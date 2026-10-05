@@ -106,8 +106,15 @@ auto DevelopParamsModel::LensModel() const -> std::string {
   return Read([](const DevelopPayload& payload) { return payload.lens_model; });
 }
 
+auto DevelopParamsModel::RasterInput() const -> std::optional<DevelopRasterInput> {
+  return Read([](const DevelopPayload& payload) { return payload.input; });
+}
+
 void DevelopParamsModel::ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update) {
   MutateWithDirtyFields([update = std::move(update)](DevelopPayload& payload) mutable {
+    if (payload.input.has_value()) {
+      throw std::logic_error("Develop: a raster image has no RAW decode settings");
+    }
     DirtyFieldMask changed;
     if (update.demosaic_method.has_value() && payload.demosaic_method != *update.demosaic_method) {
       payload.demosaic_method = std::move(*update.demosaic_method);
@@ -132,6 +139,10 @@ void DevelopParamsModel::ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update) {
 
 void DevelopParamsModel::ApplyColorTemperatureUpdate(DevelopColorTemperatureUpdate update) {
   MutateWithDirtyFields([update = std::move(update)](DevelopPayload& payload) mutable {
+    if (payload.input.has_value()) {
+      throw std::logic_error(
+          "Develop: a raster image has no RAW white balance; use the Color Grade white balance");
+    }
     bool changed = false;
     if (update.wb_mode.has_value() && payload.wb_mode != *update.wb_mode) {
       payload.wb_mode = std::move(*update.wb_mode);
@@ -154,6 +165,22 @@ void DevelopParamsModel::ApplyColorTemperatureUpdate(DevelopColorTemperatureUpda
       changed              = true;
     }
     return changed ? DirtyFieldMask{DevelopDirty::WhiteBalance} : DirtyFieldMask{};
+  });
+}
+
+void DevelopParamsModel::ApplyInputProfileUpdate(DevelopInputProfileUpdate update) {
+  if (!IsRasterInputProfileOverride(update.profile_override)) {
+    throw std::invalid_argument("Develop: unknown input profile '" + update.profile_override + "'");
+  }
+  MutateWithDirtyFields([update = std::move(update)](DevelopPayload& payload) mutable {
+    if (!payload.input.has_value()) {
+      throw std::logic_error("Develop: a RAW image has no input profile");
+    }
+    if (payload.input->profile_override_ == update.profile_override) {
+      return DirtyFieldMask{};
+    }
+    payload.input->profile_override_ = std::move(update.profile_override);
+    return DirtyFieldMask{DevelopDirty::Input};
   });
 }
 
@@ -261,44 +288,50 @@ void DevelopParamsModel::BindDngColorProfile(DngColorProfilePtr profile) {
 }
 
 auto DevelopParamsModel::ToJson() const -> nlohmann::json {
-  const auto  payload = PayloadCopy();
-  const auto& profile = payload.camera_profile;
-  return {{"demosaic_method", payload.demosaic_method},
-          {"highlights_reconstruct", payload.highlights_reconstruct},
-          {"use_camera_wb", payload.use_camera_wb},
-          {"user_wb", payload.user_wb},
-          {"wb_mode", payload.wb_mode},
-          {"custom_cct", payload.custom_cct},
-          {"custom_tint", payload.custom_tint},
-          {"as_shot_cct", payload.as_shot_cct},
-          {"as_shot_tint", payload.as_shot_tint},
-          {"camera_profile",
-           {{"dng_profile_fingerprint", DngColorProfileRefToJson(profile.dng_profile)},
-            {"color_matrices_valid", profile.color_matrices_valid},
-            {"color_matrix_1", json_util::MakeJsonArray(profile.color_matrix_1.data(), 9)},
-            {"color_matrix_2", json_util::MakeJsonArray(profile.color_matrix_2.data(), 9)},
-            {"forward_matrices_valid", profile.forward_matrices_valid},
-            {"forward_matrix_1", json_util::MakeJsonArray(profile.forward_matrix_1.data(), 9)},
-            {"forward_matrix_2", json_util::MakeJsonArray(profile.forward_matrix_2.data(), 9)},
-            {"as_shot_neutral_valid", profile.as_shot_neutral_valid},
-            {"as_shot_neutral", json_util::MakeJsonArray(profile.as_shot_neutral.data(), 3)},
-            {"calibration_illuminants_valid", profile.calibration_illuminants_valid},
-            {"color_matrix_1_cct", profile.color_matrix_1_cct},
-            {"color_matrix_2_cct", profile.color_matrix_2_cct},
-            {"cam_mul", json_util::MakeJsonArray(profile.cam_mul.data(), 3)}}},
-          {"lens_enabled", payload.lens_enabled},
-          {"apply_vignetting", payload.apply_vignetting},
-          {"apply_distortion", payload.apply_distortion},
-          {"apply_tca", payload.apply_tca},
-          {"apply_crop", payload.apply_crop},
-          {"auto_scale", payload.auto_scale},
-          {"use_user_scale", payload.use_user_scale},
-          {"user_scale", payload.user_scale},
-          {"projection_enabled", payload.projection_enabled},
-          {"target_projection", payload.target_projection},
-          {"lens_profile_db_path", payload.lens_profile_db_path},
-          {"lens_maker", payload.lens_maker},
-          {"lens_model", payload.lens_model}};
+  const auto     payload = PayloadCopy();
+  const auto&    profile = payload.camera_profile;
+  nlohmann::json value   = {
+      {"demosaic_method", payload.demosaic_method},
+      {"highlights_reconstruct", payload.highlights_reconstruct},
+      {"use_camera_wb", payload.use_camera_wb},
+      {"user_wb", payload.user_wb},
+      {"wb_mode", payload.wb_mode},
+      {"custom_cct", payload.custom_cct},
+      {"custom_tint", payload.custom_tint},
+      {"as_shot_cct", payload.as_shot_cct},
+      {"as_shot_tint", payload.as_shot_tint},
+      {"camera_profile",
+         {{"dng_profile_fingerprint", DngColorProfileRefToJson(profile.dng_profile)},
+          {"color_matrices_valid", profile.color_matrices_valid},
+          {"color_matrix_1", json_util::MakeJsonArray(profile.color_matrix_1.data(), 9)},
+          {"color_matrix_2", json_util::MakeJsonArray(profile.color_matrix_2.data(), 9)},
+          {"forward_matrices_valid", profile.forward_matrices_valid},
+          {"forward_matrix_1", json_util::MakeJsonArray(profile.forward_matrix_1.data(), 9)},
+          {"forward_matrix_2", json_util::MakeJsonArray(profile.forward_matrix_2.data(), 9)},
+          {"as_shot_neutral_valid", profile.as_shot_neutral_valid},
+          {"as_shot_neutral", json_util::MakeJsonArray(profile.as_shot_neutral.data(), 3)},
+          {"calibration_illuminants_valid", profile.calibration_illuminants_valid},
+          {"color_matrix_1_cct", profile.color_matrix_1_cct},
+          {"color_matrix_2_cct", profile.color_matrix_2_cct},
+          {"cam_mul", json_util::MakeJsonArray(profile.cam_mul.data(), 3)}}},
+      {"lens_enabled", payload.lens_enabled},
+      {"apply_vignetting", payload.apply_vignetting},
+      {"apply_distortion", payload.apply_distortion},
+      {"apply_tca", payload.apply_tca},
+      {"apply_crop", payload.apply_crop},
+      {"auto_scale", payload.auto_scale},
+      {"use_user_scale", payload.use_user_scale},
+      {"user_scale", payload.user_scale},
+      {"projection_enabled", payload.projection_enabled},
+      {"target_projection", payload.target_projection},
+      {"lens_profile_db_path", payload.lens_profile_db_path},
+      {"lens_maker", payload.lens_maker},
+      {"lens_model", payload.lens_model}};
+  // RAW documents omit the key, so their JSON stays byte for byte what it was.
+  if (payload.input.has_value()) {
+    value["input"] = DevelopRasterInputToJson(*payload.input);
+  }
+  return value;
 }
 
 void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
@@ -364,6 +397,11 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
         json_util::ReadString(json, "lens_profile_db_path", payload.lens_profile_db_path);
     payload.lens_maker = json_util::ReadString(json, "lens_maker", payload.lens_maker);
     payload.lens_model = json_util::ReadString(json, "lens_model", payload.lens_model);
+    // A malformed raster input must not turn the document into a RAW one.
+    payload.input =
+        json.contains("input")
+            ? std::optional<DevelopRasterInput>(DevelopRasterInputFromJson(json["input"]))
+            : std::nullopt;
   });
 }
 
@@ -404,6 +442,9 @@ void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
         payload.as_shot_tint != dest.as_shot_tint ||
         payload.camera_profile != dest.camera_profile) {
       changed |= DirtyFieldMask{DevelopDirty::WhiteBalance};
+    }
+    if (payload.input != dest.input) {
+      changed |= DirtyFieldMask{DevelopDirty::Input};
     }
     dest = std::move(payload);
     return changed.Any() ? changed : DirtyFieldMask{DevelopDirty::All};

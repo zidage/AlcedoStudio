@@ -50,6 +50,9 @@ namespace alcedo {
     case DrtEotf::Gamma18:
       config.encoding_eotf = ColorUtils::EOTF::GAMMA_1_8;
       break;
+    case DrtEotf::SrgbPiecewise:
+      config.encoding_eotf = ColorUtils::EOTF::SRGB_PIECEWISE;
+      break;
     case DrtEotf::Gamma22:
     default:
       config.encoding_eotf = ColorUtils::EOTF::GAMMA_2_2;

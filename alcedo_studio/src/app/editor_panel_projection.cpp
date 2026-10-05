@@ -165,6 +165,8 @@ auto DrtEotfText(DrtEotf eotf) -> const char* {
       return "bt1886";
     case DrtEotf::Gamma18:
       return "gamma_1_8";
+    case DrtEotf::SrgbPiecewise:
+      return "srgb_piecewise";
     case DrtEotf::Gamma22:
     default:
       return "gamma_2_2";
@@ -397,6 +399,24 @@ auto ReadLens(const PipelineDocument& document, const EditorParameterTarget& tar
   return FinishField(target, std::move(value), out);
 }
 
+auto ReadInputProfile(const PipelineDocument& document, const EditorParameterTarget& target,
+                      EditorPanelFieldPresentation* out, std::string* error) -> bool {
+  const auto* params = DevelopParams(document, target, error);
+  if (params == nullptr) {
+    return false;
+  }
+  EditorPanelInputProfileValue value;
+  if (const auto input = params->RasterInput(); input.has_value()) {
+    const auto description    = RasterColorDescriptionToJson(input->source_color_);
+    value.raster              = true;
+    value.profile_override    = input->profile_override_;
+    value.profile_description = input->source_color_.profile_description_;
+    value.origin              = description.at("origin").get<std::string>();
+    value.referral            = description.at("referral").get<std::string>();
+  }
+  return FinishField(target, std::move(value), out);
+}
+
 auto ReadGeometry(const PipelineDocument& document, const EditorParameterTarget& target,
                   EditorPanelFieldPresentation* out, std::string* error) -> bool {
   if (target.owner_kind != EditorParameterOwnerKind::Document) {
@@ -481,6 +501,7 @@ auto EditorPanelAdapterTable::Production() -> EditorPanelAdapterTable {
     table.Add({"raw_decode", "raw", &ReadRawDecode});
     table.Add({"color_temp", "look", &ReadColorTemp});
     table.Add({"lens_calib", "raw", &ReadLens});
+    table.Add({"input_profile", "raw", &ReadInputProfile});
     table.Add({"crop_rotate", "geometry", &ReadGeometry});
     return table;
   }();

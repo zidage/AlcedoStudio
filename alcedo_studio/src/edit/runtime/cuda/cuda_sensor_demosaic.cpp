@@ -296,6 +296,14 @@ void ExecuteCudaRgbAndPack(CudaRenderDevice& device, const PreparedRawInput& inp
   ReleaseTransientSlabsAfterGpuLastUse(device, {rgb_ptr});
 }
 
+void ExecuteCudaPackLinearRgb(CudaRenderDevice& device, const PreparedRawInput& input,
+                              cv::cuda::GpuMat linear_rgb, cv::cuda::GpuMat packed,
+                              cv::cuda::Stream& stream) {
+  const float identity[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  PackRgbWithOptionalHighlight(device, CropIfNeeded(linear_rgb, input.demosaic_output_crop), packed,
+                               identity, input.sensor.orientation_flip, false, stream);
+}
+
 void ExecuteCudaSensorDemosaicAndPack(CudaRenderDevice& device, const PreparedRawInput& input,
                                       const DevelopPayload& params, cv::cuda::GpuMat linear,
                                       cv::cuda::GpuMat packed, cv::cuda::Stream& stream) {

@@ -52,6 +52,14 @@ struct PassEncoder<CudaBackend, GpuPassKind::CameraToAp1> {
 };
 
 template <>
+struct PassEncoder<CudaBackend, GpuPassKind::DisplayToAp1> {
+  static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput& input, const PipelineDocument& document) {
+    ExecuteCudaDisplayToAp1(device, plan, input, document);
+  }
+};
+
+template <>
 struct PassEncoder<CudaBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,

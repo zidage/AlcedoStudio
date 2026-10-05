@@ -35,13 +35,15 @@ enum class ODTMethod : int {
 };
 
 enum class EOTF : int {
-  LINEAR    = 0,
-  ST2084    = 1,
-  HLG       = 2,
-  GAMMA_2_6 = 3,
-  BT1886    = 4,
-  GAMMA_2_2 = 5,
-  GAMMA_1_8 = 6,
+  LINEAR         = 0,
+  ST2084         = 1,
+  HLG            = 2,
+  GAMMA_2_6      = 3,
+  BT1886         = 4,
+  GAMMA_2_2      = 5,
+  GAMMA_1_8      = 6,
+  /// IEC 61966-2-1 piecewise sRGB. The GPU encoders use the moncurve branch.
+  SRGB_PIECEWISE = 7,
 };
 
 struct ColorSpacePrimaries {
@@ -257,6 +259,9 @@ inline auto EOTFFromString(std::string_view eotf_str) -> EOTF {
   if (eotf_str == "gamma_1_8") {
     return EOTF::GAMMA_1_8;
   }
+  if (eotf_str == "srgb_piecewise") {
+    return EOTF::SRGB_PIECEWISE;
+  }
   return EOTF::GAMMA_2_2;
 }
 
@@ -276,6 +281,8 @@ inline auto EOTFToString(EOTF eotf) -> std::string {
       return "gamma_2_2";
     case EOTF::GAMMA_1_8:
       return "gamma_1_8";
+    case EOTF::SRGB_PIECEWISE:
+      return "srgb_piecewise";
     default:
       return "gamma_2_2";
   }

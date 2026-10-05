@@ -89,6 +89,9 @@ License text file: third_party_licenses/Little-CMS-LICENSE.txt
 Upstream: https://github.com/AcademySoftwareFoundation/OpenColorIO
 License: BSD-3-Clause
 License text file: third_party_licenses/OpenColorIO-LICENSE.txt
+Usage note: the raster input ACES 2.0 output transform inverse ports OpenColorIO 2.5.1 code
+(ops/fixedfunction/ACES2/Transform.cpp, FixedFunctionOpCPU.cpp, FixedFunctionOpGPU.cpp and the
+matrix helpers). Test targets link the OpenColorIO library as the reference.
 
 16) OpenImageIO
 Upstream: https://github.com/AcademySoftwareFoundation/OpenImageIO
@@ -185,6 +188,10 @@ C) File-level adaptation pointers in this repository
 
 - alcedo/src/include/edit/runtime/cuda/drt/*.cuh
   ACES core links are referenced in comments for ported formulas.
+
+- alcedo_studio/src/include/edit/runtime/display_to_ap1_math.h
+- alcedo_studio/src/edit/runtime/drt/aces2_inverse_runtime.cpp
+  Include the OpenColorIO copyright notice (BSD-3-Clause) for the ported ACES 2.0 code.
 
 D) Redistribution reminder
 

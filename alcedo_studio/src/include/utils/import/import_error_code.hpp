@@ -18,6 +18,8 @@ enum class ImportErrorCode : uint8_t {
   DB_WRITE_FAILED,
   CANCELED,
   UNSUPPORTED_NIKON_HE_RAW,
+  /// The content is a supported type, but its category is not allowed by ImportOptions.
+  EXCLUDED_TYPE,
 };
 
 }  // namespace alcedo

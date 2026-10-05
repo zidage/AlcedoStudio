@@ -18,6 +18,19 @@ Popup {
     readonly property bool scanning: scan ? scan.scanning : false
     readonly property bool scanFinished: scan ? scan.scanFinished : false
     readonly property int fileCount: scan ? scan.fileCount : 0
+    // Files in the checked categories: the rows of the list and the files that import takes.
+    readonly property int allowedFileCount: scan ? scan.allowedFileCount : 0
+    readonly property var categoryCounts: scan ? scan.categoryCounts : [0, 0, 0, 0, 0, 0]
+    readonly property int allowedCategories: scan ? scan.allowedCategories : 0
+    // ImportFileCategory order: Raw, Jpeg, Tiff, Png, OpenExr, Other.
+    readonly property var categoryEntries: [
+        { category: 0, label: qsTr("RAW") },
+        { category: 1, label: qsTr("JPEG") },
+        { category: 2, label: qsTr("TIFF") },
+        { category: 3, label: qsTr("PNG") },
+        { category: 4, label: qsTr("OpenEXR") },
+        { category: 5, label: qsTr("Other") }
+    ]
     readonly property color textColor: root.theme ? root.theme.colText : appTheme.textColor
     readonly property color mutedColor: root.theme ? root.theme.colTextMuted : appTheme.textMutedColor
     signal confirmed()
@@ -144,9 +157,43 @@ Popup {
 
             Label {
                 Layout.fillWidth: true
+                text: qsTr("File types")
+                color: root.mutedColor
+                font.pixelSize: appTheme.fontSizeCaption
+                font.weight: appTheme.fontWeightStrong
+            }
+
+            // One checkbox per category with its count. Other is counted but never imported.
+            Flow {
+                objectName: "folderImportCategoryRow"
+                Layout.fillWidth: true
+                spacing: appTheme.spaceSm
+
+                Repeater {
+                    model: root.categoryEntries
+                    ThemeCheckBox {
+                        required property var modelData
+                        objectName: "folderImportCategory_" + modelData.category
+                        text: qsTr("%1 (%2)").arg(modelData.label)
+                              .arg(Number(root.categoryCounts[modelData.category] || 0)
+                                   .toLocaleString(Qt.locale(), 'f', 0))
+                        alwaysPrimaryText: true
+                        enabled: modelData.category !== 5
+                        checked: modelData.category !== 5
+                                 && (root.allowedCategories & (1 << modelData.category)) !== 0
+                        onToggled: function(nextChecked) {
+                            if (root.scan)
+                                root.scan.SetCategoryAllowed(modelData.category, nextChecked)
+                        }
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
                 visible: root.scanFinished && root.fileCount > 0
                 wrapMode: Text.Wrap
-                text: qsTr("Only RAW files are imported. Other files are skipped.")
+                text: qsTr("Files of other types are skipped.")
                 color: root.mutedColor
                 font.pixelSize: appTheme.fontSizeCaption
             }
@@ -242,10 +289,10 @@ Popup {
 
             DialogActionButton {
                 objectName: "folderImportConfirmButton"
-                enabled: root.scanFinished && root.fileCount > 0
+                enabled: root.scanFinished && root.allowedFileCount > 0
                 text: root.scanning
                       ? qsTr("Scanning...")
-                      : qsTr("Import %1 File(s)").arg(root.fileCount.toLocaleString(Qt.locale(), 'f', 0))
+                      : qsTr("Import %1 File(s)").arg(root.allowedFileCount.toLocaleString(Qt.locale(), 'f', 0))
                 kind: "accent"
                 buttonWidth: appTheme.spaceXl * 9
                 buttonHeight: appTheme.iconButtonHitSizeCompact

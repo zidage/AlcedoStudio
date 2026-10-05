@@ -483,6 +483,12 @@ if(UNIX AND NOT APPLE)
     find_package(lcms2 REQUIRED)
 endif()
 
+# zlib inflates PNG iCCP profiles for the raster color description reader.
+find_package(ZLIB REQUIRED)
+
+# TurboJPEG decodes raster JPEG input with DCT scaling.
+find_package(libjpeg-turbo CONFIG REQUIRED)
+
 # OpenColorIO
 find_package(OpenColorIO CONFIG REQUIRED)
 if (TARGET OpenColorIO::OpenColorIO)

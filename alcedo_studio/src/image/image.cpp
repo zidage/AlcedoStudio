@@ -20,6 +20,7 @@ using json = nlohmann::json;
 
 namespace {
 constexpr auto kRawRuntimeContextJsonKey = "RawRuntimeColorContext";
+constexpr auto kRasterColorDescriptionJsonKey = "RasterColorDescription";
 
 template <typename T>
 auto MakeJsonArray(const T* values, const int count) -> json {
@@ -196,6 +197,10 @@ auto Image::ExifToJson() -> std::string {
   if (has_raw_color_context_) {
     exif_json_[kRawRuntimeContextJsonKey] = RawColorContextToJson(raw_color_context_);
   }
+  if (has_raster_color_description_) {
+    exif_json_[kRasterColorDescriptionJsonKey] =
+        RasterColorDescriptionToJson(raster_color_description_);
+  }
 
   has_exif_json_ = true;
   return nlohmann::to_string(exif_json_);
@@ -210,6 +215,7 @@ auto Image::ExifDisplayToJson() const -> json {
   }
   auto display = exif_json_;
   display.erase(kRawRuntimeContextJsonKey);
+  display.erase(kRasterColorDescriptionJsonKey);
   return display;
 }
 
@@ -223,6 +229,12 @@ void Image::JsonToExif(std::string json_str) {
     has_raw_color_context_ =
         exif_json_.contains(kRawRuntimeContextJsonKey) &&
         RawColorContextFromJson(exif_json_[kRawRuntimeContextJsonKey], raw_color_context_);
+    raster_color_description_     = {};
+    has_raster_color_description_ = exif_json_.contains(kRasterColorDescriptionJsonKey);
+    if (has_raster_color_description_) {
+      raster_color_description_ =
+          RasterColorDescriptionFromJson(exif_json_[kRasterColorDescriptionJsonKey]);
+    }
   } catch (nlohmann::json::parse_error& e) {
     throw std::runtime_error("[ERROR] Image: JSON parse error, " + std::string(e.what()));
   } catch (std::exception& e) {
@@ -269,6 +281,23 @@ auto Image::GetRawColorContext() const -> const RawRuntimeColorContext& {
 }
 
 auto Image::HasRawColorContext() const -> bool { return has_raw_color_context_.load(); }
+
+void Image::SetRasterColorDescription(RasterColorDescription&& description) {
+  raster_color_description_     = std::move(description);
+  has_raster_color_description_ = true;
+  has_exif_json_                = false;
+  if (sync_state_.load() == ImageSyncState::SYNCED) {
+    sync_state_ = ImageSyncState::MODIFIED;
+  }
+}
+
+auto Image::GetRasterColorDescription() const -> const RasterColorDescription& {
+  return raster_color_description_;
+}
+
+auto Image::HasRasterColorDescription() const -> bool {
+  return has_raster_color_description_.load();
+}
 
 void Image::ComputeChecksum() { checksum_ = XXH3_64bits(this, sizeof(*this)); }
 

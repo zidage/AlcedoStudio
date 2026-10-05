@@ -1311,6 +1311,10 @@ Alcedo will use %1 instead.</translation>
         <source>Unknown group field: %1</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>AppDialogs</name>
@@ -1362,6 +1366,10 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location line="+212"/>
         <source>Select at least one image to analyze.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Supported images (%1)</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -3262,6 +3270,90 @@ Original source files on disk will be kept.</source>
         <source>Lens Model</source>
         <translation type="unfinished">Lens Model</translation>
     </message>
+    <message>
+        <source>Input</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Input Color</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Input Profile</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Auto (from file)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>sRGB</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Display P3</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Adobe RGB</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rec.2020</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>ProPhoto</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Linear Rec.709</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>embedded ICC</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>embedded ICC, converted on import</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>PNG cICP</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>PNG sRGB chunk</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>PNG gamma and chromaticities</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>EXR chromaticities</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>EXR ACES container</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>EXIF Adobe RGB tag</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>no profile, assumed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Scene linear</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Display referred</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>EditorSaveRecoveryBar</name>
@@ -4141,6 +4233,42 @@ Original source files on disk will be kept.</source>
         <source>Import %1 File(s)</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>File types</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>RAW</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>JPEG</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>TIFF</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>PNG</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>OpenEXR</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Other</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 (%2)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Files of other types are skipped.</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>GlobalSearchDialog</name>
@@ -4461,6 +4589,14 @@ Original source files on disk will be kept.</source>
         <location line="+9"/>
         <source>Cancel</source>
         <translation type="unfinished">Cancel</translation>
+    </message>
+    <message>
+        <source>%1 file(s) skipped because their type is not selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 file(s) skipped because they are not supported images</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>

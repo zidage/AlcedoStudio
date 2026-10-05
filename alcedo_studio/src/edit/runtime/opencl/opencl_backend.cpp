@@ -913,7 +913,10 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
 
   if (plan.Contains(GpuPassKind::UploadRaw) || plan.Contains(GpuPassKind::UploadRgb)) {
     using namespace OpenCL::RawProcessor;
-    if (plan.source.kind != DevelopInputKind::DirectRgb) {
+    if (plan.source.kind == DevelopInputKind::Raster) {
+      add(OpenCL::GpuDag::kDisplayToAp1ProgramName, OpenCL::GpuDag::kLinearizeRasterKernelName);
+      add(kCvtRefSpaceProgramName, kCopyRgbaCropInverseOrientKernelName);
+    } else if (plan.source.kind != DevelopInputKind::DirectRgb) {
       add(kCoreProgramName, kToLinearRefKernelName);
       add(kCoreProgramName, kCfaClamp01KernelName);
       add(kCvtRefSpaceProgramName, kPackPlanesCropInverseOrientKernelName);
@@ -941,6 +944,9 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
   }
   if (plan.Contains(GpuPassKind::CameraToAp1)) {
     add(OpenCL::GpuDag::kGeometryCameraProgramName, OpenCL::GpuDag::kCameraColorKernelName);
+  }
+  if (plan.Contains(GpuPassKind::DisplayToAp1)) {
+    add(OpenCL::GpuDag::kDisplayToAp1ProgramName, OpenCL::GpuDag::kDisplayToAp1KernelName);
   }
   if (plan.Contains(GpuPassKind::PrimaryColorGrade)) {
     add(OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradePointwiseKernelName);

@@ -12,6 +12,7 @@
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/basic_render_workspace.hpp"
 #include "edit/runtime/cuda/cuda_backend.hpp"
+#include "edit/runtime/cuda/cuda_display_to_ap1_pass.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/render_device_type.hpp"
@@ -81,6 +82,10 @@ class CudaRenderDevice {
   }
 
   [[nodiscard]] auto DrtRuntime() -> CudaDrtRuntimeState&;
+  /// Device copy of the DisplayToAp1 parameter block (raster input).
+  [[nodiscard]] auto DisplayToAp1Parameters() -> CudaDisplayToAp1Parameters& {
+    return display_to_ap1_parameters_;
+  }
 
   /**
    * @brief Neural Engine tile activation workspace. Created on first Neural develop
@@ -112,6 +117,7 @@ class CudaRenderDevice {
   CudaRenderWorkspace                              workspace_;
   CudaCommandContext                               command_context_;
   std::unique_ptr<CudaDrtRuntimeState>             drt_runtime_;
+  CudaDisplayToAp1Parameters                       display_to_ap1_parameters_;
   std::unique_ptr<CUDA::NeuralDemosaicWorkspace>   neural_workspace_;
   std::function<void(std::string_view)>            error_reporter_;
   GpuNodePassStats                                 pass_stats_{};

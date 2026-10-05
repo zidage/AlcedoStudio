@@ -131,6 +131,14 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           lens.insert(QStringLiteral("lens_maker"), String(value.lens_maker));
           lens.insert(QStringLiteral("lens_model"), String(value.lens_model));
           map.insert(QStringLiteral("lens_calib"), lens);
+        } else if constexpr (std::is_same_v<T, alcedo::EditorPanelInputProfileValue>) {
+          QVariantMap input;
+          input.insert(QStringLiteral("raster"), value.raster);
+          input.insert(QStringLiteral("profile_override"), String(value.profile_override));
+          input.insert(QStringLiteral("profile_description"), String(value.profile_description));
+          input.insert(QStringLiteral("origin"), String(value.origin));
+          input.insert(QStringLiteral("referral"), String(value.referral));
+          map.insert(QStringLiteral("input"), input);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelGeometryValue>) {
           QVariantMap rect;
           rect.insert(QStringLiteral("x"), value.crop_rect.x);

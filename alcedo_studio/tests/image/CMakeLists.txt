@@ -5,6 +5,8 @@ add_executable(MetadataExtractorTest ${ALCEDO_TEST_ROOT}/image/metadata_extracto
 target_include_directories(MetadataExtractorTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(MetadataExtractorTest PRIVATE GTest::gtest_main Image EditGraph
     OpenImageIO::OpenImageIO)
+target_compile_definitions(MetadataExtractorTest PRIVATE
+    ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
 gtest_discover_tests(MetadataExtractorTest TEST_PREFIX "MetadataExtractorTest.")
 alcedo_register_test_target(MetadataExtractorTest image)
 
@@ -13,6 +15,16 @@ target_include_directories(BatchImportDngMetadataTest PUBLIC ${ALCEDO_INCLUDE_DI
 target_link_libraries(BatchImportDngMetadataTest PRIVATE GTest::gtest_main Image)
 gtest_discover_tests(BatchImportDngMetadataTest TEST_PREFIX "BatchImportDngMetadataTest.")
 alcedo_register_test_target(BatchImportDngMetadataTest image)
+
+# Source color description of JPEG, PNG, TIFF and OpenEXR files (raster_image_input_plan.md).
+add_executable(RasterColorDescriptionTest
+  ${ALCEDO_TEST_ROOT}/image/raster_color_description_test.cpp)
+target_include_directories(RasterColorDescriptionTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(RasterColorDescriptionTest PRIVATE GTest::gtest_main Image Sha256Digest)
+target_compile_definitions(RasterColorDescriptionTest PRIVATE
+  ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
+gtest_discover_tests(RasterColorDescriptionTest TEST_PREFIX "RasterColorDescriptionTest.")
+alcedo_register_test_target(RasterColorDescriptionTest image)
 
 # Runtime DNG profile cache: LRU eviction, sharing by fingerprint, reload after file change.
 add_executable(DngColorProfileCacheTest ${ALCEDO_TEST_ROOT}/image/dng_color_profile_cache_test.cpp)

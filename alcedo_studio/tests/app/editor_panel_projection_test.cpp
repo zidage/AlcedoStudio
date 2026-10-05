@@ -28,6 +28,7 @@
 #include "edit/operators/models/operator_param_dto.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "image/raster_color_description.hpp"
 #include "json.hpp"
 #include "support/editor_parameter_target_test.hpp"
 
@@ -423,6 +424,42 @@ TEST(EditorPanelProjectionTest, ParseApplyProjectsLensCatalogIdentityOntoRawPane
   EXPECT_EQ(lens_value->lens_model, "Touit 1.8/32");
   const auto  adapters = EditorPanelAdapterTable::Production();
   const auto* adapter  = adapters.Find("lens_calib");
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_EQ(adapter->panel_id, "raw");
+}
+
+TEST(EditorPanelProjectionTest, InputProfileProjectsRasterDescriptionAndRawDocumentsAreNotRaster) {
+  RasterColorDescription source_color;
+  source_color.primaries_xy_        = kRasterPrimariesDisplayP3;
+  source_color.origin_              = RasterColorOrigin::IccMatrixShaper;
+  source_color.profile_description_ = "Display P3";
+  source_color.icc_sha256_          = std::string(64, 'a');
+  auto raster                       = CreateDefaultRasterPipelineDocument(source_color);
+  raster.Develop()->Params().ApplyInputProfileUpdate(DevelopInputProfileUpdate{"adobe_rgb"});
+
+  EditorPanelProjection projection;
+  std::string           error;
+  ASSERT_TRUE(ProjectCurrentPanelFields(raster, 3, &projection, &error)) << error;
+  const auto* field = FindField(projection, "input_profile");
+  ASSERT_NE(field, nullptr);
+  const auto* value = std::get_if<EditorPanelInputProfileValue>(&field->value);
+  ASSERT_NE(value, nullptr);
+  EXPECT_TRUE(value->raster);
+  EXPECT_EQ(value->profile_override, "adobe_rgb");
+  EXPECT_EQ(value->profile_description, "Display P3");
+  EXPECT_EQ(value->origin, "icc_matrix_shaper");
+  EXPECT_EQ(value->referral, "display_referred");
+
+  auto raw = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(ProjectCurrentPanelFields(raw, 4, &projection, &error)) << error;
+  const auto* raw_field = FindField(projection, "input_profile");
+  ASSERT_NE(raw_field, nullptr);
+  const auto* raw_value = std::get_if<EditorPanelInputProfileValue>(&raw_field->value);
+  ASSERT_NE(raw_value, nullptr);
+  EXPECT_FALSE(raw_value->raster);
+
+  const auto  adapters = EditorPanelAdapterTable::Production();
+  const auto* adapter  = adapters.Find("input_profile");
   ASSERT_NE(adapter, nullptr);
   EXPECT_EQ(adapter->panel_id, "raw");
 }

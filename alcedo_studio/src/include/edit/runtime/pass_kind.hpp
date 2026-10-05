@@ -33,6 +33,9 @@ enum class GpuPassKind : std::uint8_t {
   /// Decodes the last ACEScc scene value to linear AP1 before the DRT. Applies the diffusion
   /// filter when its strength is not 0. Present in every plan; DRT reads linear AP1 only.
   DiffusionFilter   = 15,
+  /// Raster input: ACES 2.0 inverse (display-referred) or matrix (scene-linear) to ACEScc AP1.
+  /// Takes the slot of CameraToAp1 and writes develop_output.
+  DisplayToAp1      = 16,
 };
 
 [[nodiscard]] inline auto GpuPassKindName(GpuPassKind kind) -> const char* {
@@ -67,6 +70,8 @@ enum class GpuPassKind : std::uint8_t {
       return "MaskUnion";
     case GpuPassKind::DiffusionFilter:
       return "DiffusionFilter";
+    case GpuPassKind::DisplayToAp1:
+      return "DisplayToAp1";
   }
   return "Unknown";
 }

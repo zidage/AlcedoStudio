@@ -19,6 +19,7 @@
 #include "concurrency/thread_pool.hpp"
 #include "image_pool_service.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
+#include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/import/import_error_code.hpp"
 #include "utils/import/import_log.hpp"
@@ -40,6 +41,10 @@ struct ImportOptions {
 
   // If set, record the sequence for deterministic import order.
   bool           write_import_sequence_            = true;
+
+  /// Content categories that import accepts. A file of another category is counted as
+  /// excluded_type_. Folder import passes the dialog selection; the file picker allows all.
+  ImportCategoryMask allowed_categories_               = kAllImportCategories;
 };
 
 struct ImportProgress {
@@ -53,9 +58,13 @@ struct ImportProgress {
 
   std::atomic<uint32_t> failed_               = 0;
 
-  /// Subset of failed_: files whose content is not a supported RAW file. These are expected in
-  /// a folder import (sidecars, JPEG copies, videos) and are reported as skipped, not as errors.
+  /// Subset of failed_: files whose content is not a supported RAW or raster image (CMYK
+  /// included). These are expected in a folder import (sidecars, videos) and are reported as
+  /// skipped, not as errors.
   std::atomic<uint32_t> unsupported_          = 0;
+
+  /// Subset of failed_: supported files whose content category is not allowed.
+  std::atomic<uint32_t> excluded_type_        = 0;
 };
 
 struct ImportError {
@@ -68,8 +77,10 @@ struct ImportResult {
   uint32_t requested_ = 0;
   uint32_t imported_  = 0;
   uint32_t failed_    = 0;
-  /// Subset of failed_: files that are not a supported RAW file.
-  uint32_t unsupported_ = 0;
+  /// Subset of failed_: files that are not a supported RAW or raster image.
+  uint32_t unsupported_   = 0;
+  /// Subset of failed_: supported files whose content category is not allowed.
+  uint32_t excluded_type_ = 0;
 };
 
 class ImportJob {
@@ -165,6 +176,7 @@ class ImportServiceImpl final : public ImportService {
   void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>& paths, const image_path_t& dest,
                                    const std::shared_ptr<ImportJob>&      job,
                                    const std::shared_ptr<ImportLog>&      import_log,
-                                   const std::shared_ptr<ImportProgress>& progress);
+                                   const std::shared_ptr<ImportProgress>& progress,
+                                   ImportCategoryMask                     allowed_categories);
 };
 };  // namespace alcedo

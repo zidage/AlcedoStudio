@@ -24,7 +24,8 @@ Item {
     readonly property int completed: handler.importCompleted
     readonly property int failed: handler.importFailed
     readonly property int unsupported: Math.min(handler.importUnsupported, failed)
-    readonly property int errors: failed - unsupported
+    readonly property int excluded: Math.min(handler.importExcluded, failed - unsupported)
+    readonly property int errors: failed - unsupported - excluded
     readonly property int expected: Math.max(0, total - failed)
     readonly property int checked: Math.min(total, completed + failed)
     readonly property bool finalizing: phase === "finalizing"
@@ -140,8 +141,20 @@ Item {
                     visible: root.unsupported > 0
                     wrapMode: Text.Wrap
                     horizontalAlignment: Text.AlignHCenter
-                    text: qsTr("%1 file(s) skipped because they are not RAW files")
+                    text: qsTr("%1 file(s) skipped because they are not supported images")
                           .arg(root.formatCount(root.unsupported))
+                    color: root.theme ? root.theme.colTextMuted : appTheme.textMutedColor
+                    font.pixelSize: appTheme.fontSizeCaption
+                }
+
+                Label {
+                    objectName: "importProgressExcluded"
+                    Layout.fillWidth: true
+                    visible: root.excluded > 0
+                    wrapMode: Text.Wrap
+                    horizontalAlignment: Text.AlignHCenter
+                    text: qsTr("%1 file(s) skipped because their type is not selected")
+                          .arg(root.formatCount(root.excluded))
                     color: root.theme ? root.theme.colTextMuted : appTheme.textMutedColor
                     font.pixelSize: appTheme.fontSizeCaption
                 }

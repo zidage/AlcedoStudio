@@ -37,6 +37,7 @@ using namespace album_util;
 
 namespace {
 
+constexpr auto kFolderAllowedCategoriesKey = "import/folderAllowedCategories";
 constexpr auto kExportSdrQualityKey      = "export/sdrQuality";
 constexpr auto kExportUltraHdrQualityKey = "export/ultraHdrQuality";
 constexpr auto kExportFileNamePresetsKey = "export/fileNamePresets";
@@ -82,6 +83,15 @@ ImportExportHandler::ImportExportHandler(ProjectModule* project, LibraryModule* 
       status_(status),
       barrier_(barrier),
       folder_scan_(new FolderImportScanModel(this)) {
+  // The folder import type selection is an application setting (decision D7).
+  folder_scan_->SetAllowedCategories(
+      QSettings{}
+          .value(QLatin1String(kFolderAllowedCategoriesKey), static_cast<int>(kAllImportCategories))
+          .toInt());
+  connect(folder_scan_, &FolderImportScanModel::AllowedCategoriesChanged, this, [this]() {
+    QSettings{}.setValue(QLatin1String(kFolderAllowedCategoriesKey),
+                         folder_scan_->AllowedCategories());
+  });
 
   const QString pictures = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
   if (!pictures.isEmpty()) {
@@ -124,7 +134,8 @@ void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
     status_->SetTaskState(PL_TEXT("No files selected."), 0, false);
     return;
   }
-  StartImportResolvedPaths(std::move(paths), false);
+  // The user picked these files, so every importable category is allowed.
+  StartImportResolvedPaths(std::move(paths), false, kAllImportCategories);
 }
 
 void ImportExportHandler::StartFolderImport() {
@@ -132,11 +143,13 @@ void ImportExportHandler::StartFolderImport() {
     status_->SetTaskState(PL_TEXT("The folder is still being scanned."), 0, false);
     return;
   }
-  StartImportPaths(folder_scan_->TakeFilePaths(), false);
+  const auto allowed = static_cast<ImportCategoryMask>(folder_scan_->AllowedCategories());
+  StartImportPaths(folder_scan_->TakeFilePaths(), false, allowed);
 }
 
 void ImportExportHandler::StartImportPaths(const std::vector<image_path_t>& paths,
-                                           const bool                       preserveTarget) {
+                                           const bool                       preserveTarget,
+                                           const ImportCategoryMask         allowedCategories) {
   std::vector<image_path_t>        deduped_paths;
   std::unordered_set<std::wstring> seen;
   deduped_paths.reserve(paths.size());
@@ -154,11 +167,12 @@ void ImportExportHandler::StartImportPaths(const std::vector<image_path_t>& path
     status_->SetTaskState(PL_TEXT("No supported files selected."), 0, false);
     return;
   }
-  StartImportResolvedPaths(std::move(deduped_paths), preserveTarget);
+  StartImportResolvedPaths(std::move(deduped_paths), preserveTarget, allowedCategories);
 }
 
 void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> paths,
-                                                   const bool                preserveTarget) {
+                                                   const bool                preserveTarget,
+                                                   const ImportCategoryMask  allowedCategories) {
   if (project_->handler().project_loading()) {
     status_->SetTaskState(PL_TEXT("Project is loading. Please wait."), 0, false);
     return;
@@ -189,6 +203,7 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   import_completed_   = 0;
   import_failed_      = 0;
   import_unsupported_ = 0;
+  import_excluded_    = 0;
   import_status_text_ = PL_TEXT("Preparing %1 file(s)...", import_total_);
   import_progress_queued_->store(false);
   emit ImportStateChanged();
@@ -226,6 +241,7 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
 
   try {
     ImportOptions options;
+    options.allowed_categories_ = allowedCategories;
     current_import_job_ = isvc->ImportToFolder(paths, import_target_folder_path_, options, job);
   } catch (const std::exception& e) {
     current_import_job_.reset();
@@ -244,8 +260,10 @@ void ImportExportHandler::ApplyImportProgress() {
     return;
   }
   const ImportProgress& progress = *job->progress_;
-  // unsupported_ is a subset of failed_ and is incremented after it, so it is read first.
+  // unsupported_ and excluded_type_ are subsets of failed_ and are incremented after it, so
+  // they are read first.
   const uint32_t        unsupported = progress.unsupported_.load();
+  const uint32_t        excluded    = progress.excluded_type_.load();
   const uint32_t        failed      = progress.failed_.load();
   const uint32_t        imported    = progress.metadata_done_.load();
   const uint32_t        prepared    = progress.placeholders_created_.load();
@@ -255,6 +273,7 @@ void ImportExportHandler::ApplyImportProgress() {
   import_completed_   = static_cast<int>(imported);
   import_failed_      = static_cast<int>(failed);
   import_unsupported_ = static_cast<int>(unsupported);
+  import_excluded_                  = static_cast<int>(excluded);
   import_phase_       = job->submission_closed_.load() ? ImportPhaseState::Reading
                                                        : ImportPhaseState::Preparing;
   if (!job->IsCancelled()) {
@@ -630,6 +649,7 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   import_completed_   = static_cast<int>(result.imported_);
   import_failed_      = static_cast<int>(result.failed_);
   import_unsupported_ = static_cast<int>(result.unsupported_);
+  import_excluded_    = static_cast<int>(result.excluded_type_);
   import_status_text_ = PL_TEXT("Saving %1 imported photo(s) to the library...", result.imported_);
   emit ImportStateChanged();
   emit importStateChanged();
@@ -691,9 +711,11 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
   import_target_folder_id_   = folders_->CurrentFolderElementId().value_or(0);
   import_target_folder_path_ = folders_->CurrentFolderFsPath();
 
-  const uint32_t errors = result.failed_ - std::min(result.failed_, result.unsupported_);
-  auto task_text = PL_TEXT("Import complete: %1 imported, %2 skipped, %3 failed", result.imported_,
-                           result.unsupported_, errors);
+  const uint32_t skipped     = result.unsupported_ + result.excluded_type_;
+  const uint32_t errors      = result.failed_ - std::min(result.failed_, skipped);
+  auto           task_text =
+      PL_TEXT("Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed",
+              result.imported_, result.excluded_type_, result.unsupported_, errors);
   if (!outcome.state_saved_) {
     status_->SetServiceMessage(PL_TEXT("Import finished, but saving project state failed."));
   } else if (!outcome.package_saved_) {
@@ -706,6 +728,7 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
   import_completed_   = static_cast<int>(result.imported_);
   import_failed_      = static_cast<int>(result.failed_);
   import_unsupported_ = static_cast<int>(result.unsupported_);
+  import_excluded_    = static_cast<int>(result.excluded_type_);
   import_status_text_ = task_text;
   emit ImportStateChanged();
   emit importStateChanged();

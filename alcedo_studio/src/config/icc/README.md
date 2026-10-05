@@ -6,6 +6,7 @@ This directory contains the ICC profiles bundled for export-time embedding on pl
 
 - `rec709_bt1886.icc`: generated with LittleCMS 2 as the Alcedo Studio Rec.709 / BT.1886 export profile approximation.
 - `rec709_gamma22.icc`: generated with LittleCMS 2.
+- `srgb_piecewise.icc`: Rec.709 primaries with the IEC 61966-2-1 piecewise sRGB curve (ICC parametric type 3), written by `alcedo_studio/tests/resources/raster/generate_raster_fixtures.py`. Used for the `srgb_piecewise` display EOTF.
 - `p3_d65_gamma22.icc`: generated with LittleCMS 2.
 - `p3_d65_pq.icc`: generated with LittleCMS 2.
 - `p3_d60_gamma26.icc`: generated with LittleCMS 2.

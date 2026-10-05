@@ -11,8 +11,8 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
-
 #include <vector>
+
 #include "app/project_package_backend.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -26,6 +26,7 @@
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
+#include "test_camera_profile.hpp"
 #include "type/hash_type.hpp"
 
 namespace alcedo {
@@ -108,6 +109,44 @@ TEST(PipelineDocumentCheckpointFormat, CheckpointExpectedSerializedCarriesRootHe
   EXPECT_EQ(decoded.root_id, root_id);
   EXPECT_FALSE(decoded.head_commit_hash.has_value());
   EXPECT_EQ(decoded.transaction_chain_hash, chain);
+}
+
+TEST(PipelineDocumentCheckpointFormat,
+     ExistingRawRootDocumentsSerializeByteIdenticalAfterRasterChange) {
+  // raw_root_before_raster_input.json and raw_checkpoint_before_raster_input.json were written by
+  // the document code of main (abdb000c8) before raster input existed: the default document with
+  // a bound camera profile, element 42. The same RAW document must encode to the same bytes, keep
+  // its root id, and never gain the Develop "input" key.
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  const auto raw_json   = nlohmann::json{{"CameraModel", "RootStateCamera"}};
+  const auto root_bytes = LoadExpectedBytes("raw_root_before_raster_input.json");
+  EXPECT_EQ(EncodePipelineRootState(42, document, raw_json).dump(), root_bytes);
+  const auto root = DecodePipelineRootState(nlohmann::json::parse(root_bytes));
+  EXPECT_EQ(EncodePipelineRootState(root.element_id, root.document, root.raw_color_context).dump(),
+            root_bytes);
+  ASSERT_NE(root.document.Develop(), nullptr);
+  EXPECT_FALSE(root.document.Develop()->Params().RasterInput().has_value());
+  EXPECT_FALSE(root.document.Develop()->Params().ToJson().contains("input"));
+
+  const auto checkpoint_bytes = LoadExpectedBytes("raw_checkpoint_before_raster_input.json");
+  const auto checkpoint = DecodePipelineDocumentCheckpoint(nlohmann::json::parse(checkpoint_bytes));
+  // The stored root id was computed by main.
+  EXPECT_EQ(ComputeRootId(42, document, raw_json), checkpoint.root_id);
+  EXPECT_EQ(ComputeRootId(42, root.document, root.raw_color_context), checkpoint.root_id);
+  EXPECT_EQ(EncodePipelineDocumentCheckpoint(checkpoint.root_id, checkpoint.head_commit_hash,
+                                             checkpoint.transaction_chain_hash, checkpoint.document)
+                .dump(),
+            checkpoint_bytes);
+
+  // A Develop payload with an imported camera profile, as main wrote it.
+  std::ifstream develop_in(std::filesystem::path(ALCEDO_EXPECTED_JSON_DIR) /
+                           "imported_camera_profile_raw_expected_develop.json");
+  ASSERT_TRUE(develop_in.good());
+  const auto         develop_json = nlohmann::json::parse(develop_in);
+  DevelopParamsModel develop;
+  develop.LoadJson(develop_json);
+  EXPECT_EQ(develop.ToJson().dump(), develop_json.dump());
 }
 
 TEST(PipelineDocumentCheckpointFormat, RoundTripPreservesDefaultIdentityAndIndependentUnlocks) {
