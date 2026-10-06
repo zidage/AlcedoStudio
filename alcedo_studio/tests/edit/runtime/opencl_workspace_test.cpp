@@ -755,7 +755,7 @@ TEST_F(OpenClWorkspaceFixture, NonblockingHostUploadsKeepBytesAfterCallerReusesS
   EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
 }
 
-TEST_F(OpenClWorkspaceFixture, SubmitAndPresentationReleaseCompletedHostUploadStorage) {
+TEST_F(OpenClWorkspaceFixture, SubmitAndPresentationKeepUploadStorageUntilRenderWait) {
   OpenClBackend backend;
   backend.UseDedicatedQueue();
   auto buffer = backend.CreateBuffer(128);
@@ -777,8 +777,82 @@ TEST_F(OpenClWorkspaceFixture, SubmitAndPresentationReleaseCompletedHostUploadSt
     } else {
       backend.Submit(commands);
     }
-    EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 128U);
     backend.Wait(commands);
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
+  }
+}
+
+TEST_F(OpenClWorkspaceFixture, SharedPixelUploadsKeepOwnerAliveWithoutCopyingImage) {
+  OpenClRenderDevice device;
+  auto&              backend = device.Workspace().Device();
+  backend.UseDedicatedQueue();
+  auto*                          destination = device.Workspace().TransientBuffers().Allocate(128);
+  auto&                          commands    = device.CommandContext();
+  auto                           hold        = HoldOpenClQueue(backend);
+  std::weak_ptr<const std::byte> owner;
+  {
+    HostImagePlane pixels;
+    pixels.extent       = {8, 1};
+    pixels.stride_bytes = 128;
+    pixels.format       = HostPixelFormat::F32Rgba;
+    auto storage =
+        std::shared_ptr<std::byte>(new std::byte[128], std::default_delete<std::byte[]>{});
+    std::fill_n(storage.get(), 128, std::byte{0x25});
+    pixels.bytes = storage;
+    owner        = pixels.bytes;
+    backend.UploadDeviceMemory(destination, pixels, commands);
+  }
+  EXPECT_FALSE(owner.expired());
+  EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
+  EXPECT_EQ(commands.RetainedUploadOwnerCount(), 1U);
+  OpenClCommandContext moved(std::move(commands));
+  commands = std::move(moved);
+  EXPECT_FALSE(owner.expired());
+  EXPECT_EQ(commands.RetainedUploadOwnerCount(), 1U);
+  ASSERT_EQ(clSetUserEventStatus(hold.get(), CL_COMPLETE), CL_SUCCESS);
+  clReleaseEvent(hold.release());
+  const auto             resolved = backend.ResolveDeviceMemory(destination, 128);
+  std::vector<std::byte> readback(128);
+  ASSERT_EQ(clEnqueueReadBuffer(backend.NativeQueue(), resolved.first, CL_TRUE, resolved.second,
+                                readback.size(), readback.data(), 0, nullptr, nullptr),
+            CL_SUCCESS);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+  device.WaitIdle();
+  EXPECT_TRUE(owner.expired());
+  EXPECT_EQ(commands.RetainedUploadOwnerCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture,
+       RepeatedParameterUploadsPreserveEveryQueuedVersionAcrossRenderWaits) {
+  OpenClBackend backend;
+  backend.UseDedicatedQueue();
+  auto                 buffer = backend.CreateBuffer(512);
+  OpenClCommandContext commands;
+  for (unsigned frame = 0; frame < 3; ++frame) {
+    SCOPED_TRACE(frame);
+    auto                   hold = HoldOpenClQueue(backend);
+    std::vector<std::byte> source(128);
+    for (unsigned write = 0; write < 4; ++write) {
+      std::fill(source.begin(), source.end(),
+                std::byte{static_cast<unsigned char>(frame * 4 + write)});
+      backend.UploadBufferRange(buffer, write * 128, source, commands);
+    }
+    std::fill(source.begin(), source.end(), std::byte{0xFF});
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 512U);
+    ASSERT_EQ(clSetUserEventStatus(hold.get(), CL_COMPLETE), CL_SUCCESS);
+    clReleaseEvent(hold.release());
+    backend.Wait(commands);
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
+    std::vector<std::byte> readback(512);
+    backend.DownloadBufferRange(buffer, 0, readback, commands);
+    for (unsigned write = 0; write < 4; ++write) {
+      EXPECT_TRUE(std::all_of(readback.begin() + write * 128, readback.begin() + (write + 1) * 128,
+                              [frame, write](std::byte value) {
+                                return value ==
+                                       std::byte{static_cast<unsigned char>(frame * 4 + write)};
+                              }));
+    }
   }
 }
 
