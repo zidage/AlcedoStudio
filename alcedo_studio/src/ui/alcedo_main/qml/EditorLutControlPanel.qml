@@ -18,6 +18,11 @@ import Alcedo.Main 1.0
 // encodings of the LUT, grouped into Scene and Display. Each selection is one
 // settled `lut` write of that side only (EditorLutEncodingModel), so one
 // history entry. They stay editable without a LUT: removing a LUT keeps them.
+//
+// Remember for this LUT (L5): the checkbox shows whether the LUT library remembers
+// encodings for the applied LUT. Checking stores the shown pair, unchecking forgets
+// it; while checked, each combo selection also updates its side of the pair. This
+// writes the library only, never the photo's edit history.
 Item {
     id: root
     objectName: "editorAdjustmentPanel_lut"
@@ -156,6 +161,27 @@ Item {
             Layout.fillWidth: true
             groupLabelRole: "groupLabel"
             model: outputEncodingModel
+        }
+
+        ThemeCheckBox {
+            objectName: "editorLutRememberEncodings"
+            Layout.fillWidth: true
+            visible: !!root.target && root.target.canRememberEncodings === true
+            enabled: root.controlsEnabled
+            text: qsTr("Remember for this LUT")
+            alwaysPrimaryText: true
+            checked: !!root.target && root.target.rememberEncodings === true
+            onToggled: function(nextChecked) {
+                root.target.setRememberEncodings(nextChecked)
+            }
+
+            HoverHandler {
+                id: rememberEncodingsHover
+            }
+
+            ToolTip.visible: rememberEncodingsHover.hovered
+            ToolTip.delay: 600
+            ToolTip.text: qsTr("The LUT library stores these encodings and applies them the next time this LUT is selected.")
         }
 
         Label {

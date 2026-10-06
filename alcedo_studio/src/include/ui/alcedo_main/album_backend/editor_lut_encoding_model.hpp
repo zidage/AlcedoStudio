@@ -27,6 +27,10 @@ namespace alcedo::ui {
  * side's encoding (EditorLutWrite::input_encoding or ::output_encoding). The reference,
  * strength and the other encoding stay as stored, so two selections in quick succession do
  * not overwrite each other. One selection is one history entry.
+ *
+ * Remembered encodings (lut_color_encoding_plan.md, Phase L5): after the session accepts the
+ * write, the selection is also passed to @ref target (LutLibraryController::RememberEncodingSide),
+ * which updates this side of the LUT's remembered pair when the LUT has one.
  */
 class EditorLutEncodingModel : public EditorAdjustmentEnumModel {
   Q_OBJECT
@@ -57,6 +61,8 @@ class EditorLutEncodingModel : public EditorAdjustmentEnumModel {
   /// LMT update that sets this side's encoding to @p value only.
   [[nodiscard]] auto selectionWrite(const QString& value) const
       -> alcedo::EditorParameterWrite override;
+  /// Pass the accepted selection to the target's remembered pair.
+  void               onSettledWriteAccepted() override;
 
  private:
   void                           loadFromTarget();

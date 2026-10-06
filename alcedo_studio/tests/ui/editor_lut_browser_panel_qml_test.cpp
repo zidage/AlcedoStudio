@@ -599,6 +599,22 @@ TEST(EditorLutBrowserPanelQmlTest, ControlPanelShowsStoredEncodingsAndDisplayNot
   EXPECT_EQ(input_combo->property("displayText").toString(),
             QStringLiteral("Sony S-Log3 / S-Gamut3.Cine"));
   EXPECT_EQ(source.submit_count, 0) << "loading the encodings never submits";
+
+  // L5: the "remember" checkbox follows the library and its toggle writes the library only.
+  QQuickItem* remember = find(QStringLiteral("editorLutRememberEncodings"));
+  ASSERT_NE(remember, nullptr);
+  EXPECT_TRUE(remember->isVisible());
+  EXPECT_FALSE(remember->property("checked").toBool());
+  ASSERT_TRUE(target.setRememberEncodings(true));
+  ASSERT_TRUE(WaitUntil([&] { return remember->property("checked").toBool(); }, 2000));
+  ASSERT_TRUE(QMetaObject::invokeMethod(remember, "toggle"));
+  ASSERT_TRUE(WaitUntil([&] { return !remember->property("checked").toBool(); }, 2000));
+  EXPECT_FALSE(library.Service()->RememberedEncodings("library:general/teal.cube").has_value());
+  EXPECT_EQ(source.submit_count, 0) << "the checkbox never submits an edit";
+  EditorLutWrite no_lut;
+  no_lut.reference = LutReference{};
+  write_lut(no_lut);
+  ASSERT_TRUE(WaitUntil([&] { return !remember->isVisible(); }, 2000));
   EXPECT_TRUE(warnings.isEmpty()) << warnings.join(QLatin1Char('\n')).toStdString();
 }
 

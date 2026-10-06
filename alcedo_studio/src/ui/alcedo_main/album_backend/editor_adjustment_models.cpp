@@ -124,7 +124,9 @@ auto EditorAdjustmentModelBase::submitNow(alcedo::EditorParameterWrite write, bo
   if (submitter_ == nullptr || !submitter_->canEdit()) {
     return false;
   }
-  return submitter_->submitWrite(fieldKey_, std::move(write), settled);
+  if (!submitter_->submitWrite(fieldKey_, std::move(write), settled)) return false;
+  if (settled) onSettledWriteAccepted();
+  return true;
 }
 
 auto EditorAdjustmentModelBase::submitJsonBoundary(const QString& paramsJson, bool settled)

@@ -1408,6 +1408,16 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+1"/>
+        <source>Only a LUT from the library can remember its encodings.</source>
+        <translation>只有 LUT 库中的 LUT 才能记住输入/输出编码。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT library cannot save the remembered encodings.</source>
+        <translation>LUT 库无法保存记住的输入/输出编码。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
         <source>The editor did not accept the LUT change.</source>
         <translation>编辑器未接受此 LUT 更改。</translation>
     </message>
@@ -3000,6 +3010,16 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>Display output: the ACES 2.0 inverse output transform brings the LUT result back to the scene.</source>
         <translation>显示输出：ACES 2.0 逆输出变换会将 LUT 结果还原为场景光。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remember for this LUT</source>
+        <translation>为此 LUT 记住该设置</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT library stores these encodings and applies them the next time this LUT is selected.</source>
+        <translation>LUT 库会保存这组输入/输出编码，下次选择此 LUT 时自动应用。</translation>
     </message>
 </context>
 <context>

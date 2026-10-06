@@ -1192,5 +1192,61 @@ TEST_F(EditorDocumentHistoryTest, LutEncodingChangeIsOneCommitAndUndoRedoRestore
   std::filesystem::remove(cube, ec);
 }
 
+// L5: applying a LUT with remembered encodings is one `lut` write that carries the reference and
+// both encodings. It is one commit, and one undo restores the previous LUT and encodings.
+TEST_F(EditorDocumentHistoryTest, LutApplyWithEncodingsIsOneCommitAndUndoRestoresPreviousLut) {
+  auto  root_document = CreateDefaultPipelineDocument();
+  auto& root_lmt =
+      dynamic_cast<LmtModel&>(*root_document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  LmtUpdate previous;
+  previous.reference       = LibraryLutReference{"general/previous.cube"};
+  previous.output_encoding = "rec709_bt1886";
+  root_lmt.ApplyUpdate(previous);
+  lease_ = test::MakeInMemoryEditorLease(42, std::move(root_document));
+
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto lmt = [&]() -> const LmtModel* {
+    const auto* grade = WorkingGrade(NodeId{"grade.primary"});
+    return grade == nullptr
+               ? nullptr
+               : dynamic_cast<const LmtModel*>(grade->FindAdjustmentByType(type_ids::Lmt()));
+  };
+
+  const auto target = CompleteCurrentPanelParameterTarget(Working()->Document(), "lut", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  EditorLutWrite write;
+  write.reference       = LibraryLutReference{"general/teal.cube"};
+  write.display_name    = "teal";
+  write.input_encoding  = "sony_slog3_sgamut3cine";
+  write.output_encoding = "rec2100_pq1000";
+  EditorAdjustmentPatch patch;
+  patch.field_key = "lut";
+  patch.write     = write;
+  patch.settled   = true;
+  patch.target    = *target;
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, patch, &error)) << error;
+  ASSERT_EQ(Graph()->CommitCount(), 1u);
+  ASSERT_NE(lmt(), nullptr);
+  EXPECT_EQ(lmt()->Reference(), LutReference{LibraryLutReference{"general/teal.cube"}});
+  EXPECT_EQ(lmt()->InputEncoding(), "sony_slog3_sgamut3cine");
+  EXPECT_EQ(lmt()->OutputEncoding(), "rec2100_pq1000");
+
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  ASSERT_NE(lmt(), nullptr);
+  EXPECT_EQ(lmt()->Reference(), LutReference{LibraryLutReference{"general/previous.cube"}});
+  EXPECT_EQ(lmt()->InputEncoding(), "acescc");
+  EXPECT_EQ(lmt()->OutputEncoding(), "rec709_bt1886");
+
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  ASSERT_NE(lmt(), nullptr);
+  EXPECT_EQ(lmt()->Reference(), LutReference{LibraryLutReference{"general/teal.cube"}});
+  EXPECT_EQ(lmt()->InputEncoding(), "sony_slog3_sgamut3cine");
+  EXPECT_EQ(lmt()->OutputEncoding(), "rec2100_pq1000");
+  EXPECT_EQ(Graph()->CommitCount(), 1u);
+}
+
 }  // namespace
 }  // namespace alcedo::ui

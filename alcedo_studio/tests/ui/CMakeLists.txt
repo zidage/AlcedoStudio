@@ -1865,12 +1865,14 @@ alcedo_register_test_target(EditorLookModelTest ui)
 add_executable(LutLibraryModelTest
     ${ALCEDO_TEST_ROOT}/ui/lut_library_model_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/lut_library_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/lut_remembered_encodings_controller_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
 )
 target_include_directories(LutLibraryModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(LutLibraryModelTest
   PRIVATE
     AlbumBackendLib
+    EditRuntime
     GTest::gtest
     JSON
     Qt6::Core

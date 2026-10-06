@@ -64,6 +64,9 @@ enum class LutTargetState : std::uint8_t {
   kNotEditable,
 };
 
+/// Side of the LUT that an encoding belongs to.
+enum class LutEncodingSide : std::uint8_t { kInput, kOutput };
+
 /**
  * @brief Binds the LUT browser to exactly one Color Grade: the primary selected node.
  *
@@ -82,6 +85,12 @@ enum class LutTargetState : std::uint8_t {
  * change cannot redirect it; the session owner rejects it if the node or its LMT adjustment
  * no longer exists. The strength is kept: the write carries only the reference and name.
  * Nothing resolves to PrimaryGrade or to another selected node.
+ *
+ * Remembered encodings (lut_color_encoding_plan.md, Phase L5): the library can remember the
+ * input and output encodings for the associated entry (LutLibraryService user state, not the
+ * document). applyEntry puts the remembered pair, or ACEScc to ACEScc when the entry has none,
+ * into the same write as the reference, so the new LUT and its encodings are one history entry. Remembering is not an edit: it creates no
+ * history entry, and undo does not change it.
  *
  * Without a photo or a Color Grade target, browsing stays available through LutLibraryModel,
  * and apply requests are rejected with targetMessage.
@@ -116,6 +125,10 @@ class LutLibraryController : public QObject {
   Q_PROPERTY(QString inputEncoding READ inputEncoding NOTIFY associationChanged)
   /// Catalog encoding id of the LUT output (`acescc` by default). Kept when the LUT is removed.
   Q_PROPERTY(QString outputEncoding READ outputEncoding NOTIFY associationChanged)
+  /// True when the association is a library entry, so its encodings can be remembered.
+  Q_PROPERTY(bool canRememberEncodings READ canRememberEncodings NOTIFY associationChanged)
+  /// True when the library remembers encodings for the associated entry.
+  Q_PROPERTY(bool rememberEncodings READ rememberEncodings NOTIFY associationChanged)
   Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
 
  public:
@@ -147,16 +160,33 @@ class LutLibraryController : public QObject {
   [[nodiscard]] auto associationMissing() const -> bool { return missing_; }
   [[nodiscard]] auto inputEncoding() const -> QString { return input_encoding_; }
   [[nodiscard]] auto outputEncoding() const -> QString { return output_encoding_; }
+  [[nodiscard]] auto canRememberEncodings() const -> bool {
+    return library_ && !association_entry_id_.isEmpty();
+  }
+  [[nodiscard]] auto rememberEncodings() const -> bool { return remember_encodings_; }
   [[nodiscard]] auto lastError() const -> QString { return last_error_; }
 
   /// Read the target and its association again. Load-only: never submits.
   Q_INVOKABLE void   reload();
-  /// Apply the library entry @p entry_id to the captured target, keeping its strength.
+  /// Apply the library entry @p entry_id to the captured target, keeping its strength, with the
+  /// entry's remembered encodings or ACEScc to ACEScc.
   /// Returns false and emits applyRejected when there is no valid target, the entry is not
   /// listed or cannot be applied, or the session rejects the write.
   Q_INVOKABLE bool   applyEntry(const QString& entry_id);
   /// Remove the LUT from the captured target, keeping its strength. Same failures as applyEntry.
   Q_INVOKABLE bool   clearAssociation();
+  /// Remember the shown inputEncoding and outputEncoding for the associated entry (@p remember
+  /// true), or forget its pair (false). Writes the library only, never the document. Returns
+  /// false and sets lastError when there is no library entry or the library rejects the change.
+  Q_INVOKABLE bool   setRememberEncodings(bool remember);
+  /**
+   * @brief A user selection of @p side changed to @p encoding_id (EditorLutEncodingModel).
+   *
+   * When the associated entry has a remembered pair, replaces that side of the pair and leaves
+   * the other side. Without a remembered pair it does nothing. A library failure sets lastError;
+   * the document edit stays.
+   */
+  void               RememberEncodingSide(LutEncodingSide side, const QString& encoding_id);
 
  signals:
   void editorSessionChanged();
@@ -180,7 +210,9 @@ class LutLibraryController : public QObject {
   [[nodiscard]] auto ReadTarget() const -> TargetRead;
   void               LoadAssociation(const TargetRead& read);
   [[nodiscard]] auto EntryIdForReference(const LutReference& reference) const -> QString;
-  auto               SubmitReference(LutReference reference, std::string display_name) -> bool;
+  /// Submit one settled write of @p reference, and of @p encodings when given.
+  auto               SubmitReference(LutReference reference, std::string display_name,
+                                     std::optional<LutRememberedEncodings> encodings) -> bool;
   auto               Reject(const QString& message) -> bool;
   void               SetLastError(const QString& message);
 
@@ -200,6 +232,7 @@ class LutLibraryController : public QObject {
   /// Encoding ids; kDefaultLutEncodingId until a target is read.
   QString                             input_encoding_{QStringLiteral("acescc")};
   QString                             output_encoding_{QStringLiteral("acescc")};
+  bool                                remember_encodings_ = false;
   QString                             last_error_;
 };
 

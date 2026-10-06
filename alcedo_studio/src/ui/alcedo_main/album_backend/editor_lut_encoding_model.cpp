@@ -100,4 +100,10 @@ auto EditorLutEncodingModel::selectionWrite(const QString& value) const
   return write;
 }
 
+void EditorLutEncodingModel::onSettledWriteAccepted() {
+  if (!target_) return;
+  target_->RememberEncodingSide(output_side_ ? LutEncodingSide::kOutput : LutEncodingSide::kInput,
+                                currentValue());
+}
+
 }  // namespace alcedo::ui
