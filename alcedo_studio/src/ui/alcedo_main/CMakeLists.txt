@@ -63,6 +63,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/application_module_host.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_module.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_module.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_module_edit_state.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/album_section_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/album_thumbnail_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/interaction_policy_controller.cpp"

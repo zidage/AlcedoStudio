@@ -22,7 +22,7 @@ namespace {
 
 using RatingTests = ApplicationModuleHostTestFixture;
 
-struct SeededProject {
+struct PopulatedProject {
   std::filesystem::path packed_path_{};
   sl_element_id_t       element_id_ = 0;
   image_id_t            image_id_   = 0;
@@ -30,11 +30,11 @@ struct SeededProject {
 
 struct SeededImages {
   std::filesystem::path      packed_path_{};
-  std::vector<SeededProject> images_{};
+  std::vector<PopulatedProject> images_{};
 };
 
 // Seeds one packed project that holds one image per entry of `ratings`.
-auto CreateSeededPackedProjectWithImages(const std::filesystem::path& tempDir,
+auto CreatePopulatedPackedProjectWithImages(const std::filesystem::path& tempDir,
                                          const std::vector<int>&      ratings)
     -> std::optional<SeededImages> {
   const auto db_path     = tempDir / "rating_seed.db";
@@ -72,7 +72,7 @@ auto CreateSeededPackedProjectWithImages(const std::filesystem::path& tempDir,
       return std::nullopt;
     }
     file->SetImage(image);
-    seeded.images_.push_back(SeededProject{packed_path, file->element_id_, image->image_id_});
+    seeded.images_.push_back(PopulatedProject{packed_path, file->element_id_, image->image_id_});
   }
 
   if (!project->GetSleeveService()->Sync().success_) {
@@ -102,9 +102,9 @@ auto CreateSeededPackedProjectWithImages(const std::filesystem::path& tempDir,
   return seeded;
 }
 
-auto CreateSeededPackedProject(const std::filesystem::path& tempDir, int rating)
-    -> std::optional<SeededProject> {
-  auto seeded = CreateSeededPackedProjectWithImages(tempDir, {rating});
+auto CreatePopulatedPackedProject(const std::filesystem::path& tempDir, int rating)
+    -> std::optional<PopulatedProject> {
+  auto seeded = CreatePopulatedPackedProjectWithImages(tempDir, {rating});
   if (!seeded.has_value() || seeded->images_.size() != 1) {
     return std::nullopt;
   }
@@ -143,7 +143,7 @@ auto ReadPackedImageRating(const std::filesystem::path& packedPath, image_id_t i
   return rating;
 }
 
-auto RatingTargets(const std::vector<SeededProject>& images) -> QVariantList {
+auto RatingTargets(const std::vector<PopulatedProject>& images) -> QVariantList {
   QVariantList targets;
   for (const auto& image : images) {
     targets.push_back(QVariantMap{{"elementId", static_cast<uint>(image.element_id_)},
@@ -163,7 +163,7 @@ auto ThumbnailRatingByElement(ApplicationModuleHost& backend, sl_element_id_t el
 }
 
 TEST_F(RatingTests, SetImageRating_SyncsRatingToPackedDatabase) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_, 0);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, 0);
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -180,7 +180,7 @@ TEST_F(RatingTests, SetImageRating_SyncsRatingToPackedDatabase) {
 }
 
 TEST_F(RatingTests, LoadProject_RestoresPersistedImageRating) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_, 0);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, 0);
   ASSERT_TRUE(seeded.has_value());
 
   {
@@ -198,7 +198,7 @@ TEST_F(RatingTests, LoadProject_RestoresPersistedImageRating) {
 }
 
 TEST_F(RatingTests, GetImageRating_ReflectsCurrentRatingForContextMenuState) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_, 2);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, 2);
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -221,7 +221,7 @@ TEST_F(RatingTests, GetImageRating_ReflectsCurrentRatingForContextMenuState) {
 }
 
 TEST_F(RatingTests, SetImageRating_UpdatesLoadedThumbnailWithoutModelReset) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_, 0);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, 0);
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -249,7 +249,7 @@ TEST_F(RatingTests, SetImageRating_UpdatesLoadedThumbnailWithoutModelReset) {
 }
 
 TEST_F(RatingTests, SetImageRatings_RatesEveryTargetAndSyncsToPackedDatabase) {
-  const auto seeded = CreateSeededPackedProjectWithImages(temp_dir_, {0, 1, 2});
+  const auto seeded = CreatePopulatedPackedProjectWithImages(temp_dir_, {0, 1, 2});
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -273,7 +273,7 @@ TEST_F(RatingTests, SetImageRatings_RatesEveryTargetAndSyncsToPackedDatabase) {
 }
 
 TEST_F(RatingTests, SetImageRatings_LeavesUnselectedImagesUnchanged) {
-  const auto seeded = CreateSeededPackedProjectWithImages(temp_dir_, {1, 1, 3});
+  const auto seeded = CreatePopulatedPackedProjectWithImages(temp_dir_, {1, 1, 3});
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -295,7 +295,7 @@ TEST_F(RatingTests, SetImageRatings_LeavesUnselectedImagesUnchanged) {
 }
 
 TEST_F(RatingTests, SetImageRatings_RejectsOutOfRangeRatingAndEmptyTargets) {
-  const auto seeded = CreateSeededPackedProjectWithImages(temp_dir_, {2, 2});
+  const auto seeded = CreatePopulatedPackedProjectWithImages(temp_dir_, {2, 2});
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -312,7 +312,7 @@ TEST_F(RatingTests, SetImageRatings_RejectsOutOfRangeRatingAndEmptyTargets) {
 }
 
 TEST_F(RatingTests, SetImageRatings_BlockedWhenAnyTargetHasRatingLock) {
-  const auto seeded = CreateSeededPackedProjectWithImages(temp_dir_, {1, 1});
+  const auto seeded = CreatePopulatedPackedProjectWithImages(temp_dir_, {1, 1});
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -354,7 +354,7 @@ auto FindTaskOfKind(ApplicationModuleHost& backend, const QString& kind) -> QVar
 }
 
 TEST_F(RatingTests, StartSetImageRatings_SavesOnWorkerAsBackgroundTask) {
-  const auto seeded = CreateSeededPackedProjectWithImages(temp_dir_, {0, 1, 2});
+  const auto seeded = CreatePopulatedPackedProjectWithImages(temp_dir_, {0, 1, 2});
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;

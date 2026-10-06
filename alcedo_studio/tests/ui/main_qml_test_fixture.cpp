@@ -12,7 +12,7 @@
 #include <QuickQanava>
 #include <sstream>
 
-#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 
 Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)

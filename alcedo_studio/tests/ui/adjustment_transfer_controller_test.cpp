@@ -22,7 +22,7 @@
 #include "app/pipeline_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
-#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_apply_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_dialog_model.hpp"
@@ -86,8 +86,8 @@ auto ItemRowForKey(const QAbstractItemModel* model, const QString& key) -> int {
 class AdjustmentTransferControllerTest : public ApplicationModuleHostTestFixture {
  protected:
   auto LoadSeededBackend(ApplicationModuleHost& backend, std::size_t image_count = 2)
-      -> std::optional<SeededProject> {
-    auto seeded = CreateSeededPackedProject(temp_dir_, {}, image_count);
+      -> std::optional<PopulatedProject> {
+    auto seeded = CreatePopulatedPackedProject(temp_dir_, {}, image_count);
     if (!seeded.has_value()) {
       return std::nullopt;
     }

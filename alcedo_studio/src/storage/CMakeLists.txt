@@ -49,6 +49,7 @@ set(STORAGE_SRCS
     "${ALCEDO_SRC_ROOT}/storage/store/ai/ai_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/element_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/album_query.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/sleeve/album_edit_state_sql.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/edit_history/commit_graph_store.cpp"
 )
 

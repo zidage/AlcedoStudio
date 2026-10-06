@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -12,7 +12,7 @@ using StatsFilterTests = ApplicationModuleHostTestFixture;
 }  // namespace
 
 TEST_F(StatsFilterTests, CameraBucketFilterRestrictsThumbnailGridAndStatsTogether) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -40,7 +40,7 @@ TEST_F(StatsFilterTests, CameraBucketFilterRestrictsThumbnailGridAndStatsTogethe
 }
 
 TEST_F(StatsFilterTests, DateBucketFilterRestrictsThumbnailGrid) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -61,7 +61,7 @@ TEST_F(StatsFilterTests, DateBucketFilterRestrictsThumbnailGrid) {
 }
 
 TEST_F(StatsFilterTests, CombinedSearchAndStatsBarFilterRestrictGridAndStatsTogether) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;

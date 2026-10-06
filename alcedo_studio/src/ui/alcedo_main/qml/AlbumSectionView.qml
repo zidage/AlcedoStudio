@@ -44,6 +44,10 @@ Item {
     property int photoRevision: 0
     property real pendingSelectRequest: 0
     property bool pendingSelectAdditive: false
+    // Scroll anchor that waits for the final column count (see restoreScrollAnchor), and the
+    // anchor of the current position, kept while the rows match this view's geometry.
+    property var pendingScrollAnchor: null
+    property var currentScrollAnchor: null
 
     signal imageSelectionChanged(int elementId, int imageId, string fileName, bool isHdr,
                                  bool selected)
@@ -56,7 +60,14 @@ Item {
     Accessible.role: Accessible.List
     Accessible.name: qsTr("Grouped photos")
 
-    onColumnCountChanged: sections.SetColumnCount(columnCount)
+    // A new column count rebuilds the rows (a model reset puts the list at the top), so the
+    // row at the top of the view is kept through the change.
+    onColumnCountChanged: {
+        const anchor = pendingScrollAnchor || currentScrollAnchor
+        pendingScrollAnchor = anchor
+        sections.SetColumnCount(columnCount)
+        Qt.callLater(root.applyPendingScrollAnchor)
+    }
     Component.onCompleted: sections.SetColumnCount(columnCount)
 
     function photoFor(fileId, revision) {
@@ -96,7 +107,10 @@ Item {
     function groupTitleText(title, unknown) {
         const field = library.groupField
         if (unknown) {
-            return field === "label" ? qsTr("Unlabelled") : qsTr("Unknown")
+            if (field === "label") {
+                return qsTr("Unlabelled")
+            }
+            return field === "edited" ? qsTr("Unedited") : qsTr("Unknown")
         }
         if (field === "rating") {
             return Number(title) === 0 ? qsTr("Unrated") : qsTr("%n star(s)", "", Number(title))
@@ -107,6 +121,83 @@ Item {
                    ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : String(title)
         }
         return String(title)
+    }
+
+    // ── Scroll anchor ──
+    // The scroll position as the photo at the top of the view: the first occurrence of the top
+    // row (the group's first occurrence for a header) and the pixel offset into that row. It
+    // survives a new column count, a collapsed group above, and the teardown of this view.
+    function layoutReady() {
+        return list.width > 0 && list.height > 0 && sections.columnCount === root.columnCount
+    }
+
+    function scrollAnchor() {
+        if (pendingScrollAnchor) {
+            return pendingScrollAnchor
+        }
+        if (!root.layoutReady()) {
+            return currentScrollAnchor
+        }
+        const row = sections.RowAtOffset(list.contentY, headerHeight, photoRowHeight)
+        if (row < 0) {
+            return null
+        }
+        const info = sections.RowInfo(row)
+        return {
+            groupField: library.groupField,
+            occurrence: Number(info.firstOccurrence),
+            header: info.kind === 0,
+            offset: list.contentY - sections.RowOffset(row, headerHeight, photoRowHeight)
+        }
+    }
+
+    function applyScrollAnchor(anchor) {
+        if (!anchor || anchor.groupField !== library.groupField) {
+            return
+        }
+        const row = anchor.header
+                    ? sections.GroupHeaderRow(sections.GroupForOccurrence(anchor.occurrence))
+                    : sections.RowForOccurrence(anchor.occurrence)
+        if (row < 0) {
+            return
+        }
+        const rowHeight = sections.RowInfo(row).kind === 0 ? headerHeight : photoRowHeight
+        const target = sections.RowOffset(row, headerHeight, photoRowHeight)
+                     + Math.min(Math.max(0, Number(anchor.offset)), rowHeight - 1)
+        const maxY = Math.max(0, sections.ContentHeight(headerHeight, photoRowHeight) - list.height)
+        list.contentY = Math.max(0, Math.min(maxY, target))
+    }
+
+    // Restore a scroll anchor that this view (or an earlier instance of it) returned. It is
+    // applied once the list has its size and the model has this view's column count.
+    function restoreScrollAnchor(anchor) {
+        pendingScrollAnchor = anchor || null
+        applyPendingScrollAnchor()
+    }
+
+    function trackScrollAnchor() {
+        if (!pendingScrollAnchor && root.layoutReady() && list.count > 0) {
+            currentScrollAnchor = scrollAnchor()
+        }
+    }
+
+    function applyPendingScrollAnchor() {
+        if (!pendingScrollAnchor || !root.layoutReady() || list.count <= 0) {
+            return
+        }
+        const anchor = pendingScrollAnchor
+        pendingScrollAnchor = null
+        applyScrollAnchor(anchor)
+    }
+
+    // Cross-workspace reveal: the library finds the photo's occurrence on the query worker and
+    // the view scrolls just enough to show it (focusPositionReady).
+    function scrollToElementAtTop(elementId) {
+        if (Number(elementId) <= 0) {
+            return false
+        }
+        library.RequestFocusPosition(Number(elementId))
+        return true
     }
 
     function scrollToRow(row) {
@@ -532,9 +623,18 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar {}
 
-            onContentYChanged: visibleRowsTimer.restart()
-            onHeightChanged: visibleRowsTimer.restart()
-            onCountChanged: visibleRowsTimer.restart()
+            onContentYChanged: {
+                visibleRowsTimer.restart()
+                root.trackScrollAnchor()
+            }
+            onHeightChanged: {
+                visibleRowsTimer.restart()
+                Qt.callLater(root.applyPendingScrollAnchor)
+            }
+            onCountChanged: {
+                visibleRowsTimer.restart()
+                Qt.callLater(root.applyPendingScrollAnchor)
+            }
 
             delegate: Item {
                 id: rowItem

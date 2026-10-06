@@ -15,6 +15,7 @@
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_select.hpp"
 #include "storage/store/semantic/semantic_label_config.hpp"
+#include "storage/store/sleeve/album_edit_state_sql.hpp"
 #include "storage/store/sleeve/album_query_sql.hpp"
 
 namespace alcedo {
@@ -29,6 +30,7 @@ auto IsKnownSortField(AlbumSortField field) -> bool {
     case AlbumSortField::kLens:
     case AlbumSortField::kRating:
     case AlbumSortField::kLabels:
+    case AlbumSortField::kEditTime:
       return true;
   }
   return false;
@@ -43,6 +45,7 @@ auto IsKnownGroupField(AlbumGroupField field) -> bool {
     case AlbumGroupField::kLens:
     case AlbumGroupField::kRating:
     case AlbumGroupField::kLabels:
+    case AlbumGroupField::kEditDay:
       return true;
   }
   return false;
@@ -64,9 +67,11 @@ void ValidateAlbumQueryOptions(const AlbumQueryOptions& options) {
   if (!IsKnownGroupField(options.group_field_)) {
     throw std::invalid_argument("Album query: unknown group field");
   }
-  if (options.group_field_ == AlbumGroupField::kImportDay &&
-      options.import_day_time_zone_.empty()) {
+  if (options.group_field_ == AlbumGroupField::kImportDay && options.local_day_time_zone_.empty()) {
     throw std::invalid_argument("Album query: import-day groups need a time zone");
+  }
+  if (options.group_field_ == AlbumGroupField::kEditDay && options.local_day_time_zone_.empty()) {
+    throw std::invalid_argument("Album query: edit-day groups need a time zone");
   }
 }
 
@@ -100,7 +105,7 @@ auto LabelRelations(const std::string& active_semantic_model_key) -> SqlFragment
   // already normalized with NormalizeSemanticLabelKey (trimmed, ASCII lowercase).
   const std::map<std::string, std::string> aliases(SemanticLabelCanonicalLookup().begin(),
                                                    SemanticLabelCanonicalLookup().end());
-  auto relations = expr::raw("WITH label_membership AS (SELECT DISTINCT sl.file_id, ");
+  auto relations = expr::raw("label_membership AS (SELECT DISTINCT sl.file_id, ");
   if (aliases.empty()) {
     relations.sql_.append("LOWER(TRIM(sl.label)) AS label_key FROM SemanticImageLabel sl ");
   } else {
@@ -127,13 +132,40 @@ auto LabelRelations(const std::string& active_semantic_model_key) -> SqlFragment
   relations.sql_.append(std::format(
       " AND TRIM(sl.label) <> '' AND sl.file_id IN (SELECT file_id FROM {})), "
       "label_sort AS (SELECT file_id, MIN(label_key) AS label_sort_key FROM label_membership "
-      "GROUP BY file_id) ",
+      "GROUP BY file_id)",
       kMatchSetTable));
   return relations;
 }
 
+auto UsesEditStateRelation(const AlbumQueryOptions& options) -> bool {
+  return options.group_field_ == AlbumGroupField::kEditDay ||
+         options.sort_field_ == AlbumSortField::kEditTime;
+}
+
+auto RelationsPrefix(const AlbumQueryOptions& options, const std::string& active_semantic_model_key)
+    -> SqlFragment {
+  SqlFragment prefix;
+  const auto  add = [&prefix](SqlFragment definition) {
+    prefix.sql_.append(prefix.empty() ? "WITH " : ", ");
+    prefix.append(std::move(definition));
+  };
+  if (UsesLabelRelation(options)) {
+    add(LabelRelations(active_semantic_model_key));
+  }
+  if (UsesEditStateRelation(options)) {
+    add(album_edit_state_sql::EditStateRelation(options.local_day_time_zone_, kMatchSetTable));
+  }
+  if (!prefix.empty()) {
+    prefix.sql_.append(" ");
+  }
+  return prefix;
+}
+
 auto OccurrenceSource(const AlbumQueryOptions& options) -> SqlFragment {
   auto source = expr::raw(std::format("FROM {} s", kMatchSetTable));
+  if (UsesEditStateRelation(options)) {
+    source.sql_.append(" LEFT JOIN edit_state es ON es.file_id = s.file_id");
+  }
   if (options.group_field_ == AlbumGroupField::kLabels) {
     source.sql_.append(" LEFT JOIN label_membership m ON m.file_id = s.file_id");
   }
@@ -159,14 +191,43 @@ auto GroupKeyExpression(AlbumGroupField field) -> SqlFragment {
       return expr::col("s.rating");
     case AlbumGroupField::kLabels:
       return expr::col("m.label_key");
+    case AlbumGroupField::kEditDay:
+      return expr::col("es.edit_day");
   }
   throw std::invalid_argument("Album query: unknown group field");
 }
 
-auto GroupOrderTerm(AlbumGroupField field) -> OrderTerm {
+namespace {
+
+/// The photo sort that reads the values of @p field (the same Inspector field).
+auto SortFieldOfGroup(AlbumGroupField field) -> AlbumSortField {
+  switch (field) {
+    case AlbumGroupField::kCaptureDay:
+      return AlbumSortField::kCaptureTime;
+    case AlbumGroupField::kImportDay:
+      return AlbumSortField::kImportTime;
+    case AlbumGroupField::kEditDay:
+      return AlbumSortField::kEditTime;
+    case AlbumGroupField::kCameraModel:
+      return AlbumSortField::kCameraModel;
+    case AlbumGroupField::kLens:
+      return AlbumSortField::kLens;
+    case AlbumGroupField::kRating:
+      return AlbumSortField::kRating;
+    case AlbumGroupField::kLabels:
+      return AlbumSortField::kLabels;
+    case AlbumGroupField::kNone:
+      break;
+  }
+  return AlbumSortField::kNone;
+}
+
+/// Fixed order of the groups of @p field when no sort of the same field is selected.
+auto DefaultGroupOrderTerm(AlbumGroupField field) -> OrderTerm {
   switch (field) {
     case AlbumGroupField::kCaptureDay:
     case AlbumGroupField::kImportDay:
+    case AlbumGroupField::kEditDay:
     case AlbumGroupField::kRating:
       return {GroupKeyExpression(field), OrderDirection::kDescending, NullPlacement::kLast};
     case AlbumGroupField::kCameraModel:
@@ -177,6 +238,19 @@ auto GroupOrderTerm(AlbumGroupField field) -> OrderTerm {
       break;
   }
   throw std::invalid_argument("Album query: the flat mode has no group order");
+}
+
+}  // namespace
+
+auto GroupOrderTerm(const AlbumQueryOptions& options) -> OrderTerm {
+  auto term = DefaultGroupOrderTerm(options.group_field_);
+  if (options.sort_field_ != AlbumSortField::kNone &&
+      options.sort_field_ == SortFieldOfGroup(options.group_field_)) {
+    term.direction_ = options.sort_direction_ == SortDirection::kDescending
+                          ? OrderDirection::kDescending
+                          : OrderDirection::kAscending;
+  }
+  return term;
 }
 
 namespace {
@@ -197,6 +271,8 @@ auto SortExpression(AlbumSortField field) -> SqlFragment {
       return expr::col("s.rating");
     case AlbumSortField::kLabels:
       return expr::col("ls.label_sort_key");
+    case AlbumSortField::kEditTime:
+      return expr::col("es.edited_at_ns");
   }
   throw std::invalid_argument("Album query: unknown sort field");
 }
@@ -213,6 +289,8 @@ auto DateGroupTimestampOf(AlbumGroupField field) -> std::optional<DateGroupTimes
       return DateGroupTimestamp{"s.capture_at", AlbumSortField::kCaptureTime};
     case AlbumGroupField::kImportDay:
       return DateGroupTimestamp{"s.added_time", AlbumSortField::kImportTime};
+    case AlbumGroupField::kEditDay:
+      return DateGroupTimestamp{"es.edited_at_ns", AlbumSortField::kEditTime};
     default:
       return std::nullopt;
   }
@@ -223,7 +301,7 @@ auto DateGroupTimestampOf(AlbumGroupField field) -> std::optional<DateGroupTimes
 auto OccurrenceOrderTerms(const AlbumQueryOptions& options) -> std::vector<OrderTerm> {
   std::vector<OrderTerm> terms;
   if (options.group_field_ != AlbumGroupField::kNone) {
-    terms.push_back(GroupOrderTerm(options.group_field_));
+    terms.push_back(GroupOrderTerm(options));
   }
   if (options.sort_field_ != AlbumSortField::kNone) {
     terms.push_back({SortExpression(options.sort_field_),

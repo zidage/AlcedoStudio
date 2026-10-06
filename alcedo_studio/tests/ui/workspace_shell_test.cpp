@@ -43,7 +43,7 @@
 
 #include "app/editor_render_intent.hpp"
 #include "support/harness_completing_pipeline_scheduler_port.hpp"
-#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
@@ -850,7 +850,7 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   if (raw_paths.empty()) {
     GTEST_SKIP() << "RAW fixture om1.dng is required for an interactive viewport session";
   }
-  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, raw_paths);
   ASSERT_TRUE(seeded.has_value());
   ASSERT_EQ(seeded->images_.size(), 2u);
 
@@ -1132,7 +1132,7 @@ TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
   if (raw_paths.empty()) {
     GTEST_SKIP() << "RAW fixture om1.dng is required for viewport input";
   }
-  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, raw_paths);
   ASSERT_TRUE(seeded.has_value());
 
   auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
@@ -1495,7 +1495,7 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
   if (raw_paths.empty()) {
     GTEST_SKIP() << "RAW fixture om1.dng is required for deleting an interactive image";
   }
-  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, raw_paths);
   ASSERT_TRUE(seeded.has_value());
   const auto file_id  = static_cast<uint>(seeded->file_id_);
   const auto image_id = static_cast<uint>(seeded->image_id_);
@@ -1674,7 +1674,7 @@ TEST_F(WorkspaceShellTests, LibraryScrollPositionSurvivesEditorRoundTrip) {
 
 TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
   ASSERT_TRUE(QCoreApplication::instance());
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
   const auto file_id  = static_cast<uint>(seeded->file_id_);
   const auto image_id = static_cast<uint>(seeded->image_id_);
@@ -1726,7 +1726,7 @@ TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
 
 TEST_F(WorkspaceShellTests, EditorCollectionChangeOpensFirstImageWhenCurrentMissing) {
   ASSERT_TRUE(QCoreApplication::instance());
-  const auto seeded = CreateSeededPackedProject(temp_dir_, {}, 2);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, {}, 2);
   ASSERT_TRUE(seeded.has_value());
   ASSERT_EQ(seeded->images_.size(), 2u);
 
@@ -1775,7 +1775,7 @@ TEST_F(WorkspaceShellTests, EditorCollectionChangeOpensFirstImageWhenCurrentMiss
 
 TEST_F(WorkspaceShellTests, EditorCollectionChangeRevealsCurrentImageWhenStillPresent) {
   ASSERT_TRUE(QCoreApplication::instance());
-  const auto seeded = CreateSeededPackedProject(temp_dir_, {}, 2);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, {}, 2);
   ASSERT_TRUE(seeded.has_value());
   ASSERT_EQ(seeded->images_.size(), 2u);
 
@@ -1868,7 +1868,7 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   if (raw_paths.empty()) {
     GTEST_SKIP() << "RAW fixture om1.dng is required for the history rail";
   }
-  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, raw_paths);
   ASSERT_TRUE(seeded.has_value());
 
   auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
@@ -2038,7 +2038,7 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
   if (raw_paths.empty()) {
     GTEST_SKIP() << "RAW fixture om1.dng is required for adjustment panel navigation";
   }
-  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, raw_paths);
   ASSERT_TRUE(seeded.has_value());
 
   auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);

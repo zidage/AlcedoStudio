@@ -282,7 +282,7 @@ void LibraryModule::ResetThumbnailWindow() {
 
 // ── Library query ───────────────────────────────────────────────────────────
 
-auto CurrentImportDayTimeZone() -> std::string {
+auto CurrentLocalDayTimeZone() -> std::string {
   return QTimeZone::systemTimeZoneId().toStdString();
 }
 
@@ -300,6 +300,8 @@ auto InspectorFieldName(AlbumSortField field) -> QString {
       return QStringLiteral("rating");
     case AlbumSortField::kLabels:
       return QStringLiteral("label");
+    case AlbumSortField::kEditTime:
+      return QStringLiteral("edited");
     case AlbumSortField::kNone:
       break;
   }
@@ -320,6 +322,8 @@ auto InspectorFieldName(AlbumGroupField field) -> QString {
       return QStringLiteral("rating");
     case AlbumGroupField::kLabels:
       return QStringLiteral("label");
+    case AlbumGroupField::kEditDay:
+      return QStringLiteral("edited");
     case AlbumGroupField::kNone:
       break;
   }
@@ -331,7 +335,8 @@ namespace {
 auto SortFieldFromName(const QString& name) -> std::optional<AlbumSortField> {
   for (const auto field :
        {AlbumSortField::kCaptureTime, AlbumSortField::kImportTime, AlbumSortField::kCameraModel,
-        AlbumSortField::kLens, AlbumSortField::kRating, AlbumSortField::kLabels}) {
+        AlbumSortField::kLens, AlbumSortField::kRating, AlbumSortField::kLabels,
+        AlbumSortField::kEditTime}) {
     if (InspectorFieldName(field) == name) {
       return field;
     }
@@ -342,7 +347,8 @@ auto SortFieldFromName(const QString& name) -> std::optional<AlbumSortField> {
 auto GroupFieldFromName(const QString& name) -> std::optional<AlbumGroupField> {
   for (const auto field :
        {AlbumGroupField::kCaptureDay, AlbumGroupField::kImportDay, AlbumGroupField::kCameraModel,
-        AlbumGroupField::kLens, AlbumGroupField::kRating, AlbumGroupField::kLabels}) {
+        AlbumGroupField::kLens, AlbumGroupField::kRating, AlbumGroupField::kLabels,
+        AlbumGroupField::kEditDay}) {
     if (InspectorFieldName(field) == name) {
       return field;
     }
@@ -508,6 +514,8 @@ void LibraryModule::RequestLibraryRefresh() {
 
 void LibraryModule::SubmitPendingRefresh() {
   refresh_scheduled_   = false;
+  // This read sees every edit written so far.
+  edit_order_stale_    = false;
   auto       proj      = project_ ? project_->handler().project() : nullptr;
   const auto folder_id = folders_ ? folders_->CurrentFolderElementId() : std::nullopt;
   auto       browse    = proj ? proj->GetAlbumBrowseService() : nullptr;
@@ -533,7 +541,7 @@ void LibraryModule::SubmitPendingRefresh() {
   input->stats_filter_                  = stats_->BuildStatsFilterNode();
   input->search_                        = search_->LibrarySearch();
   input->options_                       = RequestedOptions();
-  input->options_.import_day_time_zone_ = CurrentImportDayTimeZone();
+  input->options_.local_day_time_zone_  = CurrentLocalDayTimeZone();
   input->active_model_key_              = stats_->ActiveSemanticModelKey();
   input->page_size_ = static_cast<int64_t>(input->search_.pending_text_.has_value() ||
                                                    input->search_.filter_.has_value()
@@ -927,6 +935,9 @@ void LibraryModule::RequestFocusPosition(uint fileId, const QString& preferredGr
           }
           if (!error.isEmpty()) {
             SetQueryError(error);
+            return;
+          }
+          if (SettlePendingReveal(fileId, position.has_value())) {
             return;
           }
           if (!position.has_value()) {

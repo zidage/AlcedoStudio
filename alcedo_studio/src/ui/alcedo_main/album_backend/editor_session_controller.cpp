@@ -1107,6 +1107,15 @@ void EditorSessionController::clearLastEditedImage() {
   emit LastEditedImageChanged();
 }
 
+void EditorSessionController::restoreLastEditedImage(uint elementId, uint imageId) {
+  if (elementId == 0 || imageId == 0 || last_element_id_ != 0 || last_image_id_ != 0) {
+    return;
+  }
+  last_element_id_ = elementId;
+  last_image_id_   = imageId;
+  emit LastEditedImageChanged();
+}
+
 void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
   if (presentation_viewport_ == viewportItem) {
     return;

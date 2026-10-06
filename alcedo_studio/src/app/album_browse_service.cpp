@@ -220,6 +220,10 @@ auto AlbumBrowseService::ReadAlbumFileRows(std::span<const sl_element_id_t> file
   return store.ListSearchResultRows(file_ids);
 }
 
+auto AlbumBrowseService::ReadLastEditedFile() const -> std::optional<LastEditedFile> {
+  return ElementStoreForRead("ReadLastEditedFile").ReadLastEditedFile();
+}
+
 auto AlbumBrowseService::CreateFolder(const std::filesystem::path& parent_folder_path,
                                       const file_name_t& name) -> std::optional<AlbumFolderView> {
   if (!sleeve_service_) {

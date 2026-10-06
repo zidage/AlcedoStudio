@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "app/export_service.hpp"
@@ -41,7 +42,9 @@
 #include "io/image/export_icc_profile_resolver.hpp"
 #include "io/image/export_recipe.hpp"
 #include "json.hpp"
+#include "sleeve/album_query.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
+#include "storage/store/sleeve/element_store.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
 #include "type/supported_file_type.hpp"
 #include "type/type.hpp"
@@ -320,6 +323,47 @@ TEST_F(LibraryHistoryAndExportTest, PersistHistoryWritesTheNewStateAndPublishesI
   PipelineMgmtService reopened(project.GetStorage());
   EXPECT_EQ(reopened.AcquireCommittedSnapshot(ids.first)->Document().ToJson(),
             committed->Document().ToJson());
+}
+
+// The library edit state reads the rows that a history write stores: a persisted commit makes
+// the photo edited (edit-day group, last edited photo, overview count), and moving the Version
+// head back to the root makes it unedited again although the commit row stays.
+TEST_F(LibraryHistoryAndExportTest, PersistedHeadDecidesTheLibraryEditState) {
+  ProjectService project(db_path_, meta_path_);
+  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  const auto     ids       = ImportLinearDng(project, pipelines);
+  ASSERT_NE(ids.first, 0u);
+  auto&                   store = project.GetStorage()->GetElementStore();
+  const AlbumQueryOptions edit_days{.group_field_         = AlbumGroupField::kEditDay,
+                                    .local_day_time_zone_ = "UTC"};
+  const AlbumQueryRead    read{.offset_ = 0, .limit_ = 10, .read_groups_ = true};
+  const auto              edit_group_is_unknown = [&] {
+    const auto result = store.ReadAlbumQuery(0, std::nullopt, edit_days, "", read);
+    EXPECT_EQ(result.groups_.size(), 1u);
+    return !result.groups_.empty() &&
+           std::holds_alternative<std::monostate>(result.groups_.front().key_);
+  };
+
+  EXPECT_TRUE(edit_group_is_unknown());
+  EXPECT_FALSE(store.ReadLastEditedFile().has_value());
+  EXPECT_EQ(store.ReadProjectOverview().edited_photo_count_, 0u);
+
+  auto edited = AddExposureCommit(*pipelines, ids.first, 1.0f);
+  ASSERT_NE(pipelines->PersistHistory(edited.base, edited.graph), nullptr);
+  EXPECT_FALSE(edit_group_is_unknown());
+  const auto last = store.ReadLastEditedFile();
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->file_id_, ids.first);
+  EXPECT_EQ(last->image_id_, ids.second);
+  EXPECT_EQ(store.ReadProjectOverview().edited_photo_count_, 1u);
+
+  auto        base    = pipelines->LoadHistorySnapshot(ids.first);
+  CommitGraph to_root = *base.graph_;
+  to_root.MoveWorkingHead(to_root.GetActiveVersionId(), std::nullopt);
+  ASSERT_NE(pipelines->PersistHistory(base, to_root), nullptr);
+  EXPECT_TRUE(edit_group_is_unknown());
+  EXPECT_FALSE(store.ReadLastEditedFile().has_value());
+  EXPECT_EQ(store.ReadProjectOverview().edited_photo_count_, 0u);
 }
 
 // Two writers that read the same stored state: the second write is refused and storage keeps the

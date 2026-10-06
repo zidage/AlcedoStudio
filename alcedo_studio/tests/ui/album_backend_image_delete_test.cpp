@@ -8,7 +8,7 @@
 #include <filesystem>
 #include <optional>
 
-#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 
@@ -156,7 +156,7 @@ TEST_F(DeleteTests, DeleteImages_BlockedByInteractionPolicyLock) {
 }
 
 TEST_F(DeleteTests, AddToAlbumThenDeleteFromAlbum_KeepsRootFile) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -209,7 +209,7 @@ TEST_F(DeleteTests, AddToAlbumThenDeleteFromAlbum_KeepsRootFile) {
 }
 
 TEST_F(DeleteTests, IndexOfElementInCurrentViewFollowsCollectionMembership) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_, {}, 2);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_, {}, 2);
   ASSERT_TRUE(seeded.has_value());
   ASSERT_EQ(seeded->images_.size(), 2u);
 
@@ -247,7 +247,7 @@ TEST_F(DeleteTests, IndexOfElementInCurrentViewFollowsCollectionMembership) {
 }
 
 TEST_F(DeleteTests, AddToAlbumTwiceIsIdempotent) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -284,7 +284,7 @@ TEST_F(DeleteTests, AddToAlbumTwiceIsIdempotent) {
 }
 
 TEST_F(DeleteTests, DeleteFromRootRemovesFromAllAlbums) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -341,7 +341,7 @@ TEST_F(DeleteTests, DeleteFromRootRemovesFromAllAlbums) {
 }
 
 TEST_F(DeleteTests, StatsFilterConsistencyAfterMembershipChange) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
 
   ApplicationModuleHost backend;
@@ -394,7 +394,7 @@ TEST_F(DeleteTests, StatsFilterConsistencyAfterMembershipChange) {
 }
 
 TEST_F(DeleteTests, AddToAlbumSurvivesReload) {
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  const auto seeded = CreatePopulatedPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
 
   const auto file_id   = seeded->file_id_;

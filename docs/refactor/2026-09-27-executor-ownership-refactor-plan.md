@@ -998,7 +998,7 @@ Paste：planner 拒绝 → 记录失败，存储未动
 | Paste 原子写入与发布：`PersistHistoryWritesTheNewStateAndPublishesItsSnapshot` | 同上 | PASS：存储标签、checkpoint 标签与文档都等于返回的快照；下一次 `AcquireCommittedSnapshot` 返回同一对象且不读存储；新服务从存储构建出相同文档 |
 | 并发写者：`PersistHistoryRejectsAStaleBaseAndLeavesStorageUnchanged` | 同上 | PASS：第二个基于旧状态的写入被拒绝，存储保持第一个写入 |
 | Copy / Paste 经 controller：`CopyDoesNotSaveOrRenderSourceImage`、`MultiTargetCoordinatorRefreshesOnlySuccessfulTargets`（新增断言） | `AdjustmentTransferControllerTest` | 见下方 Suite totals |
-| 测试夹具：`CreateSeededPackedProject` 为每张图调用 `InitializeImageRoot`（与导入相同），使夹具满足"每张图都有 root" | `album_backend_seeded_project_fixture.hpp` | 见下方 Suite totals |
+| 测试夹具：`CreatePopulatedPackedProject` 为每张图调用 `InitializeImageRoot`（与导入相同），使夹具满足"每张图都有 root" | `album_backend_populated_project_fixture.hpp` | 见下方 Suite totals |
 | 迁移：root 初始化 4 个用例（`ImageRootStoresCompleteDefaultDocumentAndDevelopData`、`NonRawImageRootBindsWorkingSpaceCameraProfile`、`EditorOpenOfExistingRawRootKeepsTheRawCameraProfile`（原 `InitializeImageRootOnExistingRawRootLeavesLiveCameraProfileUnchanged`）、`PersistedRawRootWithoutMatricesDoesNotReceiveWorkingSpaceProfile`）；library Paste 的 LUT 用例改用生产路径（`LibraryPasteWithoutStoredCheckpointStillRestoresLutFieldInLiveDocument` 先 Paste 再清 checkpoint） | `PipelineMapperTest`、`EditorSessionHistoryPortPersistTest` | 见下方 Suite totals |
 
 Commands（PowerShell，PATH 前置 `build\debug\vcpkg_installed\x64-windows\debug\bin`）：
@@ -1015,7 +1015,7 @@ Suite totals：
 - P5 集（新文件 + 导出 + 隔离）：19 通过，0 失败，3 个预存 `DISABLED_`（`ExportServiceTest` 的 HDR / 批量 / 手工保留用例）。
 - 定向回归集 1590 个（首轮）：1576 通过，14 失败。
   - 9 个是 P2–P4 记录的预存失败：`EditorSessionRenderSchedulerPortTest` 5 个、`GpuDagOpenClWorkspaceTest` 2 个、`EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection`、`EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`。
-  - `AdjustmentTransferControllerTest` 4 个：测试夹具 `CreateSeededPackedProject` 绕过导入直接写库文件，图片没有 history root；原来 Copy / Paste 经 `LoadEditorPipeline` 就地补建 root，掩盖了这一点。夹具改为像导入一样调用 `InitializeImageRoot` 建 root 后，4 个全部通过（没有放宽 Copy / Paste 的 root 要求）。
+  - `AdjustmentTransferControllerTest` 4 个：测试夹具 `CreatePopulatedPackedProject` 绕过导入直接写库文件，图片没有 history root；原来 Copy / Paste 经 `LoadEditorPipeline` 就地补建 root，掩盖了这一点。夹具改为像导入一样调用 `InitializeImageRoot` 建 root 后，4 个全部通过（没有放宽 Copy / Paste 的 root 要求）。
   - `SemanticGenerationServiceTest.GeneratesLabelsForRecursiveCameraSampleDatabaseAndSqlChecks`：测试体通过，`TearDown` 删除 DB 文件时文件仍被占用。stash 全部改动回到 `8e2aba985`、只重编该目标后同样失败，为预存问题。
 - 修复夹具后重跑 `AdjustmentTransferControllerTest|AlbumBackend.*|LibraryHistoryAndExportTest|ExecutorIsolationTest|ExportServiceTest|SemanticGenerationServiceTest`：152 个，151 通过，1 失败（上面的预存 `TearDown` 失败）。
 - `ThumbnailServiceTest`（排除 FuzzScroll，直接运行 exe）：23 通过，1 跳过（Metal 用例），0 失败。

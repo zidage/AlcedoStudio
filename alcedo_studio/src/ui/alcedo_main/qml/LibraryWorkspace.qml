@@ -134,11 +134,31 @@ Item {
 
     function restoreScrollPosition() {
         const view = contentViewLoader.item
-        if (!view || !host || !view.restoreContentY) {
+        if (!view || !host) {
             return
         }
-        view.restoreContentY(root.hostContentY())
+        if (view.restoreScrollAnchor) {
+            // The grouped view reads the anchor once; it carries its group field, so groups of
+            // another field start at the top.
+            view.restoreScrollAnchor(host.librarySectionScrollAnchor)
+            host.librarySectionScrollAnchor = null
+        } else if (view.restoreContentY) {
+            view.restoreContentY(root.hostContentY())
+        } else {
+            return
+        }
         Qt.callLater(root.revealRequestedImage)
+        Qt.callLater(root.revealPendingFile)
+    }
+
+    // The last edited photo of a newly opened project, requested while this workspace is
+    // shown: the library finds its position on the query worker (selecting the root folder
+    // when the current folder lacks it), loads its page, and the view that shows that result
+    // scrolls to it (focusPositionReady).
+    function revealPendingFile() {
+        if (appModules.library.pendingRevealFileId > 0) {
+            appModules.library.RequestPendingReveal()
+        }
     }
 
     function revealRequestedImage() {
@@ -210,6 +230,13 @@ Item {
     }
 
     Connections {
+        target: appModules.library
+        function onPendingRevealChanged() {
+            Qt.callLater(root.revealPendingFile)
+        }
+    }
+
+    Connections {
         target: appModules.library.thumbnailModel
         ignoreUnknownSignals: true
         function onCountChanged() {
@@ -220,7 +247,10 @@ Item {
         }
     }
 
-    Component.onCompleted: root.applyHostViewState()
+    Component.onCompleted: {
+        root.applyHostViewState()
+        Qt.callLater(root.revealPendingFile)
+    }
     Component.onDestruction: root.persistViewState()
 
 RowLayout {
@@ -662,6 +692,12 @@ RowLayout {
         AlbumSectionView {
             objectName: "libraryAlbumSectionView"
             zoomLevel: root.gridZoomLevel
+            // Leaving the library (or the grouped view) keeps the photo at the top of the view.
+            Component.onDestruction: {
+                if (host) {
+                    host.librarySectionScrollAnchor = scrollAnchor()
+                }
+            }
             selectedImagesById: host.selectedImagesById
             exportQueueById: host.exportQueueById
             onZoomChanged: function(level) { root.gridZoomLevel = level }

@@ -262,6 +262,16 @@ ApplicationWindow {
     property bool editorClosePersistInFlight: appModules.editorSession
                                               ? appModules.editorSession.persistInFlight === true : false
 
+    // A scroll anchor names occurrences of one project's result.
+    Connections {
+        target: appModules.project
+        ignoreUnknownSignals: true
+
+        function onProjectChanged() {
+            root.librarySectionScrollAnchor = null
+        }
+    }
+
     Connections {
         target: appModules.updates
 
@@ -484,6 +494,9 @@ ApplicationWindow {
     property real libraryInspectorWidth: 300
     property int libraryGridZoomLevel: 4
     property alias libraryGridContentY: root.globalContentY
+    // Scroll anchor of the grouped library view (AlbumSectionView.scrollAnchor), written when
+    // that view is torn down (editor round trip, flat mode) and read once by the next one.
+    property var librarySectionScrollAnchor: null
     property alias editorFilmstripContentX: root.globalContentX
 
     // Cross-workspace reveal requests are consumed by the next live view. The

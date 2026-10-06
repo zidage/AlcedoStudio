@@ -27,6 +27,7 @@
 #include "storage/mapper/duckorm/duckdb_select.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
+#include "storage/store/sleeve/album_edit_state_sql.hpp"
 #include "storage/store/sleeve/album_query_sql.hpp"
 #include "type/type.hpp"
 #include "utils/string/convert.hpp"
@@ -242,9 +243,10 @@ void ReadMatchSetBuckets(duckdb_connection conn, FolderStatsView& out, bool read
 /// label key (the same relation as the label group), by count descending, then by key.
 auto ReadMatchSetLabelBuckets(duckdb_connection conn, const std::string& active_semantic_model_key)
     -> std::vector<StorageStatsBucket> {
-  auto query = album_sql::LabelRelations(active_semantic_model_key);
+  auto query = duckorm::expr::raw("WITH ");
+  query.append(album_sql::LabelRelations(active_semantic_model_key));
   query.sql_.append(
-      "SELECT label_key, COUNT(*) AS c FROM label_membership GROUP BY label_key "
+      " SELECT label_key, COUNT(*) AS c FROM label_membership GROUP BY label_key "
       "ORDER BY c DESC, label_key");
   duckdb_result result;
   ExecuteQueryOrThrow(conn, query.sql_, query, &result);
@@ -332,15 +334,6 @@ auto OccurrencePosition(const AlbumQueryOptions& options) -> duckorm::SqlFragmen
   return position;
 }
 
-/// The label relations prefix when the options read labels, else an empty fragment.
-auto RelationsPrefix(const AlbumQueryOptions& options, const std::string& active_semantic_model_key)
-    -> duckorm::SqlFragment {
-  if (!album_sql::UsesLabelRelation(options)) {
-    return {};
-  }
-  return album_sql::LabelRelations(active_semantic_model_key);
-}
-
 /// Read one bounded page, the counts, the groups, and the statistics from the match set.
 auto ReadAlbumQueryFromMatchSet(duckdb_connection conn, const AlbumQueryOptions& options,
                                 const std::string&    active_semantic_model_key,
@@ -354,13 +347,13 @@ auto ReadAlbumQueryFromMatchSet(duckdb_connection conn, const AlbumQueryOptions&
 
   const auto source     = album_sql::OccurrenceSource(options);
   if (options.group_field_ == AlbumGroupField::kLabels) {
-    auto count = RelationsPrefix(options, active_semantic_model_key);
+    auto count = album_sql::RelationsPrefix(options, active_semantic_model_key);
     count.append(duckorm::clause::select_query(std::vector{duckorm::clause::count_all()}, source));
     out.occurrence_count_ = RunScalarInt64(conn, count.sql_, count);
   }
 
   if (read.read_groups_ && options.group_field_ != AlbumGroupField::kNone) {
-    auto query = RelationsPrefix(options, active_semantic_model_key);
+    auto query = album_sql::RelationsPrefix(options, active_semantic_model_key);
     query.append(duckorm::clause::select_query(
         std::vector{
             duckorm::clause::as(GroupKeyProjection(options.group_field_), "group_key"),
@@ -371,7 +364,7 @@ auto ReadAlbumQueryFromMatchSet(duckdb_connection conn, const AlbumQueryOptions&
     // group per typed key; the typed group_order keeps the order of dates and ratings.
     query.append(
         duckorm::clause::group_by(std::vector{expr::col("group_order"), expr::col("group_key")}));
-    auto group_order        = album_sql::GroupOrderTerm(options.group_field_);
+    auto group_order        = album_sql::GroupOrderTerm(options);
     group_order.expression_ = expr::col("group_order");
     query.append(duckorm::clause::order_by(std::vector{group_order}));
     duckdb_result result;
@@ -391,7 +384,7 @@ auto ReadAlbumQueryFromMatchSet(duckdb_connection conn, const AlbumQueryOptions&
   }
 
   if (read.limit_ > 0) {
-    auto query = RelationsPrefix(options, active_semantic_model_key);
+    auto query = album_sql::RelationsPrefix(options, active_semantic_model_key);
     query.append(duckorm::clause::select_query(
         std::vector{expr::raw(kMatchSetResultColumns), GroupKeyProjection(options.group_field_)},
         source));
@@ -411,7 +404,7 @@ auto ReadAlbumQueryFromMatchSet(duckdb_connection conn, const AlbumQueryOptions&
 
   if (read.read_statistics_) {
     FolderStatsView statistics;
-    ReadMatchSetBuckets(conn, statistics, !options.import_day_time_zone_.empty());
+    ReadMatchSetBuckets(conn, statistics, !options.local_day_time_zone_.empty());
     if (!active_semantic_model_key.empty()) {
       statistics.label_stats_ = ReadMatchSetLabelBuckets(conn, active_semantic_model_key);
     }
@@ -821,7 +814,7 @@ auto ElementStore::ReadAlbumQuery(sl_element_id_t                            fol
   {
     // The only statement that evaluates the filter; every read below uses its rows.
     const MatchSetTable match_set(guard.conn_, BuildScopedFileQuery(folder_id, extra_filter),
-                                  options.import_day_time_zone_);
+                                  options.local_day_time_zone_);
     out = ReadAlbumQueryFromMatchSet(guard.conn_, options, active_semantic_model_key, read);
   }
   transaction.commit();
@@ -843,8 +836,8 @@ auto ElementStore::ReadAlbumFilePosition(sl_element_id_t                        
   std::optional<AlbumFilePosition> out;
   {
     const MatchSetTable match_set(guard.conn_, BuildScopedFileQuery(folder_id, extra_filter),
-                                  options.import_day_time_zone_);
-    auto                query = RelationsPrefix(options, active_semantic_model_key);
+                                  options.local_day_time_zone_);
+    auto                query = album_sql::RelationsPrefix(options, active_semantic_model_key);
     query.sql_.append("SELECT position, group_key FROM (");
     query.append(duckorm::clause::select_query(
         std::vector{expr::raw("s.file_id AS occurrence_file_id"),
@@ -908,8 +901,8 @@ auto ElementStore::ReadAlbumFileIds(sl_element_id_t                            f
   duckorm::Transaction transaction(guard.conn_);
   {
     const MatchSetTable match_set(guard.conn_, BuildScopedFileQuery(folder_id, extra_filter),
-                                  options.import_day_time_zone_);
-    auto                query = RelationsPrefix(options, active_semantic_model_key);
+                                  options.local_day_time_zone_);
+    auto                query = album_sql::RelationsPrefix(options, active_semantic_model_key);
     query.sql_.append("SELECT occurrence_file_id FROM (");
     query.append(duckorm::clause::select_query(
         std::vector{expr::raw("s.file_id AS occurrence_file_id"),
@@ -983,17 +976,16 @@ auto ElementStore::CountFilesInFolder(sl_element_id_t                           
 }
 
 auto ElementStore::ReadProjectOverview() const -> ProjectOverviewCounts {
+  // Import writes the edit history root and an empty Version head but no EditCommit row. A file
+  // counts as edited by the same rule as the library edit groups: its active head is a commit.
+  static constexpr const char* kOverviewQuery =
+      "SELECT COUNT(*), COUNT(*) FILTER (WHERE e.id IN ({})), "
+      "CAST(MIN(i.capture_date) AS VARCHAR), CAST(MAX(i.capture_date) AS VARCHAR) {}";
   auto       guard   = database_.GetConnectionGuard();
   auto       db_lock = guard.Lock();
   const auto scope   = BuildScopedFileQuery(0);
-  // Import writes the edit history root and an empty Version head but no EditCommit row, so a
-  // file counts as edited only when its root has at least one commit.
-  const auto sql = std::format(
-      "SELECT COUNT(*), "
-      "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM ImageEditState s JOIN EditCommit c "
-      "ON c.root_id = s.root_id WHERE s.element_id = e.id)), "
-      "CAST(MIN(i.capture_date) AS VARCHAR), CAST(MAX(i.capture_date) AS VARCHAR) {}",
-      scope.from_where_);
+  const auto sql =
+      std::format(kOverviewQuery, album_edit_state_sql::EditedFileIdsQuery(), scope.from_where_);
 
   duckdb_result result;
   ExecuteQueryOrThrow(guard.conn_, sql, scope.binds_, &result);
@@ -1007,6 +999,29 @@ auto ElementStore::ReadProjectOverview() const -> ProjectOverviewCounts {
     if (!duckdb_value_is_null(&result, 3, 0)) {
       out.latest_capture_date_ = ReadVarchar(&result, 3, 0);
     }
+  }
+  duckdb_destroy_result(&result);
+  return out;
+}
+
+auto ElementStore::ReadLastEditedFile() const -> std::optional<LastEditedFile> {
+  auto       guard   = database_.GetConnectionGuard();
+  auto       db_lock = guard.Lock();
+  // Ties of the strictly increasing commit clock cannot occur; the file id only makes the
+  // order total.
+  const auto sql     = std::format(
+      "SELECT ies.element_id, fi.image_id FROM {} "
+          "JOIN Element e ON e.id = ies.element_id AND e.type = {} "
+          "JOIN FileImage fi ON fi.file_id = e.id "
+          "ORDER BY hc.created_at_ns DESC, ies.element_id DESC LIMIT 1",
+      album_edit_state_sql::kActiveHeadCommitJoin, static_cast<uint32_t>(ElementType::FILE));
+  duckdb_result result;
+  ExecuteQueryOrThrow(guard.conn_, sql, {}, &result);
+  std::optional<LastEditedFile> out;
+  if (duckdb_row_count(&result) > 0) {
+    out =
+        LastEditedFile{.file_id_  = static_cast<sl_element_id_t>(duckdb_value_int64(&result, 0, 0)),
+                       .image_id_ = static_cast<image_id_t>(duckdb_value_int64(&result, 1, 0))};
   }
   duckdb_destroy_result(&result);
   return out;

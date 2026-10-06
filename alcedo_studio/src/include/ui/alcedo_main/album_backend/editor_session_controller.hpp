@@ -83,7 +83,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_PROPERTY(uint imageId READ image_id NOTIFY StateChanged)
   // Last image opened with a non-zero id. Survives Close/Finalize so re-entering
   // the editor from the library can restore the same image (Phase 4A-Fix). Cleared
-  // by clearLastEditedImage() when the image is deleted or the project switches.
+  // by clearLastEditedImage() when the image is deleted or the project switches. When a
+  // project opens, restoreLastEditedImage() sets the project's last edited photo.
   Q_PROPERTY(uint lastElementId READ last_element_id NOTIFY LastEditedImageChanged)
   Q_PROPERTY(uint lastImageId READ last_image_id NOTIFY LastEditedImageChanged)
   // Composite key for QML viewport session resets (includes load-request generation).
@@ -345,6 +346,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Forget the last-edited image so re-entering the editor does not resurrect a
   // deleted image or one from a prior project (Phase 4A-Fix).
   Q_INVOKABLE void   clearLastEditedImage();
+  // Set the last-edited image to the project's last edited photo (read from storage when the
+  // project opens). An image opened in this session already is newer, so it stays.
+  void               restoreLastEditedImage(uint elementId, uint imageId);
 
   // Bind/unbind the production EditorViewportItem for this workspace instance.
   // Bind on mount and after every image Open while the same viewport lives.

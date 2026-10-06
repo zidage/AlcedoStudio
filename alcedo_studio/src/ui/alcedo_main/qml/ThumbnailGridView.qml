@@ -606,6 +606,17 @@ Item {
         }
     }
 
+    // A position read (RequestFocusPosition) loaded the page of the file; in the flat view the
+    // occurrence is the grid index.
+    Connections {
+        target: appModules.library
+        function onFocusPositionReady(fileId, occurrence, sectionRow) {
+            if (occurrence >= 0) {
+                root.scrollToIndexAtTop(occurrence)
+            }
+        }
+    }
+
     Connections {
         target: appModules.library.thumbnailModel
         function onLoadingChanged() {
