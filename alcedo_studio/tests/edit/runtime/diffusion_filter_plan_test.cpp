@@ -4,11 +4,14 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
 #include "edit/graph/diffusion_filter_model.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
+
+#include "diffusion_filter_reference.hpp"
 
 namespace alcedo {
 namespace {
@@ -65,6 +68,31 @@ TEST(DiffusionFilterPlan, WeightsSumToOneAndFollowThePowerLawWithoutBlackMist) {
   const double ratio = std::pow(2.0, 2.0 - shape.power_law_exponent);
   EXPECT_NEAR(layout.weights[1] / layout.weights[0], ratio, 1e-5);
   EXPECT_NEAR(layout.weights[2] / layout.weights[1], ratio, 1e-5);
+}
+
+TEST(DiffusionFilterPlan, HighlightBoostKeepsSmoothGradientsFreeOfContours) {
+  const auto layout = MakeDiffusionFilterLayout({2000, 1500}, ResolveDiffusionFilterShape(1.0f));
+  const diffusion_filter_test::ScatterReference reference({}, 0, 0, layout, {});
+  // A uniform region scatters onto itself, so it renders (1 - s) * v + s * Boost(v). The log
+  // slope of that response is the contrast the filter adds to a smooth gradient through v; a
+  // steep slope draws a visible contour where the gradient crosses the boost knee.
+  auto render = [&](double value) {
+    const double boosted = reference.Boost({value, value, value}).r;
+    return (1.0 - layout.scatter_fraction) * value + layout.scatter_fraction * boosted;
+  };
+  constexpr double kStep = 1.0 / 64.0;
+  double           max_slope = 0.0;
+  for (double stops = -6.0; stops < 6.0; stops += kStep) {
+    const double slope =
+        (std::log2(render(std::exp2(stops + kStep))) - std::log2(render(std::exp2(stops)))) /
+        kStep;
+    max_slope = (std::max)(max_slope, slope);
+  }
+  EXPECT_LT(max_slope, 1.6);
+  // Bright light sources still get the full boost.
+  const double source = std::exp2(layout.highlight_high);
+  EXPECT_NEAR(reference.Boost({source, source, source}).r, source * (1.0 + layout.highlight_gain),
+              1e-9);
 }
 
 TEST(DiffusionFilterPlan, BlackMistReducesTheWidestLevelAndTransmission) {

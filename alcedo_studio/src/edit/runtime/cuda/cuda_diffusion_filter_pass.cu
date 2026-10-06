@@ -130,13 +130,16 @@ __device__ auto SampleBSpline(const float4* image, int width, int height, float 
   return sum;
 }
 
-/// Linear AP1 with the near-clip highlight boost. Negative (out-of-gamut) light does not scatter.
-__device__ __forceinline__ auto BoostHighlights(float4 linear, float gain, float knee) -> float3 {
+/// Linear AP1 with the highlight boost, a smoothstep of the peak channel in log2 exposure from
+/// @p low to @p high stops. Negative (out-of-gamut) light does not scatter.
+__device__ __forceinline__ auto BoostHighlights(float4 linear, float gain, float low, float high)
+    -> float3 {
   const float r    = fmaxf(linear.x, 0.0f);
   const float g    = fmaxf(linear.y, 0.0f);
   const float b    = fmaxf(linear.z, 0.0f);
   const float peak = fmaxf(r, fmaxf(g, b));
-  const float t    = fminf(fmaxf((peak - knee) / (1.0f - knee), 0.0f), 1.0f);
+  const float t =
+      fminf(fmaxf((log2f(fmaxf(peak, 1.0e-6f)) - low) / (high - low), 0.0f), 1.0f);
   const float lift = 1.0f + gain * t * t * (3.0f - 2.0f * t);
   return make_float3(r * lift, g * lift, b * lift);
 }
@@ -151,7 +154,8 @@ __global__ void DecodeKernel(const float4* src, float4* dst, std::uint32_t pixel
 /// footprint of one base texel. @p base_to_render maps base texel coordinates to the render.
 __global__ void ReduceBoostKernel(const float4* src, int src_width, int src_height, float4* dst,
                                   int dst_width, int dst_height, Matrix3x3 base_to_render,
-                                  int samples, float gain, float knee) {
+                                  int samples, float gain, float low,
+                                  float high) {
   const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
   if (x >= dst_width || y >= dst_height) return;
@@ -163,7 +167,7 @@ __global__ void ReduceBoostKernel(const float4* src, int src_width, int src_heig
       const float  bx      = static_cast<float>(x) + (static_cast<float>(i) + 0.5f) * step;
       const float2 render  = Transform(base_to_render, bx, by);
       const auto   linear  = SampleBilinearDecoded(src, src_width, src_height, render.x, render.y);
-      const auto   boosted = BoostHighlights(linear, gain, knee);
+      const auto   boosted = BoostHighlights(linear, gain, low, high);
       sum.x += boosted.x;
       sum.y += boosted.y;
       sum.z += boosted.z;
@@ -269,7 +273,8 @@ void BuildScatter(CudaRenderWorkspace& workspace, cudaStream_t stream, const flo
   ReduceBoostKernel<<<GridFor(base.width, base.height), block, 0, stream>>>(
       src, static_cast<int>(width), static_cast<int>(height), levels[0],
       static_cast<int>(base.width), static_cast<int>(base.height), mapping.base_to_render,
-      static_cast<int>(mapping.reduce_samples), layout.highlight_gain, layout.highlight_knee);
+      static_cast<int>(mapping.reduce_samples), layout.highlight_gain, layout.highlight_low,
+      layout.highlight_high);
   for (std::uint32_t index = 1; index < count; ++index) {
     const auto from = layout.extents[index - 1];
     const auto to   = layout.extents[index];

@@ -360,8 +360,8 @@ struct DiffusionReduceParams {
   int   dst_height;
   int   samples;
   float gain;
-  float knee;
-  float pad0;
+  float low;
+  float high;
   float base_to_render[12];
 };
 
@@ -457,13 +457,14 @@ static inline float4 DiffusionSampleBSpline(texture2d<float, access::read> image
   return sum;
 }
 
-/// Linear AP1 with the near-clip highlight boost. Negative (out-of-gamut) light does not scatter.
-static inline float3 DiffusionBoostHighlights(float4 linear, float gain, float knee) {
+/// Linear AP1 with the highlight boost, a smoothstep of the peak channel in log2 exposure from
+/// low to high stops. Negative (out-of-gamut) light does not scatter.
+static inline float3 DiffusionBoostHighlights(float4 linear, float gain, float low, float high) {
   const float r    = fmax(linear.x, 0.0f);
   const float g    = fmax(linear.y, 0.0f);
   const float b    = fmax(linear.z, 0.0f);
   const float peak = fmax(r, fmax(g, b));
-  const float t    = fmin(fmax((peak - knee) / (1.0f - knee), 0.0f), 1.0f);
+  const float t    = fmin(fmax((log2(fmax(peak, 1.0e-6f)) - low) / (high - low), 0.0f), 1.0f);
   const float lift = 1.0f + gain * t * t * (3.0f - 2.0f * t);
   return float3(r * lift, g * lift, b * lift);
 }
@@ -487,7 +488,7 @@ kernel void diffusion_filter_reduce_boost(texture2d<float, access::read> src [[t
       const float  bx     = float(x) + (float(i) + 0.5f) * step;
       const float2 render = DiffusionTransform(params.base_to_render, bx, by);
       const float4 linear = DiffusionBilinearDecoded(src, render.x, render.y);
-      sum += DiffusionBoostHighlights(linear, params.gain, params.knee);
+      sum += DiffusionBoostHighlights(linear, params.gain, params.low, params.high);
     }
   }
   const float inv = step * step;

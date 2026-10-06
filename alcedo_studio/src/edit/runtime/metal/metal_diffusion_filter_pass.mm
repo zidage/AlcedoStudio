@@ -33,8 +33,8 @@ struct ReduceParams {
   std::int32_t dst_height = 0;
   std::int32_t samples    = 1;
   float        gain       = 0.0f;
-  float        knee       = 0.0f;
-  float        pad0       = 0.0f;
+  float        low        = 0.0f;
+  float        high       = 0.0f;
   float        base_to_render[12]{};
 };
 static_assert(sizeof(ReduceParams) == 80);
@@ -155,7 +155,8 @@ void BuildScatter(MetalRenderDevice& device, const MetalBackend::Texture2D& scen
     params.dst_height = static_cast<std::int32_t>(base.height);
     params.samples    = static_cast<std::int32_t>(mapping.reduce_samples);
     params.gain       = layout.highlight_gain;
-    params.knee       = layout.highlight_knee;
+    params.low        = layout.highlight_low;
+    params.high       = layout.highlight_high;
     CopyMatrix(params.base_to_render, mapping.base_to_render);
     auto [encoder, pipeline] = BeginDispatch(device, kReduceBoostFunction, kReduceBoostLabel);
     encoder->setTexture(Native(scene), 0);

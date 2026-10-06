@@ -71,7 +71,8 @@ struct DiffusionFilterLayout {
   float                                        scatter_fraction = 0.0f;
   float                                        transmission     = 1.0f;
   float                                        highlight_gain   = 0.0f;
-  float                                        highlight_knee   = 0.8f;
+  float                                        highlight_low    = -1.5f;
+  float                                        highlight_high   = 1.5f;
 };
 
 /**
