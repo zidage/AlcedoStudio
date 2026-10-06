@@ -4,8 +4,8 @@ import QtQuick.Controls.Material
 import QtQuick.Layouts
 
 // Full-width application toolbar: native traffic-light reserve, collections
-// toggle, workspace switch, File, Settings, update, inspector, and caption
-// actions. The wordmark remains on the collections card below this bar.
+// toggle, workspace switch, File, Settings, update, background-task island,
+// inspector, and caption actions. The wordmark remains on the collections card below this bar.
 Rectangle {
     id: root
     objectName: "topToolbar"
@@ -167,6 +167,12 @@ Rectangle {
         }
 
         Item { Layout.fillWidth: true }
+
+        // Background-task island: a status lamp that unfolds while a task runs
+        // or after one fails.
+        BackgroundTaskBar {
+            Layout.alignment: Qt.AlignVCenter
+        }
 
         // Inspector toggle: compact IconActionButton, same hit as the
         // collections sidebar control. Visible only in the Library workspace.

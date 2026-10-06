@@ -764,10 +764,6 @@ ApplicationWindow {
                     host: root
                     workspaceRouter: appModules.workspaceRouter
                 }
-
-                BackgroundTaskBar {
-                    Layout.fillWidth: true
-                }
             }
         }
     }
