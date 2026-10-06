@@ -13,6 +13,8 @@
 #include <string>
 #include <utility>
 
+#include "color/color_encoding_catalog.hpp"
+#include "color/color_encoding_math.h"
 #include "edit/operators/models/builtin_type_ids.hpp"
 
 namespace alcedo {
@@ -373,10 +375,10 @@ auto NearlyEqualPrimaries(const std::array<float, 8>& a, const std::array<float,
 }
 
 auto NearestDrtSpace(const std::array<float, 8>& primaries) -> DrtColorSpace {
-  if (NearlyEqualPrimaries(primaries, kRasterPrimariesRec709)) {
+  if (NearlyEqualPrimaries(primaries, color::GamutPrimariesXy(color::ColorGamutId::Rec709))) {
     return DrtColorSpace::Rec709;
   }
-  if (NearlyEqualPrimaries(primaries, kRasterPrimariesDisplayP3)) {
+  if (NearlyEqualPrimaries(primaries, color::GamutPrimariesXy(color::ColorGamutId::P3D65))) {
     return DrtColorSpace::P3D65;
   }
   return DrtColorSpace::Rec2020;
@@ -396,25 +398,20 @@ auto NearestDrtEotf(const RasterTransfer& transfer) -> DrtEotf {
     default:
       break;
   }
-  struct Candidate {
-    DrtEotf eotf_;
-    float   gamma_;
-  };
-  constexpr std::array<Candidate, 4> kCandidates = {{{DrtEotf::Gamma18, 1.8f},
-                                                     {DrtEotf::Gamma22, 2.2f},
-                                                     {DrtEotf::Bt1886, 2.4f},
-                                                     {DrtEotf::Gamma26, 2.6f}}};
+  constexpr std::array<DrtEotf, 4>   kCandidates = {DrtEotf::Gamma18, DrtEotf::Gamma22,
+                                                    DrtEotf::Bt1886, DrtEotf::Gamma26};
   // Compare the curves at code values 0.25, 0.5 and 0.75.
   DrtEotf                            best        = DrtEotf::Gamma22;
   float                              best_error  = std::numeric_limits<float>::max();
   for (const auto& candidate : kCandidates) {
     float error = 0.0f;
     for (const float x : {0.25f, 0.5f, 0.75f}) {
-      error += std::abs(EvaluateRasterTransfer(transfer, x) - std::pow(x, candidate.gamma_));
+      error +=
+          std::abs(EvaluateRasterTransfer(transfer, x) - CeDecode(static_cast<int>(candidate), x));
     }
     if (error < best_error) {
       best_error = error;
-      best       = candidate.eotf_;
+      best       = candidate;
     }
   }
   return best;

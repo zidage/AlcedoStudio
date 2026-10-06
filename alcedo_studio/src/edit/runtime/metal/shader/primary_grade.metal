@@ -5,6 +5,7 @@
 #include <metal_stdlib>
 
 using namespace metal;
+#include "../../../../include/color/color_encoding_math.h"
 
 struct GradeAdjustmentParams {
   uint  behavior;
@@ -30,36 +31,6 @@ static inline float Luma(float3 c) {
 // sqrt(k) * min(gain, 1). Same math as ApplyOkLabContrast in cuda_primary_grade_pass.cu (documented
 // there) and tests/edit/runtime/oklab_contrast_reference.hpp. precise:: math keeps fast-math from
 // moving this operator away from the CUDA and OpenCL results.
-static inline float ContrastAcesccEncode(float value) {
-  constexpr float kA          = 9.72f;
-  constexpr float kB          = 17.52f;
-  constexpr float kOffset     = 0.0000152587890625f;
-  constexpr float kTransition = 0.000030517578125f;
-  constexpr float kFloor      = (-16.0f + kA) / kB;
-  if (value < 0.0f) {
-    return kFloor + value;
-  }
-  if (value < kTransition) {
-    return (precise::log2(kOffset + value * 0.5f) + kA) / kB;
-  }
-  return (precise::log2(value) + kA) / kB;
-}
-
-static inline float ContrastAcesccDecode(float value) {
-  constexpr float kA         = 9.72f;
-  constexpr float kB         = 17.52f;
-  constexpr float kOffset    = 0.0000152587890625f;
-  constexpr float kFloor     = (-16.0f + kA) / kB;
-  constexpr float kThreshold = (-15.0f + kA) / kB;
-  if (value < kFloor) {
-    return value - kFloor;
-  }
-  if (value <= kThreshold) {
-    return (precise::exp2(value * kB - kA) - kOffset) * 2.0f;
-  }
-  return precise::exp2(value * kB - kA);
-}
-
 static inline float SignedCbrt(float value) {
   return copysign(precise::pow(fabs(value), 1.0f / 3.0f), value);
 }
@@ -93,8 +64,8 @@ static inline float3 ApplyOkLabContrast(float3 acescc, float contrast) {
   constexpr float kCurveWidthStops = 2.5f;
   const float     slope            = precise::exp2(contrast * 0.01f);
   float3          lab =
-      LinearAp1ToOkLab(float3(ContrastAcesccDecode(acescc.x), ContrastAcesccDecode(acescc.y),
-                              ContrastAcesccDecode(acescc.z)));
+      LinearAp1ToOkLab(float3(CeAcesccDecode(acescc.x), CeAcesccDecode(acescc.y),
+                              CeAcesccDecode(acescc.z)));
   const float shape =
       lab.x > 0.0f ? precise::tanh(3.0f * precise::log2(lab.x / kPivotLightness) / kCurveWidthStops)
                    : -1.0f;
@@ -102,8 +73,8 @@ static inline float3 ApplyOkLabContrast(float3 acescc, float contrast) {
   const float chroma_scale = precise::sqrt(slope) * min(gain, 1.0f);
   lab                      = float3(lab.x * gain, lab.y * chroma_scale, lab.z * chroma_scale);
   const float3 linear_ap1  = OkLabToLinearAp1(lab);
-  return float3(ContrastAcesccEncode(linear_ap1.x), ContrastAcesccEncode(linear_ap1.y),
-                ContrastAcesccEncode(linear_ap1.z));
+  return float3(CeAcesccEncode(linear_ap1.x), CeAcesccEncode(linear_ap1.y),
+                CeAcesccEncode(linear_ap1.z));
 }
 
 static inline float ExtrapolateCurve(float value, device const GradeAdjustmentParams& p, uint a,
@@ -218,13 +189,13 @@ static inline float3 ApplyAdjustment(float3 c, device const GradeAdjustmentParam
   const float value    = p.values[0];
   if (behavior == 0u && value != 0.0f) {
     // values[1..9]: row-major CAT02 adaptation in linear AP1 (resolved on the CPU).
-    const float3 lin = float3(ContrastAcesccDecode(c.x), ContrastAcesccDecode(c.y),
-                              ContrastAcesccDecode(c.z));
-    c = float3(ContrastAcesccEncode(p.values[1] * lin.x + p.values[2] * lin.y + p.values[3] * lin.z),
-               ContrastAcesccEncode(p.values[4] * lin.x + p.values[5] * lin.y + p.values[6] * lin.z),
-               ContrastAcesccEncode(p.values[7] * lin.x + p.values[8] * lin.y + p.values[9] * lin.z));
+    const float3 lin = float3(CeAcesccDecode(c.x), CeAcesccDecode(c.y),
+                              CeAcesccDecode(c.z));
+    c = float3(CeAcesccEncode(p.values[1] * lin.x + p.values[2] * lin.y + p.values[3] * lin.z),
+               CeAcesccEncode(p.values[4] * lin.x + p.values[5] * lin.y + p.values[6] * lin.z),
+               CeAcesccEncode(p.values[7] * lin.x + p.values[8] * lin.y + p.values[9] * lin.z));
   } else if (behavior == 1u) {
-    const float offset = value / 17.52f;
+    const float offset = value / CE_ACESCC_B;
     c.x += offset;
     c.y += offset;
     c.z += offset;

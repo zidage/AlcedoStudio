@@ -71,7 +71,7 @@ endif()
 # file parsing, so the pipeline document can link it.
 def_library(RasterColorModel
     SOURCES ${ALCEDO_SRC_ROOT}/image/raster_color_model.cpp
-    PUBLIC_DEPS JSON
+    PUBLIC_DEPS JSON ColorEncodingCatalog
 )
 
 # Image Base

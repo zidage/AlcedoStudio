@@ -27,6 +27,7 @@ set(ALCEDO_OPENCV_IMAGE_DEPS
 # ==============================================================================
 add_subdirectory(concurrency)
 add_subdirectory(utils)
+add_subdirectory(color)
 add_subdirectory(nn)
 
 

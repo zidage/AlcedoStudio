@@ -67,9 +67,7 @@ auto EntryStatusText(const LutLibraryEntry& entry) -> QString {
 
 auto EntryDetailText(const LutLibraryEntry& entry) -> QString {
   if (entry.header_error != LutHeaderError::kNone) return ToQString(entry.header_message);
-  if (!entry.header.SupportsGradeApplication()) {
-    return Tr("1D LUTs cannot be applied by the grade stage.");
-  }
+  if (!entry.header.SupportsGradeApplication()) return UnsupportedLutText(entry.header);
   return ToQString(entry.relative_path) + QStringLiteral("  |  ") + FormatByteSize(entry.size);
 }
 
@@ -80,6 +78,12 @@ auto LutSizeText(const LutLibraryEntry& entry) -> QString {
 }
 
 }  // namespace
+
+auto UnsupportedLutText(const LutHeader& header) -> QString {
+  if (header.SupportsGradeApplication()) return {};
+  if (header.lut_3d_size > 0) return Tr("1D shaper LUTs are not supported.");
+  return Tr("1D LUTs cannot be applied by the grade stage.");
+}
 
 LutLibraryModel::LutLibraryModel(QObject* parent) : QAbstractListModel(parent) {
   query_timer_.setSingleShot(true);

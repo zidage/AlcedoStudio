@@ -7,12 +7,6 @@
 
 // === ACEScc encoding constants ================================================
 
-#define ALCEDO_OPENCL_ACESCC_LOG2_MIN       (-15.0f)
-#define ALCEDO_OPENCL_ACESCC_LOG2_DENORM    (-16.0f)
-#define ALCEDO_OPENCL_ACESCC_DENORM_TRANS   0.00003051757812f
-#define ALCEDO_OPENCL_ACESCC_DENORM_OFFSET  0.00001525878906f
-#define ALCEDO_OPENCL_ACESCC_A              9.72f
-#define ALCEDO_OPENCL_ACESCC_B              17.52f
 
 // === Reference Gamut Compression constants ====================================
 
@@ -50,31 +44,6 @@ static inline float opencl_rgc_compress_curve(float dist, float lim, float thr, 
   const float nd          = (dist - thr) / scl;
   const float p           = pow(fmax(0.0f, nd), pwr);
   return thr + scl * nd / pow(1.0f + p, 1.0f / pwr);
-}
-
-// === ACEScc encode / decode ===================================================
-
-static inline float opencl_acescc_encode(float x) {
-  const float encode_floor = (ALCEDO_OPENCL_ACESCC_LOG2_DENORM + ALCEDO_OPENCL_ACESCC_A) / ALCEDO_OPENCL_ACESCC_B;
-  if (x <= 0.0f) {
-    return encode_floor + x;
-  }
-  if (x < ALCEDO_OPENCL_ACESCC_DENORM_TRANS) {
-    return (log2(ALCEDO_OPENCL_ACESCC_DENORM_OFFSET + x * 0.5f) + ALCEDO_OPENCL_ACESCC_A) / ALCEDO_OPENCL_ACESCC_B;
-  }
-  return (log2(x) + ALCEDO_OPENCL_ACESCC_A) / ALCEDO_OPENCL_ACESCC_B;
-}
-
-static inline float opencl_acescc_decode(float acescc) {
-  const float encode_floor     = (ALCEDO_OPENCL_ACESCC_LOG2_DENORM + ALCEDO_OPENCL_ACESCC_A) / ALCEDO_OPENCL_ACESCC_B;
-  const float denorm_threshold = (ALCEDO_OPENCL_ACESCC_LOG2_MIN + ALCEDO_OPENCL_ACESCC_A) / ALCEDO_OPENCL_ACESCC_B;
-  if (acescc < encode_floor) {
-    return acescc - encode_floor;
-  }
-  if (acescc <= denorm_threshold) {
-    return (exp2(acescc * ALCEDO_OPENCL_ACESCC_B - ALCEDO_OPENCL_ACESCC_A) - ALCEDO_OPENCL_ACESCC_DENORM_OFFSET) * 2.0f;
-  }
-  return exp2(acescc * ALCEDO_OPENCL_ACESCC_B - ALCEDO_OPENCL_ACESCC_A);
 }
 
 // === Sigmoid / contrast helpers ===============================================
@@ -249,13 +218,13 @@ static inline float opencl_soft_floor(float x, float floor, float softness) {
 }
 
 static inline float3 opencl_acescc_to_ap1(float3 acescc) {
-  return (float3)(opencl_acescc_decode(acescc.x), opencl_acescc_decode(acescc.y),
-                  opencl_acescc_decode(acescc.z));
+  return (float3)(CeAcesccDecode(acescc.x), CeAcesccDecode(acescc.y),
+                  CeAcesccDecode(acescc.z));
 }
 
 static inline float3 opencl_ap1_to_acescc(float3 ap1) {
-  return (float3)(opencl_acescc_encode(ap1.x), opencl_acescc_encode(ap1.y),
-                  opencl_acescc_encode(ap1.z));
+  return (float3)(CeAcesccEncode(ap1.x), CeAcesccEncode(ap1.y),
+                  CeAcesccEncode(ap1.z));
 }
 
 static inline float3 opencl_ap1_to_oklab(float3 ap1) {

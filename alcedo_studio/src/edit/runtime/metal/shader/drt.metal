@@ -5,6 +5,7 @@
 #include <metal_stdlib>
 
 using namespace metal;
+#include "../../../../include/color/color_encoding_math.h"
 
 constant int kMetalAcesOdtTableSize = 362;
 
@@ -152,31 +153,10 @@ struct MetalToOutputParams {
 
 constant int kMetalOdtMethodAces20   = 0;
 constant int kMetalOdtMethodOpenDrt  = 1;
-constant int kMetalEotfLinear        = 0;
-constant int kMetalEotfSt2084        = 1;
-constant int kMetalEotfHlg           = 2;
-constant int kMetalEotfGamma26       = 3;
-constant int kMetalEotfBt1886        = 4;
-constant int kMetalEotfGamma22       = 5;
-constant int kMetalEotfGamma18       = 6;
 constant int kMetalOdtTableSize      = 360;
 constant int kMetalOdtTotalTableSize = 362;
 constant int kMetalOdtBaseIndex      = 1;
 constant float kMetalHueLimit        = 360.0f;
-
-constant float kAcesccLog2Min      = -15.0f;
-constant float kAcesccLog2Denorm   = -16.0f;
-constant float kAcesccDenormTrans  = 0.00003051757812f;
-constant float kAcesccDenormOffset = 0.00001525878906f;
-constant float kAcesccA            = 9.72f;
-constant float kAcesccB            = 17.52f;
-
-constant float kPqM1 = 0.1593017578125f;
-constant float kPqM2 = 78.84375f;
-constant float kPqC1 = 0.8359375f;
-constant float kPqC2 = 18.8515625f;
-constant float kPqC3 = 18.6875f;
-constant float kPqC  = 10000.0f;
 
 constant float kRefLuminance        = 100.0f;
 constant float kJScale              = 100.0f;
@@ -305,22 +285,6 @@ static inline float3 clamp_f3(float3 v, float min_val, float max_val) {
   return clamp(v, float3(min_val), float3(max_val));
 }
 
-static inline float3 pow_f3(float3 v, float expv) {
-  return float3(pow(v.x, expv), pow(v.y, expv), pow(v.z, expv));
-}
-
-static inline float acescc_decode(float acescc) {
-  const float encode_floor     = (kAcesccLog2Denorm + kAcesccA) / kAcesccB;
-  const float denorm_threshold = (kAcesccLog2Min + kAcesccA) / kAcesccB;
-  if (acescc < encode_floor) {
-    return acescc - encode_floor;
-  }
-  if (acescc <= denorm_threshold) {
-    return (exp2(acescc * kAcesccB - kAcesccA) - kAcesccDenormOffset) * 2.0f;
-  }
-  return exp2(acescc * kAcesccB - kAcesccA);
-}
-
 static inline float Tonescale_fwd(float x, const constant MetalTSParams& params) {
   if (!isfinite(x)) {
     if (x > 0.0f) {
@@ -337,73 +301,13 @@ static inline float Tonescale_fwd(float x, const constant MetalTSParams& params)
   return h * params.n_r_;
 }
 
-static inline float moncurve_inv(float y, float gamma, float offs) {
-  const float yb = pow(offs * gamma / ((gamma - 1.0f) * (1.0f + offs)), gamma);
-  const float rs =
-      pow((gamma - 1.0f) / offs, gamma - 1.0f) * pow((1.0f + offs) / gamma, gamma);
-  return (y >= yb) ? (1.0f + offs) * pow(y, 1.0f / gamma) - offs : y * rs;
-}
-
-static inline float3 moncurve_inv_f3(float3 v, float gamma, float offs) {
-  return float3(moncurve_inv(v.x, gamma, offs), moncurve_inv(v.y, gamma, offs),
-                moncurve_inv(v.z, gamma, offs));
-}
-
-static inline float bt1886_inv(float l, float gamma, float lw = 1.0f, float lb = 0.0f) {
-  const float a = pow(pow(lw, 1.0f / gamma) - pow(lb, 1.0f / gamma), gamma);
-  const float b = pow(lb, 1.0f / gamma) / (pow(lw, 1.0f / gamma) - pow(lb, 1.0f / gamma));
-  return pow(fmax(l / a, 0.0f), 1.0f / gamma) - b;
-}
-
-static inline float3 bt1886_inv_f3(float3 v, float gamma, float lw = 1.0f, float lb = 0.0f) {
-  return float3(bt1886_inv(v.x, gamma, lw, lb), bt1886_inv(v.y, gamma, lw, lb),
-                bt1886_inv(v.z, gamma, lw, lb));
-}
-
-static inline float Y_to_ST2084(float c) {
-  const float l  = c / kPqC;
-  const float lm = pow(l, kPqM1);
-  const float n  = (kPqC1 + kPqC2 * lm) / (1.0f + kPqC3 * lm);
-  return pow(n, kPqM2);
-}
-
-static inline float3 Y_to_ST2084_f3(float3 c) {
-  return float3(Y_to_ST2084(c.x), Y_to_ST2084(c.y), Y_to_ST2084(c.z));
-}
-
-static inline float3 HLG_from_display_linear_1000nits_f3(float3 display_linear) {
-  const float yd = 0.2627f * display_linear.x + 0.6780f * display_linear.y + 0.0593f * display_linear.z;
-  float3 rgb     = display_linear;
-  if (yd > 0.0f) {
-    rgb = mult_f_f3(rgb, pow(yd, (1.0f - 1.2f) / 1.2f));
-  }
-  const float a = 0.17883277f;
-  const float b = 0.28466892f;
-  const float c = 0.55991073f;
-  rgb.x         = (rgb.x <= (1.0f / 12.0f)) ? sqrt(3.0f * rgb.x) : a * log(12.0f * rgb.x - b) + c;
-  rgb.y         = (rgb.y <= (1.0f / 12.0f)) ? sqrt(3.0f * rgb.y) : a * log(12.0f * rgb.y - b) + c;
-  rgb.z         = (rgb.z <= (1.0f / 12.0f)) ? sqrt(3.0f * rgb.z) : a * log(12.0f * rgb.z - b) + c;
-  return rgb;
-}
-
-static inline float3 eotf_inv(float3 rgb_linear_in, int otf_type) {
-  const float3 rgb_linear = float3(fmax(0.0f, rgb_linear_in.x), fmax(0.0f, rgb_linear_in.y),
-                                   fmax(0.0f, rgb_linear_in.z));
-  if (otf_type == kMetalEotfLinear) return rgb_linear;
-  if (otf_type == kMetalEotfSt2084) return Y_to_ST2084_f3(rgb_linear);
-  if (otf_type == kMetalEotfHlg) return HLG_from_display_linear_1000nits_f3(rgb_linear);
-  if (otf_type == kMetalEotfBt1886) return bt1886_inv_f3(rgb_linear, 2.4f, 1.0f, 0.0f);
-  if (otf_type == kMetalEotfGamma26) return pow_f3(rgb_linear, 1.0f / 2.6f);
-  if (otf_type == kMetalEotfGamma22) return pow_f3(rgb_linear, 1.0f / 2.2f);
-  if (otf_type == kMetalEotfGamma18) return pow_f3(rgb_linear, 1.0f / 1.8f);
-  return moncurve_inv_f3(rgb_linear, 2.4f, 0.055f);
-}
-
 static inline float3 DisplayEncoding(float3 rgb, constant float* mat_limit_to_display, int eotf_num,
                                      float linear_scale = 1.0f) {
-  const float3 rgb_disp_linear   = mult_f3_f33(rgb, mat_limit_to_display);
-  const float3 rgb_display_scale = mult_f_f3(rgb_disp_linear, linear_scale);
-  return eotf_inv(rgb_display_scale, eotf_num);
+  const float3 scaled   = mult_f_f3(mult_f3_f33(rgb, mat_limit_to_display), linear_scale);
+  const float  hlg_gain = eotf_num == CE_TF_HLG ? CeHlgDisplayGain(scaled.x, scaled.y, scaled.z) : 1.0f;
+  return float3(CeDisplayEncodeChannel(eotf_num, scaled.x, hlg_gain),
+                CeDisplayEncodeChannel(eotf_num, scaled.y, hlg_gain),
+                CeDisplayEncodeChannel(eotf_num, scaled.z, hlg_gain));
 }
 
 #include "drt_aces.metal"
@@ -440,7 +344,7 @@ kernel void diffusion_filter_decode(texture2d<float, access::read> input [[textu
     return;
   }
   const float4 source = input.read(gid);
-  output.write(float4(acescc_decode(source.x), acescc_decode(source.y), acescc_decode(source.z),
+  output.write(float4(CeAcesccDecode(source.x), CeAcesccDecode(source.y), CeAcesccDecode(source.z),
                       source.w),
                gid);
 }
@@ -475,7 +379,7 @@ static inline float2 DiffusionTransform(constant float* m, float x, float y) {
 }
 
 static inline float4 DiffusionDecode(float4 value) {
-  return float4(acescc_decode(value.x), acescc_decode(value.y), acescc_decode(value.z), value.w);
+  return float4(CeAcesccDecode(value.x), CeAcesccDecode(value.y), CeAcesccDecode(value.z), value.w);
 }
 
 static inline float4 DiffusionFetch(texture2d<float, access::read> image, int x, int y) {

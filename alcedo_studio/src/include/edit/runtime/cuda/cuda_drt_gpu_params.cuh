@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "color/color_encoding_math.h"
+
 #ifndef GPU_FUNC
 #define GPU_FUNC __device__ __forceinline__
 #endif
@@ -23,18 +25,30 @@ enum class CudaDrtMethod : int {
   OPEN_DRT = 1,
 };
 
-/** @brief Display encoding EOTF as the CUDA kernel reads it. Values equal `ColorUtils::EOTF`. */
+/**
+ * @brief Display encoding EOTF as the CUDA kernel reads it. Values equal `ColorUtils::EOTF` and
+ * the catalog transfer function ids (color_encoding_math.h).
+ */
 enum class CudaDrtEotf : int {
-  LINEAR    = 0,
-  ST2084    = 1,
-  HLG       = 2,
-  GAMMA_2_6 = 3,
-  BT1886    = 4,
-  GAMMA_2_2 = 5,
-  GAMMA_1_8 = 6,
-  /// Piecewise sRGB: the moncurve branch of eotf_inv.
+  LINEAR         = 0,
+  ST2084         = 1,
+  HLG            = 2,
+  GAMMA_2_6      = 3,
+  BT1886         = 4,
+  GAMMA_2_2      = 5,
+  GAMMA_1_8      = 6,
+  /// sRGB curve of the color encoding catalog.
   SRGB_PIECEWISE = 7,
 };
+
+static_assert(static_cast<int>(CudaDrtEotf::LINEAR) == CE_TF_LINEAR);
+static_assert(static_cast<int>(CudaDrtEotf::ST2084) == CE_TF_ST2084);
+static_assert(static_cast<int>(CudaDrtEotf::HLG) == CE_TF_HLG);
+static_assert(static_cast<int>(CudaDrtEotf::GAMMA_2_6) == CE_TF_GAMMA_2_6);
+static_assert(static_cast<int>(CudaDrtEotf::BT1886) == CE_TF_BT1886);
+static_assert(static_cast<int>(CudaDrtEotf::GAMMA_2_2) == CE_TF_GAMMA_2_2);
+static_assert(static_cast<int>(CudaDrtEotf::GAMMA_1_8) == CE_TF_GAMMA_1_8);
+static_assert(static_cast<int>(CudaDrtEotf::SRGB_PIECEWISE) == CE_TF_SRGB);
 
 struct CudaDrtJmhParams {
   float MATRIX_RGB_to_CAM16_c_[9];

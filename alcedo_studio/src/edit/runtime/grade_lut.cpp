@@ -16,6 +16,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/lmt_model.hpp"
+#include "edit/runtime/lut_bake.hpp"
 
 namespace alcedo {
 namespace {
@@ -137,10 +138,17 @@ auto PackResolvedCube(const LutResourceResolution& resolution)
     throw std::runtime_error("Primary grade: failed to load LMT cube '" + path_text +
                              "': " + (error.empty() ? "the file has no 3D table" : error));
   }
+  // The pass samples only the 3D table; a shaper LUT sampled without its shaper renders wrongly.
+  if (cube.Has1D()) {
+    throw std::runtime_error("Primary grade: failed to load LMT cube '" + path_text +
+                             "': 1D shaper LUTs are not supported");
+  }
 
-  auto packed  = std::make_shared<PackedGradeLut>();
-  packed->rgba = PackCubeLutRgba(cube);
-  packed->edge = static_cast<std::uint32_t>(cube.edge3d_);
+  auto packed        = std::make_shared<PackedGradeLut>();
+  packed->rgba       = PackCubeLutRgba(cube);
+  packed->edge       = static_cast<std::uint32_t>(cube.edge3d_);
+  packed->domain_min = cube.domain_min_;
+  packed->domain_max = cube.domain_max_;
   ContentHash hash;
   hash.MixBytes(packed->rgba);
   hash.MixU32(packed->edge);
@@ -187,7 +195,11 @@ auto TryPackGradeLut(const ColorGradeNodeModel& grade, const LutResourceResolver
       packed = PackResolvedCube(resolution);
     }
   });
-  return packed;
+  if (packed == nullptr) {
+    return nullptr;
+  }
+  // The bake runs after ReadResource returns: it reads only the packed table.
+  return ResolveLmtSampledTable(std::move(packed), model->InputEncoding(), model->OutputEncoding());
 }
 
 auto GradeLutResourceIdentity(const ColorGradeNodeModel& grade,

@@ -14,6 +14,7 @@
 #include <string_view>
 #include <vector>
 
+#include "color/color_encoding_math.h"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/diffusion_filter_model.hpp"
 #include "edit/graph/i_node_model.hpp"
@@ -41,9 +42,19 @@ enum class DrtEotf : int {
   Bt1886        = 4,
   Gamma22       = 5,
   Gamma18       = 6,
-  /// IEC 61966-2-1 piecewise sRGB curve (not gamma 2.2).
+  /// sRGB (IEC 61966-2-1) curve of the color encoding catalog (not gamma 2.2).
   SrgbPiecewise = 7,
 };
+
+// The serialized DrtEotf values are the catalog transfer function ids (color_encoding_math.h).
+static_assert(static_cast<int>(DrtEotf::Linear) == CE_TF_LINEAR);
+static_assert(static_cast<int>(DrtEotf::St2084) == CE_TF_ST2084);
+static_assert(static_cast<int>(DrtEotf::Hlg) == CE_TF_HLG);
+static_assert(static_cast<int>(DrtEotf::Gamma26) == CE_TF_GAMMA_2_6);
+static_assert(static_cast<int>(DrtEotf::Bt1886) == CE_TF_BT1886);
+static_assert(static_cast<int>(DrtEotf::Gamma22) == CE_TF_GAMMA_2_2);
+static_assert(static_cast<int>(DrtEotf::Gamma18) == CE_TF_GAMMA_1_8);
+static_assert(static_cast<int>(DrtEotf::SrgbPiecewise) == CE_TF_SRGB);
 
 struct OpenDrtDetailedParams {
   float tn_con       = 1.66f;

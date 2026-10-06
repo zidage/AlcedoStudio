@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -41,29 +42,33 @@ TEST(OpenClDrtParameterBytes, OpenClDrtParameterBytesMatchStoredExpectedBytes) {
   }
 }
 
-// Every OpenCL source of the DRT program lives in the runtime tree: the shaders under
-// edit/runtime/opencl/shader and the shared ACES gamut compression header under
-// include/edit/runtime. The program must also build from those files.
+// Every OpenCL source of the DRT program lives in the runtime tree: the color encoding curves
+// under include/color, the shaders under edit/runtime/opencl/shader and the shared ACES gamut
+// compression header under include/edit/runtime. The program must also build from those files.
 TEST(OpenClDrtParameterBytes, OpenClDrtProgramBuildsFromRuntimeShaderDirectory) {
   RegisterOpenClGpuDagPrograms();
   OpenClBackendProgramRegistry::Instance().RegisterProgramsForManifest(
       OpenCL::GpuDag::kManifestName);
   const auto paths =
       OpenClProgramLibrary::Instance().RegisteredSourcePaths(OpenCL::GpuDag::kDrtProgramName);
-  ASSERT_EQ(paths.size(), 5U);
-  for (const auto& path : paths) {
-    const auto text = path.generic_string();
+  ASSERT_EQ(paths.size(), 6U);
+  EXPECT_NE(paths[0].generic_string().find("src/include/color/color_encoding_math.h"),
+            std::string::npos)
+      << paths[0].generic_string();
+  for (std::size_t i = 1; i < paths.size(); ++i) {
+    const auto text = paths[i].generic_string();
     EXPECT_EQ(text.find("edit/pipeline"), std::string::npos) << text;
-    if (path.extension() == ".cl") {
+    if (paths[i].extension() == ".cl") {
       EXPECT_NE(text.find("src/edit/runtime/opencl/shader/"), std::string::npos) << text;
     } else {
       EXPECT_NE(text.find("src/include/edit/runtime/"), std::string::npos) << text;
     }
   }
-  EXPECT_EQ(paths[1].filename(), "drt_params.cl");
-  EXPECT_EQ(paths[2].filename(), "common.cl");
-  EXPECT_EQ(paths[3].filename(), "cst.cl");
-  EXPECT_EQ(paths[4].filename(), "drt.cl");
+  EXPECT_EQ(paths[1].filename(), "aces_reference_gamut_compression.h");
+  EXPECT_EQ(paths[2].filename(), "drt_params.cl");
+  EXPECT_EQ(paths[3].filename(), "common.cl");
+  EXPECT_EQ(paths[4].filename(), "cst.cl");
+  EXPECT_EQ(paths[5].filename(), "drt.cl");
 
   if (!TryInitializeOpenClRuntime() || !OpenClContext::Instance().Capabilities().image_support) {
     GTEST_SKIP() << "No OpenCL image device available to build the program.";

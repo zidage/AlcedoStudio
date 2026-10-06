@@ -77,8 +77,8 @@ __kernel void diffusion_filter_decode_scene_rgba32f(__read_only image2d_t src_im
   const float4 source = src_is_buffer != 0
                             ? src_buffer[(uint)gid.y * width + (uint)gid.x]
                             : read_imagef(src_image, kNearestClamp, gid);
-  const float4 linear = (float4)(opencl_acescc_decode(source.x), opencl_acescc_decode(source.y),
-                                 opencl_acescc_decode(source.z), source.w);
+  const float4 linear = (float4)(CeAcesccDecode(source.x), CeAcesccDecode(source.y),
+                                 CeAcesccDecode(source.z), source.w);
   if (dst_is_buffer != 0) {
     dst_buffer[(uint)gid.y * width + (uint)gid.x] = linear;
   } else {
@@ -114,8 +114,8 @@ static inline float2 DiffusionTransform(const float* m, float x, float y) {
 }
 
 static inline float4 DiffusionDecode(float4 value) {
-  return (float4)(opencl_acescc_decode(value.x), opencl_acescc_decode(value.y),
-                  opencl_acescc_decode(value.z), value.w);
+  return (float4)(CeAcesccDecode(value.x), CeAcesccDecode(value.y),
+                  CeAcesccDecode(value.z), value.w);
 }
 
 static inline float4 DiffusionSceneFetch(__read_only image2d_t image,

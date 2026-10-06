@@ -265,7 +265,7 @@ TEST_F(CudaRasterDevelopTest, DisplayToAp1PassTimeIsMeasuredAgainstTheForwardDrt
   plane.bytes                  = storage;
   const auto             input = RasterInputLoader::FromHostPlane(plane);
   RasterColorDescription description;
-  description.primaries_xy_ = kRasterPrimariesDisplayP3;
+  description.primaries_xy_ = color::GamutPrimariesXy(color::ColorGamutId::P3D65);
   auto       document       = CreateDefaultRasterPipelineDocument(description);
   const auto plan = GraphCompiler::Compile(document, input.CompileSource(), RenderRequest{});
 

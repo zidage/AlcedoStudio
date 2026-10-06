@@ -146,79 +146,15 @@ static inline float opencl_radians_to_degrees(float rad) {
   return rad * (180.0f / ALCEDO_OPENCL_PI);
 }
 
-// === Display encoding, matching CUDA disp_enc_funcs.cuh ======================
-
-static inline float opencl_moncurve_inv(float y, float gamma, float offs) {
-  const float yb = pow(offs * gamma / ((gamma - 1.0f) * (1.0f + offs)), gamma);
-  const float rs = pow((gamma - 1.0f) / offs, gamma - 1.0f) *
-                   pow((1.0f + offs) / gamma, gamma);
-  return (y >= yb) ? (1.0f + offs) * pow(y, 1.0f / gamma) - offs : y * rs;
-}
-
-static inline float opencl_bt1886_inv(float L, float gamma) {
-  const float Lw = 1.0f;
-  const float Lb = 0.0f;
-  const float a = pow(pow(Lw, 1.0f / gamma) - pow(Lb, 1.0f / gamma), gamma);
-  const float b = pow(Lb, 1.0f / gamma) / (pow(Lw, 1.0f / gamma) - pow(Lb, 1.0f / gamma));
-  return pow(fmax(L / a, 0.0f), 1.0f / gamma) - b;
-}
-
-static inline float opencl_y_to_st2084(float C) {
-  const float pq_m1 = 0.1593017578125f;
-  const float pq_m2 = 78.84375f;
-  const float pq_c1 = 0.8359375f;
-  const float pq_c2 = 18.8515625f;
-  const float pq_c3 = 18.6875f;
-  const float pq_C = 10000.0f;
-  float L = C / pq_C;
-  float Lm = pow(L, pq_m1);
-  float N = (pq_c1 + pq_c2 * Lm) / (1.0f + pq_c3 * Lm);
-  return pow(N, pq_m2);
-}
-
-static inline float3 opencl_hlg_from_display_linear_1000nits(float3 display_linear) {
-  float Yd = 0.2627f * display_linear.x + 0.6780f * display_linear.y + 0.0593f * display_linear.z;
-  float3 rgb = display_linear;
-  if (Yd > 0.0f) {
-    rgb *= pow(Yd, (1.0f - 1.2f) / 1.2f);
-  }
-  const float a = 0.17883277f;
-  const float b = 0.28466892f;
-  const float c = 0.55991073f;
-  rgb.x = (rgb.x <= (1.0f / 12.0f)) ? sqrt(3.0f * rgb.x) : a * log(12.0f * rgb.x - b) + c;
-  rgb.y = (rgb.y <= (1.0f / 12.0f)) ? sqrt(3.0f * rgb.y) : a * log(12.0f * rgb.y - b) + c;
-  rgb.z = (rgb.z <= (1.0f / 12.0f)) ? sqrt(3.0f * rgb.z) : a * log(12.0f * rgb.z - b) + c;
-  return rgb;
-}
-
-static inline float3 opencl_eotf_inv(float3 rgb_linear_in, int eotf_type) {
-  float3 rgb = fmax(rgb_linear_in, (float3)(0.0f));
-  if (eotf_type == 0) {
-    return rgb;
-  } else if (eotf_type == 1) {
-    return (float3)(opencl_y_to_st2084(rgb.x), opencl_y_to_st2084(rgb.y),
-                    opencl_y_to_st2084(rgb.z));
-  } else if (eotf_type == 2) {
-    return opencl_hlg_from_display_linear_1000nits(rgb);
-  } else if (eotf_type == 4) {
-    return (float3)(opencl_bt1886_inv(rgb.x, 2.4f), opencl_bt1886_inv(rgb.y, 2.4f),
-                    opencl_bt1886_inv(rgb.z, 2.4f));
-  } else if (eotf_type == 3) {
-    return pow(rgb, (float3)(1.0f / 2.6f));
-  } else if (eotf_type == 5) {
-    return pow(rgb, (float3)(1.0f / 2.2f));
-  } else if (eotf_type == 6) {
-    return pow(rgb, (float3)(1.0f / 1.8f));
-  }
-  return (float3)(opencl_moncurve_inv(rgb.x, 2.4f, 0.055f),
-                  opencl_moncurve_inv(rgb.y, 2.4f, 0.055f),
-                  opencl_moncurve_inv(rgb.z, 2.4f, 0.055f));
-}
+// === Display encoding (color/color_encoding_math.h), as CUDA disp_enc_funcs.cuh =============
 
 static inline float3 opencl_display_encoding(float3 rgb, __global const float* limit_to_display,
                                              int eotf, float linear_scale) {
-  float3 rgb_disp_linear = opencl_mat3_mul_global(rgb, limit_to_display);
-  return opencl_eotf_inv(rgb_disp_linear * linear_scale, eotf);
+  const float3 scaled   = opencl_mat3_mul_global(rgb, limit_to_display) * linear_scale;
+  const float  hlg_gain = eotf == CE_TF_HLG ? CeHlgDisplayGain(scaled.x, scaled.y, scaled.z) : 1.0f;
+  return (float3)(CeDisplayEncodeChannel(eotf, scaled.x, hlg_gain),
+                  CeDisplayEncodeChannel(eotf, scaled.y, hlg_gain),
+                  CeDisplayEncodeChannel(eotf, scaled.z, hlg_gain));
 }
 
 // === ACES 2.0 output transform ===============================================
@@ -890,8 +826,8 @@ static inline float4 opencl_output_op(float4 px, __global OpenClDrtParams* param
   }
 
   const float3 aces_linear =
-      (float3)(opencl_acescc_decode(px.x), opencl_acescc_decode(px.y),
-               opencl_acescc_decode(px.z));
+      (float3)(CeAcesccDecode(px.x), CeAcesccDecode(px.y),
+               CeAcesccDecode(px.z));
   float3 odt_color;
   if (params->to_output_params_.method_ == 0) {
     odt_color = opencl_aces_output_transform_fwd(aces_linear,

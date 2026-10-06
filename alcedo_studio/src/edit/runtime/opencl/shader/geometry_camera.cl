@@ -102,21 +102,6 @@ __kernel void geometry_resample_rgba32f(__read_only image2d_t src, __write_only 
   write_imagef(dst, (int2)((int)x, (int)y), pixel);
 }
 
-static inline float AcesccEncode(float value) {
-  const float kA          = 9.72f;
-  const float kB          = 17.52f;
-  const float kOffset     = 0.0000152587890625f;
-  const float kTransition = 0.000030517578125f;
-  const float kFloor      = (-16.0f + kA) / kB;
-  if (value < 0.0f) {
-    return kFloor + value;
-  }
-  if (value < kTransition) {
-    return (log2(kOffset + value * 0.5f) + kA) / kB;
-  }
-  return (log2(value) + kA) / kB;
-}
-
 __kernel void camera_color_acescc(__read_only image2d_t src, __write_only image2d_t dst,
                                   global const float* camera_params, uint offset_floats,
                                   global const float* dng_profile) {
@@ -136,8 +121,8 @@ __kernel void camera_color_acescc(__read_only image2d_t src, __write_only image2
   const AcesRgcRgb compressed =
       AcesReferenceGamutCompress(corrected.r, corrected.g, corrected.b);
   write_imagef(dst, gid,
-               (float4)(AcesccEncode(compressed.r), AcesccEncode(compressed.g),
-                        AcesccEncode(compressed.b), source.w));
+               (float4)(CeAcesccEncode(compressed.r), CeAcesccEncode(compressed.g),
+                        CeAcesccEncode(compressed.b), source.w));
 }
 
 typedef struct {

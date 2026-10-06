@@ -24,7 +24,7 @@ namespace {
 
 auto DisplayP3Srgb() -> RasterColorDescription {
   RasterColorDescription description;
-  description.primaries_xy_        = kRasterPrimariesDisplayP3;
+  description.primaries_xy_        = color::GamutPrimariesXy(color::ColorGamutId::P3D65);
   description.origin_              = RasterColorOrigin::IccMatrixShaper;
   description.profile_description_ = "Display P3";
   description.icc_sha256_          = std::string(64, 'b');
@@ -33,7 +33,7 @@ auto DisplayP3Srgb() -> RasterColorDescription {
 
 auto Rec2020Pq() -> RasterColorDescription {
   RasterColorDescription description;
-  description.primaries_xy_ = kRasterPrimariesRec2020;
+  description.primaries_xy_ = color::GamutPrimariesXy(color::ColorGamutId::Rec2020);
   for (auto& transfer : description.transfer_) {
     transfer.kind_ = RasterTransferKind::St2084;
   }
@@ -45,7 +45,7 @@ auto Rec2020Pq() -> RasterColorDescription {
 auto ExrLinear() -> RasterColorDescription {
   RasterColorDescription description;
   description.referral_     = RasterReferral::SceneLinear;
-  description.primaries_xy_ = kRasterPrimariesAp0;
+  description.primaries_xy_ = color::GamutPrimariesXy(color::ColorGamutId::Ap0);
   for (auto& transfer : description.transfer_) {
     transfer.kind_ = RasterTransferKind::Linear;
   }
@@ -132,9 +132,9 @@ TEST(DevelopRasterInputTest, EffectiveDescriptionFollowsTheOverride) {
 
   input.profile_override_ = "adobe_rgb";
   const auto adobe        = ResolveEffectiveRasterDescription(input);
-  EXPECT_EQ(adobe.primaries_xy_, kRasterPrimariesAdobeRgb);
+  EXPECT_EQ(adobe.primaries_xy_, color::GamutPrimariesXy(color::ColorGamutId::AdobeRgb));
   EXPECT_EQ(adobe.transfer_[0].kind_, RasterTransferKind::Gamma);
-  EXPECT_FLOAT_EQ(adobe.transfer_[0].gamma_, kAdobeRgbGamma);
+  EXPECT_FLOAT_EQ(adobe.transfer_[0].gamma_, CE_ADOBE_RGB_GAMMA);
   EXPECT_EQ(adobe.referral_, RasterReferral::DisplayReferred);
 
   input.profile_override_ = "linear_rec709";
@@ -143,7 +143,8 @@ TEST(DevelopRasterInputTest, EffectiveDescriptionFollowsTheOverride) {
   EXPECT_EQ(linear.transfer_[2].kind_, RasterTransferKind::Linear);
 
   input.profile_override_ = "prophoto";
-  EXPECT_EQ(ResolveEffectiveRasterDescription(input).primaries_xy_, kRasterPrimariesProPhoto);
+  EXPECT_EQ(ResolveEffectiveRasterDescription(input).primaries_xy_,
+            color::GamutPrimariesXy(color::ColorGamutId::ProPhoto));
   for (const auto name : kRasterInputProfileOverrides) {
     input.profile_override_ = std::string(name);
     EXPECT_NO_THROW((void)ResolveEffectiveRasterDescription(input)) << name;

@@ -2,8 +2,6 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "edit/runtime/cuda/cuda_diffusion_filter_pass.hpp"
-
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -12,11 +10,12 @@
 #include <stdexcept>
 #include <vector>
 
+#include "color/color_encoding_math.h"
 #include "cuda/cuda_check.hpp"
-#include "cuda_acescc.cuh"
 #include "edit/graph/diffusion_filter_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/runtime/cuda/cuda_backend.hpp"
+#include "edit/runtime/cuda/cuda_diffusion_filter_pass.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
@@ -33,8 +32,8 @@ auto GridFor(std::uint32_t width, std::uint32_t height) -> dim3 {
 }
 
 __device__ __forceinline__ auto DecodeAcescc(float4 value) -> float4 {
-  return make_float4(cuda_acescc::Decode(value.x), cuda_acescc::Decode(value.y),
-                     cuda_acescc::Decode(value.z), value.w);
+  return make_float4(CeAcesccDecode(value.x), CeAcesccDecode(value.y), CeAcesccDecode(value.z),
+                     value.w);
 }
 
 __device__ __forceinline__ auto Add(float4 a, float4 b) -> float4 {

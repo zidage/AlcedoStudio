@@ -15,10 +15,10 @@
 #include <span>
 #include <vector>
 
-#include "aces2_inverse_ocio_reference.hpp"
+#include "aces2_ocio_reference.hpp"
 #include "edit/runtime/cuda/cuda_display_to_ap1_pass.hpp"
 #include "edit/runtime/display_to_ap1_math.h"
-#include "edit/runtime/drt/aces2_inverse_runtime.hpp"
+#include "edit/runtime/drt/aces2_reference_runtime.hpp"
 #include "image/raster_color_description.hpp"
 
 namespace alcedo {
@@ -71,20 +71,20 @@ auto RunOnCuda(std::span<const float> packed, const std::vector<float>& rgb,
 
 TEST_F(CudaDisplayToAp1Test, Aces2InverseMatchesOcioCpuProcessor) {
   CudaDisplayToAp1Parameters parameters;
-  for (const auto& c : aces2_inverse_test::InverseCases()) {
+  for (const auto& c : aces2_ocio_reference::Aces2Cases()) {
     SCOPED_TRACE(c.name_);
-    const auto runtime = ResolveAces2InverseRuntime(c.primaries_, c.peak_nits_);
-    const auto grid    = aces2_inverse_test::DisplayGrid(c.peak_nits_);
-    aces2_inverse_test::ExpectMatchesOcio(
+    const auto runtime = ResolveAces2ReferenceRuntime(c.primaries_, c.peak_nits_);
+    const auto grid    = aces2_ocio_reference::DisplayGrid(c.peak_nits_);
+    aces2_ocio_reference::ExpectMatchesOcio(
         c, grid, RunOnCuda(runtime->packed_, grid, DisplayToAp1Output::LinearAp0, parameters));
   }
 }
 
 TEST_F(CudaDisplayToAp1Test, Aces2InverseReturnsBlackForBlackAndNeutralForSourceWhite) {
   CudaDisplayToAp1Parameters parameters;
-  for (const auto& c : aces2_inverse_test::InverseCases()) {
+  for (const auto& c : aces2_ocio_reference::Aces2Cases()) {
     SCOPED_TRACE(c.name_);
-    const auto         runtime = ResolveAces2InverseRuntime(c.primaries_, c.peak_nits_);
+    const auto         runtime = ResolveAces2ReferenceRuntime(c.primaries_, c.peak_nits_);
     const float        peak    = c.peak_nits_ / 100.0f;
     std::vector<float> rgb     = {0.0f, 0.0f, 0.0f};
     for (const float fraction : {0.0005f, 0.05f, 0.5f, 0.9f}) {
@@ -104,8 +104,9 @@ TEST_F(CudaDisplayToAp1Test, Aces2InverseReturnsBlackForBlackAndNeutralForSource
 
 TEST_F(CudaDisplayToAp1Test, AcesccOutputMatchesHostEvaluationForBothBranches) {
   CudaDisplayToAp1Parameters parameters;
-  const auto         display = ResolveAces2InverseRuntime(kRasterPrimariesDisplayP3, 100.0f);
-  const auto         scene   = PackSceneLinearToAp1(kRasterPrimariesAp0);
+  const auto                 display =
+      ResolveAces2ReferenceRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 100.0f);
+  const auto scene = PackSceneLinearToAp1(color::GamutPrimariesXy(color::ColorGamutId::Ap0));
   std::vector<float> rgb;
   for (int i = 0; i < 64; ++i) {
     rgb.push_back(static_cast<float>(i % 4) / 3.0f);
@@ -119,7 +120,7 @@ TEST_F(CudaDisplayToAp1Test, AcesccOutputMatchesHostEvaluationForBothBranches) {
     // last bits.
     for (std::size_t p = 0; p < rgb.size() / 3; ++p) {
       const auto host =
-          D2aSourceToAcesccAp1(D2aMake3(rgb[p * 3], rgb[p * 3 + 1], rgb[p * 3 + 2]), packed.data());
+          D2aSourceToAcesccAp1(A2rMake3(rgb[p * 3], rgb[p * 3 + 1], rgb[p * 3 + 2]), packed.data());
       EXPECT_NEAR(gpu[p * 3], host.x, 2e-4f) << "pixel " << p;
       EXPECT_NEAR(gpu[p * 3 + 1], host.y, 2e-4f) << "pixel " << p;
       EXPECT_NEAR(gpu[p * 3 + 2], host.z, 2e-4f) << "pixel " << p;
@@ -129,8 +130,10 @@ TEST_F(CudaDisplayToAp1Test, AcesccOutputMatchesHostEvaluationForBothBranches) {
 
 TEST_F(CudaDisplayToAp1Test, ParameterBlockIsUploadedOnlyWhenItChanges) {
   CudaDisplayToAp1Parameters parameters;
-  const auto                 a = ResolveAces2InverseRuntime(kRasterPrimariesRec709, 100.0f);
-  const auto                 b = ResolveAces2InverseRuntime(kRasterPrimariesRec2020, 100.0f);
+  const auto                 a =
+      ResolveAces2ReferenceRuntime(color::GamutPrimariesXy(color::ColorGamutId::Rec709), 100.0f);
+  const auto b =
+      ResolveAces2ReferenceRuntime(color::GamutPrimariesXy(color::ColorGamutId::Rec2020), 100.0f);
   (void)parameters.Upload(a->packed_, nullptr);
   (void)parameters.Upload(a->packed_, nullptr);
   EXPECT_EQ(parameters.UploadCount(), 1u);
@@ -144,7 +147,8 @@ TEST_F(CudaDisplayToAp1Test, InverseKernelTimeIsMeasuredAtUhdExtent) {
   // pass statistics once the pass runs in the develop graph.
   constexpr std::uint32_t    kPixels = 3840u * 2160u;
   CudaDisplayToAp1Parameters parameters;
-  const auto runtime = ResolveAces2InverseRuntime(kRasterPrimariesDisplayP3, 100.0f);
+  const auto                 runtime =
+      ResolveAces2ReferenceRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 100.0f);
   float4*    input   = nullptr;
   float4*    output  = nullptr;
   ASSERT_EQ(::cudaMalloc(reinterpret_cast<void**>(&input), kPixels * sizeof(float4)), cudaSuccess);

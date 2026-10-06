@@ -130,5 +130,122 @@ TEST(LutReferenceModel, InvalidLutUpdateIsRejectedWithoutMutation) {
   EXPECT_EQ(model.ToJson().dump(), json);
 }
 
+TEST(LutReferenceModel, MissingEncodingKeysReadAsAcesccAndDefaultsAreNotWritten) {
+  const nlohmann::json stored = {{"cube_path", ""},
+                                 {"name", "Look"},
+                                 {"reference", {{"kind", "library"}, {"path", "user/look.cube"}}},
+                                 {"strength", 0.5f}};
+  LmtModel             model;
+  model.LoadJson(stored);
+  EXPECT_EQ(model.InputEncoding(), "acescc");
+  EXPECT_EQ(model.OutputEncoding(), "acescc");
+  EXPECT_EQ(model.ToJson().dump(), stored.dump());
+
+  // Explicit default ids read the same and are still not written.
+  LmtModel explicit_default;
+  auto     with_defaults           = stored;
+  with_defaults["input_encoding"]  = "acescc";
+  with_defaults["output_encoding"] = "acescc";
+  explicit_default.LoadJson(with_defaults);
+  EXPECT_EQ(explicit_default.ToJson().dump(), stored.dump());
+
+  const auto update = LmtUpdateFromModelJson(nlohmann::json{{"cube_path", ""}});
+  ASSERT_TRUE(update.input_encoding.has_value());
+  ASSERT_TRUE(update.output_encoding.has_value());
+  EXPECT_EQ(*update.input_encoding, "acescc");
+  EXPECT_EQ(*update.output_encoding, "acescc");
+}
+
+TEST(LutReferenceModel, NonDefaultEncodingsRoundTripThroughDocumentJson) {
+  auto document = CreateDefaultPipelineDocument();
+  PrimaryLmt(document).SetReference(LibraryLutReference{"user/slog3_to_709.cube"}, "S-Log3");
+  PrimaryLmt(document).SetEncodings("sony_slog3_sgamut3cine", "rec709_bt1886");
+  const auto params = PrimaryLmt(document).ToJson();
+  EXPECT_EQ(params.at("input_encoding"), "sony_slog3_sgamut3cine");
+  EXPECT_EQ(params.at("output_encoding"), "rec709_bt1886");
+  EXPECT_FALSE(PrimaryLmt(document).IsDefault());
+
+  auto reopened = PipelineDocument::FromJson(document.ToJson());
+  EXPECT_EQ(PrimaryLmt(reopened).InputEncoding(), "sony_slog3_sgamut3cine");
+  EXPECT_EQ(PrimaryLmt(reopened).OutputEncoding(), "rec709_bt1886");
+  EXPECT_EQ(reopened.ToJson().dump(), document.ToJson().dump());
+
+  // Only the non-default side is written.
+  PrimaryLmt(document).SetEncodings("acescc", "rec2100_pq1000");
+  const auto output_only = PrimaryLmt(document).ToJson();
+  EXPECT_FALSE(output_only.contains("input_encoding"));
+  EXPECT_EQ(output_only.at("output_encoding"), "rec2100_pq1000");
+
+  // Encodings without a LUT are still an adjusted LMT.
+  LmtModel no_lut;
+  no_lut.SetEncodings("arri_logc4_awg4", "acescc");
+  EXPECT_FALSE(no_lut.IsDefault());
+}
+
+TEST(LutReferenceModel, EncodingChangeHasOwnRevisionAndClearingReferenceKeepsEncodings) {
+  LmtModel model;
+  model.SetCubePath("D:/luts/a.cube");
+  const auto reference_revision = model.FieldsRevision(DirtyFieldMask{LmtDirty::Reference});
+  const auto strength_revision  = model.FieldsRevision(DirtyFieldMask{LmtDirty::Strength});
+  const auto encoding_revision  = model.FieldsRevision(DirtyFieldMask{LmtDirty::Encoding});
+
+  model.SetEncodings("sony_slog3_sgamut3cine", "rec709_bt1886");
+  EXPECT_GT(model.FieldsRevision(DirtyFieldMask{LmtDirty::Encoding}), encoding_revision);
+  EXPECT_EQ(model.FieldsRevision(DirtyFieldMask{LmtDirty::Reference}), reference_revision);
+  EXPECT_EQ(model.FieldsRevision(DirtyFieldMask{LmtDirty::Strength}), strength_revision);
+  EXPECT_EQ(model.CubePath(), "D:/luts/a.cube");
+
+  // An equal encoding pair is not a change.
+  const auto revision = model.Revision();
+  model.SetEncodings("sony_slog3_sgamut3cine", "rec709_bt1886");
+  EXPECT_EQ(model.Revision(), revision);
+
+  // The user may pick another LUT of the same kind after clearing (section 6.1).
+  model.SetReference(std::monostate{});
+  EXPECT_EQ(model.InputEncoding(), "sony_slog3_sgamut3cine");
+  EXPECT_EQ(model.OutputEncoding(), "rec709_bt1886");
+  model.SetReference(LibraryLutReference{"user/b.cube"}, "B");
+  EXPECT_EQ(model.InputEncoding(), "sony_slog3_sgamut3cine");
+
+  // One update carries a selection and both encodings, and both dirty fields share its revision.
+  LmtUpdate update;
+  update.reference       = LibraryLutReference{"user/c.cube"};
+  update.input_encoding  = "acescct";
+  update.output_encoding = "acescc";
+  model.ApplyUpdate(update);
+  EXPECT_EQ(model.FieldsRevision(DirtyFieldMask{LmtDirty::Reference}), model.Revision());
+  EXPECT_EQ(model.FieldsRevision(DirtyFieldMask{LmtDirty::Encoding}), model.Revision());
+  EXPECT_EQ(model.InputEncoding(), "acescct");
+  EXPECT_EQ(model.OutputEncoding(), "acescc");
+}
+
+TEST(LutReferenceModel, UnknownEncodingIdThrowsAndLeavesModelUnchanged) {
+  LmtModel model;
+  model.SetReference(LibraryLutReference{"user/a.cube"}, "A");
+  model.SetEncodings("arri_logc3_awg3", "rec709_srgb");
+  const auto revision = model.Revision();
+  const auto json     = model.ToJson().dump();
+
+  EXPECT_THROW(model.SetEncodings("slog3", "acescc"), std::invalid_argument);
+  EXPECT_THROW(model.SetEncodings("acescc", "ACEScc"), std::invalid_argument);
+  // A valid part does not apply when another part is invalid.
+  LmtUpdate mixed;
+  mixed.strength        = 0.2f;
+  mixed.input_encoding  = "acescct";
+  mixed.output_encoding = "linear_rec709";
+  EXPECT_THROW(model.ApplyUpdate(mixed), std::invalid_argument);
+  EXPECT_THROW((model.LoadJson({{"cube_path", ""}, {"input_encoding", "unknown"}})),
+               std::invalid_argument);
+  EXPECT_THROW((model.LoadJson({{"cube_path", ""}, {"output_encoding", 3}})),
+               std::invalid_argument);
+
+  EXPECT_EQ(model.Revision(), revision);
+  EXPECT_EQ(model.ToJson().dump(), json);
+  EXPECT_EQ(model.InputEncoding(), "arri_logc3_awg3");
+  EXPECT_FLOAT_EQ(model.Strength(), 1.0f);
+  EXPECT_FALSE(ValidateLutEncodingId("unknown").empty());
+  EXPECT_TRUE(ValidateLutEncodingId("rec2100_hlg1000").empty());
+}
+
 }  // namespace
 }  // namespace alcedo

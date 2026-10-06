@@ -5,6 +5,7 @@
 #include <metal_stdlib>
 
 using namespace metal;
+#include "../../../../include/color/color_encoding_math.h"
 #include "../../../../include/edit/runtime/aces_reference_gamut_compression.h"
 #include "../../../../include/edit/runtime/dng_profile_gpu_math.h"
 
@@ -12,21 +13,6 @@ struct CameraColorGpuParams {
   float camera_to_ap1[9];
   float pad[3];
 };
-
-static inline float AcesccEncode(float value) {
-  constexpr float kA          = 9.72f;
-  constexpr float kB          = 17.52f;
-  constexpr float kOffset     = 0.0000152587890625f;
-  constexpr float kTransition = 0.000030517578125f;
-  constexpr float kFloor      = (-16.0f + kA) / kB;
-  if (value < 0.0f) {
-    return kFloor + value;
-  }
-  if (value < kTransition) {
-    return (log2(kOffset + value * 0.5f) + kA) / kB;
-  }
-  return (log2(value) + kA) / kB;
-}
 
 kernel void camera_color_acescc(texture2d<float, access::read>  src [[texture(0)]],
                                 texture2d<float, access::write> dst [[texture(1)]],
@@ -48,7 +34,7 @@ kernel void camera_color_acescc(texture2d<float, access::read>  src [[texture(0)
       camera.camera_to_ap1[8] * source.z;
   const auto corrected  = DngApplyColorProfile(DngMakeRgb(x, y, z), dng_profile);
   const auto compressed = AcesReferenceGamutCompress(corrected.r, corrected.g, corrected.b);
-  dst.write(float4(AcesccEncode(compressed.r), AcesccEncode(compressed.g),
-                   AcesccEncode(compressed.b), source.w),
+  dst.write(float4(CeAcesccEncode(compressed.r), CeAcesccEncode(compressed.g),
+                   CeAcesccEncode(compressed.b), source.w),
             gid);
 }

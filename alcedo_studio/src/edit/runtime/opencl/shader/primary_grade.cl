@@ -25,36 +25,6 @@ static inline float Luma(float3 c) { return 0.272229f * c.x + 0.674082f * c.y + 
 // Contrast: S curve on OkLab lightness of scene-linear AP1 around 18% grey, chroma scaled by
 // sqrt(k) * min(gain, 1). Same math as ApplyOkLabContrast in cuda_primary_grade_pass.cu (documented
 // there) and tests/edit/runtime/oklab_contrast_reference.hpp.
-static inline float ContrastAcesccEncode(float value) {
-  const float kA          = 9.72f;
-  const float kB          = 17.52f;
-  const float kOffset     = 0.0000152587890625f;
-  const float kTransition = 0.000030517578125f;
-  const float kFloor      = (-16.0f + kA) / kB;
-  if (value < 0.0f) {
-    return kFloor + value;
-  }
-  if (value < kTransition) {
-    return (log2(kOffset + value * 0.5f) + kA) / kB;
-  }
-  return (log2(value) + kA) / kB;
-}
-
-static inline float ContrastAcesccDecode(float value) {
-  const float kA         = 9.72f;
-  const float kB         = 17.52f;
-  const float kOffset    = 0.0000152587890625f;
-  const float kFloor     = (-16.0f + kA) / kB;
-  const float kThreshold = (-15.0f + kA) / kB;
-  if (value < kFloor) {
-    return value - kFloor;
-  }
-  if (value <= kThreshold) {
-    return (exp2(value * kB - kA) - kOffset) * 2.0f;
-  }
-  return exp2(value * kB - kA);
-}
-
 static inline float3 LinearAp1ToOkLab(float3 c) {
   const float l  = 0.6341104672f * c.x + 0.3489495087f * c.y + 0.0169400240f * c.z;
   const float m  = 0.2754060131f * c.x + 0.6327713632f * c.y + 0.0918226237f * c.z;
@@ -84,16 +54,16 @@ static inline float3 ApplyOkLabContrast(float3 acescc, float contrast) {
   const float kCurveWidthStops = 2.5f;
   const float slope            = exp2(contrast * 0.01f);
   float3      lab =
-      LinearAp1ToOkLab((float3)(ContrastAcesccDecode(acescc.x), ContrastAcesccDecode(acescc.y),
-                                ContrastAcesccDecode(acescc.z)));
+      LinearAp1ToOkLab((float3)(CeAcesccDecode(acescc.x), CeAcesccDecode(acescc.y),
+                                CeAcesccDecode(acescc.z)));
   const float shape =
       lab.x > 0.0f ? tanh(3.0f * log2(lab.x / kPivotLightness) / kCurveWidthStops) : -1.0f;
   const float gain         = exp2((slope - 1.0f) * kCurveWidthStops * shape / 3.0f);
   const float chroma_scale = sqrt(slope) * fmin(gain, 1.0f);
   lab                      = (float3)(lab.x * gain, lab.y * chroma_scale, lab.z * chroma_scale);
   const float3 linear_ap1  = OkLabToLinearAp1(lab);
-  return (float3)(ContrastAcesccEncode(linear_ap1.x), ContrastAcesccEncode(linear_ap1.y),
-                  ContrastAcesccEncode(linear_ap1.z));
+  return (float3)(CeAcesccEncode(linear_ap1.x), CeAcesccEncode(linear_ap1.y),
+                  CeAcesccEncode(linear_ap1.z));
 }
 
 static inline float ExtrapolateCurve(float value, __global const GradeAdjustmentParams* p, uint a,
@@ -205,13 +175,13 @@ static inline float3 ApplyAdjustment(float3 c, __global const GradeAdjustmentPar
   if (behavior == 0u && value != 0.0f) {
     // values[1..9]: row-major CAT02 adaptation in linear AP1 (resolved on the CPU).
     __global const float* m   = p->values + 1;
-    const float3          lin = (float3)(ContrastAcesccDecode(c.x), ContrastAcesccDecode(c.y),
-                                         ContrastAcesccDecode(c.z));
-    c = (float3)(ContrastAcesccEncode(m[0] * lin.x + m[1] * lin.y + m[2] * lin.z),
-                 ContrastAcesccEncode(m[3] * lin.x + m[4] * lin.y + m[5] * lin.z),
-                 ContrastAcesccEncode(m[6] * lin.x + m[7] * lin.y + m[8] * lin.z));
+    const float3          lin = (float3)(CeAcesccDecode(c.x), CeAcesccDecode(c.y),
+                                         CeAcesccDecode(c.z));
+    c = (float3)(CeAcesccEncode(m[0] * lin.x + m[1] * lin.y + m[2] * lin.z),
+                 CeAcesccEncode(m[3] * lin.x + m[4] * lin.y + m[5] * lin.z),
+                 CeAcesccEncode(m[6] * lin.x + m[7] * lin.y + m[8] * lin.z));
   } else if (behavior == 1u) {
-    const float offset = value / 17.52f;
+    const float offset = value / CE_ACESCC_B;
     c.x += offset;
     c.y += offset;
     c.z += offset;

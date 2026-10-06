@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "color/color_encoding_catalog.hpp"
+
 namespace alcedo {
 namespace {
 
@@ -38,25 +40,28 @@ auto ResolveEffectiveRasterDescription(const DevelopRasterInput& input) -> Raste
     return input.source_color_;
   }
   if (name == "srgb") {
-    return MakeSdr(kRasterPrimariesRec709, RasterTransferKind::SrgbPiecewise, 2.2f, "sRGB");
+    return MakeSdr(color::GamutPrimariesXy(color::ColorGamutId::Rec709),
+                   RasterTransferKind::SrgbPiecewise, 2.2f, "sRGB");
   }
   if (name == "display_p3") {
-    return MakeSdr(kRasterPrimariesDisplayP3, RasterTransferKind::SrgbPiecewise, 2.2f,
-                   "Display P3");
+    return MakeSdr(color::GamutPrimariesXy(color::ColorGamutId::P3D65),
+                   RasterTransferKind::SrgbPiecewise, 2.2f, "Display P3");
   }
   if (name == "adobe_rgb") {
-    return MakeSdr(kRasterPrimariesAdobeRgb, RasterTransferKind::Gamma, kAdobeRgbGamma,
-                   "Adobe RGB (1998)");
+    return MakeSdr(color::GamutPrimariesXy(color::ColorGamutId::AdobeRgb),
+                   RasterTransferKind::Gamma, CE_ADOBE_RGB_GAMMA, "Adobe RGB (1998)");
   }
   if (name == "rec2020") {
-    return MakeSdr(kRasterPrimariesRec2020, RasterTransferKind::Bt1886, 2.4f, "Rec.2020");
+    return MakeSdr(color::GamutPrimariesXy(color::ColorGamutId::Rec2020),
+                   RasterTransferKind::Bt1886, CE_BT1886_GAMMA, "Rec.2020");
   }
   if (name == "prophoto") {
-    return MakeSdr(kRasterPrimariesProPhoto, RasterTransferKind::Gamma, 1.8f, "ProPhoto RGB");
+    return MakeSdr(color::GamutPrimariesXy(color::ColorGamutId::ProPhoto),
+                   RasterTransferKind::Gamma, CE_GAMMA_1_8_EXPONENT, "ProPhoto RGB");
   }
   if (name == "linear_rec709") {
-    auto description =
-        MakeSdr(kRasterPrimariesRec709, RasterTransferKind::Linear, 1.0f, "Linear Rec.709");
+    auto description      = MakeSdr(color::GamutPrimariesXy(color::ColorGamutId::Rec709),
+                                    RasterTransferKind::Linear, 1.0f, "Linear Rec.709");
     description.referral_ = RasterReferral::SceneLinear;
     return description;
   }

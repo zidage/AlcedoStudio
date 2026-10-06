@@ -15,12 +15,14 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "app/editor_parameter_write.hpp"
+#include "color/color_encoding_catalog.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
@@ -30,6 +32,7 @@
 #include "lut_target_test_support.hpp"
 #include "support/recording_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_adjustment_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_lut_encoding_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 
 namespace alcedo::ui::test {
@@ -61,16 +64,29 @@ auto LibraryFiles() -> std::vector<std::pair<std::string, std::string>> {
           {"general/strip.cube", "LUT_1D_SIZE 2\n0 0 0\n1 1 1\n"}};
 }
 
-auto SetStrength(DocumentTargetSource& source, const NodeId& node, float strength) -> bool {
+auto LutTarget(const DocumentTargetSource& source, const NodeId& node) -> EditorParameterTarget {
   EditorParameterTarget target;
   target.owner_kind             = EditorParameterOwnerKind::ColorGrade;
   target.node_id                = node;
   target.adjustment_instance_id = AdjustmentInstanceId{source.LmtInstance(node)};
   target.field_key              = "lut";
+  return target;
+}
+
+auto SetStrength(DocumentTargetSource& source, const NodeId& node, float strength) -> bool {
   EditorLutWrite write;
   write.strength = strength;
   std::string error;
-  return ApplyEditorParameterWrite(source.Mutable(), target, write, &error);
+  return ApplyEditorParameterWrite(source.Mutable(), LutTarget(source, node), write, &error);
+}
+
+/// Index of encoding @p id in the combo entries, or -1.
+auto EntryIndex(const EditorLutEncodingModel& model, const QString& id) -> int {
+  const QVariantList entries = model.entries();
+  for (int index = 0; index < entries.size(); ++index) {
+    if (entries[index].toMap().value(QStringLiteral("value")).toString() == id) return index;
+  }
+  return -1;
 }
 
 /// An official (`origin: alcedo`) film simulation with a print, stored as a loose library file.
@@ -550,6 +566,163 @@ TEST(LutLibraryControllerTest, ApplyingAPackageEntrySubmitsItsOfficialReference)
   EXPECT_FALSE(official.strength.has_value());
   const EditorLutWrite& loose = source.queued[1].second;
   EXPECT_EQ(*loose.reference, LutReference{LibraryLutReference{"kodak/look.cube"}});
+}
+
+// L4: the encoding combos list every catalog encoding, scene-referred first, and each selection
+// is one settled `lut` write of its own side only, so the reference, the strength and the other
+// side stay as stored.
+TEST(LutLibraryControllerTest, EncodingSelectionSubmitsOneSettledWriteOfThatSideOnly) {
+  TemporaryLutLibrary  library(LibraryFiles());
+  DocumentTargetSource source;
+  LutLibraryController controller;
+  controller.setLibrary(library.Service());
+  controller.SetTargetSource(&source);
+  ASSERT_TRUE(controller.applyEntry(QStringLiteral("library:general/teal.cube")));
+  ASSERT_EQ(source.ApplyQueued(), 1);
+  ASSERT_TRUE(SetStrength(source, kGradeB, 0.4f));
+  controller.reload();
+
+  RecordingSubmitter     submitter;
+  EditorLutEncodingModel input;
+  EditorLutEncodingModel output;
+  output.setSide(QStringLiteral("output"));
+  for (EditorLutEncodingModel* model : {&input, &output}) {
+    model->setSubmitter(&submitter);
+    model->setTarget(&controller);
+  }
+  const auto encodings = color::ColorEncodings();
+  ASSERT_EQ(input.entries().size(), static_cast<qsizetype>(encodings.size()));
+  bool seen_display = false;
+  for (const QVariant& entry : input.entries()) {
+    const bool display =
+        entry.toMap().value(QStringLiteral("group")).toString() == QStringLiteral("display");
+    EXPECT_FALSE(seen_display && !display) << "scene encodings are listed first";
+    seen_display = seen_display || display;
+  }
+  EXPECT_TRUE(seen_display);
+  EXPECT_EQ(input.currentValue(), QStringLiteral("acescc"));
+  EXPECT_EQ(input.defaultIndex(), EntryIndex(input, QStringLiteral("acescc")));
+  EXPECT_FALSE(output.displayReferred());
+
+  output.selectIndex(EntryIndex(output, QStringLiteral("rec709_bt1886")));
+  input.selectIndex(EntryIndex(input, QStringLiteral("sony_slog3_sgamut3cine")));
+  ASSERT_EQ(submitter.calls.size(), 2u);
+  EXPECT_EQ(submitter.settledCount(), 2);
+  const auto& output_write = std::get<EditorLutWrite>(submitter.calls[0].write);
+  EXPECT_EQ(output_write.output_encoding, std::optional<std::string>{"rec709_bt1886"});
+  EXPECT_FALSE(output_write.input_encoding.has_value());
+  EXPECT_FALSE(output_write.reference.has_value());
+  EXPECT_FALSE(output_write.strength.has_value());
+  const auto& input_write = std::get<EditorLutWrite>(submitter.calls[1].write);
+  EXPECT_EQ(input_write.input_encoding, std::optional<std::string>{"sony_slog3_sgamut3cine"});
+  EXPECT_FALSE(input_write.output_encoding.has_value());
+
+  // Both writes are applied after both selections, as a busy session applies them: neither
+  // write resets the other side.
+  std::string error;
+  for (const RecordedAdjustmentCall& call : submitter.calls) {
+    ASSERT_TRUE(
+        ApplyEditorParameterWrite(source.Mutable(), LutTarget(source, kGradeB), call.write, &error))
+        << error;
+  }
+  controller.reload();
+  const LmtModel* lmt = source.Lmt(kGradeB);
+  ASSERT_NE(lmt, nullptr);
+  EXPECT_EQ(lmt->InputEncoding(), "sony_slog3_sgamut3cine");
+  EXPECT_EQ(lmt->OutputEncoding(), "rec709_bt1886");
+  EXPECT_EQ(lmt->Reference(), LutReference{LibraryLutReference{"general/teal.cube"}});
+  EXPECT_FLOAT_EQ(lmt->Strength(), 0.4f);
+  EXPECT_EQ(controller.inputEncoding(), QStringLiteral("sony_slog3_sgamut3cine"));
+  EXPECT_EQ(output.currentValue(), QStringLiteral("rec709_bt1886"));
+  EXPECT_TRUE(output.displayReferred());
+  EXPECT_FALSE(input.displayReferred());
+
+  // Reset writes the default of its own side only.
+  output.reset();
+  ASSERT_EQ(submitter.calls.size(), 3u);
+  const auto& reset_write = std::get<EditorLutWrite>(submitter.calls[2].write);
+  EXPECT_EQ(reset_write.output_encoding, std::optional<std::string>{"acescc"});
+  EXPECT_FALSE(reset_write.input_encoding.has_value());
+
+  // Removing the LUT keeps the encodings.
+  ASSERT_TRUE(controller.clearAssociation());
+  ASSERT_EQ(source.ApplyQueued(), 1);
+  controller.reload();
+  EXPECT_FALSE(controller.hasAssociation());
+  EXPECT_EQ(controller.inputEncoding(), QStringLiteral("sony_slog3_sgamut3cine"));
+  EXPECT_EQ(controller.outputEncoding(), QStringLiteral("rec709_bt1886"));
+}
+
+// L4: the panel shows the stored encodings after the document is written and read again in
+// the project document format, as reopening the project does. Loading never submits.
+TEST(LutLibraryControllerTest, StoredEncodingsAreShownAfterReopeningTheDocument) {
+  TemporaryLutLibrary  library(LibraryFiles());
+  DocumentTargetSource source;
+  EditorLutWrite       write;
+  write.reference       = LibraryLutReference{"general/teal.cube"};
+  write.input_encoding  = "arri_logc4_awg4";
+  write.output_encoding = "rec2100_pq1000";
+  std::string error;
+  ASSERT_TRUE(
+      ApplyEditorParameterWrite(source.Mutable(), LutTarget(source, kGradeB), write, &error))
+      << error;
+  const std::string    stored = source.Mutable().ToJson().dump();
+
+  DocumentTargetSource reopened;
+  reopened.ReplaceDocument(PipelineDocument::FromJson(nlohmann::json::parse(stored)));
+  LutLibraryController controller;
+  controller.setLibrary(library.Service());
+  controller.SetTargetSource(&reopened);
+  RecordingSubmitter     submitter;
+  EditorLutEncodingModel input;
+  EditorLutEncodingModel output;
+  output.setSide(QStringLiteral("output"));
+  for (EditorLutEncodingModel* model : {&input, &output}) {
+    model->setSubmitter(&submitter);
+    model->setTarget(&controller);
+  }
+
+  EXPECT_TRUE(controller.hasAssociation());
+  EXPECT_EQ(controller.inputEncoding(), QStringLiteral("arri_logc4_awg4"));
+  EXPECT_EQ(controller.outputEncoding(), QStringLiteral("rec2100_pq1000"));
+  EXPECT_EQ(input.currentValue(), QStringLiteral("arri_logc4_awg4"));
+  EXPECT_EQ(output.currentValue(), QStringLiteral("rec2100_pq1000"));
+  EXPECT_TRUE(output.displayReferred());
+  EXPECT_TRUE(submitter.calls.empty()) << "loading the stored encodings never submits";
+  EXPECT_EQ(reopened.submit_count, 0);
+}
+
+// L4: a 3D LUT with a 1D shaper is listed, marked unsupported with its own reason, and cannot be
+// applied; a 1D-only LUT keeps its reason.
+TEST(LutLibraryControllerTest, ShaperLutIsUnsupportedWithShaperReasonAndIsNotApplied) {
+  std::string shaper = "LUT_1D_SIZE 2\nLUT_3D_SIZE 2\n0 0 0\n1 1 1\n";
+  for (int i = 0; i < 8; ++i) shaper += "0.5 0.5 0.5\n";
+  auto files = LibraryFiles();
+  files.emplace_back("general/shaper.cube", shaper);
+  TemporaryLutLibrary  library(files);
+  DocumentTargetSource source;
+  LutLibraryController controller;
+  controller.setLibrary(library.Service());
+  controller.SetTargetSource(&source);
+  LutLibraryModel model;
+  model.setLibrary(library.Service());
+
+  const int shaper_row = model.rowOfEntry(QStringLiteral("library:general/shaper.cube"));
+  ASSERT_GE(shaper_row, 0);
+  const QModelIndex shaper_index = model.index(shaper_row);
+  EXPECT_FALSE(model.data(shaper_index, LutLibraryModel::SelectableRole).toBool());
+  EXPECT_EQ(model.data(shaper_index, LutLibraryModel::StatusTextRole).toString(),
+            QStringLiteral("Unsupported"));
+  EXPECT_EQ(model.data(shaper_index, LutLibraryModel::DetailTextRole).toString(),
+            QStringLiteral("1D shaper LUTs are not supported."));
+  const int strip_row = model.rowOfEntry(QStringLiteral("library:general/strip.cube"));
+  ASSERT_GE(strip_row, 0);
+  EXPECT_EQ(model.data(model.index(strip_row), LutLibraryModel::DetailTextRole).toString(),
+            QStringLiteral("1D LUTs cannot be applied by the grade stage."));
+
+  EXPECT_FALSE(controller.applyEntry(QStringLiteral("library:general/shaper.cube")));
+  EXPECT_EQ(controller.lastError(), QStringLiteral("1D shaper LUTs are not supported."));
+  EXPECT_EQ(source.submit_count, 0);
 }
 
 }  // namespace alcedo::ui::test

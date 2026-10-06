@@ -286,7 +286,8 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_CAMERA_COLOR_METALLIB}"
         "Compiling Metal DAG camera color shader"
         "Linking Metal DAG camera color library"
-        DEPENDS "${ALCEDO_INCLUDE_ROOT}/edit/runtime/dng_profile_gpu_math.h"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/dng_profile_gpu_math.h"
                 "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
     )
 
@@ -297,6 +298,7 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_PRIMARY_GRADE_METALLIB}"
         "Compiling Metal DAG primary grade shader"
         "Linking Metal DAG primary grade library"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
     )
 
     alcedo_add_metal_library(
@@ -306,6 +308,7 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_LOCAL_TONE_METALLIB}"
         "Compiling Metal DAG local tone shader"
         "Linking Metal DAG local tone library"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
     )
 
     alcedo_add_metal_library(
@@ -330,6 +333,7 @@ if(ALCEDO_METAL_ENABLED)
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_neighbor.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/prng.metal"
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
+            "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
     )
 
     # The ACES 2.0 inverse is checked against OpenColorIO within 1e-3; fast math is off.
@@ -340,7 +344,9 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_DISPLAY_TO_AP1_METALLIB}"
         "Compiling Metal DAG DisplayToAp1 shader"
         "Linking Metal DAG DisplayToAp1 library"
-        DEPENDS "${ALCEDO_INCLUDE_ROOT}/edit/runtime/display_to_ap1_math.h"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces2_reference_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/display_to_ap1_math.h"
                 "${ALCEDO_INCLUDE_ROOT}/edit/runtime/raster_linearize_math.h"
         COMPILE_FLAGS -fno-fast-math
     )

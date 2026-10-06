@@ -80,7 +80,7 @@ set(EDIT_GRAPH_SRCS
 def_library(EditGraph
     SOURCES ${EDIT_GRAPH_SRCS}
     PUBLIC_DEPS JSON EditGeometry EditMaskCore xxHash RasterColorModel
-    PRIVATE_DEPS ${ALCEDO_OPENCV_CORE_DEPS}
+    PRIVATE_DEPS ColorEncodingCatalog ${ALCEDO_OPENCV_CORE_DEPS}
 )
 if(ALCEDO_ENABLE_BRUSH_MASK)
     target_link_libraries(EditGraph PUBLIC EditMaskBrush)
@@ -102,6 +102,7 @@ set(EDIT_RUNTIME_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/diffusion_filter_plan.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/grade_lut.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/lut_bake.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/grade_schedule.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/drt_post_schedule.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/dng_profile_gpu_data.cpp
@@ -122,9 +123,9 @@ def_library(EditRuntimeDrt
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/drt_output_resolver.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces_odt_runtime.cpp
-        ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces2_inverse_runtime.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces2_reference_runtime.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/open_drt_runtime.cpp
-    PUBLIC_DEPS EditGraph ${ALCEDO_OPENCV_CORE_DEPS}
+    PUBLIC_DEPS EditGraph ColorEncodingCatalog ${ALCEDO_OPENCV_CORE_DEPS}
 )
 
 # Lens calibration shared by the CUDA, OpenCL, and Metal Develop passes: the Lensfun resolver and the
@@ -228,7 +229,7 @@ def_library(EditLutResources
 def_library(EditRuntime
     SOURCES ${EDIT_RUNTIME_SRCS}
     PUBLIC_DEPS EditGraph EditLutResources EditGeometry EditInput EditRuntimeDrt
-    PRIVATE_DEPS PreviewPerformance
+    PRIVATE_DEPS PreviewPerformance ThreadPool
 )
 if(ALCEDO_ENABLE_BRUSH_MASK)
     target_link_libraries(EditRuntime PUBLIC EditMaskBrush)

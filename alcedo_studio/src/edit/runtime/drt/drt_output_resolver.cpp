@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "edit/operators/utils/color_utils.hpp"
 #include "edit/runtime/drt/aces_odt_runtime.hpp"
 #include "edit/runtime/drt/open_drt_runtime.hpp"
 
