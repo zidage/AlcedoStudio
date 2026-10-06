@@ -16,7 +16,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
-#include "edit/runtime/drt/aces2_inverse_runtime.hpp"
+#include "edit/runtime/drt/aces2_reference_runtime.hpp"
 
 namespace alcedo {
 
@@ -31,7 +31,7 @@ namespace alcedo {
 /// DisplayToAp1 parameters of one render: the cached ACES 2.0 inverse for display-referred input,
 /// or the packed scene-linear matrix.
 struct DisplayToAp1Block {
-  std::shared_ptr<const Aces2InverseRuntime>      inverse_;
+  std::shared_ptr<const Aces2ReferenceRuntime>    inverse_;
   std::array<float, ALCEDO_D2A_SCENE_PACKED_SIZE> scene_{};
 
   [[nodiscard]] auto                              Packed() const -> std::span<const float> {

@@ -221,6 +221,19 @@ class LutLibraryService final : public QObject {
   /// Rejected (kBusy) while a root operation runs, because that operation carries the
   /// favorites to a new root. Emits FavoritesChanged after the file is written.
   auto               SetFavorite(std::string_view entry_id, bool favorite) -> Status;
+  /// Input and output encodings remembered for @p entry_id; std::nullopt when none are
+  /// (lut_color_encoding_plan.md, Phase L5). An entry absent from the inventory keeps its pair.
+  [[nodiscard]] auto RememberedEncodings(std::string_view entry_id) const
+      -> std::optional<LutRememberedEncodings>;
+  /// Remember @p encodings for @p entry_id, or forget the pair when @p encodings is
+  /// std::nullopt, and persist it. kInvalidRequest for a malformed entry ID or an encoding id
+  /// that is not in the color encoding catalog. Rejected (kBusy) while a root operation runs,
+  /// as SetFavorite is. The file is written before the change is published; a write failure
+  /// (kPersistenceError) leaves the published state unchanged. Emits
+  /// RememberedEncodingsChanged after the file is written, only when the pair changed.
+  auto               SetRememberedEncodings(std::string_view                      entry_id,
+                                            std::optional<LutRememberedEncodings> encodings)
+      -> Status;
   /// Scoped const read of the package receipts read with the published
   /// inventory, sorted by package ID. Invalid receipts are absent (and reported
   /// as inventory diagnostics).
@@ -252,6 +265,9 @@ class LutLibraryService final : public QObject {
 
   /// User-requested rescan. Coalesced into a running refresh; kBusy during
   /// another operation. Publishes only after `lut-inventory.json` is written.
+  /// After it publishes, every listed official package LUT that the grade can apply and that has
+  /// no remembered encodings gets ACEScc to ACEScc (lut_color_encoding_plan.md, Phase L5).
+  /// Automatic refreshes (Start, missing-file lookups) do not write these defaults.
   auto             RefreshInventory() -> Status;
   /// Copy selected `.cube` files into `<root>/user/`. Every conflict is checked
   /// before any file is copied; existing files are never overwritten.
@@ -310,6 +326,9 @@ class LutLibraryService final : public QObject {
   void InventoryChanged(const QStringList& affected_paths);
   void RootChanged();
   void FavoritesChanged();
+  /// The remembered encodings of @p entry_ids were written (SetRememberedEncodings, or the
+  /// official defaults of a user-requested refresh).
+  void RememberedEncodingsChanged(const QStringList& entry_ids);
   void OperationStateChanged();
   /// An operation completed; details are in LastResult().
   void OperationFinished(alcedo::LutLibraryService::Operation operation,
@@ -341,6 +360,14 @@ class LutLibraryService final : public QObject {
   /// inventory. A path the inventory does not list becomes its `library:` ID.
   void ConvertLegacyFavorites();
   auto RequestRefresh(bool user_requested) -> Status;
+  /// True while an operation runs that carries the user state to another root, so user state
+  /// changes are rejected until it completes.
+  [[nodiscard]] auto RootOperationRunning() const -> bool;
+  /// Give every listed official package LUT without remembered encodings the default pair, as
+  /// one user state write. A write failure sets lastError and changes nothing.
+  void               RememberDefaultEncodingsForOfficialLuts();
+  /// Write @p updated to the root, then publish it. Returns the write error, empty on success.
+  auto               CommitUserState(LutLibraryUserState updated) -> std::string;
 
   LutLibraryServiceOptions           options_;
   /// Root, published inventory, receipts, and user state; shared with render executors.
@@ -352,6 +379,9 @@ class LutLibraryService final : public QObject {
   std::set<std::string, std::less<>> refresh_requested_paths_;
   /// An installation replaced package content that is retired when no operation runs.
   bool                                   pending_content_retirement_ = false;
+  /// A user-requested refresh is pending or running, so its completion writes the official
+  /// default encodings. Set even when the request is coalesced into a running refresh.
+  bool                                   official_defaults_requested_ = false;
   bool                               shut_down_ = false;
   /// User cancellation is read by the running operation at its existing cancellation points.
   std::atomic<bool>                      cancel_requested_{false};

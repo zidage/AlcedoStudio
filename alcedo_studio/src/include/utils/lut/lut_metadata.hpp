@@ -77,8 +77,11 @@ struct LutHeader {
   int                        lut_3d_size = 0;
   int                        lut_1d_size = 0;
 
-  /// The grade runtime applies 3D cubes only; 1D-only files stay visible but unusable.
-  [[nodiscard]] auto         SupportsGradeApplication() const -> bool { return lut_3d_size > 0; }
+  /// The grade runtime applies 3D cubes without a 1D shaper only; 1D-only and shaper files stay
+  /// visible but unusable (lut_color_encoding_plan.md, section 6.4).
+  [[nodiscard]] auto         SupportsGradeApplication() const -> bool {
+    return lut_3d_size > 0 && lut_1d_size == 0;
+  }
   [[nodiscard]] auto         Origin() const -> LutOrigin {
     return metadata ? metadata->origin : LutOrigin::kUnannotated;
   }

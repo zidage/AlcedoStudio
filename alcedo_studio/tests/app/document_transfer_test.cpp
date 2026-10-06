@@ -6,22 +6,25 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
 #include <variant>
 
 #include "app/adjustment_transfer_package_builder.hpp"
 #include "app/document_transfer_planner.hpp"
+#include "app/editor_parameter_write.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_history_applier.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
-#include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
@@ -33,7 +36,10 @@
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
+#include "edit/runtime/grade_lut.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
 #include "support/document_transfer_test_support.hpp"
@@ -924,6 +930,80 @@ TEST(DocumentTransferTest, DrtOnlyPackageIdenticalToTargetFailsWithoutChanges) {
   const auto before  = CanonicalPipelineDocumentJson(target);
   EXPECT_THROW((void)PlanSelectivePaste(package, target), std::runtime_error);
   EXPECT_EQ(CanonicalPipelineDocumentJson(target), before);
+}
+
+// L4: transferring the LUT adjustment copies its reference, strength and both encodings, and the
+// target samples the same composite LUT table as the source (so it renders like the source).
+TEST(DocumentTransferTest, LutTransferCopiesEncodingsAndTargetSamplesTheSourceTable) {
+  const auto cube =
+      std::filesystem::temp_directory_path() /
+      ("lut_transfer_" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".cube");
+  {
+    std::ofstream out(cube, std::ios::trunc);
+    out << "LUT_3D_SIZE 2\n";
+    for (int b = 0; b <= 1; ++b) {
+      for (int g = 0; g <= 1; ++g) {
+        for (int r = 0; r <= 1; ++r) {
+          out << 0.05 + 0.9 * r << ' ' << 0.1 + 0.8 * g << ' ' << 0.2 + 0.7 * b << '\n';
+        }
+      }
+    }
+  }
+  auto        source = CreateDefaultPipelineDocument();
+  std::string error;
+  const auto  target_field = CompleteCurrentPanelParameterTarget(source, "lut", &error);
+  ASSERT_TRUE(target_field.has_value()) << error;
+  EditorLutWrite write;
+  write.reference       = FileLutReference{cube.string()};
+  write.strength        = 0.6f;
+  write.input_encoding  = "sony_slog3_sgamut3cine";
+  write.output_encoding = "rec709_bt1886";
+  ASSERT_TRUE(ApplyEditorParameterWrite(source, *target_field, write, &error)) << error;
+  const auto* source_grade = source.PrimaryGrade();
+  ASSERT_NE(source_grade, nullptr);
+  const auto* lmt_id = source_grade->FindAdjustmentIdByType(type_ids::Lmt());
+  ASSERT_NE(lmt_id, nullptr);
+
+  AdjustmentTransferSelection selection;
+  selection.nodes.push_back(
+      {source_grade->Id(), {{AdjustmentTransferItemKind::Adjustment, *lmt_id}}});
+  // The package goes through its exported form, as copy and paste between images does.
+  const auto package = ImportDocumentTransfer(
+      ExportDocumentTransfer(AdjustmentTransferPackageBuilder::Build(source, selection)));
+  ASSERT_EQ(package.color_grades_.size(), 1u);
+  ASSERT_EQ(package.color_grades_.front().adjustments.size(), 1u);
+  const auto& params = package.color_grades_.front().adjustments.front().params;
+  EXPECT_EQ(params.at("input_encoding"), "sony_slog3_sgamut3cine");
+  EXPECT_EQ(params.at("output_encoding"), "rec709_bt1886");
+
+  const auto  target  = CreateDefaultPipelineDocument();
+  const auto  working = ApplyPasteToClone(PlanSelectivePaste(package, target), target);
+  const auto* pasted =
+      dynamic_cast<const ColorGradeNodeModel*>(working.Graph().FindNode(NodeId{"grade.t1"}));
+  ASSERT_NE(pasted, nullptr);
+  const auto* pasted_lmt =
+      dynamic_cast<const LmtModel*>(pasted->FindAdjustmentByType(type_ids::Lmt()));
+  const auto* source_lmt =
+      dynamic_cast<const LmtModel*>(source_grade->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(pasted_lmt, nullptr);
+  ASSERT_NE(source_lmt, nullptr);
+  EXPECT_EQ(pasted_lmt->ToJson(), source_lmt->ToJson());
+  EXPECT_EQ(pasted_lmt->InputEncoding(), "sony_slog3_sgamut3cine");
+  EXPECT_EQ(pasted_lmt->OutputEncoding(), "rec709_bt1886");
+  EXPECT_FLOAT_EQ(pasted_lmt->Strength(), 0.6f);
+
+  const auto resources    = DefaultLutResourceResolver();
+  const auto source_table = TryPackGradeLut(*source_grade, *resources);
+  const auto pasted_table = TryPackGradeLut(*pasted, *resources);
+  ASSERT_NE(source_table, nullptr);
+  ASSERT_NE(pasted_table, nullptr);
+  EXPECT_EQ(source_table->edge, 65u);
+  EXPECT_EQ(pasted_table->key, source_table->key);
+  EXPECT_EQ(pasted_table->rgba, source_table->rgba);
+
+  std::error_code ec;
+  std::filesystem::remove(cube, ec);
 }
 
 }  // namespace

@@ -18,8 +18,13 @@
 
 #include "app/lut_library_service.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_query.hpp"
+#include "utils/lut/lut_metadata.hpp"
 
 namespace alcedo::ui {
+
+/// Why the grade stage cannot apply a LUT with @p header: a 1D shaper with a 3D table, or a
+/// 1D table only. Empty when LutHeader::SupportsGradeApplication() is true.
+[[nodiscard]] auto UnsupportedLutText(const LutHeader& header) -> QString;
 
 /**
  * @brief Browser list of the LUT library: filter, search, order, favorites, and focus.

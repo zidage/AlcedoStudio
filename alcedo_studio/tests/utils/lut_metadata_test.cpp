@@ -150,6 +150,17 @@ TEST(LutMetadataTest, OneDimensionalCubeIsVisibleButNotApplicable) {
   EXPECT_FALSE(result.header.SupportsGradeApplication());
 }
 
+TEST(LutMetadataTest, ShaperCubeIsVisibleButNotApplicable) {
+  // A 1D shaper with a 3D table: the grade pass samples only the 3D table, so the library marks
+  // it unsupported instead of offering a LUT that renders wrongly (lut_color_encoding_plan 6.4).
+  const LutHeaderReadResult result =
+      ReadLutHeader("LUT_1D_SIZE 2\nLUT_3D_SIZE 2\n0 0 0\n1 1 1\n0 0 0\n");
+  ASSERT_TRUE(result.Ok()) << result.message;
+  EXPECT_EQ(result.header.lut_1d_size, 2);
+  EXPECT_EQ(result.header.lut_3d_size, 2);
+  EXPECT_FALSE(result.header.SupportsGradeApplication());
+}
+
 TEST(LutMetadataTest, MetadataRejectsDuplicateAndOversizedComments) {
   const std::string duplicate =
       std::string(kOfficialFilmWithPrint) + "\n" + CubeWith(kUserFilmWithPaperPrint);

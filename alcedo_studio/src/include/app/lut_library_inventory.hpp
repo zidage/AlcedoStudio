@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -28,17 +30,32 @@ inline constexpr std::string_view kLutPackageReceiptFileName   = "installed.json
 [[nodiscard]] auto                LutPathToUtf8(const std::filesystem::path& path) -> std::string;
 [[nodiscard]] auto                LutPathFromUtf8(std::string_view utf8) -> std::filesystem::path;
 
-/// User state that the scan does not produce: favorites and prior roots.
+/// Input and output color encodings that the user chose to remember for one library entry
+/// (docs/roadmap/alcedo_studio/edit/lut_color_encoding_plan.md, Phase L5). Both are color
+/// encoding catalog ids (color::FindColorEncoding).
+struct LutRememberedEncodings {
+  std::string input_encoding;
+  std::string output_encoding;
+
+  [[nodiscard]] auto operator==(const LutRememberedEncodings&) const -> bool = default;
+};
+
+/// True when both ids of @p encodings are color encoding catalog ids.
+[[nodiscard]] auto IsValidLutRememberedEncodings(const LutRememberedEncodings& encodings) -> bool;
+
+/// User state that the scan does not produce: favorites, remembered encodings, and prior roots.
 ///
 /// Persisted as `<root>/lut-library.json`, separate from the scan output
 /// `lut-inventory.json`, so a favorite change writes a small file and a rescan
-/// never rewrites user choices. Favorites are stored by entry ID
-/// (@ref IsValidLutLibraryEntryId): an official package LUT keeps its favorite across
-/// package updates that move its content directory, and a user file keeps it across
+/// never rewrites user choices. Favorites and remembered encodings are stored by entry ID
+/// (@ref IsValidLutLibraryEntryId): an official package LUT keeps them across
+/// package updates that move its content directory, and a user file keeps them across
 /// root migration because relative paths are preserved.
 struct LutLibraryUserState {
   /// Sorted, unique entry IDs. A favorite whose entry is absent is kept.
   std::vector<std::string> favorite_entry_ids;
+  /// Encodings remembered per entry ID. A pair whose entry is absent is kept.
+  std::map<std::string, LutRememberedEncodings, std::less<>> remembered_encodings;
   /// Root-relative favorite paths from files written before entry IDs (the `favorites`
   /// key). The service converts them to entry IDs against the published inventory and
   /// then clears this list; until then they are written back unchanged.
@@ -51,6 +68,10 @@ struct LutLibraryUserState {
 struct LutLibraryUserStateReadResult {
   std::optional<LutLibraryUserState> state;
   std::string                        error;
+  /// Remembered-encoding items that were left out of @ref state because their entry ID or an
+  /// encoding id is invalid; one description per item. They do not make the file invalid,
+  /// because an invalid file loads as an empty state and its favorites would be lost.
+  std::vector<std::string>           dropped_items;
 };
 
 /// True for `official:<package id>/<lut id>` with non-empty IDs, or `library:<path>` with a
@@ -59,7 +80,8 @@ struct LutLibraryUserStateReadResult {
 [[nodiscard]] auto IsValidLutLibraryEntryId(std::string_view entry_id) -> bool;
 
 [[nodiscard]] auto SerializeLutLibraryUserState(const LutLibraryUserState& state) -> std::string;
-/// Parse `lut-library.json` bytes; invalid entry IDs and relative paths are rejected.
+/// Parse `lut-library.json` bytes; invalid favorite entry IDs and relative paths reject the
+/// file. Invalid remembered-encoding items are dropped one by one (`dropped_items`).
 [[nodiscard]] auto ParseLutLibraryUserState(std::string_view json_bytes)
     -> LutLibraryUserStateReadResult;
 /// Read `<root>/lut-library.json`. A missing file yields an empty state, not an error.

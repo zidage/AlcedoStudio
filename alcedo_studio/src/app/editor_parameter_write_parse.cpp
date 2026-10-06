@@ -215,8 +215,9 @@ auto ParseCurveWrite(const nlohmann::json& params) -> EditorCurveWrite {
 }
 
 /// Parse the complete LMT state: the Model JSON (`cube_path` or a tagged `reference`,
-/// optional `name` and `strength`) or a legacy panel object whose path is under `ocio_lmt`,
-/// `lut`, or `value`. A missing strength is the 100% default, so replaying a stored state
+/// optional `name`, `strength`, `input_encoding` and `output_encoding`) or a legacy panel object
+/// whose path is under `ocio_lmt`, `lut`, or `value`. A missing strength is the 100% default and
+/// a missing encoding is ACEScc, so replaying a stored state (undo, redo, adjustment transfer)
 /// restores it exactly.
 auto ParseLutWrite(const nlohmann::json& params) -> EditorLutWrite {
   RequireObject(params, "lut");
@@ -225,10 +226,12 @@ auto ParseLutWrite(const nlohmann::json& params) -> EditorLutWrite {
                        : (params.contains("ocio_lmt") && params.at("ocio_lmt").is_object())
                            ? UnwrapObject(params, {"ocio_lmt"}, "lut")
                            : params;
-  RejectUnknownKeys(
-      object, {"cube_path", "ocio_lmt", "lut", "value", "reference", "name", "strength"}, "lut");
+  RejectUnknownKeys(object,
+                    {"cube_path", "ocio_lmt", "lut", "value", "reference", "name", "strength",
+                     "input_encoding", "output_encoding"},
+                    "lut");
   nlohmann::json model = nlohmann::json::object();
-  for (const char* key : {"reference", "name", "strength"}) {
+  for (const char* key : {"reference", "name", "strength", "input_encoding", "output_encoding"}) {
     if (object.contains(key)) model[key] = object.at(key);
   }
   if (const auto path =

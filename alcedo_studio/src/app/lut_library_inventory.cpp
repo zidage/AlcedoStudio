@@ -12,6 +12,7 @@
 #include <system_error>
 #include <utility>
 
+#include "color/color_encoding_catalog.hpp"
 #include "utils/lut/lut_inventory_digest.hpp"
 #include "utils/lut/lut_metadata.hpp"
 
@@ -94,6 +95,29 @@ auto StringList(const Json& root, const char* key, std::vector<std::string>* out
   return true;
 }
 
+/// Read the `remembered_encodings` object. An item with an invalid entry ID or encoding id is
+/// left out and described in @p dropped; it never rejects the file.
+void ReadRememberedEncodings(const Json& root, LutLibraryUserState* state,
+                             std::vector<std::string>* dropped) {
+  const auto found = root.find("remembered_encodings");
+  if (found == root.end()) return;
+  if (!found->is_object()) {
+    dropped->push_back("remembered_encodings is not an object");
+    return;
+  }
+  for (const auto& [entry_id, item] : found->items()) {
+    LutRememberedEncodings encodings;
+    if (!IsValidLutLibraryEntryId(entry_id) || !item.is_object() ||
+        !ReadString(item, "input", &encodings.input_encoding) ||
+        !ReadString(item, "output", &encodings.output_encoding) ||
+        !IsValidLutRememberedEncodings(encodings)) {
+      dropped->push_back("remembered encodings of '" + entry_id + "' are invalid");
+      continue;
+    }
+    state->remembered_encodings.emplace(entry_id, std::move(encodings));
+  }
+}
+
 auto HeaderDiffers(const LutLibraryEntry& left, const LutLibraryEntry& right) -> bool {
   if (left.size != right.size || left.sha256 != right.sha256 ||
       left.header_error != right.header_error || left.header_message != right.header_message ||
@@ -120,6 +144,11 @@ auto LutPathFromUtf8(std::string_view utf8) -> std::filesystem::path {
   return std::filesystem::path(std::u8string(begin, begin + utf8.size()));
 }
 
+auto IsValidLutRememberedEncodings(const LutRememberedEncodings& encodings) -> bool {
+  return color::FindColorEncoding(encodings.input_encoding) != nullptr &&
+         color::FindColorEncoding(encodings.output_encoding) != nullptr;
+}
+
 auto IsValidLutLibraryEntryId(std::string_view entry_id) -> bool {
   constexpr std::string_view kOfficial = "official:";
   constexpr std::string_view kLibrary  = "library:";
@@ -140,6 +169,15 @@ auto SerializeLutLibraryUserState(const LutLibraryUserState& state) -> std::stri
                {"previous_roots", state.previous_roots}};
   // Paths not yet converted to entry IDs keep their original key.
   if (!state.legacy_favorite_paths.empty()) root["favorites"] = state.legacy_favorite_paths;
+  // Written only when present, so files without remembered encodings keep their bytes.
+  if (!state.remembered_encodings.empty()) {
+    Json remembered = Json::object();
+    for (const auto& [entry_id, encodings] : state.remembered_encodings) {
+      remembered[entry_id] = {{"input", encodings.input_encoding},
+                              {"output", encodings.output_encoding}};
+    }
+    root["remembered_encodings"] = std::move(remembered);
+  }
   return root.dump(1);
 }
 
@@ -163,7 +201,9 @@ auto ParseLutLibraryUserState(std::string_view json_bytes) -> LutLibraryUserStat
     std::sort(list->begin(), list->end());
     list->erase(std::unique(list->begin(), list->end()), list->end());
   }
-  return {std::move(state), {}};
+  std::vector<std::string> dropped;
+  ReadRememberedEncodings(root, &state, &dropped);
+  return {std::move(state), {}, std::move(dropped)};
 }
 
 auto ReadLutLibraryUserStateFile(const std::filesystem::path& root)

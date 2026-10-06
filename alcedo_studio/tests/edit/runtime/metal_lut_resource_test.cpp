@@ -136,4 +136,8 @@ TEST_F(MetalLutResourceFixture, ReturnedLutAtZeroStrengthRemainsVisuallyInactive
   lut_resource_test::CheckReturnedLutAtZeroStrengthRemainsInactive(*harness_, "metal");
 }
 
+TEST_F(MetalLutResourceFixture, NonDefaultEncodingRendersHostCompositeTableWithin2PowMinus17) {
+  lut_resource_test::CheckNonDefaultEncodingSamplesHostCompositeTable(*harness_, "metal");
+}
+
 }  // namespace alcedo
