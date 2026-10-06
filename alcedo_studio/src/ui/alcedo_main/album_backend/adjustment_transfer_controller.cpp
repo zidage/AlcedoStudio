@@ -90,6 +90,13 @@ AdjustmentTransferController::AdjustmentTransferController(
           &AdjustmentTransferController::PasteInProgressChanged);
   connect(apply_coordinator_.get(), &AdjustmentTransferApplyCoordinator::ApplyFinished, this,
           &AdjustmentTransferController::PasteFinished);
+  // Paste writes the edits to storage; an edit-ordered library shows them.
+  connect(apply_coordinator_.get(), &AdjustmentTransferApplyCoordinator::ApplyFinished, this,
+          [this](const QVariantMap& result) {
+            if (library_ != nullptr && result.value(QStringLiteral("appliedCount")).toInt() > 0) {
+              library_->NoteEditHistoryChanged(editor_session_ && editor_session_->active());
+            }
+          });
 }
 
 void AdjustmentTransferController::SetEditorSession(EditorSessionController* editor_session) {

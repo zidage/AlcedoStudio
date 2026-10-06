@@ -144,12 +144,19 @@ struct AlbumFilePosition {
 /// read by ElementStore::ReadProjectOverview; the scope equals `CountFilesInFolder(0)`.
 struct ProjectOverviewCounts {
   uint64_t                   photo_count_        = 0;
-  /// Files whose edit history root has at least one `EditCommit` row, in any Version.
+  /// Files whose active Version head is a commit (see album_edit_state_sql).
   uint64_t                   edited_photo_count_ = 0;
   /// `YYYY-MM-DD` of the earliest `Image.capture_date`; empty when no file has a capture date.
   std::optional<std::string> earliest_capture_date_{};
   /// `YYYY-MM-DD` of the latest `Image.capture_date`; empty when no file has a capture date.
   std::optional<std::string> latest_capture_date_{};
+};
+
+/// The project file whose active Version head is the newest commit. Read by
+/// ElementStore::ReadLastEditedFile.
+struct LastEditedFile {
+  sl_element_id_t file_id_  = 0;
+  image_id_t      image_id_ = 0;
 };
 
 /**
@@ -240,6 +247,11 @@ class ElementStore {
   /// connection lock and is safe to call from any thread. Throws std::runtime_error with the
   /// DuckDB message when the statement fails.
   auto ReadProjectOverview() const -> ProjectOverviewCounts;
+
+  /// The file of the whole project whose active Version head commit is the newest, by the same
+  /// edited rule as the library edit groups. Empty when no file is edited. Reads only; takes
+  /// the connection lock. Throws std::runtime_error with the DuckDB message on failure.
+  auto ReadLastEditedFile() const -> std::optional<LastEditedFile>;
 
   /// Return one page of files that match @p extra_filter, ordered by element id, with the
   /// display columns and the total match count from one statement (`COUNT(*) OVER ()`).

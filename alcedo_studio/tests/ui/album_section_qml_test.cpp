@@ -26,7 +26,7 @@
 #include <string>
 #include <vector>
 
-#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
@@ -196,7 +196,7 @@ auto AlbumWarnings(const std::vector<std::string>& warnings) -> std::vector<std:
 
 TEST_F(AlbumSectionQmlTests, InspectorFieldActionsApplyOneSortAndOneGroupWithoutChangingFilters) {
   ApplicationModuleHost backend;
-  const auto            packed = CreateSeededPackedProject(temp_dir_, {}, 0, SixPhotoSpecs());
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, SixPhotoSpecs());
   ASSERT_TRUE(packed.has_value());
   ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
   auto* library = backend.library();
@@ -261,7 +261,7 @@ TEST_F(AlbumSectionQmlTests, InspectorFieldActionsApplyOneSortAndOneGroupWithout
 
 TEST_F(AlbumSectionQmlTests, SectionViewShowsGroupRowsAndReleasesOccurrencePinsOnTeardown) {
   ApplicationModuleHost backend;
-  const auto            packed = CreateSeededPackedProject(temp_dir_, {}, 0, SixPhotoSpecs());
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, SixPhotoSpecs());
   ASSERT_TRUE(packed.has_value());
   ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
   auto* library = backend.library();
@@ -321,7 +321,7 @@ TEST_F(AlbumSectionQmlTests, LargeSectionTraversalKeepsCellsAndLoadedRowsBounded
   for (size_t index = 0; index < specs.size(); ++index) {
     specs[index].model_ = index < 380 ? "Canon R5" : "Sony A7";
   }
-  const auto packed = CreateSeededPackedProject(temp_dir_, {}, 0, specs);
+  const auto packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, specs);
   ASSERT_TRUE(packed.has_value());
   ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
   auto* library = backend.library();

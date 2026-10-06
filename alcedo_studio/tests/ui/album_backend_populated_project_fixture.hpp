@@ -2,8 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-/// @file album_backend_seeded_project_fixture.hpp
-/// @brief Shared GPU-free seeded-project helpers for UI tests that need a real
+/// @file album_backend_populated_project_fixture.hpp
+/// @brief Shared GPU-free populated-project helpers for UI tests that need a real
 ///        (synthetic DNG) image in storage — e.g. exercising the real delete
 ///        entry or folder-filter round-trips without RAW fixtures or GPU decode.
 ///
@@ -20,6 +20,7 @@
 #include <chrono>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -39,7 +40,7 @@
 namespace alcedo::ui::test {
 
 /// A packed .alcd project containing one synthetic image, plus its ids.
-struct SeededProject {
+struct PopulatedProject {
   std::filesystem::path packed_path_{};
   sl_element_id_t       file_id_  = 0;
   image_id_t            image_id_ = 0;
@@ -97,22 +98,26 @@ struct LibraryPhotoSpec {
 /// Build a packed project with one synthetic DNG image (no real pixels, no GPU),
 /// or with the supplied RAW files when editor interaction is required.
 /// @p specs, when set, gives the number of synthetic images and their metadata.
+/// @p write_history, when set, runs after every image has its history root and before the
+/// project is packed (for example to persist edit commits).
 /// Returns the packed path and the image element/file + image ids on success.
-inline auto CreateSeededPackedProject(
+using ProjectHistoryWriter =
+    std::function<void(PipelineMgmtService&, const std::vector<PopulatedProject::ImageKey>&)>;
+inline auto CreatePopulatedPackedProject(
     const std::filesystem::path&              tempDir,
     const std::vector<std::filesystem::path>& sourceImagePaths = {},
-    std::size_t synthetic_image_count = 1, const std::vector<LibraryPhotoSpec>& specs = {})
-    -> std::optional<SeededProject> {
-  const auto db_path     = tempDir / "album_delete_seed.db";
-  const auto meta_path   = tempDir / "album_delete_seed.json";
-  const auto packed_path = tempDir / "album_delete_seed.alcd";
+    std::size_t synthetic_image_count = 1, const std::vector<LibraryPhotoSpec>& specs = {},
+    const ProjectHistoryWriter& write_history = {}) -> std::optional<PopulatedProject> {
+  const auto db_path     = tempDir / "album_delete_project.db";
+  const auto meta_path   = tempDir / "album_delete_project.json";
+  const auto packed_path = tempDir / "album_delete_project.alcd";
 
   auto project = std::make_shared<ProjectService>(db_path, meta_path, ProjectOpenMode::kCreateNew);
   const std::size_t                    image_count = !specs.empty() ? specs.size()
                                                      : sourceImagePaths.empty()
                                                          ? std::max<std::size_t>(1, synthetic_image_count)
                                                          : sourceImagePaths.size();
-  std::vector<SeededProject::ImageKey> image_keys;
+  std::vector<PopulatedProject::ImageKey> image_keys;
   image_keys.reserve(image_count);
 
   for (std::size_t index = 0; index < image_count; ++index) {
@@ -156,7 +161,7 @@ inline auto CreateSeededPackedProject(
       return std::nullopt;
     }
 
-    image_keys.push_back(SeededProject::ImageKey{file.first->element_id_, image->image_id_});
+    image_keys.push_back(PopulatedProject::ImageKey{file.first->element_id_, image->image_id_});
   }
 
   const auto image_sync = project->GetImagePoolService()->SyncWithStorage();
@@ -169,6 +174,9 @@ inline auto CreateSeededPackedProject(
   PipelineMgmtService pipelines(project->GetStorage());
   for (const auto& key : image_keys) {
     pipelines.InitializeImageRoot(key.file_id_, CreateDefaultPipelineDocument(), nullptr);
+  }
+  if (write_history) {
+    write_history(pipelines, image_keys);
   }
 
   std::filesystem::path snapshot_path;
@@ -186,7 +194,7 @@ inline auto CreateSeededPackedProject(
     return std::nullopt;
   }
 
-  return SeededProject{packed_path, image_keys.front().file_id_, image_keys.front().image_id_,
+  return PopulatedProject{packed_path, image_keys.front().file_id_, image_keys.front().image_id_,
                        std::move(image_keys)};
 }
 

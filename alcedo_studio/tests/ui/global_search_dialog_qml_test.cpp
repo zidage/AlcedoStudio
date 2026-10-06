@@ -25,7 +25,7 @@
 #include <string>
 #include <vector>
 
-#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
@@ -875,7 +875,7 @@ TEST_F(GlobalSearchDialogQmlTests, TypingTwentyCharactersQuicklyAppliesOnlyTheLa
   AppTheme::ApplyApplicationFont(*app);
 
   // 101 synthetic files, so the 20-character name album-delete-100.dng exists.
-  const auto packed_project = CreateSeededPackedProject(temp_dir_, {}, 101);
+  const auto packed_project = CreatePopulatedPackedProject(temp_dir_, {}, 101);
   ASSERT_TRUE(packed_project.has_value());
   ApplicationModuleHost backend;
   ASSERT_TRUE(LoadPackedProject(backend, packed_project->packed_path_));

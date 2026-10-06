@@ -11,11 +11,11 @@ RowLayout {
     id: root
     objectName: "inspectorFieldActions_" + field
 
-    /// Inspector field name: date, import, camera, lens, rating, or label.
+    /// Inspector field name: date, import, camera, lens, rating, label, or edited.
     property string field: ""
     /// Field name for accessible names and tooltips, for example "capture time".
     property string fieldTitle: ""
-    /// True for capture and import time (day groups, full timestamps inside a day).
+    /// True for capture, import, and edit time (day groups, full timestamps inside a day).
     property bool timeField: false
     property string ascendingTitle: qsTr("Ascending")
     property string descendingTitle: qsTr("Descending")
@@ -33,13 +33,17 @@ RowLayout {
         if (root.timeField && root.grouped) {
             tip += " " + qsTr("Inside each day, the full time orders the photos.")
         } else if (!root.timeField && (root.library.groupField === "date"
-                                       || root.library.groupField === "import")) {
+                                       || root.library.groupField === "import"
+                                       || root.library.groupField === "edited")) {
             tip += " " + qsTr("Equal values inside a day keep the newest time first.")
         } else if (!root.timeField && root.grouped && root.field !== "label") {
             tip += " " + qsTr("Equal values follow file ID order.")
         }
         if (!root.timeField) {
             tip += " " + qsTr("Text sorts by character code, not by language rules.")
+        }
+        if (root.field === "edited") {
+            tip += " " + qsTr("Unedited photos come last.")
         }
         tip += " " + qsTr("Select it again to clear the sort.")
         return tip

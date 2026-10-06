@@ -102,13 +102,17 @@ inline void AddUnboundImage(ProjectService& project, const file_name_t& file_nam
   image_pool->SyncWithStorage();
 }
 
-/// Writes the edit history root of @p elementId (an `ImageEditState` row) and, when
-/// @p commitCount is above zero, that many `EditCommit` rows on the root.
+/// Writes the edit history root of @p elementId (an `ImageEditState` row and its active
+/// `VersionRef`) and, when @p commitCount is above zero, that many `EditCommit` rows on one
+/// first-parent chain with the Version head at the last commit. Without commits the head is the
+/// root (an empty head hash), as import writes it.
 inline void AddEditHistoryRows(ProjectService& project, sl_element_id_t elementId,
                                int commitCount) {
-  auto       guard   = project.GetStorage()->GetDatabase().GetConnectionGuard();
-  const auto root_id = "root_" + std::to_string(elementId);
-  const auto run     = [&guard](const std::string& sql) {
+  auto       guard      = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  const auto id         = std::to_string(elementId);
+  const auto root_id    = "root_" + id;
+  const auto version_id = "version_" + id;
+  const auto run        = [&guard](const std::string& sql) {
     duckdb_result result;
     const auto    state = duckdb_query(guard.conn_, sql.c_str(), &result);
     EXPECT_EQ(state, DuckDBSuccess) << duckdb_result_error(&result) << "\n" << sql;
@@ -117,14 +121,20 @@ inline void AddEditHistoryRows(ProjectService& project, sl_element_id_t elementI
   run("INSERT INTO ImageEditState (element_id, root_id, active_version_id, "
       "materialized_head_commit_hash, materialized_transaction_chain_hash, "
       "serialized_pipeline_state, project_schema_version) VALUES (" +
-      std::to_string(elementId) + ", '" + root_id + "', 'version_" + std::to_string(elementId) +
-      "', NULL, 'chain', NULL, 1);");
+      id + ", '" + root_id + "', '" + version_id + "', NULL, 'chain', NULL, 1);");
+  std::string head;
   for (int i = 0; i < commitCount; ++i) {
+    const auto hash   = "commit_" + id + "_" + std::to_string(i);
+    const auto parent = head.empty() ? std::string("NULL") : "'" + head + "'";
     run("INSERT INTO EditCommit (commit_hash, root_id, first_parent_hash, second_parent_hash, "
-        "created_at_ns, kind, edit_payload) VALUES ('commit_" +
-        std::to_string(elementId) + "_" + std::to_string(i) + "', '" + root_id +
-        "', NULL, NULL, 1, 0, '{}');");
+        "created_at_ns, kind, edit_payload) VALUES ('" +
+        hash + "', '" + root_id + "', " + parent + ", NULL, " + std::to_string(i + 1) +
+        ", 0, '{}');");
+    head = hash;
   }
+  run("INSERT INTO VersionRef (version_id, element_id, display_name, head_commit_hash, "
+      "created_at_unix, updated_at_unix) VALUES ('" +
+      version_id + "', " + id + ", 'Default', '" + head + "', 0, 0);");
 }
 
 /// Creates a project in `<dir>/<name>_src`, lets @p populate add rows through the project

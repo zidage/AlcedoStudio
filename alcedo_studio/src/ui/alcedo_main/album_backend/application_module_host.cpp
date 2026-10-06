@@ -312,16 +312,18 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                   ".mini-git.wal");
         };
     auto refresh_focused_thumbnail =
-        [library = QPointer<LibraryModule>(library_.get())](sl_element_id_t element_id) {
+        [this, library = QPointer<LibraryModule>(library_.get())](sl_element_id_t element_id) {
           if (!library) {
             return;
           }
           QMetaObject::invokeMethod(
               library,
-              [library, element_id] {
+              [this, library, element_id] {
                 if (!library || library->project() == nullptr) {
                   return;
                 }
+                // The host owns the library, so it is alive while this queued call runs.
+                library->NoteEditHistoryChanged(editor_session_ && editor_session_->active());
                 if (auto thumbnails = library->project()->handler().thumbnail_service()) {
                   thumbnails->InvalidateThumbnail(element_id);
                 }
@@ -376,6 +378,17 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                    [session = editor_session_.get()] { session->NotifyLutResourcesChanged(); });
   editor_session_->SetInteractionPolicy(interaction_policy_.get());
   editor_session_->SetAlbumCatalog(library_.get());
+  QObject::connect(library_.get(), &LibraryModule::LastEditedFileFound, editor_session_.get(),
+                   [session = editor_session_.get()](uint element_id, uint image_id) {
+                     session->restoreLastEditedImage(element_id, image_id);
+                   });
+  // Leaving the editor shows the library again: apply edits written while it was hidden.
+  QObject::connect(editor_session_.get(), &EditorSessionController::StateChanged, library_.get(),
+                   [session = editor_session_.get(), library = library_.get()] {
+                     if (!session->active()) {
+                       library->RefreshStaleEditOrder();
+                     }
+                   });
   editor_session_->SetImageExifReader([this](uint image_id) -> alcedo::EditorImageExifDisplay {
     if (image_id == 0 || project_ == nullptr || project_->handler().project() == nullptr) {
       return {};
@@ -511,6 +524,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     if (library) {
       library->ReloadCurrentFolder();
+      library->RevealLastEditedFile();
     }
     if (semantic) {
       semantic->RefreshSemanticState();

@@ -22,7 +22,7 @@
 
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
-#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
 
@@ -103,11 +103,11 @@ auto RowFileNames(const QVariantMap& response) -> std::vector<std::string> {
   return names;
 }
 
-class LoadedSeededProject {
+class LoadedPopulatedProject {
  public:
   auto Load(const std::filesystem::path& temp_dir, ApplicationModuleHost& backend,
             std::size_t image_count) -> bool {
-    const auto packed_project = CreateSeededPackedProject(temp_dir, {}, image_count);
+    const auto packed_project = CreatePopulatedPackedProject(temp_dir, {}, image_count);
     if (!packed_project.has_value() || !LoadPackedProject(backend, packed_project->packed_path_)) {
       return false;
     }
@@ -127,7 +127,7 @@ class LoadedSeededProject {
 
 TEST_F(SearchWorkerTests, PreviewRowsCarryDisplayColumnsAndTotalFromTheQuery) {
   ApplicationModuleHost backend;
-  LoadedSeededProject   project;
+  LoadedPopulatedProject   project;
   ASSERT_TRUE(project.Load(temp_dir_, backend, kSyntheticImageCount));
   auto*      search = backend.search();
 
@@ -165,7 +165,7 @@ TEST_F(SearchWorkerTests, PreviewRowsCarryDisplayColumnsAndTotalFromTheQuery) {
 
 TEST_F(SearchWorkerTests, RapidPreviewRequestsDeliverOnlyTheNewestResponse) {
   ApplicationModuleHost backend;
-  LoadedSeededProject   project;
+  LoadedPopulatedProject   project;
   ASSERT_TRUE(project.Load(temp_dir_, backend, kSyntheticImageCount));
   auto*         search = backend.search();
 
@@ -201,7 +201,7 @@ TEST_F(SearchWorkerTests, RapidPreviewRequestsDeliverOnlyTheNewestResponse) {
 
 TEST_F(SearchWorkerTests, ApplyFuzzySearchQueriesOnTheWorkerAndKeepsInspectorFilters) {
   ApplicationModuleHost backend;
-  LoadedSeededProject   project;
+  LoadedPopulatedProject   project;
   ASSERT_TRUE(project.Load(temp_dir_, backend, kSyntheticImageCount));
   auto* search = backend.search();
   auto* stats  = backend.stats();
@@ -236,7 +236,7 @@ TEST_F(SearchWorkerTests, ApplyFuzzySearchQueriesOnTheWorkerAndKeepsInspectorFil
 
 TEST_F(SearchWorkerTests, ClearFuzzySearchDropsAnApplyStillOnTheWorker) {
   ApplicationModuleHost backend;
-  LoadedSeededProject   project;
+  LoadedPopulatedProject   project;
   ASSERT_TRUE(project.Load(temp_dir_, backend, kSyntheticImageCount));
   auto* search = backend.search();
 
@@ -261,7 +261,7 @@ TEST_F(SearchWorkerTests, ClearFuzzySearchDropsAnApplyStillOnTheWorker) {
 
 TEST_F(SearchWorkerTests, SearchSqlNeverRunsOnTheUiThread) {
   ApplicationModuleHost backend;
-  LoadedSeededProject   project;
+  LoadedPopulatedProject   project;
   ASSERT_TRUE(project.Load(temp_dir_, backend, kSyntheticImageCount));
   auto*                     search = backend.search();
 

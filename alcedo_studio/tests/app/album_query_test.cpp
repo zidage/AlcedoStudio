@@ -436,7 +436,7 @@ TEST_F(AlbumQueryTest, ImportDayFilterUsesLocalMidnightBoundaries) {
 
   const auto names_on_day = [&](const wchar_t* day) {
     const auto result =
-        ReadAll(project, AlbumQueryOptions{.import_day_time_zone_ = kNewYork},
+        ReadAll(project, AlbumQueryOptions{.local_day_time_zone_ = kNewYork},
                 CompileFilter(sleeve_filter::BuildImportDateBucketFilter(day, kNewYork)));
     std::set<std::string> names;
     for (const auto& row : result.rows_) {
@@ -449,8 +449,8 @@ TEST_F(AlbumQueryTest, ImportDayFilterUsesLocalMidnightBoundaries) {
 
   // Groups, statistics, and the filter agree on the same local day.
   const auto grouped =
-      ReadAll(project, AlbumQueryOptions{.group_field_          = AlbumGroupField::kImportDay,
-                                         .import_day_time_zone_ = kNewYork});
+      ReadAll(project, AlbumQueryOptions{.group_field_         = AlbumGroupField::kImportDay,
+                                         .local_day_time_zone_ = kNewYork});
   std::map<std::string, std::string> day_of;
   for (const auto& row : grouped.rows_) {
     day_of[row.photo_.file_name_] = KeyText(row.group_key_);
@@ -491,8 +491,8 @@ TEST_F(AlbumQueryTest, UnknownImportTimeFormsTheLastImportDayGroup) {
                "UPDATE Element SET added_time = NULL WHERE id = " + std::to_string(ids_[3]));
 
   const auto grouped =
-      ReadAll(project, AlbumQueryOptions{.group_field_          = AlbumGroupField::kImportDay,
-                                         .import_day_time_zone_ = "UTC"});
+      ReadAll(project, AlbumQueryOptions{.group_field_         = AlbumGroupField::kImportDay,
+                                         .local_day_time_zone_ = "UTC"});
   ASSERT_FALSE(grouped.groups_.empty());
   EXPECT_EQ(KeyText(grouped.groups_.back().key_), "<unknown>");
   EXPECT_EQ(grouped.groups_.back().photo_count_, 1);
@@ -526,17 +526,17 @@ TEST_F(AlbumQueryTest, DateGroupsSortPhotosByFullTimestamp) {
   // Import days in UTC: 09-02 {c, d, e}, 09-01 {a, b, h}, 08-30 {f, g}.
   {
     const auto ascending =
-        ReadAll(project, AlbumQueryOptions{.sort_field_           = AlbumSortField::kImportTime,
-                                           .sort_direction_       = SortDirection::kAscending,
-                                           .group_field_          = AlbumGroupField::kImportDay,
-                                           .import_day_time_zone_ = "UTC"});
+        ReadAll(project, AlbumQueryOptions{.sort_field_          = AlbumSortField::kImportTime,
+                                           .sort_direction_      = SortDirection::kAscending,
+                                           .group_field_         = AlbumGroupField::kImportDay,
+                                           .local_day_time_zone_ = "UTC"});
     EXPECT_EQ(RowIds(ascending), (std::vector<sl_element_id_t>{id(2), id(3), id(4), id(0), id(1),
                                                                id(7), id(5), id(6)}));
     const auto descending =
-        ReadAll(project, AlbumQueryOptions{.sort_field_           = AlbumSortField::kImportTime,
-                                           .sort_direction_       = SortDirection::kDescending,
-                                           .group_field_          = AlbumGroupField::kImportDay,
-                                           .import_day_time_zone_ = "UTC"});
+        ReadAll(project, AlbumQueryOptions{.sort_field_          = AlbumSortField::kImportTime,
+                                           .sort_direction_      = SortDirection::kDescending,
+                                           .group_field_         = AlbumGroupField::kImportDay,
+                                           .local_day_time_zone_ = "UTC"});
     EXPECT_EQ(RowIds(descending), (std::vector<sl_element_id_t>{id(4), id(2), id(3), id(7), id(0),
                                                                 id(1), id(5), id(6)}));
     std::vector<std::string> days;
@@ -560,10 +560,10 @@ TEST_F(AlbumQueryTest, DateGroupTimestampResolvesEqualPhotoSortValues) {
   EXPECT_EQ(RowIds(capture),
             (std::vector<sl_element_id_t>{id(1), id(2), id(0), id(4), id(6), id(5), id(7), id(3)}));
   // Import day 2026-09-01 (UTC) holds a (3, 10:00), b (5, 10:00), h (3, 23:59:59).
-  const AlbumQueryOptions import_options{.sort_field_           = AlbumSortField::kRating,
-                                         .sort_direction_       = SortDirection::kDescending,
-                                         .group_field_          = AlbumGroupField::kImportDay,
-                                         .import_day_time_zone_ = "UTC"};
+  const AlbumQueryOptions import_options{.sort_field_          = AlbumSortField::kRating,
+                                         .sort_direction_      = SortDirection::kDescending,
+                                         .group_field_         = AlbumGroupField::kImportDay,
+                                         .local_day_time_zone_ = "UTC"};
   const auto              imported = ReadAll(project, import_options);
   EXPECT_EQ(RowIds(imported),
             (std::vector<sl_element_id_t>{id(4), id(2), id(3), id(1), id(7), id(0), id(6), id(5)}));
@@ -672,6 +672,8 @@ TEST_F(AlbumQueryTest, InvalidOptionsAndPageBoundsAreRejectedBeforeSql) {
                std::invalid_argument);
   EXPECT_THROW(read(AlbumQueryOptions{.group_field_ = AlbumGroupField::kImportDay}, page),
                std::invalid_argument);
+  EXPECT_THROW(read(AlbumQueryOptions{.group_field_ = AlbumGroupField::kEditDay}, page),
+               std::invalid_argument);
   EXPECT_THROW(read(AlbumQueryOptions{}, AlbumQueryRead{.offset_ = 0, .limit_ = 1001}),
                std::invalid_argument);
   EXPECT_THROW(read(AlbumQueryOptions{}, AlbumQueryRead{.offset_ = -1, .limit_ = 10}),
@@ -692,7 +694,7 @@ TEST_F(AlbumQueryTest, AlbumQueryFailureReportsDuckDbError) {
   // An unknown zone fails when DuckDB executes the import-day conversion.
   EXPECT_THROW(store.ReadAlbumQuery(0, std::nullopt,
                                     AlbumQueryOptions{.group_field_ = AlbumGroupField::kImportDay,
-                                                      .import_day_time_zone_ = "Not/AZone"},
+                                                      .local_day_time_zone_ = "Not/AZone"},
                                     kActiveModel, AlbumQueryRead{.offset_ = 0, .limit_ = 10}),
                std::runtime_error);
   EXPECT_THROW(store.ReadAlbumFilePosition(0, broken, AlbumQueryOptions{}, kActiveModel, ids_[0],
@@ -862,6 +864,155 @@ TEST_F(AlbumQueryTest, LinkedDuckDbConvertsIanaTimeZonesWithoutTheSessionSetting
             "2026-03-09 04:00:00");
 }
 
+/// Epoch nanoseconds of a UTC wall time, the unit of EditCommit.created_at_ns.
+auto UtcNs(int year, unsigned month, unsigned day, int hour = 0, int minute = 0) -> uint64_t {
+  return static_cast<uint64_t>(Utc(year, month, day, hour, minute)) * 1'000'000'000ULL;
+}
+
+/// Edit history rows of one file as import writes them (root, an empty Version head, and the
+/// edit state), plus one commit per entry of @p commit_times_ns. @p head_index selects the
+/// commit at the Version head; std::nullopt keeps the head at the root (every edit undone).
+void WriteEditHistory(ProjectService& project, sl_element_id_t file_id,
+                      const std::vector<uint64_t>& commit_times_ns,
+                      std::optional<size_t>        head_index) {
+  const auto  id     = std::to_string(file_id);
+  std::string parent = "NULL";
+  for (size_t index = 0; index < commit_times_ns.size(); ++index) {
+    const auto hash = "'commit-" + id + "-" + std::to_string(index) + "'";
+    RunStatement(project, "INSERT INTO EditCommit VALUES (" + hash + ", 'root-" + id + "', " +
+                              parent + ", NULL, " + std::to_string(commit_times_ns[index]) +
+                              ", 0, '{}')");
+    parent = hash;
+  }
+  const auto head =
+      head_index.has_value() ? "commit-" + id + "-" + std::to_string(*head_index) : std::string{};
+  RunStatement(project, "INSERT INTO VersionRef VALUES ('version-" + id + "', " + id +
+                            ", 'Default', '" + head + "', 0, 0)");
+  RunStatement(project, "INSERT INTO ImageEditState VALUES (" + id + ", 'root-" + id +
+                            "', 'version-" + id + "', NULL, '', NULL, 1)");
+}
+
+/// Fixture edits: a and c on 2026-09-03 (UTC), e on 2026-09-01; d has only the import rows;
+/// f has a commit but its head is back at the root; b, g, and h have no edit history rows.
+void WriteFixtureEdits(ProjectService& project, const std::vector<sl_element_id_t>& ids) {
+  WriteEditHistory(project, ids[0], {UtcNs(2026, 9, 2, 9), UtcNs(2026, 9, 3, 10)}, 1);
+  WriteEditHistory(project, ids[2], {UtcNs(2026, 9, 3, 8)}, 0);
+  WriteEditHistory(project, ids[4], {UtcNs(2026, 9, 1, 12), UtcNs(2026, 9, 4, 12)}, 0);
+  WriteEditHistory(project, ids[3], {}, std::nullopt);
+  WriteEditHistory(project, ids[5], {UtcNs(2026, 9, 5, 12)}, std::nullopt);
+}
+
+TEST_F(AlbumQueryTest, EditDayGroupsUseTheActiveHeadAndPutUneditedPhotosLast) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  WriteFixtureEdits(project, ids_);
+
+  const auto result = ReadAll(project, AlbumQueryOptions{.group_field_ = AlbumGroupField::kEditDay,
+                                                         .local_day_time_zone_ = "UTC"});
+  std::vector<std::pair<std::string, int64_t>> groups;
+  for (const auto& group : result.groups_) {
+    groups.emplace_back(KeyText(group.key_), group.photo_count_);
+  }
+  // e's head is its first commit (2026-09-01); its later commit is not the head. f's commit was
+  // undone, so f is unedited.
+  const std::vector<std::pair<std::string, int64_t>> expected_groups{
+      {"2026-09-03", 2}, {"2026-09-01", 1}, {"<unknown>", 5}};
+  EXPECT_EQ(groups, expected_groups);
+  // Inside a day the edit time orders newest first; unedited photos follow file id order.
+  EXPECT_EQ(RowIds(result), (std::vector<sl_element_id_t>{ids_[0], ids_[2], ids_[4], ids_[1],
+                                                          ids_[3], ids_[5], ids_[6], ids_[7]}));
+  EXPECT_EQ(KeyText(result.rows_[0].group_key_), "2026-09-03");
+  EXPECT_EQ(KeyText(result.rows_[3].group_key_), "<unknown>");
+}
+
+TEST_F(AlbumQueryTest, EditDayUsesTheLocalTimeZone) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  // 02:00 UTC on 2026-09-03 is 22:00 on 2026-09-02 in New York (EDT).
+  WriteEditHistory(project, ids_[0], {UtcNs(2026, 9, 3, 2)}, 0);
+
+  const auto utc = ReadAll(project, AlbumQueryOptions{.group_field_ = AlbumGroupField::kEditDay,
+                                                      .local_day_time_zone_ = "UTC"});
+  const auto new_york =
+      ReadAll(project, AlbumQueryOptions{.group_field_         = AlbumGroupField::kEditDay,
+                                         .local_day_time_zone_ = kNewYork});
+  ASSERT_FALSE(utc.groups_.empty());
+  ASSERT_FALSE(new_york.groups_.empty());
+  EXPECT_EQ(KeyText(utc.groups_.front().key_), "2026-09-03");
+  EXPECT_EQ(KeyText(new_york.groups_.front().key_), "2026-09-02");
+}
+
+TEST_F(AlbumQueryTest, EditTimeSortPutsUneditedPhotosLastInBothDirections) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  WriteFixtureEdits(project, ids_);
+  const std::vector<sl_element_id_t> unedited{ids_[1], ids_[3], ids_[5], ids_[6], ids_[7]};
+
+  const AlbumQueryOptions            newest{.sort_field_     = AlbumSortField::kEditTime,
+                                            .sort_direction_ = SortDirection::kDescending};
+  auto expected = std::vector<sl_element_id_t>{ids_[0], ids_[2], ids_[4]};
+  expected.insert(expected.end(), unedited.begin(), unedited.end());
+  EXPECT_EQ(RowIds(ReadAll(project, newest)), expected);
+  EXPECT_EQ(ReadInPages(project, newest, 3), expected);
+
+  const AlbumQueryOptions oldest{.sort_field_     = AlbumSortField::kEditTime,
+                                 .sort_direction_ = SortDirection::kAscending};
+  expected = std::vector<sl_element_id_t>{ids_[4], ids_[2], ids_[0]};
+  expected.insert(expected.end(), unedited.begin(), unedited.end());
+  EXPECT_EQ(RowIds(ReadAll(project, oldest)), expected);
+
+  // The position and id reads use the same order.
+  auto&      store = Store(project);
+  const auto position =
+      store.ReadAlbumFilePosition(0, std::nullopt, newest, kActiveModel, ids_[4], std::nullopt);
+  ASSERT_TRUE(position.has_value());
+  EXPECT_EQ(position->occurrence_index_, 2);
+  EXPECT_EQ(store.ReadAlbumFileIds(0, std::nullopt, newest, kActiveModel, 0, 3),
+            (std::vector<sl_element_id_t>{ids_[0], ids_[2], ids_[4]}));
+}
+
+TEST_F(AlbumQueryTest, EditDayGroupsCombineWithTheLabelSort) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  WriteFixtureEdits(project, ids_);
+  // a and c share an edit day; the label sort puts c ("landscape") before a ("portrait").
+  RunStatement(project,
+               "INSERT INTO SemanticImageLabel (file_id, model_key, label, score, confident) "
+               "VALUES (" +
+                   std::to_string(ids_[0]) + ", 'model-active', 'portrait', 0.9, TRUE), (" +
+                   std::to_string(ids_[2]) + ", 'model-active', 'landscape', 0.9, TRUE)");
+
+  // Both relations (labels, then edit state) and their binds (model key, then time zone) are
+  // in one WITH list.
+  const auto result = ReadAll(project, AlbumQueryOptions{.sort_field_  = AlbumSortField::kLabels,
+                                                         .group_field_ = AlbumGroupField::kEditDay,
+                                                         .local_day_time_zone_ = "UTC"});
+  const auto ids    = RowIds(result);
+  ASSERT_EQ(ids.size(), 8u);
+  EXPECT_EQ(ids[0], ids_[2]);
+  EXPECT_EQ(ids[1], ids_[0]);
+  EXPECT_EQ(ids[2], ids_[4]);
+}
+
+TEST_F(AlbumQueryTest, LastEditedFileAndEditedCountUseTheActiveHead) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  auto& store = Store(project);
+  EXPECT_FALSE(store.ReadLastEditedFile().has_value());
+  EXPECT_EQ(store.ReadProjectOverview().edited_photo_count_, 0u);
+
+  WriteFixtureEdits(project, ids_);
+  // f's undone commit (2026-09-05) and e's commit after its head (2026-09-04) are newer than
+  // a's head (2026-09-03 10:00), but neither is an active head.
+  const auto last = store.ReadLastEditedFile();
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->file_id_, ids_[0]);
+  const auto rows = store.ListSearchResultRows(std::vector<sl_element_id_t>{ids_[0]});
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(last->image_id_, rows.front().image_id_);
+  EXPECT_EQ(store.ReadProjectOverview().edited_photo_count_, 3u);
+}
+
 /// Run @p setup, then @p sql on the same connection, and return column @p column of every row
 /// joined by newlines (EXPLAIN output).
 auto QueryColumnText(ProjectService& project, const std::string& setup, const std::string& sql,
@@ -938,6 +1089,23 @@ TEST_F(AlbumQueryTest, LargeLibraryPagesStayBoundedAndRecordTimings) {
                "'wedding', 'forest', 'mountain', 'interior', 'family', 'event', 'concert', "
                "'\xE4\xBA\xBA\xE5\x83\x8F'])[1 + e.id % 12], 0.9, TRUE FROM Element e "
                "WHERE e.type = 0 AND e.id % 9 <> 0");
+  // Edit history rows for every file as import writes them; two of three files have a head
+  // commit (ten minutes apart), and every fifth file also has a commit that is not the head.
+  RunStatement(project,
+               "INSERT INTO EditCommit SELECT 'commit-' || e.id, 'root-' || e.id, NULL, NULL, "
+               "1756000000000000000 + e.id * 600000000000, 0, '{}' FROM Element e "
+               "WHERE e.type = 0 AND e.id % 3 <> 0");
+  RunStatement(project,
+               "INSERT INTO EditCommit SELECT 'undone-' || e.id, 'root-' || e.id, NULL, NULL, "
+               "1800000000000000000 + e.id, 0, '{}' FROM Element e "
+               "WHERE e.type = 0 AND e.id % 5 = 0");
+  RunStatement(project,
+               "INSERT INTO VersionRef SELECT 'version-' || e.id, e.id, 'Default', "
+               "CASE WHEN e.id % 3 <> 0 THEN 'commit-' || e.id ELSE '' END, 0, 0 "
+               "FROM Element e WHERE e.type = 0");
+  RunStatement(project,
+               "INSERT INTO ImageEditState SELECT e.id, 'root-' || e.id, 'version-' || e.id, "
+               "NULL, '', NULL, 1 FROM Element e WHERE e.type = 0");
   auto&      store   = Store(project);
 
   const auto time_ms = [](const std::function<void()>& run) {
@@ -952,6 +1120,10 @@ TEST_F(AlbumQueryTest, LargeLibraryPagesStayBoundedAndRecordTimings) {
   const AlbumQueryOptions labels{.sort_field_     = AlbumSortField::kCaptureTime,
                                  .sort_direction_ = SortDirection::kDescending,
                                  .group_field_    = AlbumGroupField::kLabels};
+  const AlbumQueryOptions edits{.sort_field_          = AlbumSortField::kEditTime,
+                                .sort_direction_      = SortDirection::kDescending,
+                                .group_field_         = AlbumGroupField::kEditDay,
+                                .local_day_time_zone_ = "UTC"};
   const AlbumQueryRead    initial_read{
          .offset_ = 0, .limit_ = 1000, .read_groups_ = true, .read_statistics_ = true};
   std::map<std::string, std::vector<double>> samples;
@@ -991,6 +1163,28 @@ TEST_F(AlbumQueryTest, LargeLibraryPagesStayBoundedAndRecordTimings) {
              first_labels =
                  store.ReadAlbumQuery(0, std::nullopt, labels, kActiveModel, initial_read);
            }));
+    record(
+        "edit-day initial (groups+stats+page)", time_ms([&] {
+          EXPECT_EQ(
+              store.ReadAlbumQuery(0, std::nullopt, edits, kActiveModel, initial_read).rows_.size(),
+              1000u);
+        }));
+    record("edit-day deep page", time_ms([&] {
+             EXPECT_EQ(store
+                           .ReadAlbumQuery(0, std::nullopt, edits, kActiveModel,
+                                           AlbumQueryRead{.offset_ = kFiles - 1000, .limit_ = 1000})
+                           .rows_.size(),
+                       1000u);
+           }));
+    record(
+        "edit-day focus position", time_ms([&] {
+          EXPECT_TRUE(store
+                          .ReadAlbumFilePosition(0, std::nullopt, edits, kActiveModel,
+                                                 first.rows_.back().photo_.file_id_, std::nullopt)
+                          .has_value());
+        }));
+    record("last edited file", time_ms([&] { EXPECT_TRUE(store.ReadLastEditedFile()); }));
+    record("project overview", time_ms([&] { (void)store.ReadProjectOverview(); }));
     record("label deep page", time_ms([&] {
              EXPECT_EQ(store
                            .ReadAlbumQuery(0, std::nullopt, labels, kActiveModel,

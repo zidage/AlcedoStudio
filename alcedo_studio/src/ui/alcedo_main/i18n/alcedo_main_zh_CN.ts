@@ -1013,6 +1013,14 @@
         <translation>导入时间</translation>
     </message>
     <message>
+        <source>By Edit Time</source>
+        <translation>按编辑时间</translation>
+    </message>
+    <message>
+        <source>edit time</source>
+        <translation>编辑时间</translation>
+    </message>
+    <message>
         <source>camera model</source>
         <translation>相机型号</translation>
     </message>
@@ -7379,6 +7387,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>文本按字符编码排序，不按语言规则。</translation>
     </message>
     <message>
+        <source>Unedited photos come last.</source>
+        <translation>未编辑的照片排在最后。</translation>
+    </message>
+    <message>
         <source>Select it again to clear the sort.</source>
         <translation>再次选择可清除排序。</translation>
     </message>
@@ -7412,6 +7424,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>Unlabelled</source>
         <translation>未标注</translation>
+    </message>
+    <message>
+        <source>Unedited</source>
+        <translation>未编辑</translation>
     </message>
     <message>
         <source>Unknown</source>

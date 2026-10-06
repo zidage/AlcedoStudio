@@ -113,6 +113,11 @@ class AlbumBrowseService {
   [[nodiscard]] auto ReadAlbumFileRows(std::span<const sl_element_id_t> file_ids) const
       -> std::vector<SearchResultRow>;
 
+  /// The project file whose active Version head commit is the newest (see
+  /// ElementStore::ReadLastEditedFile); empty when no file is edited. Throws like
+  /// ReadAlbumQuery. Thread: may run on a worker thread.
+  [[nodiscard]] auto ReadLastEditedFile() const -> std::optional<LastEditedFile>;
+
   /// Receives the operation name at the start of each album query read, on the thread that
   /// runs it. Tests install one to prove that album SQL leaves the UI thread. Thread-safe.
   using QueryThreadObserver = std::function<void(std::string_view operation)>;

@@ -32,7 +32,8 @@ inline constexpr const char* kMatchSetTable = "SearchMatchSet";
 [[nodiscard]] auto           UsesLabelRelation(const AlbumQueryOptions& options) -> bool;
 
 /**
- * @brief `WITH label_membership AS (...), label_sort AS (...) ` for the active model.
+ * @brief `label_membership AS (...), label_sort AS (...)` for the active model: definitions
+ *        for a common table expression list (see RelationsPrefix).
  *
  * @details label_membership holds one row per distinct canonical `(file_id, label_key)` pair of
  * the match set files. Alias-equivalent labels map to one canonical key with the taxonomy
@@ -43,12 +44,25 @@ inline constexpr const char* kMatchSetTable = "SearchMatchSet";
 [[nodiscard]] auto           LabelRelations(const std::string& active_semantic_model_key)
     -> duckorm::SqlFragment;
 
+/// True when the options read the edit state relation (edit-day group or edit-time sort).
+[[nodiscard]] auto UsesEditStateRelation(const AlbumQueryOptions& options) -> bool;
+
+/**
+ * @brief `WITH <relations> ` that the options read: the label relations (LabelRelations) and
+ *        the edit state relation (album_edit_state_sql::EditStateRelation, local day zone of
+ *        the options). Empty when the options read neither.
+ */
+[[nodiscard]] auto RelationsPrefix(const AlbumQueryOptions& options,
+                                   const std::string&       active_semantic_model_key)
+    -> duckorm::SqlFragment;
+
 /**
  * @brief FROM clause of the ordered occurrence stream.
  *
  * @details One row per matching file, except for the label group, which has one row per
  * canonical label of a file and one unlabelled row for a file without a label (alias `m`).
- * The label sort joins label_sort (alias `ls`).
+ * The label sort joins label_sort (alias `ls`). The edit-day group and the edit-time sort
+ * left-join edit_state (alias `es`), so an unedited file keeps its row with NULL edit values.
  */
 [[nodiscard]] auto OccurrenceSource(const AlbumQueryOptions& options) -> duckorm::SqlFragment;
 

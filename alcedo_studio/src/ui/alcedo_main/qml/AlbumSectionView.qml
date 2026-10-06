@@ -96,7 +96,10 @@ Item {
     function groupTitleText(title, unknown) {
         const field = library.groupField
         if (unknown) {
-            return field === "label" ? qsTr("Unlabelled") : qsTr("Unknown")
+            if (field === "label") {
+                return qsTr("Unlabelled")
+            }
+            return field === "edited" ? qsTr("Unedited") : qsTr("Unknown")
         }
         if (field === "rating") {
             return Number(title) === 0 ? qsTr("Unrated") : qsTr("%n star(s)", "", Number(title))

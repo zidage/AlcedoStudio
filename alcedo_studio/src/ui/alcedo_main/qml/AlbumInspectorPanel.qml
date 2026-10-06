@@ -151,6 +151,31 @@ ScrollView {
                 }
             }
 
+            // Edit time has no filter buckets, only the sort and Group actions. Edited photos
+            // group by the day of their last edit; unedited photos form one group.
+            RowLayout {
+                objectName: "editTimeInspectorSection"
+                Layout.fillWidth: true
+                spacing: appTheme.spaceXs
+
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("By Edit Time").toUpperCase()
+                    color: appTheme.textMutedColor
+                    font.pixelSize: 10
+                    font.weight: 700
+                    font.letterSpacing: 1.6
+                    wrapMode: Text.Wrap
+                }
+                InspectorFieldActions {
+                    field: "edited"
+                    fieldTitle: qsTr("edit time")
+                    timeField: true
+                    ascendingTitle: qsTr("oldest first")
+                    descendingTitle: qsTr("newest first")
+                }
+            }
+
             StatsCard {
                 Layout.fillWidth: true
                 title: qsTr("By Camera Model")

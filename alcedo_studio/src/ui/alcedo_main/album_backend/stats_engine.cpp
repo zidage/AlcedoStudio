@@ -266,7 +266,7 @@ auto StatsEngine::BuildStatsFilterNode() const -> std::optional<FilterNode> {
       children.push_back(sleeve_filter::BuildImportDateUnknownFilter());
     } else {
       children.push_back(sleeve_filter::BuildImportDateBucketFilter(
-          filter_import_date_.toStdWString(), CurrentImportDayTimeZone()));
+          filter_import_date_.toStdWString(), CurrentLocalDayTimeZone()));
     }
   }
 

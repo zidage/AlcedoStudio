@@ -27,8 +27,18 @@
 #include <vector>
 
 #include "app/album_browse_service.hpp"
+#include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
-#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/history/commit_graph.hpp"
+#include "edit/history/edit_commit.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "json.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
@@ -150,22 +160,26 @@ class WorkerHold {
 class LoadedLibrary {
  public:
   auto Load(const std::filesystem::path& temp_dir, ApplicationModuleHost& backend,
-            const std::vector<LibraryPhotoSpec>& specs, std::size_t count = 0) -> bool {
-    const auto packed = CreateSeededPackedProject(temp_dir, {}, count, specs);
+            const std::vector<LibraryPhotoSpec>& specs, std::size_t count = 0,
+            const ProjectHistoryWriter& write_history = {}) -> bool {
+    const auto packed = CreatePopulatedPackedProject(temp_dir, {}, count, specs, write_history);
     if (!packed.has_value() || !LoadPackedProject(backend, packed->packed_path_)) {
       return false;
     }
     for (const auto& key : packed->images_) {
       ids_.push_back(key.file_id_);
+      image_ids_.push_back(key.image_id_);
     }
     browse_ = backend.project()->handler().project()->GetAlbumBrowseService();
     return browse_ != nullptr && WaitForLibraryQuery(backend);
   }
   auto ids() const -> const std::vector<sl_element_id_t>& { return ids_; }
+  auto image_ids() const -> const std::vector<image_id_t>& { return image_ids_; }
   auto browse() const -> const std::shared_ptr<AlbumBrowseService>& { return browse_; }
 
  private:
   std::vector<sl_element_id_t>        ids_;
+  std::vector<image_id_t>             image_ids_;
   std::shared_ptr<AlbumBrowseService> browse_;
 };
 
@@ -178,6 +192,46 @@ auto ModelIds(LibraryModule& library) -> std::vector<sl_element_id_t> {
 }
 
 auto Settle(ApplicationModuleHost& backend) -> bool { return WaitForLibraryQuery(backend); }
+
+/// Persist one exposure edit of @p file_id as the head of its active Version, as a Paste to a
+/// library image writes it. The commit clock makes it the newest commit of the project.
+void PersistExposureEdit(PipelineMgmtService& pipelines, sl_element_id_t file_id) {
+  auto           base    = pipelines.LoadHistorySnapshot(file_id);
+  const auto     current = pipelines.AcquireCommittedSnapshot(file_id);
+  nlohmann::json before =
+      current->Document().PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure())->ToJson();
+  nlohmann::json after = before;
+  after["exposure_ev"] = before.at("exposure_ev").get<float>() + 1.0f;
+
+  PipelineEditBatch  batch;
+  SetParameterChange change;
+  change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
+  change.target.node_id                = NodeId{"grade.primary"};
+  change.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
+  change.target.field_key              = "exposure";
+  change.before_value                  = std::move(before);
+  change.after_value                   = std::move(after);
+  change.before_enabled                = true;
+  change.after_enabled                 = true;
+  batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
+  batch.presentation_key               = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+
+  CommitGraph graph  = *base.graph_;
+  auto        commit = EditCommit::MakePipelineEdit(graph.GetRootId(),
+                                                    graph.GetActiveVersionRef().head_commit_hash, batch);
+  const auto  head   = commit.GetCommitHash();
+  ASSERT_TRUE(graph.InsertCommit(std::move(commit)));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), head);
+  ASSERT_NE(pipelines.PersistHistory(base, graph), nullptr);
+}
+
+/// Photos 4 and then 2 of SixPhotoSpecs are edited, so photo 2 is the last edited photo.
+void EditPhotosFourThenTwo(PipelineMgmtService&                           pipelines,
+                           const std::vector<PopulatedProject::ImageKey>& images) {
+  PersistExposureEdit(pipelines, images[4].file_id_);
+  PersistExposureEdit(pipelines, images[2].file_id_);
+}
 
 }  // namespace
 
@@ -439,6 +493,120 @@ TEST_F(LibraryQueryTests, EqualSortKeysKeepDeterministicFocusPosition) {
   module->RequestFocusPosition(static_cast<uint>(library.ids()[4]));
   ASSERT_TRUE(WaitUntil([&]() { return positions.count() == 1; }));
   EXPECT_EQ(positions.takeFirst().at(1).toLongLong(), -1);
+}
+
+// Opening a project makes its last edited photo the pending reveal and the editor's last image;
+// the reveal reads the photo's position in the accepted order once and then ends.
+TEST_F(LibraryQueryTests, ProjectOpenRevealsTheLastEditedPhoto) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs(), 0, EditPhotosFourThenTwo));
+  auto*      module = backend.library();
+  const auto target = static_cast<uint>(library.ids()[2]);
+  ASSERT_TRUE(WaitUntil([&]() { return module->PendingRevealFileId() == target; }));
+  EXPECT_EQ(backend.editor_session()->last_element_id(), target);
+  EXPECT_EQ(backend.editor_session()->last_image_id(), static_cast<uint>(library.image_ids()[2]));
+
+  QSignalSpy positions(module, &LibraryModule::FocusPositionReady);
+  module->RequestPendingReveal();
+  ASSERT_TRUE(WaitUntil([&]() { return positions.count() == 1; }));
+  const auto args = positions.takeFirst();
+  EXPECT_EQ(args.at(0).toUInt(), target);
+  EXPECT_EQ(args.at(1).toLongLong(), 2);  // the default order is by file id
+  EXPECT_EQ(module->PendingRevealFileId(), 0u);
+  module->RequestPendingReveal();
+  ProcessEvents(100);
+  EXPECT_EQ(positions.count(), 0);
+
+  // The edit-time sort and edit-day groups read the same edits.
+  module->ToggleInspectorSort(QStringLiteral("edited"), true);
+  ASSERT_TRUE(Settle(backend));
+  const auto sorted = ModelIds(*module);
+  ASSERT_EQ(sorted.size(), 6u);
+  EXPECT_EQ(sorted[0], library.ids()[2]);
+  EXPECT_EQ(sorted[1], library.ids()[4]);
+  module->SetInspectorGrouping(QStringLiteral("edited"), true);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(module->GroupFieldName(), QStringLiteral("edited"));
+  EXPECT_EQ(module->section_model().GroupCount(), 2);  // today's edit day and the unedited group
+}
+
+// A pending reveal outside the current folder selects the root folder once and finds the photo
+// there; a project without edits has no pending reveal.
+TEST_F(LibraryQueryTests, RevealSelectsTheRootFolderWhenTheCurrentFolderLacksThePhoto) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs(), 0, EditPhotosFourThenTwo));
+  auto*      module  = backend.library();
+  auto*      folders = backend.folders();
+  const auto target  = static_cast<uint>(library.ids()[2]);
+  ASSERT_TRUE(WaitUntil([&]() { return module->PendingRevealFileId() == target; }));
+
+  folders->CreateFolder(QStringLiteral("Empty"));
+  uint empty_folder = 0;
+  for (const auto& entry : folders->Folders()) {
+    const auto map = entry.toMap();
+    if (map.value(QStringLiteral("folderId")).toUInt() != 0) {
+      empty_folder = map.value(QStringLiteral("folderId")).toUInt();
+    }
+  }
+  ASSERT_NE(empty_folder, 0u);
+  folders->SelectFolder(empty_folder);
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_EQ(folders->CurrentFolderId(), empty_folder);
+  EXPECT_TRUE(ModelIds(*module).empty());
+
+  QSignalSpy positions(module, &LibraryModule::FocusPositionReady);
+  module->RequestPendingReveal();
+  ASSERT_TRUE(WaitUntil([&]() { return positions.count() == 1; }));
+  const auto args = positions.takeFirst();
+  EXPECT_EQ(args.at(0).toUInt(), target);
+  EXPECT_EQ(args.at(1).toLongLong(), 2);
+  EXPECT_EQ(folders->CurrentFolderId(), 0u);
+  EXPECT_EQ(module->PendingRevealFileId(), 0u);
+  EXPECT_EQ(ModelIds(*module).size(), 6u);
+}
+
+TEST_F(LibraryQueryTests, ProjectWithoutEditsHasNoPendingReveal) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  ProcessEvents(200);
+  EXPECT_EQ(backend.library()->PendingRevealFileId(), 0u);
+  EXPECT_EQ(backend.editor_session()->last_element_id(), 0u);
+}
+
+// An edit written while the library is hidden (the editor is open) does not reorder the photos
+// under the user; the edit-ordered library refreshes when it is shown again. While the library
+// is shown, an edit refreshes it at once.
+TEST_F(LibraryQueryTests, EditOrderRefreshWaitsUntilTheLibraryIsShown) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs(), 0, EditPhotosFourThenTwo));
+  auto* module = backend.library();
+  module->ToggleInspectorSort(QStringLiteral("edited"), true);
+  ASSERT_TRUE(Settle(backend));
+  const auto before = ModelIds(*module);
+  ASSERT_EQ(before.front(), library.ids()[2]);
+  auto& pipelines = *backend.project()->handler().pipeline_service();
+
+  PersistExposureEdit(pipelines, library.ids()[0]);
+  module->NoteEditHistoryChanged(true);
+  ProcessEvents(100);
+  EXPECT_FALSE(module->QueryUpdating());
+  EXPECT_EQ(ModelIds(*module), before);
+
+  module->RefreshStaleEditOrder();
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(ModelIds(*module).front(), library.ids()[0]);
+  // The refresh applied the stale edit; showing the library again reads nothing.
+  module->RefreshStaleEditOrder();
+  EXPECT_FALSE(module->QueryUpdating());
+
+  PersistExposureEdit(pipelines, library.ids()[5]);
+  module->NoteEditHistoryChanged(false);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_EQ(ModelIds(*module).front(), library.ids()[5]);
 }
 
 TEST_F(LibraryQueryTests, OrderedFileIdsAreUniqueAndFollowTheAcceptedOrder) {

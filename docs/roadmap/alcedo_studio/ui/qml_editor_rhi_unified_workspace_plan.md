@@ -1082,8 +1082,8 @@ Implementation closeout:
   选中非根文件夹时用 `withAlpha(theme.colDanger, …)` 渲染删除相册按钮底色；原先 LibraryWorkspace
   未暴露 `colDanger` 导致 `Cannot read property 'r' of undefined` warning。该潜在问题由
   `LibraryFolderFilterSurvivesEditorRoundTrip` 暴露并修复。
-- seeded-project 测试夹具抽取为共享头 `tests/ui/album_backend_seeded_project_fixture.hpp`
-  （`CreateSeededPackedProject`/`LoadPackedProject`/`FindFolderId` 等内联函数），
+- populated-project 测试夹具抽取为共享头 `tests/ui/album_backend_populated_project_fixture.hpp`
+  （`CreatePopulatedPackedProject`/`LoadPackedProject`/`FindFolderId` 等内联函数），
   `workspace_shell_test.cpp` 与 `album_backend_image_delete_test.cpp` 共用，避免重复。
   `SeedLibraryThumbnails` 的缩略图数据 URL 改为空串（占位卡片，无解码），避免空 base64 触发
   async `QQuickImage` 解码失败 warning。

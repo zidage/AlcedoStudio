@@ -20,6 +20,8 @@ enum class AlbumSortField : uint8_t {
   kLens,
   kRating,
   kLabels,
+  /// Commit time of the active Version head; a photo whose head is the root has no value.
+  kEditTime,
 };
 
 /// Field that partitions the photos of a library read into groups. kNone is the flat mode.
@@ -31,6 +33,9 @@ enum class AlbumGroupField : uint8_t {
   kLens,
   kRating,
   kLabels,
+  /// Local day of the active Version head commit; photos whose head is the root form the
+  /// unknown (unedited) group.
+  kEditDay,
 };
 
 /// Direction of the explicit photo sort. It has no effect when the sort field is kNone.
@@ -55,9 +60,10 @@ struct AlbumQueryOptions {
   AlbumSortField  sort_field_     = AlbumSortField::kNone;
   SortDirection   sort_direction_ = SortDirection::kAscending;
   AlbumGroupField group_field_    = AlbumGroupField::kNone;
-  /// IANA time zone that turns the UTC import time into a local calendar day (import-day
-  /// groups and import-day statistics). Required for AlbumGroupField::kImportDay.
-  std::string     import_day_time_zone_{};
+  /// IANA time zone that turns a UTC instant into a local calendar day (import-day and
+  /// edit-day groups, import-day statistics). Required for AlbumGroupField::kImportDay and
+  /// AlbumGroupField::kEditDay.
+  std::string     local_day_time_zone_{};
 };
 
 /**

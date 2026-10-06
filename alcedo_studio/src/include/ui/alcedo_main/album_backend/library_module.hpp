@@ -77,11 +77,12 @@ struct LibraryQueryOutput {
   std::vector<AlbumItem>    row_display_{};
 };
 
-/// IANA id of the system time zone. Import-day filters, groups, and statistics use it.
-[[nodiscard]] auto  CurrentImportDayTimeZone() -> std::string;
+/// IANA id of the system time zone. Import-day filters, groups, and statistics and edit-day
+/// groups use it.
+[[nodiscard]] auto  CurrentLocalDayTimeZone() -> std::string;
 
-/// Inspector field name ("date", "import", "camera", "lens", "rating", "label") of a sort or
-/// group field; empty for kNone.
+/// Inspector field name ("date", "import", "camera", "lens", "rating", "label", "edited") of a
+/// sort or group field; empty for kNone.
 [[nodiscard]] auto  InspectorFieldName(AlbumSortField field) -> QString;
 [[nodiscard]] auto  InspectorFieldName(AlbumGroupField field) -> QString;
 
@@ -118,6 +119,7 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   Q_PROPERTY(bool grouped READ Grouped NOTIFY PresentationChanged)
   Q_PROPERTY(bool queryUpdating READ QueryUpdating NOTIFY QueryStateChanged)
   Q_PROPERTY(QString queryError READ QueryError NOTIFY QueryStateChanged)
+  Q_PROPERTY(uint pendingRevealFileId READ PendingRevealFileId NOTIFY PendingRevealChanged)
 
  public:
   explicit LibraryModule(ProjectModule* project, QObject* parent = nullptr);
@@ -163,6 +165,7 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   bool    Grouped() const { return accepted_options_.group_field_ != AlbumGroupField::kNone; }
   bool    QueryUpdating() const { return refresh_in_flight_; }
   QString QueryError() const { return query_error_; }
+  uint             PendingRevealFileId() const { return pending_reveal_file_id_; }
 
   // ── Q_INVOKABLE ────────────────────────────────────────────────────────
   Q_INVOKABLE void SetThumbnailVisible(uint elementId, uint imageId, bool visible,
@@ -216,6 +219,29 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
                                                        uint elementId, uint imageId, bool visible,
                                                        uint maxEdge = 1024);
 
+  // ── Edit history (library_module_edit_state.cpp) ───────────────────────
+  /**
+   * @brief Read the project's last edited photo on the query worker and make it the pending
+   *        reveal. The library view that shows the result calls RequestPendingReveal. Also
+   *        emits LastEditedFileFound. Clears the previous pending reveal first. UI thread only.
+   */
+  void                   RevealLastEditedFile();
+  /**
+   * @brief Find the pending reveal file in the accepted result (RequestFocusPosition). When
+   *        the current folder does not hold it, select the root folder (every project file,
+   *        filters and search cleared) once and find it there. The pending reveal ends when
+   *        the position is delivered or the file is not in the project.
+   */
+  Q_INVOKABLE void       RequestPendingReveal();
+  /**
+   * @brief An edit of one or more photos was written to storage. When the requested
+   *        presentation reads the edit state (edit-time sort or edit-day groups), refresh it,
+   *        or, while @p library_hidden, refresh it on the next RefreshStaleEditOrder.
+   */
+  void                   NoteEditHistoryChanged(bool library_hidden);
+  /// Refresh once when an edit was written while the library was hidden (see above).
+  void                   RefreshStaleEditOrder();
+
   /// Request one refresh of the accepted library query. Requests of one event loop turn are
   /// combined: the refresh reads the filters, the search, and the presentation options when it
   /// is submitted to the worker. UI thread only.
@@ -257,6 +283,9 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   void orderedFileIdsReady(qulonglong requestId, const QVariantList& fileIds);
   void FocusPositionReady(uint fileId, qint64 occurrence, int sectionRow);
   void focusPositionReady(uint fileId, qint64 occurrence, int sectionRow);
+  void PendingRevealChanged();
+  /// The project's last edited photo was read (see RevealLastEditedFile).
+  void LastEditedFileFound(uint elementId, uint imageId);
 
  private:
   void SaveThumbnailDiskCacheSettings();
@@ -283,6 +312,10 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
                                      const std::filesystem::path& filePath) -> AlbumItem&;
   void               SetQueryError(const QString& message);
   void               RunAfterRefresh(std::function<void()> action);
+  void                SetPendingReveal(uint fileId);
+  /// Position read of @p fileId finished (@p found). Returns true when it started a second
+  /// read in the root folder, so the miss is not delivered.
+  auto                SettlePendingReveal(uint fileId, bool found) -> bool;
 
   ProjectModule*     project_ = nullptr;
   FolderController*  folders_ = nullptr;
@@ -314,6 +347,11 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   bool                                 page_in_flight_        = false;
   QString                              query_error_{};
   std::vector<std::function<void()>>   after_refresh_{};
+  /// An edit was written while the library was hidden and the presentation reads edit state.
+  bool                                     edit_order_stale_       = false;
+  uint                                     pending_reveal_file_id_ = 0;
+  /// The pending reveal already selected the root folder after a miss.
+  bool                                     reveal_scope_widened_   = false;
   /// Last member: destroyed first, so no job outlives the state it posts to.
   std::unique_ptr<SearchRequestWorker> query_worker_;
 };
