@@ -81,7 +81,8 @@ auto MakeDiffusionFilterLayout(ImageExtent canvas_extent, const DiffusionFilterS
   layout.transmission =
       1.0f - shape.black_absorption * shape.black_mist * shape.scatter_fraction;
   layout.highlight_gain = shape.highlight_glow;
-  layout.highlight_knee = shape.highlight_knee;
+  layout.highlight_low  = shape.highlight_low_stops;
+  layout.highlight_high = shape.highlight_high_stops;
   return layout;
 }
 

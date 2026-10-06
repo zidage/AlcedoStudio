@@ -25,8 +25,13 @@ inline constexpr float kDiffusionStrengthMax = 1.0f;
  * - @ref power_law_exponent: exponent `p` of the `r^-p` point spread tail.
  * - @ref black_mist: veil reduction of the widest scatter levels and light absorption.
  * - @ref black_absorption: transmission loss per unit of `black_mist * s`.
- * - @ref highlight_glow: gain of the near-clip highlight boost in the scatter branch.
- * - @ref highlight_knee: scene-linear value where the highlight boost starts; full boost at 1.0.
+ * - @ref highlight_glow: gain of the highlight boost in the scatter branch.
+ * - @ref highlight_low_stops: log2 scene-linear value where the highlight boost starts.
+ * - @ref highlight_high_stops: log2 scene-linear value where the highlight boost is full.
+ *
+ * The boost follows a smoothstep in log2 exposure across several stops. A narrow linear knee
+ * makes the output a steep function of the input at the knee, which draws a hard contour
+ * through every smooth gradient that crosses it.
  */
 struct DiffusionFilterShape {
   float scatter_fraction    = 0.0f;
@@ -35,8 +40,9 @@ struct DiffusionFilterShape {
   float power_law_exponent  = 2.6f;
   float black_mist          = 0.5f;
   float black_absorption    = 0.1f;
-  float highlight_glow      = 6.0f;
-  float highlight_knee      = 0.8f;
+  float highlight_glow       = 6.0f;
+  float highlight_low_stops  = -1.5f;
+  float highlight_high_stops = 1.5f;
 };
 
 /// Scatter fraction at the maximum stored strength. Strength 1 equals the 0.4 strength of the

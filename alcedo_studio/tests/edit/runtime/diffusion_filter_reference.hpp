@@ -93,8 +93,10 @@ class ScatterReference {
   auto Boost(Rgb value) const -> Rgb {
     value             = {std::max(value.r, 0.0), std::max(value.g, 0.0), std::max(value.b, 0.0)};
     const double peak = std::max(value.r, std::max(value.g, value.b));
-    const double knee = layout_.highlight_knee;
-    const double t    = std::clamp((peak - knee) / (1.0 - knee), 0.0, 1.0);
+    const double low  = layout_.highlight_low;
+    const double high = layout_.highlight_high;
+    const double t =
+        std::clamp((std::log2(std::max(peak, 1.0e-6)) - low) / (high - low), 0.0, 1.0);
     return value * (1.0 + layout_.highlight_gain * t * t * (3.0 - 2.0 * t));
   }
 
