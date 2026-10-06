@@ -11,8 +11,10 @@
 #include "app/editor_panel_projection.hpp"
 #include "app/lut_library_publication.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
+#include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -121,6 +123,8 @@ void LutLibraryController::setLibrary(alcedo::LutLibraryService* library) {
     connect(library_, &alcedo::LutLibraryService::InventoryChanged, this,
             &LutLibraryController::reload);
     connect(library_, &alcedo::LutLibraryService::RootChanged, this,
+            &LutLibraryController::reload);
+    connect(library_, &alcedo::LutLibraryService::RememberedEncodingsChanged, this,
             &LutLibraryController::reload);
   }
   emit libraryChanged();
@@ -251,9 +255,15 @@ void LutLibraryController::LoadAssociation(const TargetRead& read) {
       name = QString::fromStdU16String(LutPathFromUtf8(library->relative_path).stem().u16string());
     }
   }
+  const QString input_encoding  = ToQString(value.input_encoding);
+  const QString output_encoding = ToQString(value.output_encoding);
+  const bool    remember        = library_ && !entry_id.isEmpty() &&
+                        library_->RememberedEncodings(ToUtf8(entry_id)).has_value();
   if (value.reference == reference_ && entry_id == association_entry_id_ &&
       name == association_name_ && print_name == association_print_name_ &&
-      static_cast<double>(value.strength) == strength_ && missing == missing_) {
+      static_cast<double>(value.strength) == strength_ && missing == missing_ &&
+      input_encoding == input_encoding_ && output_encoding == output_encoding_ &&
+      remember == remember_encodings_) {
     return;
   }
   reference_              = std::move(value.reference);
@@ -262,6 +272,9 @@ void LutLibraryController::LoadAssociation(const TargetRead& read) {
   association_print_name_ = print_name;
   strength_             = static_cast<double>(value.strength);
   missing_              = missing;
+  input_encoding_         = input_encoding;
+  output_encoding_        = output_encoding;
+  remember_encodings_     = remember;
   emit associationChanged();
 }
 
@@ -296,7 +309,7 @@ auto LutLibraryController::applyEntry(const QString& entry_id) -> bool {
     if (entry.header_error != LutHeaderError::kNone) {
       problem = Tr("The LUT file is invalid: %1").arg(ToQString(entry.header_message));
     } else if (!entry.header.SupportsGradeApplication()) {
-      problem = Tr("1D LUTs cannot be applied by the grade stage.");
+      problem = UnsupportedLutText(entry.header);
     } else {
       reference = LutLibraryPublication::ReferenceForEntry(entry);
       name      = entry.DisplayName();
@@ -304,12 +317,56 @@ auto LutLibraryController::applyEntry(const QString& entry_id) -> bool {
     }
   });
   if (!problem.isEmpty()) return Reject(problem);
-  return SubmitReference(std::move(reference), std::move(name));
+  // A LUT without remembered encodings applies the default pair, so the encodings of the
+  // previous LUT do not stay on the image.
+  LutRememberedEncodings encodings =
+      library_->RememberedEncodings(ToUtf8(entry_id))
+          .value_or(LutRememberedEncodings{std::string(kDefaultLutEncodingId),
+                                           std::string(kDefaultLutEncodingId)});
+  return SubmitReference(std::move(reference), std::move(name), std::move(encodings));
 }
 
-auto LutLibraryController::clearAssociation() -> bool { return SubmitReference({}, {}); }
+auto LutLibraryController::clearAssociation() -> bool {
+  return SubmitReference({}, {}, std::nullopt);
+}
 
-auto LutLibraryController::SubmitReference(LutReference reference, std::string display_name)
+auto LutLibraryController::setRememberEncodings(bool remember) -> bool {
+  if (!canRememberEncodings()) {
+    SetLastError(Tr("Only a LUT from the library can remember its encodings."));
+    return false;
+  }
+  std::optional<LutRememberedEncodings> encodings;
+  if (remember) {
+    encodings = LutRememberedEncodings{ToUtf8(input_encoding_), ToUtf8(output_encoding_)};
+  }
+  if (library_->SetRememberedEncodings(ToUtf8(association_entry_id_), std::move(encodings)) !=
+      alcedo::LutLibraryService::Status::kOk) {
+    SetLastError(Tr("The LUT library cannot save the remembered encodings."));
+    return false;
+  }
+  SetLastError({});
+  return true;
+}
+
+void LutLibraryController::RememberEncodingSide(LutEncodingSide side,
+                                                const QString&  encoding_id) {
+  if (!canRememberEncodings()) return;
+  const std::string                     entry_id = ToUtf8(association_entry_id_);
+  std::optional<LutRememberedEncodings> pair     = library_->RememberedEncodings(entry_id);
+  if (!pair) return;
+  if (side == LutEncodingSide::kOutput) {
+    pair->output_encoding = ToUtf8(encoding_id);
+  } else {
+    pair->input_encoding = ToUtf8(encoding_id);
+  }
+  if (library_->SetRememberedEncodings(entry_id, std::move(pair)) !=
+      alcedo::LutLibraryService::Status::kOk) {
+    SetLastError(Tr("The LUT library cannot save the remembered encodings."));
+  }
+}
+
+auto LutLibraryController::SubmitReference(LutReference reference, std::string display_name,
+                                           std::optional<LutRememberedEncodings> encodings)
     -> bool {
   // Capture the complete target now; later selection changes cannot redirect this write.
   const TargetRead read = ReadTarget();
@@ -320,6 +377,10 @@ auto LutLibraryController::SubmitReference(LutReference reference, std::string d
   EditorLutWrite write;
   write.reference    = std::move(reference);
   write.display_name = std::move(display_name);
+  if (encodings) {
+    write.input_encoding  = std::move(encodings->input_encoding);
+    write.output_encoding = std::move(encodings->output_encoding);
+  }
   if (source_ == nullptr || !source_->SubmitLutWrite(*read.target, std::move(write))) {
     return Reject(Tr("The editor did not accept the LUT change."));
   }

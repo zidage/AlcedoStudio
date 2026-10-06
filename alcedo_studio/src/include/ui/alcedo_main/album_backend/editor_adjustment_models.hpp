@@ -84,6 +84,12 @@ class EditorAdjustmentModelBase : public QObject {
   auto submitNow(alcedo::EditorParameterWrite write, bool settled) -> bool;
   /// Parse QML-collected field JSON once, then enqueue the typed write.
   auto submitJsonBoundary(const QString& paramsJson, bool settled) -> bool;
+  /// Called once after the submitter accepted a settled write of a user edit (submitNow never
+  /// runs for programmatic loads). The default does nothing. A model whose user edit also
+  /// changes state outside the pipeline document (for example, a library preference) overrides
+  /// it and forwards the change to the owner of that state. The document edit is already
+  /// accepted and is not undone when the owner rejects the change.
+  virtual void onSettledWriteAccepted() {}
   [[nodiscard]] auto submitterHandle() const -> IEditorAdjustmentSubmitter* {
     return submitter_;
   }
@@ -235,6 +241,12 @@ class EditorAdjustmentEnumModel : public EditorAdjustmentModelBase {
   void entriesChanged();
   void currentIndexChanged();
   void defaultIndexChanged();
+
+ protected:
+  /// Typed Model operation for the selected entry @p value (used when paramsBuilder is unset).
+  /// The default writes an enum value; a field whose Model takes another operation overrides it.
+  [[nodiscard]] virtual auto selectionWrite(const QString& value) const
+      -> alcedo::EditorParameterWrite;
 
  private:
   bool clampIndex(int i) const;

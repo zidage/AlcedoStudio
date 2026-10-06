@@ -9,9 +9,11 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 #include "app/pipeline_history_applier.hpp"
+#include "color/color_encoding_catalog.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
@@ -79,6 +81,12 @@ auto SingleNumberText(const nlohmann::json& params) -> std::optional<std::string
 
 auto BoolText(bool value) -> std::string { return value ? "On" : "Off"; }
 
+/// English display name of LMT encoding @p id; the Model accepts catalog ids only.
+auto LutEncodingDisplayName(std::string_view id) -> std::string {
+  const auto* encoding = color::FindColorEncoding(id);
+  return encoding != nullptr ? std::string(encoding->display_name_) : std::string(id);
+}
+
 auto PathTail(const std::string& path) -> std::string {
   if (path.empty()) {
     return "None";
@@ -110,15 +118,25 @@ auto AdjustmentDisplayValue(const IOperatorModel& model) -> std::string {
   }
   if (type == type_ids::Lmt()) {
     const auto* lmt = dynamic_cast<const LmtModel*>(&model);
-    if (lmt == nullptr || IsEmptyLutReference(lmt->Reference())) {
+    if (lmt == nullptr) {
       return "None";
     }
-    std::string text = lmt->DisplayName().empty() ? PathTail(lmt->CubePath()) : lmt->DisplayName();
-    if (text.empty() || text == "None") {
-      text = DescribeLutReference(lmt->Reference());
+    std::string text = "None";
+    if (!IsEmptyLutReference(lmt->Reference())) {
+      text = lmt->DisplayName().empty() ? PathTail(lmt->CubePath()) : lmt->DisplayName();
+      if (text.empty() || text == "None") {
+        text = DescribeLutReference(lmt->Reference());
+      }
+      if (lmt->Strength() != kDefaultLutStrength) {
+        text += ", " + FixedNumber(static_cast<double>(lmt->Strength()) * 100.0, 0) + "%";
+      }
     }
-    if (lmt->Strength() != kDefaultLutStrength) {
-      text += ", " + FixedNumber(static_cast<double>(lmt->Strength()) * 100.0, 0) + "%";
+    // The encodings are transferred with the LUT, also when it has no reference.
+    const auto input  = lmt->InputEncoding();
+    const auto output = lmt->OutputEncoding();
+    if (input != kDefaultLutEncodingId || output != kDefaultLutEncodingId) {
+      text +=
+          ", " + LutEncodingDisplayName(input) + " \xE2\x86\x92 " + LutEncodingDisplayName(output);
     }
     return text;
   }

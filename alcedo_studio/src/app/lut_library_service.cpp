@@ -4,6 +4,7 @@
 
 #include "app/lut_library_service.hpp"
 
+#include <QDebug>
 #include <QDesktopServices>
 #include <QDir>
 #include <QMetaObject>
@@ -12,7 +13,9 @@
 #include <atomic>
 #include <system_error>
 #include <utility>
+#include <variant>
 
+#include "color/color_encoding_catalog.hpp"
 #include "utils/lut/lut_inventory_digest.hpp"
 
 namespace alcedo {
@@ -22,6 +25,14 @@ namespace fs                              = std::filesystem;
 
 constexpr const char* kRootSettingsKey    = "lut/libraryRoot";
 constexpr const char* kLegacyFavoritesKey = "editor/lutPanel/favoritePaths";
+
+/// Remembered-encoding items left out of a loaded `lut-library.json`. The next user state write
+/// does not keep them.
+void ReportDroppedUserStateItems(const LutLibraryUserStateReadResult& read) {
+  for (const std::string& item : read.dropped_items) {
+    qWarning("LUT library state item ignored: %s", item.c_str());
+  }
+}
 
 auto                  ToQString(const fs::path& path) -> QString {
   const std::u8string text = path.u8string();
@@ -196,6 +207,7 @@ void LutLibraryService::Start() {
       result.message = "The rebuilt LUT inventory cannot be saved: " + loaded->write_error;
     }
     LutLibraryUserStateReadResult state = ReadLutLibraryUserStateFile(root);
+    ReportDroppedUserStateItems(state);
     if (!state.state && result.status == Status::kOk) {
       result.status  = Status::kPersistenceError;
       result.message = state.error;
@@ -398,11 +410,22 @@ auto LutLibraryService::IsFavorite(std::string_view entry_id) const -> bool {
   return std::binary_search(favorites.begin(), favorites.end(), entry_id);
 }
 
-auto LutLibraryService::SetFavorite(std::string_view entry_id, bool favorite) -> Status {
-  if (operation_ == Operation::kLoad || operation_ == Operation::kUseRoot ||
-      operation_ == Operation::kMigrateRoot) {
-    return Status::kBusy;
+auto LutLibraryService::RootOperationRunning() const -> bool {
+  return operation_ == Operation::kLoad || operation_ == Operation::kUseRoot ||
+         operation_ == Operation::kMigrateRoot;
+}
+
+auto LutLibraryService::CommitUserState(LutLibraryUserState updated) -> std::string {
+  if (std::string error = options_.file_operations.write_user_state(Root(), updated);
+      !error.empty()) {
+    return error;
   }
+  publication_->SetUserState(std::move(updated));
+  return {};
+}
+
+auto LutLibraryService::SetFavorite(std::string_view entry_id, bool favorite) -> Status {
+  if (RootOperationRunning()) return Status::kBusy;
   if (!IsValidLutLibraryEntryId(entry_id)) return Status::kInvalidRequest;
   if (IsFavorite(entry_id) == favorite) return Status::kOk;
   LutLibraryUserState updated  = publication_->UserState();
@@ -413,14 +436,46 @@ auto LutLibraryService::SetFavorite(std::string_view entry_id, bool favorite) ->
   } else {
     ids.erase(position);
   }
-  if (std::string error = options_.file_operations.write_user_state(Root(), updated);
-      !error.empty()) {
+  if (std::string error = CommitUserState(std::move(updated)); !error.empty()) {
     last_error_ = QString::fromStdString("The LUT favorites cannot be saved: " + error);
     emit OperationStateChanged();
     return Status::kPersistenceError;
   }
-  publication_->SetUserState(std::move(updated));
   emit FavoritesChanged();
+  return Status::kOk;
+}
+
+auto LutLibraryService::RememberedEncodings(std::string_view entry_id) const
+    -> std::optional<LutRememberedEncodings> {
+  const auto& remembered = publication_->UserState().remembered_encodings;
+  const auto  found      = remembered.find(entry_id);
+  if (found == remembered.end()) return std::nullopt;
+  return found->second;
+}
+
+auto LutLibraryService::SetRememberedEncodings(std::string_view                      entry_id,
+                                               std::optional<LutRememberedEncodings> encodings)
+    -> Status {
+  if (RootOperationRunning()) return Status::kBusy;
+  if (!IsValidLutLibraryEntryId(entry_id) ||
+      (encodings && !IsValidLutRememberedEncodings(*encodings))) {
+    return Status::kInvalidRequest;
+  }
+  if (RememberedEncodings(entry_id) == encodings) return Status::kOk;
+  LutLibraryUserState updated = publication_->UserState();
+  if (encodings) {
+    updated.remembered_encodings.insert_or_assign(std::string(entry_id), std::move(*encodings));
+  } else {
+    updated.remembered_encodings.erase(updated.remembered_encodings.find(entry_id));
+  }
+  if (std::string error = CommitUserState(std::move(updated)); !error.empty()) {
+    last_error_ =
+        QString::fromStdString("The remembered LUT encodings cannot be saved: " + error);
+    emit OperationStateChanged();
+    return Status::kPersistenceError;
+  }
+  emit RememberedEncodingsChanged(
+      {QString::fromUtf8(entry_id.data(), static_cast<qsizetype>(entry_id.size()))});
   return Status::kOk;
 }
 
@@ -430,26 +485,65 @@ auto LutLibraryService::RefreshInventory() -> Status { return RequestRefresh(tru
 
 auto LutLibraryService::RequestRefresh(bool user_requested) -> Status {
   if (user_requested) refresh_requested_paths_.clear();
-  if (operation_ == Operation::kRefresh) return Status::kOk;  // Coalesced into the running scan.
-  const fs::path root    = Root();
-  const unsigned workers = options_.scan_worker_count;
-  return Begin(Operation::kRefresh, [this, root, workers](const std::atomic<bool>&) -> Completion {
-    auto        scanned  = std::make_shared<LutLibraryInventory>(ScanLutLibraryRoot(root, workers));
-    auto        receipts = std::make_shared<std::vector<LutPackageReceipt>>(ReadReceipts(root));
-    std::string error    = options_.file_operations.write_inventory(root, *scanned);
-    return [this, scanned, receipts, error] {
-      OperationResult result{.operation = Operation::kRefresh};
-      if (!error.empty()) {
-        // Keep the previous inventory; its verification is now out of date.
-        result.status  = Status::kPersistenceError;
-        result.message = "The LUT inventory cannot be saved: " + error;
-      } else {
-        result.affected_paths = PublishInventory(std::move(*scanned), std::move(*receipts));
-        if (!inventory_complete()) result.message = "Some LUT folders or files could not be read.";
-      }
-      Finish(std::move(result));
-    };
-  });
+  if (operation_ == Operation::kRefresh) {
+    // Coalesced into the running scan, whose completion then writes the official defaults.
+    if (user_requested) official_defaults_requested_ = true;
+    return Status::kOk;
+  }
+  const fs::path root          = Root();
+  const unsigned workers       = options_.scan_worker_count;
+  // Set before Begin: the completion reads it on this thread after the scan.
+  official_defaults_requested_ = user_requested;
+  const Status status =
+      Begin(Operation::kRefresh, [this, root, workers](const std::atomic<bool>&) -> Completion {
+        auto scanned  = std::make_shared<LutLibraryInventory>(ScanLutLibraryRoot(root, workers));
+        auto receipts = std::make_shared<std::vector<LutPackageReceipt>>(ReadReceipts(root));
+        std::string error = options_.file_operations.write_inventory(root, *scanned);
+        return [this, scanned, receipts, error] {
+          OperationResult result{.operation = Operation::kRefresh};
+          if (!error.empty()) {
+            // Keep the previous inventory; its verification is now out of date.
+            result.status  = Status::kPersistenceError;
+            result.message = "The LUT inventory cannot be saved: " + error;
+          } else {
+            result.affected_paths = PublishInventory(std::move(*scanned), std::move(*receipts));
+            if (!inventory_complete())
+              result.message = "Some LUT folders or files could not be read.";
+          }
+          const bool write_defaults    = official_defaults_requested_ && error.empty();
+          official_defaults_requested_ = false;
+          if (write_defaults) RememberDefaultEncodingsForOfficialLuts();
+          Finish(std::move(result));
+        };
+      });
+  if (status != Status::kOk) official_defaults_requested_ = false;
+  return status;
+}
+
+void LutLibraryService::RememberDefaultEncodingsForOfficialLuts() {
+  LutLibraryUserState updated = publication_->UserState();
+  QStringList         added;
+  for (const LutLibraryEntry& entry : publication_->Inventory().entries) {
+    if (entry.header_error != LutHeaderError::kNone ||
+        !entry.header.SupportsGradeApplication() ||
+        !std::holds_alternative<OfficialLutReference>(
+            LutLibraryPublication::ReferenceForEntry(entry))) {
+      continue;
+    }
+    std::string entry_id = LutLibraryPublication::EntryIdOf(entry);
+    if (updated.remembered_encodings.contains(entry_id)) continue;
+    added.push_back(QString::fromStdString(entry_id));
+    updated.remembered_encodings.emplace(
+        std::move(entry_id), LutRememberedEncodings{std::string(color::kDefaultColorEncodingId),
+                                                    std::string(color::kDefaultColorEncodingId)});
+  }
+  if (added.isEmpty()) return;
+  if (std::string error = CommitUserState(std::move(updated)); !error.empty()) {
+    last_error_ = QString::fromStdString("The default LUT encodings cannot be saved: " + error);
+    emit OperationStateChanged();
+    return;
+  }
+  emit RememberedEncodingsChanged(added);
 }
 
 auto LutLibraryService::ImportFiles(std::vector<fs::path> sources) -> Status {
@@ -553,6 +647,7 @@ auto LutLibraryService::UseRoot(const fs::path& root) -> Status {
                   "The LUT inventory cannot be saved in the folder: " + loaded->write_error);
     }
     LutLibraryUserStateReadResult state = ReadLutLibraryUserStateFile(target);
+    ReportDroppedUserStateItems(state);
     if (!state.state) return fail(Status::kPersistenceError, state.error);
     auto user_state = std::make_shared<LutLibraryUserState>(std::move(*state.state));
     return [this, result, target, loaded, user_state]() mutable {

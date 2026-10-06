@@ -35,6 +35,7 @@
 #include "edit/mask/mask_id.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
@@ -470,6 +471,39 @@ TEST(AdjustmentTransferCatalogTest, CatalogBuildsDrtPostItemsFromCurrentOwners) 
       EXPECT_EQ(OwnerOfAdjustment(item->type), AdjustmentParameterOwner::ColorGrade);
     }
   }
+}
+
+// L4: the LUT row names the encodings ("input -> output") when either is not ACEScc, also when
+// no LUT is selected, because the transfer copies them.
+TEST(AdjustmentTransferCatalogTest, LutItemSummaryAppendsNonDefaultEncodings) {
+  const auto lut_value = [](const PipelineDocument& document) -> std::string {
+    std::string error;
+    const auto  nodes = AdjustmentTransferCatalogService::BuildNodeDescriptors(document, &error);
+    EXPECT_TRUE(nodes.has_value()) << error;
+    if (!nodes.has_value() || nodes->size() < 2) return {};
+    for (const auto* item : ItemsOfKind(nodes->at(1), AdjustmentTransferItemKind::Adjustment)) {
+      if (item->type == type_ids::Lmt()) return item->display_value;
+    }
+    ADD_FAILURE() << "the primary grade has no LUT item";
+    return {};
+  };
+  const auto lmt = [](PipelineDocument& document) -> LmtModel& {
+    return dynamic_cast<LmtModel&>(*document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  };
+
+  auto document = CreateDefaultPipelineDocument();
+  EXPECT_EQ(lut_value(document), "None");
+  lmt(document).SetCubePath("D:/luts/show_look.cube");
+  lmt(document).SetStrength(0.5f);
+  EXPECT_EQ(lut_value(document), "show_look.cube, 50%");
+
+  lmt(document).SetEncodings("sony_slog3_sgamut3cine", "rec709_bt1886");
+  EXPECT_EQ(lut_value(document),
+            "show_look.cube, 50%, Sony S-Log3 / S-Gamut3.Cine \xE2\x86\x92 Rec.709 BT.1886");
+
+  lmt(document).SetCubePath("");
+  lmt(document).SetEncodings("acescc", "rec2100_pq1000");
+  EXPECT_EQ(lut_value(document), "None, ACEScc (AP1) \xE2\x86\x92 Rec.2100 PQ (1000 nits)");
 }
 
 }  // namespace alcedo
