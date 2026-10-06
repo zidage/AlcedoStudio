@@ -543,7 +543,7 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     const auto linear_view  = ViewFromPtr(backend, linear_ptr, linear_bytes);
     {
       diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
-      backend.UploadDeviceMemory(uploaded, input.pixels.Span(), device.CommandContext());
+      backend.UploadDeviceMemory(uploaded, input.pixels, device.CommandContext());
       backend.UploadDeviceMemory(params_ptr, std::as_bytes(std::span(params)),
                                  device.CommandContext());
     }
@@ -575,7 +575,7 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     const auto source   = ViewFromPtr(backend, uploaded, bytes);
     {
       diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
-      backend.UploadDeviceMemory(uploaded, input.pixels.Span(), device.CommandContext());
+      backend.UploadDeviceMemory(uploaded, input.pixels, device.CommandContext());
     }
     auto stream = MakeEncodeQueue(device);
     {
@@ -620,7 +620,7 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     TraceDevelopStage("acquire output end");
     {
       diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
-      backend.UploadDeviceMemory(u16_ptr, input.pixels.Span(), device.CommandContext());
+      backend.UploadDeviceMemory(u16_ptr, input.pixels, device.CommandContext());
     }
     TraceDevelopStage("enqueue CFA upload end");
     auto stream = MakeEncodeQueue(device);

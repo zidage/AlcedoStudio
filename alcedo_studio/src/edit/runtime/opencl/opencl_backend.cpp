@@ -144,21 +144,31 @@ OpenClCommandContext::~OpenClCommandContext() { ReleaseTrackedEvents(); }
 
 OpenClCommandContext::OpenClCommandContext(OpenClCommandContext&& other) noexcept
     : live_events_(std::move(other.live_events_)),
+      upload_bytes_(std::move(other.upload_bytes_)),
+      active_upload_count_(std::exchange(other.active_upload_count_, 0)),
+      upload_owners_(std::move(other.upload_owners_)),
+      last_upload_event_(other.last_upload_event_),
       final_event_(other.final_event_),
       submission_id_(other.submission_id_) {
-  other.final_event_   = nullptr;
-  other.submission_id_ = 0;
+  other.final_event_       = nullptr;
+  other.last_upload_event_ = nullptr;
+  other.submission_id_     = 0;
 }
 
 auto OpenClCommandContext::operator=(OpenClCommandContext&& other) noexcept
     -> OpenClCommandContext& {
   if (this != &other) {
     ReleaseTrackedEvents();
-    live_events_         = std::move(other.live_events_);
-    final_event_         = other.final_event_;
-    submission_id_       = other.submission_id_;
-    other.final_event_   = nullptr;
-    other.submission_id_ = 0;
+    live_events_             = std::move(other.live_events_);
+    upload_bytes_            = std::move(other.upload_bytes_);
+    active_upload_count_     = std::exchange(other.active_upload_count_, 0);
+    upload_owners_           = std::move(other.upload_owners_);
+    last_upload_event_       = other.last_upload_event_;
+    final_event_             = other.final_event_;
+    submission_id_           = other.submission_id_;
+    other.final_event_       = nullptr;
+    other.last_upload_event_ = nullptr;
+    other.submission_id_     = 0;
   }
   return *this;
 }
@@ -170,8 +180,53 @@ void OpenClCommandContext::TrackEvent(cl_event event) {
   live_events_.push_back(event);
 }
 
+auto OpenClCommandContext::RetainUploadBytes(std::span<const std::byte> bytes)
+    -> std::span<const std::byte> {
+  ReserveUploadEvent();
+  if (active_upload_count_ == upload_bytes_.size()) {
+    upload_bytes_.emplace_back();
+  }
+  auto& storage = upload_bytes_[active_upload_count_];
+  storage.assign(bytes.begin(), bytes.end());
+  ++active_upload_count_;
+  return storage;
+}
+
+void OpenClCommandContext::ReserveUploadEvent() {
+  if (live_events_.size() == live_events_.capacity()) {
+    live_events_.reserve(std::max<std::size_t>(1, live_events_.capacity() * 2));
+  }
+}
+
+auto OpenClCommandContext::RetainedUploadByteCount() const -> std::size_t {
+  std::size_t bytes = 0;
+  for (std::size_t i = 0; i < active_upload_count_; ++i) {
+    bytes += upload_bytes_[i].size();
+  }
+  return bytes;
+}
+
+void OpenClCommandContext::ResetUploadStorage() noexcept {
+  // Keep reusable parameter/table allocations, but release large one-off LUT or image copies.
+  constexpr std::size_t kMaxReusableUploadBytes = 1ull << 20;
+  for (std::size_t i = 0; i < active_upload_count_; ++i) {
+    if (upload_bytes_[i].capacity() > kMaxReusableUploadBytes) {
+      std::vector<std::byte>{}.swap(upload_bytes_[i]);
+    }
+  }
+  active_upload_count_ = 0;
+  upload_owners_.clear();
+  last_upload_event_ = nullptr;
+}
+
 auto OpenClCommandContext::ReleaseTrackedEvents() noexcept -> std::size_t {
-  const auto count = live_events_.size();
+  if (last_upload_event_ != nullptr) {
+    // This also protects unsubmitted writes during destruction or move assignment.
+    // Events come from one in-order queue, so the last write covers every upload.
+    (void)clWaitForEvents(1, &last_upload_event_);
+  }
+  ResetUploadStorage();
+  const auto count   = live_events_.size();
   for (cl_event event : live_events_) {
     if (event != nullptr) {
       clReleaseEvent(event);
@@ -534,11 +589,13 @@ void OpenClBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
   if (buffer.Empty() || static_cast<std::size_t>(offset) + bytes.size() > buffer.Bytes()) {
     throw std::runtime_error("OpenClBackend::UploadBufferRange: range exceeds buffer");
   }
-  cl_event event = nullptr;
+  const auto upload = command_context.RetainUploadBytes(bytes);
+  cl_event   event  = nullptr;
   CheckOpenCl(clEnqueueWriteBuffer(queue_, buffer.Native(), CL_FALSE, offset, bytes.size(),
-                                   bytes.data(), 0, nullptr, &event),
+                                   upload.data(), 0, nullptr, &event),
               "OpenClBackend::UploadBufferRange");
   TrackEnqueueEvent(command_context, event);
+  command_context.last_upload_event_ = event;
   NoteOpenClH2DBytes(bytes.size());
   ++h2d_copy_count_;
   h2d_bytes_ += bytes.size();
@@ -575,11 +632,13 @@ void OpenClBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byt
   }
   const std::size_t origin[3] = {0, 0, 0};
   const std::size_t region[3] = {texture.Width(), texture.Height(), 1};
+  const auto        upload    = command_context.RetainUploadBytes(bytes);
   cl_event          event     = nullptr;
   CheckOpenCl(clEnqueueWriteImage(queue_, texture.Native(), CL_FALSE, origin, region, 0, 0,
-                                  bytes.data(), 0, nullptr, &event),
+                                  upload.data(), 0, nullptr, &event),
               "OpenClBackend::UploadTexture2D");
   TrackEnqueueEvent(command_context, event);
+  command_context.last_upload_event_ = event;
   NoteOpenClH2DBytes(bytes.size());
   ++h2d_copy_count_;
   h2d_bytes_ += bytes.size();
@@ -619,12 +678,14 @@ void OpenClBackend::UploadR8TextureRect(Texture2D& texture, RectI rectangle,
                                  static_cast<std::size_t>(rectangle.y), 0};
   const std::size_t region[3] = {static_cast<std::size_t>(rectangle.width),
                                  static_cast<std::size_t>(rectangle.height), 1};
+  const auto        upload    = command_context.RetainUploadBytes(bytes);
   cl_event          event     = nullptr;
   CheckOpenCl(clEnqueueWriteImage(queue_, texture.Native(), CL_FALSE, origin, region,
-                                  static_cast<std::size_t>(rectangle.width), 0, bytes.data(), 0,
+                                  static_cast<std::size_t>(rectangle.width), 0, upload.data(), 0,
                                   nullptr, &event),
               "OpenClBackend::UploadR8TextureRect");
   TrackEnqueueEvent(command_context, event);
+  command_context.last_upload_event_ = event;
   NoteOpenClH2DBytes(bytes.size());
   ++h2d_copy_count_;
   h2d_bytes_ += bytes.size();
@@ -740,11 +801,35 @@ void OpenClBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> byt
     return;
   }
   const auto resolved = ResolveDeviceMemory(dst, bytes.size());
+  const auto upload   = command_context.RetainUploadBytes(bytes);
+  EnqueueDeviceMemoryUpload(resolved.first, resolved.second, upload, command_context);
+}
+
+void OpenClBackend::UploadDeviceMemory(void* dst, const HostImagePlane& pixels,
+                                       CommandContext& command_context) {
+  if (fail_next_upload_) {
+    fail_next_upload_ = false;
+    throw std::runtime_error("OpenClBackend::UploadDeviceMemory: injected failure");
+  }
+  const auto bytes = pixels.Span();
+  if (bytes.empty()) {
+    return;
+  }
+  const auto resolved = ResolveDeviceMemory(dst, bytes.size());
+  command_context.ReserveUploadEvent();
+  command_context.upload_owners_.push_back(pixels.bytes);
+  EnqueueDeviceMemoryUpload(resolved.first, resolved.second, bytes, command_context);
+}
+
+void OpenClBackend::EnqueueDeviceMemoryUpload(cl_mem buffer, std::uint32_t offset,
+                                              std::span<const std::byte> bytes,
+                                              CommandContext&            command_context) {
   cl_event   event    = nullptr;
-  CheckOpenCl(clEnqueueWriteBuffer(queue_, resolved.first, CL_FALSE, resolved.second, bytes.size(),
-                                   bytes.data(), 0, nullptr, &event),
+  CheckOpenCl(clEnqueueWriteBuffer(queue_, buffer, CL_FALSE, offset, bytes.size(), bytes.data(), 0,
+                                   nullptr, &event),
               "OpenClBackend::UploadDeviceMemory");
   TrackEnqueueEvent(command_context, event);
+  command_context.last_upload_event_ = event;
   NoteOpenClH2DBytes(bytes.size());
   ++h2d_copy_count_;
   h2d_bytes_ += bytes.size();
@@ -822,7 +907,8 @@ void OpenClBackend::Wait(CommandContext& command_context) {
     in_flight_submission_ = 0;
   }
   ResolveGpuTimestamps();
-  const auto released = command_context.ReleaseTrackedEvents();
+  command_context.ResetUploadStorage();
+  const auto released                = command_context.ReleaseTrackedEvents();
   NoteEventRelease(released);
   for (std::size_t i = 0; i < released; ++i) {
     NoteOpenClReleaseEvent();
