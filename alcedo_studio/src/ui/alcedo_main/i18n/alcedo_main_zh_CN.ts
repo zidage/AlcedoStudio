@@ -1600,6 +1600,10 @@ Alcedo 将改用 %1。</translation>
         <source>Paste Adjustments</source>
         <translation>粘贴调整</translation>
     </message>
+    <message>
+        <source>No recent tasks</source>
+        <translation>暂无近期任务</translation>
+    </message>
 </context>
 <context>
     <name>BackgroundTasksDialog</name>

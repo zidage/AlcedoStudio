@@ -86,22 +86,58 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   EXPECT_TRUE(window->isVisible());
   EXPECT_EQ(root->objectName(), QStringLiteral("mainWindow"));
 
+  // The background-task island lives on the top toolbar and rests as a lamp.
   auto* task_bar = root->findChild<QObject*>(QStringLiteral("backgroundTaskBar"));
   ASSERT_NE(task_bar, nullptr);
-  EXPECT_FALSE(task_bar->property("layoutActive").toBool());
-  BackgroundTaskSnapshot task_snapshot;
-  task_snapshot.kind_             = BackgroundTaskKind::ImageAnalysis;
-  task_snapshot.state_            = BackgroundTaskState::Running;
-  task_snapshot.title_            = QStringLiteral("Analyzing");
-  task_snapshot.progress_percent_ = 25;
-  task_snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
-  const QString task_id           = host.background_tasks()->RegisterTask(task_snapshot);
-  ProcessEvents(50);
-  EXPECT_TRUE(task_bar->property("layoutActive").toBool());
+  auto* top_toolbar = root->findChild<QObject*>(QStringLiteral("topToolbar"));
+  ASSERT_NE(top_toolbar, nullptr);
+  EXPECT_EQ(top_toolbar->findChild<QObject*>(QStringLiteral("backgroundTaskBar")), task_bar);
+  EXPECT_FALSE(task_bar->property("expanded").toBool());
+  const int reveal_delay_ms = task_bar->property("revealDelayMs").toInt();
+  const int auto_collapse_ms = AppTheme::Instance().backgroundTaskAutoCollapseMs();
+  const auto register_running_task = [&host](const QString& title) {
+    BackgroundTaskSnapshot snapshot;
+    snapshot.kind_             = BackgroundTaskKind::ImageAnalysis;
+    snapshot.state_            = BackgroundTaskState::Running;
+    snapshot.title_            = title;
+    snapshot.progress_percent_ = 25;
+    snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
+    return host.background_tasks()->RegisterTask(snapshot);
+  };
+
+  // A task that finishes inside the grace delay never unfolds the island.
+  const QString quick_task_id = register_running_task(QStringLiteral("Quick"));
+  ProcessEvents(reveal_delay_ms / 4);
+  host.background_tasks()->FinishTask(quick_task_id, BackgroundTaskState::Succeeded);
+  ProcessEvents(reveal_delay_ms + 100);
+  EXPECT_FALSE(task_bar->property("expanded").toBool());
+
+  // A long task unfolds the island; success folds it back at once.
+  const QString task_id = register_running_task(QStringLiteral("Analyzing"));
+  ProcessEvents(reveal_delay_ms + 100);
+  EXPECT_TRUE(task_bar->property("expanded").toBool());
   host.background_tasks()->FinishTask(task_id, BackgroundTaskState::Succeeded);
-  ProcessEvents(AppTheme::Instance().backgroundTaskAutoCollapseMs() +
-                AppTheme::Instance().motionFoldOpenMs() + 100);
-  EXPECT_FALSE(task_bar->property("layoutActive").toBool());
+  ProcessEvents(50);
+  EXPECT_FALSE(task_bar->property("expanded").toBool());
+
+  // A failure unfolds the island, which folds back after the auto-collapse delay.
+  const QString failing_task_id = register_running_task(QStringLiteral("Failing"));
+  host.background_tasks()->FinishTask(failing_task_id, BackgroundTaskState::Failed,
+                                      QStringLiteral("boom"));
+  ProcessEvents(50);
+  EXPECT_TRUE(task_bar->property("expanded").toBool());
+  ProcessEvents(auto_collapse_ms + 100);
+  EXPECT_FALSE(task_bar->property("expanded").toBool());
+
+  // A hand-opened island stays open until the user closes it.
+  ASSERT_TRUE(QMetaObject::invokeMethod(task_bar, "toggleByUser"));
+  EXPECT_TRUE(task_bar->property("expanded").toBool());
+  EXPECT_TRUE(task_bar->property("pinned").toBool());
+  ProcessEvents(auto_collapse_ms + 100);
+  EXPECT_TRUE(task_bar->property("expanded").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(task_bar, "toggleByUser"));
+  EXPECT_FALSE(task_bar->property("expanded").toBool());
+  EXPECT_FALSE(task_bar->property("pinned").toBool());
 
   // Exercise the real project, folder, thumbnail, import, export, inspection,
   // search, settings, and editor-entry seams through their concrete modules.
