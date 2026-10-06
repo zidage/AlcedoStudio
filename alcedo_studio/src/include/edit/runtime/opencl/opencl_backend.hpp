@@ -43,8 +43,8 @@ struct OpenClLutBinding {
 /**
  * @brief In-order product-queue encode state for one OpenCL render.
  *
- * Holds the current submission id and retained events for this render. Does not
- * own a command queue. Not thread-safe.
+ * Holds the current submission id, retained events and host upload bytes for this render.
+ * Does not own a command queue. Not thread-safe.
  */
 class OpenClCommandContext {
  public:
@@ -67,9 +67,12 @@ class OpenClCommandContext {
 
   [[nodiscard]] auto TrackedEventCount() const -> std::size_t { return live_events_.size(); }
   [[nodiscard]] auto FinalEvent() const -> cl_event { return final_event_; }
+  [[nodiscard]] auto RetainedUploadByteCount() const -> std::size_t;
 
   /**
-   * @brief Release every tracked event. Does not wait.
+   * @brief Release every tracked event and host upload allocation.
+   * Waits for writes when host upload bytes are still retained. Normal backend
+   * completion already waits and clears those bytes before calling this function.
    * @return Number of events released.
    */
   auto ReleaseTrackedEvents() noexcept -> std::size_t;
@@ -77,9 +80,24 @@ class OpenClCommandContext {
  private:
   friend class OpenClBackend;
 
-  std::vector<cl_event> live_events_;
-  cl_event              final_event_   = nullptr;
-  std::uint64_t         submission_id_ = 0;
+  /**
+   * @brief Copy an upload's bytes into storage owned until command completion.
+   *
+   * Upload APIs accept borrowed spans, including arrays destroyed or overwritten while
+   * OpenCL work is queued. They cannot extend the caller's lifetime. Only the submitted
+   * bytes are copied; these immutable allocations are never written back to their source.
+   * Reserve event storage before enqueue so tracking the write cannot allocate and fail.
+   */
+  auto RetainUploadBytes(std::span<const std::byte> bytes) -> std::span<const std::byte>;
+  /** @brief Release host storage when the last write has completed; does not wait. */
+  void ReleaseCompletedUploadBytes();
+
+  std::vector<cl_event>               live_events_;
+  std::vector<std::vector<std::byte>> upload_bytes_;
+  // Borrowed from live_events_; one in-order queue makes this write cover all uploads.
+  cl_event                            last_upload_event_ = nullptr;
+  cl_event                            final_event_       = nullptr;
+  std::uint64_t                       submission_id_     = 0;
 };
 
 /**

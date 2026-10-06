@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/develop_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
@@ -104,6 +105,27 @@ TEST_F(OpenClLutResourceFixture, LutStrengthZeroHalfAndOneMatchExpectedPixels) {
 
 TEST_F(OpenClLutResourceFixture, LutStrengthDoesNotScaleOtherAdjustments) {
   lut_resource_test::CheckStrengthDoesNotScaleOtherAdjustments(*harness_, "opencl");
+}
+
+TEST_F(OpenClLutResourceFixture, RawCctEditsWithSelectedLutMatchExpectedPixels) {
+  const auto cube = lut_resource_test::FixtureDirectory("opencl", "raw-cct-lut") / "affine.cube";
+  lut_resource_test::WriteAffineCube(cube);
+  auto document = multi_grade_test::MakeIdentityGradeDocument();
+  lut_resource_test::Lmt(document).SetCubePath(cube.string());
+  lut_resource_test::Lmt(document).SetStrength(1.0f);
+  const auto initial = harness_->Render(document);
+  ASSERT_TRUE(lut_resource_test::PixelsMatch(initial, lut_resource_test::ApplyAffineLut));
+
+  for (const float cct : {3000.0f, 4800.0f, 9000.0f}) {
+    SCOPED_TRACE(cct);
+    document.Develop()->Params().ApplyColorTemperatureUpdate(
+        DevelopColorTemperatureUpdate{.wb_mode = "custom", .custom_cct = cct});
+    const auto rendered = harness_->Render(document);
+    EXPECT_TRUE(lut_resource_test::PixelsMatch(rendered, lut_resource_test::ApplyAffineLut));
+    EXPECT_FALSE(lut_resource_test::SamePixels(initial.develop, rendered.develop));
+    EXPECT_EQ(rendered.grade_execute, 1U);
+    EXPECT_EQ(rendered.display_execute, 1U);
+  }
 }
 
 TEST_F(OpenClLutResourceFixture, MissingLutKeepsOtherGradeAdjustments) {

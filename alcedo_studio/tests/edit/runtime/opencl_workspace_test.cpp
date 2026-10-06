@@ -3,10 +3,12 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <initializer_list>
 #include <iterator>
 #include <memory>
@@ -91,6 +93,24 @@ auto TestExecutableDir() -> std::filesystem::path {
 auto UniqueSuffix() -> std::string {
   static int sequence = 0;
   return std::to_string(++sequence);
+}
+
+auto HoldOpenClQueue(OpenClBackend& backend) {
+  const auto release_hold = [](cl_event event) {
+    (void)clSetUserEventStatus(event, CL_COMPLETE);
+    clReleaseEvent(event);
+  };
+  cl_int                                                                   error = CL_SUCCESS;
+  std::unique_ptr<std::remove_pointer_t<cl_event>, decltype(release_hold)> hold(
+      clCreateUserEvent(backend.NativeContext(), &error), release_hold);
+  if (error != CL_SUCCESS || !hold) {
+    throw std::runtime_error("Cannot create the OpenCL queue's test dependency");
+  }
+  cl_event dependency = hold.get();
+  if (clEnqueueBarrierWithWaitList(backend.NativeQueue(), 1, &dependency, nullptr) != CL_SUCCESS) {
+    throw std::runtime_error("Cannot enqueue the OpenCL queue's test dependency");
+  }
+  return hold;
 }
 
 TEST(GpuDagOpenClWorkspace, RendererTemplateInstantiatesOpenClWithoutCudaOrMetalHeaders) {
@@ -685,6 +705,136 @@ TEST_F(OpenClWorkspaceFixture, OpenClCommandContextReleasesEveryRetainedEvent) {
   EXPECT_EQ(device.Workspace().Device().EventCreateCount(),
             device.Workspace().Device().EventReleaseCount());
   EXPECT_EQ(device.CommandContext().TrackedEventCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, NonblockingHostUploadsKeepBytesAfterCallerReusesStorage) {
+  OpenClRenderDevice device;
+  auto&              backend = device.Workspace().Device();
+  backend.UseDedicatedQueue();
+  auto& commands  = device.CommandContext();
+  auto  buffer    = backend.CreateBuffer(128);
+  auto  rgba      = backend.CreateTexture2D(2, 4, TextureFormat::Rgba32f);
+  auto  mask      = backend.CreateTexture2D(16, 16, TextureFormat::R8);
+  auto* transient = device.Workspace().TransientBuffers().Allocate(128);
+
+  auto  hold      = HoldOpenClQueue(backend);
+
+  {
+    std::vector<std::byte> source(128, std::byte{0x25});
+    backend.UploadBufferRange(buffer, 0, source, commands);
+    backend.UploadDeviceMemory(transient, source, commands);
+    backend.UploadTexture2D(rgba, source, commands);
+    backend.UploadR8TextureRect(mask, RectI{4, 3, 8, 8},
+                                std::span<const std::byte>(source).first(64), commands);
+    // The event keeps every write queued while the caller overwrites and destroys its array.
+    std::fill(source.begin(), source.end(), std::byte{0x6B});
+  }
+
+  EXPECT_EQ(commands.RetainedUploadByteCount(), 448U);
+
+  ASSERT_EQ(clSetUserEventStatus(hold.get(), CL_COMPLETE), CL_SUCCESS);
+  clReleaseEvent(hold.release());
+  std::vector<std::byte> readback(128);
+  backend.DownloadBufferRange(buffer, 0, readback, commands);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+  const auto resolved = backend.ResolveDeviceMemory(transient, 128);
+  ASSERT_EQ(clEnqueueReadBuffer(backend.NativeQueue(), resolved.first, CL_TRUE, resolved.second,
+                                readback.size(), readback.data(), 0, nullptr, nullptr),
+            CL_SUCCESS);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+  backend.DownloadTexture2D(rgba, readback, commands);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+  const std::size_t origin[3] = {4, 3, 0};
+  const std::size_t region[3] = {8, 8, 1};
+  readback.resize(64);
+  ASSERT_EQ(clEnqueueReadImage(backend.NativeQueue(), mask.Native(), CL_TRUE, origin, region, 0, 0,
+                               readback.data(), 0, nullptr, nullptr),
+            CL_SUCCESS);
+  EXPECT_EQ(readback, std::vector<std::byte>(64, std::byte{0x25}));
+  device.WaitIdle();
+  EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, SubmitAndPresentationReleaseCompletedHostUploadStorage) {
+  OpenClBackend backend;
+  backend.UseDedicatedQueue();
+  auto buffer = backend.CreateBuffer(128);
+  for (const bool present : {false, true}) {
+    SCOPED_TRACE(present ? "presentation" : "submission");
+    OpenClCommandContext commands;
+    commands.SetSubmissionId(backend.NextSubmissionId());
+    auto hold = HoldOpenClQueue(backend);
+    {
+      const std::vector<std::byte> source(128, std::byte{0x25});
+      backend.UploadBufferRange(buffer, 0, source, commands);
+    }
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 128U);
+    ASSERT_EQ(clSetUserEventStatus(hold.get(), CL_COMPLETE), CL_SUCCESS);
+    clReleaseEvent(hold.release());
+    ASSERT_EQ(clFinish(backend.NativeQueue()), CL_SUCCESS);
+    if (present) {
+      backend.FinalizePresentation(commands);
+    } else {
+      backend.Submit(commands);
+    }
+    EXPECT_EQ(commands.RetainedUploadByteCount(), 0U);
+    backend.Wait(commands);
+  }
+}
+
+TEST_F(OpenClWorkspaceFixture, MovingCommandContextsKeepsQueuedUploadBytesAlive) {
+  OpenClBackend backend;
+  backend.UseDedicatedQueue();
+  auto                 buffer = backend.CreateBuffer(128);
+  OpenClCommandContext original;
+  auto                 hold = HoldOpenClQueue(backend);
+  {
+    std::vector<std::byte> source(128, std::byte{0x25});
+    backend.UploadBufferRange(buffer, 0, source, original);
+    std::fill(source.begin(), source.end(), std::byte{0x6B});
+  }
+  OpenClCommandContext moved(std::move(original));
+  OpenClCommandContext assigned;
+  assigned = std::move(moved);
+  ASSERT_EQ(clSetUserEventStatus(hold.get(), CL_COMPLETE), CL_SUCCESS);
+  clReleaseEvent(hold.release());
+  std::vector<std::byte> readback(128);
+  backend.DownloadBufferRange(buffer, 0, readback, assigned);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
+  backend.Wait(assigned);
+  EXPECT_EQ(assigned.TrackedEventCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, DestroyingUnsubmittedContextWaitsForQueuedUpload) {
+  OpenClBackend backend;
+  backend.UseDedicatedQueue();
+  auto buffer   = backend.CreateBuffer(128);
+  auto commands = std::make_unique<OpenClCommandContext>();
+  auto hold     = HoldOpenClQueue(backend);
+  {
+    std::vector<std::byte> source(128, std::byte{0x25});
+    backend.UploadBufferRange(buffer, 0, source, *commands);
+  }
+  std::promise<void> cleanup_started;
+  auto               started = cleanup_started.get_future();
+  auto               cleanup =
+      std::async(std::launch::async, [commands = std::move(commands), &cleanup_started]() mutable {
+        cleanup_started.set_value();
+        commands.reset();
+      });
+  started.wait();
+  const bool returned_before_upload =
+      cleanup.wait_for(std::chrono::milliseconds(30)) == std::future_status::ready;
+  const auto completion_error = clSetUserEventStatus(hold.get(), CL_COMPLETE);
+  clReleaseEvent(hold.release());
+  cleanup.get();
+  ASSERT_EQ(completion_error, CL_SUCCESS);
+  EXPECT_FALSE(returned_before_upload);
+  std::vector<std::byte> readback(128);
+  ASSERT_EQ(clEnqueueReadBuffer(backend.NativeQueue(), buffer.Native(), CL_TRUE, 0, readback.size(),
+                                readback.data(), 0, nullptr, nullptr),
+            CL_SUCCESS);
+  EXPECT_EQ(readback, std::vector<std::byte>(128, std::byte{0x25}));
 }
 
 TEST_F(OpenClWorkspaceFixture, ParameterUploadFailureKeepsPackedBytesQueuedUntilRetry) {
