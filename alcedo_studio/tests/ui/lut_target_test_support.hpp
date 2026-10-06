@@ -71,6 +71,10 @@ class DocumentTargetSource final : public LutTargetSource {
   }
 
   [[nodiscard]] auto Mutable() -> PipelineDocument& { return *document_; }
+  /// Replace the open document, as reopening the project replaces it.
+  void               ReplaceDocument(PipelineDocument document) {
+    document_ = std::make_shared<PipelineDocument>(std::move(document));
+  }
   [[nodiscard]] auto Lmt(const NodeId& node) const -> const LmtModel* {
     const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(document_->Graph().FindNode(node));
     if (grade == nullptr) return nullptr;

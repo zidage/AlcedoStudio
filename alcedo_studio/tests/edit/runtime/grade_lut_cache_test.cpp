@@ -19,7 +19,9 @@
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/runtime/grade_lut.hpp"
+#include "edit/runtime/lut_bake.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
+#include "utils/lut/cube_lut.hpp"
 
 namespace alcedo {
 namespace {
@@ -199,6 +201,116 @@ TEST(GradeLutCacheTest, ChangedDigestReparsesCubeWithUnchangedStamp) {
   EXPECT_NE(second->key, first->key);
   EXPECT_NEAR(PackedChannel(*second, 0, 2), 1.0f, 1.0e-6f);
   EXPECT_NE(GradeLutResourceIdentity(*grade, resolver), 0U);
+}
+
+auto LmtOf(ColorGradeNodeModel& grade) -> LmtModel& {
+  return *dynamic_cast<LmtModel*>(grade.FindAdjustmentByType(type_ids::Lmt()));
+}
+
+/// Identity cube over a domain; red varies fastest.
+void WriteDomainIdentityCube(const std::filesystem::path& path, const char* domain_min,
+                             const char* domain_max) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream out(path);
+  out << "DOMAIN_MIN " << domain_min << "\nDOMAIN_MAX " << domain_max << "\nLUT_3D_SIZE 2\n";
+  for (int b = 0; b <= 1; ++b) {
+    for (int g = 0; g <= 1; ++g) {
+      for (int r = 0; r <= 1; ++r) {
+        out << r << ' ' << g << ' ' << b << '\n';
+      }
+    }
+  }
+}
+
+TEST(GradeLutCacheTest, DefaultEncodingUnitDomainLutKeepsSourcePackedBytesAndKey) {
+  const auto path = std::filesystem::absolute("build/tmp/grade_lut_cache/default_encoding/a.cube");
+  WriteConstantCube(path, 3, 0.25f, 0.5f, 0.75f);
+  const auto grade  = MakeGradeWithLut(path);
+  const auto bakes  = LmtCompositeBakeCount();
+  const auto packed = TryPackGradeLut(*grade, Files());
+  ASSERT_NE(packed, nullptr);
+
+  // The bytes and key that the pack produced before encodings existed: PackCubeLutRgba of the
+  // parsed cube, keyed by its bytes and edge.
+  CubeLut cube;
+  ASSERT_TRUE(ParseCubeFile(path, cube));
+  const auto  expected_bytes = PackCubeLutRgba(cube);
+  ContentHash hash;
+  hash.MixBytes(expected_bytes);
+  hash.MixU32(3);
+  EXPECT_EQ(packed->rgba, expected_bytes);
+  EXPECT_EQ(packed->edge, 3U);
+  EXPECT_EQ(packed->key, hash.Key());
+  EXPECT_EQ(LmtCompositeBakeCount(), bakes);
+}
+
+TEST(GradeLutCacheTest, EncodingChangeRepacksCompositeAndDefaultRestoresSourceTable) {
+  const auto path = std::filesystem::absolute("build/tmp/grade_lut_cache/encoding/a.cube");
+  WriteConstantCube(path, 2, 0.4f, 0.5f, 0.6f);
+  const auto grade  = MakeGradeWithLut(path);
+  const auto source = TryPackGradeLut(*grade, Files());
+  ASSERT_NE(source, nullptr);
+
+  LmtOf(*grade).SetEncodings("sony_slog3_sgamut3cine", "rec709_bt1886");
+  const auto bakes     = LmtCompositeBakeCount();
+  const auto composite = TryPackGradeLut(*grade, Files());
+  ASSERT_NE(composite, nullptr);
+  EXPECT_EQ(composite->edge, kLmtCompositeEdge);
+  EXPECT_NE(composite->key, source->key);
+  EXPECT_EQ(LmtCompositeBakeCount(), bakes + 1);
+  // A constant LUT bakes to the constant brought back from Rec.709 BT.1886.
+  const LmtEncodingConversion conversion(*color::FindColorEncoding("sony_slog3_sgamut3cine"),
+                                         *color::FindColorEncoding("rec709_bt1886"));
+  const auto                  expected = conversion.LutOutputToAcescc({0.4f, 0.5f, 0.6f});
+  EXPECT_NEAR(PackedChannel(*composite, 0, 0), expected[0], 1.0e-6f);
+  EXPECT_NEAR(PackedChannel(*composite, 0, 2), expected[2], 1.0e-6f);
+
+  // Unchanged content and encodings reuse the composite table without a bake.
+  EXPECT_EQ(TryPackGradeLut(*grade, Files()).get(), composite.get());
+  EXPECT_EQ(LmtCompositeBakeCount(), bakes + 1);
+
+  LmtOf(*grade).SetEncodings("acescc", "acescc");
+  const auto restored = TryPackGradeLut(*grade, Files());
+  EXPECT_EQ(restored.get(), source.get());
+}
+
+TEST(GradeLutCacheTest, NonUnitDomainLutIsBakedWithItsDomainApplied) {
+  const auto path = std::filesystem::absolute("build/tmp/grade_lut_cache/domain/wide.cube");
+  WriteDomainIdentityCube(path, "-0.5 0 0.25", "1.5 2 0.75");
+  const auto grade  = MakeGradeWithLut(path);
+  const auto packed = TryPackGradeLut(*grade, Files());
+  ASSERT_NE(packed, nullptr);
+  // Default encodings, but the domain must be applied, so the table is a composite table.
+  ASSERT_EQ(packed->edge, kLmtCompositeEdge);
+  EXPECT_TRUE(HasUnitDomain(*packed));
+  const auto node = [](std::size_t r, std::size_t g, std::size_t b) {
+    return (b * kLmtCompositeEdge + g) * kLmtCompositeEdge + r;
+  };
+  // Code c samples the identity at u = (c - min) / (max - min), clamped to [0, 1].
+  EXPECT_NEAR(PackedChannel(*packed, node(0, 0, 0), 0), 0.25f, 1.0e-6f);
+  EXPECT_NEAR(PackedChannel(*packed, node(64, 0, 0), 0), 0.75f, 1.0e-6f);
+  EXPECT_NEAR(PackedChannel(*packed, node(0, 32, 0), 1), 0.25f, 1.0e-6f);
+  EXPECT_NEAR(PackedChannel(*packed, node(0, 0, 0), 2), 0.0f, 1.0e-6f);
+  EXPECT_NEAR(PackedChannel(*packed, node(0, 0, 32), 2), 0.5f, 1.0e-6f);
+  EXPECT_NEAR(PackedChannel(*packed, node(0, 0, 64), 2), 1.0f, 1.0e-6f);
+}
+
+TEST(GradeLutCacheTest, ShaperCubeIsRejectedWithUnsupportedError) {
+  const auto path = std::filesystem::absolute("build/tmp/grade_lut_cache/shaper/shaper.cube");
+  std::filesystem::create_directories(path.parent_path());
+  {
+    std::ofstream out(path);
+    out << "LUT_1D_SIZE 2\nLUT_3D_SIZE 2\n0 0 0\n1 1 1\n";
+    for (int i = 0; i < 8; ++i) out << "0.5 0.5 0.5\n";
+  }
+  const auto grade = MakeGradeWithLut(path);
+  try {
+    (void)TryPackGradeLut(*grade, Files());
+    ADD_FAILURE() << "a shaper LUT must not render without its shaper";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("1D shaper LUTs are not supported"), std::string::npos)
+        << error.what();
+  }
 }
 
 TEST(GradeLutCacheTest, ResourceIdentityFollowsAvailabilityAndClearedReference) {

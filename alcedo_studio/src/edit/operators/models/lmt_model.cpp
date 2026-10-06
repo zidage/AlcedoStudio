@@ -8,7 +8,13 @@
 #include <stdexcept>
 #include <utility>
 
+#include "color/color_encoding_catalog.hpp"
+
 namespace alcedo {
+
+static_assert(kDefaultLutEncodingId == color::kDefaultColorEncodingId,
+              "The LMT default encoding is the catalog default (ACEScc)");
+
 namespace {
 
 void RequireValid(const LmtUpdate& update) {
@@ -22,6 +28,24 @@ void RequireValid(const LmtUpdate& update) {
       throw std::invalid_argument(error);
     }
   }
+  for (const auto* encoding : {&update.input_encoding, &update.output_encoding}) {
+    if (encoding->has_value()) {
+      if (auto error = ValidateLutEncodingId(**encoding); !error.empty()) {
+        throw std::invalid_argument(error);
+      }
+    }
+  }
+}
+
+/// The encoding id stored under @p key, or the default when the key is missing.
+auto ReadEncoding(const nlohmann::json& json, const char* key) -> std::string {
+  if (!json.contains(key)) {
+    return std::string{kDefaultLutEncodingId};
+  }
+  if (!json.at(key).is_string()) {
+    throw std::invalid_argument(std::string("LMT ") + key + " must be a string");
+  }
+  return json.at(key).get<std::string>();
 }
 
 auto ReadReference(const nlohmann::json& json) -> LutReference {
@@ -53,6 +77,13 @@ auto ValidateLutStrength(float strength) -> std::string {
   return {};
 }
 
+auto ValidateLutEncodingId(std::string_view encoding_id) -> std::string {
+  if (color::FindColorEncoding(encoding_id) == nullptr) {
+    return "LUT color encoding '" + std::string(encoding_id) + "' is not in the catalog";
+  }
+  return {};
+}
+
 auto LmtUpdateFromModelJson(const nlohmann::json& json) -> LmtUpdate {
   if (json.is_null()) {
     return LmtUpdateFromModelJson(nlohmann::json::object());
@@ -62,7 +93,8 @@ auto LmtUpdateFromModelJson(const nlohmann::json& json) -> LmtUpdate {
   }
   for (const auto& [key, value] : json.items()) {
     (void)value;
-    if (key != "cube_path" && key != "reference" && key != "strength" && key != "name") {
+    if (key != "cube_path" && key != "reference" && key != "strength" && key != "name" &&
+        key != "input_encoding" && key != "output_encoding") {
       throw std::invalid_argument("LMT parameters have unknown key '" + key + "'");
     }
   }
@@ -81,14 +113,18 @@ auto LmtUpdateFromModelJson(const nlohmann::json& json) -> LmtUpdate {
     }
     strength = json.at("strength").get<float>();
   }
-  update.strength = strength;
+  update.strength        = strength;
+  update.input_encoding  = ReadEncoding(json, "input_encoding");
+  update.output_encoding = ReadEncoding(json, "output_encoding");
   RequireValid(update);
   return update;
 }
 
 auto LmtModel::IsDefault() const -> bool {
   return Read([](const LmtPayload& payload) {
-    return IsEmptyLutReference(payload.reference) && payload.strength == kDefaultLutStrength;
+    return IsEmptyLutReference(payload.reference) && payload.strength == kDefaultLutStrength &&
+           payload.input_encoding == kDefaultLutEncodingId &&
+           payload.output_encoding == kDefaultLutEncodingId;
   });
 }
 
@@ -102,6 +138,13 @@ void LmtModel::SetReference(LutReference reference, std::string display_name) {
 void LmtModel::SetStrength(float strength) {
   LmtUpdate update;
   update.strength = strength;
+  ApplyUpdate(update);
+}
+
+void LmtModel::SetEncodings(std::string input_encoding, std::string output_encoding) {
+  LmtUpdate update;
+  update.input_encoding  = std::move(input_encoding);
+  update.output_encoding = std::move(output_encoding);
   ApplyUpdate(update);
 }
 
@@ -122,6 +165,14 @@ void LmtModel::ApplyUpdate(const LmtUpdate& update) {
     if (update.strength.has_value() && payload.strength != *update.strength) {
       payload.strength = *update.strength;
       changed |= LmtDirty::Strength;
+    }
+    if (update.input_encoding.has_value() && payload.input_encoding != *update.input_encoding) {
+      payload.input_encoding = *update.input_encoding;
+      changed |= LmtDirty::Encoding;
+    }
+    if (update.output_encoding.has_value() && payload.output_encoding != *update.output_encoding) {
+      payload.output_encoding = *update.output_encoding;
+      changed |= LmtDirty::Encoding;
     }
     return changed;
   });
@@ -147,6 +198,14 @@ auto LmtModel::Strength() const -> float {
   return Read([](const LmtPayload& payload) { return payload.strength; });
 }
 
+auto LmtModel::InputEncoding() const -> std::string {
+  return Read([](const LmtPayload& payload) { return payload.input_encoding; });
+}
+
+auto LmtModel::OutputEncoding() const -> std::string {
+  return Read([](const LmtPayload& payload) { return payload.output_encoding; });
+}
+
 auto LmtModel::CubePath() const -> std::string {
   return Read([](const LmtPayload& payload) {
     const auto* file = std::get_if<FileLutReference>(&payload.reference);
@@ -167,6 +226,12 @@ auto LmtModel::ToJson() const -> nlohmann::json {
     }
     if (payload.strength != kDefaultLutStrength) {
       json["strength"] = payload.strength;
+    }
+    if (payload.input_encoding != kDefaultLutEncodingId) {
+      json["input_encoding"] = payload.input_encoding;
+    }
+    if (payload.output_encoding != kDefaultLutEncodingId) {
+      json["output_encoding"] = payload.output_encoding;
     }
     return json;
   });

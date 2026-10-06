@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -17,17 +18,22 @@
 namespace alcedo {
 
 /**
- * @brief Device-uploadable form of a parsed .cube file plus its content identity.
+ * @brief Device-uploadable form of a 3D LUT table plus its content identity.
  *
- * Produced once per cube file version by @ref TryPackGradeLut and shared
- * immutably across callers and backends. @ref key is the @ref ContentKey the
- * backend LUT caches index on; it is computed at pack time so an unchanged
- * file never pays the byte-wise hash again.
+ * Either a parsed .cube file or an LMT composite table (lut_bake.hpp). Produced once per
+ * content version by @ref TryPackGradeLut and shared immutably across callers and backends.
+ * @ref key is the @ref ContentKey the backend LUT caches index on; it hashes @ref rgba and
+ * @ref edge and is computed at pack time so unchanged content never pays the byte-wise hash
+ * again. The domain is not in the key: the GPU passes sample only unit-domain tables, and a
+ * table with another domain is always baked into a composite table first.
  */
 struct PackedGradeLut {
   std::vector<std::byte> rgba;
   std::uint32_t          edge = 0;
   ContentKey             key{};
+  /// DOMAIN_MIN / DOMAIN_MAX of the .cube; [0, 1] for composite tables.
+  std::array<float, 3>   domain_min{0.0f, 0.0f, 0.0f};
+  std::array<float, 3>   domain_max{1.0f, 1.0f, 1.0f};
 };
 
 /**
@@ -36,7 +42,8 @@ struct PackedGradeLut {
 [[nodiscard]] auto PackCubeLutRgba(const CubeLut& lut) -> std::vector<std::byte>;
 
 /**
- * @brief Load the ColorGrade LMT cube that @p resources resolves for its reference.
+ * @brief Load the table the ColorGrade LMT samples: the cube that @p resources resolves for its
+ * reference, composed with the LMT's input and output encodings.
  *
  * The reference is resolved and parsed inside LutResourceResolver::ReadResource, so a
  * library owner cannot remove the file while it is read; GPU work starts after the call.
@@ -45,12 +52,15 @@ struct PackedGradeLut {
  * unchanged content return the same immutable instance instead of re-reading, re-parsing,
  * and re-hashing the .cube text on every pipeline execute. Changed content is parsed again
  * and replaces the entry; the old instance stays alive until its in-flight callers release it.
+ * ACEScc to ACEScc with a unit domain returns that parsed table; any other encoding pair or
+ * domain returns the 65^3 composite table of ResolveLmtSampledTable.
  *
  * @return nullptr when the node has no LMT model, references no LUT, its strength is 0
  *         (the operation samples nothing), or the referenced file is missing. A missing
  *         file skips only this LUT operation; the reference and strength are unchanged.
- * @throws std::runtime_error when a resolved file cannot be parsed as a 3D cube. Invalid or
- *         unreadable content is an error, never an identity substitute.
+ * @throws std::runtime_error when a resolved file cannot be parsed as a 3D cube, or when it
+ *         has a 1D shaper table ("1D shaper LUTs are not supported"). Invalid, unreadable or
+ *         unsupported content is an error, never an identity substitute.
  */
 [[nodiscard]] auto TryPackGradeLut(const ColorGradeNodeModel& grade,
                                    const LutResourceResolver& resources)

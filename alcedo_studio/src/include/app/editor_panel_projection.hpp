@@ -19,6 +19,7 @@
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/lut_reference.hpp"
 
 namespace alcedo {
@@ -44,6 +45,9 @@ struct EditorPanelLutValue {
   LutReference reference;
   std::string  display_name;
   float        strength = 1.0f;
+  /// Catalog encoding ids (color_encoding_catalog.hpp) of the LUT input and output.
+  std::string  input_encoding{kDefaultLutEncodingId};
+  std::string  output_encoding{kDefaultLutEncodingId};
 };
 
 struct EditorPanelCurveValue {
