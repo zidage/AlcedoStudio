@@ -364,7 +364,7 @@ auto ReadAlbumQueryFromMatchSet(duckdb_connection conn, const AlbumQueryOptions&
     // group per typed key; the typed group_order keeps the order of dates and ratings.
     query.append(
         duckorm::clause::group_by(std::vector{expr::col("group_order"), expr::col("group_key")}));
-    auto group_order        = album_sql::GroupOrderTerm(options.group_field_);
+    auto group_order        = album_sql::GroupOrderTerm(options);
     group_order.expression_ = expr::col("group_order");
     query.append(duckorm::clause::order_by(std::vector{group_order}));
     duckdb_result result;

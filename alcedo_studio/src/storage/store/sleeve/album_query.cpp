@@ -197,7 +197,33 @@ auto GroupKeyExpression(AlbumGroupField field) -> SqlFragment {
   throw std::invalid_argument("Album query: unknown group field");
 }
 
-auto GroupOrderTerm(AlbumGroupField field) -> OrderTerm {
+namespace {
+
+/// The photo sort that reads the values of @p field (the same Inspector field).
+auto SortFieldOfGroup(AlbumGroupField field) -> AlbumSortField {
+  switch (field) {
+    case AlbumGroupField::kCaptureDay:
+      return AlbumSortField::kCaptureTime;
+    case AlbumGroupField::kImportDay:
+      return AlbumSortField::kImportTime;
+    case AlbumGroupField::kEditDay:
+      return AlbumSortField::kEditTime;
+    case AlbumGroupField::kCameraModel:
+      return AlbumSortField::kCameraModel;
+    case AlbumGroupField::kLens:
+      return AlbumSortField::kLens;
+    case AlbumGroupField::kRating:
+      return AlbumSortField::kRating;
+    case AlbumGroupField::kLabels:
+      return AlbumSortField::kLabels;
+    case AlbumGroupField::kNone:
+      break;
+  }
+  return AlbumSortField::kNone;
+}
+
+/// Fixed order of the groups of @p field when no sort of the same field is selected.
+auto DefaultGroupOrderTerm(AlbumGroupField field) -> OrderTerm {
   switch (field) {
     case AlbumGroupField::kCaptureDay:
     case AlbumGroupField::kImportDay:
@@ -212,6 +238,19 @@ auto GroupOrderTerm(AlbumGroupField field) -> OrderTerm {
       break;
   }
   throw std::invalid_argument("Album query: the flat mode has no group order");
+}
+
+}  // namespace
+
+auto GroupOrderTerm(const AlbumQueryOptions& options) -> OrderTerm {
+  auto term = DefaultGroupOrderTerm(options.group_field_);
+  if (options.sort_field_ != AlbumSortField::kNone &&
+      options.sort_field_ == SortFieldOfGroup(options.group_field_)) {
+    term.direction_ = options.sort_direction_ == SortDirection::kDescending
+                          ? OrderDirection::kDescending
+                          : OrderDirection::kAscending;
+  }
+  return term;
 }
 
 namespace {
@@ -262,7 +301,7 @@ auto DateGroupTimestampOf(AlbumGroupField field) -> std::optional<DateGroupTimes
 auto OccurrenceOrderTerms(const AlbumQueryOptions& options) -> std::vector<OrderTerm> {
   std::vector<OrderTerm> terms;
   if (options.group_field_ != AlbumGroupField::kNone) {
-    terms.push_back(GroupOrderTerm(options.group_field_));
+    terms.push_back(GroupOrderTerm(options));
   }
   if (options.sort_field_ != AlbumSortField::kNone) {
     terms.push_back({SortExpression(options.sort_field_),

@@ -69,8 +69,15 @@ inline constexpr const char* kMatchSetTable = "SearchMatchSet";
 /// Group key expression over the occurrence source; NULL is the unknown group. Empty for kNone.
 [[nodiscard]] auto GroupKeyExpression(AlbumGroupField field) -> duckorm::SqlFragment;
 
-/// Fixed order of the groups of @p field. Unknown (NULL) is always last.
-[[nodiscard]] auto GroupOrderTerm(AlbumGroupField field) -> duckorm::OrderTerm;
+/**
+ * @brief Order of the groups of the options' group field. Unknown (NULL) is always last.
+ *
+ * @details When the photo sort is the same Inspector field as the group field (for example the
+ * capture-time sort with capture-day groups), the groups follow the sort direction, so the
+ * groups and the photos inside them have one order. Otherwise the group field's fixed order
+ * applies (see AlbumQueryOptions).
+ */
+[[nodiscard]] auto GroupOrderTerm(const AlbumQueryOptions& options) -> duckorm::OrderTerm;
 
 /**
  * @brief The one comparison definition of page, position, and id reads: group key, selected

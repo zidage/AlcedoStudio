@@ -134,10 +134,19 @@ Item {
 
     function restoreScrollPosition() {
         const view = contentViewLoader.item
-        if (!view || !host || !view.restoreContentY) {
+        if (!view || !host) {
             return
         }
-        view.restoreContentY(root.hostContentY())
+        if (view.restoreScrollAnchor) {
+            // The grouped view reads the anchor once; it carries its group field, so groups of
+            // another field start at the top.
+            view.restoreScrollAnchor(host.librarySectionScrollAnchor)
+            host.librarySectionScrollAnchor = null
+        } else if (view.restoreContentY) {
+            view.restoreContentY(root.hostContentY())
+        } else {
+            return
+        }
         Qt.callLater(root.revealRequestedImage)
         Qt.callLater(root.revealPendingFile)
     }
@@ -683,6 +692,12 @@ RowLayout {
         AlbumSectionView {
             objectName: "libraryAlbumSectionView"
             zoomLevel: root.gridZoomLevel
+            // Leaving the library (or the grouped view) keeps the photo at the top of the view.
+            Component.onDestruction: {
+                if (host) {
+                    host.librarySectionScrollAnchor = scrollAnchor()
+                }
+            }
             selectedImagesById: host.selectedImagesById
             exportQueueById: host.exportQueueById
             onZoomChanged: function(level) { root.gridZoomLevel = level }

@@ -315,6 +315,79 @@ TEST_F(AlbumSectionQmlTests, SectionViewShowsGroupRowsAndReleasesOccurrencePinsO
   }
 }
 
+// The grouped view's scroll anchor (the occurrence at the top of the view and the offset into
+// its row) restores the same position in a new view instance, as after an editor round trip,
+// and keeps the top photo through a new column count.
+TEST_F(AlbumSectionQmlTests, ScrollAnchorRestoresTheTopPhotoAcrossTeardownAndColumnChanges) {
+  ApplicationModuleHost         backend;
+  std::vector<LibraryPhotoSpec> specs(400);
+  for (size_t index = 0; index < specs.size(); ++index) {
+    specs[index].model_ = index < 380 ? "Canon R5" : "Sony A7";
+  }
+  const auto packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, specs);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  auto* library = backend.library();
+  library->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  auto&           sections = library->section_model();
+
+  LoadedComponent view(backend, "AlbumSectionView.qml", 1000);
+  QObject*        list    = nullptr;
+  const auto      list_up = [&]() {
+    list = view.Find("albumSectionList");
+    return list != nullptr && list->property("count").toInt() == sections.rowCount() &&
+           list->property("height").toReal() > 0;
+  };
+  ASSERT_TRUE(WaitUntil(list_up)) << Joined(view.warnings());
+  const auto row_height = view.loaded()->property("photoRowHeight").toReal();
+  list->setProperty("contentY", 20.0 * row_height + 17.0);
+  // Let the delegates of the new position finish before the view is torn down.
+  ProcessEvents(500);
+  QVariant anchor;
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(view.loaded(), "scrollAnchor", Q_RETURN_ARG(QVariant, anchor)));
+  const auto anchor_map = anchor.toMap();
+  ASSERT_FALSE(anchor_map.isEmpty());
+  const auto occurrence = anchor_map.value(QStringLiteral("occurrence")).toLongLong();
+  EXPECT_GT(occurrence, 0);
+  const auto saved_y = list->property("contentY").toReal();
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+
+  // A new view instance starts at the top; the anchor puts it back at the same position.
+  // (Tearing down a scrolled 400-photo section view in this harness reports "Object or context
+  // destroyed during incubation" also with the view before this change, so warnings are
+  // checked before the teardown.)
+  view.window()->setProperty("loaderActive", false);
+  ProcessEvents(300);
+  ProcessEvents(100);
+  view.window()->setProperty("loaderActive", true);
+  ASSERT_TRUE(WaitUntil(list_up)) << Joined(view.warnings());
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(view.loaded(), "restoreScrollAnchor", Q_ARG(QVariant, anchor)));
+  ASSERT_TRUE(WaitUntil([&]() {
+    return std::abs(list->property("contentY").toReal() - saved_y) < 0.5;
+  })) << "contentY "
+      << list->property("contentY").toReal() << " expected " << saved_y;
+
+  // A new column count keeps the anchored photo in the top row of the view.
+  const auto columns_before = view.loaded()->property("columnCount").toInt();
+  view.loaded()->setProperty("zoomLevel", 1);
+  ASSERT_TRUE(WaitUntil([&]() {
+    return view.loaded()->property("columnCount").toInt() != columns_before &&
+           sections.ColumnCount() == view.loaded()->property("columnCount").toInt();
+  }));
+  ProcessEvents(100);
+  const auto top_row  = sections.RowAtOffset(list->property("contentY").toReal(),
+                                             view.loaded()->property("headerHeight").toReal(),
+                                             view.loaded()->property("photoRowHeight").toReal());
+  const auto top_info = sections.RowInfo(top_row);
+  const auto first    = top_info.value(QStringLiteral("firstOccurrence")).toLongLong();
+  const auto count    = top_info.value(QStringLiteral("occurrenceCount")).toLongLong();
+  EXPECT_LE(first, occurrence);
+  EXPECT_LT(occurrence, first + std::max<qint64>(count, 1));
+}
+
 TEST_F(AlbumSectionQmlTests, LargeSectionTraversalKeepsCellsAndLoadedRowsBounded) {
   ApplicationModuleHost        backend;
   std::vector<LibraryPhotoSpec> specs(400);

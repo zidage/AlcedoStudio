@@ -286,33 +286,68 @@ void AlbumSectionModel::SetColumnCount(int columns) {
   RebuildRows();
 }
 
-void AlbumSectionModel::SetGroupCollapsed(int group_index, bool collapsed) {
-  if (group_index < 0 || group_index >= GroupCount() ||
-      IsGroupCollapsed(group_index) == collapsed) {
-    return;
+void AlbumSectionModel::ApplyGroupCollapse(int group_index, bool collapsed) {
+  // The photo rows of the group are inserted or removed below its header; the other rows stay,
+  // so a view keeps its scroll position (a model reset moves it to the top).
+  const auto& group      = groups_[static_cast<size_t>(group_index)];
+  const int   header_row = static_cast<int>(row_starts_[static_cast<size_t>(group_index)]);
+  const int   photo_rows = static_cast<int>(CeilDiv(group.photo_count_, column_count_));
+  if (photo_rows > 0) {
+    if (collapsed) {
+      beginRemoveRows({}, header_row + 1, header_row + photo_rows);
+    } else {
+      beginInsertRows({}, header_row + 1, header_row + photo_rows);
+    }
   }
-  const auto key = CollapseKey(groups_[static_cast<size_t>(group_index)].key_);
+  const auto key = CollapseKey(group.key_);
   if (collapsed) {
     collapsed_keys_.insert(key);
   } else {
     collapsed_keys_.erase(key);
   }
-  RebuildRows();
+  RebuildRowStarts();
+  if (photo_rows > 0) {
+    if (collapsed) {
+      endRemoveRows();
+    } else {
+      endInsertRows();
+    }
+  }
+  emit dataChanged(index(header_row), index(header_row), {Collapsed});
+}
+
+void AlbumSectionModel::SetGroupCollapsed(int group_index, bool collapsed) {
+  if (group_index < 0 || group_index >= GroupCount() ||
+      IsGroupCollapsed(group_index) == collapsed) {
+    return;
+  }
+  ApplyGroupCollapse(group_index, collapsed);
+  emit SectionsChanged();
 }
 
 void AlbumSectionModel::ExpandAll() {
   if (collapsed_keys_.empty()) {
     return;
   }
-  collapsed_keys_.clear();
-  RebuildRows();
+  for (int index = 0; index < GroupCount(); ++index) {
+    if (IsGroupCollapsed(index)) {
+      ApplyGroupCollapse(index, false);
+    }
+  }
+  emit SectionsChanged();
 }
 
 void AlbumSectionModel::CollapseAll() {
+  bool changed = false;
   for (int index = 0; index < GroupCount(); ++index) {
-    collapsed_keys_.insert(CollapseKey(groups_[static_cast<size_t>(index)].key_));
+    if (!IsGroupCollapsed(index)) {
+      ApplyGroupCollapse(index, true);
+      changed = true;
+    }
   }
-  RebuildRows();
+  if (changed) {
+    emit SectionsChanged();
+  }
 }
 
 bool AlbumSectionModel::IsGroupCollapsed(int group_index) const {
@@ -349,6 +384,13 @@ QVariantMap AlbumSectionModel::RowInfo(int row) const {
 
 int AlbumSectionModel::GroupForOccurrence(qint64 occurrence) const {
   return GroupOfOccurrence(occurrence);
+}
+
+int AlbumSectionModel::GroupHeaderRow(int group_index) const {
+  if (group_index < 0 || group_index >= GroupCount()) {
+    return -1;
+  }
+  return static_cast<int>(row_starts_[static_cast<size_t>(group_index)]);
 }
 
 QVariantMap AlbumSectionModel::OccurrenceRangeForRows(int first_row, int last_row) const {

@@ -504,18 +504,28 @@ TEST_F(AlbumQueryTest, UnknownImportTimeFormsTheLastImportDayGroup) {
   EXPECT_EQ(RowIds(unknown), std::vector<sl_element_id_t>{ids_[3]});
 }
 
-TEST_F(AlbumQueryTest, DateGroupsSortPhotosByFullTimestamp) {
+TEST_F(AlbumQueryTest, DateGroupsAndPhotosFollowTheSameTimeSortDirection) {
   ProjectService project(db_path_, meta_path_);
   BuildFixture(project);
-  const auto id = [this](size_t index) { return ids_[index]; };
-  // Capture days newest first; inside a day the full capture time, then the file id.
+  const auto id   = [this](size_t index) { return ids_[index]; };
+  const auto days = [](const AlbumQueryResult& result) {
+    std::vector<std::string> keys;
+    for (const auto& group : result.groups_) {
+      keys.push_back(KeyText(group.key_));
+    }
+    return keys;
+  };
+  // The capture-time sort orders the capture days and the photos inside a day in the same
+  // direction (full capture time, then the file id); unknown days stay last.
   {
     const auto ascending =
         ReadAll(project, AlbumQueryOptions{.sort_field_     = AlbumSortField::kCaptureTime,
                                            .sort_direction_ = SortDirection::kAscending,
                                            .group_field_    = AlbumGroupField::kCaptureDay});
-    EXPECT_EQ(RowIds(ascending), (std::vector<sl_element_id_t>{id(0), id(1), id(2), id(6), id(4),
-                                                               id(5), id(3), id(7)}));
+    EXPECT_EQ(RowIds(ascending), (std::vector<sl_element_id_t>{id(5), id(6), id(4), id(0), id(1),
+                                                               id(2), id(3), id(7)}));
+    EXPECT_EQ(days(ascending),
+              (std::vector<std::string>{"2026-06-05", "2026-06-06", "2026-06-07", "<unknown>"}));
     const auto descending =
         ReadAll(project, AlbumQueryOptions{.sort_field_     = AlbumSortField::kCaptureTime,
                                            .sort_direction_ = SortDirection::kDescending,
@@ -530,8 +540,10 @@ TEST_F(AlbumQueryTest, DateGroupsSortPhotosByFullTimestamp) {
                                            .sort_direction_      = SortDirection::kAscending,
                                            .group_field_         = AlbumGroupField::kImportDay,
                                            .local_day_time_zone_ = "UTC"});
-    EXPECT_EQ(RowIds(ascending), (std::vector<sl_element_id_t>{id(2), id(3), id(4), id(0), id(1),
-                                                               id(7), id(5), id(6)}));
+    EXPECT_EQ(RowIds(ascending), (std::vector<sl_element_id_t>{id(5), id(6), id(0), id(1), id(7),
+                                                               id(2), id(3), id(4)}));
+    EXPECT_EQ(days(ascending),
+              (std::vector<std::string>{"2026-08-30", "2026-09-01", "2026-09-02"}));
     const auto descending =
         ReadAll(project, AlbumQueryOptions{.sort_field_          = AlbumSortField::kImportTime,
                                            .sort_direction_      = SortDirection::kDescending,
@@ -539,11 +551,8 @@ TEST_F(AlbumQueryTest, DateGroupsSortPhotosByFullTimestamp) {
                                            .local_day_time_zone_ = "UTC"});
     EXPECT_EQ(RowIds(descending), (std::vector<sl_element_id_t>{id(4), id(2), id(3), id(7), id(0),
                                                                 id(1), id(5), id(6)}));
-    std::vector<std::string> days;
-    for (const auto& group : descending.groups_) {
-      days.push_back(KeyText(group.key_));
-    }
-    EXPECT_EQ(days, (std::vector<std::string>{"2026-09-02", "2026-09-01", "2026-08-30"}));
+    EXPECT_EQ(days(descending),
+              (std::vector<std::string>{"2026-09-02", "2026-09-01", "2026-08-30"}));
   }
 }
 
@@ -601,28 +610,44 @@ TEST_F(AlbumQueryTest, DateGroupWithoutExplicitSortUsesFullTimestamp) {
   EXPECT_EQ(RowIds(ReadAll(project, AlbumQueryOptions{})), sorted);
 }
 
-TEST_F(AlbumQueryTest, SameScalarGroupAndSortUsesFileIdForTies) {
+// A sort of the group's own field orders the groups in its direction; the photos of a group
+// share one value, so they follow the file id. The unknown group stays last.
+TEST_F(AlbumQueryTest, SameFieldGroupAndSortShareTheDirectionAndUseFileIdForTies) {
   ProjectService project(db_path_, meta_path_);
   BuildFixture(project);
-  const auto id = [this](size_t index) { return ids_[index]; };
-  for (const auto direction : {SortDirection::kAscending, SortDirection::kDescending}) {
-    const auto camera =
-        ReadAll(project, AlbumQueryOptions{.sort_field_     = AlbumSortField::kCameraModel,
-                                           .sort_direction_ = direction,
-                                           .group_field_    = AlbumGroupField::kCameraModel});
-    EXPECT_EQ(RowIds(camera), (std::vector<sl_element_id_t>{id(0), id(1), id(6), id(2), id(4),
-                                                            id(5), id(3), id(7)}));
-    const auto rating =
+  const auto id   = [this](size_t index) { return ids_[index]; };
+  const auto read = [this, &project](AlbumSortField sort, AlbumGroupField group,
+                                     SortDirection direction) {
+    return RowIds(ReadAll(
+        project, AlbumQueryOptions{
+                     .sort_field_ = sort, .sort_direction_ = direction, .group_field_ = group}));
+  };
+  using enum SortDirection;
+  EXPECT_EQ(read(AlbumSortField::kCameraModel, AlbumGroupField::kCameraModel, kAscending),
+            (std::vector<sl_element_id_t>{id(0), id(1), id(6), id(2), id(4), id(5), id(3), id(7)}));
+  EXPECT_EQ(read(AlbumSortField::kCameraModel, AlbumGroupField::kCameraModel, kDescending),
+            (std::vector<sl_element_id_t>{id(5), id(2), id(4), id(0), id(1), id(6), id(3), id(7)}));
+  EXPECT_EQ(read(AlbumSortField::kRating, AlbumGroupField::kRating, kAscending),
+            (std::vector<sl_element_id_t>{id(3), id(5), id(0), id(2), id(6), id(7), id(1), id(4)}));
+  EXPECT_EQ(read(AlbumSortField::kRating, AlbumGroupField::kRating, kDescending),
+            (std::vector<sl_element_id_t>{id(1), id(4), id(0), id(2), id(6), id(7), id(5), id(3)}));
+  EXPECT_EQ(read(AlbumSortField::kLens, AlbumGroupField::kLens, kAscending),
+            (std::vector<sl_element_id_t>{id(5), id(7), id(0), id(6), id(2), id(4), id(1), id(3)}));
+  EXPECT_EQ(read(AlbumSortField::kLens, AlbumGroupField::kLens, kDescending),
+            (std::vector<sl_element_id_t>{id(2), id(4), id(0), id(6), id(5), id(7), id(1), id(3)}));
+
+  // A sort of another field keeps the group field's fixed order (cameras ascending) in both
+  // directions.
+  for (const auto direction : {kAscending, kDescending}) {
+    const auto by_rating =
         ReadAll(project, AlbumQueryOptions{.sort_field_     = AlbumSortField::kRating,
                                            .sort_direction_ = direction,
-                                           .group_field_    = AlbumGroupField::kRating});
-    EXPECT_EQ(RowIds(rating), (std::vector<sl_element_id_t>{id(1), id(4), id(0), id(2), id(6),
-                                                            id(7), id(5), id(3)}));
-    const auto lens = ReadAll(project, AlbumQueryOptions{.sort_field_     = AlbumSortField::kLens,
-                                                         .sort_direction_ = direction,
-                                                         .group_field_ = AlbumGroupField::kLens});
-    EXPECT_EQ(RowIds(lens), (std::vector<sl_element_id_t>{id(5), id(7), id(0), id(6), id(2), id(4),
-                                                          id(1), id(3)}));
+                                           .group_field_    = AlbumGroupField::kCameraModel});
+    std::vector<std::string> cameras;
+    for (const auto& group : by_rating.groups_) {
+      cameras.push_back(KeyText(group.key_));
+    }
+    EXPECT_EQ(cameras, (std::vector<std::string>{"Canon R5", "Nikon Z8", "Sony A7", "<unknown>"}));
   }
 }
 

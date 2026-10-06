@@ -114,6 +114,47 @@ TEST(AlbumSectionModelTest, SectionRowsSkipCollapsedPhotoRanges) {
   EXPECT_EQ(model.rowCount(), 3);
 }
 
+// Collapsing or expanding inserts or removes only the photo rows of the group below its header
+// and updates the header; it never resets the model, so a view keeps its scroll position.
+TEST(AlbumSectionModelTest, CollapseChangesOnlyTheGroupRowsWithoutAModelReset) {
+  AlbumSectionModel model;
+  model.ResetGroups(ThreeGroups(), 9, 9, false);
+  model.SetColumnCount(2);  // Rows: H P P P | H P | H P P
+  QSignalSpy resets(&model, &QAbstractItemModel::modelReset);
+  QSignalSpy removed(&model, &QAbstractItemModel::rowsRemoved);
+  QSignalSpy inserted(&model, &QAbstractItemModel::rowsInserted);
+  QSignalSpy changed(&model, &QAbstractItemModel::dataChanged);
+
+  model.SetGroupCollapsed(1, true);
+  ASSERT_EQ(removed.count(), 1);
+  EXPECT_EQ(removed.at(0).at(1).toInt(), 5);
+  EXPECT_EQ(removed.at(0).at(2).toInt(), 5);
+  ASSERT_EQ(changed.count(), 1);
+  EXPECT_EQ(changed.at(0).at(0).value<QModelIndex>().row(), 4);
+  EXPECT_TRUE(model.data(model.index(4), AlbumSectionModel::Collapsed).toBool());
+  EXPECT_EQ(model.rowCount(), 8);
+  EXPECT_EQ(model.RowAt(5).group_index_, 2);  // the next header moved up one row
+
+  model.SetGroupCollapsed(1, false);
+  ASSERT_EQ(inserted.count(), 1);
+  EXPECT_EQ(inserted.at(0).at(1).toInt(), 5);
+  EXPECT_EQ(inserted.at(0).at(2).toInt(), 5);
+  EXPECT_EQ(model.rowCount(), 9);
+
+  removed.clear();
+  inserted.clear();
+  EXPECT_EQ(model.GroupHeaderRow(2), 6);
+  EXPECT_EQ(model.GroupHeaderRow(3), -1);
+  model.CollapseAll();
+  EXPECT_EQ(removed.count(), 3);
+  EXPECT_EQ(model.GroupHeaderRow(2), 2);
+  EXPECT_EQ(model.rowCount(), 3);
+  model.ExpandAll();
+  EXPECT_EQ(inserted.count(), 3);
+  EXPECT_EQ(model.rowCount(), 9);
+  EXPECT_EQ(resets.count(), 0);
+}
+
 TEST(AlbumSectionModelTest, CollapseStateFollowsTheGroupKeyAcrossResultReplacement) {
   AlbumSectionModel model;
   model.ResetGroups(ThreeGroups(), 9, 9, false);

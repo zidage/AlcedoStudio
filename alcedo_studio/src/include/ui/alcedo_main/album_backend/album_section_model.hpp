@@ -129,6 +129,8 @@ class AlbumSectionModel final : public QAbstractListModel {
   [[nodiscard]] Q_INVOKABLE QVariantMap  RowInfo(int row) const;
   /// Group index of @p occurrence; -1 when it is out of range.
   [[nodiscard]] Q_INVOKABLE int          GroupForOccurrence(qint64 occurrence) const;
+  /// Header row of group @p group_index; -1 when it is out of range.
+  [[nodiscard]] Q_INVOKABLE int          GroupHeaderRow(int group_index) const;
   /// `{begin, end}` occurrences shown by the photo rows in [@p first_row, @p last_row]; an empty
   /// range when those rows show no photo.
   [[nodiscard]] Q_INVOKABLE QVariantMap  OccurrenceRangeForRows(int first_row, int last_row) const;
@@ -160,6 +162,9 @@ class AlbumSectionModel final : public QAbstractListModel {
   /// Rebuild the prefix table of row starts. Does not emit.
   void                              RebuildRowStarts();
   void                              RebuildRows();
+  /// Insert or remove the photo rows of one group below its header (no model reset) and
+  /// notify the header's Collapsed role. The group's state must differ from @p collapsed.
+  void                              ApplyGroupCollapse(int group_index, bool collapsed);
   /// Group whose rows hold @p row (binary search on the prefix table).
   [[nodiscard]] auto                GroupOfRow(int row) const -> int;
   [[nodiscard]] auto                GroupOfOccurrence(int64_t occurrence) const -> int;
