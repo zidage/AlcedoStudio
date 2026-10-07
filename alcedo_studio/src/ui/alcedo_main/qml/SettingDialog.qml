@@ -347,102 +347,108 @@ Dialog {
                             wrapMode: Text.Wrap
                         }
 
-                        ColumnLayout {
-                            id: categoryNavColumn
+                        // Scrolls once the categories outgrow the dialog height.
+                        ScrollView {
+                            id: categoryNavScroll
+                            objectName: "settingsNavScroll"
                             Layout.fillWidth: true
-                            spacing: 8
+                            Layout.fillHeight: true
+                            contentWidth: availableWidth
+                            clip: true
 
-                            // Instantiator, not Repeater: the Repeater's
-                            // delegate-model never completes under an
-                            // offscreen test window, so nav items would never
-                            // materialize for QML tests (and this list is
-                            // fixed at ten entries, so eager creation is
-                            // equivalent in production).
-                            Instantiator {
-                                model: [
-                                    { label: qsTr("Language / Theme"), icon: "qrc:/panel_icons/language.svg" },
-                                    { label: qsTr("Default Behavior"), icon: "qrc:/panel_icons/zero-config.svg" },
-                                    { label: qsTr("Cache"), icon: "qrc:/panel_icons/box.svg" },
-                                    { label: qsTr("Local Content Recognition"), icon: "qrc:/panel_icons/search.svg" },
-                                    { label: qsTr("Advanced Content Analysis"), icon: "qrc:/panel_icons/flask.svg" },
-                                    { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
-                                    { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
-                                    { label: qsTr("Keyboard"), icon: "qrc:/panel_icons/keyboard.svg" },
-                                    { label: qsTr("LUTs"), icon: "qrc:/panel_icons/lut-cube.svg" },
-                                    { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
-                                ]
+                            ColumnLayout {
+                                id: categoryNavColumn
+                                width: categoryNavScroll.availableWidth
+                                spacing: 8
 
-                                onObjectAdded: function(index, object) {
-                                    object.parent = categoryNavColumn
-                                }
+                                // Instantiator, not Repeater: the Repeater's
+                                // delegate-model never completes under an
+                                // offscreen test window, so nav items would never
+                                // materialize for QML tests (and this list is
+                                // fixed at ten entries, so eager creation is
+                                // equivalent in production).
+                                Instantiator {
+                                    model: [
+                                        { label: qsTr("Language / Theme"), icon: "qrc:/panel_icons/language.svg" },
+                                        { label: qsTr("Default Behavior"), icon: "qrc:/panel_icons/zero-config.svg" },
+                                        { label: qsTr("Cache"), icon: "qrc:/panel_icons/box.svg" },
+                                        { label: qsTr("Local Content Recognition"), icon: "qrc:/panel_icons/search.svg" },
+                                        { label: qsTr("Advanced Content Analysis"), icon: "qrc:/panel_icons/flask.svg" },
+                                        { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
+                                        { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
+                                        { label: qsTr("Keyboard"), icon: "qrc:/panel_icons/keyboard.svg" },
+                                        { label: qsTr("LUTs"), icon: "qrc:/panel_icons/lut-cube.svg" },
+                                        { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
+                                    ]
 
-                                delegate: Rectangle {
-                                    required property int index
-                                    required property var modelData
-
-                                    objectName: "settingsNavItem:" + index
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: Math.max(48, categoryNavRow.implicitHeight
-                                                                     + appTheme.spaceMd)
-                                    radius: 6
-                                    color: dialog.currentCategory === index
-                                           ? Qt.rgba(dialog.primaryAccent.r, dialog.primaryAccent.g, dialog.primaryAccent.b, 0.22)
-                                           : (categoryMouse.containsMouse ? dialog.hoverColor : "transparent")
-
-                                    RowLayout {
-                                        id: categoryNavRow
-                                        anchors.fill: parent
-                                        anchors.leftMargin: 12
-                                        anchors.rightMargin: 12
-                                        spacing: 12
-
-                                        Image {
-                                            Layout.preferredWidth: 20
-                                            Layout.preferredHeight: 20
-                                            source: modelData.icon
-                                            sourceSize.width: 20
-                                            sourceSize.height: 20
-                                            asynchronous: true
-                                            opacity: dialog.currentCategory === index ? 0.95 : 0.72
-                                        }
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            text: modelData.label
-                                            color: dialog.currentCategory === index ? dialog.textColor : dialog.mutedTextColor
-                                            font.pixelSize: 15
-                                            font.weight: dialog.currentCategory === index ? 700 : 500
-                                            wrapMode: Text.Wrap
-                                        }
-
-                                        Rectangle {
-                                            Layout.preferredWidth: 8
-                                            Layout.preferredHeight: 8
-                                            Layout.alignment: Qt.AlignVCenter
-                                            radius: 4
-                                            visible: index === dialog.updatesCategory
-                                                     && appModules.updates
-                                                     && (appModules.updates.updateDeferred
-                                                         || appModules.updates.updateAvailable)
-                                            color: appTheme.backgroundTaskFinishedColor
-                                            Accessible.name: qsTr("Update available")
-                                            Accessible.role: Accessible.Indicator
-                                        }
+                                    onObjectAdded: function(index, object) {
+                                        object.parent = categoryNavColumn
                                     }
 
-                                    MouseArea {
-                                        id: categoryMouse
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: dialog.currentCategory = index
+                                    delegate: Rectangle {
+                                        required property int index
+                                        required property var modelData
+
+                                        objectName: "settingsNavItem:" + index
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: Math.max(48, categoryNavRow.implicitHeight
+                                                                         + appTheme.spaceMd)
+                                        radius: 6
+                                        color: dialog.currentCategory === index
+                                               ? Qt.rgba(dialog.primaryAccent.r, dialog.primaryAccent.g, dialog.primaryAccent.b, 0.22)
+                                               : (categoryMouse.containsMouse ? dialog.hoverColor : "transparent")
+
+                                        RowLayout {
+                                            id: categoryNavRow
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 12
+                                            anchors.rightMargin: 12
+                                            spacing: 12
+
+                                            Image {
+                                                Layout.preferredWidth: 20
+                                                Layout.preferredHeight: 20
+                                                source: modelData.icon
+                                                sourceSize.width: 20
+                                                sourceSize.height: 20
+                                                asynchronous: true
+                                                opacity: dialog.currentCategory === index ? 0.95 : 0.72
+                                            }
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: modelData.label
+                                                color: dialog.currentCategory === index ? dialog.textColor : dialog.mutedTextColor
+                                                font.pixelSize: 15
+                                                font.weight: dialog.currentCategory === index ? 700 : 500
+                                                wrapMode: Text.Wrap
+                                            }
+
+                                            Rectangle {
+                                                Layout.preferredWidth: 8
+                                                Layout.preferredHeight: 8
+                                                Layout.alignment: Qt.AlignVCenter
+                                                radius: 4
+                                                visible: index === dialog.updatesCategory
+                                                         && appModules.updates
+                                                         && (appModules.updates.updateDeferred
+                                                             || appModules.updates.updateAvailable)
+                                                color: appTheme.backgroundTaskFinishedColor
+                                                Accessible.name: qsTr("Update available")
+                                                Accessible.role: Accessible.Indicator
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            id: categoryMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: dialog.currentCategory = index
+                                        }
                                     }
                                 }
                             }
-                        }
-
-                        Item {
-                            Layout.fillHeight: true
                         }
                     }
                 }

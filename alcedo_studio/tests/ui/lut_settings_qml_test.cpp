@@ -452,8 +452,8 @@ TEST(LutSettingsQmlTest, InstalledPackageIsRemovedOnlyAfterConfirmation) {
       harness.item(QStringLiteral("lutSettingsPackageRemoveWarning:") + spectral);
   ASSERT_NE(warning, nullptr);
   EXPECT_TRUE(warning->isVisible());
-  EXPECT_EQ(Text(warning), PanelText("Photos that have these LUTs applied lose that look until the "
-                                     "package is installed again."));
+  EXPECT_EQ(Text(warning),
+            PanelText("After removal, photos that use LUTs from this package lose that look."));
   EXPECT_EQ(harness.library()->PackageReceipts().size(), 1u);
   LutSettingsHarness::Press(
       harness.item(QStringLiteral("lutSettingsPackageRemoveKeep:") + spectral));

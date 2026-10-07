@@ -860,7 +860,7 @@ ColumnLayout {
 
                 Label {
                     Layout.fillWidth: true
-                    text: qsTr("Remove this package? Its LUTs leave the library. Favorites are kept.")
+                    text: qsTr("Remove this package?")
                     color: appTheme.textColor
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeCaption
@@ -868,7 +868,7 @@ ColumnLayout {
                 }
                 AlertBadge {
                     objectName: "lutSettingsPackageRemoveWarning:" + packageCard.packageId
-                    text: qsTr("Photos that have these LUTs applied lose that look until the package is installed again.")
+                    text: qsTr("After removal, photos that use LUTs from this package lose that look.")
                 }
                 RowLayout {
                     Layout.fillWidth: true

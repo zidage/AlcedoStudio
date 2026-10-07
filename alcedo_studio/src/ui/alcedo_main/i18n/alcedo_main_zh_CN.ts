@@ -5768,13 +5768,13 @@ Create a new layer above it and draw the Mask there?</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>Remove this package? Its LUTs leave the library. Favorites are kept.</source>
-        <translation>要移除这个 LUT 包吗？其中的 LUT 将从库中移除，收藏会保留。</translation>
+        <source>Remove this package?</source>
+        <translation>要删除这个 LUT 包吗？</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Photos that have these LUTs applied lose that look until the package is installed again.</source>
-        <translation>已应用这些 LUT 的照片将失去对应的效果，直到重新安装该包。</translation>
+        <source>After removal, photos that use LUTs from this package lose that look.</source>
+        <translation>删除后，应用该包内 LUT 的照片将失去对应的效果。</translation>
     </message>
     <message>
         <location line="+1"/>
