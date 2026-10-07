@@ -445,4 +445,45 @@ the named tests to fail on `v0.3.2` (or to show the finding is wrong) before the
 
 ## 8. Completion record
 
-No item is complete. Record the test names, the commands, and the results here when an item lands.
+Record the test names, the commands, and the results here when an item lands.
+
+### Item 1 — H1 (#284)
+
+**Change:**
+
+- `EditorActionInputs::input_sequence_open` is true while the pending input queue holds a write for
+  the open image or the history port reports an uncommitted value
+  (`IEditorHistoryPort::HasUncommittedLiveValues`). `EditorActionPolicy::Evaluate` denies `Undo`,
+  `Redo`, `MoveHead`, and `ApplyPaste` while `input_sequence_open || mask_input_open` is true.
+- `EditorSessionService::EndPublication` publishes the action availability again when the
+  input-sequence fact changes without a session result (a preview write or a Cancel seal).
+- `ApplyPreparedHeadMoveOnLivePipeline` restores the before values of an open input sequence
+  before the move (`RestorePendingDocumentSequence`) instead of clearing the sequence after the
+  move. `RestoreUnsettledPreview` and `DiscardUnmaterializedChanges` use the same restore.
+
+**Tests (real history port):**
+
+| Test | Before the fix | After the fix |
+| --- | --- | --- |
+| `EditorHistoryMoveDuringInputTest.UndoIsDeniedWhileASliderInputSequenceIsOpen` | Failed: Undo, Redo, MoveHead, and Paste allowed and accepted | Passed |
+| `EditorHistoryMoveDuringInputTest.UndoIsDeniedWhileAMaskEditIsOpen` | Failed: same | Passed |
+| `EditorHistoryMoveDuringInputTest.ArrowKeyThenUndoWithinDebounceKeepsDocumentEqualToHeadReplay` | Failed: Undo moved HEAD to the root, the settled write made no commit, and the document kept contrast 40 that no commit recorded | Passed |
+| `EditorCommittedSnapshotPublicationTest.CommittedSnapshotNeverContainsAnUncommittedValue` (Undo, Redo, MoveHead) | Failed: the committed snapshot differed from the replay of its head | Passed |
+| `EditorCommittedSnapshotPublicationTest.SaveCheckpointMatchesHeadReplayAfterHistoryMoves` | Failed: the checkpoint of HEAD held the preview value | Passed |
+| `EditorSessionInputSequencePolicy.OpenInputSequenceOrMaskEditRefusesHistoryMovesAndPasteButKeepsEditing` | Added with the fix (pure policy) | Passed |
+
+**Commands:** `cmake --build --preset win_debug --target EditorHistoryMoveDuringInputTest
+EditorSessionHistoryPortTest EditorSessionActionPolicyCq3Test` (through `scripts\msvc_env.cmd`), then
+the test executables directly. The "before" column ran the new tests against the unchanged `main`
+source (`dd75972d5`).
+
+**Regression suites run after the fix:** `EditorComparisonServiceTest` 8/8,
+`EditorComparisonInputsTest` 9/9, `EditorPendingInputSessionTest` 10/10,
+`EditorSessionServiceFacadeTest` 4/4, `EditorSessionCq5QualificationTest` 6/6,
+`EditorSessionEditControllerTest` 15/15, `EditorSessionControllerPhase5ATest` 52/52,
+`EditorSessionHistoryPortTest` 110/111, `EditorSessionActionPolicyCq3Test` 13/14. The two failures
+(`EditorHistoryCommitPresentationTest.FormatsNumericBooleanPathEnumAndCompoundAdjustments`,
+`EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`) also fail
+on clean `main`. `EditorSerialInputBoundaryTest` does not compile on `main` (it includes the
+removed `editor_lut_catalog_model.hpp`) and did not run. The full suite and the application build
+did not run.

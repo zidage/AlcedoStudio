@@ -103,6 +103,10 @@ struct EditorActionInputs {
   bool               current_output_is_hdr           = false;
   /// Mask drawing or editing owns the editor input.
   bool               mask_input_open                 = false;
+  /// A slider, curve, or other field input sequence of the open image is not committed yet: the
+  /// pending input queue holds a write for the image, or the working document holds a preview
+  /// value. The working document is then in the edit state, so no history move may run on it.
+  bool               input_sequence_open              = false;
 };
 
 /// Minimal queue-owned execution context visible to the evaluator. Not a

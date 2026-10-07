@@ -186,6 +186,40 @@ TEST(EditorSessionComparisonPolicy,
   EXPECT_FALSE(EditorActionPolicy::Evaluate(EditorAction::OpenComparison, {}, inputs).allowed);
 }
 
+TEST(EditorSessionInputSequencePolicy,
+     OpenInputSequenceOrMaskEditRefusesHistoryMovesAndPasteButKeepsEditing) {
+  EditorActionInputs inputs;
+  inputs.session_state                 = EditorSessionState::Interactive;
+  inputs.has_image                     = true;
+  inputs.can_undo                      = true;
+  inputs.can_redo                      = true;
+  inputs.package_available             = true;
+  const std::set<EditorAction> refused = {EditorAction::Undo, EditorAction::Redo,
+                                          EditorAction::MoveHead, EditorAction::ApplyPaste};
+  const auto closed = EditorActionPolicy::EvaluateAll(EditorCommandContext{}, inputs);
+  for (const auto action : refused) {
+    EXPECT_TRUE(closed.For(action).allowed) << EditorActionName(action);
+  }
+
+  for (const bool slider_input : {true, false}) {
+    auto open                = inputs;
+    open.input_sequence_open = slider_input;
+    open.mask_input_open     = !slider_input;
+    const auto availability  = EditorActionPolicy::EvaluateAll(EditorCommandContext{}, open);
+    for (std::size_t i = 0; i < EditorActionCount(); ++i) {
+      const auto action = static_cast<EditorAction>(i);
+      if (refused.contains(action)) {
+        EXPECT_FALSE(availability.For(action).allowed) << EditorActionName(action);
+        EXPECT_FALSE(availability.For(action).reason.empty()) << EditorActionName(action);
+      } else if (action != EditorAction::OpenComparison) {
+        // The input sequence itself continues; only the Mask edit also refuses a comparison.
+        EXPECT_EQ(availability.For(action).allowed, closed.For(action).allowed)
+            << EditorActionName(action);
+      }
+    }
+  }
+}
+
 TEST(EditorSessionNodeCommandPolicy,
      RenameAndEditNodeGraphUseTheSameAdmissionDecisionAsSettledAdjustments) {
   EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::RenameColorGrade),

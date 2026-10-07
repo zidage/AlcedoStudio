@@ -305,6 +305,43 @@ alcedo_ui_gtest_discover_tests(EditorComparisonServiceTest
   PROPERTIES LABELS "editor_session;editor_comparison")
 alcedo_register_test_target(EditorComparisonServiceTest ui)
 
+# Undo, Redo, head moves, and Paste refused while a slider input sequence or a Mask edit is open,
+# through the production session facade over the real history port.
+add_executable(EditorHistoryMoveDuringInputTest
+    ${ALCEDO_TEST_ROOT}/app/editor_history_move_during_input_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorHistoryMoveDuringInputTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorHistoryMoveDuringInputTest
+  EditorSessionService
+  EditorComparisonService
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorHistoryMoveDuringInputTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorHistoryMoveDuringInputTest
+  TEST_PREFIX "EditorHistoryMoveDuringInputTest."
+  PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
+alcedo_register_test_target(EditorHistoryMoveDuringInputTest ui)
+
 # Checkpoint storage owns Mini-Git materialization and recovery.
 # Same direct-adapter link rule as history port: avoid AlbumBackendLib for unit runs.
 add_executable(EditorSessionCheckpointStoreTest

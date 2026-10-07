@@ -125,6 +125,27 @@ auto RestoreDocumentFields(HistoryWorkingState&                                 
   return true;
 }
 
+/// Write the before values of the open input sequence back to the working document and close the
+/// sequence. No commit records a preview value, so nothing may run on top of it.
+auto RestorePendingDocumentSequence(HistoryWorkingState& state, std::string* error) -> bool {
+  if (state.pending_document_sequence.empty()) {
+    return true;
+  }
+  std::vector<HistoryWorkingState::DocumentFieldEdit> fields;
+  fields.reserve(state.pending_document_sequence.size());
+  for (const auto& [_, edit] : state.pending_document_sequence) {
+    fields.push_back(edit);
+  }
+  if (!RestoreDocumentFields(state, fields, error)) {
+    return false;
+  }
+  for (const auto& edit : fields) {
+    ProjectDocumentEdit(state, edit);
+  }
+  state.pending_document_sequence.clear();
+  return true;
+}
+
 /// Apply one traversed commit to the working document only. The caller restores earlier commits
 /// of the same head move when a later one fails.
 auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& commit, bool backward,
@@ -163,11 +184,16 @@ auto InverseApplyCommitToLiveDocument(HistoryWorkingState& state, const EditComm
 }
 
 /// WAL-first same-session head move: publish the head move, apply the traversed commits to the
-/// working document, and restore both when a later step fails.
+/// working document, and restore both when a later step fails. The session refuses a head move
+/// while an input sequence is open; if one still reaches this point, its preview values are
+/// restored first, so the moved document holds only committed values.
 auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
                                          EditorHistoryState&            history_state,
                                          const MiniGitPreparedHeadMove& prepared,
                                          std::string*                   error) -> bool {
+  if (!RestorePendingDocumentSequence(state, error)) {
+    return false;
+  }
   const auto prior_selection = state.history->WorkingSelection();
   const auto published       = state.history->PublishPreparedHeadMove(prepared);
   if (!published.moved) {
@@ -212,7 +238,6 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
     return false;
   }
   history_state.RecordPublishedRenderReason(RenderReasonForHeadMove(prepared.traversed_commits));
-  state.pending_document_sequence.clear();
   state.recovered_head = false;
   return true;
 }
@@ -362,26 +387,10 @@ auto EditorHistoryMutation::RestoreUnsettledPreview(const alcedo::EditorHistoryG
     -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  const bool changed = !state->pending_document_sequence.empty();
   if (live_changed != nullptr) {
-    *live_changed = changed;
+    *live_changed = !state->pending_document_sequence.empty();
   }
-  if (!changed) {
-    return true;
-  }
-  std::vector<HistoryWorkingState::DocumentFieldEdit> fields;
-  fields.reserve(state->pending_document_sequence.size());
-  for (const auto& [_, edit] : state->pending_document_sequence) {
-    fields.push_back(edit);
-  }
-  if (!RestoreDocumentFields(*state, fields, error)) {
-    return false;
-  }
-  for (const auto& edit : fields) {
-    ProjectDocumentEdit(*state, edit);
-  }
-  state->pending_document_sequence.clear();
-  return true;
+  return RestorePendingDocumentSequence(*state, error);
 }
 
 auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHandle& guard,
@@ -782,15 +791,7 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
     return false;
   }
 
-  {
-    for (const auto& [_, edit] : state->pending_document_sequence) {
-      if (!ApplyEditorParameterPatch(state->document->Document(), edit.target,
-                                     edit.before_model_json, error))
-        return false;
-      ProjectDocumentEdit(*state, edit);
-    }
-    state->pending_document_sequence.clear();
-  }
+  if (!RestorePendingDocumentSequence(*state, error)) return false;
   const auto materialized_head = state->graph->GetImageEditState().materialized_head_commit_hash;
   while (state->history->working_head() != materialized_head) {
     const auto prepared = materialized_head.has_value()

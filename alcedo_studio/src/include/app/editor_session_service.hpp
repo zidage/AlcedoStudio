@@ -784,6 +784,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   void HandleSaveCheckpointCompletion(const EditorSessionCompletion& completion);
   void PublishActionAvailabilityIfChanged();
   [[nodiscard]] auto BuildActionInputs() -> EditorActionInputs;
+  /// True while an input sequence of the open image is not committed: the pending input queue
+  /// holds a write for the image, or the working document holds an uncommitted value.
+  [[nodiscard]] auto HasOpenInputSequence() const -> bool;
   void               AcquireLease(EditorOperationLeaseKind kind, std::uint64_t command_id,
                                   sl_element_id_t element_id, image_id_t image_id,
                                   ImageLoadRequestId image_load_request, std::string blocking_reason = {});
@@ -929,6 +932,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   std::uint64_t                                  current_operation_id_ = 0;
   std::size_t                                    publication_depth_    = 0;
   bool                                           publication_dirty_    = false;
+  /// Input-sequence fact of the last published availability. An input sequence opens and closes
+  /// without a session result, so the end of each publication compares the fact with this value.
+  bool                                           published_input_sequence_open_ = false;
   std::atomic<bool>                              consume_wakeup_posted_{false};
   bool                                           last_published_render_busy_ = false;
   /// When the last frame finished (ready, failed, or cancelled); preview diagnostics only.

@@ -294,6 +294,16 @@ auto EditorSessionHistoryPort::BuildComparisonInputs(
   return true;
 }
 
+auto EditorSessionHistoryPort::HasUncommittedLiveValues(
+    const alcedo::EditorHistoryGuardHandle& guard) const -> bool {
+  std::scoped_lock lock(mutex_);
+  if (!guard.valid) {
+    return false;
+  }
+  const auto state = state_->PeekWorkingState(guard.element_id);
+  return state != nullptr && state->HasUncommittedLiveValues();
+}
+
 auto EditorSessionHistoryPort::HasUnmaterializedChanges(
     const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
   std::scoped_lock lock(mutex_);
