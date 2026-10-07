@@ -226,6 +226,14 @@ inline auto CanonicalSemanticLabel(std::string_view label_text) -> std::optional
   return found->second;
 }
 
+/// The form SemanticImageLabel stores: the canonical label of a taxonomy alias (沙漠 and
+/// " Desert" become "desert"), or the text unchanged when no definition lists it. The UI
+/// translates the stored key with SemanticLabelDisplayText, so a model's prompt language
+/// never reaches the label column.
+inline auto StoredSemanticLabel(std::string_view label_text) -> std::string {
+  return CanonicalSemanticLabel(label_text).value_or(std::string(label_text));
+}
+
 inline auto SemanticLabelDisplayText(std::string_view label_text, SemanticLabelLanguage language)
     -> std::string {
   const auto canonical = CanonicalSemanticLabel(label_text);

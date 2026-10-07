@@ -636,6 +636,23 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
               << "\n";
   }
 
+  // Label assignment stores canonical label keys. Projects from older versions can hold the
+  // label text of the model's prompt language (for example 沙漠); rewrite it once here so
+  // groups, statistics, and filters compare keys. Best-effort: on failure the rows stay as
+  // they are, the project still opens, and the next open tries again.
+  {
+    std::string label_error;
+    const auto  rewritten = storage_->GetSemanticLabelStore().CanonicalizeImageLabels(&label_error);
+    if (!rewritten.has_value()) {
+      qCWarning(diag::semanticLog).noquote()
+          << QStringLiteral("project.open.label_canonicalize_failed error=%1")
+                 .arg(QString::fromStdString(label_error));
+    } else if (*rewritten > 0) {
+      qCInfo(diag::semanticLog).noquote()
+          << QStringLiteral("project.open.label_canonicalized texts=%1").arg(*rewritten);
+    }
+  }
+
   RecreateSleeveService(start_id);
   pool_service_   = std::make_shared<ImagePoolService>(storage_, image_pool_start_id);
   filter_service_ = std::make_shared<SleeveFilterService>(storage_);

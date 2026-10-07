@@ -5,7 +5,6 @@
 #include "sleeve/album_query.hpp"
 
 #include <format>
-#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -14,7 +13,6 @@
 
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_select.hpp"
-#include "storage/store/semantic/semantic_label_config.hpp"
 #include "storage/store/sleeve/album_edit_state_sql.hpp"
 #include "storage/store/sleeve/album_query_sql.hpp"
 
@@ -101,32 +99,12 @@ auto UsesLabelRelation(const AlbumQueryOptions& options) -> bool {
 }
 
 auto LabelRelations(const std::string& active_semantic_model_key) -> SqlFragment {
-  // Alias text -> canonical key pairs of the label taxonomy, as trusted literals. The keys are
-  // already normalized with NormalizeSemanticLabelKey (trimmed, ASCII lowercase).
-  const std::map<std::string, std::string> aliases(SemanticLabelCanonicalLookup().begin(),
-                                                   SemanticLabelCanonicalLookup().end());
-  auto relations = expr::raw("label_membership AS (SELECT DISTINCT sl.file_id, ");
-  if (aliases.empty()) {
-    relations.sql_.append("LOWER(TRIM(sl.label)) AS label_key FROM SemanticImageLabel sl ");
-  } else {
-    relations.sql_.append(
-        "COALESCE(lm.canonical_key, LOWER(TRIM(sl.label))) AS label_key "
-        "FROM SemanticImageLabel sl LEFT JOIN (VALUES ");
-    bool first = true;
-    for (const auto& [alias, canonical] : aliases) {
-      if (!first) {
-        relations.sql_.append(", ");
-      }
-      first = false;
-      relations.sql_.append("(");
-      relations.append(expr::lit(alias));
-      relations.sql_.append(", ");
-      relations.append(expr::lit(canonical));
-      relations.sql_.append(")");
-    }
-    relations.sql_.append(
-        ") AS lm(alias_key, canonical_key) ON lm.alias_key = LOWER(TRIM(sl.label)) ");
-  }
+  // Label assignment stores canonical keys, and opening a project rewrites older alias texts
+  // (SemanticLabelStore::CanonicalizeImageLabels), so the stored label is the key. LOWER and
+  // TRIM only fold the case and spaces of a label outside the taxonomy.
+  auto relations = expr::raw(
+      "label_membership AS (SELECT DISTINCT sl.file_id, LOWER(TRIM(sl.label)) AS label_key "
+      "FROM SemanticImageLabel sl ");
   relations.sql_.append("WHERE sl.model_key = ");
   relations.append(expr::param(active_semantic_model_key));
   relations.sql_.append(std::format(

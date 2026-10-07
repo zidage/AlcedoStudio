@@ -102,8 +102,17 @@ auto MakeTopScoresJson(const RankedLabels& scores, size_t limit) -> std::string 
 }
 
 auto BuildLabel(sl_element_id_t file_id, const std::string& model_key,
-                const SemanticLabelAssignmentOptions& options, const RankedLabels& scores)
+                const SemanticLabelAssignmentOptions& options, const RankedLabels& ranked)
     -> SemanticImageLabelRecord {
+  // Prototypes carry the label text of the model's prompt language. The label, second label,
+  // and top scores store the canonical key instead, so groups, statistics, and filters compare
+  // keys and the UI translates them.
+  RankedLabels scores = ranked;
+  for (auto& [label, score] : scores) {
+    (void)score;
+    label = StoredSemanticLabel(label);
+  }
+
   // The elbow decides how many of the ranked candidates are genuinely relevant for this
   // image; the rest are noise and are dropped before they reach the stored JSON. The
   // display ceiling (top_score_count_, capped at kMaxSemanticImageLabelCount) bounds k.
