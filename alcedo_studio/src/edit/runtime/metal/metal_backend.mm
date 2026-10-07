@@ -578,8 +578,7 @@ auto MetalBackend::AcquireRecordedWorkScratchTexture(std::uint32_t width, std::u
 void MetalBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
                                      std::span<const std::byte> bytes,
                                      CommandContext&            command_context) {
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("MetalBackend::UploadBufferRange: injected failure");
   }
   if (bytes.empty()) {
@@ -626,8 +625,7 @@ void MetalBackend::DownloadBufferRange(const Buffer& buffer, std::uint32_t offse
 
 void MetalBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
                                    CommandContext& command_context) {
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("MetalBackend::UploadTexture2D: injected failure");
   }
   if (texture.Native() == nullptr) {
@@ -680,8 +678,7 @@ void MetalBackend::UploadR8TextureRect(Texture2D& texture, RectI rectangle,
       bytes.size() != static_cast<std::size_t>(rectangle.width) * rectangle.height) {
     throw std::runtime_error("MetalBackend::UploadR8TextureRect: invalid rectangle");
   }
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("MetalBackend::UploadR8TextureRect: injected failure");
   }
   MetalBackendImpl::AttachGpu(*gpu_);
@@ -737,8 +734,7 @@ void MetalBackend::DownloadTexture2D(const Texture2D& texture, std::span<std::by
 
 void MetalBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
                                       CommandContext& command_context) {
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("MetalBackend::UploadDeviceMemory: injected failure");
   }
   if (bytes.empty()) {
@@ -1044,7 +1040,7 @@ void MetalBackend::ResetCounters() {
   }
 }
 
-void MetalBackend::FailNextUpload() { fail_next_upload_ = true; }
+void MetalBackend::FailNextUpload() { FailUploadAfter(0); }
 
 auto MetalBackend::NativeDevice() const -> void* {
   return gpu_ ? static_cast<void*>(gpu_->device) : nullptr;

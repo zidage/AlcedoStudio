@@ -754,6 +754,46 @@ TEST_F(OpenClRendererFixture, OpenClBatchRenderLeavesInteractiveCachesAndRelease
   EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
 }
 
+// Plan §3.3: a batch task is one binding. A batch render that fails inside Execute releases its
+// result textures, transients, and parameter slots before it throws, not at the next successful
+// batch render, and keeps its device. The test fails each upload of the render in turn (#288).
+TEST_F(OpenClRendererFixture, OpenClBatchRenderFailureDuringExecuteReleasesEveryResultResource) {
+  ASSERT_TRUE(HostRgbaIsFinite(RenderHost(false)));
+  const auto device = batch_renderer_->DebugDeviceIdentity();
+  ASSERT_NE(device, 0U);
+  auto&         backend         = batch_renderer_->Device().Workspace().Device();
+  std::uint32_t failed_renders  = 0;
+  bool          render_finished = false;
+  // The render finishes once the armed failure lies past the last upload of the render.
+  for (std::uint32_t uploads_to_pass = 0; uploads_to_pass < 256 && !render_finished;
+       ++uploads_to_pass) {
+    SCOPED_TRACE(uploads_to_pass);
+    backend.FailUploadAfter(uploads_to_pass);
+    try {
+      render_finished = HostRgbaIsFinite(RenderHost(false));
+      ASSERT_TRUE(render_finished);
+    } catch (const std::runtime_error& ex) {
+      ++failed_renders;
+      EXPECT_NE(std::string(ex.what()).find("injected failure"), std::string::npos) << ex.what();
+      const auto resources = batch_renderer_->Resources();
+      EXPECT_EQ(resources.published_result_count, 0U);
+      EXPECT_TRUE(resources.session_value_ids.empty());
+      EXPECT_EQ(resources.texture_pool_used_bytes, 0U);
+      EXPECT_EQ(resources.texture_pool_entry_count, 0U);
+      EXPECT_EQ(resources.transient_used_bytes, 0U);
+      EXPECT_EQ(resources.transient_capacity_bytes, 0U);
+      EXPECT_EQ(resources.transient_slab_count, 0U);
+      EXPECT_EQ(resources.parameter_slot_count, 0U);
+      EXPECT_EQ(resources.parameter_capacity_bytes, 0U);
+      EXPECT_EQ(batch_renderer_->Device().Workspace().Images().UnpublishedCount(), 0U);
+      EXPECT_FALSE(batch_renderer_->Device().Workspace().IsRendering());
+      EXPECT_EQ(batch_renderer_->DebugDeviceIdentity(), device);
+    }
+  }
+  EXPECT_TRUE(render_finished);
+  EXPECT_GT(failed_renders, 1U);
+}
+
 TEST_F(OpenClRendererFixture, OpenClParallelBatchRendersCompleteAndReleaseWorkspaces) {
   // Regression: parallel thumbnail renders each own a batch renderer device.
   // Shared command-queue submission and shared cl_kernel argument state used to

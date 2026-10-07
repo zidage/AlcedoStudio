@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -394,6 +395,11 @@ class OpenClBackend {
   void               NoteFree() noexcept { ++free_count_; }
   void               ResetCounters();
   void               FailNextUpload();
+  /**
+   * @brief Test hook: let @p uploads_to_pass more upload calls run, then fail the next one
+   *        with std::runtime_error. @ref FailNextUpload is `FailUploadAfter(0)`.
+   */
+  void FailUploadAfter(std::uint32_t uploads_to_pass) { uploads_before_failure_ = uploads_to_pass; }
   void               NoteHostToDeviceBegin() { last_h2d_ranges_.clear(); }
 
   [[nodiscard]] auto NativeDevice() const -> cl_device_id { return device_; }
@@ -427,6 +433,19 @@ class OpenClBackend {
   }
 
  private:
+  /// True when the armed test failure is due on this upload call; disarms it then.
+  [[nodiscard]] auto ConsumeInjectedUploadFailure() -> bool {
+    if (!uploads_before_failure_.has_value()) {
+      return false;
+    }
+    if (*uploads_before_failure_ == 0) {
+      uploads_before_failure_.reset();
+      return true;
+    }
+    --*uploads_before_failure_;
+    return false;
+  }
+
   friend class Buffer;
   friend class Texture2D;
 
@@ -479,7 +498,7 @@ class OpenClBackend {
   std::uint64_t          kernel_create_baseline_   = 0;
   std::uint64_t          kernel_hit_baseline_      = 0;
   std::uint64_t          program_build_baseline_   = 0;
-  bool                   fail_next_upload_         = false;
+  std::optional<std::uint32_t> uploads_before_failure_;
   std::vector<ByteRange> last_h2d_ranges_;
   std::vector<RectI>     last_texture_rectangles_;
   std::uint64_t          lut_upload_bytes_     = 0;

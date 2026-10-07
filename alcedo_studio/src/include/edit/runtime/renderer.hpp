@@ -64,6 +64,8 @@ struct RenderSessionResources {
   std::size_t               transient_used_bytes        = 0;
   std::size_t               transient_capacity_bytes    = 0;
   std::size_t               transient_slab_count        = 0;
+  std::size_t               parameter_slot_count        = 0;
+  std::size_t               parameter_capacity_bytes    = 0;
   std::vector<GraphValueId> session_value_ids;
 };
 
@@ -313,6 +315,8 @@ auto Renderer<Backend>::Resources() const -> RenderSessionResources {
   resources.transient_used_bytes     = workspace.TransientBuffers().used_bytes();
   resources.transient_capacity_bytes = workspace.TransientBuffers().capacity_bytes();
   resources.transient_slab_count     = workspace.TransientBuffers().slab_count();
+  resources.parameter_slot_count     = workspace.Parameters().SlotCount();
+  resources.parameter_capacity_bytes = workspace.Parameters().capacity_bytes();
   resources.session_value_ids        = workspace.Images().CurrentValueIds();
   return resources;
 }

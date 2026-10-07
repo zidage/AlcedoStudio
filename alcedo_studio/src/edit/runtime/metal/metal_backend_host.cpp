@@ -213,7 +213,7 @@ void MetalBackend::ResetCounters() {
   last_h2d_ranges_.clear();
   last_texture_rectangles_.clear();
 }
-void MetalBackend::FailNextUpload() { fail_next_upload_ = true; }
+void MetalBackend::FailNextUpload() { FailUploadAfter(0); }
 auto MetalBackend::NativeDevice() const -> void* { return nullptr; }
 auto MetalBackend::NativeQueue() const -> void* { return nullptr; }
 auto MetalBackend::WorkingSetBudgetBytes() const -> std::size_t {

@@ -184,8 +184,7 @@ auto CudaBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, Tex
 void CudaBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
                                     std::span<const std::byte> bytes,
                                     CommandContext&            command_context) {
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("CudaBackend::UploadBufferRange: injected failure");
   }
   if (bytes.empty()) {
@@ -222,8 +221,7 @@ void CudaBackend::DownloadBufferRange(const Buffer& buffer, std::uint32_t offset
 
 void CudaBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
                                   CommandContext& command_context) {
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("CudaBackend::UploadTexture2D: injected failure");
   }
   if (texture.DevicePointer() == nullptr) {
@@ -281,8 +279,7 @@ void CudaBackend::UploadR8TextureRect(Texture2D& texture, RectI rectangle,
 
 void CudaBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
                                      CommandContext& command_context) {
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("CudaBackend::UploadDeviceMemory: injected failure");
   }
   if (bytes.empty()) {
@@ -445,7 +442,7 @@ void CudaBackend::ResetCounters() {
   last_texture_rectangles_.clear();
 }
 
-void CudaBackend::FailNextUpload() { fail_next_upload_ = true; }
+void CudaBackend::FailNextUpload() { FailUploadAfter(0); }
 
 auto CudaBackend::QueryDeviceMemory() const -> GpuDeviceMemorySnapshot {
   GpuDeviceMemorySnapshot snapshot;

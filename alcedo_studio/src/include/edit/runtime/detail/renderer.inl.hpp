@@ -217,18 +217,6 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     develop.full_ref_height   = plan.source.full_reference_extent.height;
     diag::PreviewPerformance::NoteDevelopDecode(develop);
   }
-  GraphValueId output_id;
-  {
-    diag::PreviewCpuInterval encode(diag::PreviewCpuStage::Encode);
-    output_id = render_device->Execute(plan, prepared, document, false,
-                                       interactive ? TransientAllocationPolicy::SessionPacked
-                                                   : TransientAllocationPolicy::ExactRelease,
-                                       persistence);
-  }
-  if (diag::PreviewPerformanceEnabled()) {
-    diag::PreviewPerformance::NoteResourceSnapshot(
-        render_device->Workspace().CaptureResourceSnapshot());
-  }
   const auto release_batch_resources = [&]() {
     if (interactive) {
       return;
@@ -238,6 +226,31 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     render_device->Workspace().ReleaseSessionResources();
     render_device->ReleaseNeuralDemosaicWorkspace();
   };
+  // A batch task is one binding: it releases every result resource after a failure too.
+  // The release must not replace the render error, so a release error is not reported.
+  const auto release_batch_resources_after_failure = [&]() noexcept {
+    try {
+      release_batch_resources();
+    } catch (...) {
+    }
+  };
+
+  GraphValueId output_id;
+  try {
+    diag::PreviewCpuInterval encode(diag::PreviewCpuStage::Encode);
+    output_id = render_device->Execute(plan, prepared, document, false,
+                                       interactive ? TransientAllocationPolicy::SessionPacked
+                                                   : TransientAllocationPolicy::ExactRelease,
+                                       persistence);
+  } catch (...) {
+    // PlanExecutor has already cancelled the render and reported the error.
+    release_batch_resources_after_failure();
+    throw;
+  }
+  if (diag::PreviewPerformanceEnabled()) {
+    diag::PreviewPerformance::NoteResourceSnapshot(
+        render_device->Workspace().CaptureResourceSnapshot());
+  }
 
   ViewerDisplayConfig display_config{};
   if (request.output_color.has_value()) {
@@ -290,15 +303,11 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
         render_device->WaitIdle();
       }
       render_device->Workspace().Images().DiscardUnpublished();
-      if (!interactive) {
-        render_device->WaitIdle();
-        render_device->Workspace().ReleaseSessionResources();
-        render_device->ReleaseNeuralDemosaicWorkspace();
-      }
     } catch (...) {
       // Preserve the original presentation/download error. The device destructor or
       // session teardown still owns the last-resort wait and resource release.
     }
+    release_batch_resources_after_failure();
     render_device->ReportError(ex.what());
     throw;
   }
