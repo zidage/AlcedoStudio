@@ -69,11 +69,15 @@ the title gives a summary of the specific problem or work.
 
 ### Issues from users and outside contributors
 
-- Issues are for bugs only. Use the `[BUG]` type. Post feature suggestions in
+- You can open `[BUG]` and `[FEATURE]` issues. The `[ARCHITECTURE]` type is for
+  maintainers. For an open question or an idea that is not yet a specific request, use
   [Discussions](https://github.com/zidage/AlcedoStudio/discussions).
-- The issue body has no required format. Include clear steps to reproduce the bug.
-- Do not include a "possible cause", a "possible fix", or similar analysis in an
-  issue. If you want to propose a cause or a fix, open a pull request.
+- The issue body has no required format.
+  - A `[BUG]` issue includes clear steps to reproduce the bug.
+  - A `[FEATURE]` issue describes what you want to do, why the current application does
+    not let you do it, and the expected result.
+- In a `[BUG]` issue, do not include a "possible cause", a "possible fix", or similar
+  analysis. If you want to propose a cause or a fix, open a pull request.
 
 ### Issues from maintainers
 
@@ -99,10 +103,11 @@ use issues to plan and track all work, so the rules above do not apply to them.
 - Maintainers add each issue that is planned or in work to the
   [Alcedo Studio development roadmap](https://github.com/users/zidage/projects/1)
   project, and keep its `Status` field current: `Todo`, `In progress`, `Done`.
-- User feedback goes into the same project. When a maintainer accepts a feature
-  suggestion from Discussions or confirms a bug from a user, the maintainer adds the
-  item to the project and links the source discussion or issue. The user can follow
-  the progress there.
+- User feedback goes into the same project. When a maintainer accepts a `[FEATURE]`
+  issue or an idea from Discussions, or confirms a `[BUG]` issue from a user, the
+  maintainer adds the issue to the project. For an idea from Discussions, the maintainer
+  opens a `[FEATURE]` issue that links the discussion. The user can follow the progress
+  there.
 - A pull request that resolves an issue names it with `Fixes #<number>` or
   `Closes #<number>`, so that GitHub closes the issue and the project moves the item to
   `Done` when the pull request is merged.
