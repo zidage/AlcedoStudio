@@ -216,8 +216,9 @@ class PipelineMgmtService final {
    * @brief End the editor lease of @p id.
    *
    * The last committed snapshot the editor published becomes an ordinary cache entry that is
-   * checked against storage, and its document is written as the element pipeline JSON. No effect
-   * when the lease is not held.
+   * checked against storage. The document of the materialized history state is written as the
+   * element pipeline JSON: commits that only the editor journal recorded (a Close with Discard)
+   * never reach it. No effect when the lease is not held.
    */
   void               ReleaseEditorLease(sl_element_id_t id);
 
@@ -295,8 +296,8 @@ class PipelineMgmtService final {
     return accelerator_preference_;
   }
 
-  /// Write the element pipeline JSON of every image the editor holds, from its last published
-  /// committed snapshot.
+  /// Write the element pipeline JSON of every image the editor holds and published, from its
+  /// materialized history state.
   void Sync();
 };
 

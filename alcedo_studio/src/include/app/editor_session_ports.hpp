@@ -75,6 +75,12 @@ class IEditorHistoryPort {
   virtual auto Acquire(sl_element_id_t element_id, std::string* error)
       -> EditorHistoryGuardHandle                             = 0;
   virtual void Release(const EditorHistoryGuardHandle& guard) = 0;
+  /// Release after the user discarded the unsaved changes (Close with Discard): the commits that
+  /// only the recovery journal records are dropped with it, so the next acquire of the image does
+  /// not recover them. Test ports without a journal keep the default plain release.
+  virtual void ReleaseDiscardingUnmaterialized(const EditorHistoryGuardHandle& guard) {
+    Release(guard);
+  }
   /// Capture the committed operator state before the first interactive preview
   /// for one input sequence. Repeated preview samples for the same field must
   /// preserve the original captured state.

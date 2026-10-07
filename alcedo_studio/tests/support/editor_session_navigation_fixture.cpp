@@ -129,6 +129,14 @@ void EditorSessionNavigationFixture::TrackingHistoryPort::Release(
   inner.Release(guard);
 }
 
+void EditorSessionNavigationFixture::TrackingHistoryPort::ReleaseDiscardingUnmaterialized(
+    const EditorHistoryGuardHandle& guard) {
+  if (guard.valid && guard.element_id == kElementA && owner_ != nullptr) {
+    owner_->RecordEvent("release_a");
+  }
+  inner.ReleaseDiscardingUnmaterialized(guard);
+}
+
 auto EditorSessionNavigationFixture::TrackingHistoryPort::CaptureAdjustmentBeforePreview(
     const EditorHistoryGuardHandle& guard, const EditorAdjustmentPatch& patch, std::string* error)
     -> bool {

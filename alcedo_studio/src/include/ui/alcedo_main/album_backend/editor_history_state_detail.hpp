@@ -123,7 +123,9 @@ class EditorHistoryState {
       -> std::shared_ptr<HistoryWorkingState>;
 
   /// Drop the working history state for one image and return its editor lease.
-  void ReleaseState(sl_element_id_t element_id);
+  /// @p discard_unmaterialized first clears the recovery journal, so the commits that only the
+  /// journal records are not recovered by the next acquire.
+  void ReleaseState(sl_element_id_t element_id, bool discard_unmaterialized = false);
 
   /// Resolve the pipeline port (may be expired).
   [[nodiscard]] auto PipelinePort() const -> std::shared_ptr<EditorSessionPipelinePort>;

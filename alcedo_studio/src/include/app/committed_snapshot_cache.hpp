@@ -64,6 +64,16 @@ class CommittedSnapshotCache {
       -> std::shared_ptr<const PipelineGraphSnapshot>;
 
   /**
+   * @brief Snapshot of the materialized history state of @p element_id.
+   *
+   * Unlike @ref Acquire, an editor publication is returned only when its head and chain equal the
+   * materialized labels in storage: commits that exist only in the editor's journal are excluded.
+   * @throws std::runtime_error from @ref LoadCommittedSnapshotFromStorage.
+   */
+  [[nodiscard]] auto AcquireMaterialized(sl_element_id_t element_id)
+      -> std::shared_ptr<const PipelineGraphSnapshot>;
+
+  /**
    * @brief Store the editor's snapshot of a committed state of its image.
    * @param editor_holds_image When false (the editor already released the image) the entry is
    *        stored like a storage-built one and checked against storage on the next acquire.
@@ -89,6 +99,12 @@ class CommittedSnapshotCache {
   [[nodiscard]] auto StorageLoadCount() const -> std::size_t;
 
  private:
+  /// Return the first candidate whose labels equal the materialized labels in storage, else build
+  /// the snapshot from storage and store it. Called without the cache lock.
+  auto MatchStoredOrLoad(sl_element_id_t                              element_id,
+                         std::shared_ptr<const PipelineGraphSnapshot> published,
+                         std::shared_ptr<const PipelineGraphSnapshot> stored)
+      -> std::shared_ptr<const PipelineGraphSnapshot>;
   void                     StoreLocked(std::shared_ptr<const PipelineGraphSnapshot> snapshot);
 
   std::shared_ptr<Storage> storage_;

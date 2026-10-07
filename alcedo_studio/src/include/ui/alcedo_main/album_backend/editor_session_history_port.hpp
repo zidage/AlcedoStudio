@@ -55,6 +55,7 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
       -> alcedo::EditorHistoryGuardHandle override;
   /// Drop the working history state for one image.
   void Release(const alcedo::EditorHistoryGuardHandle& guard) override;
+  void ReleaseDiscardingUnmaterialized(const alcedo::EditorHistoryGuardHandle& guard) override;
   auto CaptureAdjustmentBeforePreview(const alcedo::EditorHistoryGuardHandle& guard,
                                       const alcedo::EditorAdjustmentPatch& patch,
                                       std::string* error) -> bool override;

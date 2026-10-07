@@ -119,13 +119,40 @@ auto CommittedSnapshotCache::Acquire(sl_element_id_t element_id, bool editor_hol
       stored = it->second;
     }
   }
+  return MatchStoredOrLoad(element_id, nullptr, std::move(stored));
+}
 
-  if (stored) {
+auto CommittedSnapshotCache::AcquireMaterialized(sl_element_id_t element_id)
+    -> std::shared_ptr<const PipelineGraphSnapshot> {
+  std::shared_ptr<const PipelineGraphSnapshot> published;
+  std::shared_ptr<const PipelineGraphSnapshot> stored;
+  {
+    std::scoped_lock lock(mutex_);
+    if (const auto it = published_.find(element_id); it != published_.end()) {
+      published = it->second;
+    }
+    if (const auto it = stored_.find(element_id); it != stored_.end()) {
+      stored = it->second;
+    }
+  }
+  return MatchStoredOrLoad(element_id, std::move(published), std::move(stored));
+}
+
+auto CommittedSnapshotCache::MatchStoredOrLoad(sl_element_id_t                              element_id,
+                                               std::shared_ptr<const PipelineGraphSnapshot> published,
+                                               std::shared_ptr<const PipelineGraphSnapshot> stored)
+    -> std::shared_ptr<const PipelineGraphSnapshot> {
+  if (published || stored) {
     const auto label = ReadMaterializedLabel(*storage_, element_id);
-    if (label.has_value() && MatchesLabel(*stored, *label)) {
-      std::scoped_lock lock(mutex_);
-      stored_order_.AccessElement(element_id);
-      return stored;
+    if (label.has_value()) {
+      if (published && MatchesLabel(*published, *label)) {
+        return published;
+      }
+      if (stored && MatchesLabel(*stored, *label)) {
+        std::scoped_lock lock(mutex_);
+        stored_order_.AccessElement(element_id);
+        return stored;
+      }
     }
   }
 

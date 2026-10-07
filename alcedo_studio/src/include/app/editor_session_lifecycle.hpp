@@ -91,8 +91,9 @@ class EditorSessionLifecycle final {
   void               KeepCurrentAfterCheckpointFailure(std::string message);
 
   /// Release the current image's guards after a successful checkpoint. Returns
-  /// the released identity for diagnostics.
-  auto               ReleaseAfterCheckpoint() -> ReleaseOutcome;
+  /// the released identity for diagnostics. @p discard_unmaterialized drops
+  /// the commits that only the recovery journal records (a release without Save).
+  auto               ReleaseAfterCheckpoint(bool discard_unmaterialized = false) -> ReleaseOutcome;
 
   /// Release the current image's guards immediately (discard / no-save paths).
   void               ReleaseGuards();

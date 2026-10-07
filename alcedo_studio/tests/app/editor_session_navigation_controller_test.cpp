@@ -328,6 +328,19 @@ TEST_F(EditorSessionNavigationControllerTest, CloseWaitsForSaveThenCompletes) {
 
   fixture_.CompleteCheckpoint();
   EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.history().release_count, 1);
+  EXPECT_EQ(fixture_.history().discarding_release_count, 0)
+      << "a save close keeps the journal: the save already cleared what it materialized";
+}
+
+TEST_F(EditorSessionNavigationControllerTest, DiscardCloseReleasesTheImageDroppingItsJournal) {
+  fixture_.OpenA();
+
+  (void)fixture_.nav().RequestClose(false);
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.history().release_count, 1);
+  EXPECT_EQ(fixture_.history().discarding_release_count, 1)
+      << "the discarded commits must not be recovered from the journal by the next acquire";
 }
 
 TEST_F(EditorSessionNavigationControllerTest, ShutDownRejectsFurtherOpens) {

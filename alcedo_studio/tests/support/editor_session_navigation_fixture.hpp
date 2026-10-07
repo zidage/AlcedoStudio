@@ -91,6 +91,7 @@ class EditorSessionNavigationFixture {
     auto Acquire(sl_element_id_t element_id, std::string* error)
         -> EditorHistoryGuardHandle override;
     void Release(const EditorHistoryGuardHandle& guard) override;
+    void ReleaseDiscardingUnmaterialized(const EditorHistoryGuardHandle& guard) override;
     auto CaptureAdjustmentBeforePreview(const EditorHistoryGuardHandle& guard,
                                         const EditorAdjustmentPatch& patch, std::string* error)
         -> bool override;

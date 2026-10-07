@@ -284,8 +284,10 @@ void PipelineMgmtService::ReleaseEditorLease(sl_element_id_t id) {
       return;
     }
   }
-  if (const auto last = committed_snapshots_.EndEditorPublication(id)) {
-    WriteElementPipelineJson(*last);
+  if (committed_snapshots_.EndEditorPublication(id)) {
+    // The last publication may hold commits that only the editor journal recorded, which a
+    // Close with Discard drops. The element pipeline JSON receives only the materialized state.
+    WriteElementPipelineJson(*committed_snapshots_.AcquireMaterialized(id));
   }
 }
 
@@ -371,8 +373,8 @@ void PipelineMgmtService::Sync() {
     leased.assign(editor_leases_.begin(), editor_leases_.end());
   }
   for (const auto id : leased) {
-    if (const auto published = committed_snapshots_.EditorPublished(id)) {
-      WriteElementPipelineJson(*published);
+    if (committed_snapshots_.EditorPublished(id)) {
+      WriteElementPipelineJson(*committed_snapshots_.AcquireMaterialized(id));
     }
   }
 }
