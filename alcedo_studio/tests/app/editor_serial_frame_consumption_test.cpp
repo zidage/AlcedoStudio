@@ -211,7 +211,9 @@ TEST_F(SerialFrameConsumptionTest, GuiRemainsResponsiveWhilePresentNeedsAnUpdate
 // editor's own executor, so history operations no longer wait for the in-flight frame.
 TEST_F(SerialFrameConsumptionTest, UndoAndCheckoutRunWhileAFrameIsInFlight) {
   OpenInteractive();
-  EnqueueExposure(0.21f);
+  // A settled write starts the frame. A preview write would leave its input sequence open, and
+  // the session refuses Undo until that sequence commits.
+  EnqueueExposure(0.21f, true);
   ConsumeQueued();
   ASSERT_TRUE(service_->serial_frame_admission().HoldsOwnership());
   ASSERT_TRUE(latch_->running());
