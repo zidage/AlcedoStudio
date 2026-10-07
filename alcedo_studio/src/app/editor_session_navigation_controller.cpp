@@ -363,7 +363,8 @@ void EditorSessionNavigationController::CompletePendingAction(
     return;
   }
 
-  lifecycle_.ReleaseAfterCheckpoint();
+  // A release without Save (Close with Discard, Discard and Continue) drops the journaled commits.
+  lifecycle_.ReleaseAfterCheckpoint(!pending.persist);
 
   if (pending.kind == PendingEditorActionKind::CloseEditor) {
     ContinueToClose(pending.persist);

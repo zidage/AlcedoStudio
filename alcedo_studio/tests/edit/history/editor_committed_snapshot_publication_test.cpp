@@ -94,6 +94,36 @@ class EditorCommittedSnapshotPublicationTest : public ::testing::Test {
     return pipelines_->AcquireCommittedSnapshot(kElementId);
   }
 
+  /// Element pipeline JSON that older versions of the application read.
+  auto ElementPipelineJson() -> nlohmann::json {
+    const auto json = project_->GetStorage()->GetElementStore().GetPipelineJsonByElementId(kElementId);
+    EXPECT_TRUE(json.has_value());
+    return json.value_or(nlohmann::json{});
+  }
+
+  /// Commit an exposure edit that only the editor journal records.
+  void CommitJournaledExposure() {
+    std::string error;
+    ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(
+        handle_, WithColorGradeTarget({"exposure", R"({"exposure":0.25})", false}), &error))
+        << error;
+    ASSERT_TRUE(history_.CommitAdjustment(
+        handle_, WithColorGradeTarget({"exposure", R"({"exposure":0.75})", true}), &error))
+        << error;
+  }
+
+  /// Release the image the way Close with Discard does.
+  void DiscardClose() {
+    history_.ReleaseDiscardingUnmaterialized(handle_);
+    handle_ = {};
+  }
+
+  void Reopen() {
+    std::string error;
+    handle_ = history_.Acquire(kElementId, &error);
+    ASSERT_TRUE(handle_.valid) << error;
+  }
+
   /// Working document as the history published it after its last operation.
   auto Working() -> std::shared_ptr<const alcedo::PipelineGraphSnapshot> {
     return pipeline_port_->CurrentPreview(kElementId);
@@ -369,6 +399,57 @@ TEST_F(EditorCommittedSnapshotPublicationTest, ReleasedImageIsServedFromStorageW
   EXPECT_EQ(pipelines_->CommittedSnapshotStorageLoadCount(), 1u);
   EXPECT_EQ(stored->Chain(), opened->Chain());
   EXPECT_DOUBLE_EQ(ExposureEv(stored->Document()), ExposureEv(opened->Document()));
+}
+
+TEST_F(EditorCommittedSnapshotPublicationTest,
+       DiscardCloseLeavesElementPipelineJsonAtTheMaterializedState) {
+  CommitJournaledExposure();
+  const auto discarded = Committed();
+  ASSERT_TRUE(discarded->Head().has_value());
+
+  DiscardClose();
+
+  const auto materialized = Committed();
+  EXPECT_FALSE(materialized->Head().has_value());
+  ASSERT_NE(materialized->Document().ToJson(), discarded->Document().ToJson());
+  EXPECT_EQ(ElementPipelineJson(), materialized->Document().ToJson())
+      << "the element pipeline JSON received the discarded commit";
+}
+
+TEST_F(EditorCommittedSnapshotPublicationTest, DiscardCloseThenReopenShowsTheMaterializedState) {
+  const auto opened = Committed();
+  CommitJournaledExposure();
+  ASSERT_NE(ExposureEv(Committed()->Document()), ExposureEv(opened->Document()));
+
+  DiscardClose();
+  Reopen();
+
+  EXPECT_EQ(Head(), opened->Head()) << "the discarded commit came back from the journal";
+  EXPECT_DOUBLE_EQ(ExposureEv(Working()->Document()), ExposureEv(opened->Document()));
+  EXPECT_DOUBLE_EQ(ExposureEv(Committed()->Document()), ExposureEv(opened->Document()));
+
+  // The journal was dropped, not only skipped by this acquire: storage keeps the root state.
+  history_.Release(handle_);
+  handle_ = {};
+  EXPECT_FALSE(Committed()->Head().has_value());
+}
+
+TEST_F(EditorCommittedSnapshotPublicationTest, SavedCloseWritesTheSavedStateToElementPipelineJson) {
+  CommitJournaledExposure();
+  const auto saved = Committed();
+  const auto graph = Graph();
+  auto       persisted_graph = *graph;
+  const auto document        = HeadReplay();
+  ASSERT_NE(document, nullptr);
+  std::string error;
+  ASSERT_TRUE(pipelines_->PersistEditorHistory(persisted_graph, graph->GetImageEditState(),
+                                                *document, &error))
+      << error;
+
+  history_.Release(handle_);
+  handle_ = {};
+
+  EXPECT_EQ(ElementPipelineJson(), saved->Document().ToJson());
 }
 
 }  // namespace

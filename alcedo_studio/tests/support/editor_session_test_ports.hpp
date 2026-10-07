@@ -56,6 +56,8 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   bool fail_capture   = false;
   int  acquire_count  = 0;
   int  release_count  = 0;
+  /// Releases that dropped the unmaterialized journal; each also counts in release_count.
+  int  discarding_release_count = 0;
   int  capture_count  = 0;
   int  commit_count   = 0;
   int  restore_preview_count = 0;
@@ -120,6 +122,10 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   }
 
   void Release(const EditorHistoryGuardHandle&) override { ++release_count; }
+  void ReleaseDiscardingUnmaterialized(const EditorHistoryGuardHandle&) override {
+    ++release_count;
+    ++discarding_release_count;
+  }
 
   auto CaptureAdjustmentBeforePreview(const EditorHistoryGuardHandle&,
                                       const EditorAdjustmentPatch& patch, std::string*)

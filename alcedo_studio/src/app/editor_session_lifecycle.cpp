@@ -84,13 +84,18 @@ void EditorSessionLifecycle::KeepCurrentAfterCheckpointFailure(std::string messa
   last_error_ = std::move(message);
 }
 
-auto EditorSessionLifecycle::ReleaseAfterCheckpoint() -> ReleaseOutcome {
+auto EditorSessionLifecycle::ReleaseAfterCheckpoint(bool discard_unmaterialized)
+    -> ReleaseOutcome {
   std::scoped_lock lock(mutex_);
   AssertMutationThread();
   ReleaseOutcome outcome;
   outcome.identity = identity_;
   if (deps_.history && history_guard_.valid) {
-    deps_.history->Release(history_guard_);
+    if (discard_unmaterialized) {
+      deps_.history->ReleaseDiscardingUnmaterialized(history_guard_);
+    } else {
+      deps_.history->Release(history_guard_);
+    }
   }
   history_guard_   = {};
   outcome.released = true;

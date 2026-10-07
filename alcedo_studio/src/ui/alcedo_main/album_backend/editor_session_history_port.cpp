@@ -74,6 +74,13 @@ void EditorSessionHistoryPort::Release(const alcedo::EditorHistoryGuardHandle& g
   state_->ReleaseState(guard.element_id);
 }
 
+void EditorSessionHistoryPort::ReleaseDiscardingUnmaterialized(
+    const alcedo::EditorHistoryGuardHandle& guard) {
+  std::scoped_lock lock(mutex_);
+  if (!guard.valid) return;
+  state_->ReleaseState(guard.element_id, /*discard_unmaterialized=*/true);
+}
+
 auto EditorSessionHistoryPort::CaptureAdjustmentBeforePreview(
     const alcedo::EditorHistoryGuardHandle& guard, const alcedo::EditorAdjustmentPatch& patch,
     std::string* error) -> bool {

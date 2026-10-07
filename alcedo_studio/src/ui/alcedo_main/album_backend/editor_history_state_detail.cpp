@@ -9,6 +9,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -178,12 +179,24 @@ auto EditorHistoryState::PeekWorkingState(sl_element_id_t element_id) const
   return existing == working_states_.end() ? nullptr : existing->second;
 }
 
-void EditorHistoryState::ReleaseState(sl_element_id_t element_id) {
+void EditorHistoryState::ReleaseState(sl_element_id_t element_id, bool discard_unmaterialized) {
+  std::shared_ptr<HistoryWorkingState>       state;
   std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
   {
     std::scoped_lock lock(mutex_);
-    if (working_states_.erase(element_id) == 0) return;
+    const auto       it = working_states_.find(element_id);
+    if (it == working_states_.end()) return;
+    state = std::move(it->second);
+    working_states_.erase(it);
     pipeline_port = pipeline_port_.lock();
+  }
+  // Clear the journal before the lease returns: from then on the next acquire may read it.
+  if (discard_unmaterialized && state->journal) {
+    std::string error;
+    if (!state->journal->TruncateMaterialized(&error)) {
+      qWarning("Editor history of image %llu: discarded changes stay in the journal: %s",
+               static_cast<unsigned long long>(element_id), error.c_str());
+    }
   }
   if (pipeline_port) pipeline_port->ReleaseLease(element_id);
 }
