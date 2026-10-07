@@ -86,6 +86,8 @@ struct LutLibraryServiceOptions {
 class LutLibraryService final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString rootPath READ root_path NOTIFY RootChanged)
+  /// Native path of `<root>/user`, the folder for the user's own LUT files.
+  Q_PROPERTY(QString userDirectoryPath READ user_directory_path NOTIFY RootChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY OperationStateChanged)
   Q_PROPERTY(bool inventoryComplete READ inventory_complete NOTIFY InventoryChanged)
   Q_PROPERTY(int entryCount READ entry_count NOTIFY InventoryChanged)
@@ -112,7 +114,10 @@ class LutLibraryService final : public QObject {
     kInstallPackage,
     /// Remove package content that an installation replaced, after the new inventory is
     /// published and no render reads the old files (plan 4.5).
-    kRetirePackageContent
+    kRetirePackageContent,
+    /// Remove an installed official package: its receipt, then (as kRetirePackageContent)
+    /// its content.
+    kRemovePackage
   };
   Q_ENUM(Operation)
 
@@ -164,6 +169,7 @@ class LutLibraryService final : public QObject {
 
   [[nodiscard]] auto Root() const -> const std::filesystem::path& { return publication_->Root(); }
   [[nodiscard]] auto root_path() const -> QString;
+  [[nodiscard]] auto user_directory_path() const -> QString;
   [[nodiscard]] auto busy() const -> bool { return operation_ != Operation::kNone; }
   [[nodiscard]] auto inventory_complete() const -> bool {
     return publication_->Inventory().Complete();
@@ -300,6 +306,13 @@ class LutLibraryService final : public QObject {
   /// kPersistenceError and `committed_package_id` set; the next Start rebuilds
   /// the inventory from the receipt. kBusy while another operation runs.
   auto             InstallPackage(LutPackageInstallRequest request) -> Status;
+  /// Remove the installed official package @p package_id. Deleting its receipt is the commit
+  /// point; the rescan then publishes the inventory without its LUTs, and its content is
+  /// retired afterwards (RetireInactiveLutPackageContent) once no render reads it. Favorites
+  /// and remembered encodings of its LUTs are kept for a later reinstallation. Other packages
+  /// and user files are not changed. kInvalidRequest when the package is not installed;
+  /// kBusy while another operation runs.
+  auto                    RemovePackage(std::string_view package_id) -> Status;
   /// Request cancellation of a running package installation or root migration.
   /// Returns false when no cancelable operation runs. An installation stops at its
   /// next cancellation point before the receipt commit, or completes if it already
@@ -310,6 +323,8 @@ class LutLibraryService final : public QObject {
 
   Q_INVOKABLE bool refresh() { return RefreshInventory() == Status::kOk; }
   Q_INVOKABLE bool openRootDirectory() { return OpenRootDirectory(); }
+  /// Create `<root>/user` when absent and open it in the platform file manager.
+  Q_INVOKABLE bool        openUserDirectory();
   Q_INVOKABLE bool        cancelOperation() { return CancelOperation(); }
   /// @p paths and @p folder accept native paths and local-file URLs (file dialogs).
   Q_INVOKABLE bool importFiles(const QStringList& paths);

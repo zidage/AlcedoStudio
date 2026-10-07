@@ -52,13 +52,15 @@ class LutLibraryModel : public QAbstractListModel {
   Q_PROPERTY(alcedo::LutLibraryService* library READ library WRITE setLibrary NOTIFY libraryChanged)
   /// Search text as typed; the rows follow it 100 ms after the last change (applyQueryNow).
   Q_PROPERTY(QString queryText READ queryText WRITE setQueryText NOTIFY queryTextChanged)
-  /// `all`, `general`, or `film_simulation`. Choosing `general` clears brand and print.
+  /// `all`, `general` (labelled User), or `film_simulation`. Choosing `general` clears brand
+  /// and print.
   Q_PROPERTY(QString category READ category WRITE setCategory NOTIFY filterChanged)
   /// Source ID, or empty for All.
   Q_PROPERTY(QString source READ source WRITE setSource NOTIFY filterChanged)
   /// Normalized film brand key (a `value` of brandChoices), or empty for All.
   Q_PROPERTY(QString brand READ brand WRITE setBrand NOTIFY filterChanged)
-  /// Normalized print key (a `value` of printChoices), or empty for All.
+  /// Normalized print key (a `value` of printChoices), kLutNoPrintKey for film simulations
+  /// without a print, or empty for All.
   Q_PROPERTY(QString print READ print WRITE setPrint NOTIFY filterChanged)
   Q_PROPERTY(bool favoritesOnly READ favoritesOnly WRITE setFavoritesOnly NOTIFY filterChanged)
   /// `name` or `modified`; used when the query is empty.
@@ -74,7 +76,8 @@ class LutLibraryModel : public QAbstractListModel {
   Q_PROPERTY(QVariantList favoriteChoices READ favoriteChoices NOTIFY choicesChanged)
   /// Brand and print choices apply only outside the General category.
   Q_PROPERTY(bool filmFiltersAvailable READ filmFiltersAvailable NOTIFY choicesChanged)
-  /// True when the library declares a print, so the print choices can narrow the results.
+  /// True when the library declares a print, so the print choices (each print, and No print
+  /// for film simulations without one) can narrow the results.
   Q_PROPERTY(bool printFilterAvailable READ printFilterAvailable NOTIFY choicesChanged)
   Q_PROPERTY(int count READ count NOTIFY countChanged)
   Q_PROPERTY(int totalCount READ totalCount NOTIFY countChanged)

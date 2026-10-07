@@ -29,6 +29,7 @@
 #include <string_view>
 #include <vector>
 
+#include "app/lut_library_publication.hpp"
 #include "utils/lut/lut_inventory_digest.hpp"
 #include "utils/lut/lut_metadata.hpp"
 
@@ -865,7 +866,7 @@ TEST(LutPackageActionTest, EachStatusOffersOneSettingsAction) {
   EXPECT_EQ(LutPackageActionFor(LutPackageStatus::kError), LutPackageAction::kRetry);
   for (const LutPackageStatus status :
        {LutPackageStatus::kCurrent, LutPackageStatus::kChecking, LutPackageStatus::kDownloading,
-        LutPackageStatus::kVerifying, LutPackageStatus::kInstalling}) {
+        LutPackageStatus::kVerifying, LutPackageStatus::kInstalling, LutPackageStatus::kRemoving}) {
     EXPECT_EQ(LutPackageActionFor(status), LutPackageAction::kNone);
   }
 }
@@ -926,6 +927,89 @@ TEST_F(LutPackageServiceTest, SettingsRowsFollowDownloadCancelAndRetry) {
   EXPECT_TRUE(row.value(QStringLiteral("error")).toString().isEmpty());
   EXPECT_EQ(row.value(QStringLiteral("installedRevision")).toString(), QStringLiteral("r1"));
   EXPECT_EQ(row.value(QStringLiteral("installedFileCount")).toULongLong(), spectral.luts.size());
+}
+
+TEST_F(LutPackageServiceTest,
+       RemovePackageDeletesItsContentAndKeepsOtherPackageUserFilesAndFavorites) {
+  WriteBytes(root_ / "user" / "look.cube",
+             "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n"
+             "0 0 1\n1 0 1\n0 1 1\n1 1 1\n");
+  StartLibrary();
+  StartPackages();
+  const BuiltPackage spectral    = Publish(kSpectral, "r1", 0);
+  const BuiltPackage spektrafilm = Publish(kSpektrafilm, "r1", 1);
+  ServeFeed({&spectral, &spektrafilm});
+  Check();
+  ASSERT_TRUE(Install(kSpectral));
+  ASSERT_TRUE(Install(kSpektrafilm));
+  std::string favorite;
+  library_->ForEachPackageEntry(kSpectral, [&](const LutLibraryEntry& entry) {
+    if (favorite.empty()) favorite = LutLibraryPublication::EntryIdOf(entry);
+  });
+  ASSERT_FALSE(favorite.empty());
+  ASSERT_EQ(library_->SetFavorite(favorite, true), LutLibraryService::Status::kOk);
+  const auto  other_files = InstalledFiles(kSpektrafilm);
+  const auto  user_bytes  = ReadBytes(root_ / "user" / "look.cube");
+  QVariantMap row         = RowFor(*packages_, kSpectral);
+  EXPECT_TRUE(row.value(QStringLiteral("removable")).toBool());
+
+  ASSERT_TRUE(packages_->RemovePackage(QString::fromLatin1(kSpectral)));
+  row = RowFor(*packages_, kSpectral);
+  EXPECT_EQ(row.value(QStringLiteral("status")).toString(), QStringLiteral("removing"));
+  EXPECT_TRUE(row.value(QStringLiteral("busy")).toBool());
+  EXPECT_FALSE(row.value(QStringLiteral("cancelable")).toBool());
+  EXPECT_FALSE(RowFor(*packages_, kSpektrafilm).value(QStringLiteral("removable")).toBool());
+  ASSERT_TRUE(WaitUntil(
+      [&] { return Status(kSpectral) != LutPackageStatus::kRemoving && !library_->busy(); }));
+
+  // The package is gone from the library and the disk; Settings offers it for download again.
+  EXPECT_EQ(Status(kSpectral), LutPackageStatus::kNotInstalled);
+  EXPECT_FALSE(Receipt(kSpectral).has_value());
+  EXPECT_TRUE(InstalledFiles(kSpectral).empty());
+  EXPECT_FALSE(fs::exists(root_ / "packages" / std::string(kSpectral)))
+      << library_->last_error().toStdString();
+  row = RowFor(*packages_, kSpectral);
+  EXPECT_EQ(row.value(QStringLiteral("action")).toString(), QStringLiteral("install"));
+  EXPECT_FALSE(row.value(QStringLiteral("removable")).toBool());
+  EXPECT_TRUE(row.value(QStringLiteral("error")).toString().isEmpty());
+  // The other package, the user's files, and the favorite are unchanged.
+  EXPECT_EQ(Status(kSpektrafilm), LutPackageStatus::kCurrent);
+  EXPECT_EQ(InstalledFiles(kSpektrafilm), other_files);
+  EXPECT_EQ(ReadBytes(root_ / "user" / "look.cube"), user_bytes);
+  EXPECT_TRUE(library_->ReadEntry("user/look.cube", [](const LutLibraryEntry&) {}));
+  EXPECT_TRUE(library_->IsFavorite(favorite));
+
+  // Reinstalling lists the favorite's LUT again.
+  ASSERT_TRUE(Install(kSpectral));
+  EXPECT_EQ(Status(kSpectral), LutPackageStatus::kCurrent);
+  EXPECT_EQ(InstalledFiles(kSpectral), spectral.luts);
+}
+
+TEST_F(LutPackageServiceTest, InstalledPackageIsListedAndRemovableWithoutAFeedCheck) {
+  StartLibrary();
+  StartPackages();
+  const BuiltPackage spectral = Publish(kSpectral, "r1", 0);
+  InstallRevision(spectral);
+
+  // A new session that has not checked the feed (offline Settings).
+  StartLibrary();
+  StartPackages();
+  ASSERT_FALSE(packages_->checked());
+  QVariantMap row = RowFor(*packages_, kSpectral);
+  ASSERT_FALSE(row.isEmpty());
+  EXPECT_EQ(row.value(QStringLiteral("status")).toString(), QStringLiteral("installed"));
+  EXPECT_EQ(row.value(QStringLiteral("installedRevision")).toString(), QStringLiteral("r1"));
+  EXPECT_TRUE(row.value(QStringLiteral("action")).toString().isEmpty());
+  EXPECT_TRUE(row.value(QStringLiteral("removable")).toBool());
+
+  ASSERT_TRUE(packages_->RemovePackage(QString::fromLatin1(kSpectral)));
+  ASSERT_TRUE(WaitUntil([&] { return !library_->busy() && library_->PackageReceipts().empty(); }));
+  EXPECT_TRUE(RowFor(*packages_, kSpectral).isEmpty());
+  EXPECT_EQ(library_->EntryCount(), 0u);
+  EXPECT_FALSE(fs::exists(root_ / "packages" / std::string(kSpectral)))
+      << library_->last_error().toStdString();
+  // Removing a package that is not installed is refused with a row error.
+  EXPECT_FALSE(packages_->RemovePackage(QString::fromLatin1(kSpectral)));
 }
 
 TEST_F(LutPackageServiceTest, FeedPackageNameIsShownInsteadOfTheId) {

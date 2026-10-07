@@ -1127,6 +1127,8 @@ auto AppTheme::dangerColor() const -> QColor { return toneWine(); }
 auto AppTheme::dangerTintColor() const -> QColor {
   return GetTheme(current_theme_index_).danger_tint;
 }
+auto AppTheme::alertBadgeFillColor() const -> QColor { return dangerColor(); }
+auto AppTheme::alertBadgeTextColor() const -> QColor { return QColor(0xFF, 0xFF, 0xFF); }
 auto AppTheme::backgroundTaskFinishedColor() const -> QColor { return QColor(0x3F, 0xB9, 0x50); }
 auto AppTheme::backgroundTaskWorkingColor() const -> QColor { return QColor(0xD2, 0xA8, 0x3A); }
 auto AppTheme::backgroundTaskFailedColor() const -> QColor { return dangerColor(); }

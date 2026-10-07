@@ -380,13 +380,15 @@ void LutLibraryModel::rebuildChoices() {
   category_choices_ = {
       Choice(QStringLiteral("all"), Tr("All"), general + film,
              filter_.category == LutCategoryFilter::kAll),
-      Choice(QStringLiteral("general"), Tr("General"), general,
+      Choice(QStringLiteral("general"), Tr("User"), general,
              filter_.category == LutCategoryFilter::kGeneral),
       Choice(QStringLiteral("film_simulation"), Tr("Film simulation"), film,
              filter_.category == LutCategoryFilter::kFilmSimulation)};
 
+  // @p fixed_choices follow All, before the declared values (the print's No print).
   auto dimension_choices = [&](LutFacetDimension dimension, const QString& selected,
-                               QString LutSearchKeys::* key, QString LutSearchKeys::* label) {
+                               QString LutSearchKeys::* key, QString LutSearchKeys::* label,
+                               QVariantList fixed_choices = {}) {
     // Every value the library declares is a choice; its count may be zero.
     std::map<QString, std::pair<QString, int>> counts;
     for (const LutSearchKeys& keys : keys_) {
@@ -398,8 +400,14 @@ void LutLibraryModel::rebuildChoices() {
       if (!(keys.*key).isEmpty()) ++counts[keys.*key].second;
     });
     // A chosen value stays listed, even when the library no longer declares it.
-    if (!selected.isEmpty()) counts.try_emplace(selected, selected, 0);
+    const auto is_fixed = [&](const QString& value) {
+      return std::any_of(fixed_choices.begin(), fixed_choices.end(), [&](const QVariant& choice) {
+        return choice.toMap().value(QStringLiteral("value")).toString() == value;
+      });
+    };
+    if (!selected.isEmpty() && !is_fixed(selected)) counts.try_emplace(selected, selected, 0);
     QVariantList choices{Choice({}, Tr("All"), total, selected.isEmpty())};
+    choices.append(fixed_choices);
     for (const auto& [value, entry] : counts) {
       choices.push_back(Choice(value, entry.first, entry.second, value == selected));
     }
@@ -410,14 +418,22 @@ void LutLibraryModel::rebuildChoices() {
   if (filmFiltersAvailable()) {
     brand_choices_ = dimension_choices(LutFacetDimension::kBrand, filter_.brand_key,
                                        &LutSearchKeys::brand_key, &LutSearchKeys::brand_label);
-    print_choices_ = dimension_choices(LutFacetDimension::kPrint, filter_.print_key,
-                                       &LutSearchKeys::print_key, &LutSearchKeys::print_label);
+    // No print: film simulations that declare no print (negative-only looks).
+    int        without_print = 0;
+    const auto no_print      = QString::fromLatin1(kLutNoPrintKey);
+    count_where(LutFacetDimension::kPrint, [&](const LutSearchKeys& keys) {
+      if (keys.category == LutCategory::kFilmSimulation && !keys.has_print) ++without_print;
+    });
+    print_choices_ = dimension_choices(
+        LutFacetDimension::kPrint, filter_.print_key, &LutSearchKeys::print_key,
+        &LutSearchKeys::print_label,
+        {Choice(no_print, Tr("No print"), without_print, filter_.print_key == no_print)});
   } else {
     brand_choices_ = {Choice({}, Tr("All"), 0, true)};
     print_choices_ = {Choice({}, Tr("All"), 0, true)};
   }
-  // All is always the first choice; any other means some print can be chosen.
-  print_filter_available_ = print_choices_.size() > 1;
+  // All and No print are always listed; any other choice means the library declares a print.
+  print_filter_available_ = print_choices_.size() > 2;
 
   int candidates = 0;
   int favorites  = 0;

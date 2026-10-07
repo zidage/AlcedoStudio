@@ -129,13 +129,18 @@ class LutEditDistanceMemo {
     -> std::optional<LutSearchRank>;
 
 enum class LutCategoryFilter : std::uint8_t { kAll, kGeneral, kFilmSimulation };
+
+/// Print predicate value that selects film simulations without a print (negative only).
+/// Print keys are metadata slugs (`[a-z0-9._-]`), so this value never names a print.
+inline constexpr char kLutNoPrintKey[] = ":none";
 enum class LutFacetDimension : std::uint8_t { kCategory, kSource, kBrand, kPrint, kFavorites };
 
 /**
  * @brief The browser's filter predicates; an empty key or kAll removes that predicate.
  *
  * Brand and print are film predicates: they do not apply while the category is General.
- * The print predicate matches one print (print film or photographic paper) by its key.
+ * The print predicate matches one print (print film or photographic paper) by its key, or,
+ * with kLutNoPrintKey, every film simulation that declares no print.
  */
 struct LutFacetFilter {
   LutCategoryFilter category = LutCategoryFilter::kAll;

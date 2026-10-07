@@ -8,7 +8,7 @@ import QtQuick.Layouts
 // Settings > LUTs, laid out as bento tiles: the LUT library folder (open,
 // change, refresh), the total LUT count, the film simulation / custom split,
 // and the official LUT packages as store cards (download, update, repair,
-// cancel, retry). "Change folder" moves the library into an empty folder and
+// cancel, retry, remove). "Change folder" moves the library into an empty folder and
 // switches to a folder that already holds files (LutLibraryService::
 // RootChangeMigrates). The dialog starts the signed package check when
 // Settings opens; this page never starts one by itself except "Check again".
@@ -41,6 +41,8 @@ ColumnLayout {
     property string pendingError: ""
     // A request the library refused to start (another operation runs).
     property string actionError: ""
+    // Package whose removal waits for confirmation on its card.
+    property string pendingRemovalId: ""
 
     spacing: appTheme.spaceMd
 
@@ -67,6 +69,13 @@ ColumnLayout {
         pendingError = ""
     }
 
+    function confirmPackageRemoval() {
+        if (!packageService || pendingRemovalId.length === 0)
+            return
+        packageService.removePackage(pendingRemovalId)
+        pendingRemovalId = ""
+    }
+
     function confirmPendingFolder() {
         if (!library || pendingFolder.length === 0 || pendingError.length > 0)
             return
@@ -86,6 +95,7 @@ ColumnLayout {
         case "sourceCleanup": return qsTr("Removing copied files from the previous folder…")
         case "installPackage": return qsTr("Installing a LUT package…")
         case "retirePackageContent": return qsTr("Removing replaced package files…")
+        case "removePackage": return qsTr("Removing a LUT package…")
         }
         return ""
     }
@@ -100,6 +110,8 @@ ColumnLayout {
         case "downloading": return qsTr("Downloading… %1%").arg(Math.round(row.progress * 100))
         case "verifying": return qsTr("Verifying…")
         case "installing": return qsTr("Installing…")
+        case "removing": return qsTr("Removing…")
+        case "installed": return qsTr("Installed")
         case "error": return qsTr("Not completed")
         }
         return ""
@@ -107,7 +119,8 @@ ColumnLayout {
 
     function packageStatusColor(row) {
         switch (row.status) {
-        case "current": return appTheme.accentColor
+        case "current":
+        case "installed": return appTheme.accentColor
         case "updateAvailable":
         case "repairRequired": return appTheme.toneGold
         case "error": return page.dangerColor
@@ -148,6 +161,9 @@ ColumnLayout {
     function packageRevisionText(row) {
         const installed = row.installedRevision || ""
         const available = row.revision || ""
+        // A package the feed does not list has only its installed revision.
+        if (available.length === 0)
+            return installed
         if (installed.length > 0 && installed !== available)
             return qsTr("%1 → %2").arg(installed).arg(available)
         return available
@@ -302,15 +318,10 @@ ColumnLayout {
                             font.pixelSize: appTheme.fontSizeCaption
                             wrapMode: Text.Wrap
                         }
-                        Label {
+                        AlertBadge {
                             objectName: "lutSettingsPendingError"
                             Layout.fillWidth: true
-                            visible: page.pendingError.length > 0
                             text: page.pendingError
-                            color: page.dangerColor
-                            font.family: appTheme.uiFontFamily
-                            font.pixelSize: appTheme.fontSizeCaption
-                            wrapMode: Text.Wrap
                         }
                         RowLayout {
                             spacing: appTheme.spaceSm
@@ -371,18 +382,13 @@ ColumnLayout {
                     }
                 }
 
-                Label {
+                AlertBadge {
                     objectName: "lutSettingsLibraryError"
                     Layout.fillWidth: true
                     readonly property string message: page.actionError.length > 0
                                                       ? page.actionError
                                                       : (page.library ? page.library.lastError : "")
-                    visible: message.length > 0
                     text: message
-                    color: page.dangerColor
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                    wrapMode: Text.Wrap
                 }
 
                 Label {
@@ -537,17 +543,12 @@ ColumnLayout {
                 font.weight: Font.DemiBold
             }
             // Only a failed check is reported; a running check spins the refresh icon.
-            Label {
+            AlertBadge {
                 objectName: "lutSettingsCheckText"
                 Layout.fillWidth: true
-                visible: text.length > 0
                 text: page.packagesEnabled && !page.packageService.checking
                       && page.packageService.lastError.length > 0
                       ? qsTr("The package check failed: %1").arg(page.packageService.lastError) : ""
-                color: page.dangerColor
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
-                wrapMode: Text.Wrap
             }
             Label {
                 objectName: "lutSettingsPackagesUnavailable"
@@ -585,7 +586,8 @@ ColumnLayout {
         Layout.leftMargin: 34
         Layout.rightMargin: 34
         Layout.bottomMargin: 26
-        visible: page.packagesEnabled
+        // Installed packages are listed (and removable) even without the feed.
+        visible: page.packagesEnabled || page.packageRows.length > 0
         columns: width >= 600 ? 2 : 1
         columnSpacing: appTheme.spaceMd
         rowSpacing: appTheme.spaceMd
@@ -756,6 +758,7 @@ ColumnLayout {
         readonly property string packageId: row.id || ""
         readonly property string action: row.action || ""
         readonly property bool busy: !!row.busy
+        readonly property bool confirmingRemoval: panel.pendingRemovalId === packageId
         readonly property string upstream: panel.packageUpstream(packageId)
 
         objectName: "lutSettingsPackage:" + packageId
@@ -842,15 +845,55 @@ ColumnLayout {
                 Layout.fillHeight: true
             }
 
-            Label {
+            AlertBadge {
                 objectName: "lutSettingsPackageError:" + packageCard.packageId
                 Layout.fillWidth: true
-                visible: text.length > 0
                 text: packageCard.row.error || ""
-                color: appTheme.dangerColor
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
-                wrapMode: Text.Wrap
+            }
+
+            // Removal confirmation: the package's LUTs leave the library.
+            ColumnLayout {
+                objectName: "lutSettingsPackageRemoveConfirm:" + packageCard.packageId
+                Layout.fillWidth: true
+                visible: packageCard.confirmingRemoval
+                spacing: appTheme.spaceSm
+
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("Remove this package? Its LUTs leave the library. Favorites are kept.")
+                    color: appTheme.textColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
+                    wrapMode: Text.Wrap
+                }
+                AlertBadge {
+                    objectName: "lutSettingsPackageRemoveWarning:" + packageCard.packageId
+                    text: qsTr("Photos that have these LUTs applied lose that look until the package is installed again.")
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: appTheme.spaceSm
+
+                    Item {
+                        Layout.fillWidth: true
+                    }
+                    DialogActionButton {
+                        objectName: "lutSettingsPackageRemoveKeep:" + packageCard.packageId
+                        buttonWidth: 100
+                        buttonHeight: 34
+                        text: qsTr("Keep")
+                        onClicked: packageCard.panel.pendingRemovalId = ""
+                    }
+                    DialogActionButton {
+                        objectName: "lutSettingsPackageRemoveConfirmButton:" + packageCard.packageId
+                        kind: "danger"
+                        buttonWidth: 100
+                        buttonHeight: 34
+                        enabled: !packageCard.panel.libraryBusy && !!packageCard.row.removable
+                        text: qsTr("Remove")
+                        onClicked: packageCard.panel.confirmPackageRemoval()
+                    }
+                }
             }
 
             ThemedProgressBar {
@@ -863,6 +906,7 @@ ColumnLayout {
 
             RowLayout {
                 Layout.fillWidth: true
+                visible: !packageCard.confirmingRemoval
                 spacing: appTheme.spaceSm
 
                 Rectangle {
@@ -891,6 +935,22 @@ ColumnLayout {
                     buttonHeight: 34
                     text: packageCard.panel.packageActionText(packageCard.action)
                     onClicked: packageCard.panel.packageService.installPackage(packageCard.packageId)
+                }
+                // The shared trash glyph, in the same chrome as the card's GitHub action.
+                IconButton {
+                    objectName: "lutSettingsPackageRemove:" + packageCard.packageId
+                    Layout.alignment: Qt.AlignVCenter
+                    visible: !!packageCard.row.removable && !packageCard.busy
+                    enabled: !packageCard.panel.libraryBusy
+                    buttonSize: 34
+                    buttonRadius: 10
+                    iconSize: 18
+                    iconSrc: "qrc:/panel_icons/trash.svg"
+                    normalColor: Qt.rgba(1, 1, 1, 0.07)
+                    borderColor: Qt.rgba(appTheme.textColor.r, appTheme.textColor.g,
+                                         appTheme.textColor.b, 0.14)
+                    tooltipText: qsTr("Remove package")
+                    onClicked: packageCard.panel.pendingRemovalId = packageCard.packageId
                 }
                 DialogActionButton {
                     objectName: "lutSettingsPackageCancel:" + packageCard.packageId

@@ -92,7 +92,12 @@ auto Expected(const std::string& category, const std::string& source, const std:
     if (category != "all" && facts.category != category) continue;
     if (!source.empty() && facts.source != source) continue;
     if (film && !brand.empty() && facts.brand != brand) continue;
-    if (film && !print.empty() && facts.print != print) continue;
+    if (film && print == kLutNoPrintKey) {
+      // No print: film simulations that declare no print.
+      if (std::string(facts.category) != "film_simulation" || facts.print[0] != '\0') continue;
+    } else if (film && !print.empty() && facts.print != print) {
+      continue;
+    }
     if (favorites_only && favorites.count(facts.entry_id) == 0) continue;
     ids.push_back(QString::fromUtf8(facts.entry_id));
   }
@@ -128,8 +133,8 @@ TEST(LutLibraryModelTest, FiltersUseIntersectionAndAllRemovesOnePredicate) {
   const std::vector<std::string> sources    = {"", "spectral_film_lut", "spektrafilm_lut",
                                                "acme_lut", "my_tool"};
   const std::vector<std::string> brands     = {"", "kodak", "fujifilm", "acme"};
-  const std::vector<std::string> prints     = {"", "kodak-2383", "crystal-archive",
-                                               "acme-paper"};
+  const std::vector<std::string> prints     = {"", "kodak-2383", "crystal-archive", "acme-paper",
+                                               kLutNoPrintKey};
   int                            checked    = 0;
   for (const std::string& category : categories) {
     for (const std::string& source : sources) {
@@ -153,7 +158,7 @@ TEST(LutLibraryModelTest, FiltersUseIntersectionAndAllRemovesOnePredicate) {
       }
     }
   }
-  EXPECT_EQ(checked, 3 * 5 * 4 * 4 * 2);
+  EXPECT_EQ(checked, 3 * 5 * 4 * 5 * 2);
 
   // Facet counts apply every other predicate: with the Kodak brand, the source choice counts
   // only Kodak entries, and each brand count ignores the chosen brand.
@@ -183,7 +188,8 @@ TEST(LutLibraryModelTest, PrintChoicesListEveryPrintFilmAndPaper) {
   for (const QVariant& choice : model.printChoices()) {
     labels.push_back(choice.toMap().value(QStringLiteral("label")).toString());
   }
-  EXPECT_EQ(labels, (QStringList{"All", "Acme Paper", "Crystal Archive", "2383"}));
+  // No print follows All, before the declared prints.
+  EXPECT_EQ(labels, (QStringList{"All", "No print", "Acme Paper", "Crystal Archive", "2383"}));
 
   model.setPrint(QStringLiteral("crystal-archive"));
   EXPECT_EQ(RowEntryIds(model), QStringList{"library:fuji/eterna_archive.cube"});
@@ -204,6 +210,50 @@ TEST(LutLibraryModelTest, PrintChoicesListEveryPrintFilmAndPaper) {
   model.setBrand({});
   model.setSource(QStringLiteral("spektrafilm_lut"));
   EXPECT_EQ(RowEntryIds(model), QStringList{"library:fuji/eterna_archive.cube"});
+}
+
+TEST(LutLibraryModelTest, NoPrintChoiceSelectsFilmSimulationsWithoutAPrint) {
+  TemporaryLutLibrary library(ClassifiedLibraryFiles());
+  LutLibraryModel     model;
+  model.setLibrary(library.Service());
+  const QString no_print = QString::fromLatin1(kLutNoPrintKey);
+  // Portra 400 and Provia declare no print; General LUTs are not film simulations.
+  EXPECT_EQ(ChoiceCount(model.printChoices(), no_print), 2);
+
+  model.setPrint(no_print);
+  EXPECT_EQ(model.print(), no_print);
+  EXPECT_EQ(SortedRowEntryIds(model),
+            (QStringList{"library:fuji/provia.cube", "library:kodak/portra_400.cube"}));
+  // The choice is selected and counts follow the other predicates.
+  bool selected = false;
+  for (const QVariant& choice : model.printChoices()) {
+    const QVariantMap map = choice.toMap();
+    if (map.value(QStringLiteral("value")).toString() == no_print) {
+      selected = map.value(QStringLiteral("selected")).toBool();
+    }
+  }
+  EXPECT_TRUE(selected);
+  model.setBrand(QStringLiteral("Kodak"));
+  EXPECT_EQ(RowEntryIds(model), QStringList{"library:kodak/portra_400.cube"});
+  EXPECT_EQ(ChoiceCount(model.printChoices(), no_print), 1);
+
+  // User (General) clears the print predicate like any other print.
+  model.setCategory(QStringLiteral("general"));
+  EXPECT_EQ(model.print(), QString());
+}
+
+TEST(LutLibraryModelTest, GeneralCategoryIsLabelledUser) {
+  TemporaryLutLibrary library(ClassifiedLibraryFiles());
+  LutLibraryModel     model;
+  model.setLibrary(library.Service());
+  QString label;
+  for (const QVariant& choice : model.categoryChoices()) {
+    const QVariantMap map = choice.toMap();
+    if (map.value(QStringLiteral("value")).toString() == QStringLiteral("general")) {
+      label = map.value(QStringLiteral("label")).toString();
+    }
+  }
+  EXPECT_EQ(label, QStringLiteral("User"));
 }
 
 TEST(LutLibraryModelTest, ThirdPartyPrintMetadataAddsPrintChoice) {
