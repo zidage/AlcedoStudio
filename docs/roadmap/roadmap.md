@@ -35,6 +35,9 @@
 
 ## Still Planned
 
+- [ ] Fix the review findings of the executor ownership refactor, starting with history moves
+      during an open input sequence; see the
+      [Executor Ownership Refactor Review Findings](alcedo_studio/edit/executor_ownership_review_findings.md).
 - [ ] Add JSON serialization for pipeline configurations.
 - [ ] Complete the Simplified Chinese UI translations added from PR #93 through PR #176; see the
       [PR 93-176 Simplified Chinese UI Translation Plan](alcedo_studio/ui/pr_93_176_simplified_chinese_ui_translation_plan.md).

@@ -31,6 +31,7 @@ use their own top-level category.
 - [Node-aware Pipeline Editing and Mask Authoring Master Plan](alcedo_studio/edit/node_mask_editor_master_plan.md)
 - [Brush Mask Architecture, History, and Raster Materialization Master Plan](alcedo_studio/edit/brush_mask_architecture_master_plan.md)
 - [Raster Image Input (JPEG, PNG, TIFF, OpenEXR) Plan](alcedo_studio/edit/raster_image_input_plan.md)
+- [Executor Ownership Refactor Review Findings](alcedo_studio/edit/executor_ownership_review_findings.md)
 
 ## Alcedo Studio — UI
 
