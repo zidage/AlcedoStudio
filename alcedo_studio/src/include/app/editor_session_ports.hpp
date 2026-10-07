@@ -306,6 +306,14 @@ class IEditorHistoryPort {
     return false;
   }
 
+  /// Return whether the working document of the image holds a value that no commit records: an
+  /// open field input sequence or an open Mask edit. Test ports that do not model input
+  /// sequences may keep the default false.
+  [[nodiscard]] virtual auto HasUncommittedLiveValues(
+      const EditorHistoryGuardHandle& /*guard*/) const -> bool {
+    return false;
+  }
+
   /// Return whether the active working head differs from the last materialized
   /// head. The editor uses this to enable the current-image discard action.
   /// Test ports that do not model Mini-Git state may keep the default false.

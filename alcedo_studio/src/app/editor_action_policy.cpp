@@ -35,6 +35,12 @@ namespace {
 
 [[nodiscard]] auto Allow() -> EditorActionDecision { return EditorActionDecision{true, {}}; }
 
+/// True while an input sequence or a Mask edit leaves uncommitted values on the working
+/// document. History moves and Paste replace that document, so they wait for the commit.
+[[nodiscard]] auto HasOpenEditorInput(const EditorActionInputs& inputs) -> bool {
+  return inputs.input_sequence_open || inputs.mask_input_open;
+}
+
 [[nodiscard]] auto IsRecoveryState(EditorSessionState state) -> bool {
   return state == EditorSessionState::RetainedImageFailure;
 }
@@ -278,6 +284,9 @@ auto EditorActionPolicy::Evaluate(EditorAction action, const EditorCommandContex
       if (!inputs.can_undo) {
         return Deny("Nothing to undo");
       }
+      if (HasOpenEditorInput(inputs)) {
+        return Deny("Finish the current edit before Undo");
+      }
       return Allow();
 
     case EditorAction::Redo:
@@ -287,11 +296,17 @@ auto EditorActionPolicy::Evaluate(EditorAction action, const EditorCommandContex
       if (!inputs.can_redo) {
         return Deny("Nothing to redo");
       }
+      if (HasOpenEditorInput(inputs)) {
+        return Deny("Finish the current edit before Redo");
+      }
       return Allow();
 
     case EditorAction::MoveHead:
       if (inputs.session_state != EditorSessionState::Interactive || !inputs.has_image) {
         return Deny("Head move requires an interactive image");
+      }
+      if (HasOpenEditorInput(inputs)) {
+        return Deny("Finish the current edit before moving in the history");
       }
       return Allow();
 
@@ -326,6 +341,9 @@ auto EditorActionPolicy::Evaluate(EditorAction action, const EditorCommandContex
       }
       if (inputs.background_blocks_paste) {
         return Deny("A background task blocks Paste");
+      }
+      if (HasOpenEditorInput(inputs)) {
+        return Deny("Finish the current edit before Paste");
       }
       return Allow();
 

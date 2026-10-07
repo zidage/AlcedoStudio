@@ -201,10 +201,16 @@ void EditorSessionService::EndPublication() {
     return;
   }
   --publication_depth_;
-  if (publication_depth_ == 0 && publication_dirty_) {
+  if (publication_depth_ != 0) {
+    return;
+  }
+  if (publication_dirty_) {
     publication_dirty_ = false;
     PublishActionAvailabilityIfChanged();
     NotifyChange();
+  } else if (HasOpenInputSequence() != published_input_sequence_open_) {
+    // A preview write opened the sequence, or a seal closed it, without a session result.
+    PublishActionAvailabilityIfChanged();
   }
 }
 
@@ -2638,12 +2644,33 @@ auto EditorSessionService::BuildActionInputs() -> EditorActionInputs {
                            mask_state == EditorMaskCreationState::Creating ||
                            mask_state == EditorMaskCreationState::Editing ||
                            mask_state == EditorMaskCreationState::Settling;
+  inputs.input_sequence_open = HasOpenInputSequence();
   return inputs;
 }
 
+auto EditorSessionService::HasOpenInputSequence() const -> bool {
+  if (!lifecycle_.has_image()) {
+    return false;
+  }
+  const auto identity = lifecycle_.identity();
+  const auto queued   = pending_input_.Peek();
+  const bool queued_for_open_image =
+      std::any_of(queued.sequences.begin(), queued.sequences.end(),
+                  [&identity](const EditorPendingSequence& sequence) {
+                    return sequence.identity.element_id == identity.element_id &&
+                           sequence.identity.image_id == identity.image_id;
+                  });
+  if (queued_for_open_image) {
+    return true;
+  }
+  return dependencies_.history && lifecycle_.has_history_guard() &&
+         dependencies_.history->HasUncommittedLiveValues(lifecycle_.history_guard());
+}
+
 void EditorSessionService::PublishActionAvailabilityIfChanged() {
-  const auto next =
-      EditorActionPolicy::EvaluateAll(EditorCommandContext{active_leases_}, BuildActionInputs());
+  const auto inputs              = BuildActionInputs();
+  published_input_sequence_open_ = inputs.input_sequence_open;
+  const auto next = EditorActionPolicy::EvaluateAll(EditorCommandContext{active_leases_}, inputs);
   ActionAvailabilityObserver observer;
   {
     std::scoped_lock lock(publish_mutex_);

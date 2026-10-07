@@ -16,8 +16,10 @@
 #include <optional>
 #include <string>
 
+#include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_document_history.hpp"
+#include "app/pipeline_root_state.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
@@ -121,6 +123,58 @@ class EditorCommittedSnapshotPublicationTest : public ::testing::Test {
     std::string error;
     const auto  capture = history_.CaptureSaveCheckpoint(handle_, &error);
     return capture == nullptr && error.find("unsettled") != std::string::npos;
+  }
+
+  /// Document of the active head, replayed from the immutable root the way every consumer
+  /// rebuilds a committed state.
+  auto HeadReplay() -> std::shared_ptr<alcedo::PipelineDocument> {
+    std::shared_ptr<const alcedo::CommitGraph>      graph;
+    std::shared_ptr<const alcedo::PipelineDocument> root_document;
+    std::string                                     error;
+    EXPECT_TRUE(history_.SnapshotHistorySource(handle_, &graph, &root_document, &error)) << error;
+    if (!graph || !root_document) {
+      return nullptr;
+    }
+    const alcedo::LoadedRootState root{alcedo::ClonePipelineDocument(*root_document), {}};
+    auto                          replay = alcedo::BuildDocumentFromRoot(
+        *graph, root, graph->GetActiveVersionRef().head_commit_hash, &error);
+    EXPECT_NE(replay, nullptr) << error;
+    return replay;
+  }
+
+  void CommitField(const std::string& field, const std::string& json) {
+    std::string error;
+    ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(
+        handle_, WithColorGradeTarget({field, json, false}), &error))
+        << error;
+    ASSERT_TRUE(
+        history_.CommitAdjustment(handle_, WithColorGradeTarget({field, json, true}), &error))
+        << error;
+  }
+
+  /// Leave a contrast preview on the working document, as a held slider or the debounce after an
+  /// arrow key does.
+  void OpenContrastPreview(const std::string& json) {
+    std::string error;
+    ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(
+        handle_, WithColorGradeTarget({"contrast", json, false}), &error))
+        << error;
+    ASSERT_TRUE(HoldsUncommittedValues());
+  }
+
+  /// The working document and the committed snapshot both equal the replay of the active head.
+  void ExpectWorkingAndCommittedEqualHeadReplay(const char* move) {
+    EXPECT_FALSE(HoldsUncommittedValues()) << move;
+    const auto replay = HeadReplay();
+    ASSERT_NE(replay, nullptr) << move;
+    const auto committed = Committed();
+    ASSERT_NE(committed, nullptr) << move;
+    EXPECT_EQ(committed->Head(), Head()) << move;
+    EXPECT_EQ(committed->Chain(), Chain()) << move;
+    EXPECT_EQ(committed->Document().ToJson(), replay->ToJson())
+        << move << ": the committed snapshot holds a value that no commit records";
+    EXPECT_EQ(Working()->Document().ToJson(), replay->ToJson())
+        << move << ": the working document differs from the replay of its head";
   }
 
   std::filesystem::path                        db_path_;
@@ -239,6 +293,59 @@ TEST_F(EditorCommittedSnapshotPublicationTest, OpenMaskInputIsUncommittedUntilIt
   ASSERT_NE(settled, before);
   EXPECT_EQ(settled->Head(), Head());
   EXPECT_NE(settled->Document().PrimaryGrade()->FindMask(mask_id), nullptr);
+}
+
+// The session policy refuses history moves while an input sequence is open. When a move still
+// reaches the history port, the port restores the open preview first, so no uncommitted value
+// stays on the document that the move publishes as committed.
+TEST_F(EditorCommittedSnapshotPublicationTest, CommittedSnapshotNeverContainsAnUncommittedValue) {
+  std::string error;
+  CommitField("exposure", R"({"exposure":0.5})");
+  const auto first = Head();
+  ASSERT_TRUE(first.has_value());
+  CommitField("exposure", R"({"exposure":1.0})");
+  const auto second = Head();
+  ASSERT_TRUE(second.has_value());
+
+  OpenContrastPreview(R"({"contrast":40.0})");
+  ASSERT_TRUE(history_.Undo(handle_, &error)) << error;
+  EXPECT_EQ(Head(), first);
+  ExpectWorkingAndCommittedEqualHeadReplay("Undo");
+
+  OpenContrastPreview(R"({"contrast":-30.0})");
+  ASSERT_TRUE(history_.Redo(handle_, &error)) << error;
+  EXPECT_EQ(Head(), second);
+  ExpectWorkingAndCommittedEqualHeadReplay("Redo");
+
+  OpenContrastPreview(R"({"contrast":25.0})");
+  ASSERT_TRUE(history_.MoveHeadToCommit(handle_, *first, &error)) << error;
+  EXPECT_EQ(Head(), first);
+  ExpectWorkingAndCommittedEqualHeadReplay("MoveHead");
+}
+
+TEST_F(EditorCommittedSnapshotPublicationTest, SaveCheckpointMatchesHeadReplayAfterHistoryMoves) {
+  std::string error;
+  CommitField("exposure", R"({"exposure":0.5})");
+  const auto first = Head();
+  CommitField("exposure", R"({"exposure":1.0})");
+
+  OpenContrastPreview(R"({"contrast":40.0})");
+  ASSERT_TRUE(history_.Undo(handle_, &error)) << error;
+  OpenContrastPreview(R"({"contrast":-30.0})");
+  ASSERT_TRUE(history_.Redo(handle_, &error)) << error;
+  OpenContrastPreview(R"({"contrast":25.0})");
+  ASSERT_TRUE(history_.MoveHeadToCommit(handle_, *first, &error)) << error;
+
+  const auto capture = history_.CaptureSaveCheckpoint(handle_, &error);
+  ASSERT_NE(capture, nullptr) << error;
+  EXPECT_EQ(capture->working_head, first);
+  const auto& stored = capture->materialization.image_state.serialized_pipeline_state;
+  ASSERT_TRUE(stored.has_value());
+  const auto replay = HeadReplay();
+  ASSERT_NE(replay, nullptr);
+  EXPECT_EQ(*stored, alcedo::MakeEditorSerializedPipelineState(Graph()->GetRootId(), first, Chain(),
+                                                               *replay))
+      << "the Save checkpoint of HEAD must hold the replay of HEAD";
 }
 
 TEST_F(EditorCommittedSnapshotPublicationTest, ReleasedImageIsServedFromStorageWhenItDiffers) {
