@@ -184,60 +184,47 @@ Classic themes, and at DPR 1.0, 1.5, and 2.0:
   shell and is capped so the viewport keeps its minimum width. A grip on the
   panel's trailing edge (`SizeHorCursor`; a 1 px `textMutedColor` line fades in
   on hover or drag) resizes it live down to `editorLutBrowserPanelWidthMin`; a
-  double click restores the default. The rail keeps the width, the filter
-  sidebar state, and the grid/list choice while the page unloads.
+  double click restores the default. The rail keeps the width and the
+  grid/list choice while the page unloads.
 
 ### `EditorLutBrowserPanel.qml`
 
-- The toolbar spans the top of the page: the filter sidebar toggle (the
-  existing `layout-sidebar` / `layout-sidebar-inactive` glyphs), the sunken
-  `bgBaseColor` search track (search glyph, native text input, a compact clear
-  action while text is present), sort, and the grid/list segments.
+- The toolbar spans the top of the page: the sunken `bgBaseColor` search track
+  (search glyph, native text input, a compact clear action while text is
+  present), the favorites toggle (`panel_icons/star.svg`, neutral
+  `buttonSelectedFillColor` fill and `editorListFavoriteActiveColor` glyph while
+  on), sort, and the grid/list segments.
 - Grid/list segments follow the monochrome segmented family at toolbar height:
   `bgBaseColor` track, `editorListSelectedFillColor` well under the current
   segment, `editorListSelectedInkColor` glyph. Icons are the user-provided
   Tabler `layout-grid` and `layout-list` (`panel_icons/view-grid.svg`,
   `panel_icons/view-list.svg`).
-- Below the toolbar the filter sidebar sits beside the results. It folds to
-  zero width with `motionFoldOpenMs` / `motionFoldCloseMs` and `motionEasing`
-  (`reduceMotion` resolves them to zero); a 1 px `cardBorderColor` divider
-  separates the docked sidebar. When the page is too narrow for the sidebar and
-  two tile columns, the open sidebar floats over the results with the card
-  border instead of squeezing them.
-
-### `EditorLutFilterCard.qml`
-
-- Docked, the sidebar has no chrome of its own; floating, it adds the standard
-  card border and `controlRadiusSmall`.
-- Title `Filters` uses `fontSizeTitle`, `fontWeightHeading`. A `Clear` caption
-  action appears only when a predicate is active.
-- `Favorites` is the first choice, above the sections: one row with the star
-  glyph (`editorListFavoriteActiveColor` while the filter is on), its count,
-  and a count bar scaled to every candidate. It behaves like every other
-  choice; choosing it again shows every LUT.
-- Sections follow the Album inspector layout: uppercase caption title
-  (`fontSizeCaption`, `fontWeightStrong`, muted), then one row per choice with
-  a quiet count bar (`editorListSelectedFillColor` at low alpha) behind the
-  label and count. The selected row keeps its count bar and adds a 1 px outline
-  (`graphSelectionOutlineColor`, `graphSelectionOutlineWidth`); it has no fill
-  and no ink change. Hover and keyboard focus use `buttonHoveredFillColor`.
-  There is no accent color, side stripe, pill, or dot. Choosing the selected
-  row again returns that dimension to All.
+- Below the toolbar, one row of filter combo boxes (Category, Source, Brand,
+  Print) at toolbar height, wrapping to two per row when four do not fit at
+  104 px each. Each is a sunken `bgBaseColor` field with a 1 px
+  `cardBorderColor` border (`textMutedColor` on hover or keyboard focus), caption
+  text, and a `▾` indicator. At All it shows the dimension name in muted text; a
+  chosen value shows its label in `textColor` with no outline, fill, or weight
+  change. The popup lists only All, the chosen value, and values with matching
+  LUTs, without counts; the chosen value carries a `✓`. A compact close action
+  after the row clears every filter while one is active.
 ### `EditorLutResultCard.qml`
 
-- No card chrome of its own. The footer holds the muted count and the compact
-  `IconActionButton` library actions (import, refresh, open folder); library
-  and favorite errors appear above it in `dangerColor`.
-- The target indicator is plain text: muted `Applies to` label and the node
-  name, the current LUT on its own line, its print on a separate muted line,
-  and the Missing explanation in `dangerColor`. It has no remove button: choosing
-  the applied tile again removes the LUT. Without a target it shows only the
-  controller's reason in muted text. The sort menu marks the current order with
-  the same 1 px outline.
+- No card chrome of its own and no target block above the tiles. The footer
+  line reads `<LUT> applied to <node>` in `textColor` (or `Choose a LUT to
+  apply to <node>`, or the controller's reason without a target, in muted
+  text), followed by the compact `IconActionButton` library actions (import,
+  refresh, open user folder) and the `EditorInfoHint` that names the user
+  folder. The Missing explanation, apply errors, and library and favorite
+  errors are `AlertBadge`s above the footer. Choosing the applied tile again
+  removes the LUT. The sort menu marks the current order with the 1 px
+  outline.
+- Opening the page and clearing the filters scroll the applied LUT's row into
+  view.
 - Tiles sit in a sunken `bgBaseColor` well with `spaceXs` gaps. A tile shows the
   approved Tabler `cube` icon (`panel_icons/lut-cube.svg`,
   `editorLutTileIconSize`), the full title (wrapped, never elided), the print on
-  its own line, and the status line for invalid or 1D entries. Every tile in a
+  its own line, and an `AlertBadge` for invalid or 1D entries. Every tile in a
   row takes the height of the row's tallest tile.
 - The applied tile has a 1 px outline (`graphSelectionOutlineColor`,
   `graphSelectionOutlineWidth`) and no fill; its text, icon, and star keep their
@@ -250,7 +237,7 @@ Classic themes, and at DPR 1.0, 1.5, and 2.0:
   always shown in its trailing column. Selection, hover, and muted states match
   the tiles.
 - Empty, loading, and zero-result states are centered text with
-  `DialogActionButton` actions; library errors use `dangerColor`.
+  `DialogActionButton` actions.
 
 ### `EditorLutControlPanel.qml`
 
@@ -267,9 +254,9 @@ Classic themes, and at DPR 1.0, 1.5, and 2.0:
 
 Check both themes at 1.0 and 1.5 DPR: empty library, loading, many results,
 zero results, long names, applied tile, focused tile, favorite on applied and
-idle tiles, no target (RAW or DRT selected), Missing LUT, grid and list
-layouts, the filter fold, the floating sidebar on a narrow page, and a drag
-resize down to the minimum width.
+idle tiles, no target (RAW or DRT selected), Missing LUT, an apply error badge,
+grid and list layouts, the filter row wrapped on a narrow page, a chosen filter
+value, and a drag resize down to the minimum width.
 
 ## LUT Settings (LUT library plan L6B)
 
@@ -286,23 +273,28 @@ resize down to the minimum width.
 - A chosen folder opens an inline confirmation card (`dividerColor` 1 px
   border, `panelRadius`, no fill): the question, the folder path, and what the
   operation does, or the reason it cannot start in `dangerColor`. Only the
-  confirm button (`accent`) starts the operation.
+  confirm button (`accent`) starts the operation. The reason is an
+  `AlertBadge`.
 - A running library operation shows its name and an indeterminate
-  `ThemedProgressBar`; a move adds Cancel. Library errors use `dangerColor`;
+  `ThemedProgressBar`; a move adds Cancel. Library errors are `AlertBadge`s;
   files kept after a move are listed in muted caption text.
-- `Official LUT packages`: the check state line (muted, or `dangerColor` on a
-  failed check) with `Check again`, then one bordered row per package: name,
-  status, `%n LUTs · size download · revision` in `dataFontFamily`, a
-  determinate `ThemedProgressBar` while downloading (indeterminate while
-  verifying and installing), the row error in `dangerColor`, and at most one
-  action button (`accent`; `Retry` uses the normal kind) plus Cancel for the
-  running row. No pills, badges, or status dots.
+- `Official LUT packages`: a failed check is an `AlertBadge` beside
+  `Check again`, then one bordered card per package: name, status, LUT count,
+  revision, and size, a determinate `ThemedProgressBar` while downloading
+  (indeterminate while verifying, installing, and removing), the card error as
+  an `AlertBadge`, and at most one action button (`accent`; `Retry` uses the
+  normal kind) plus Cancel for the running card. An installed card adds the
+  shared `panel_icons/trash.svg` as an `IconButton` in the GitHub action's
+  chrome (tooltip `Remove package`); it opens an inline confirmation on the
+  card: caption text, an `AlertBadge` stating that photos with these LUTs
+  applied lose that look, then `Keep` and a `danger` `Remove`. Installed packages the feed does not
+  list get a card with status `Installed` so they can still be removed.
 
 ### Manual review
 
-Check both themes: package rows in every status, a failed check, a long
-Unicode root path, the move confirmation with and without an error, and a
-running move with Cancel.
+Check both themes: package cards in every status, a failed check, a long
+Unicode root path, the move confirmation with and without an error, a running
+move with Cancel, the removal confirmation, and a removal error badge.
 
 ## Welcome surface (welcome overview plan Phase 2)
 

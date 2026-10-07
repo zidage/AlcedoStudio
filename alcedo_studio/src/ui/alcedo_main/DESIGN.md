@@ -10,7 +10,7 @@ Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `DialogActionButton.qml`, `IconButton.qml`, `SegmentedCardSwitcher.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
 `AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
-`SkeletonBlock.qml`
+`SkeletonBlock.qml`, `AlertBadge.qml`
 
 Per-file decisions: `docs/VI/README.md`. That catalog specializes this global
 system for individual QML files and is updated with each approved visual change.
@@ -95,6 +95,25 @@ A reference image, an existing component, or a data type does not give this
 permission. Use plain text, an icon, a standard action, or layout structure by
 default. Do not copy an existing approved pill or badge into a new surface
 without an explicit user request.
+
+The one standing exception is the alert badge below: the user requested it for
+every warning and error message.
+
+### Alert badges: warning and error messages
+
+Every warning or error message (a failed operation, a missing file, a rejected
+request, an invalid entry) is shown with the shared `AlertBadge.qml`: a
+`alertBadgeFillColor` badge (`badgeRadius`, `spaceSm` / `spaceXs` padding) with
+`alertBadgeTextColor` (white) caption text in `fontWeightStrong`. The text wraps
+and the badge hides itself while the text is empty. Do not paint a warning or
+error sentence in `dangerColor` text: red text on the dark surfaces is hard to
+read. Neutral status (loading, empty states, hints, the reason an action is
+unavailable) stays muted body text, not a badge.
+
+This rule applies to every new or changed message. Existing `dangerColor` text
+in files a change does not touch has not been converted yet; convert it when
+the file is next changed. `dangerColor` itself remains the token for
+destructive buttons, failure status lamps, and error borders.
 
 ### Hard ban: unrequested status dots
 
@@ -205,6 +224,8 @@ parallel palette to satisfy the policy.
 | Accent secondary | `accentSecondaryColor` | Secondary accent only where explicitly specified; never selected borders or a reason to use Material |
 | Danger | `dangerColor` (`toneWine`) | Destructive emphasis |
 | Danger tint | `dangerTintColor` | Soft danger wells |
+| Alert badge fill | `alertBadgeFillColor` (`dangerColor`) | `AlertBadge.qml` fill for warning and error messages |
+| Alert badge text | `alertBadgeTextColor` (white) | `AlertBadge.qml` message text |
 | Background task finished | `backgroundTaskFinishedColor` | Green status lamp for completed/canceled work |
 | Background task working | `backgroundTaskWorkingColor` | Yellow status lamp for queued/running/canceling work |
 | Background task failed | `backgroundTaskFailedColor` | Red status lamp for failed work |
@@ -873,7 +894,7 @@ cells.
 | --- | --- |
 | Empty | Muted body copy; card surface unchanged |
 | Loading | Muted status label (e.g. viewport “Preparing…”) |
-| Error | `dangerColor` / `dangerTintColor` — no ad-hoc reds |
+| Error | Warning and error messages use `AlertBadge.qml` (white text on `alertBadgeFillColor`), never red text; other error emphasis uses `dangerColor` / `dangerTintColor` — no ad-hoc reds |
 | Disabled | Muted icon/text tint + `enabled: false`; editor shells keep card surface (no parent opacity, no second shell tone) |
 | Selected | Dense rows + segmented controls: `editorListSelectedFillColor` well + `editorListSelectedInkColor` ink. Icon actions outside capsules may use neutral `buttonSelectedFillColor` (fill only). Nodes and established outline-based surfaces use the text-color outline. New or changed Library selection follows the same monochrome policy. No blue frame, tint, slab, glow, or side stripe. |
 | Hover | Quiet `buttonHoveredFillColor` well unless capsule exception applies (Library/Editor and adjustment nav segments: tooltip only) |
@@ -1011,6 +1032,7 @@ row delegate and arrow affordance automatically.
 | `AppContextMenu.qml` | Shared dark popup menu shell (`Menu` + `AppMenuItem` delegate, fade transition, `openAt`) |
 | `AppMenuItem.qml` | Shared dark menu row (state gutter, wrapping label, sub-menu arrow, hover wash) |
 | `AppMenuSeparator.qml` | Shared 1 px menu group divider |
+| `AlertBadge.qml` | Warning and error message: wrapped white caption text on an `alertBadgeFillColor` badge; hidden while empty |
 | `SkeletonBlock.qml` | Content placeholder: `bgBaseColor` block with the moving `hoverColor` band (Motion); `animated: false` draws a static tile |
 
 ---

@@ -38,6 +38,9 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor accentSecondaryColor READ accentSecondaryColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dangerColor READ dangerColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dangerTintColor READ dangerTintColor NOTIFY ThemeChanged)
+  /// Warning and error messages: AlertBadge.qml fill and text (DESIGN.md "Alert badges").
+  Q_PROPERTY(QColor alertBadgeFillColor READ alertBadgeFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor alertBadgeTextColor READ alertBadgeTextColor NOTIFY ThemeChanged)
   Q_PROPERTY(
       QColor backgroundTaskFinishedColor READ backgroundTaskFinishedColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor backgroundTaskWorkingColor READ backgroundTaskWorkingColor NOTIFY ThemeChanged)
@@ -299,6 +302,8 @@ class AppTheme final : public QObject {
   auto        accentSecondaryColor() const -> QColor;
   auto        dangerColor() const -> QColor;
   auto        dangerTintColor() const -> QColor;
+  auto        alertBadgeFillColor() const -> QColor;
+  auto        alertBadgeTextColor() const -> QColor;
   auto        backgroundTaskFinishedColor() const -> QColor;
   auto        backgroundTaskWorkingColor() const -> QColor;
   auto        backgroundTaskFailedColor() const -> QColor;

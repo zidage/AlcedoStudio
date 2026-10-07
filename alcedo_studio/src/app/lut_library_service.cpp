@@ -333,6 +333,10 @@ void LutLibraryService::ConvertLegacyFavorites() {
 
 auto LutLibraryService::root_path() const -> QString { return ToQString(Root()); }
 
+auto LutLibraryService::user_directory_path() const -> QString {
+  return ToQString((Root() / LutPathFromUtf8(kLutUserImportDirectoryName)).make_preferred());
+}
+
 auto LutLibraryService::ReadEntry(std::string_view                                   relative_path,
                                   const std::function<void(const LutLibraryEntry&)>& visitor) const
     -> bool {
@@ -764,6 +768,44 @@ auto LutLibraryService::InstallPackage(LutPackageInstallRequest request) -> Stat
       });
 }
 
+auto LutLibraryService::RemovePackage(std::string_view package_id) -> Status {
+  const auto installed = std::find_if(
+      PackageReceipts().begin(), PackageReceipts().end(),
+      [&](const LutPackageReceipt& receipt) { return receipt.package_id == package_id; });
+  if (!IsLutPackageId(package_id) || installed == PackageReceipts().end()) {
+    return Status::kInvalidRequest;
+  }
+  const fs::path root    = Root();
+  const unsigned workers = options_.scan_worker_count;
+  return Begin(
+      Operation::kRemovePackage,
+      [this, root, workers, id = std::string(package_id)](const std::atomic<bool>&) -> Completion {
+        OperationResult result{.operation = Operation::kRemovePackage};
+        const fs::path  receipt = root / LutPathFromUtf8(kLutPackagesDirectoryName) /
+                                 LutPathFromUtf8(id) / LutPathFromUtf8(kLutPackageReceiptFileName);
+        // Deleting the receipt is the commit point: the scan no longer lists the content.
+        if (std::string error = options_.file_operations.remove_file(receipt); !error.empty()) {
+          result.status  = Status::kIoError;
+          result.message = "The LUT package was not removed: " + error;
+          return [this, result] { Finish(result); };
+        }
+        auto scanned  = std::make_shared<LutLibraryInventory>(ScanLutLibraryRoot(root, workers));
+        auto receipts = std::make_shared<std::vector<LutPackageReceipt>>(ReadReceipts(root));
+        if (std::string error = options_.file_operations.write_inventory(root, *scanned);
+            !error.empty()) {
+          result.status  = Status::kPersistenceError;
+          result.message = "The LUT package is removed; an inventory refresh is required: " + error;
+          return [this, result] { Finish(result); };
+        }
+        return [this, result, scanned, receipts]() mutable {
+          result.affected_paths       = PublishInventory(std::move(*scanned), std::move(*receipts));
+          // Renders no longer resolve to the package; its content is retired next.
+          pending_content_retirement_ = true;
+          Finish(std::move(result));
+        };
+      });
+}
+
 void LutLibraryService::RetireReplacedPackageContent() {
   const fs::path root    = Root();
   const unsigned workers = options_.scan_worker_count;
@@ -844,6 +886,8 @@ auto LutLibraryService::operation_name() const -> QString {
       return QStringLiteral("installPackage");
     case Operation::kRetirePackageContent:
       return QStringLiteral("retirePackageContent");
+    case Operation::kRemovePackage:
+      return QStringLiteral("removePackage");
   }
   return {};
 }
@@ -909,6 +953,21 @@ auto LutLibraryService::OpenRootDirectory() -> bool {
       fs::is_directory(Root(), error) && options_.open_url(LutLibraryDirectoryUrl(Root()));
   if (!opened) {
     last_error_ = tr("The LUT folder could not be opened: %1").arg(root_path());
+    emit OperationStateChanged();
+  }
+  return opened;
+}
+
+auto LutLibraryService::openUserDirectory() -> bool {
+  const fs::path  directory = Root() / LutPathFromUtf8(kLutUserImportDirectoryName);
+  std::error_code error;
+  if (fs::is_directory(Root(), error) && !fs::exists(directory, error)) {
+    fs::create_directories(directory, error);
+  }
+  const bool opened =
+      fs::is_directory(directory, error) && options_.open_url(LutLibraryDirectoryUrl(directory));
+  if (!opened) {
+    last_error_ = tr("The LUT folder could not be opened: %1").arg(user_directory_path());
     emit OperationStateChanged();
   }
   return opened;

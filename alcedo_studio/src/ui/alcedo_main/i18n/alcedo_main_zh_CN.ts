@@ -1361,8 +1361,8 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>General</source>
-        <translation>通用</translation>
+        <source>User</source>
+        <translation>用户</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -2917,16 +2917,6 @@ Original source files on disk will be kept.</source>
     <name>EditorLutBrowserPanel</name>
     <message>
         <location filename="../qml/EditorLutBrowserPanel.qml" line="+1"/>
-        <source>Hide filters</source>
-        <translation>隐藏筛选</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Show filters</source>
-        <translation>显示筛选</translation>
-    </message>
-    <message>
-        <location line="+1"/>
         <source>Search LUTs</source>
         <translation>搜索 LUT</translation>
     </message>
@@ -2969,6 +2959,41 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>List view</source>
         <translation>列表视图</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show all LUTs</source>
+        <translation>显示全部 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show favorites only</source>
+        <translation>仅显示收藏</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Category</source>
+        <translation>类别</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Source</source>
+        <translation>来源</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Brand</source>
+        <translation>品牌</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Print</source>
+        <translation>印片</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear filters</source>
+        <translation>清除筛选</translation>
     </message>
 </context>
 <context>
@@ -3035,54 +3060,6 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
-    <name>EditorLutFilterCard</name>
-    <message>
-        <location filename="../qml/EditorLutFilterCard.qml" line="+1"/>
-        <source>Show less</source>
-        <translation>收起</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Show all %1</source>
-        <translation>显示全部 %1 项</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Filters</source>
-        <translation>筛选</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Clear</source>
-        <translation>清除</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Clear filters</source>
-        <translation>清除筛选</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Category</source>
-        <translation>类别</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Source</source>
-        <translation>来源</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Brand</source>
-        <translation>品牌</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Print</source>
-        <translation>印片</translation>
-    </message>
-</context>
-<context>
     <name>EditorLutResultCard</name>
     <message>
         <location filename="../qml/EditorLutResultCard.qml" line="+1"/>
@@ -3126,18 +3103,8 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>Open LUT folder</source>
-        <translation>打开 LUT 文件夹</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Applies to</source>
-        <translation>应用到</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>No LUT applied</source>
-        <translation>未应用 LUT</translation>
+        <source>Open user LUT folder</source>
+        <translation>打开用户 LUT 文件夹</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -3171,8 +3138,8 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>Download the official LUT packages in Settings, import .cube files, or copy them into the LUT folder and refresh.</source>
-        <translation>在设置中下载官方 LUT 包，导入 .cube 文件，或将其复制到 LUT 文件夹后刷新。</translation>
+        <source>Download the official LUT packages in Settings, import .cube files, or copy them into the user LUT folder and refresh.</source>
+        <translation>在设置中下载官方 LUT 包、导入 .cube 文件，或将文件复制到用户 LUT 文件夹后刷新。</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -3196,21 +3163,6 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>%1 of %2 LUTs</source>
-        <translation>%1 / %2 个 LUT</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>1 LUT</source>
-        <translation>1 个 LUT</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>%1 LUTs</source>
-        <translation>%1 个 LUT</translation>
-    </message>
-    <message>
-        <location line="+1"/>
         <source>Remove from favorites</source>
         <translation>取消收藏</translation>
     </message>
@@ -3218,6 +3170,25 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>Add to favorites</source>
         <translation>加入收藏</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Put your own .cube files in the user folder of the LUT library:
+%1
+Refresh the library afterwards; they are listed under the User category. Import LUTs copies files there for you.</source>
+        <translation>请将你自己的 .cube 文件放在 LUT 库的用户文件夹中：
+%1
+放入后刷新 LUT 库，它们会列在“用户”类别下。“导入 LUT”会自动把文件复制到这里。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 applied to %2</source>
+        <translation>%1 应用于 %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose a LUT to apply to %1</source>
+        <translation>选择要应用于 %1 的 LUT</translation>
     </message>
 </context>
 <context>
@@ -5779,6 +5750,46 @@ Create a new layer above it and draw the Mask there?</source>
         <location line="+1"/>
         <source>View the original project on GitHub</source>
         <translation>在 GitHub 上查看原项目</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Removing a LUT package…</source>
+        <translation>正在移除 LUT 包…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Removing…</source>
+        <translation>正在移除…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Installed</source>
+        <translation>已安装</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove this package?</source>
+        <translation>要删除这个 LUT 包吗？</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>After removal, photos that use LUTs from this package lose that look.</source>
+        <translation>删除后，应用该包内 LUT 的照片将失去对应的效果。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove package</source>
+        <translation>移除 LUT 包</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Keep</source>
+        <translation>保留</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove</source>
+        <translation>移除</translation>
     </message>
 </context>
 <context>

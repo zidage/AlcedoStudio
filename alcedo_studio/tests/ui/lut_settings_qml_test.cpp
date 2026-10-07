@@ -41,6 +41,7 @@ extern "C" {
 #include <ed25519.h>
 }
 
+#include "app/lut_library_inventory.hpp"
 #include "app/lut_library_service.hpp"
 #include "app/lut_package_service.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
@@ -403,6 +404,76 @@ TEST(LutSettingsQmlTest, PackageRowsStartOnlyTheChosenDownloadAndOfferCancelAndR
   LutSettingsHarness::Press(action);
   ASSERT_EQ(harness.downloads_->started_urls.size(), 2u);
   EXPECT_EQ(harness.downloads_->started_urls.back(), harness.downloads_->started_urls.front());
+  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+}
+
+TEST(LutSettingsQmlTest, InstalledPackageIsRemovedOnlyAfterConfirmation) {
+  LutSettingsHarness harness;
+  ASSERT_NE(harness.dialog(), nullptr) << harness.warnings_.join('\n').toStdString();
+  // An installed package: its receipt names one content directory with one LUT.
+  const std::string content = std::string("packages/") + kSpectralId + "/content/r1";
+  {
+    fs::create_directories(harness.root_ / content);
+    std::ofstream cube(harness.root_ / content / "look.cube", std::ios::binary);
+    cube << "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+  }
+  alcedo::LutPackageReceipt receipt;
+  receipt.package_id        = kSpectralId;
+  receipt.content_directory = content;
+  receipt.revision          = "r1";
+  ASSERT_TRUE(alcedo::WriteLutPackageReceiptFile(harness.root_, receipt).empty());
+  ASSERT_TRUE(harness.library()->refresh());
+  ASSERT_TRUE(WaitUntil([&] {
+    return !harness.library()->busy() && harness.library()->PackageReceipts().size() == 1;
+  }));
+  ASSERT_EQ(harness.library()->entry_count(), 1);
+
+  harness.Open(kLutCategory);
+  ASSERT_TRUE(harness.WaitForCheck());
+  ProcessEvents(100);
+  const QString spectral    = QString::fromLatin1(kSpectralId);
+  const QString spektrafilm = QString::fromLatin1(kSpektrafilmId);
+  // Only the installed package offers Remove.
+  EXPECT_FALSE(
+      harness.item(QStringLiteral("lutSettingsPackageRemove:") + spektrafilm)->isVisible());
+  QQuickItem* remove  = harness.item(QStringLiteral("lutSettingsPackageRemove:") + spectral);
+  QQuickItem* confirm = harness.item(QStringLiteral("lutSettingsPackageRemoveConfirm:") + spectral);
+  ASSERT_NE(confirm, nullptr);
+  EXPECT_FALSE(confirm->isVisible());
+
+  // Remove is the shared trash glyph.
+  ASSERT_NE(remove, nullptr);
+  EXPECT_EQ(remove->property("iconSrc").toString(), QStringLiteral("qrc:/panel_icons/trash.svg"));
+
+  // Remove asks first and warns that photos lose the look; Keep changes nothing.
+  LutSettingsHarness::Press(remove);
+  EXPECT_TRUE(confirm->isVisible());
+  QQuickItem* warning =
+      harness.item(QStringLiteral("lutSettingsPackageRemoveWarning:") + spectral);
+  ASSERT_NE(warning, nullptr);
+  EXPECT_TRUE(warning->isVisible());
+  EXPECT_EQ(Text(warning),
+            PanelText("After removal, photos that use LUTs from this package lose that look."));
+  EXPECT_EQ(harness.library()->PackageReceipts().size(), 1u);
+  LutSettingsHarness::Press(
+      harness.item(QStringLiteral("lutSettingsPackageRemoveKeep:") + spectral));
+  EXPECT_FALSE(confirm->isVisible());
+  EXPECT_EQ(harness.library()->PackageReceipts().size(), 1u);
+
+  // Confirmed, the package leaves the library and the disk; the card offers the download.
+  LutSettingsHarness::Press(remove);
+  LutSettingsHarness::Press(
+      harness.item(QStringLiteral("lutSettingsPackageRemoveConfirmButton:") + spectral));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return !harness.library()->busy() && harness.library()->PackageReceipts().empty(); }));
+  ProcessEvents(100);
+  EXPECT_EQ(harness.library()->entry_count(), 0);
+  EXPECT_FALSE(fs::exists(harness.root_ / "packages" / kSpectralId))
+      << harness.library()->last_error().toStdString();
+  EXPECT_FALSE(confirm->isVisible());
+  EXPECT_FALSE(remove->isVisible());
+  EXPECT_EQ(Text(harness.item(QStringLiteral("lutSettingsPackageAction:") + spectral)),
+            PanelText("Download"));
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 

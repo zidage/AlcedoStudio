@@ -107,6 +107,8 @@ enum class LutPackageStatus {
   kDownloading,
   kVerifying,
   kInstalling,
+  /// The installed package is being removed (LutLibraryService::RemovePackage).
+  kRemoving,
   kError
 };
 
@@ -182,8 +184,11 @@ class LutPackageService final : public QObject {
   /// One map per listed package for Settings: `id`, `name` (feed name, else the ID),
   /// `revision`, `installedRevision`, `fileCount`, `installedFileCount`, `archiveBytes`,
   /// `status` (LutPackageStatus name), `action` ("", "install", "update", "repair",
-  /// "retry"), `busy` (a transfer stage runs), `cancelable`, `localVerificationComplete`,
-  /// `progress` (0-1, download), and `error`.
+  /// "retry"), `busy` (a transfer stage or the removal runs), `cancelable`, `removable`
+  /// (installed and no package action or check runs), `localVerificationComplete`,
+  /// `progress` (0-1, download), and `error`. Installed packages the feed does not list
+  /// (the feed was not checked, failed, or dropped them) follow with status `installed`,
+  /// so they can still be removed.
   [[nodiscard]] auto packages() const -> QVariantList;
   /// Scoped const read of one package; nullptr when the feed does not list it.
   [[nodiscard]] auto Package(const QString& package_id) const -> const PackageState*;
@@ -200,12 +205,17 @@ class LutPackageService final : public QObject {
   auto               InstallPackage(const QString& package_id) -> bool;
   /// Cancel a download or a pre-commit installation of @p package_id.
   auto               CancelInstall(const QString& package_id) -> bool;
+  /// Remove the installed package @p package_id through the library
+  /// (LutLibraryService::RemovePackage). Works without a feed check. Returns false (with the
+  /// package error set) while another package action, a check, or a library operation runs.
+  auto               RemovePackage(const QString& package_id) -> bool;
   /// Cancel an active download and ignore later completions. Idempotent.
   void               Shutdown();
 
   Q_INVOKABLE bool   checkPackages() { return CheckPackages(); }
   Q_INVOKABLE bool   installPackage(const QString& id) { return InstallPackage(id); }
   Q_INVOKABLE bool   cancelInstall(const QString& id) { return CancelInstall(id); }
+  Q_INVOKABLE bool   removePackage(const QString& id) { return RemovePackage(id); }
 
  signals:
   void StateChanged();
@@ -239,6 +249,12 @@ class LutPackageService final : public QObject {
   QString                   active_request_id_;
   bool                      activation_pending_ = false;
   bool                      activating_         = false;
+  /// The active package action is a removal, not an installation.
+  bool                      removing_           = false;
+  /// Last failed removal. Kept apart from PackageState::error, whose Error status offers
+  /// Retry (a reinstallation); a removal failure leaves the package's status as it was.
+  QString                   removal_error_package_id_;
+  QString                   removal_error_;
   bool                      checking_           = false;
   bool                      shut_down_          = false;
 };

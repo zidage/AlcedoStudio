@@ -123,7 +123,9 @@ struct LutPackageContentRetirement {
 /// numeric suffix on a name conflict) so that its bytes survive as a user entry.
 /// Files that still declare `origin: alcedo` are removed with their directory;
 /// no user copy is made. A package whose receipt cannot be read is left
-/// unchanged. Blocks; must not run on the GUI thread.
+/// unchanged. A package without a receipt (removed, or never committed) loses all of its
+/// content, and its `packages/<id>/` folder is removed once empty.
+/// Blocks; must not run on the GUI thread.
 [[nodiscard]] auto RetireInactiveLutPackageContent(const std::filesystem::path& root)
     -> LutPackageContentRetirement;
 

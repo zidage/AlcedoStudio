@@ -4,13 +4,15 @@
 
 // LUT browser page (LUT library plan L6A): loads production EditorLutBrowserPanel.qml from the
 // source tree over a real LutLibraryService, LutLibraryModel, and LutLibraryController, and checks
-// the tiles, titles, filter rows, and tile application through the page's own functions. Pointer
-// delivery is not used: offscreen input is unreliable, and the owners are covered by C++ tests.
+// the tiles, titles, filter combo boxes, and tile application through the page's own functions.
+// Pointer delivery is not used: offscreen input is unreliable, and the owners are covered by C++
+// tests.
 
 #include <gtest/gtest.h>
 
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFont>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
@@ -21,6 +23,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVariant>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -232,21 +235,58 @@ auto TitleLabelOf(QQuickItem* tile) -> QQuickItem* {
   return ChildNamed(tile, QStringLiteral("editorLutTileTitle"));
 }
 
+/// Index of the listed choice with @p value in a filter combo box, or -1.
+auto ChoiceIndex(QQuickItem* combo, const QString& value) -> int {
+  const QVariantList choices = combo->property("shownChoices").toList();
+  for (int i = 0; i < choices.size(); ++i) {
+    if (choices[i].toMap().value(QStringLiteral("value")).toString() == value) return i;
+  }
+  return -1;
+}
+
+/// Activate the choice with @p value, as choosing it in the popup does.
+auto ChooseFilter(QQuickItem* combo, const QString& value) -> bool {
+  const int index = ChoiceIndex(combo, value);
+  return index >= 0 && QMetaObject::invokeMethod(combo, "activated", Q_ARG(int, index));
+}
+
 }  // namespace
 
-TEST(EditorLutBrowserPanelQmlTest, BrowserLoadsFilterCardAndOneTilePerResultWithoutWarnings) {
+TEST(EditorLutBrowserPanelQmlTest, BrowserLoadsFilterBarAndOneTilePerResultWithoutWarnings) {
   BrowserHarness h;
   ASSERT_NE(h.window, nullptr) << h.Warnings();
   ASSERT_NE(h.panel, nullptr) << h.Warnings();
-  EXPECT_NE(h.Find(QStringLiteral("editorLutFilterCard")), nullptr);
+  EXPECT_NE(h.Find(QStringLiteral("editorLutFilterBar")), nullptr);
+  // The filter sidebar and its counts are gone.
+  EXPECT_EQ(h.Find(QStringLiteral("editorLutFilterCard")), nullptr);
+  EXPECT_EQ(h.Find(QStringLiteral("editorLutFilterToggle")), nullptr);
+  // Every combo box at All shows its dimension name.
+  for (const auto& [name, title] :
+       {std::pair{"editorLutCategoryFilter", "Category"},
+        std::pair{"editorLutSourceFilter", "Source"}, std::pair{"editorLutBrandFilter", "Brand"},
+        std::pair{"editorLutPrintFilter", "Print"}}) {
+    QQuickItem* combo = h.Find(QString::fromLatin1(name));
+    ASSERT_NE(combo, nullptr) << name;
+    EXPECT_TRUE(combo->isVisible()) << name;
+    EXPECT_EQ(combo->property("displayText").toString(), QString::fromLatin1(title)) << name;
+  }
+  // The footer hint names the user folder.
+  QQuickItem* hint = h.Find(QStringLiteral("editorLutUserFolderHint"));
+  ASSERT_NE(hint, nullptr);
+  EXPECT_TRUE(
+      hint->property("text").toString().contains(h.library.Service()->user_directory_path()));
   EXPECT_NE(h.Find(QStringLiteral("editorLutSearchInput")), nullptr);
-  EXPECT_NE(h.Find(QStringLiteral("editorLutTargetIndicator")), nullptr);
+  // No target block above the tiles and no LUT count: the footer names the target.
+  EXPECT_EQ(h.Find(QStringLiteral("editorLutTargetIndicator")), nullptr);
+  EXPECT_EQ(h.Find(QStringLiteral("editorLutCountText")), nullptr);
   ASSERT_EQ(h.browser.count(), 5);
   EXPECT_EQ(h.Tiles().size(), h.browser.count());
   EXPECT_GE(h.result->property("columns").toInt(), 2);
-  auto* count_text = h.Find(QStringLiteral("editorLutCountText"));
-  ASSERT_NE(count_text, nullptr);
-  EXPECT_EQ(count_text->property("text").toString(), QStringLiteral("5 LUTs"));
+  auto* status = h.Find(QStringLiteral("editorLutTargetStatus"));
+  ASSERT_NE(status, nullptr);
+  ASSERT_FALSE(h.target.hasAssociation());
+  EXPECT_EQ(status->property("text").toString(),
+            QStringLiteral("Choose a LUT to apply to %1").arg(h.target.targetNodeName()));
   EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
 }
 
@@ -278,25 +318,28 @@ TEST(EditorLutBrowserPanelQmlTest, TileTitlesAreCompleteAndExcludeThePrint) {
   EXPECT_GE(long_tile->height(), long_title->height());
 }
 
-TEST(EditorLutBrowserPanelQmlTest, FacetRowSelectsItsChoiceAndSecondChoiceReturnsToAll) {
+TEST(EditorLutBrowserPanelQmlTest, CategoryComboSelectsUserAndAllReturnsToEveryLut) {
   BrowserHarness h;
   ASSERT_NE(h.panel, nullptr) << h.Warnings();
-  auto* general = h.Find(QStringLiteral("editorLutFacet_category_general"));
-  ASSERT_NE(general, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(general, "activate"));
+  auto* category = h.Find(QStringLiteral("editorLutCategoryFilter"));
+  ASSERT_NE(category, nullptr);
+  ASSERT_TRUE(ChooseFilter(category, QStringLiteral("general")));
   EXPECT_EQ(h.browser.category(), QStringLiteral("general"));
   ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == h.browser.count(); }, 2000));
   EXPECT_EQ(h.browser.count(), 3);
-  // Brand and Print do not apply to General LUTs.
-  auto* brand = h.Find(QStringLiteral("editorLutBrandSection"));
-  ASSERT_NE(brand, nullptr);
-  EXPECT_FALSE(brand->isVisible());
+  EXPECT_EQ(category->property("displayText").toString(), QStringLiteral("User"));
+  EXPECT_TRUE(h.Find(QStringLiteral("editorLutClearFilters"))->isVisible());
+  // Brand and Print do not apply to User LUTs.
+  EXPECT_FALSE(h.Find(QStringLiteral("editorLutBrandFilter"))->isVisible());
+  EXPECT_FALSE(h.Find(QStringLiteral("editorLutPrintFilter"))->isVisible());
 
-  general = h.Find(QStringLiteral("editorLutFacet_category_general"));
-  ASSERT_NE(general, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(general, "activate"));
+  ASSERT_TRUE(ChooseFilter(category, QStringLiteral("all")));
   EXPECT_EQ(h.browser.category(), QStringLiteral("all"));
   EXPECT_EQ(h.browser.count(), 5);
+  EXPECT_EQ(category->property("displayText").toString(), QStringLiteral("Category"));
+  EXPECT_FALSE(h.Find(QStringLiteral("editorLutClearFilters"))->isVisible());
+  EXPECT_TRUE(h.Find(QStringLiteral("editorLutBrandFilter"))->isVisible());
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
 }
 
 TEST(EditorLutBrowserPanelQmlTest, TileActivationTogglesTheTargetLutOnlyWhenATargetExists) {
@@ -313,6 +356,14 @@ TEST(EditorLutBrowserPanelQmlTest, TileActivationTogglesTheTargetLutOnlyWhenATar
   ASSERT_EQ(h.source.ApplyQueued(), 1);
   h.target.reload();
   EXPECT_EQ(h.browser.appliedEntryId(), teal);
+  // The footer names the applied LUT and its node.
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        return h.Find(QStringLiteral("editorLutTargetStatus"))->property("text").toString() ==
+               QStringLiteral("%1 applied to %2")
+                   .arg(h.target.associationName(), h.target.targetNodeName());
+      },
+      2000));
 
   // The applied tile shows an outline, not a filled well.
   QQuickItem* teal_tile = h.TileFor(teal);
@@ -362,35 +413,34 @@ TEST(EditorLutBrowserPanelQmlTest, TileActivationTogglesTheTargetLutOnlyWhenATar
   EXPECT_FALSE(applied.toBool());
   EXPECT_EQ(h.browser.focusedEntryId(), film);
   EXPECT_EQ(h.source.submit_count, submits_before_target_loss);
-  auto* message = h.Find(QStringLiteral("editorLutTargetMessage"));
+  auto* message = h.Find(QStringLiteral("editorLutTargetStatus"));
   ASSERT_NE(message, nullptr);
   EXPECT_TRUE(message->isVisible());
   EXPECT_EQ(message->property("text").toString(), h.target.targetMessage());
   EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
 }
 
-TEST(EditorLutBrowserPanelQmlTest, FavoritesFacetListLayoutAndFilterFold) {
+TEST(EditorLutBrowserPanelQmlTest, FavoritesToggleAndListLayout) {
   BrowserHarness h;
   ASSERT_NE(h.panel, nullptr) << h.Warnings();
   ASSERT_NE(h.result, nullptr) << h.Warnings();
 
-  // Starring through the page updates the Favorites facet; the facet is a filter choice.
+  // Starring through the page, then the toolbar star shows only favorites.
   const QString teal = QStringLiteral("library:general/teal.cube");
   QVariant      starred;
   ASSERT_TRUE(QMetaObject::invokeMethod(h.result, "toggleFavorite",
                                         Q_RETURN_ARG(QVariant, starred), Q_ARG(QVariant, teal)));
   ASSERT_TRUE(starred.toBool());
   EXPECT_TRUE(h.browser.isFavorite(teal));
-  EXPECT_EQ(h.Find(QStringLiteral("editorLutFavoritesOnly")), nullptr);
-  auto* favorites = h.Find(QStringLiteral("editorLutFacet_favorites_favorites"));
+  auto* favorites = h.Find(QStringLiteral("editorLutFavoritesToggle"));
   ASSERT_NE(favorites, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(favorites, "activate"));
+  EXPECT_FALSE(favorites->property("selected").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(favorites, "clicked"));
   EXPECT_TRUE(h.browser.favoritesOnly());
+  EXPECT_TRUE(favorites->property("selected").toBool());
   ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 1; }, 2000));
   EXPECT_EQ(h.Tiles().front()->property("entryId").toString(), teal);
-  favorites = h.Find(QStringLiteral("editorLutFacet_favorites_favorites"));
-  ASSERT_NE(favorites, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(favorites, "activate"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(favorites, "clicked"));
   EXPECT_FALSE(h.browser.favoritesOnly());
   ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 5; }, 2000));
 
@@ -406,91 +456,149 @@ TEST(EditorLutBrowserPanelQmlTest, FavoritesFacetListLayoutAndFilterFold) {
   }
   h.panel->setProperty("viewMode", QStringLiteral("grid"));
   ASSERT_TRUE(WaitUntil([&] { return h.result->property("columns").toInt() >= 2; }, 2000));
-
-  // Folding the filters gives the results the full width.
-  auto* filter_host = h.Find(QStringLiteral("editorLutFilterHost"));
-  ASSERT_NE(filter_host, nullptr);
-  const qreal docked_width = h.result->width();
-  h.panel->setProperty("filtersVisible", false);
-  ASSERT_TRUE(WaitUntil([&] { return !filter_host->isVisible(); }, 2000));
-  EXPECT_GT(h.result->width(), docked_width);
-  EXPECT_NEAR(h.result->x(), 0.0, 0.5);
   EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
 }
 
-TEST(EditorLutBrowserPanelQmlTest, NarrowPageShrinksTilesThenClosesTheFilters) {
+TEST(EditorLutBrowserPanelQmlTest, NarrowPageWrapsTheFilterRowAndKeepsTheResultsFullWidth) {
   BrowserHarness h;
   ASSERT_NE(h.panel, nullptr) << h.Warnings();
-  auto* filter_host = h.Find(QStringLiteral("editorLutFilterHost"));
-  ASSERT_NE(filter_host, nullptr);
-  const int min_tile = AppTheme::Instance().editorLutTileMinWidth();
-  auto tiles_have_width = [&](qreal below) {
-    const QList<QQuickItem*> tiles = h.Tiles();
-    if (tiles.isEmpty()) return false;
-    for (QQuickItem* tile : tiles) {
-      if (tile->width() <= 0.0 || tile->width() >= below) return false;
-    }
-    return true;
-  };
+  auto* grid = h.Find(QStringLiteral("editorLutFilterGrid"));
+  ASSERT_NE(grid, nullptr);
+  // Wide: the four combo boxes share one row.
+  ASSERT_TRUE(WaitUntil([&] { return grid->property("columns").toInt() == 4; }, 2000));
 
-  // Narrower than one full tile column beside the sidebar: the sidebar stays docked and the
-  // single column shrinks instead of being covered.
-  h.window->setWidth(340);
-  ASSERT_TRUE(WaitUntil([&] { return tiles_have_width(min_tile); }, 2000));
-  EXPECT_TRUE(h.panel->property("filterDocked").toBool());
-  EXPECT_TRUE(h.panel->property("filtersOpen").toBool());
-  EXPECT_TRUE(filter_host->isVisible());
-  EXPECT_EQ(h.result->property("columns").toInt(), 1);
-  EXPECT_GE(h.result->x(), filter_host->width());
-
-  // Narrower still: the sidebar closes and the results take the whole page. The user's
-  // choice is kept, so the sidebar returns once the page is wide enough.
+  // Narrow: two per row, every combo box inside the page, results across the full width.
   h.window->setWidth(280);
-  ASSERT_TRUE(WaitUntil([&] { return !filter_host->isVisible(); }, 2000));
-  EXPECT_FALSE(h.panel->property("filtersOpen").toBool());
-  EXPECT_TRUE(h.panel->property("filtersVisible").toBool());
-  EXPECT_NEAR(h.result->x(), 0.0, 0.5);
-  EXPECT_TRUE(tiles_have_width(h.result->width()));
-  h.window->setWidth(660);
-  ASSERT_TRUE(WaitUntil([&] { return filter_host->isVisible(); }, 2000));
-  EXPECT_TRUE(h.panel->property("filtersOpen").toBool());
-
-  // Opened by hand on a narrow page, the sidebar floats over the results; narrowing the
-  // page again after it docks closes it.
-  h.window->setWidth(280);
-  ASSERT_TRUE(WaitUntil([&] { return !filter_host->isVisible(); }, 2000));
-  ASSERT_TRUE(QMetaObject::invokeMethod(h.panel, "toggleFilters"));
-  ASSERT_TRUE(WaitUntil([&] { return filter_host->isVisible(); }, 2000));
-  auto* filter_card = h.Find(QStringLiteral("editorLutFilterCard"));
-  ASSERT_NE(filter_card, nullptr);
-  EXPECT_TRUE(filter_card->property("floating").toBool());
-  ASSERT_TRUE(QMetaObject::invokeMethod(h.panel, "toggleFilters"));
-  ASSERT_TRUE(WaitUntil([&] { return !filter_host->isVisible(); }, 2000));
-  EXPECT_FALSE(h.panel->property("filtersVisible").toBool());
+  ASSERT_TRUE(WaitUntil([&] { return grid->property("columns").toInt() == 2; }, 2000));
+  ProcessEvents(50);
+  for (const char* name : {"editorLutCategoryFilter", "editorLutSourceFilter",
+                           "editorLutBrandFilter", "editorLutPrintFilter"}) {
+    QQuickItem* combo = h.Find(QString::fromLatin1(name));
+    ASSERT_NE(combo, nullptr) << name;
+    const QRectF in_panel = combo->mapRectToItem(h.panel, combo->boundingRect());
+    EXPECT_GT(combo->width(), 0.0) << name;
+    EXPECT_LE(in_panel.right(), h.panel->width() + 0.5) << name;
+  }
+  const QRectF result = h.result->mapRectToItem(h.panel, h.result->boundingRect());
+  EXPECT_NEAR(result.width(), h.panel->width() - 2 * AppTheme::Instance().spaceSm(), 1.0);
   EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
 }
 
-TEST(EditorLutBrowserPanelQmlTest, PrintSectionListsEachPrintFilm) {
+TEST(EditorLutBrowserPanelQmlTest, PrintComboListsEachPrintAndNoPrint) {
   BrowserHarness h;
   ASSERT_NE(h.panel, nullptr) << h.Warnings();
-  auto* section = h.Find(QStringLiteral("editorLutPrintSection"));
-  ASSERT_NE(section, nullptr);
-  EXPECT_TRUE(section->isVisible());
-  EXPECT_EQ(h.Find(QStringLiteral("editorLutFacet_print_with_print")), nullptr);
-  auto* print = h.Find(QStringLiteral("editorLutFacet_print_kodak_vision_2383"));
+  auto* print = h.Find(QStringLiteral("editorLutPrintFilter"));
   ASSERT_NE(print, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(print, "activate"));
+  EXPECT_TRUE(print->isVisible());
+  const QString no_print = QString::fromLatin1(kLutNoPrintKey);
+  EXPECT_EQ(ChoiceIndex(print, no_print), 1);
+  ASSERT_GE(ChoiceIndex(print, QStringLiteral("kodak_vision_2383")), 0);
+
+  ASSERT_TRUE(ChooseFilter(print, QStringLiteral("kodak_vision_2383")));
   EXPECT_EQ(h.browser.print(), QStringLiteral("kodak_vision_2383"));
   ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 1; }, 2000));
   EXPECT_EQ(h.Tiles().front()->property("entryId").toString(),
             QStringLiteral("library:films/kodak_vision3_250d__kodak_vision_2383.cube"));
-  EXPECT_TRUE(h.Find(QStringLiteral("editorLutClearFilters"))->isVisible());
+  EXPECT_EQ(print->property("displayText").toString(), QStringLiteral("Vision 2383"));
 
-  print = h.Find(QStringLiteral("editorLutFacet_print_kodak_vision_2383"));
-  ASSERT_NE(print, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(print, "activate"));
+  // No print: the film simulation without a print, not the User LUTs.
+  ASSERT_TRUE(ChooseFilter(print, no_print));
+  EXPECT_EQ(h.browser.print(), no_print);
+  ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 1; }, 2000));
+  EXPECT_EQ(h.Tiles().front()->property("entryId").toString(),
+            QStringLiteral("library:films/kodak_vision3_250d.cube"));
+  EXPECT_EQ(print->property("displayText").toString(), QStringLiteral("No print"));
+
+  auto* clear = h.Find(QStringLiteral("editorLutClearFilters"));
+  ASSERT_NE(clear, nullptr);
+  EXPECT_TRUE(clear->isVisible());
+  ASSERT_TRUE(QMetaObject::invokeMethod(clear, "clicked"));
   EXPECT_EQ(h.browser.print(), QString());
   ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 5; }, 2000));
+  EXPECT_EQ(print->property("displayText").toString(), QStringLiteral("Print"));
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
+}
+
+TEST(EditorLutBrowserPanelQmlTest, ChoicesWithoutLutsAreHiddenAndAChosenValueIsNotHighlighted) {
+  BrowserHarness h;
+  ASSERT_NE(h.panel, nullptr) << h.Warnings();
+  auto* category = h.Find(QStringLiteral("editorLutCategoryFilter"));
+  auto* print    = h.Find(QStringLiteral("editorLutPrintFilter"));
+  ASSERT_NE(category, nullptr);
+  ASSERT_NE(print, nullptr);
+  ASSERT_GE(ChoiceIndex(category, QStringLiteral("general")), 0);
+  QObject* border =
+      category->property("background").value<QQuickItem*>()->property("border").value<QObject*>();
+  ASSERT_NE(border, nullptr);
+  const QVariant idle_color = border->property("color");
+
+  // With the 2383 print chosen, no User LUT matches: User leaves the category list while
+  // the model still declares it.
+  ASSERT_TRUE(ChooseFilter(print, QStringLiteral("kodak_vision_2383")));
+  ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 1; }, 2000));
+  EXPECT_EQ(ChoiceIndex(category, QStringLiteral("general")), -1);
+  EXPECT_GE(ChoiceIndex(category, QStringLiteral("film_simulation")), 0);
+  bool declared = false;
+  for (const QVariant& choice : h.browser.categoryChoices()) {
+    declared |= choice.toMap().value(QStringLiteral("value")).toString() == "general";
+  }
+  EXPECT_TRUE(declared);
+
+  // The chosen print keeps the idle border and weight: no outline, no focus border.
+  QObject* print_border =
+      print->property("background").value<QQuickItem*>()->property("border").value<QObject*>();
+  EXPECT_EQ(print_border->property("width").toInt(), 1);
+  EXPECT_EQ(print_border->property("color"), idle_color);
+  EXPECT_FALSE(print->hasActiveFocus());
+  EXPECT_EQ(
+      print->property("contentItem").value<QQuickItem*>()->property("font").value<QFont>().weight(),
+      QFont::Weight(AppTheme::Instance().fontWeightRegular()));
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
+}
+
+TEST(EditorLutBrowserPanelQmlTest, OpeningAndClearingFiltersScrollTheAppliedLutIntoView) {
+  std::vector<std::pair<std::string, std::string>> files;
+  for (int i = 0; i < 40; ++i) {
+    char name[32];
+    std::snprintf(name, sizeof(name), "user/look_%02d.cube", i);
+    files.emplace_back(name, CubeWithMetadata({}));
+  }
+  BrowserHarness h(std::move(files));
+  ASSERT_NE(h.result, nullptr) << h.Warnings();
+  h.panel->setProperty("viewMode", QStringLiteral("list"));
+  const QString last = QStringLiteral("library:user/look_39.cube");
+  QVariant      applied;
+  ASSERT_TRUE(QMetaObject::invokeMethod(h.result, "activateEntry", Q_RETURN_ARG(QVariant, applied),
+                                        Q_ARG(QVariant, last)));
+  ASSERT_EQ(h.source.ApplyQueued(), 1);
+  h.target.reload();
+  ASSERT_EQ(h.browser.appliedEntryId(), last);
+
+  auto* rows = h.Find(QStringLiteral("editorLutTileRows"));
+  ASSERT_NE(rows, nullptr);
+  ASSERT_TRUE(WaitUntil(
+      [&] { return rows->property("contentHeight").toReal() > rows->height() + 100; }, 2000));
+  auto applied_tile_in_view = [&] {
+    QQuickItem* tile = h.TileFor(last);
+    if (tile == nullptr) return false;
+    const QRectF in_rows = tile->mapRectToItem(rows, tile->boundingRect());
+    return in_rows.top() >= -0.5 && in_rows.bottom() <= rows->height() + 0.5;
+  };
+
+  // The rail restores a stored position when the page opens; the applied LUT wins.
+  ASSERT_TRUE(QMetaObject::invokeMethod(h.panel, "restoreListContentY", Q_ARG(QVariant, 0)));
+  ASSERT_TRUE(WaitUntil(applied_tile_in_view, 2000));
+  EXPECT_GT(rows->property("contentY").toReal(), 0.0);
+
+  // Scrolled away under a filter, clearing the filters shows the applied LUT again.
+  rows->setProperty("contentY", 0);
+  ASSERT_FALSE(applied_tile_in_view());
+  h.browser.setSource(QStringLiteral("none"));
+  auto* clear = h.Find(QStringLiteral("editorLutClearFilters"));
+  ASSERT_NE(clear, nullptr);
+  ASSERT_TRUE(WaitUntil([&] { return clear->isVisible(); }, 2000));
+  ASSERT_TRUE(QMetaObject::invokeMethod(clear, "clicked"));
+  ASSERT_TRUE(WaitUntil(applied_tile_in_view, 2000));
   EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
 }
 

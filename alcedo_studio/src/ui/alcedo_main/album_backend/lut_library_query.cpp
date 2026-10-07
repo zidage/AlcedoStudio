@@ -267,9 +267,12 @@ auto LutKeysPassFilter(const LutSearchKeys& keys, bool favorite, const LutFacetF
       keys.brand_key != filter.brand_key) {
     return false;
   }
-  if (film_predicates && applies(LutFacetDimension::kPrint) && !filter.print_key.isEmpty() &&
-      keys.print_key != filter.print_key) {
-    return false;
+  if (film_predicates && applies(LutFacetDimension::kPrint) && !filter.print_key.isEmpty()) {
+    if (filter.print_key == QLatin1String(kLutNoPrintKey)) {
+      if (keys.category != LutCategory::kFilmSimulation || keys.has_print) return false;
+    } else if (keys.print_key != filter.print_key) {
+      return false;
+    }
   }
   if (applies(LutFacetDimension::kFavorites) && filter.favorites_only && !favorite) return false;
   return true;

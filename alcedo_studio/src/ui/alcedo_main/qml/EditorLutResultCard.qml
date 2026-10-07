@@ -4,10 +4,12 @@ import QtQuick.Controls.impl
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
-// LUT browser results (LUT library plan L6A, section 6.5): the target
-// indicator, the filtered LUTs as a grid of tiles or a compact list, and a
-// footer with the count and the library actions. Search, order, and the layout
-// switch live in the page toolbar (EditorLutBrowserPanel).
+// LUT browser results (LUT library plan L6A, section 6.5): the filtered LUTs
+// as a grid of tiles or a compact list, and a footer that names the applied LUT
+// and its Color Grade target, with the library actions. Warnings and errors use
+// AlertBadge. Search, order, and the layout switch live in the page toolbar
+// (EditorLutBrowserPanel). Opening the page and clearing the filters scroll the
+// applied LUT into view (revealAppliedEntry).
 //
 // Data ownership: LutLibraryModel (browser) owns rows, query, and focus;
 // LutLibraryController (target) owns the Color Grade target and its current
@@ -122,6 +124,25 @@ Item {
         tileRows.positionViewAtIndex(Math.floor(row / root.columns), ListView.Contain)
     }
 
+    // Scroll the row of the applied LUT into view; no-op when it is not listed.
+    function revealAppliedEntry() {
+        if (!browser || root.appliedEntryId.length === 0)
+            return false
+        const row = Number(browser.rowOfEntry(root.appliedEntryId))
+        if (row < 0)
+            return false
+        tileRows.positionViewAtIndex(Math.floor(row / root.columns), ListView.Contain)
+        return true
+    }
+
+    // Remove every filter and the query, then show the applied LUT.
+    function clearFiltersAndReveal() {
+        if (!browser)
+            return
+        browser.clearFilters()
+        Qt.callLater(root.revealAppliedEntry)
+    }
+
     function focusResults() {
         tileRows.forceActiveFocus()
     }
@@ -163,110 +184,6 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         spacing: appTheme.spaceSm
-
-        // ── Target indicator ──────────────────────────────────────────────
-        ColumnLayout {
-            objectName: "editorLutTargetIndicator"
-            Layout.fillWidth: true
-            Layout.leftMargin: appTheme.spaceXs
-            Layout.rightMargin: appTheme.spaceXs
-            spacing: appTheme.spaceXs / 2
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: appTheme.spaceSm
-                visible: root.canApply
-
-                Label {
-                    text: qsTr("Applies to")
-                    color: root.colMuted
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                }
-
-                Label {
-                    objectName: "editorLutTargetNodeName"
-                    Layout.fillWidth: true
-                    text: root.target ? String(root.target.targetNodeName) : ""
-                    color: root.colText
-                    wrapMode: Text.Wrap
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                    font.weight: appTheme.fontWeightStrong
-                }
-            }
-
-            Label {
-                objectName: "editorLutTargetMessage"
-                Layout.fillWidth: true
-                visible: !root.canApply
-                text: root.target ? String(root.target.targetMessage) : ""
-                color: root.colMuted
-                wrapMode: Text.Wrap
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: appTheme.spaceSm
-                visible: !!root.target && root.target.hasImage === true
-                         && String(root.target.targetState) !== "noNode"
-                         && String(root.target.targetState) !== "notColorGrade"
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 0
-
-                    Label {
-                        objectName: "editorLutAssociationName"
-                        Layout.fillWidth: true
-                        text: root.target && root.target.hasAssociation
-                              ? String(root.target.associationName)
-                              : qsTr("No LUT applied")
-                        color: root.target && root.target.hasAssociation ? root.colText : root.colMuted
-                        wrapMode: Text.Wrap
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeBody
-                        font.weight: appTheme.fontWeightRegular
-                    }
-
-                    Label {
-                        objectName: "editorLutAssociationPrint"
-                        Layout.fillWidth: true
-                        visible: text.length > 0
-                        text: root.target ? String(root.target.associationPrintName || "") : ""
-                        color: root.colMuted
-                        wrapMode: Text.Wrap
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeCaption
-                    }
-
-                    Label {
-                        objectName: "editorLutAssociationMissing"
-                        Layout.fillWidth: true
-                        visible: !!root.target && root.target.associationMissing === true
-                        text: qsTr("The LUT file is missing. The photo renders without it until the file returns.")
-                        color: appTheme.dangerColor
-                        wrapMode: Text.Wrap
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeCaption
-                    }
-                }
-
-            }
-
-            Label {
-                objectName: "editorLutApplyError"
-                Layout.fillWidth: true
-                visible: text.length > 0
-                text: root.target ? String(root.target.lastError || "") : ""
-                color: appTheme.dangerColor
-                wrapMode: Text.Wrap
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
-            }
-        }
 
         // ── Tiles (sunken well) ───────────────────────────────────────────
         Rectangle {
@@ -384,7 +301,7 @@ Item {
                     wrapMode: Text.Wrap
                     visible: !(root.libraryBusy && root.totalCount === 0)
                     text: root.totalCount === 0
-                          ? qsTr("Download the official LUT packages in Settings, import .cube files, or copy them into the LUT folder and refresh.")
+                          ? qsTr("Download the official LUT packages in Settings, import .cube files, or copy them into the user LUT folder and refresh.")
                           : qsTr("Change the search or the filters to see more LUTs.")
                     color: root.colMuted
                     font.family: appTheme.uiFontFamily
@@ -405,8 +322,8 @@ Item {
                     DialogActionButton {
                         objectName: "editorLutEmptyOpenFolderButton"
                         visible: root.totalCount === 0 && !!root.library
-                        text: qsTr("Open LUT folder")
-                        onClicked: root.library.openRootDirectory()
+                        text: qsTr("Open user LUT folder")
+                        onClicked: root.library.openUserDirectory()
                     }
                     DialogActionButton {
                         objectName: "editorLutEmptySettingsButton"
@@ -418,22 +335,28 @@ Item {
                         objectName: "editorLutClearSearchButton"
                         visible: root.totalCount > 0
                         text: qsTr("Clear search and filters")
-                        onClicked: root.browser.clearFilters()
+                        onClicked: root.clearFiltersAndReveal()
                     }
                 }
             }
         }
 
-        // ── Footer: errors, result count, and library actions ─────────────
-        Label {
+        // ── Footer: warnings, the applied LUT and its target, library actions ──
+        AlertBadge {
+            objectName: "editorLutAssociationMissing"
+            text: root.target && root.target.associationMissing === true
+                  ? qsTr("The LUT file is missing. The photo renders without it until the file returns.")
+                  : ""
+        }
+
+        AlertBadge {
+            objectName: "editorLutApplyError"
+            text: root.target ? String(root.target.lastError || "") : ""
+        }
+
+        AlertBadge {
             objectName: "editorLutLibraryError"
-            Layout.fillWidth: true
-            visible: text.length > 0
             text: root.libraryError.length > 0 ? root.libraryError : root.favoriteError
-            color: appTheme.dangerColor
-            wrapMode: Text.Wrap
-            font.family: appTheme.uiFontFamily
-            font.pixelSize: appTheme.fontSizeCaption
         }
 
         RowLayout {
@@ -441,19 +364,27 @@ Item {
             Layout.fillWidth: true
             spacing: appTheme.spaceXs
 
+            // The applied LUT and the node it applies to; without a target, the reason.
             Label {
-                objectName: "editorLutCountText"
+                objectName: "editorLutTargetStatus"
+                readonly property bool hasAssociation: !!root.target
+                                                       && root.target.hasAssociation === true
+                readonly property string nodeName: root.target
+                                                   ? String(root.target.targetNodeName || "") : ""
                 Layout.fillWidth: true
                 Layout.leftMargin: appTheme.spaceXs
                 text: root.libraryBusy
                       ? qsTr("Refreshing LUT library")
-                      : (root.resultCount !== root.totalCount
-                         ? qsTr("%1 of %2 LUTs").arg(root.resultCount).arg(root.totalCount)
-                         : (root.totalCount === 1 ? qsTr("1 LUT")
-                                                  : qsTr("%1 LUTs").arg(root.totalCount)))
-                color: root.colMuted
-                elide: Text.ElideRight
-                font.family: appTheme.dataFontFamily
+                      : (!root.canApply
+                         ? (root.target ? String(root.target.targetMessage || "") : "")
+                         : (hasAssociation
+                            ? qsTr("%1 applied to %2").arg(String(root.target.associationName))
+                                                      .arg(nodeName)
+                            : qsTr("Choose a LUT to apply to %1").arg(nodeName)))
+                color: hasAssociation && root.canApply && !root.libraryBusy ? root.colText
+                                                                             : root.colMuted
+                wrapMode: Text.Wrap
+                font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
             }
 
@@ -477,9 +408,19 @@ Item {
                 objectName: "editorLutOpenFolderButton"
                 enabled: !!root.library
                 iconSrc: "qrc:/panel_icons/folder-open.svg"
-                actionName: qsTr("Open LUT folder")
+                actionName: qsTr("Open user LUT folder")
                 // A rejected dispatch sets the library's lastError (shown above).
-                onClicked: root.library.openRootDirectory()
+                onClicked: root.library.openUserDirectory()
+            }
+
+            // Where the user's own LUT files go.
+            EditorInfoHint {
+                objectName: "editorLutUserFolderHint"
+                Layout.alignment: Qt.AlignVCenter
+                Layout.rightMargin: appTheme.spaceXs
+                visible: !!root.library
+                text: qsTr("Put your own .cube files in the user folder of the LUT library:\n%1\nRefresh the library afterwards; they are listed under the User category. Import LUTs copies files there for you.")
+                      .arg(root.library ? String(root.library.userDirectoryPath) : "")
             }
         }
     }
@@ -580,15 +521,9 @@ Item {
                 font.pixelSize: appTheme.fontSizeCaption
             }
 
-            Label {
+            AlertBadge {
                 Layout.fillWidth: true
-                visible: tile.statusText.length > 0
-                horizontalAlignment: tile.textAlignment
-                wrapMode: Text.Wrap
                 text: tile.statusText
-                color: appTheme.dangerColor
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
             }
         }
 

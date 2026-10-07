@@ -477,6 +477,13 @@ auto RetireInactiveLutPackageContent(const fs::path& root) -> LutPackageContentR
     for (const fs::path& directory : retired) {
       RetireContentDirectory(root, package_id, directory, &result);
     }
+    // A removed package leaves no receipt: drop its emptied folders. fs::remove keeps a
+    // directory that still holds files.
+    if (receipt == receipts.end()) {
+      std::error_code ignored;
+      fs::remove(content_parent, ignored);
+      fs::remove(package->path(), ignored);
+    }
   }
   return result;
 }

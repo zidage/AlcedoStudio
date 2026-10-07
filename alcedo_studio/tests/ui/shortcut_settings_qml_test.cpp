@@ -354,6 +354,7 @@ TEST(ShortcutSettingsQmlTest, KeyboardCategoryIsReachableAndAboutStillOpens) {
   // Reach Keyboard through the real category nav, not a direct index write.
   auto* nav_keyboard = FindItem(settings, QStringLiteral("settingsNavItem:7"));
   ASSERT_NE(nav_keyboard, nullptr);
+  ScrollItemIntoView(harness.window_, QStringLiteral("settingsNavScroll"), nav_keyboard);
   ClickItem(harness.window_, nav_keyboard);
   EXPECT_EQ(settings->property("currentCategory").toInt(), 7);
 
@@ -374,6 +375,8 @@ TEST(ShortcutSettingsQmlTest, KeyboardCategoryIsReachableAndAboutStillOpens) {
   // About moved to index 9 (after LUTs) and still opens.
   auto* nav_about = FindItem(settings, QStringLiteral("settingsNavItem:9"));
   ASSERT_NE(nav_about, nullptr);
+  // The category nav scrolls; About can sit below the fold.
+  ScrollItemIntoView(harness.window_, QStringLiteral("settingsNavScroll"), nav_about);
   ClickItem(harness.window_, nav_about);
   EXPECT_EQ(settings->property("currentCategory").toInt(), 9);
   EXPECT_EQ(page_title->property("text").toString(), DialogText("About"));

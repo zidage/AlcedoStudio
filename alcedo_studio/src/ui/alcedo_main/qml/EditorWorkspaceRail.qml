@@ -32,7 +32,6 @@ Item {
     // LUT browser view state, kept here because the page body unloads on close.
     // The width is the user's drag-resized choice; expandedPanelWidth clamps it.
     property real lutPanelWidth: appTheme.editorLutBrowserPanelWidth
-    property bool lutFiltersVisible: true
     property string lutViewMode: "grid"
     // Widest the expanded panel may be; the workspace keeps its viewport minimum.
     property real maximumPanelWidth: appTheme.editorLutBrowserPanelWidth
@@ -494,9 +493,7 @@ Item {
             theme: root.theme
             editorSession: root.editorSession
             host: root.host
-            filtersVisible: root.lutFiltersVisible
             viewMode: root.lutViewMode
-            onFiltersVisibleChanged: root.lutFiltersVisible = filtersVisible
             onViewModeChanged: root.lutViewMode = viewMode
             Component.onDestruction: {
                 if (root._lastBodyPage === "luts" && listContentY !== undefined)

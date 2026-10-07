@@ -56,6 +56,8 @@ auto StatusName(LutPackageStatus status) -> QString {
       return QStringLiteral("verifying");
     case LutPackageStatus::kInstalling:
       return QStringLiteral("installing");
+    case LutPackageStatus::kRemoving:
+      return QStringLiteral("removing");
     case LutPackageStatus::kError:
       return QStringLiteral("error");
   }
@@ -181,6 +183,7 @@ auto LutPackageActionFor(LutPackageStatus status) -> LutPackageAction {
     case LutPackageStatus::kDownloading:
     case LutPackageStatus::kVerifying:
     case LutPackageStatus::kInstalling:
+    case LutPackageStatus::kRemoving:
       return LutPackageAction::kNone;
   }
   return LutPackageAction::kNone;
@@ -250,8 +253,13 @@ LutPackageService::LutPackageService(LutPackageServiceOptions options, LutLibrar
       !options_.downloader) {
     options_.feed_url.clear();
   }
+  // The receipts follow the inventory; rows of installed packages change with them.
   connect(&library_, &LutLibraryService::InventoryChanged, this, [this] {
-    if (checked()) RecomputeComparisons();
+    if (checked()) {
+      RecomputeComparisons();
+    } else {
+      emit StateChanged();
+    }
   });
   connect(&library_, &LutLibraryService::OperationFinished, this,
           &LutPackageService::OnLibraryOperationFinished);
@@ -278,8 +286,12 @@ auto LutPackageService::enabled() const -> bool { return options_.feed_url.isVal
 
 auto LutPackageService::packages() const -> QVariantList {
   QVariantList list;
+  const auto&  receipts      = library_.PackageReceipts();
+  const bool   can_remove    = !ActionRunning() && !checking_;
+  const auto   removal_error = [this](const QString& package_id) {
+    return package_id == removal_error_package_id_ ? removal_error_ : QString();
+  };
   for (const PackageState& package : packages_) {
-    const auto& receipts = library_.PackageReceipts();
     const auto  receipt  = std::find_if(receipts.begin(), receipts.end(), [&](const auto& item) {
       return item.package_id == package.descriptor.id.toStdString();
     });
@@ -299,11 +311,36 @@ auto LutPackageService::packages() const -> QVariantList {
         {QStringLiteral("action"),
          active || checking_ ? QString() : ActionName(LutPackageActionFor(package.status))},
         {QStringLiteral("busy"), active || IsTransferStage(package.status)},
-        {QStringLiteral("cancelable"), active},
+        {QStringLiteral("cancelable"), active && !removing_},
+        {QStringLiteral("removable"), can_remove && receipt != receipts.end()},
         {QStringLiteral("localVerificationComplete"),
          package.comparison.local_verification_complete},
         {QStringLiteral("progress"), package.progress},
-        {QStringLiteral("error"), package.error}});
+        {QStringLiteral("error"),
+         package.error.isEmpty() ? removal_error(package.descriptor.id) : package.error}});
+  }
+  // Installed packages the feed does not list stay removable without a feed check.
+  for (const LutPackageReceipt& receipt : receipts) {
+    const QString id = QString::fromStdString(receipt.package_id);
+    if (Package(id) != nullptr) continue;
+    const bool active = id == active_package_id_;
+    list.push_back(
+        QVariantMap{{QStringLiteral("id"), id},
+                    {QStringLiteral("name"), id},
+                    {QStringLiteral("revision"), QString()},
+                    {QStringLiteral("installedRevision"), QString::fromStdString(receipt.revision)},
+                    {QStringLiteral("fileCount"), QVariant::fromValue(receipt.file_count)},
+                    {QStringLiteral("installedFileCount"), QVariant::fromValue(receipt.file_count)},
+                    {QStringLiteral("archiveBytes"), QVariant::fromValue(receipt.artifact_size)},
+                    {QStringLiteral("status"), active ? StatusName(LutPackageStatus::kRemoving)
+                                                      : QStringLiteral("installed")},
+                    {QStringLiteral("action"), QString()},
+                    {QStringLiteral("busy"), active},
+                    {QStringLiteral("cancelable"), false},
+                    {QStringLiteral("removable"), can_remove},
+                    {QStringLiteral("localVerificationComplete"), false},
+                    {QStringLiteral("progress"), 0.0},
+                    {QStringLiteral("error"), removal_error(id)}});
   }
   return list;
 }
@@ -466,6 +503,7 @@ auto LutPackageService::InstallPackage(const QString& package_id) -> bool {
   active_request_id_ = request.id;
   package->progress  = 0.0;
   package->error.clear();
+  if (removal_error_package_id_ == package_id) removal_error_package_id_.clear();
   const bool started = options_.downloader->Start(
       request,
       [this, package_id](qint64 downloaded, qint64 total) {
@@ -534,6 +572,16 @@ void LutPackageService::StartActivation(const QString& package_id) {
 void LutPackageService::OnLibraryOperationFinished(LutLibraryService::Operation operation,
                                                    LutLibraryService::Status    status) {
   if (shut_down_) return;
+  if (operation == LutLibraryService::Operation::kRemovePackage && removing_) {
+    removing_ = false;
+    if (status != LutLibraryService::Status::kOk) {
+      removal_error_package_id_ = active_package_id_;
+      removal_error_            = QString::fromStdString(library_.LastResult().message);
+    }
+    active_package_id_.clear();
+    RecomputeComparisons();
+    return;
+  }
   if (activation_pending_ && !activating_) {
     StartActivation(active_package_id_);
     return;
@@ -559,7 +607,7 @@ void LutPackageService::OnLibraryOperationFinished(LutLibraryService::Operation 
 }
 
 auto LutPackageService::CancelInstall(const QString& package_id) -> bool {
-  if (package_id.isEmpty() || package_id != active_package_id_) return false;
+  if (package_id.isEmpty() || package_id != active_package_id_ || removing_) return false;
   if (!active_request_id_.isEmpty()) {
     options_.downloader->Cancel(active_request_id_);
     return true;
@@ -575,6 +623,42 @@ auto LutPackageService::CancelInstall(const QString& package_id) -> bool {
     return true;
   }
   return false;
+}
+
+// ── Removal ─────────────────────────────────────────────────────────────────
+
+auto LutPackageService::RemovePackage(const QString& package_id) -> bool {
+  if (shut_down_ || package_id.isEmpty()) return false;
+  removal_error_package_id_ = package_id;
+  if (ActionRunning() || checking_) {
+    removal_error_ = tr("Another LUT package action is running.");
+    emit PackageChanged(package_id);
+    emit StateChanged();
+    return false;
+  }
+  const LutLibraryService::Status status = library_.RemovePackage(package_id.toStdString());
+  if (status != LutLibraryService::Status::kOk) {
+    removal_error_ =
+        status == LutLibraryService::Status::kBusy
+            ? tr("Another LUT library operation is running. Try again when it finishes.")
+            : tr("This LUT package is not installed.");
+    emit PackageChanged(package_id);
+    emit StateChanged();
+    return false;
+  }
+  removal_error_package_id_.clear();
+  removal_error_.clear();
+  active_package_id_ = package_id;
+  removing_          = true;
+  if (PackageState* package = MutablePackage(package_id); package != nullptr) {
+    package->error.clear();
+    package->progress = 0.0;
+  }
+  SetPackageStatus(package_id, LutPackageStatus::kRemoving);
+  // A package the feed does not list has no PackageState; its row follows StateChanged.
+  emit PackageChanged(package_id);
+  emit StateChanged();
+  return true;
 }
 
 }  // namespace alcedo
