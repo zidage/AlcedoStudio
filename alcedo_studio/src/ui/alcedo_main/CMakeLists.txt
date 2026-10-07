@@ -977,18 +977,7 @@ if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
 
     # Ensure every packaged metallib is built before POST_BUILD copy, even when
     # an intermediate static lib is not linked into a particular configuration.
-    add_dependencies(alcedo_main
-        MetalUtilsShaders
-        MetalGeometryUtilsShaders
-        LensCalibrationMetalShaders
-        ScopeAnalyzerMetalShaders
-        MetalToLinearRefShaders
-        MetalDebayerRcdShaders
-        MetalHighlightReconstructShaders
-        MetalXTransInterpolateShaders
-        MetalCvtRefSpaceShaders
-        MetalDemosaicNetIoShaders
-    )
+    add_dependencies(alcedo_main ${ALCEDO_METAL_SHADER_TARGETS})
 
     # Recreate the directory so it holds exactly ALCEDO_METAL_RUNTIME_LIBS. The bundle install copies
     # this directory, so a metallib removed from the list (for example the archived fused pipeline

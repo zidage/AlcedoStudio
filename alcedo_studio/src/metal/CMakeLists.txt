@@ -177,7 +177,14 @@ if(ALCEDO_METAL_ENABLED)
             VERBATIM
         )
         add_custom_target(${shader_target} DEPENDS "${metallib_file}")
+
+        # Every metallib this function builds ships in the bundle. Registering here keeps the
+        # runtime list from missing a library that a pass loads.
+        set_property(GLOBAL APPEND PROPERTY ALCEDO_METAL_RUNTIME_LIB_FILES "${metallib_file}")
+        set_property(GLOBAL APPEND PROPERTY ALCEDO_METAL_SHADER_TARGETS "${shader_target}")
     endfunction()
+    set_property(GLOBAL PROPERTY ALCEDO_METAL_RUNTIME_LIB_FILES "")
+    set_property(GLOBAL PROPERTY ALCEDO_METAL_SHADER_TARGETS "")
 
     alcedo_add_metal_library(
         MetalUtilsShaders
@@ -369,26 +376,13 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_CVT_REF_SPACE_METALLIB}"
         "${METAL_DEMOSAICNET_IO_METALLIB}"
     )
-    set(ALCEDO_METAL_RUNTIME_LIBS
-        "${METAL_UTILS_METALLIB}"
-        "${METAL_GEOMETRY_UTILS_METALLIB}"
-        "${METAL_LENS_CALIB_METALLIB}"
-        "${METAL_SCOPE_ANALYZER_METALLIB}"
-        "${METAL_TO_LINEAR_REF_METALLIB}"
-        "${METAL_DEBAYER_RCD_METALLIB}"
-        "${METAL_HIGHLIGHT_RECONSTRUCT_METALLIB}"
-        "${METAL_XTRANS_INTERPOLATE_METALLIB}"
-        "${METAL_CVT_REF_SPACE_METALLIB}"
-        "${METAL_DEMOSAICNET_IO_METALLIB}"
-        "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
-        "${METAL_CAMERA_COLOR_METALLIB}"
-        "${METAL_PRIMARY_GRADE_METALLIB}"
-        "${METAL_LOCAL_TONE_METALLIB}"
-        "${METAL_MASK_METALLIB}"
-        "${METAL_DRT_METALLIB}"
-    )
+    get_property(ALCEDO_METAL_RUNTIME_LIBS GLOBAL PROPERTY ALCEDO_METAL_RUNTIME_LIB_FILES)
     set(ALCEDO_METAL_RUNTIME_LIBS "${ALCEDO_METAL_RUNTIME_LIBS}" CACHE INTERNAL
         "Metal shader libraries required at runtime." FORCE
+    )
+    get_property(ALCEDO_METAL_SHADER_TARGETS GLOBAL PROPERTY ALCEDO_METAL_SHADER_TARGETS)
+    set(ALCEDO_METAL_SHADER_TARGETS "${ALCEDO_METAL_SHADER_TARGETS}" CACHE INTERNAL
+        "Targets that build the Metal runtime libraries." FORCE
     )
 
     # Source paths are relative to ALCEDO_SRC_ROOT (this file lives under metal/).
