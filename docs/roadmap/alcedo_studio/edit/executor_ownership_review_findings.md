@@ -2,6 +2,7 @@
 
 - Date: 2026-10-07
 - Status: planned (findings recorded; no fix started)
+- Tracking issue: #297 (each accepted finding is a sub-issue)
 - Reviewed series: #211, #212, #216, #217, #218, #219, #220, #223, #224
   (executor ownership refactor P0 to P8; +20198 / -14118 lines in 292 files)
 - Source revision: `v0.3.2` (`939700f7`)
@@ -98,22 +99,22 @@ Verified source facts:
 
 ## 3. Findings summary
 
-| ID | Severity | Finding | Evidence |
-| --- | --- | --- | --- |
-| H1 | High | Undo, Redo, and history moves run during an open input sequence. The uncommitted value stays in the document, leaves no commit, and goes to other consumers as a committed state. | Source trace |
-| H2 | High | macOS CI runs no Metal test. All Metal evidence of the series is local only. | Source trace (CI configuration) |
-| M1 | Medium | Close with Discard writes the discarded state into the element pipeline JSON. | Source trace |
-| M2 | Medium | The thumbnail of the open image changes only after Save, not after each commit. | Source trace |
-| M3 | Medium | A batch render that fails during GPU execution keeps its GPU resources. | Source trace |
-| M4 | Medium | Copy Adjustments reads the editor image identity and its history in two separate steps. | Source trace |
-| M5 | Medium | The executor binding key and the release order differ from plan §3.3. | Source trace |
-| M6 | Medium | Silent substitutes and swallowed errors break the no-fallback rule. | Source trace |
-| M7 | Medium | Export reports a wrong stage and message when the render fails. | Source trace |
-| M8 | Medium | The GUI thread does storage reads, history replay, and file deletes. | Source trace |
-| M9 | Medium | The frozen-document write check never compiles in CI, and revision reuse has no per-type test. | Coverage gap |
-| L1–L6 | Low | Unused epoch, wrong completion records, terminology, test quality, cost claims, API surface. | Mixed |
-| D1–D4 | Structure | Editor session god object, shared history state, three lease tables, two replay paths. | Maintainability |
-| W1–W3 | Not reachable | Paste and editor open race, lease release race, non-slider input bypass. | Withdrawn |
+| ID | Severity | Finding | Evidence | Issue |
+| --- | --- | --- | --- | --- |
+| H1 | High | Undo, Redo, and history moves run during an open input sequence. The uncommitted value stays in the document, leaves no commit, and goes to other consumers as a committed state. | Source trace | #284 |
+| H2 | High | macOS CI runs no Metal test. All Metal evidence of the series is local only. | Source trace (CI configuration) | #285 |
+| M1 | Medium | Close with Discard writes the discarded state into the element pipeline JSON. | Source trace | #286 |
+| M2 | Medium | The thumbnail of the open image changes only after Save, not after each commit. | Source trace | #287 |
+| M3 | Medium | A batch render that fails during GPU execution keeps its GPU resources. | Source trace | #288 |
+| M4 | Medium | Copy Adjustments reads the editor image identity and its history in two separate steps. | Source trace | #289 |
+| M5 | Medium | The executor binding key and the release order differ from plan §3.3. | Source trace | #290 |
+| M6 | Medium | Silent substitutes and swallowed errors break the no-fallback rule. | Source trace | #291 |
+| M7 | Medium | Export reports a wrong stage and message when the render fails. | Source trace | #292 |
+| M8 | Medium | The GUI thread does storage reads, history replay, and file deletes. | Source trace | #293 |
+| M9 | Medium | The frozen-document write check never compiles in CI, and revision reuse has no per-type test. | Coverage gap | #294 |
+| L1–L6 | Low | Unused epoch, wrong completion records, terminology, test quality, cost claims, API surface. | Mixed | #295 |
+| D1–D4 | Structure | Editor session god object, shared history state, three lease tables, two replay paths. | Maintainability | #296 |
+| W1–W3 | Not reachable | Paste and editor open race, lease release race, non-slider input bypass. | Withdrawn | none |
 
 ## 4. Findings
 
@@ -428,16 +429,16 @@ is correct under the commit rules in Section 1.1. Do not add a consistency mecha
 
 ## 7. Follow-up work order
 
-| Order | Work | Findings | Estimated diff |
-| --- | --- | --- | --- |
-| 1 | Deny history moves during an open input sequence; restore the sequence before any move; add the H1 tests. | H1 | 400 |
-| 2 | Fix the macOS CI label filter; label `ExecutorIsolationTest`. | H2 | 50 |
-| 3 | Stop the element JSON write on release without Save; confirm the WAL behavior on Discard. | M1 | 250 |
-| 4 | Release batch resources on failure; per-backend release tests; correct the binding release order. | M3, M5 | 600 |
-| 5 | Pass the element id to `SnapshotHistorySource`; report render failure in export; remove silent substitutes. | M4, M6, M7 | 500 |
-| 6 | Commit-time thumbnail refresh or a plan correction; move GUI-thread storage work. | M2, M8 | 700 |
-| 7 | Revision and frozen-document tests; delete the unused epoch; correct the completion records. | M9, L1, L2 | 600 |
-| 8 | Editor session and history-port decomposition. | D1–D4 | Plan separately; split into phases of at most 2000 lines. |
+| Order | Work | Findings | Issues | Estimated diff |
+| --- | --- | --- | --- | --- |
+| 1 | Deny history moves during an open input sequence; restore the sequence before any move; add the H1 tests. | H1 | #284 | 400 |
+| 2 | Fix the macOS CI label filter; label `ExecutorIsolationTest`. | H2 | #285 | 50 |
+| 3 | Stop the element JSON write on release without Save; confirm the WAL behavior on Discard. | M1 | #286 | 250 |
+| 4 | Release batch resources on failure; per-backend release tests; correct the binding release order. | M3, M5 | #288, #290 | 600 |
+| 5 | Pass the element id to `SnapshotHistorySource`; report render failure in export; remove silent substitutes. | M4, M6, M7 | #289, #291, #292 | 500 |
+| 6 | Commit-time thumbnail refresh or a plan correction; move GUI-thread storage work. | M2, M8 | #287, #293 | 700 |
+| 7 | Revision and frozen-document tests; delete the unused epoch; correct the completion records. | M9, L1, L2 | #294, #295 | 600 |
+| 8 | Editor session and history-port decomposition. | D1–D4 | #296 | Plan separately; split into phases of at most 2000 lines. |
 
 Before work starts on any item, read `AGENTS.md` and the applicable skills again. Each item needs
 the named tests to fail on `v0.3.2` (or to show the finding is wrong) before the fix lands.
