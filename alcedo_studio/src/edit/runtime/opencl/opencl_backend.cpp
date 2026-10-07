@@ -579,8 +579,7 @@ auto OpenClBackend::CreateSceneWorkImage(std::uint32_t width, std::uint32_t heig
 void OpenClBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
                                       std::span<const std::byte> bytes,
                                       CommandContext&            command_context) {
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("OpenClBackend::UploadBufferRange: injected failure");
   }
   if (bytes.empty()) {
@@ -622,8 +621,7 @@ void OpenClBackend::DownloadBufferRange(const Buffer& buffer, std::uint32_t offs
 
 void OpenClBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
                                     CommandContext& command_context) {
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("OpenClBackend::UploadTexture2D: injected failure");
   }
   RequirePackedTextureBytes(texture, bytes.size());
@@ -793,8 +791,7 @@ auto OpenClBackend::ResolveDeviceMemory(void* device_pointer, std::size_t bytes)
 
 void OpenClBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
                                        CommandContext& command_context) {
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("OpenClBackend::UploadDeviceMemory: injected failure");
   }
   if (bytes.empty()) {
@@ -807,8 +804,7 @@ void OpenClBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> byt
 
 void OpenClBackend::UploadDeviceMemory(void* dst, const HostImagePlane& pixels,
                                        CommandContext& command_context) {
-  if (fail_next_upload_) {
-    fail_next_upload_ = false;
+  if (ConsumeInjectedUploadFailure()) {
     throw std::runtime_error("OpenClBackend::UploadDeviceMemory: injected failure");
   }
   const auto bytes = pixels.Span();
@@ -1197,7 +1193,7 @@ void OpenClBackend::ResetCounters() {
   program_build_baseline_ = SnapshotOpenClApiCounters().program_builds;
 }
 
-void OpenClBackend::FailNextUpload() { fail_next_upload_ = true; }
+void OpenClBackend::FailNextUpload() { FailUploadAfter(0); }
 
 auto OpenClBackend::MaxSlabBytes() const -> std::size_t {
   if (max_slab_bytes_override_ > 0) {

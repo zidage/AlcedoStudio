@@ -52,6 +52,7 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto Device() const -> const Backend& { return backend_; }
 
   [[nodiscard]] auto Parameters() -> ParameterArena<Backend>& { return parameters_; }
+  [[nodiscard]] auto Parameters() const -> const ParameterArena<Backend>& { return parameters_; }
   [[nodiscard]] auto TransientBuffers() -> TransientBufferArena<Backend>& { return transients_; }
   [[nodiscard]] auto TransientBuffers() const -> const TransientBufferArena<Backend>& {
     return transients_;
