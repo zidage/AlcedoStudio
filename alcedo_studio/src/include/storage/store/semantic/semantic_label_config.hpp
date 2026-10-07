@@ -5,9 +5,9 @@
 #pragma once
 
 #include <algorithm>
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <locale>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -60,7 +60,7 @@ inline auto SemanticLabelLanguageForModel(std::string_view profile_id, std::stri
   auto lower = [](std::string_view value) {
     std::string out(value);
     std::ranges::transform(out, out.begin(),
-                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                           [](char ch) { return std::tolower(ch, std::locale::classic()); });
     return out;
   };
   const auto profile = lower(profile_id);
@@ -174,18 +174,21 @@ inline auto DefaultSemanticPhotographyLabelQueries(SemanticLabelLanguage languag
   return DefaultSemanticPhotographyLabelQueries();
 }
 
+/// Trims and lowercases with the classic locale, never the process C locale. Qt sets the user's
+/// locale on macOS and Linux, where <cctype> treats byte 0xA0 as white space. That byte is a
+/// UTF-8 continuation byte (沙漠 ends in 0xA0), so a <cctype> trim cut the label in half and
+/// the label SQL that runs on project open failed with "Invalid unicode".
 inline auto NormalizeSemanticLabelKey(std::string value) -> std::string {
-  const auto first = std::find_if_not(value.begin(), value.end(),
-                                      [](unsigned char ch) { return std::isspace(ch) != 0; });
-  const auto last  = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) {
-                      return std::isspace(ch) != 0;
-                    }).base();
+  const auto& classic  = std::locale::classic();
+  const auto  is_space = [&classic](char ch) { return std::isspace(ch, classic); };
+  const auto  first    = std::find_if_not(value.begin(), value.end(), is_space);
+  const auto  last     = std::find_if_not(value.rbegin(), value.rend(), is_space).base();
   if (first >= last) {
     return {};
   }
   std::string out(first, last);
   std::ranges::transform(out, out.begin(),
-                         [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                         [&classic](char ch) { return std::tolower(ch, classic); });
   return out;
 }
 

@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <clocale>
 #include <cmath>
 #include <filesystem>
 #include <limits>
@@ -429,6 +430,32 @@ TEST_F(SemanticStoreTest, NewProjectSeedsDefaultLabelQueries) {
   EXPECT_EQ(CanonicalSemanticLabel("\xE9\xA3\x8E\xE6\x99\xAF").value_or(""), "landscape");
   EXPECT_EQ(SemanticLabelDisplayText("landscape", SemanticLabelLanguage::kChinese),
             "\xE9\xA3\x8E\xE6\x99\xAF");
+}
+
+// Qt runs the app under the user's UTF-8 locale on macOS, where <cctype> treats 0xA0 as
+// whitespace. 沙漠 ends in byte 0xA0, so a <cctype> trim cut the label in half and the label SQL
+// that opening a project runs failed with "Invalid unicode".
+TEST(SemanticLabelConfigTest, NormalizeKeepsUtf8LabelsIntactUnderUtf8Locale) {
+  const char* previous = std::setlocale(LC_ALL, nullptr);
+  const std::string saved_locale = previous != nullptr ? previous : "C";
+  for (const char* name : {"en_US.UTF-8", "C.UTF-8", "zh_CN.UTF-8", ".UTF8"}) {
+    if (std::setlocale(LC_ALL, name) != nullptr) {
+      break;
+    }
+  }
+
+  const std::string interior = "\xE5\xAE\xA4\xE5\x86\x85";  // 室内
+  const std::string desert   = "\xE6\xB2\x99\xE6\xBC\xA0";  // 沙漠
+  EXPECT_EQ(NormalizeSemanticLabelKey(interior), interior);
+  EXPECT_EQ(NormalizeSemanticLabelKey(desert), desert);
+  EXPECT_EQ(NormalizeSemanticLabelKey(" \tLandscape \n"), "landscape");
+  for (const auto& entry : DefaultSemanticPhotographyLabelDefinitions()) {
+    EXPECT_EQ(NormalizeSemanticLabelKey(entry.chinese_label), entry.chinese_label);
+  }
+
+  std::setlocale(LC_ALL, saved_locale.c_str());
+  EXPECT_EQ(CanonicalSemanticLabel(interior).value_or(""), "interior");
+  EXPECT_EQ(CanonicalSemanticLabel(desert).value_or(""), "desert");
 }
 
 TEST_F(SemanticStoreTest, ActiveModelKeyAndLanguageMetadataAreStoredPerModel) {

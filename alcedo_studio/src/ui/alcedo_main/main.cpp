@@ -28,6 +28,7 @@
 #include <QuickQanava>
 
 #include <exiv2/error.hpp>
+#include <clocale>
 #include <cstdio>
 #include <memory>
 #include <optional>
@@ -245,6 +246,11 @@ int main(int argc, char* argv[]) {
   Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::error);
 
   QApplication app(argc, argv);
+  // QApplication applies the user's locale on macOS and Linux (setlocale(LC_ALL, "")). Keep
+  // number parsing and formatting in the C locale, as Qt recommends: .cube LUT values, search
+  // terms like f/2.8 and lens names all use a decimal point, and strtof/stod/snprintf would
+  // read or write a decimal comma under locales such as de_DE.
+  std::setlocale(LC_NUMERIC, "C");
   const QString log_path = alcedo::diag::InitializeApplicationLogging();
   // Preview timing is a developer diagnostic. Turn it on only when
   // ALCEDO_PREVIEW_PERF_LOG names an output file.

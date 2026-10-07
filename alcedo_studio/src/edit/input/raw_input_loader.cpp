@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <locale>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <stdexcept>
@@ -491,7 +492,7 @@ auto TrimLibRawField(const char* text) -> std::string {
   }
   std::size_t length = std::min(std::strlen(text), static_cast<std::size_t>(256));
   while (length > 0 &&
-         (text[length - 1] == '\0' || std::isspace(static_cast<unsigned char>(text[length - 1])))) {
+         (text[length - 1] == '\0' || std::isspace(text[length - 1], std::locale::classic()))) {
     --length;
   }
   return {text, length};
