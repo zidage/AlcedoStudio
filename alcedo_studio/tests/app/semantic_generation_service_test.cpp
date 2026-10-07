@@ -1155,7 +1155,9 @@ TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
   EXPECT_TRUE(stored_label->second_label_.empty());
 }
 
-TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDisplayText) {
+// A Chinese prompt profile ranks Chinese label text (风景). The label store keeps the canonical
+// key, and the UI translates that key for each language.
+TEST_F(SemanticGenerationServiceTest, PersistsCanonicalKeysForChinesePromptsAndMapsDisplayText) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
   auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterLocalizedSemanticTestModel(semantic);
@@ -1197,11 +1199,11 @@ TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDispl
   ASSERT_EQ(results.size(), 1U);
   EXPECT_EQ(results.front().status, SemanticGenerationItemStatus::kEmbedded);
   EXPECT_TRUE(results.front().has_label);
-  EXPECT_EQ(results.front().label, "\xE9\xA3\x8E\xE6\x99\xAF");
+  EXPECT_EQ(results.front().label, "landscape");
 
   const auto stored_label = semantic.labels_.GetImageLabelForFile(42, "localized-zh-test", &error);
   ASSERT_TRUE(stored_label.has_value()) << error;
-  EXPECT_EQ(stored_label->label_, "\xE9\xA3\x8E\xE6\x99\xAF");
+  EXPECT_EQ(stored_label->label_, "landscape");
   EXPECT_EQ(SemanticLabelDisplayText(stored_label->label_, SemanticLabelLanguage::kEnglish),
             "landscape");
   EXPECT_EQ(SemanticLabelDisplayText(stored_label->label_, SemanticLabelLanguage::kChinese),

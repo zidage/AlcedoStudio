@@ -36,10 +36,10 @@ inline constexpr const char* kMatchSetTable = "SearchMatchSet";
  *        for a common table expression list (see RelationsPrefix).
  *
  * @details label_membership holds one row per distinct canonical `(file_id, label_key)` pair of
- * the match set files. Alias-equivalent labels map to one canonical key with the taxonomy
- * alias rules (SemanticLabelCanonicalLookup); a label outside the taxonomy keeps its lowercase
- * trimmed text as key. Labels of other models do not appear. label_sort holds the minimum key
- * of each labelled file.
+ * the match set files. The label column holds canonical keys (label assignment writes them,
+ * and SemanticLabelStore::CanonicalizeImageLabels rewrites older alias texts on project open),
+ * so the key is the lowercase trimmed label. The SQL holds no label literal. Labels of other
+ * models do not appear. label_sort holds the minimum key of each labelled file.
  */
 [[nodiscard]] auto           LabelRelations(const std::string& active_semantic_model_key)
     -> duckorm::SqlFragment;

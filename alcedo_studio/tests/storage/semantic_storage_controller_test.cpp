@@ -648,6 +648,104 @@ TEST_F(SemanticStoreTest, AssignsLabelInDatabaseTransaction) {
   EXPECT_TRUE(stored_label->confident_);
 }
 
+// A Chinese prompt profile ranks prototypes that carry Chinese label text. The label, second
+// label, and top scores store the canonical keys; the UI translates them for display.
+TEST_F(SemanticStoreTest, StoresCanonicalKeysForChinesePromptLabels) {
+  ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
+  RegisterTestModel(semantic);
+
+  const std::string                         landscape_zh = "\xE9\xA3\x8E\xE6\x99\xAF";  // 风景
+  const std::string                         portrait_zh  = "\xE4\xBA\xBA\xE5\x83\x8F";  // 人像
+  std::vector<SemanticLabelPrototypeRecord> prototypes{
+      SemanticLabelPrototypeRecord{.model_key_          = kModelKey,
+                                   .label_              = landscape_zh,
+                                   .prompt_config_hash_ = "test-prompts",
+                                   .embedding_          = OneHot(4)},
+      SemanticLabelPrototypeRecord{.model_key_          = kModelKey,
+                                   .label_              = portrait_zh,
+                                   .prompt_config_hash_ = "test-prompts",
+                                   .embedding_          = OneHot(5)},
+      SemanticLabelPrototypeRecord{.model_key_          = kModelKey,
+                                   .label_              = "\xE5\xBB\xBA\xE7\xAD\x91",
+                                   .prompt_config_hash_ = "test-prompts",
+                                   .embedding_          = OneHot(6)}};
+  std::string error;
+  ASSERT_TRUE(semantic.labels_.UpsertLabelPrototypes(prototypes, &error)) << error;
+
+  const auto file_id = CreateSyntheticFile(project, L"zh_pair.raf");
+  const auto rows    = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
+  ASSERT_EQ(rows.size(), 1U);
+  SemanticLabelAssignmentOptions assignment_options;
+  assignment_options.prompt_config_hash_ = "test-prompts";
+  SemanticImageEmbeddingRecord embedding{.file_id_   = file_id,
+                                         .image_id_  = rows.front().image_id_,
+                                         .model_key_ = kModelKey,
+                                         .embedding_ = ClosePairQuery(4, 5)};
+  SemanticImageLabelRecord     assigned;
+  ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbeddingAndAssignLabel(embedding, assignment_options,
+                                                                      &assigned, &error))
+      << error;
+
+  const auto stored = semantic.labels_.GetImageLabelForFile(file_id, kModelKey, &error);
+  ASSERT_TRUE(stored.has_value()) << error;
+  EXPECT_EQ(stored->label_, "landscape");
+  EXPECT_EQ(stored->second_label_, "portrait");
+  EXPECT_EQ(CountSubstring(stored->top_scores_json_, "\"landscape\""), 1U);
+  EXPECT_EQ(CountSubstring(stored->top_scores_json_, "\"portrait\""), 1U);
+  EXPECT_EQ(stored->top_scores_json_.find(landscape_zh), std::string::npos);
+  EXPECT_EQ(stored->top_scores_json_.find(portrait_zh), std::string::npos);
+}
+
+// Projects from older versions hold the label text of the model's prompt language. Opening
+// the project rewrites taxonomy aliases in the label, second label, and top scores to the
+// canonical keys, leaves other text alone, and a second run changes nothing.
+TEST_F(SemanticStoreTest, OpeningOldProjectRewritesAliasLabelsToCanonicalKeys) {
+  sl_element_id_t alias_file  = 0;
+  sl_element_id_t custom_file = 0;
+  {
+    ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
+    RegisterTestModel(semantic_test::StoresOf(*project.GetStorage()));
+    alias_file  = CreateSyntheticFile(project, L"old_alias.raf");
+    custom_file = CreateSyntheticFile(project, L"old_custom.raf");
+    project.SaveProject(meta_path_);
+  }
+  // Rows as an older version wrote them for a Chinese prompt profile: 沙漠 (desert) and
+  // 风景 (landscape), plus a label that no taxonomy definition lists.
+  const std::string insert =
+      "INSERT INTO SemanticImageLabel (file_id, model_key, label, score, second_label, "
+      "second_score, confident, top_scores) VALUES (" +
+      std::to_string(alias_file) + ", '" + kModelKey +
+      "', '\xE6\xB2\x99\xE6\xBC\xA0', 0.6, '\xE9\xA3\x8E\xE6\x99\xAF', 0.5, TRUE, "
+      "'[{\"label\":\"\xE6\xB2\x99\xE6\xBC\xA0\",\"score\":0.6},{\"label\":"
+      "\"\xE9\xA3\x8E\xE6\x99\xAF\",\"score\":0.5}]'), (" +
+      std::to_string(custom_file) + ", '" + kModelKey +
+      "', 'my custom', 0.9, NULL, NULL, TRUE, '[{\"label\":\"my custom\",\"score\":0.9}]');";
+  RunRawSql(db_path_, insert.c_str());
+
+  ProjectService reopened(db_path_, meta_path_, ProjectOpenMode::kLoadExisting);
+  auto           semantic = semantic_test::StoresOf(*reopened.GetStorage());
+  std::string    error;
+
+  const auto     alias_label = semantic.labels_.GetImageLabelForFile(alias_file, kModelKey, &error);
+  ASSERT_TRUE(alias_label.has_value()) << error;
+  EXPECT_EQ(alias_label->label_, "desert");
+  EXPECT_EQ(alias_label->second_label_, "landscape");
+  EXPECT_EQ(CountSubstring(alias_label->top_scores_json_, "\"desert\""), 1U);
+  EXPECT_EQ(CountSubstring(alias_label->top_scores_json_, "\"landscape\""), 1U);
+  EXPECT_EQ(alias_label->top_scores_json_.find("\xE6\xB2\x99\xE6\xBC\xA0"), std::string::npos);
+  EXPECT_EQ(alias_label->top_scores_json_.find("\xE9\xA3\x8E\xE6\x99\xAF"), std::string::npos);
+
+  const auto custom_label = semantic.labels_.GetImageLabelForFile(custom_file, kModelKey, &error);
+  ASSERT_TRUE(custom_label.has_value()) << error;
+  EXPECT_EQ(custom_label->label_, "my custom");
+  EXPECT_EQ(CountSubstring(custom_label->top_scores_json_, "\"my custom\""), 1U);
+
+  const auto second_run = semantic.labels_.CanonicalizeImageLabels(&error);
+  ASSERT_TRUE(second_run.has_value()) << error;
+  EXPECT_EQ(*second_run, 0U);
+}
+
 TEST_F(SemanticStoreTest, AssignsElbowTruncatedLabelsByScoreDistribution) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
   auto           semantic = semantic_test::StoresOf(*project.GetStorage());

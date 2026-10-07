@@ -56,6 +56,21 @@ class SemanticLabelStore {
   [[nodiscard]] auto CountImageLabelsInFolder(sl_element_id_t    folder_id,
                                               const std::string& model_key) const -> size_t;
 
+  /**
+   * @brief Rewrite assigned labels to the canonical keys that label assignment now stores.
+   *
+   * Projects written before canonical storage keep the label text of the model's prompt
+   * language (for example 沙漠 from a Chinese prompt profile) in the label, second label, and
+   * top scores. This rewrites every taxonomy alias in those three places to its canonical key
+   * in one transaction, and leaves text that no definition lists unchanged. It reads only the
+   * distinct label texts when nothing needs a rewrite, and a second run changes nothing.
+   *
+   * @return The number of distinct label texts that changed, or std::nullopt on failure
+   *         (nothing is changed then).
+   */
+  [[nodiscard]] auto CanonicalizeImageLabels(std::string* error = nullptr) const
+      -> std::optional<size_t>;
+
  private:
   Database& database_;
 };

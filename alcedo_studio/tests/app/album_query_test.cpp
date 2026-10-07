@@ -365,12 +365,20 @@ TEST_F(AlbumQueryTest, LabelGroupsUseAllCanonicalAssignmentsFromActiveModel) {
                      std::to_string(file_id) + ", '" + model + "', '" + label + "', 0.9, TRUE)");
   };
   // a and b hold alias-equivalent labels; c holds a label of the active model and one of
-  // another model; d holds only a label of the other model.
+  // another model; d holds only a label of the other model. b and c are rows as older versions
+  // stored them (prompt-language text, case, and spaces).
   insert_label(ids_[0], kActiveModel, "portrait");
   insert_label(ids_[1], kActiveModel, " \xE4\xBA\xBA\xE5\x83\x8F ");  // "人像" with spaces
   insert_label(ids_[2], kActiveModel, "Landscape");
   insert_label(ids_[2], kInactiveModel, "street");
   insert_label(ids_[3], kInactiveModel, "portrait");
+  // Opening a project rewrites those rows to canonical keys; the label SQL compares keys only.
+  std::string label_error;
+  ASSERT_TRUE(project.GetStorage()
+                  ->GetSemanticLabelStore()
+                  .CanonicalizeImageLabels(&label_error)
+                  .has_value())
+      << label_error;
 
   const auto result = ReadAll(project, AlbumQueryOptions{.group_field_ = AlbumGroupField::kLabels});
   std::vector<std::pair<std::string, int64_t>> groups;
@@ -1107,12 +1115,12 @@ TEST_F(AlbumQueryTest, LargeLibraryPagesStayBoundedAndRecordTimings) {
   SyntheticLibraryBuilder builder(project);
   ASSERT_EQ(builder.AddFiles(specs).size(), static_cast<size_t>(kFiles));
   // One label of the active model per file (the SemanticImageLabel key allows one), taken from
-  // twelve taxonomy labels and their Chinese aliases; every 9th file has none.
+  // twelve canonical taxonomy keys; every 9th file has none.
   RunStatement(project,
                "INSERT INTO SemanticImageLabel (file_id, model_key, label, score, confident) "
                "SELECT e.id, 'model-active', (['portrait', 'landscape', 'street', 'sports', "
                "'wedding', 'forest', 'mountain', 'interior', 'family', 'event', 'concert', "
-               "'\xE4\xBA\xBA\xE5\x83\x8F'])[1 + e.id % 12], 0.9, TRUE FROM Element e "
+               "'desert'])[1 + e.id % 12], 0.9, TRUE FROM Element e "
                "WHERE e.type = 0 AND e.id % 9 <> 0");
   // Edit history rows for every file as import writes them; two of three files have a head
   // commit (ten minutes apart), and every fifth file also has a commit that is not the head.

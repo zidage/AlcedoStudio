@@ -8,8 +8,12 @@
 #include <cstdint>
 #include <exception>
 #include <format>
+#include <string>
+#include <utility>
 #include <variant>
+#include <vector>
 
+#include "json.hpp"
 #include "semantic_tables.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
@@ -261,6 +265,97 @@ auto SemanticLabelStore::CountImageLabelsInFolder(sl_element_id_t    folder_id,
   query.append(expr::column_eq("sl.model_key", model_key));
   query.append(expr::raw(" AND sl.label IS NOT NULL AND sl.label <> ''"));
   return semantic_tables::CountOrZero(guard.conn_, query);
+}
+
+auto SemanticLabelStore::CanonicalizeImageLabels(std::string* error) const
+    -> std::optional<size_t> {
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  try {
+    // The distinct texts of both label columns. A project with canonical labels stops here.
+    static const std::array<duckorm::DuckFieldDesc, 1> text_fields = {
+        Column("value", duckorm::DuckDBType::NULLABLE_STRING)};
+    const auto texts = duckorm::select_by_query(
+        guard.conn_, text_fields, text_fields.size(),
+        expr::raw("SELECT label AS value FROM SemanticImageLabel WHERE label IS NOT NULL "
+                  "UNION SELECT second_label FROM SemanticImageLabel "
+                  "WHERE second_label IS NOT NULL"));
+    std::vector<std::pair<std::string, std::string>> renames;
+    for (const auto& row : texts) {
+      auto       text   = duckorm::cell_text(row[0]);
+      const auto stored = StoredSemanticLabel(text);
+      if (!text.empty() && stored != text) {
+        renames.emplace_back(std::move(text), stored);
+      }
+    }
+    if (renames.empty()) {
+      return size_t{0};
+    }
+
+    duckorm::Transaction transaction(guard.conn_);
+    for (const auto& [from, to] : renames) {
+      for (const char* column : {"label", "second_label"}) {
+        auto statement = expr::raw(std::format("UPDATE SemanticImageLabel SET {} = ", column));
+        statement.append(expr::param(to));
+        statement.append(expr::raw(" WHERE "));
+        statement.append(expr::column_eq(column, from));
+        duckorm::execute(guard.conn_, statement);
+      }
+    }
+
+    // The top scores hold the same texts inside JSON. Rewrite only the rows that contain one.
+    std::vector<duckorm::SqlFragment> contains_terms;
+    contains_terms.reserve(renames.size());
+    for (const auto& [from, to] : renames) {
+      (void)to;
+      auto term = expr::raw("contains(CAST(top_scores AS VARCHAR), ");
+      term.append(expr::param(from));
+      term.append(expr::raw(")"));
+      contains_terms.push_back(std::move(term));
+    }
+    auto score_query = expr::raw(
+        "SELECT file_id, model_key, top_scores FROM SemanticImageLabel "
+        "WHERE top_scores IS NOT NULL AND ");
+    score_query.append(expr::or_(contains_terms));
+    static const std::array<duckorm::DuckFieldDesc, 3> score_fields = {
+        Column("file_id", duckorm::DuckDBType::INT64),
+        Column("model_key", duckorm::DuckDBType::VARCHAR),
+        Column("top_scores", duckorm::DuckDBType::NULLABLE_STRING)};
+    const auto score_rows =
+        duckorm::select_by_query(guard.conn_, score_fields, score_fields.size(), score_query);
+    for (const auto& row : score_rows) {
+      auto scores = nlohmann::json::parse(duckorm::cell_text(row[2]), nullptr, false);
+      if (!scores.is_array()) {
+        continue;  // Not JSON written by label assignment; leave it as it is.
+      }
+      bool changed = false;
+      for (auto& entry : scores) {
+        if (!entry.is_object() || !entry.contains("label") || !entry["label"].is_string()) {
+          continue;
+        }
+        const auto text   = entry["label"].get<std::string>();
+        const auto stored = StoredSemanticLabel(text);
+        if (stored != text) {
+          entry["label"] = stored;
+          changed        = true;
+        }
+      }
+      if (!changed) {
+        continue;
+      }
+      auto statement = expr::raw("UPDATE SemanticImageLabel SET top_scores = ");
+      statement.append(expr::param(scores.dump()));
+      statement.append(expr::raw(" WHERE "));
+      statement.append(expr::and_({expr::column_eq("file_id", std::get<int64_t>(row[0])),
+                                   expr::column_eq("model_key", duckorm::cell_text(row[1]))}));
+      duckorm::execute(guard.conn_, statement);
+    }
+    transaction.commit();
+    return renames.size();
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+    return std::nullopt;
+  }
 }
 
 }  // namespace alcedo
