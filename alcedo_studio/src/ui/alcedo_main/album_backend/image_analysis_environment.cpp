@@ -9,6 +9,7 @@
 #include <cmath>
 #include <iomanip>
 #include <sstream>
+#include <locale>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,11 +27,11 @@ using namespace std::chrono_literals;
 constexpr auto kImageAnalysisSidecarStartupTimeout = 60s;
 
 auto TrimAscii(std::string value) -> std::string {
-  auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
-  while (!value.empty() && is_space(static_cast<unsigned char>(value.front()))) {
+  auto is_space = [](char ch) { return std::isspace(ch, std::locale::classic()); };
+  while (!value.empty() && is_space(value.front())) {
     value.erase(value.begin());
   }
-  while (!value.empty() && is_space(static_cast<unsigned char>(value.back()))) {
+  while (!value.empty() && is_space(value.back())) {
     value.pop_back();
   }
   return value;

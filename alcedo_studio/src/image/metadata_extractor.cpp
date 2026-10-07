@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <locale>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -86,7 +87,7 @@ void SetDisplayDimensionsFromLibRaw(const LibRaw& raw_processor, ExifDisplayMeta
 auto TrimTrailingZeroPadded(const char* s, size_t max_len = 256) -> std::string {
   if (!s) return {};
   size_t len = std::min(std::strlen(s), max_len);
-  while (len > 0 && (s[len - 1] == '\0' || std::isspace(static_cast<unsigned char>(s[len - 1])))) {
+  while (len > 0 && (s[len - 1] == '\0' || std::isspace(s[len - 1], std::locale::classic()))) {
     --len;
   }
   return {s, len};
@@ -94,13 +95,12 @@ auto TrimTrailingZeroPadded(const char* s, size_t max_len = 256) -> std::string 
 
 auto TrimAscii(const std::string& value) -> std::string {
   std::string out = value;
-  while (!out.empty() &&
-         (out.back() == '\0' || std::isspace(static_cast<unsigned char>(out.back())))) {
+  while (!out.empty() && (out.back() == '\0' || std::isspace(out.back(), std::locale::classic()))) {
     out.pop_back();
   }
   size_t begin = 0;
   while (begin < out.size() &&
-         (out[begin] == '\0' || std::isspace(static_cast<unsigned char>(out[begin])))) {
+         (out[begin] == '\0' || std::isspace(out[begin], std::locale::classic()))) {
     ++begin;
   }
   if (begin > 0) {

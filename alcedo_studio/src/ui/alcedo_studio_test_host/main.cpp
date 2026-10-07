@@ -14,6 +14,7 @@
 #include <QTimer>
 #include <QuickQanava>
 #include <algorithm>
+#include <clocale>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -226,6 +227,11 @@ int main(int argc, char* argv[]) {
   alcedo::TimeProvider::Refresh();
 
   QApplication app(argc, argv);
+  // QApplication applies the user's locale on macOS and Linux (setlocale(LC_ALL, "")). Keep
+  // number parsing and formatting in the C locale, as Qt recommends: .cube LUT values, search
+  // terms like f/2.8 and lens names all use a decimal point, and strtof/stod/snprintf would
+  // read or write a decimal comma under locales such as de_DE.
+  std::setlocale(LC_NUMERIC, "C");
   QQuickStyle::setStyle("Basic");
   if (!qEnvironmentVariableIsEmpty("ALCEDO_PREVIEW_PERF_LOG") ||
       !qEnvironmentVariableIsEmpty("ALCEDO_TEST_FRAME_TRACE")) {
