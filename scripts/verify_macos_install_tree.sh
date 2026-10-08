@@ -146,6 +146,7 @@ if [[ "$skip_metal_assets" -eq 0 ]]; then
     local_tone.metallib
     mask.metallib
     drt.metallib
+    display_to_ap1.metallib
   )
   # The legacy fused edit pipeline metallib is archived (G10.10) and must not be packaged.
   if [[ -e "${metal_dir}/fused_pipeline.metallib" ]]; then
@@ -155,6 +156,15 @@ if [[ "$skip_metal_assets" -eq 0 ]]; then
     # Empty/corrupt metallibs would still "exist"; require a non-trivial size.
     assert_min_size "${metal_dir}/${lib}" 512
   done
+fi
+
+# A run from the build tree writes the sidecar log next to alcedo_mind; logs must not be packaged.
+if [[ -e "${macos_dir}/log" ]]; then
+  fail "build-tree log directory is packaged: ${macos_dir}/log"
+fi
+packaged_logs="$(find "$app_dir" -type f -name '*.log*' -print -quit)"
+if [[ -n "$packaged_logs" ]]; then
+  fail "log file is packaged: ${packaged_logs}"
 fi
 
 if ! otool -L "$mind_exe" | grep -q '/System/Library/Frameworks/CoreML.framework/'; then
