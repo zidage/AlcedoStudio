@@ -64,6 +64,21 @@ void ExpectMatrixNear(const double* actual, const double (&expected)[9], const d
   }
 }
 
+TEST(MetadataExtractorTest, NikonCfaWithoutColorMatrixImportsRawMetadata) {
+  const auto path = RasterFixturePath("nikon_cfa_without_color_matrix.tif");
+  EXPECT_FALSE(MetadataExtractor::ClassifyRasterFile(path).has_value());
+  Image image(1, path, ImageType::NEF);
+  ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(path, image));
+  EXPECT_EQ(image.image_type_, ImageType::NEF);
+  ASSERT_TRUE(image.HasRawColorContext());
+  EXPECT_FALSE(image.HasRasterColorDescription());
+  EXPECT_EQ(image.GetRawColorContext().camera_make_, "Nikon");
+  EXPECT_EQ(image.GetRawColorContext().camera_model_, "Alcedo CFA fixture");
+  const auto display = image.ExifDisplayToJson();
+  EXPECT_EQ(display.value("ImageWidth", 0u), 32u);
+  EXPECT_EQ(display.value("ImageHeight", 0u), 24u);
+}
+
 TEST(MetadataExtractorTest, AnalogBalanceAndCameraCalibrationComposeInDngSpecOrder) {
   double color_matrix[9] = {2.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 4.0};
   const double analog_balance[3]              = {2.0, 1.0, 0.5};

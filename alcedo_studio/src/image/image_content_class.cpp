@@ -6,7 +6,7 @@
 
 #include <libraw/libraw.h>
 
-#include <cstring>
+#include <initializer_list>
 #include <memory>
 
 #include "image/raster_container_reader.hpp"
@@ -28,22 +28,13 @@ auto StartsWith(std::span<const std::byte> bytes, std::initializer_list<unsigned
   return true;
 }
 
-/// LibRaw opens the TIFF container and reports a camera make and a color matrix.
-auto LibRawReportsCamera(std::span<const std::byte> bytes) -> bool {
+/// LibRaw identifies a supported RAW image from the container's image structure and encoding.
+auto LibRawRecognizesRawImage(std::span<const std::byte> bytes) -> bool {
   // Heap allocation: LibRaw is large (see AGENTS.md on WebGPU RAW tests).
   auto raw = std::make_unique<LibRaw>();
-  if (raw->open_buffer(bytes.data(), bytes.size()) != LIBRAW_SUCCESS) {
-    return false;
-  }
-  const bool has_make   = raw->imgdata.idata.make[0] != '\0';
-  bool       has_matrix = false;
-  for (const auto& row : raw->imgdata.color.cam_xyz) {
-    for (const float value : row) {
-      has_matrix = has_matrix || value != 0.0f;
-    }
-  }
-  raw->recycle();
-  return has_make && has_matrix;
+  // Camera color calibration is independent of whether the file contains RAW samples.
+  return raw->open_buffer(bytes.data(), bytes.size()) == LIBRAW_SUCCESS &&
+         raw->imgdata.idata.raw_count > 0;
 }
 
 }  // namespace
@@ -67,7 +58,7 @@ auto ClassifyImageContent(std::span<const std::byte> bytes) -> ImageContentClass
       // A TIFF-magic file whose first directory cannot be read is left to LibRaw.
       return ImageContentClass::Unknown;
     }
-    return LibRawReportsCamera(bytes) ? ImageContentClass::Raw : ImageContentClass::Tiff;
+    return LibRawRecognizesRawImage(bytes) ? ImageContentClass::Raw : ImageContentClass::Tiff;
   }
   return ImageContentClass::Unknown;
 }

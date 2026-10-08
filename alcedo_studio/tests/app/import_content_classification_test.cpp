@@ -201,6 +201,31 @@ class ImportContentClassificationTest : public ::testing::Test {
   std::filesystem::path scratch_dir_;
 };
 
+TEST_F(ImportContentClassificationTest, NikonCfaAndCameraTaggedRgbTiffImportAsDistinctTypes) {
+  const auto raw        = RasterFixturePath("nikon_cfa_without_color_matrix.tif");
+  const auto tiff       = RasterFixturePath("nikon_rgb_with_camera_metadata.tif");
+  const auto raw_as_nef = scratch_dir_ / "nikon_cfa.nef";
+  const auto raw_as_bin = scratch_dir_ / "nikon_cfa.bin";
+  std::filesystem::copy_file(raw, raw_as_nef);
+  std::filesystem::copy_file(raw, raw_as_bin);
+  ProjectService project(db_path_, meta_path_);
+  const auto     outcome = ImportToLibraryRoot(project, {raw_as_nef, raw_as_bin, tiff});
+  EXPECT_EQ(outcome.result_.requested_, 3u);
+  EXPECT_EQ(outcome.result_.imported_, 3u);
+  EXPECT_EQ(outcome.result_.failed_, 0u);
+  for (const auto* name : {"nikon_cfa.nef", "nikon_cfa.bin"}) {
+    const auto row = QueryImageRow(project, name);
+    EXPECT_EQ(row.type_, static_cast<int64_t>(ImageType::DEFAULT));
+    EXPECT_TRUE(row.metadata_.contains("RawRuntimeColorContext"));
+    EXPECT_FALSE(row.metadata_.contains("RasterColorDescription"));
+  }
+  const auto tiff_row = QueryImageRow(project, tiff.filename().string());
+  EXPECT_EQ(tiff_row.type_, static_cast<int64_t>(ImageType::TIFF));
+  EXPECT_TRUE(tiff_row.metadata_.contains("RasterColorDescription"));
+  EXPECT_FALSE(tiff_row.metadata_.contains("RawRuntimeColorContext"));
+  EXPECT_EQ(CountFileImageRowsWithoutImage(project), 0);
+}
+
 TEST_F(ImportContentClassificationTest,
        MixedFolderImportsRawAndRasterFilesAndLeavesNoOrphanImageRows) {
   if (!std::filesystem::exists(RawFixturePath())) {
