@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
 #include <atomic>
@@ -103,6 +104,15 @@ class ImportExportHandler final : public QObject {
   Q_INVOKABLE void         SaveExportSdrQuality(int quality);
   Q_INVOKABLE int          LoadExportUltraHdrQuality() const;
   Q_INVOKABLE void         SaveExportUltraHdrQuality(int quality);
+  /// Remembered export folder as a local path. Falls back to defaultExportFolder when nothing is
+  /// stored or the stored folder no longer exists.
+  Q_INVOKABLE QString      LoadExportFolder() const;
+  /// Stores the export folder (URL or local path) and returns it as a local path. Returns an empty
+  /// string and stores nothing when the input is empty.
+  Q_INVOKABLE QString      SaveExportFolder(const QString& folderUrlOrPath);
+  /// File URL of the folder for the folder dialog. Uses the remembered folder when the input is
+  /// empty or does not exist.
+  Q_INVOKABLE QUrl         ExportFolderUrl(const QString& folderUrlOrPath) const;
   Q_INVOKABLE QVariantList LoadExportFileNamePresets() const;
   Q_INVOKABLE bool         SaveExportFileNamePreset(const QString& name, const QString& pattern,
                                                     const QString& replacedName);

@@ -10,8 +10,10 @@
 /// edge-case inputs.  All tests run headlessly via QCoreApplication.
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QUrl>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -791,6 +793,86 @@ TEST_F(ImportTests, AllowedCategoriesAreRestoredFromSettings) {
   EXPECT_EQ(QSettings{}.value(QStringLiteral("import/folderAllowedCategories")).toInt(), updated);
   ApplicationModuleHost reopened;
   EXPECT_EQ(reopened.import_export()->FolderScan()->AllowedCategories(), updated);
+}
+
+/// The export folder is an application setting, kept the same way as the folder import selection.
+class ExportFolderSettingsReset {
+ public:
+  ExportFolderSettingsReset()
+      : organization_(QCoreApplication::organizationName()),
+        application_(QCoreApplication::applicationName()) {
+    QCoreApplication::setOrganizationName(QStringLiteral("AlcedoStudioTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("AlbumBackendImportTest"));
+    QSettings{}.remove(QStringLiteral("export/lastFolder"));
+  }
+  ~ExportFolderSettingsReset() {
+    QSettings{}.remove(QStringLiteral("export/lastFolder"));
+    QCoreApplication::setOrganizationName(organization_);
+    QCoreApplication::setApplicationName(application_);
+  }
+
+ private:
+  QString organization_;
+  QString application_;
+};
+
+TEST_F(ImportTests, ExportFolderIsRestoredFromSettings) {
+  ExportFolderSettingsReset settings;
+  const auto                folder = temp_dir_ / "export_target";
+  std::filesystem::create_directories(folder);
+  const QString local = QDir::fromNativeSeparators(PathToQString(folder));
+  {
+    ApplicationModuleHost backend;
+    auto*                 handler = backend.import_export();
+    EXPECT_EQ(handler->LoadExportFolder(), handler->DefaultExportFolder());
+    // The folder dialog returns a file URL; the handler stores and returns the local path.
+    EXPECT_EQ(handler->SaveExportFolder(QUrl::fromLocalFile(local).toString()), local);
+  }
+  ApplicationModuleHost reopened;
+  auto*                 handler = reopened.import_export();
+  EXPECT_EQ(handler->LoadExportFolder(), local);
+  EXPECT_EQ(handler->ExportFolderUrl(QString{}), QUrl::fromLocalFile(local));
+  EXPECT_EQ(handler->ExportFolderUrl(local), QUrl::fromLocalFile(local));
+}
+
+// The folder dialog returns percent-encoded file URLs (e.g. file:///Users/me/My%20Exports on
+// macOS). Every URL form of the same folder must store the same local path.
+TEST_F(ImportTests, ExportFolderUrlFormsStoreTheSameLocalPath) {
+  ExportFolderSettingsReset settings;
+  ApplicationModuleHost     backend;
+  auto*                     handler = backend.import_export();
+  const auto folder = temp_dir_ / std::filesystem::path(u8"导出 folder #1");
+  std::filesystem::create_directories(folder);
+  const QString local = QDir::cleanPath(QDir::fromNativeSeparators(PathToQString(folder)));
+  const QUrl    url   = QUrl::fromLocalFile(local);
+
+  const QStringList inputs{local,
+                           local + QStringLiteral("/"),
+                           url.toString(),
+                           url.toString(QUrl::FullyEncoded),
+                           url.toString(QUrl::FullyEncoded) + QStringLiteral("/")};
+  for (const QString& input : inputs) {
+    SCOPED_TRACE(input.toStdString());
+    EXPECT_EQ(handler->SaveExportFolder(input), local);
+    EXPECT_EQ(handler->LoadExportFolder(), local);
+    EXPECT_EQ(handler->ExportFolderUrl(input), url);
+    EXPECT_EQ(handler->ExportFolderUrl(input).toLocalFile(), local);
+  }
+  EXPECT_TRUE(url.toString(QUrl::FullyEncoded).contains(QStringLiteral("%20")));
+}
+
+TEST_F(ImportTests, MissingExportFolderFallsBackToDefault) {
+  ExportFolderSettingsReset settings;
+  ApplicationModuleHost     backend;
+  auto*                     handler = backend.import_export();
+  const auto                missing = temp_dir_ / "removed_export_target";
+  std::filesystem::create_directories(missing);
+  ASSERT_FALSE(handler->SaveExportFolder(PathToQString(missing)).isEmpty());
+  std::filesystem::remove(missing);
+
+  EXPECT_EQ(handler->LoadExportFolder(), handler->DefaultExportFolder());
+  EXPECT_TRUE(handler->SaveExportFolder(QStringLiteral("  ")).isEmpty());
+  EXPECT_EQ(handler->LoadExportFolder(), handler->DefaultExportFolder());
 }
 
 // Section 9.2: a checkbox change rebuilds the rows of a 200k-file folder in at most 30 ms.
