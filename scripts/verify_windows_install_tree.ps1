@@ -68,6 +68,7 @@ $requiredFiles = @(
     'Qt6Widgets.dll',
     'vcruntime140.dll',
     'vcruntime140_1.dll',
+    'vcomp140.dll',
     'msvcp140.dll',
     'fonts\main_Inter.ttf',
     'fonts\main_NotoSans_zh.ttf',

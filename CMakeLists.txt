@@ -1105,6 +1105,10 @@ endif()
 
 if(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION "${CMAKE_INSTALL_BINDIR}")
+    # /openmp makes alcedo_main.exe, EditPipeline.dll and raw_r.dll import vcomp140.dll. The
+    # runtime dependency scan drops it because the build PC resolves it from System32, so ship it
+    # with the other MSVC runtime DLLs: a PC without the VC++ redistributable cannot start the app.
+    set(CMAKE_INSTALL_OPENMP_LIBRARIES TRUE)
     include(InstallRequiredSystemLibraries)
 
     set(ALCEDO_RUNTIME_DEP_DIRS "" CACHE STRING "Extra directories to search for runtime DLL dependencies during install.")
@@ -1627,6 +1631,17 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
             "
         )
     endif()
+
+    # The install copies the build-tree bundle as a whole. A run from the build tree leaves the
+    # sidecar log directory next to alcedo_mind; it must not reach the packages.
+    install(CODE
+        "set(_alcedo_build_log_dir \"\${CMAKE_INSTALL_PREFIX}/${ALCEDO_MACOS_BUNDLE_NAME}.app/Contents/MacOS/log\")
+         if(EXISTS \"\${_alcedo_build_log_dir}\")
+             message(STATUS \"Removing build-tree log directory from bundle: \${_alcedo_build_log_dir}\")
+             file(REMOVE_RECURSE \"\${_alcedo_build_log_dir}\")
+         endif()
+        "
+    )
 
     # Sign only after all bundle mutations are complete.
     if(NOT "${ALCEDO_MACOS_CODESIGN_IDENTITY}" STREQUAL "")
