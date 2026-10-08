@@ -146,7 +146,6 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
       auto& pin = pin_it->second;
       if (pin.image_id_ == imageId) {
         pin.ref_count_++;
-        current_visible_thumbnail_keys_[elementId] = key;
         const auto* item = library_.FindAlbumItem(elementId);
         if (item != nullptr && item->thumb_data_url.isEmpty() && !item->thumb_loading &&
             item->thumb_error_text.isEmpty()) {
@@ -155,7 +154,7 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
         return;
       }
 
-      ReleasePinnedThumbnailRequest(key, /*update_state_if_unpinned=*/false);
+      ReleasePinnedThumbnailRequest(key);
       try {
         // Same element/key now points at different image content. Treat this
         // as content invalidation rather than a zoom-tier release.
@@ -166,12 +165,13 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
                               .image_id_ = imageId,
                               .resolution_ = key.resolution};
     } else {
-      ReleaseOtherPinnedRequestsForElement(elementId, key);
+      // Pins of other tiers belong to other consumers (the grid and the Editor filmstrip can
+      // show the same element at different tiers). A consumer that changes its own tier
+      // releases its old tier itself.
       thumbnail_pins_[key] = {.ref_count_ = 1,
                               .image_id_ = imageId,
                               .resolution_ = key.resolution};
     }
-    current_visible_thumbnail_keys_[elementId] = key;
 
     const auto* item = library_.FindAlbumItem(elementId);
     const bool known_missing = item != nullptr && item->thumb_missing_source;
@@ -197,10 +197,6 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
   }
 
   thumbnail_pins_.erase(it);
-  if (const auto current_it = current_visible_thumbnail_keys_.find(elementId);
-      current_it != current_visible_thumbnail_keys_.end() && current_it->second == key) {
-    current_visible_thumbnail_keys_.erase(current_it);
-  }
 
   // Strategy B: mark only this request key as inactive.
   DeactivateThumbnailRequest(key);
@@ -210,12 +206,52 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
   const bool  missing_source = item != nullptr && item->thumb_missing_source;
   if (!IsThumbnailPinned(elementId)) {
     UpdateThumbnailState(elementId, QString(), false, missing_source);
+  } else {
+    ShowRemainingPinnedTier(elementId);
   }
   if (thumb_svc) {
     try {
       thumb_svc->ReleaseThumbnail(key);
     } catch (...) {
     }
+  }
+}
+
+void ThumbnailManager::ShowRemainingPinnedTier(sl_element_id_t elementId) {
+  const ThumbnailCacheKey* remaining_key      = nullptr;
+  image_id_t               remaining_image_id = 0;
+  for (const auto& [key, pin] : thumbnail_pins_) {
+    if (key.element_id == elementId && pin.ref_count_ > 0 &&
+        (remaining_key == nullptr || key.resolution > remaining_key->resolution)) {
+      remaining_key      = &key;
+      remaining_image_id = pin.image_id_;
+    }
+  }
+  if (remaining_key == nullptr) {
+    return;
+  }
+
+  const ThumbnailCacheKey key = *remaining_key;
+
+  // The row may still carry the released tier's URL, whose pixels just left the store.
+  const auto    max_edge = static_cast<uint32_t>(key.resolution);
+  const QString url      = image_store_->CurrentUrl(elementId, max_edge);
+  if (!url.isEmpty()) {
+    UpdateThumbnailState(elementId, url, false, false);
+    return;
+  }
+  // A request in flight publishes the remaining tier. Until then the row keeps its URL, so a card
+  // that already shows the released tier keeps those pixels instead of going blank.
+  if (!thumbnail_active_flags_.contains(key)) {
+    RequestThumbnail(elementId, remaining_image_id, max_edge);
+  }
+}
+
+void ThumbnailManager::FinishThumbnailRequest(const ThumbnailCacheKey&                  key,
+                                              const std::shared_ptr<std::atomic<bool>>& is_active) {
+  const auto flag_it = thumbnail_active_flags_.find(key);
+  if (flag_it != thumbnail_active_flags_.end() && flag_it->second == is_active) {
+    thumbnail_active_flags_.erase(flag_it);
   }
 }
 
@@ -295,6 +331,7 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
               }
               return QObject::tr("Thumbnail render returned no image.");
             }();
+            self->thumbs().FinishThumbnailRequest(key, is_active);
             self->thumbs().UpdateThumbnailState(elementId, QString(), false, missing_source,
                                               error_text);
           }
@@ -376,6 +413,7 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
                     return;
                   }
 
+                  self->thumbs().FinishThumbnailRequest(key, is_active);
                   const bool pinned = self->thumbs().IsThumbnailPinned(key);
                   if (pinned) {
                     const bool render_error = thumbUrl.isEmpty();
@@ -415,20 +453,18 @@ bool ThumbnailManager::RefreshCurrentThumbnail(sl_element_id_t elementId, image_
     return false;
   }
 
-  const auto current_it = current_visible_thumbnail_keys_.find(elementId);
-  if (current_it == current_visible_thumbnail_keys_.end()) {
-    return false;
+  // Every pinned tier is refreshed: the grid and the Editor filmstrip can pin the same element
+  // at different tiers, and either tier can become the one the row shows.
+  std::vector<ThumbnailCacheKey> pinned_keys;
+  for (const auto& [key, pin] : thumbnail_pins_) {
+    if (key.element_id == elementId && pin.image_id_ == imageId && pin.ref_count_ > 0) {
+      pinned_keys.push_back(key);
+    }
   }
-
-  const auto key = current_it->second;
-  const auto pin_it = thumbnail_pins_.find(key);
-  if (pin_it == thumbnail_pins_.end() || pin_it->second.image_id_ != imageId ||
-      pin_it->second.ref_count_ == 0) {
-    return false;
+  for (const auto& key : pinned_keys) {
+    RequestThumbnail(elementId, imageId, static_cast<uint32_t>(key.resolution));
   }
-
-  RequestThumbnail(elementId, imageId, static_cast<uint32_t>(key.resolution));
-  return true;
+  return !pinned_keys.empty();
 }
 
 void ThumbnailManager::UpdateThumbnailState(sl_element_id_t elementId, const QString& dataUrl,
@@ -484,15 +520,10 @@ void ThumbnailManager::DeactivateThumbnailRequest(const ThumbnailCacheKey& key) 
   thumbnail_active_flags_.erase(key);
 }
 
-void ThumbnailManager::ReleasePinnedThumbnailRequest(const ThumbnailCacheKey& key,
-                                                     bool update_state_if_unpinned) {
+void ThumbnailManager::ReleasePinnedThumbnailRequest(const ThumbnailCacheKey& key) {
   auto it = thumbnail_pins_.find(key);
   if (it != thumbnail_pins_.end()) {
     thumbnail_pins_.erase(it);
-  }
-  if (const auto current_it = current_visible_thumbnail_keys_.find(key.element_id);
-      current_it != current_visible_thumbnail_keys_.end() && current_it->second == key) {
-    current_visible_thumbnail_keys_.erase(current_it);
   }
   DeactivateThumbnailRequest(key);
   image_store_->Remove(key.element_id, static_cast<uint32_t>(key.resolution));
@@ -504,27 +535,6 @@ void ThumbnailManager::ReleasePinnedThumbnailRequest(const ThumbnailCacheKey& ke
     } catch (...) {
     }
   }
-
-  if (update_state_if_unpinned && !IsThumbnailPinned(key.element_id)) {
-    const auto* item = library_.FindAlbumItem(key.element_id);
-    const bool  missing_source = item != nullptr && item->thumb_missing_source;
-    UpdateThumbnailState(key.element_id, QString(), false, missing_source);
-  }
-}
-
-void ThumbnailManager::ReleaseOtherPinnedRequestsForElement(sl_element_id_t elementId,
-                                                            const ThumbnailCacheKey& keep_key) {
-  std::vector<ThumbnailCacheKey> stale_keys;
-  for (const auto& [key, pin] : thumbnail_pins_) {
-    (void)pin;
-    if (key.element_id == elementId && !(key == keep_key)) {
-      stale_keys.push_back(key);
-    }
-  }
-
-  for (const auto& stale_key : stale_keys) {
-    ReleasePinnedThumbnailRequest(stale_key, /*update_state_if_unpinned=*/false);
-  }
 }
 
 void ThumbnailManager::RemoveThumbnailState(sl_element_id_t elementId, image_id_t imageId) {
@@ -532,7 +542,6 @@ void ThumbnailManager::RemoveThumbnailState(sl_element_id_t elementId, image_id_
   if (elementId == 0) {
     return;
   }
-  current_visible_thumbnail_keys_.erase(elementId);
 
   std::vector<ThumbnailCacheKey> keys_to_release;
   for (const auto& [key, pin] : thumbnail_pins_) {
@@ -609,7 +618,6 @@ void ThumbnailManager::ReleaseVisibleThumbnailPins() {
   }
   thumbnail_pins_.clear();
   thumbnail_active_flags_.clear();
-  current_visible_thumbnail_keys_.clear();
   image_store_->Clear();
 }
 

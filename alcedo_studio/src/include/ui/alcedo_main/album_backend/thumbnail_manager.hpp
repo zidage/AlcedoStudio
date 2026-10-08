@@ -38,6 +38,7 @@ class ThumbnailManager {
   [[nodiscard]] auto VisibleOccurrenceCount(sl_element_id_t elementId) const -> size_t;
   void RequestThumbnail(sl_element_id_t elementId, image_id_t imageId, uint32_t maxEdge = 1024,
                         int retryAttempt = 0);
+  /// Request every pinned tier of @p elementId again. Returns false when no tier is pinned.
   [[nodiscard]] bool RefreshCurrentThumbnail(sl_element_id_t elementId, image_id_t imageId);
   void               UpdateThumbnailState(sl_element_id_t elementId, const QString& dataUrl,
                                           bool loading, bool missingSource,
@@ -67,18 +68,22 @@ class ThumbnailManager {
   [[nodiscard]] static auto PathExists(const std::filesystem::path& path) -> bool;
   [[nodiscard]] bool        IsThumbnailPinned(const ThumbnailCacheKey& key) const;
   void                      DeactivateThumbnailRequest(const ThumbnailCacheKey& key);
-  void ReleasePinnedThumbnailRequest(const ThumbnailCacheKey& key, bool update_state_if_unpinned);
-  void ReleaseOtherPinnedRequestsForElement(sl_element_id_t         elementId,
-                                            const ThumbnailCacheKey& keep_key);
+  void ReleasePinnedThumbnailRequest(const ThumbnailCacheKey& key);
+  /// After one tier of @p elementId was released while another stays pinned, show the remaining
+  /// tier (the largest one): its stored image, or a new request when none is in flight.
+  void ShowRemainingPinnedTier(sl_element_id_t elementId);
+  /// A request for @p key answered. Forget its active flag unless a newer request replaced it.
+  void FinishThumbnailRequest(const ThumbnailCacheKey&                  key,
+                              const std::shared_ptr<std::atomic<bool>>& is_active);
 
   LibraryModule& library_;
   std::shared_ptr<ThumbnailImageStore> image_store_{std::make_shared<ThumbnailImageStore>()};
   // TODO: Move pin ref-count tracking into ThumbnailService.
   std::unordered_map<ThumbnailCacheKey, PinnedThumbnailState> thumbnail_pins_{};
-  std::unordered_map<sl_element_id_t, ThumbnailCacheKey>      current_visible_thumbnail_keys_{};
   /// Visible grouped-view occurrences: (group key, element id, tier edge).
   std::set<std::tuple<std::string, sl_element_id_t, uint32_t>> visible_occurrences_{};
-  // Strategy B: active flags for in-flight thumbnail requests.
+  // Strategy B: active flags for in-flight thumbnail requests. A key leaves the map when its
+  // request is released or answers.
   std::unordered_map<ThumbnailCacheKey, std::shared_ptr<std::atomic<bool>>>
       thumbnail_active_flags_{};
 };
