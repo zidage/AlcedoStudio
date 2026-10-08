@@ -942,6 +942,15 @@ void EditorSessionController::OnBackendSessionResult(const alcedo::EditorSession
     persist_observed_saving_ = false;
     SetPersistInFlight(false);
     emit StateChanged();
+  } else if (persist_in_flight_ && persist_operation_id_ != 0 &&
+             result.operation_id == persist_operation_id_ &&
+             alcedo::EditorSessionResultIsTerminal(result.kind)) {
+    // The persist's own terminal result is authoritative. State notifications
+    // are queued and read live state, so a fast checkpoint can return to
+    // Interactive before the Saving transition is ever observed here.
+    persist_observed_saving_ = false;
+    SetPersistInFlight(false);
+    emit StateChanged();
   }
   auto published = history_ops_.CorrelateObservedResult(result);
   if (!published.has_value()) {
@@ -1081,6 +1090,7 @@ void EditorSessionController::PersistCurrentImage() {
       state == alcedo::EditorSessionState::Switching ||
       (result.kind == alcedo::EditorSessionResultKind::Accepted &&
        result.message == "Editor session command queued");
+  persist_operation_id_ = persist_waiting ? result.operation_id : 0;
   SetPersistInFlight(persist_waiting);
   emit StateChanged();
 }

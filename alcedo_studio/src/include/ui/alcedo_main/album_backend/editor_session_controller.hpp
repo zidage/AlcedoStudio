@@ -94,8 +94,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// NoImage, Failed, or RetainedImageFailure. Quit/save waits on this because
   /// a queued owner-thread Close still reports Interactive.
   Q_PROPERTY(bool closeInFlight READ close_in_flight NOTIFY StateChanged)
-  /// True after PersistCurrentImage is admitted and before the backend returns
-  /// to Interactive (or a terminal failure). Library routing and quit wait on
+  /// True after PersistCurrentImage is admitted and before the backend publishes
+  /// the persist operation's terminal result. Library routing and quit wait on
   /// this because a queued owner-thread persist still reports Interactive.
   Q_PROPERTY(bool persistInFlight READ persist_in_flight NOTIFY StateChanged)
   Q_PROPERTY(EditorActionAvailabilityModel* actions READ actions CONSTANT)
@@ -513,6 +513,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   bool                            close_in_flight_               = false;
   bool                            persist_in_flight_             = false;
   bool                            persist_observed_saving_       = false;
+  /// Operation id of the admitted PersistCurrentImage. Its terminal result
+  /// clears persist_in_flight_ even when no Saving state was ever observed.
+  std::uint64_t                   persist_operation_id_          = 0;
   QString                         close_error_;
   QString                         persist_error_;
 

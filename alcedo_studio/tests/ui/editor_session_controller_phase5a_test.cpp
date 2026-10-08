@@ -56,6 +56,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   bool                  last_close_persist       = true;
   bool                  defer_close_             = false;
   bool                  defer_persist_           = false;
+  std::uint64_t         persist_operation_id_    = 0;
   int                   presentation_width       = 0;
   int                   presentation_height      = 0;
   std::string           last_error_;
@@ -170,8 +171,9 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   auto PersistCurrentImage() -> EditorSessionResult override {
     ++persist_count;
     EditorSessionResult result;
-    result.state    = state_;
-    result.identity = identity_;
+    result.state        = state_;
+    result.identity     = identity_;
+    result.operation_id = persist_operation_id_;
     if (defer_persist_) {
       result.kind    = EditorSessionResultKind::Accepted;
       result.message = "Editor session command queued";
@@ -187,6 +189,22 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     state_         = EditorSessionState::Saving;
     NotifyChange();
     state_ = EditorSessionState::Interactive;
+    NotifyChange();
+  }
+
+  /// Production race: the owner thread enters and leaves Saving before the
+  /// queued change notification runs, so the controller only ever reads
+  /// Interactive. The persist's terminal result is the sole completion signal.
+  void CompletePersistWithoutObservableSaving() {
+    defer_persist_ = false;
+    state_         = EditorSessionState::Interactive;
+    EditorSessionResult terminal;
+    terminal.kind         = EditorSessionResultKind::Accepted;
+    terminal.operation_id = persist_operation_id_;
+    terminal.state        = state_;
+    terminal.identity     = identity_;
+    terminal.message      = "Editor image persisted";
+    NotifyResult(terminal);
     NotifyChange();
   }
 
@@ -597,6 +615,29 @@ TEST(EditorSessionControllerPhase5ATest,
   EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
 
   backend.CompletePersist();
+  EXPECT_FALSE(controller.persist_in_flight());
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     QueuedPersistClearsPersistInFlightFromTerminalResultWithoutObservedSaving) {
+  FakeSessionBackend      backend;
+  backend.defer_persist_        = true;
+  backend.persist_operation_id_ = 77;
+  EditorSessionController controller(&backend);
+
+  controller.Open(1, 2);
+  backend.SimulateFirstFrameReady();
+  controller.PersistCurrentImage();
+  ASSERT_TRUE(controller.persist_in_flight());
+
+  // An unrelated terminal result must not release the wait.
+  backend.persist_operation_id_ = 78;
+  backend.CompletePersistWithoutObservableSaving();
+  EXPECT_TRUE(controller.persist_in_flight());
+
+  backend.persist_operation_id_ = 77;
+  backend.CompletePersistWithoutObservableSaving();
   EXPECT_FALSE(controller.persist_in_flight());
   EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
 }
