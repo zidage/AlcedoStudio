@@ -20,8 +20,9 @@ enum class ImageContentClass : uint8_t { Raw, Jpeg, Png, Tiff, OpenExr, Unknown 
  * @brief Classify file content (raster_image_input_plan.md, section 6.1).
  *
  * JPEG, PNG and OpenEXR are recognized by their magic numbers. A TIFF container is RAW when its
- * first directory has a DNGVersion tag, or when LibRaw opens it and reports a camera make and a
- * color matrix; otherwise it is a raster TIFF. Anything else is `Unknown`, which import hands to
+ * first directory has a DNGVersion tag, or when LibRaw identifies a supported RAW image from its
+ * structure and encoding. Camera names and color matrices do not determine the file type.
+ * Otherwise it is a raster TIFF. Anything else is `Unknown`, which import hands to
  * LibRaw as before (CR3, RAF, RW2 and others).
  */
 [[nodiscard]] auto ClassifyImageContent(std::span<const std::byte> bytes) -> ImageContentClass;

@@ -9,6 +9,7 @@
 #include "edit/input/raster_input_loader.hpp"
 
 #include <gtest/gtest.h>
+#include <libraw/libraw.h>
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -105,6 +107,36 @@ TEST(RasterInputLoaderTest, TiffMagicWithoutCameraMakeClassifiesAsRaster) {
   EXPECT_EQ(ClassifyImageContent(Fixture("uncompressed_rgb16_no_make.tif")),
             ImageContentClass::Tiff);
   EXPECT_EQ(ClassifyImageContent(MinimalTiff(false)), ImageContentClass::Tiff);
+}
+
+TEST(RasterInputLoaderTest, NikonCfaWithoutColorMatrixClassifiesAndDecodesAsRaw) {
+  const auto bytes = Fixture("nikon_cfa_without_color_matrix.tif");
+  auto       raw   = std::make_unique<LibRaw>();
+  ASSERT_EQ(raw->open_buffer(bytes.data(), bytes.size()), LIBRAW_SUCCESS);
+  ASSERT_GT(raw->imgdata.idata.raw_count, 0u);
+  ASSERT_STREQ(raw->imgdata.idata.make, "Nikon");
+  for (const auto& row : raw->imgdata.color.cam_xyz) {
+    for (const float value : row) {
+      ASSERT_FLOAT_EQ(value, 0.0f);
+    }
+  }
+  EXPECT_EQ(ClassifyImageContent(bytes), ImageContentClass::Raw);
+  EXPECT_FALSE(RasterFileKindFor(ClassifyImageContent(bytes)).has_value());
+  const auto input = LoadEncodedImage(bytes, DecodeRes::FULL);
+  EXPECT_EQ(input.input_kind, RawInputKind::BayerRaw);
+  EXPECT_EQ(input.host_extent, (Extent2D{32, 24}));
+  EXPECT_EQ(input.pixels.format, HostPixelFormat::U16Cfa);
+  EXPECT_EQ(Pixel<std::uint16_t>(input, 0, 0, 0), 1000);
+}
+
+TEST(RasterInputLoaderTest, NikonRgbTiffWithCameraMetadataClassifiesAndDecodesAsRaster) {
+  const auto bytes = Fixture("nikon_rgb_with_camera_metadata.tif");
+  EXPECT_EQ(ClassifyImageContent(bytes), ImageContentClass::Tiff);
+  const auto input = LoadEncodedImage(bytes, DecodeRes::FULL);
+  EXPECT_EQ(input.input_kind, RawInputKind::RasterRgb);
+  EXPECT_EQ(input.host_extent, (Extent2D{32, 24}));
+  EXPECT_EQ(input.pixels.format, HostPixelFormat::U16Rgba);
+  EXPECT_EQ(Pixel<std::uint16_t>(input, 0, 0, 0), 1000);
 }
 
 TEST(RasterInputLoaderTest, DngClassifiesAsRaw) {

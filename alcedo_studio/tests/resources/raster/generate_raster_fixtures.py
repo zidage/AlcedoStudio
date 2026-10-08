@@ -409,6 +409,46 @@ def write_tiff(name: str, pixels: np.ndarray, *, icc: bytes | None = None) -> No
     )
 
 
+def write_nikon_tiff(*, raw: bool) -> None:
+    """A 32x24 Nikon TIFF: CFA sensor samples or exported RGB, with no color matrix.
+
+    The invented model keeps LibRaw's camera matrix table from supplying a matrix.
+    The RAW file has a metadata-only IFD0 and a CFA SubIFD, as the Z50 II NEF does.
+    All pixels are generated; no camera image or personal metadata is included.
+    """
+    width, height = 32, 24
+    channels = 1 if raw else 3
+    camera = [(271, 2, 6, b"Nikon\0"), (272, 2, 19, b"Alcedo CFA fixture\0")]
+    image = [
+        (256, 4, 1, width), (257, 4, 1, height), (258, 3, 1, 16),
+        (259, 3, 1, 1), (262, 3, 1, 32803 if raw else 2),
+        (273, 4, 1, 0), (277, 3, 1, channels), (278, 4, 1, height),
+        (279, 4, 1, width * height * channels * 2),
+    ]
+    if raw:
+        image += [(33421, 3, 2, 0x00020002), (33422, 1, 4, 0x02010100)]
+    first = camera + [(330, 4, 1, 8 + 2 + 3 * 12 + 4)] if raw else camera + image
+    directories = [sorted(first), sorted(image)] if raw else [sorted(first)]
+    values_offset = 8 + sum(2 + len(entries) * 12 + 4 for entries in directories)
+    camera_bytes = b"".join(value for _, _, _, value in camera)
+    pixels_offset = values_offset + len(camera_bytes)
+    encoded = bytearray(b"II*\0" + struct.pack("<I", 8))
+    for entries in directories:
+        encoded += struct.pack("<H", len(entries))
+        for tag, kind, count, value in entries:
+            if isinstance(value, bytes):
+                field = values_offset
+                values_offset += len(value)
+            else:
+                field = pixels_offset if tag == 273 else value
+            encoded += struct.pack("<HHII", tag, kind, count, field)
+        encoded += struct.pack("<I", 0)
+    encoded += camera_bytes
+    encoded += struct.pack("<H", 1000) * (width * height * channels)
+    name = "nikon_cfa_without_color_matrix.tif" if raw else "nikon_rgb_with_camera_metadata.tif"
+    (OUT_DIR / name).write_bytes(encoded)
+
+
 # ---------------------------------------------------------------------------------------------
 # OpenEXR (single-part scanline, no compression)
 # ---------------------------------------------------------------------------------------------
@@ -518,6 +558,8 @@ def main() -> None:
               chunks=[(b"sRGB", b"\0"), (b"eXIf", exif_orientation(2, prefix=False))])
 
     # TIFF
+    write_nikon_tiff(raw=True)
+    write_nikon_tiff(raw=False)
     write_tiff(
         "rec2020_icc_16bit.tif",
         rgb16,
