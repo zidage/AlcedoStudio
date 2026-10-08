@@ -404,4 +404,86 @@ TEST_F(ThumbnailTests, VisibleThumbnailRerequestsWhenMaxEdgeChanges) {
   ProcessEvents(250);
 }
 
+// The Library grid and the retained Editor filmstrip pin the same element at different tiers.
+// Pinning the second tier must keep the first consumer's pin and stored image, and releasing the
+// second tier must leave the row on an image that the provider still resolves.
+TEST_F(ThumbnailTests, ReleasingOneTierKeepsTheOtherConsumersPinnedTier) {
+  ApplicationModuleHost backend;
+  PinAcceleratorBeforeProjectOpen(backend);
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  auto images = CollectRawTestImages("airplane", 1);
+  if (images.empty()) {
+    images = CollectRawTestImages("still_life", 1);
+  }
+  if (images.empty()) {
+    GTEST_SKIP() << "No RAW test image available for the two-tier thumbnail pin test.";
+  }
+
+  backend.import_export()->StartImport(PathsToQStringList(images));
+  WaitForImportFinished(backend);
+
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  ASSERT_GE(backend.library()->ShownCount(), 1);
+
+  const QVariantMap first_row = backend.library()->Thumbnails().front().toMap();
+  const auto        element_id =
+      static_cast<sl_element_id_t>(first_row.value("elementId").toUInt());
+  const auto image_id = static_cast<image_id_t>(first_row.value("imageId").toUInt());
+  ASSERT_NE(element_id, 0);
+  ASSERT_NE(image_id, 0);
+  auto store = backend.library()->thumbs().image_store();
+  ASSERT_NE(store, nullptr);
+
+  constexpr uint kGridEdge      = 256;
+  constexpr uint kFilmstripEdge = 512;
+  const auto     settled_row    = [](const QVariantMap& row) {
+    return !row.value("thumbUrl").toString().isEmpty() && !row.value("thumbLoading").toBool();
+  };
+
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id),
+                                         static_cast<uint>(image_id), true, kGridEdge);
+  const QVariantMap grid_row = WaitForThumbnailRow(backend, element_id, settled_row, 30000);
+  ASSERT_FALSE(grid_row.isEmpty()) << "The grid tier thumbnail did not load.";
+  const QString grid_url = grid_row.value("thumbUrl").toString();
+  ASSERT_FALSE(store->Get(element_id, kGridEdge).isNull());
+
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id),
+                                         static_cast<uint>(image_id), true, kFilmstripEdge);
+  const QVariantMap filmstrip_row = WaitForThumbnailRow(
+      backend, element_id,
+      [&grid_url, &settled_row](const QVariantMap& row) {
+        return settled_row(row) && row.value("thumbUrl").toString() != grid_url;
+      },
+      30000);
+  ASSERT_FALSE(filmstrip_row.isEmpty()) << "The filmstrip tier thumbnail did not load.";
+  EXPECT_TRUE(backend.library()->thumbs().IsThumbnailPinned(element_id));
+  EXPECT_FALSE(store->Get(element_id, kGridEdge).isNull())
+      << "Pinning the filmstrip tier removed the grid tier's stored image.";
+
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id),
+                                         static_cast<uint>(image_id), false, kFilmstripEdge);
+  const QVariantMap after_release_row =
+      WaitForThumbnailRow(backend, element_id, settled_row, 30000);
+  ASSERT_FALSE(after_release_row.isEmpty())
+      << "Releasing the filmstrip tier cleared the row although the grid tier stays pinned.";
+  EXPECT_TRUE(backend.library()->thumbs().IsThumbnailPinned(element_id));
+  const QImage shown_image =
+      ResolveThumbUrlImage(backend, after_release_row.value("thumbUrl").toString());
+  ASSERT_FALSE(shown_image.isNull())
+      << "The row URL does not resolve in the image store after the filmstrip tier release.";
+  EXPECT_LE(MaxImageEdge(shown_image), static_cast<int>(kGridEdge));
+
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id),
+                                         static_cast<uint>(image_id), false, kGridEdge);
+  const QVariantMap released_row = WaitForThumbnailRow(
+      backend, element_id,
+      [](const QVariantMap& row) {
+        return row.value("thumbUrl").toString().isEmpty() && !row.value("thumbLoading").toBool();
+      },
+      5000);
+  EXPECT_FALSE(released_row.isEmpty()) << "Releasing the last tier did not clear the row.";
+  EXPECT_FALSE(backend.library()->thumbs().IsThumbnailPinned(element_id));
+}
+
 }  // namespace alcedo::ui::test

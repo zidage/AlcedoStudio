@@ -46,6 +46,8 @@ class ThumbnailImageStore {
   void               Clear();
 
   [[nodiscard]] auto Get(sl_element_id_t element_id, uint32_t max_edge) const -> QImage;
+  /// URL of the stored image at its current revision, or empty when the key has no image.
+  [[nodiscard]] auto CurrentUrl(sl_element_id_t element_id, uint32_t max_edge) const -> QString;
   [[nodiscard]] auto GetByProviderId(const QString& id) const -> QImage;
 
   [[nodiscard]] static auto MakeUrl(sl_element_id_t element_id, uint32_t max_edge,
