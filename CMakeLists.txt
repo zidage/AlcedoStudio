@@ -850,6 +850,41 @@ function(alcedo_install_metal_runtime_libs destination)
     install(FILES ${ALCEDO_METAL_RUNTIME_LIBS} DESTINATION "${destination}")
 endfunction()
 
+# Install the OpenCL program sources under ${destination}/opencl, mirroring their
+# paths below alcedo_studio/src. OpenClProgramLibrary treats a packaged shader
+# directory as authoritative, so any source a program registers but the package
+# omits fails at runtime with "failed to open source file". The .cl directories
+# go in whole; the shared headers come from ALCEDO_OPENCL_PACKAGED_HEADERS, the
+# same list that feeds the program source defines in src/opencl/CMakeLists.txt.
+function(alcedo_install_opencl_sources destination)
+    if(NOT ALCEDO_OPENCL_ENABLED)
+        return()
+    endif()
+    set(_src_root "${CMAKE_SOURCE_DIR}/alcedo_studio/src")
+    foreach(_shader_dir IN ITEMS
+            decoders/processor/operators/gpu/opencl_shader
+            edit/runtime/lens/opencl/shader
+            edit/scope/opencl_shader
+            opencl/opencl_shader
+            edit/runtime/opencl/shader)
+        install(DIRECTORY "${_src_root}/${_shader_dir}/"
+            DESTINATION "${destination}/opencl/${_shader_dir}")
+    endforeach()
+    if(NOT ALCEDO_OPENCL_PACKAGED_HEADERS)
+        message(FATAL_ERROR
+            "[alcedo] ALCEDO_OPENCL_ENABLED but ALCEDO_OPENCL_PACKAGED_HEADERS is empty. "
+            "OpenCL program headers were not registered for packaging.")
+    endif()
+    foreach(_header IN LISTS ALCEDO_OPENCL_PACKAGED_HEADERS)
+        file(RELATIVE_PATH _rel_header "${_src_root}" "${_header}")
+        if(IS_ABSOLUTE "${_rel_header}" OR _rel_header MATCHES "^\\.\\./")
+            message(FATAL_ERROR "[alcedo] OpenCL header is outside alcedo_studio/src: ${_header}")
+        endif()
+        get_filename_component(_rel_dir "${_rel_header}" DIRECTORY)
+        install(FILES "${_header}" DESTINATION "${destination}/opencl/${_rel_dir}")
+    endforeach()
+endfunction()
+
 # Ship Alcedo LICENSE/NOTICE plus gathered third-party texts, including the
 # QuickQanava BSD-3-Clause and vendored bezier MIT notices required for binary
 # redistribution. @p destination is next to the Windows executable or inside
@@ -932,25 +967,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         alcedo_install_legal_notices("${_bundle_resources_dest}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${_bundle_macos_dest}")
         alcedo_remove_installed_lut_payloads("${_bundle_macos_dest}/LUTs")
-        if(ALCEDO_OPENCL_ENABLED)
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/decoders/processor/operators/gpu/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/lens/opencl/shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/edit/runtime/lens/opencl/shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/scope/opencl_shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/edit/scope/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/opencl/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/opencl/shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/edit/runtime/opencl/shader")
-            install(FILES
-                "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/dng_profile_gpu_math.h"
-                "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/aces_reference_gamut_compression.h"
-                DESTINATION "${_bundle_macos_dest}/opencl/include/edit/runtime")
-            install(FILES
-                "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/color/color_encoding_math.h"
-                DESTINATION "${_bundle_macos_dest}/opencl/include/color")
-        endif()
+        alcedo_install_opencl_sources("${_bundle_macos_dest}")
         alcedo_install_metal_runtime_libs("${_bundle_resources_dest}/metallib")
         alcedo_install_duckdb_extensions("${_bundle_resources_dest}")
         if(ALCEDO_BUILD_SEMANTIC_SIDECAR AND ALCEDO_MIND_BINARY)
@@ -1054,25 +1071,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         alcedo_install_demosaicnet_models("${_config_dir}" "${CMAKE_INSTALL_BINDIR}")
 
         alcedo_remove_installed_lut_payloads("${CMAKE_INSTALL_BINDIR}/LUTs")
-        if(ALCEDO_OPENCL_ENABLED)
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/decoders/processor/operators/gpu/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/lens/opencl/shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/runtime/lens/opencl/shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/scope/opencl_shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/scope/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/opencl/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/opencl/shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/runtime/opencl/shader")
-            install(FILES
-                "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/dng_profile_gpu_math.h"
-                "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/aces_reference_gamut_compression.h"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/include/edit/runtime")
-            install(FILES
-                "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/color/color_encoding_math.h"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/include/color")
-        endif()
+        alcedo_install_opencl_sources("${CMAKE_INSTALL_BINDIR}")
         alcedo_install_duckdb_extensions("${CMAKE_INSTALL_BINDIR}")
 
         if(ALCEDO_BUILD_SEMANTIC_SIDECAR AND ALCEDO_MIND_BINARY)

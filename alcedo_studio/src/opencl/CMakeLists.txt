@@ -25,6 +25,25 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_DAG_CST_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/cst.cl")
     set(OPENCL_DAG_DISPLAY_TO_AP1_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/display_to_ap1.cl")
 
+    # Shared C headers that OpenCL programs load as source. The .cl directories are
+    # installed whole, but these headers sit in include/ next to non-OpenCL headers,
+    # so the install rules copy exactly this list. Every *_H source define below
+    # must come from here, or the packaged app fails to open the header at runtime.
+    set(OPENCL_COLOR_ENCODING_MATH_H "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h")
+    set(OPENCL_DNG_PROFILE_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/dng_profile_gpu_math.h")
+    set(OPENCL_ACES_RGC_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h")
+    set(OPENCL_ACES2_REFERENCE_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces2_reference_math.h")
+    set(OPENCL_DISPLAY_TO_AP1_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/display_to_ap1_math.h")
+    set(OPENCL_RASTER_LINEARIZE_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/raster_linearize_math.h")
+    set(ALCEDO_OPENCL_PACKAGED_HEADERS
+        "${OPENCL_COLOR_ENCODING_MATH_H}"
+        "${OPENCL_DNG_PROFILE_MATH_H}"
+        "${OPENCL_ACES_RGC_H}"
+        "${OPENCL_ACES2_REFERENCE_MATH_H}"
+        "${OPENCL_DISPLAY_TO_AP1_MATH_H}"
+        "${OPENCL_RASTER_LINEARIZE_MATH_H}"
+        CACHE INTERNAL "Header sources of OpenCL programs that the install rules package.")
+
     # On Windows, first-party CUDA pipeline targets (RawProcessorOp, EditRuntimeLens,
     # EditPipeline, …) are SHARED by default. If OpenCL context/program runtime
     # stays STATIC, each DLL and alcedo_main gets its own Meyers singleton for
@@ -108,9 +127,9 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_GEOMETRY_UTILS_CL="${OPENCL_GEOMETRY_UTILS_CL}"
         ALCEDO_OPENCL_LENS_CALIB_CL="${OPENCL_LENS_CALIB_CL}"
         ALCEDO_OPENCL_SCOPE_ANALYZER_CL="${OPENCL_SCOPE_ANALYZER_CL}"
-        ALCEDO_OPENCL_COLOR_ENCODING_MATH_H="${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
-        ALCEDO_OPENCL_DNG_PROFILE_MATH_H="${ALCEDO_INCLUDE_ROOT}/edit/runtime/dng_profile_gpu_math.h"
-        ALCEDO_OPENCL_ACES_RGC_H="${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
+        ALCEDO_OPENCL_COLOR_ENCODING_MATH_H="${OPENCL_COLOR_ENCODING_MATH_H}"
+        ALCEDO_OPENCL_DNG_PROFILE_MATH_H="${OPENCL_DNG_PROFILE_MATH_H}"
+        ALCEDO_OPENCL_ACES_RGC_H="${OPENCL_ACES_RGC_H}"
         ALCEDO_OPENCL_DAG_GEOMETRY_CAMERA_CL="${OPENCL_DAG_GEOMETRY_CAMERA_CL}"
         ALCEDO_OPENCL_DAG_PRIMARY_GRADE_CL="${OPENCL_DAG_PRIMARY_GRADE_CL}"
         ALCEDO_OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL="${OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL}"
@@ -121,9 +140,9 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_DAG_COMMON_CL="${OPENCL_DAG_COMMON_CL}"
         ALCEDO_OPENCL_DAG_CST_CL="${OPENCL_DAG_CST_CL}"
         ALCEDO_OPENCL_DAG_DISPLAY_TO_AP1_CL="${OPENCL_DAG_DISPLAY_TO_AP1_CL}"
-        ALCEDO_OPENCL_ACES2_REFERENCE_MATH_H="${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces2_reference_math.h"
-        ALCEDO_OPENCL_DISPLAY_TO_AP1_MATH_H="${ALCEDO_INCLUDE_ROOT}/edit/runtime/display_to_ap1_math.h"
-        ALCEDO_OPENCL_RASTER_LINEARIZE_MATH_H="${ALCEDO_INCLUDE_ROOT}/edit/runtime/raster_linearize_math.h"
+        ALCEDO_OPENCL_ACES2_REFERENCE_MATH_H="${OPENCL_ACES2_REFERENCE_MATH_H}"
+        ALCEDO_OPENCL_DISPLAY_TO_AP1_MATH_H="${OPENCL_DISPLAY_TO_AP1_MATH_H}"
+        ALCEDO_OPENCL_RASTER_LINEARIZE_MATH_H="${OPENCL_RASTER_LINEARIZE_MATH_H}"
         ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_OPENCL_SHADER_SOURCE_ROOT}"
     )
 endif()

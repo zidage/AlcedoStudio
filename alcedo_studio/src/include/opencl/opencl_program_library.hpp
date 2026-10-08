@@ -88,6 +88,10 @@ class OpenClProgramLibrary {
   // Source files of the named program in build order, or empty when it is not registered. Does
   // not trigger compilation. Used by tests that check where a program's sources live.
   auto RegisteredSourcePaths(std::string_view name) const -> std::vector<std::filesystem::path>;
+
+  // Build options of the named program, or empty when it is not registered. Does not trigger
+  // compilation. Used by tests that rebuild a program from another copy of its sources.
+  auto RegisteredBuildOptions(std::string_view name) const -> std::string;
 };
 
 }  // namespace alcedo
