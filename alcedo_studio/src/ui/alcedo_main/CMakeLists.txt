@@ -406,6 +406,19 @@ if(WIN32)
         RUNTIME_OUTPUT_DIRECTORY "${ALCEDO_BINARY_ROOT}"
     )
 
+    # Ship as a GUI-subsystem app so launching Alcedo does not pop a console
+    # window. Redirected stdout/stderr (e.g. --verify-qml-imports in
+    # verify_windows_install_tree.ps1) still work. Keep the standard main()
+    # entry point instead of WinMain. Developers who want a console for logs
+    # can configure with -DALCEDO_WINDOWS_CONSOLE=ON.
+    option(ALCEDO_WINDOWS_CONSOLE "Build alcedo_main as a console-subsystem app" OFF)
+    if(NOT ALCEDO_WINDOWS_CONSOLE)
+        set_target_properties(alcedo_main PROPERTIES WIN32_EXECUTABLE ON)
+        if(MSVC)
+            target_link_options(alcedo_main PRIVATE "/ENTRY:mainCRTStartup")
+        endif()
+    endif()
+
     # Make the build-tree executable directly runnable without a shell-specific
     # Qt environment. Packaging generates its own deployment configuration.
     get_filename_component(_alcedo_qt_runtime_prefix
