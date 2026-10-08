@@ -237,7 +237,7 @@ Item {
 
     function preparePage() {
         if (outDirText.length === 0)
-            outDirText = appModules.importExport.defaultExportFolder
+            outDirText = appModules.importExport.LoadExportFolder()
         ensureValidBitDepthSelection()
         applyRememberedQuality()
         loadExportFileNamePresets()
@@ -304,6 +304,7 @@ Item {
                 || !root.settingsValid)
             return
         persistExportQuality()
+        appModules.importExport.SaveExportFolder(outDirText)
         const hasSdrResize = root.sdrResizeMode !== "original"
         const sdrMaxSide = root.sdrResizeMode === "longEdge" ? parseInt(sdrMaxSideText) : 0
         appModules.importExport.StartExportWithRecipeOptionsForTargets(
@@ -407,7 +408,10 @@ Item {
     FolderDialog {
         id: exportFolderDialog
         title: qsTr("Select Export Folder")
-        onAccepted: root.outDirText = selectedFolder.toString()
+        onAccepted: {
+            const local = appModules.importExport.SaveExportFolder(selectedFolder.toString())
+            root.outDirText = local.length > 0 ? local : selectedFolder.toString()
+        }
     }
 
     ColumnLayout {
@@ -501,7 +505,11 @@ Item {
                                 hoverEnabled: true
                                 activeFocusOnTab: true
                                 Accessible.name: text
-                                onClicked: exportFolderDialog.open()
+                                onClicked: {
+                                    exportFolderDialog.currentFolder =
+                                            appModules.importExport.ExportFolderUrl(root.outDirText)
+                                    exportFolderDialog.open()
+                                }
                                 contentItem: Label {
                                     text: parent.text
                                     color: parent.enabled ? appTheme.textColor : appTheme.textMutedColor

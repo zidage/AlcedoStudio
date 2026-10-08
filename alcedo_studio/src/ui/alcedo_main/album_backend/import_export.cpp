@@ -5,6 +5,7 @@
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QMetaObject>
 #include <QPointer>
 #include <QSettings>
@@ -41,10 +42,17 @@ constexpr auto kFolderAllowedCategoriesKey = "import/folderAllowedCategories";
 constexpr auto kExportSdrQualityKey      = "export/sdrQuality";
 constexpr auto kExportUltraHdrQualityKey = "export/ultraHdrQuality";
 constexpr auto kExportFileNamePresetsKey = "export/fileNamePresets";
+constexpr auto kExportLastFolderKey      = "export/lastFolder";
 constexpr int  kDefaultExportQuality     = 95;
 constexpr int  kMaxExportPresetCount     = 64;
 constexpr int  kMaxExportPresetNameSize  = 80;
 constexpr int  kMaxExportPatternSize     = 2048;
+
+/// Export folders use '/' separators and no trailing separator, like the Pictures default from
+/// QStandardPaths.
+auto ExportFolderText(const std::filesystem::path& path) -> QString {
+  return QDir::cleanPath(QDir::fromNativeSeparators(PathToQString(path)));
+}
 
 auto           SanitizeBitDepth(ImageFormatType format, ExportFormatOptions::BIT_DEPTH requested)
     -> ExportFormatOptions::BIT_DEPTH {
@@ -535,6 +543,36 @@ auto ImportExportHandler::LoadExportUltraHdrQuality() const -> int {
 
 void ImportExportHandler::SaveExportUltraHdrQuality(int quality) {
   QSettings{}.setValue(QLatin1String(kExportUltraHdrQualityKey), std::clamp(quality, 1, 100));
+}
+
+auto ImportExportHandler::LoadExportFolder() const -> QString {
+  const QString stored = QSettings{}.value(QLatin1String(kExportLastFolderKey)).toString();
+  const auto    path   = InputToPath(stored);
+  std::error_code ec;
+  if (path.has_value() && std::filesystem::is_directory(path.value(), ec) && !ec) {
+    return ExportFolderText(path.value());
+  }
+  return default_export_folder_;
+}
+
+auto ImportExportHandler::SaveExportFolder(const QString& folderUrlOrPath) -> QString {
+  const auto path = InputToPath(folderUrlOrPath);
+  if (!path.has_value()) {
+    return {};
+  }
+  const QString local = ExportFolderText(path.value());
+  QSettings{}.setValue(QLatin1String(kExportLastFolderKey), local);
+  return local;
+}
+
+auto ImportExportHandler::ExportFolderUrl(const QString& folderUrlOrPath) const -> QUrl {
+  const auto path = InputToPath(folderUrlOrPath);
+  std::error_code ec;
+  if (path.has_value() && std::filesystem::is_directory(path.value(), ec) && !ec) {
+    return QUrl::fromLocalFile(ExportFolderText(path.value()));
+  }
+  const QString fallback = LoadExportFolder();
+  return fallback.isEmpty() ? QUrl{} : QUrl::fromLocalFile(fallback);
 }
 
 auto ImportExportHandler::LoadExportFileNamePresets() const -> QVariantList {
