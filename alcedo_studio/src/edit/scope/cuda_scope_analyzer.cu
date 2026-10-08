@@ -15,7 +15,6 @@
 #include <stdexcept>
 #include <string>
 
-#include "utils/diagnostics/scope_diag.hpp"
 
 #include "edit/scope/detail/scope_cuda_shared.cuh"
 
@@ -196,7 +195,6 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
         frame.ready_signal.resource.get());
     if (!image_resource || !signal_resource || !image_resource->device_ptr ||
         !signal_resource->stream) {
-      diag::NoteScope("stage_skip missing_cuda_buffer_or_stream");
       return {};
     }
 
@@ -221,7 +219,6 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
     ReclaimCompletedSlots();
     ScopeSlot* slot = AcquireIdleSlot();
     if (!slot) {
-      diag::NoteScope("stage_skip no_idle_slot");
       return {};
     }
 
@@ -236,7 +233,6 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
         cudaMemcpyDeviceToDevice, signal_resource->stream);
     if (copy_status != cudaSuccess) {
       slot->phase = ScopeSlot::Phase::Idle;
-      diag::NoteScope(std::string("stage_skip memcpy=") + cudaGetErrorString(copy_status));
       return {};
     }
     cudaEventRecord(slot->input_ready->event, signal_resource->stream);
@@ -270,7 +266,6 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
         static_cast<scope::cuda_detail::CudaLinearImageResource*>(frame.image.resource.get());
     if (!event_resource || event_resource->slot_index < 0 || !image_resource ||
         !image_resource->device_ptr) {
-      diag::NoteScope("submit_skip missing_staged_event");
       return;
     }
 

@@ -18,7 +18,6 @@
 #include "edit/scope/scope_analyzer.hpp"
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_program_library.hpp"
-#include "utils/diagnostics/scope_diag.hpp"
 
 namespace alcedo {
 namespace {
@@ -159,11 +158,9 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
     }
     if (use_image_input) {
       if (!source_image_2d || source_image_2d->image == nullptr) {
-        diag::NoteScope("stage_skip missing_opencl_image");
         return {};
       }
     } else if (!source_image || source_image->buffer == nullptr) {
-      diag::NoteScope("stage_skip missing_opencl_buffer");
       return {};
     }
 
@@ -184,7 +181,6 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
     ReclaimCompletedSlots();
     ScopeSlot* slot = AcquireIdleSlot();
     if (slot == nullptr) {
-      diag::NoteScope("stage_skip no_idle_slot");
       return {};
     }
 
@@ -233,7 +229,6 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
     auto* event_resource = static_cast<scope::opencl_detail::OpenClEventSignalResource*>(
         frame.ready_signal.resource.get());
     if (event_resource == nullptr || event_resource->slot_index < 0) {
-      diag::NoteScope("submit_skip missing_staged_event");
       return;
     }
 
