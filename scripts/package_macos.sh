@@ -336,7 +336,20 @@ hdiutil attach -nobrowse -readonly -mountpoint "${package_verify_dir}/dmg" "$pac
 dmg_verify_status=0
 "${script_dir}/verify_macos_install_tree.sh" --install-dir "${package_verify_dir}/dmg" \
   "${package_verify_args[@]}" || dmg_verify_status=$?
-hdiutil detach -quiet "${package_verify_dir}/dmg"
+# The verify script runs the app from the DMG. macOS can hold the volume for a few seconds after
+# that process exits, and a detach then fails with "Resource busy" (exit 16). Retry, then force.
+dmg_detached=0
+for _ in {1..10}; do
+  if hdiutil detach -quiet "${package_verify_dir}/dmg"; then
+    dmg_detached=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$dmg_detached" -eq 0 ]]; then
+  echo "DMG volume is still busy; forcing the detach." >&2
+  hdiutil detach -quiet -force "${package_verify_dir}/dmg"
+fi
 [[ "$dmg_verify_status" -eq 0 ]] || exit "$dmg_verify_status"
 rm -rf "$package_verify_dir"
 
