@@ -643,9 +643,10 @@ TEST_F(OpenClWorkspaceFixture, OpenClProgramManifestCanLoadFromInstalledResource
 
 TEST_F(OpenClWorkspaceFixture, InstalledOpenClPackageBuildsEveryGpuDagProgram) {
   // Run after `cmake --install` with ALCEDO_INSTALLED_OPENCL_BIN_DIR set to the installed
-  // directory that holds `opencl/` (for example build/install/bin). Each gpu_dag program is built
-  // again from the installed copies only, so a source file that the install rules miss fails here
-  // with the program name and the missing path.
+  // directory that holds `opencl/` (for example build/install/bin). Every built-in program (gpu_dag,
+  // RAW, geometry, scope, DemosaicNet) is built again from the installed copies only, so a source
+  // file that the install rules miss fails here with the program name and the missing path. The
+  // list comes from the library rather than a fixed set so that a new program cannot be skipped.
   const char* installed_bin = std::getenv("ALCEDO_INSTALLED_OPENCL_BIN_DIR");
   if (installed_bin == nullptr || *installed_bin == '\0') {
     GTEST_SKIP() << "ALCEDO_INSTALLED_OPENCL_BIN_DIR is not set";
@@ -657,10 +658,26 @@ TEST_F(OpenClWorkspaceFixture, InstalledOpenClPackageBuildsEveryGpuDagProgram) {
   const auto source_root =
       std::filesystem::path{ALCEDO_OPENCL_SHADER_SOURCE_ROOT}.lexically_normal();
   auto& library = OpenClProgramLibrary::Instance();
-  for (const char* program_name :
-       {OpenCL::GpuDag::kGeometryCameraProgramName, OpenCL::GpuDag::kPrimaryGradeProgramName,
-        OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kMaskProgramName,
-        OpenCL::GpuDag::kDrtProgramName}) {
+  // Probe programs from other tests in this process register paths outside the source tree or
+  // files that do not exist there; built-in programs always load existing source-tree files.
+  const auto is_builtin_program = [&](const std::vector<std::filesystem::path>& source_paths) {
+    return !source_paths.empty() &&
+           std::all_of(source_paths.begin(), source_paths.end(), [&](const auto& path) {
+             const auto rel = path.lexically_normal().lexically_relative(source_root);
+             return !rel.empty() && *rel.begin() != ".." && std::filesystem::is_regular_file(path);
+           });
+  };
+  std::vector<std::string> program_names;
+  for (const auto& name : library.RegisteredProgramNames()) {
+    if (is_builtin_program(library.RegisteredSourcePaths(name))) {
+      program_names.push_back(name);
+    }
+  }
+  ASSERT_NE(std::find(program_names.begin(), program_names.end(),
+                      OpenCL::GpuDag::kDisplayToAp1ProgramName),
+            program_names.end());
+
+  for (const auto& program_name : program_names) {
     SCOPED_TRACE(program_name);
     const auto source_paths = library.RegisteredSourcePaths(program_name);
     ASSERT_FALSE(source_paths.empty());
@@ -677,7 +694,7 @@ TEST_F(OpenClWorkspaceFixture, InstalledOpenClPackageBuildsEveryGpuDagProgram) {
     library.RegisterProgram(OpenClProgramDescriptor{
         .name                = installed_program,
         .source_paths        = installed_paths,
-        .build_options       = "-cl-std=CL1.2",
+        .build_options       = library.RegisteredBuildOptions(program_name),
         .required_at_startup = false,
     });
     EXPECT_NO_THROW((void)library.GetProgram(installed_program));

@@ -134,6 +134,7 @@ if (-not $SkipOpenCLAssetCheck) {
         'opencl\edit\scope\opencl_shader\scope_analyzer.cl',
         'opencl\edit\runtime\opencl\shader\common.cl',
         'opencl\edit\runtime\opencl\shader\cst.cl',
+        'opencl\edit\runtime\opencl\shader\display_to_ap1.cl',
         'opencl\edit\runtime\opencl\shader\drt.cl',
         'opencl\edit\runtime\opencl\shader\drt_params.cl',
         'opencl\edit\runtime\opencl\shader\geometry_camera.cl',
@@ -143,6 +144,9 @@ if (-not $SkipOpenCLAssetCheck) {
         'opencl\edit\runtime\opencl\shader\primary_grade_neighbor.cl',
         'opencl\include\edit\runtime\dng_profile_gpu_math.h',
         'opencl\include\edit\runtime\aces_reference_gamut_compression.h',
+        'opencl\include\edit\runtime\aces2_reference_math.h',
+        'opencl\include\edit\runtime\display_to_ap1_math.h',
+        'opencl\include\edit\runtime\raster_linearize_math.h',
         'opencl\include\color\color_encoding_math.h'
     )
     foreach ($file in $openClFiles) {

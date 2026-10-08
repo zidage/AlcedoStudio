@@ -364,6 +364,15 @@ auto OpenClProgramLibrary::RegisteredSourcePaths(std::string_view name) const
   return it->second->descriptor.source_paths;
 }
 
+auto OpenClProgramLibrary::RegisteredBuildOptions(std::string_view name) const -> std::string {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto                  it = programs_.find(std::string(name));
+  if (it == programs_.end() || !it->second) {
+    return {};
+  }
+  return it->second->descriptor.build_options;
+}
+
 }  // namespace alcedo
 
 #endif
