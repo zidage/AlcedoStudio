@@ -26,6 +26,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <future>
@@ -654,6 +655,35 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_EQ(thumbnails_->refresh_count, 1);
   ASSERT_EQ(thumbnails_->refreshed_ids.size(), 1u);
   EXPECT_EQ(thumbnails_->refreshed_ids.front(), static_cast<sl_element_id_t>(10));
+}
+
+/// Regression: a persist that finds a checkpoint already in progress must still
+/// publish a terminal result. The controller clears persistInFlight from the
+/// persist's own terminal result; a silent return left quit waiting forever.
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       PersistDuringActiveCheckpointPublishesOneTerminalResult) {
+  openInteractive(10, 20);
+
+  history_->dirty_journal              = true;
+  checkpoint_store_->async_materialize = false;
+  (void)service_->PersistCurrentImage();
+  ASSERT_EQ(service_->state(), EditorSessionState::Saving);
+
+  const auto result = service_->PersistCurrentImage();
+  drainQueue();
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Accepted);
+  ASSERT_NE(result.operation_id, 0u);
+  const auto own_terminals = std::count_if(
+      recorder_->results.begin(), recorder_->results.end(), [&](const EditorSessionResult& r) {
+        return r.operation_id == result.operation_id && EditorSessionResultIsTerminal(r.kind);
+      });
+  EXPECT_EQ(own_terminals, 1)
+      << "a persist satisfied by the in-flight checkpoint must publish one terminal result";
+
+  checkpoint_store_->CompleteMaterialization(true);
+  drainQueue();
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
 }
 
 }  // namespace

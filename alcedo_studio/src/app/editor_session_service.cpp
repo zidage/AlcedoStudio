@@ -1136,15 +1136,19 @@ auto EditorSessionService::PersistCurrentImage() -> EditorSessionResult {
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     return Reject("Cannot persist while shutting down");
   }
+  // Both early outs publish a terminal result: a queued persist is tracked by
+  // its operation id, and a silent return would leave the caller waiting.
   if (lifecycle_.state() == EditorSessionState::Saving ||
       lifecycle_.state() == EditorSessionState::Switching || navigation_.has_pending_action() ||
       save_service_.active()) {
-    EditorSessionResult waiting;
-    waiting.kind     = EditorSessionResultKind::SaveStarted;
-    waiting.state    = lifecycle_.state();
-    waiting.identity = lifecycle_.identity();
-    waiting.message  = "Editor save checkpoint is already in progress";
-    return waiting;
+    // The in-flight checkpoint or navigation owns the save; this persist is
+    // satisfied by it. Callers wait on the session state for that work.
+    EditorSessionResult accepted;
+    accepted.kind     = EditorSessionResultKind::Accepted;
+    accepted.state    = lifecycle_.state();
+    accepted.identity = lifecycle_.identity();
+    accepted.message  = "Editor save checkpoint is already in progress";
+    return Emit(std::move(accepted));
   }
   if (!lifecycle_.has_image() || lifecycle_.state() != EditorSessionState::Interactive) {
     EditorSessionResult accepted;
@@ -1152,7 +1156,7 @@ auto EditorSessionService::PersistCurrentImage() -> EditorSessionResult {
     accepted.state    = lifecycle_.state();
     accepted.identity = lifecycle_.identity();
     accepted.message  = "No open editor image to persist";
-    return accepted;
+    return Emit(std::move(accepted));
   }
   return StartHistoryCheckpoint("Editor image persisted", false);
 }
