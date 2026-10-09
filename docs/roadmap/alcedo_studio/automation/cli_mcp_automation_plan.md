@@ -1402,6 +1402,10 @@ Deviations:
   - gtest_discover_tests keeps only the first entry of a label list, so the CI targets have the
     single label ci_automation_flow instead of "automation;ci_automation_flow".
   - AutomationLibraryCommandsTest (in-process) was added for the parameter and state rules.
+  - The end-to-end tests need alcedo_main. With ALCEDO_GENERATE_QMLTYPES OFF the QML module
+    plugin references qml_register_types_Alcedo_Main, which is then not generated, so
+    alcedo_main did not link in macos_arm_metal_ci (first CI run). The macos_arm_metal_ci and
+    macos_debug_tests presets now set ALCEDO_GENERATE_QMLTYPES ON, like the other presets.
 Primary success call chain: alcedo-cli call library.import {paths} -> AutomationServer ->
   registry -> StartImportAndAnswer -> ImportExportHandler::StartImportPaths -> ImportStateChanged
   -> AutomationTaskTracker assigns import-1 -> {"task_id": "import-1"}; tasks.wait import-1 ->
