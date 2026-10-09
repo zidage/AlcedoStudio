@@ -189,7 +189,8 @@ auto RunHostSession(QCoreApplication& app, const HeadlessHostOptions& options,
           &registration_error) ||
       !RegisterAutomationHostCommands(registry, std::move(context), &registration_error) ||
       !RegisterAutomationProjectCommands(registry, &host, &registration_error) ||
-      !RegisterAutomationLibraryCommands(registry, &host, &tracker, &registration_error) ||
+      !RegisterAutomationLibraryCommands(registry, &host, &tracker, QLatin1String(kHostMode),
+                                         &registration_error) ||
       !RegisterAutomationTaskCommands(registry, &host, &tracker, &registration_error)) {
     ReportFailure(QStringLiteral("command registration failed: %1").arg(registration_error));
     host.Shutdown();

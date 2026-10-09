@@ -445,6 +445,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   application_close_ = std::make_unique<ApplicationCloseCoordinator>(
       editor_session_.get(), workspace_router_.get(), project_.get(), this);
   RecordConstruction("ApplicationCloseCoordinator", application_close_.get());
+  library_mutations_ = std::make_unique<LibraryMutationOperations>(
+      images_.get(), library_->selection(), folders_.get(), editor_session_.get(),
+      workspace_router_.get(), this);
+  RecordConstruction("LibraryMutationOperations", library_mutations_.get());
 
   library_->BindCollaborators(folders_.get(), search_.get(), stats_.get());
   library_->SetSemanticLabelProvider(
@@ -681,6 +685,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     pointer.reset();
     RecordDestruction(type_name, object);
   };
+  destroy(library_mutations_, "LibraryMutationOperations");
   destroy(application_close_, "ApplicationCloseCoordinator");
   destroy(project_launch_, "ProjectLaunchCoordinator");
   destroy(editor_behavior_, "EditorBehaviorPreferences");

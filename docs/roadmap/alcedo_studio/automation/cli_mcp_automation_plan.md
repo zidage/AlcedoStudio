@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1, AU2, AU3, AU4a, AU4b, and AU5 have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1 to AU6 have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -566,7 +566,7 @@ class AutomationCommandRegistry {
 | AU4a | Project launch and close in C++ | Project coordinators, `ProjectModule`, QML | AU3 | 1400–1600 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU4b | Project commands | `AutomationHostLib` | AU4a | 600–800 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
-| AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
+| AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU8 | Parameter catalog: RAW, input profile, lens, crop | Catalog, Raw and Geometry QML | AU7 | 1300–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU9 | Parameter catalog: display transform and color fields | Catalog, Display, Look, white balance QML | AU8 | 1200–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
@@ -1505,7 +1505,76 @@ ctest --test-dir build/debug -R "LibrarySelectionTest|LibraryMutationOperationsT
 
 **Expected diff:** 900–1300 lines.
 
-**Completion record:** see section 13.
+**Completion record:**
+
+```text
+Phase / date / status: AU6 / 2026-10-10 / implemented.
+Source revision and branch: AU5 (feature/automation-library-import-tasks); branch
+  feature/automation-library-selection-rating-delete. Actual diff: 1549 lines (26 files,
+  this record included).
+Actual changed modules: new LibrarySelection (owned by LibraryModule, QML property
+  library.selection, LibraryModule::SelectAllInCurrentView), new LibraryMutationOperations (owned
+  by ApplicationModuleHost, QML property libraryMutations), ImageController
+  (StartSetImageRatings returns the task id), QML (SelectionState.qml forwards to
+  LibrarySelection; ImageActionsController.qml calls LibraryMutationOperations), library
+  commands, translations (4 new strings, .ts edited by hand), tests.
+Implemented behavior:
+  - LibrarySelection holds the selected images by element id and has the SelectionState.qml
+    operations (set one, clear, replace, current target maps, prune). A change that leaves the
+    selection as it was emits no SelectionChanged. Select All loads through the last photo and
+    selects the loaded rows, as before.
+  - LibraryMutationOperations: ResolveTargets (the selection, or the clicked image; the editor
+    filmstrip passes includeSelection false), DeleteScope (project for the root folder, album
+    otherwise), DeleteTargets (ImageController::DeleteImages, then the selection prune and the
+    close of a deleted editor image: the last edited image is forgotten, the Editor workspace
+    shows the empty editor, and an image that the session keeps open outside the Editor closes
+    without its changes), and RateTargets (0..5; one target uses SetImageRating, several use
+    StartSetImageRatings). The QML clamp stays because a slider produces only valid values.
+  - The export queue prune after a delete stays in QML until AU12 owns the export queue.
+  - library.selection.get and library.selection.set work in a GUI session; the headless host
+    answers -32001.
+  - library.rate {element_ids, rating 0..5}: the schema rejects a rating outside 0..5 with
+    -32602 and the range; one photo answers applied_count, several answer the task_id of the
+    RatingUpdate task.
+  - library.delete {element_ids, scope}: the scope must be the scope of the current folder
+    (-32002 otherwise); the result lists deleted_ids and failed_ids.
+  - Unknown element ids answer -32602 with data.unknown_ids before anything changes.
+Deviations: the delete also forgets the last edited image when that image is deleted outside the
+  Editor workspace, and closes a background editor session of a deleted image without its
+  changes. Before, only a delete in the Editor workspace did this, so the editor could try to
+  restore or persist a deleted image.
+Primary success call chain: library.delete [e1] project -> ResolveElementRows ->
+  LibraryMutationOperations::DeleteTargets -> ImageController::DeleteImages ->
+  LibrarySelection::PruneElements -> CloseDeletedEditorImage -> {"deleted_ids": [e1]}.
+Primary failure and restore call chain: library.delete with an unknown element id -> -32602
+  data.unknown_ids -> nothing deleted
+  (AutomationLibraryCommandsTest.DeleteOfUnknownIdOrOtherScopeDeletesNothing).
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main alcedo_cli
+    LibrarySelectionTest LibraryMutationOperationsTest AutomationLibraryCommandsTest
+    AutomationLibraryE2ETest ApplicationModuleHostLifecycleTest AlbumBackendImageDeleteTest
+    AlbumBackendRatingTest AlbumBackendInteractionPolicyTest MainQmlWorkflowTest --parallel 8
+    -> 0
+  ctest --test-dir build/debug -R "LibrarySelectionTest|LibraryMutationOperationsTest|
+    AutomationLibraryCommandsTest|AutomationLibraryE2ETest|ApplicationModuleHostLifecycleTest"
+    -j 1  -> 0 (22 tests)
+  ctest --test-dir build/debug -R "AlbumBackendImageDeleteTest|AlbumBackendRatingTest|
+    AlbumBackendInteractionPolicyTest|MainQmlWorkflowTest|ci_automation|
+    AutomationProjectCommandsTest|ImportExportHandlerTest|ApplicationCloseCoordinatorTest|
+    ProjectLaunchCoordinatorTest|ProjectModuleTest" -j 1  -> 8
+Discovered / passed / failed / skipped counts: LibrarySelectionTest 2/2,
+  LibraryMutationOperationsTest 5/5, AutomationLibraryCommandsTest 7/7, AutomationLibraryE2ETest
+  6/6 (RatingPersistsAfterReopen rates one photo directly and two in a batch, deletes one, and
+  a new session lists the same items and ratings), ApplicationModuleHostLifecycleTest 2/2.
+  Regression: 55 discovered, 54 passed, 1 failed. The failure is
+  MainQmlWorkflowTests.ProductionWindowLoadsAndRoutesCoreWorkspaceActions (Material/Dialog.qml
+  warning), which also fails at main f5edecb45 (AU4a record).
+CI run: recorded in the pull request after the macOS run.
+Manual verification: not run by the agent. The user records the GUI checks (select all, delete
+  with confirmation, rate one and several images).
+Evidence path: build/tmp/automation_au6/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS Metal runs only in CI.
+```
 
 ### Phase AU7 — Parameter catalog: scalar fields
 

@@ -204,6 +204,22 @@ bool LibraryModule::LoadThumbnailsThroughIndex(int index) {
   return LoadMoreThumbnails();
 }
 
+void LibraryModule::SelectAllInCurrentView() {
+  const int total = TotalCount();
+  if (total <= 0) {
+    selection_.Clear();
+    return;
+  }
+  (void)LoadThumbnailsThroughIndex(total - 1);
+  std::vector<LibrarySelection::SelectedImage> images;
+  images.reserve(thumbnail_model_.items().size());
+  for (const auto& item : thumbnail_model_.items()) {
+    images.push_back(LibrarySelection::SelectedImage{item.element_id, item.image_id, item.file_name,
+                                                     item.is_hdr});
+  }
+  selection_.Replace(std::move(images));
+}
+
 int LibraryModule::IndexOfElementInCurrentView(uint elementId) {
   if (elementId == 0) {
     return -1;

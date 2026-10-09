@@ -32,15 +32,16 @@ namespace alcedo::automation::test {
 /// uses for every socket request.
 class InProcessAutomationSession {
  public:
-  InProcessAutomationSession() {
+  /// @p host_mode is `headless` or `gui`; the library selection commands need `gui`.
+  explicit InProcessAutomationSession(const QString& host_mode = QStringLiteral("headless")) {
     AutomationHostCommandContext context;
     context.host      = &host_;
-    context.host_mode = QStringLiteral("headless");
+    context.host_mode = host_mode;
     QString    error;
     const bool registered =
         RegisterAutomationHostCommands(registry_, std::move(context), &error) &&
         RegisterAutomationProjectCommands(registry_, &host_, &error) &&
-        RegisterAutomationLibraryCommands(registry_, &host_, &tracker_, &error) &&
+        RegisterAutomationLibraryCommands(registry_, &host_, &tracker_, host_mode, &error) &&
         RegisterAutomationTaskCommands(registry_, &host_, &tracker_, &error);
     EXPECT_TRUE(registered) << error.toStdString();
   }

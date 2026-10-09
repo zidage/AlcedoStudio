@@ -143,43 +143,7 @@ Item {
         if (!host.backendInteractive || appModules.library.thumbnailModel.loading) {
             return
         }
-        const total = Number(appModules.library.totalCount)
-        if (total <= 0) {
-            selectionState.clearSelectedImages()
-            return
-        }
-
-        appModules.library.LoadThumbnailsThroughIndex(total - 1)
-        const rows = appModules.library.thumbnailModel.getItemsInRange(0, total - 1)
-        const items = []
-        for (let i = 0; i < rows.length; ++i) {
-            const item = root.selectionItemFromThumbnailRow(rows[i])
-            if (item) {
-                items.push(item)
-            }
-        }
-        selectionState.replaceSelectedImages(items)
-    }
-
-    function singleTargetFor(item) {
-        return [{
-            elementId: Number(item.elementId),
-            fileId: Number(item.fileId || item.elementId),
-            imageId: Number(item.imageId),
-            folderId: Number(item.folderId || appModules.folders.currentFolderId),
-            scopeType: item.scopeType ? String(item.scopeType) : "",
-            fileName: item.fileName ? item.fileName : qsTr("(unnamed)")
-        }]
-    }
-
-    function resolveDeleteTargets(clickedItem) {
-        if (host.selectedCount > 0) {
-            return Object.values(host.selectedImagesById)
-        }
-        if (!clickedItem) {
-            return []
-        }
-        return singleTargetFor(clickedItem)
+        appModules.library.SelectAllInCurrentView()
     }
 
     function albumTargetActions() {
@@ -212,8 +176,7 @@ Item {
         }
         const fromFilmstrip = origin === "editor-filmstrip"
         root.menuOrigin = fromFilmstrip ? "editor-filmstrip" : "library"
-        const targets = fromFilmstrip ? singleTargetFor(clickedItem)
-                                      : resolveDeleteTargets(clickedItem)
+        const targets = appModules.libraryMutations.ResolveTargets(clickedItem, !fromFilmstrip)
         if (!targets || targets.length === 0) {
             return
         }
@@ -247,13 +210,14 @@ Item {
         if (count <= 0) {
             return
         }
+        const fromProject = appModules.libraryMutations.DeleteScope() === "project"
         let text = ""
         if (count === 1) {
-            text = Number(appModules.folders.currentFolderId) === 0
+            text = fromProject
                     ? qsTr("Delete this image from project?")
                     : qsTr("Remove this image from this album?")
         } else {
-            text = Number(appModules.folders.currentFolderId) === 0
+            text = fromProject
                     ? qsTr("Delete %1 images from project?").arg(count)
                     : qsTr("Remove %1 images from this album?").arg(count)
         }
@@ -406,48 +370,14 @@ Item {
         function onLoadingChanged() { root.flushEditorLibraryListSync() }
     }
 
-    // Phase 4A-Fix: deleting the image currently loaded in the editor must end
-    // that image's session, clear its id, and drop the editor to the empty state
-    // while staying in the editor workspace. It also forgets the last-edited
-    // image so re-entering the editor does not resurrect a deleted image.
-    function handleEditorImageDeleted(deletedIds) {
-        if (!appModules.editorSession || !appModules.workspaceRouter) {
-            return
-        }
-        // Only the editor workspace owns the live edit session; a delete issued
-        // from the library must not touch the (empty) editor state.
-        if (appModules.workspaceRouter.workspace !== "editor") {
-            return
-        }
-        const editorElementId = Number(appModules.editorSession.elementId || 0)
-        if (editorElementId <= 0) {
-            return
-        }
-        let touchedEditor = false
-        for (let i = 0; i < deletedIds.length; ++i) {
-            if (Number(deletedIds[i]) === editorElementId) {
-                touchedEditor = true
-                break
-            }
-        }
-        if (!touchedEditor) {
-            return
-        }
-        // openEditor(0,0) while already in editor finalizes the active session
-        // and reopens with no image (active + hasImage=false), so the empty-state
-        // prompt shows without tearing the editor workspace down.
-        appModules.editorSession.clearLastEditedImage()
-        appModules.workspaceRouter.openEditor(0, 0)
-    }
-
     function runDeleteTargets() {
         if (!root.pendingDeleteTargets || root.pendingDeleteTargets.length === 0) {
             return
         }
-        const result = appModules.images.DeleteImages(root.pendingDeleteTargets)
+        // LibraryMutationOperations prunes the selection and closes a deleted editor image.
+        const result = appModules.libraryMutations.DeleteTargets(root.pendingDeleteTargets)
         const deletedIds = (result && result.deletedElementIds) ? result.deletedElementIds : []
         if (deletedIds.length > 0) {
-            selectionState.pruneDeletedElements(deletedIds)
             exportQueueState.pruneDeletedElements(deletedIds)
             const focusedElementId = Number(root.focusedImageTarget.elementId || 0)
             const focusedFileId = Number(root.focusedImageTarget.fileId || 0)
@@ -458,7 +388,6 @@ Item {
                     break
                 }
             }
-            root.handleEditorImageDeleted(deletedIds)
         }
         root.pendingDeleteTargets = []
     }
@@ -467,15 +396,27 @@ Item {
         if (!root.pendingRatingTarget || Number(root.pendingRatingTarget.imageId) <= 0) {
             return
         }
+        // A slider produces only valid values; the clamp keeps the old QML behavior.
         const normalizedRating = Math.max(0, Math.min(5, Number(rating)))
-        if (root.pendingRatingTargets && root.pendingRatingTargets.length > 1) {
-            root.requestSetImageRatings(normalizedRating)
+        // A rating picked from the menu goes to every target when several are selected.
+        const targets = root.pendingRatingTargets && root.pendingRatingTargets.length > 1
+                ? root.pendingRatingTargets
+                : [root.pendingRatingTarget]
+        const result = appModules.libraryMutations.RateTargets(targets, normalizedRating)
+        if (result && result.batch === true) {
+            // Batch path: the library shows the new stars at once; the save runs as a
+            // background task and onImageRatingsFinished reports the result.
+            if (result.started === true) {
+                root.pendingRatingTarget = Object.assign({}, root.pendingRatingTarget, {
+                    rating: normalizedRating
+                })
+                return
+            }
+            if (result.message) {
+                host.showSnackbar(result.message)
+            }
             return
         }
-        const result = appModules.images.SetImageRating(
-            Number(root.pendingRatingTarget.elementId),
-            Number(root.pendingRatingTarget.imageId),
-            normalizedRating)
         if (result && result.success === true) {
             root.pendingRatingTarget = Object.assign({}, root.pendingRatingTarget, {
                 rating: Number(result.rating)
@@ -487,22 +428,6 @@ Item {
         }
         if (result && result.message) {
             host.showSnackbar(result.message)
-        }
-    }
-
-    // Batch path: the library shows the new stars at once; the save runs as a
-    // background task and onImageRatingsFinished reports the result.
-    function requestSetImageRatings(normalizedRating) {
-        const started = appModules.images.StartSetImageRatings(root.pendingRatingTargets,
-                                                               normalizedRating)
-        if (started && started.started === true) {
-            root.pendingRatingTarget = Object.assign({}, root.pendingRatingTarget, {
-                rating: normalizedRating
-            })
-            return
-        }
-        if (started && started.message) {
-            host.showSnackbar(started.message)
         }
     }
 
@@ -531,10 +456,10 @@ Item {
             return
         }
         const normalizedRating = Math.max(0, Math.min(5, Number(rating)))
-        const result = appModules.images.SetImageRating(
-            Number(root.focusedImageTarget.elementId || root.focusedImageTarget.fileId),
-            Number(root.focusedImageTarget.imageId),
-            normalizedRating)
+        const result = appModules.libraryMutations.RateTargets([{
+            elementId: Number(root.focusedImageTarget.elementId || root.focusedImageTarget.fileId),
+            imageId: Number(root.focusedImageTarget.imageId)
+        }], normalizedRating)
         if (result && result.success === true) {
             root.focusedImageTarget = Object.assign({}, root.focusedImageTarget, {
                 rating: Number(result.rating)

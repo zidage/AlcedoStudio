@@ -11,6 +11,9 @@
 #include <QMetaObject>
 #include <QObject>
 #include <QPointer>
+#include <QStringList>
+#include <QVariantList>
+#include <QVariantMap>
 #include <algorithm>
 #include <array>
 #include <exception>
@@ -175,6 +178,81 @@ auto ItemSchema() -> QJsonObject {
                                 QJsonArray{"element_id", "image_id", "file_name", "rating"});
 }
 
+/// The library rows of @p params["element_ids"], in that order. Sends -32602 with
+/// `data.unknown_ids` and returns nothing when an id is not a photo of the project.
+auto ResolveElementRows(ProjectService& project, const QJsonObject& params, AutomationReply& reply)
+    -> std::optional<std::vector<SearchResultRow>> {
+  std::vector<sl_element_id_t> ids;
+  for (const QJsonValue& value : params.value("element_ids").toArray()) {
+    const auto id = static_cast<sl_element_id_t>(value.toDouble());
+    if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+      ids.push_back(id);
+    }
+  }
+  const auto browse = project.GetAlbumBrowseService();
+  if (!browse) {
+    SendAutomationOwnerError(reply, AutomationErrorCode::Failed,
+                             QStringLiteral("The library cannot be read."));
+    return std::nullopt;
+  }
+  std::vector<SearchResultRow> rows;
+  try {
+    rows = browse->ReadAlbumFileRows(ids);
+  } catch (const std::exception& e) {
+    SendAutomationOwnerError(reply, AutomationErrorCode::Failed, QString::fromUtf8(e.what()));
+    return std::nullopt;
+  }
+  QJsonArray  unknown;
+  QStringList unknown_text;
+  for (const auto id : ids) {
+    const bool found = std::any_of(rows.begin(), rows.end(), [id](const SearchResultRow& row) {
+      return row.file_id_ == id && row.image_id_ != 0;
+    });
+    if (!found) {
+      unknown.push_back(static_cast<double>(id));
+      unknown_text.push_back(QString::number(id));
+    }
+  }
+  if (!unknown.isEmpty()) {
+    reply.SendError(
+        AutomationErrorCode::InvalidParams,
+        QStringLiteral("unknown element ids: %1").arg(unknown_text.join(QStringLiteral(", "))),
+        QJsonObject{{"pointer", "/element_ids"}, {"unknown_ids", unknown}});
+    return std::nullopt;
+  }
+  return rows;
+}
+
+/// ImageController target entries (elementId, imageId, fileName) of @p rows.
+auto TargetEntries(const std::vector<SearchResultRow>& rows) -> QVariantList {
+  QVariantList entries;
+  for (const auto& row : rows) {
+    entries.push_back(
+        QVariantMap{{QStringLiteral("elementId"), static_cast<uint>(row.file_id_)},
+                    {QStringLiteral("imageId"), static_cast<uint>(row.image_id_)},
+                    {QStringLiteral("fileName"), QString::fromStdString(row.file_name_)}});
+  }
+  return entries;
+}
+
+auto SelectionItems(const ui::LibrarySelection& selection) -> QJsonArray {
+  QJsonArray items;
+  for (const QVariant& value : selection.SelectedItems()) {
+    const QVariantMap item = value.toMap();
+    items.push_back(QJsonObject{
+        {"element_id", static_cast<double>(item.value(QStringLiteral("elementId")).toUInt())},
+        {"image_id", static_cast<double>(item.value(QStringLiteral("imageId")).toUInt())},
+        {"file_name", item.value(QStringLiteral("fileName")).toString()}});
+  }
+  return items;
+}
+
+auto ElementIdsParam() -> QJsonObject {
+  return QJsonObject{{"type", "array"},
+                     {"items", QJsonObject{{"type", "integer"}, {"minimum", 1}}},
+                     {"minItems", 1}};
+}
+
 void RegisterOrFail(AutomationCommandRegistry& registry, AutomationCommandSpec spec, bool* ok,
                     QString* error) {
   if (*ok && !registry.Register(std::move(spec), error)) {
@@ -186,7 +264,8 @@ void RegisterOrFail(AutomationCommandRegistry& registry, AutomationCommandSpec s
 
 auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                                        ui::ApplicationModuleHost* host,
-                                       AutomationTaskTracker* tracker, QString* error) -> bool {
+                                       AutomationTaskTracker* tracker, const QString& host_mode,
+                                       QString* error) -> bool {
   if (host == nullptr || tracker == nullptr) {
     if (error != nullptr) {
       *error = QStringLiteral("the library commands need a host and a task tracker");
@@ -468,6 +547,155 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
         /*pin_if_found=*/true, dispatcher, ThumbnailTierFor(long_edge));
   };
   RegisterOrFail(registry, std::move(thumbnail), &ok, error);
+
+  const bool selection_available    = host_mode != QStringLiteral("headless");
+  const auto selection_items_schema = AutomationObjectSchema(
+      QJsonObject{{"items", QJsonObject{{"type", "array"}}}}, QJsonArray{"items"});
+
+  AutomationCommandSpec selection_get;
+  selection_get.method      = QStringLiteral("library.selection.get");
+  selection_get.description = QStringLiteral(
+      "Returns the library selection of the GUI. The headless host has no selection.");
+  selection_get.params_schema = AutomationClosedParamsSchema();
+  selection_get.result_schema = selection_items_schema;
+  selection_get.handler = [host, selection_available](const QJsonObject&, AutomationReply reply) {
+    if (!selection_available) {
+      SendAutomationOwnerError(reply, AutomationErrorCode::NotReady,
+                               QStringLiteral("The library selection exists only in the GUI."));
+      return;
+    }
+    reply.SendResult(QJsonObject{{"items", SelectionItems(*host->library()->selection())}});
+  };
+  RegisterOrFail(registry, std::move(selection_get), &ok, error);
+
+  AutomationCommandSpec selection_set;
+  selection_set.method      = QStringLiteral("library.selection.set");
+  selection_set.description = QStringLiteral(
+      "Replaces the library selection of the GUI with 'element_ids'. The headless host has no "
+      "selection.");
+  selection_set.changes_state = true;
+  selection_set.params_schema = AutomationClosedParamsSchema(
+      QJsonObject{{"element_ids",
+                   QJsonObject{{"type", "array"},
+                               {"items", QJsonObject{{"type", "integer"}, {"minimum", 1}}}}}},
+      QJsonArray{"element_ids"});
+  selection_set.result_schema = selection_items_schema;
+  selection_set.handler       = [host, selection_available](const QJsonObject& params,
+                                                      AutomationReply    reply) {
+    if (!selection_available) {
+      SendAutomationOwnerError(reply, AutomationErrorCode::NotReady,
+                                     QStringLiteral("The library selection exists only in the GUI."));
+      return;
+    }
+    const auto project = EnteredProject(host, reply);
+    if (!project) {
+      return;
+    }
+    const auto rows = ResolveElementRows(*project, params, reply);
+    if (!rows.has_value()) {
+      return;
+    }
+    std::vector<ui::LibrarySelection::SelectedImage> images;
+    for (const auto& row : *rows) {
+      images.push_back(ui::LibrarySelection::SelectedImage{
+          row.file_id_, row.image_id_, QString::fromStdString(row.file_name_), false});
+    }
+    host->library()->selection()->Replace(std::move(images));
+    reply.SendResult(QJsonObject{{"items", SelectionItems(*host->library()->selection())}});
+  };
+  RegisterOrFail(registry, std::move(selection_set), &ok, error);
+
+  AutomationCommandSpec rate;
+  rate.method      = QStringLiteral("library.rate");
+  rate.description = QStringLiteral(
+      "Sets the star rating (0 to 5) of 'element_ids'. One photo is rated at once and the "
+      "result holds 'applied_count'. Several photos use the batch save, and the result holds "
+      "the 'task_id' of the save task.");
+  rate.changes_state = true;
+  rate.params_schema = AutomationClosedParamsSchema(
+      QJsonObject{{"element_ids", ElementIdsParam()},
+                  {"rating", QJsonObject{{"type", "integer"}, {"minimum", 0}, {"maximum", 5}}}},
+      QJsonArray{"element_ids", "rating"});
+  rate.result_schema = AutomationObjectSchema();
+  rate.handler       = [host](const QJsonObject& params, AutomationReply reply) {
+    const auto project = EnteredProject(host, reply);
+    if (!project) {
+      return;
+    }
+    const auto rows = ResolveElementRows(*project, params, reply);
+    if (!rows.has_value()) {
+      return;
+    }
+    const int         rating = params.value("rating").toInt();
+    const QVariantMap result = host->library_mutations()->RateTargets(TargetEntries(*rows), rating);
+    const QString     message = result.value(QStringLiteral("message")).toString();
+    if (result.value(QStringLiteral("batch")).toBool()) {
+      if (!result.value(QStringLiteral("started")).toBool()) {
+        SendAutomationOwnerError(reply, AutomationErrorCode::Rejected, message);
+        return;
+      }
+      reply.SendResult(QJsonObject{{"task_id", result.value(QStringLiteral("taskId")).toString()},
+                                         {"rated_count", static_cast<int>(rows->size())},
+                                         {"rating", rating}});
+      return;
+    }
+    if (!result.value(QStringLiteral("success")).toBool()) {
+      SendAutomationOwnerError(reply, AutomationErrorCode::Rejected, message);
+      return;
+    }
+    reply.SendResult(QJsonObject{{"applied_count", 1},
+                                       {"rating", result.value(QStringLiteral("rating")).toInt()}});
+  };
+  RegisterOrFail(registry, std::move(rate), &ok, error);
+
+  AutomationCommandSpec remove;
+  remove.method      = QStringLiteral("library.delete");
+  remove.description = QStringLiteral(
+      "Deletes 'element_ids'. With scope 'project' the photos leave the project; this needs the "
+      "root folder as the current folder. With scope 'album' they leave the current album.");
+  remove.changes_state = true;
+  remove.params_schema = AutomationClosedParamsSchema(
+      QJsonObject{
+          {"element_ids", ElementIdsParam()},
+          {"scope", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"project", "album"}}}}},
+      QJsonArray{"element_ids", "scope"});
+  remove.result_schema =
+      AutomationObjectSchema(QJsonObject{{"deleted_ids", QJsonObject{{"type", "array"}}},
+                                         {"failed_ids", QJsonObject{{"type", "array"}}}},
+                             QJsonArray{"deleted_ids", "failed_ids"});
+  remove.handler = [host](const QJsonObject& params, AutomationReply reply) {
+    const auto project = EnteredProject(host, reply);
+    if (!project) {
+      return;
+    }
+    const auto rows = ResolveElementRows(*project, params, reply);
+    if (!rows.has_value()) {
+      return;
+    }
+    ui::LibraryMutationOperations* mutations = host->library_mutations();
+    const QString                  scope     = params.value("scope").toString();
+    if (scope != mutations->DeleteScope()) {
+      SendAutomationOwnerError(
+          reply, AutomationErrorCode::Rejected,
+          QStringLiteral("The current folder gives the delete scope '%1', not '%2'.")
+              .arg(mutations->DeleteScope(), scope));
+      return;
+    }
+    const QVariantMap result = mutations->DeleteTargets(TargetEntries(*rows));
+    const QJsonArray  deleted =
+        QJsonArray::fromVariantList(result.value(QStringLiteral("deletedElementIds")).toList());
+    if (deleted.isEmpty()) {
+      SendAutomationOwnerError(reply, AutomationErrorCode::Failed,
+                               result.value(QStringLiteral("message")).toString());
+      return;
+    }
+    reply.SendResult(QJsonObject{
+        {"deleted_ids", deleted},
+        {"failed_ids",
+         QJsonArray::fromVariantList(result.value(QStringLiteral("failedElementIds")).toList())},
+        {"message", result.value(QStringLiteral("message")).toString()}});
+  };
+  RegisterOrFail(registry, std::move(remove), &ok, error);
 
   return ok;
 }

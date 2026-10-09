@@ -508,6 +508,11 @@ alcedo_register_test_target(ProjectModuleTest ui)
 # Import name filters read by the QML file dialog (automation plan AU5).
 def_ui_test(ImportExportHandlerTest import_export_handler_test.cpp)
 alcedo_register_test_target(ImportExportHandlerTest ui)
+# Library selection and the delete and rating rules moved out of QML (automation plan AU6).
+def_ui_test(LibrarySelectionTest library_selection_test.cpp)
+alcedo_register_test_target(LibrarySelectionTest ui)
+def_ui_test(LibraryMutationOperationsTest library_mutation_operations_test.cpp)
+alcedo_register_test_target(LibraryMutationOperationsTest ui)
 
 def_ui_test(AdjustmentTransferDialogModelTest adjustment_transfer_dialog_model_test.cpp)
 alcedo_register_test_target(AdjustmentTransferDialogModelTest ui)

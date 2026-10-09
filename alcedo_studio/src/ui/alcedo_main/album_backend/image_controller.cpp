@@ -1554,6 +1554,7 @@ auto ImageController::StartSetImageRatings(const QVariantList& targetEntries, in
   }).detach();
 
   result["started"] = true;
+  result["taskId"]  = rating_task_id_;
   return result;
 }
 

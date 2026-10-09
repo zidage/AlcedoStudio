@@ -102,5 +102,93 @@ TEST_F(AutomationLibraryCommandsTest, ImportRequiresExactlyOneSource) {
             AutomationErrorCode::InvalidParams);
 }
 
+TEST_F(AutomationLibraryCommandsTest, SelectionCommandsAreNotReadyInHeadlessHost) {
+  InProcessAutomationSession session;
+  EXPECT_EQ(ErrorCode(session.Call(QStringLiteral("library.selection.get"))),
+            AutomationErrorCode::NotReady);
+  EXPECT_EQ(ErrorCode(session.Call(QStringLiteral("library.selection.set"),
+                                   QJsonObject{{"element_ids", QJsonArray{1}}})),
+            AutomationErrorCode::NotReady);
+}
+
+TEST_F(AutomationLibraryCommandsTest, SelectionSetReplacesGuiSelectionAndRejectsUnknownIds) {
+  const QString raw_root = QStringLiteral(TEST_IMG_PATH) + QStringLiteral("/ci_rawfiles");
+  InProcessAutomationSession session(QStringLiteral("gui"));
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "selection_project"}})
+                   .isEmpty());
+  const QString task_id = session
+                              .CallResult(QStringLiteral("library.import"),
+                                          QJsonObject{{"folder", raw_root}, {"recursive", false}})
+                              .value("task_id")
+                              .toString();
+  ASSERT_FALSE(task_id.isEmpty());
+  session.CallResult(QStringLiteral("tasks.wait"),
+                     QJsonObject{{"task_id", task_id}, {"timeout_ms", 600000}});
+  const QJsonArray items =
+      session.CallResult(QStringLiteral("library.list")).value("items").toArray();
+  ASSERT_GE(items.size(), 2);
+  const QJsonValue first  = items.at(0).toObject().value("element_id");
+  const QJsonValue second = items.at(1).toObject().value("element_id");
+
+  const QJsonArray selected =
+      session
+          .CallResult(QStringLiteral("library.selection.set"),
+                      QJsonObject{{"element_ids", QJsonArray{second, first}}})
+          .value("items")
+          .toArray();
+  EXPECT_EQ(selected.size(), 2);
+  EXPECT_EQ(session.host().library()->selection()->SelectedCount(), 2);
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.selection.get")).value("items").toArray(),
+            selected);
+
+  const auto unknown = session.Call(QStringLiteral("library.selection.set"),
+                                    QJsonObject{{"element_ids", QJsonArray{first, 999999}}});
+  ASSERT_EQ(ErrorCode(unknown), AutomationErrorCode::InvalidParams);
+  EXPECT_EQ(unknown->error->data.toObject().value("unknown_ids").toArray(), QJsonArray{999999});
+  EXPECT_EQ(session.host().library()->selection()->SelectedCount(), 2);
+
+  // A deleted photo leaves the selection.
+  const QJsonObject deleted =
+      session.CallResult(QStringLiteral("library.delete"),
+                         QJsonObject{{"element_ids", QJsonArray{first}}, {"scope", "project"}});
+  EXPECT_EQ(deleted.value("deleted_ids").toArray().size(), 1);
+  EXPECT_EQ(session.host().library()->selection()->SelectedCount(), 1);
+}
+
+TEST_F(AutomationLibraryCommandsTest, DeleteOfUnknownIdOrOtherScopeDeletesNothing) {
+  const QString raw_root = QStringLiteral(TEST_IMG_PATH) + QStringLiteral("/ci_rawfiles");
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "delete_project"}})
+                   .isEmpty());
+  const QString task_id = session
+                              .CallResult(QStringLiteral("library.import"),
+                                          QJsonObject{{"folder", raw_root}, {"recursive", false}})
+                              .value("task_id")
+                              .toString();
+  session.CallResult(QStringLiteral("tasks.wait"),
+                     QJsonObject{{"task_id", task_id}, {"timeout_ms", 600000}});
+  const QJsonArray items =
+      session.CallResult(QStringLiteral("library.list")).value("items").toArray();
+  ASSERT_FALSE(items.isEmpty());
+  const QJsonValue first = items.at(0).toObject().value("element_id");
+
+  const auto       unknown =
+      session.Call(QStringLiteral("library.delete"),
+                   QJsonObject{{"element_ids", QJsonArray{first, 999999}}, {"scope", "project"}});
+  ASSERT_EQ(ErrorCode(unknown), AutomationErrorCode::InvalidParams);
+  EXPECT_EQ(unknown->error->data.toObject().value("unknown_ids").toArray(), QJsonArray{999999});
+  // The root folder is the current folder, so the album scope does not apply.
+  EXPECT_EQ(
+      ErrorCode(session.Call(QStringLiteral("library.delete"),
+                             QJsonObject{{"element_ids", QJsonArray{first}}, {"scope", "album"}})),
+      AutomationErrorCode::Rejected);
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(),
+            items.size());
+}
+
 }  // namespace
 }  // namespace alcedo::automation
