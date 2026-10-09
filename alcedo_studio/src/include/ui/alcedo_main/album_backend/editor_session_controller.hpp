@@ -406,6 +406,13 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Returns null when unbound or the object is not an EditorViewportItem.
   // Callers must re-resolve after PresentationBindingChanged / StateChanged.
   [[nodiscard]] auto presentation_frame_sink() const -> alcedo::IFrameSink*;
+  /// Headless host: binds @p sink as the presentation target without a QML viewport. The sink
+  /// address becomes the presentation sink id and @p width x @p height the presentation size,
+  /// so that an opened image can reach Interactive. Call on the GUI thread before the first
+  /// image opens. @p sink must outlive the editor session. Returns false when no session
+  /// backend is attached.
+  [[nodiscard]] auto BindHeadlessPresentationSink(alcedo::IFrameSink* sink, int width, int height)
+      -> bool;
 
   void               set_filmstrip_collapsed(bool collapsed);
   void               set_filmstrip_expanded_height(double height);
@@ -537,6 +544,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                 exif_lens_make_;
   QString                 exif_lens_model_;
   QPointer<QObject>       presentation_viewport_;
+  // Set once by BindHeadlessPresentationSink before the first render; read by render workers.
+  alcedo::IFrameSink*     headless_presentation_sink_ = nullptr;
   QPointer<QObject>       interaction_controller_;
   QMetaObject::Connection interaction_view_change_connection_;
   QMetaObject::Connection interaction_policy_connection_;

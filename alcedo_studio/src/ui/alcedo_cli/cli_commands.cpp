@@ -5,13 +5,19 @@
 #include "cli_commands.hpp"
 
 #include <QByteArray>
+#include <QCoreApplication>
+#include <QDeadlineTimer>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QJsonValue>
+#include <QProcess>
 #include <QString>
+#include <QThread>
 #include <QtGlobal>
 #include <cstdio>
 #include <functional>
@@ -47,6 +53,11 @@ Global options:
 Commands:
   call <method> [<params-json>]   Send one command.
   schema                          Print the command schemas.
+  session start --headless (--project <path> | --create <folder>,<name>)
+        [--editor-backend cuda|opencl|metal] [--viewport <w>x<h>] [--settings-dir <dir>]
+        [--log-file <path>] [--host-binary <path>]
+                                  Start a headless session and wait until it answers.
+  session stop                    Shut the session down and wait for its process to exit.
   session list                    List the session files and their state.
   session prune                   Remove the stale session files.
   watch                           Print notifications until interrupted.
@@ -333,6 +344,263 @@ auto RunSchema(const CliOptions& options) -> int {
       });
 }
 
+constexpr int kDefaultCommandTimeoutMs = 120000;
+constexpr int kProcessExitWaitMs       = 60000;
+constexpr int kPollIntervalMs          = 100;
+constexpr int kStartErrorTailBytes     = 4000;
+
+#if defined(Q_OS_WIN)
+constexpr auto kHostExecutableName = "alcedo_main.exe";
+#else
+constexpr auto kHostExecutableName = "alcedo_main";
+#endif
+
+/// Finds alcedo_main: --host-binary, then the directory of alcedo-cli, then the macOS bundle
+/// layouts (alcedo-cli in Contents/Helpers, or a build tree with alcedo_main.app beside it).
+auto FindHostBinary(const QString& explicit_path, QString* error) -> QString {
+  if (!explicit_path.isEmpty()) {
+    if (QFileInfo(explicit_path).isExecutable()) {
+      return QFileInfo(explicit_path).absoluteFilePath();
+    }
+    *error = QStringLiteral("--host-binary '%1' is not an executable file").arg(explicit_path);
+    return {};
+  }
+  const QDir        cli_dir(QCoreApplication::applicationDirPath());
+  const QStringList candidates{
+      cli_dir.filePath(QLatin1String(kHostExecutableName)),
+      cli_dir.filePath(QStringLiteral("../MacOS/") + QLatin1String(kHostExecutableName)),
+      cli_dir.filePath(QStringLiteral("alcedo_main.app/Contents/MacOS/") +
+                       QLatin1String(kHostExecutableName))};
+  for (const QString& candidate : candidates) {
+    if (QFileInfo(candidate).isExecutable()) {
+      return QFileInfo(candidate).absoluteFilePath();
+    }
+  }
+  *error = QStringLiteral("cannot find %1 near '%2'; use --host-binary")
+               .arg(QLatin1String(kHostExecutableName), cli_dir.absolutePath());
+  return {};
+}
+
+auto ReadFileTail(const QString& path) -> QString {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    return {};
+  }
+  if (file.size() > kStartErrorTailBytes) {
+    file.seek(file.size() - kStartErrorTailBytes);
+  }
+  return QString::fromUtf8(file.readAll()).trimmed();
+}
+
+/// Reads the `session start` options from the words after `session start`.
+auto ParseStartOptions(const QStringList& words, QStringList* host_arguments, QString* host_binary,
+                       QString* log_file, QString* error) -> bool {
+  bool headless = false;
+  bool project  = false;
+  for (qsizetype index = 0; index < words.size(); ++index) {
+    const QString& word       = words.at(index);
+    auto           take_value = [&](QString* value) -> bool {
+      if (index + 1 >= words.size()) {
+        *error = QStringLiteral("option %1 needs a value").arg(word);
+        return false;
+      }
+      *value = words.at(++index);
+      return true;
+    };
+    QString value;
+    if (word == QStringLiteral("--headless")) {
+      headless = true;
+    } else if (word == QStringLiteral("--project")) {
+      if (!take_value(&value)) return false;
+      *host_arguments << word << QFileInfo(value).absoluteFilePath();
+      project = true;
+    } else if (word == QStringLiteral("--create")) {
+      if (!take_value(&value)) return false;
+      const qsizetype comma = value.lastIndexOf(QLatin1Char(','));
+      if (comma <= 0 || comma + 1 >= value.size()) {
+        *error = QStringLiteral("--create needs <folder>,<name>");
+        return false;
+      }
+      *host_arguments << word << QFileInfo(value.left(comma)).absoluteFilePath()
+                      << value.mid(comma + 1);
+      project = true;
+    } else if (word == QStringLiteral("--editor-backend") || word == QStringLiteral("--viewport")) {
+      if (!take_value(&value)) return false;
+      *host_arguments << word << value;
+    } else if (word == QStringLiteral("--settings-dir")) {
+      if (!take_value(&value)) return false;
+      *host_arguments << word << QFileInfo(value).absoluteFilePath();
+    } else if (word == QStringLiteral("--log-file")) {
+      if (!take_value(log_file)) return false;
+      *log_file = QFileInfo(*log_file).absoluteFilePath();
+      *host_arguments << word << *log_file;
+    } else if (word == QStringLiteral("--host-binary")) {
+      if (!take_value(host_binary)) return false;
+    } else {
+      *error = QStringLiteral("unknown session start option '%1'").arg(word);
+      return false;
+    }
+  }
+  if (!headless) {
+    *error = QStringLiteral("session start needs --headless");
+    return false;
+  }
+  if (!project) {
+    *error = QStringLiteral("session start needs --project <path> or --create <folder>,<name>");
+    return false;
+  }
+  return true;
+}
+
+auto RunSessionStart(const CliOptions& options) -> int {
+  QStringList host_arguments{QStringLiteral("--headless")};
+  QString     host_binary;
+  QString     log_file;
+  QString     error;
+  if (!ParseStartOptions(options.positional.mid(2), &host_arguments, &host_binary, &log_file,
+                         &error)) {
+    return UsageFailure(error);
+  }
+  const QString session_name =
+      options.session_name.isEmpty() ? QStringLiteral("default") : options.session_name;
+  if (!automation::IsValidAutomationSessionName(session_name)) {
+    return UsageFailure(QStringLiteral("invalid session name '%1'").arg(session_name));
+  }
+  const QString session_dir = QFileInfo(options.session_dir).absoluteFilePath();
+  host_arguments << QStringLiteral("--session") << session_name << QStringLiteral("--session-dir")
+                 << session_dir;
+
+  const QString session_path = automation::AutomationSessionFilePath(session_dir, session_name);
+  if (const auto existing = automation::ReadAutomationSessionFile(session_path);
+      existing.has_value() && automation::IsAutomationProcessRunning(existing->pid)) {
+    WriteErr(QStringLiteral("alcedo-cli: session '%1' already runs (process %2)\n")
+                 .arg(session_name)
+                 .arg(existing->pid));
+    return Exit(CliExitCode::SessionSelectionError);
+  }
+
+  const QString program = FindHostBinary(host_binary, &error);
+  if (program.isEmpty()) {
+    WriteErr(QStringLiteral("alcedo-cli: %1\n").arg(error));
+    return Exit(CliExitCode::ConnectionError);
+  }
+  if (!QDir().mkpath(session_dir)) {
+    WriteErr(
+        QStringLiteral("alcedo-cli: cannot create the session directory '%1'\n").arg(session_dir));
+    return Exit(CliExitCode::ConnectionError);
+  }
+
+  // The host runs on after this program exits. Its stderr goes to a file beside the session
+  // file, so that a start failure can be shown.
+  const QString stderr_path =
+      QDir(session_dir).filePath(session_name + QStringLiteral(".start.log"));
+  QFile::remove(stderr_path);
+  QProcess process;
+  process.setProgram(program);
+  process.setArguments(host_arguments);
+  process.setWorkingDirectory(QFileInfo(program).absolutePath());
+  process.setStandardInputFile(QProcess::nullDevice());
+  process.setStandardOutputFile(QProcess::nullDevice());
+  process.setStandardErrorFile(stderr_path);
+  qint64 pid = 0;
+  if (!process.startDetached(&pid)) {
+    WriteErr(
+        QStringLiteral("alcedo-cli: cannot start '%1': %2\n").arg(program, process.errorString()));
+    return Exit(CliExitCode::ConnectionError);
+  }
+
+  const int            timeout_ms = options.timeout_ms.value_or(kDefaultCommandTimeoutMs);
+  const QDeadlineTimer deadline(timeout_ms);
+  while (!deadline.hasExpired()) {
+    if (const auto file = automation::ReadAutomationSessionFile(session_path);
+        file.has_value() && file->pid == pid && SessionAnswersPing(*file)) {
+      if (options.json) {
+        WriteOut(ToJsonText(QJsonObject{{"session_name", file->session_name},
+                                        {"socket_name", file->socket_name},
+                                        {"pid", static_cast<double>(file->pid)},
+                                        {"host_mode", file->host_mode},
+                                        {"project_path", file->project_path},
+                                        {"session_file", session_path}},
+                            QJsonDocument::Compact) +
+                 '\n');
+      } else {
+        WriteOut(QStringLiteral("session '%1' started (process %2, project %3)\n")
+                     .arg(file->session_name)
+                     .arg(file->pid)
+                     .arg(file->project_path));
+      }
+      return Exit(CliExitCode::Success);
+    }
+    if (!automation::IsAutomationProcessRunning(pid)) {
+      QString tail = ReadFileTail(stderr_path);
+      if (tail.isEmpty() && !log_file.isEmpty()) {
+        tail = ReadFileTail(log_file);
+      }
+      WriteErr(QStringLiteral("alcedo-cli: the session process %1 exited before it was ready\n"
+                              "%2\n")
+                   .arg(pid)
+                   .arg(tail));
+      return Exit(CliExitCode::ConnectionError);
+    }
+    QThread::msleep(kPollIntervalMs);
+  }
+  WriteErr(QStringLiteral("alcedo-cli: session '%1' did not answer within %2 ms (process %3 "
+                          "still runs)\n")
+               .arg(session_name)
+               .arg(timeout_ms)
+               .arg(pid));
+  return Exit(CliExitCode::ConnectionError);
+}
+
+auto RunSessionStop(const CliOptions& options) -> int {
+  QString    error;
+  const auto session = SelectSession(options, &error);
+  if (!session.has_value()) {
+    WriteErr(QStringLiteral("alcedo-cli: %1\n").arg(error));
+    return Exit(CliExitCode::SessionSelectionError);
+  }
+  QJsonObject params;
+  if (options.timeout_ms.has_value()) {
+    params.insert("timeout_ms", *options.timeout_ms);
+  }
+  const int        timeout_ms = options.timeout_ms.value_or(kDefaultCommandTimeoutMs);
+
+  AutomationClient client;
+  if (!client.Connect(session->socket_name, kConnectTimeoutMs)) {
+    WriteErr(QStringLiteral("alcedo-cli: %1\n").arg(client.error_string()));
+    return Exit(CliExitCode::ConnectionError);
+  }
+  const auto response =
+      client.Call(QStringLiteral("session.shutdown"), params, timeout_ms + kResponseWaitMarginMs);
+  if (!response.has_value()) {
+    WriteErr(QStringLiteral("alcedo-cli: socket '%1': %2\n")
+                 .arg(session->socket_name, client.error_string()));
+    return Exit(CliExitCode::ConnectionError);
+  }
+  if (response->error.has_value()) {
+    return PrintResponse(options, *response);
+  }
+
+  const QDeadlineTimer exit_deadline(kProcessExitWaitMs);
+  while (automation::IsAutomationProcessRunning(session->pid)) {
+    if (exit_deadline.hasExpired()) {
+      WriteErr(QStringLiteral("alcedo-cli: session process %1 did not exit within %2 ms\n")
+                   .arg(session->pid)
+                   .arg(kProcessExitWaitMs));
+      return Exit(CliExitCode::ConnectionError);
+    }
+    QThread::msleep(kPollIntervalMs);
+  }
+  if (options.json) {
+    WriteOut(ToJsonText(QJsonObject{{"session_name", session->session_name}, {"stopped", true}},
+                        QJsonDocument::Compact) +
+             '\n');
+  } else {
+    WriteOut(QStringLiteral("session '%1' stopped\n").arg(session->session_name));
+  }
+  return Exit(CliExitCode::Success);
+}
+
 auto SessionEntryState(const AutomationSessionFileEntry& entry) -> QString {
   if (!entry.file.has_value()) {
     return QStringLiteral("unreadable");
@@ -472,6 +740,12 @@ auto RunAlcedoCli(const QStringList& arguments) -> int {
     }
     if (options.positional.size() == 2 && verb == QStringLiteral("prune")) {
       return RunSessionPrune(options);
+    }
+    if (verb == QStringLiteral("start")) {
+      return RunSessionStart(options);
+    }
+    if (options.positional.size() == 2 && verb == QStringLiteral("stop")) {
+      return RunSessionStop(options);
     }
     return UsageFailure(QStringLiteral("unknown session command '%1'").arg(verb));
   }

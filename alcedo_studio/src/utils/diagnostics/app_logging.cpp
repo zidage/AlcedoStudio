@@ -9,6 +9,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QStandardPaths>
 #include <QThread>
 
@@ -148,7 +149,11 @@ auto ResolveLogDirectory(const QString& preferred_directory) -> QString {
 
 }  // namespace
 
-auto InitializeApplicationLogging(const QString& preferred_directory) -> QString {
+namespace {
+
+/// Opens @p file_path and installs the message handler. Returns the open path, or an empty
+/// string when the file cannot be opened.
+auto InitializeApplicationLoggingAt(const QString& file_path) -> QString {
   QString initialized_path;
   {
     std::lock_guard lock(g_log_lock);
@@ -156,14 +161,8 @@ auto InitializeApplicationLogging(const QString& preferred_directory) -> QString
       return g_log_file_path;
     }
 
-    const QString log_dir_path = ResolveLogDirectory(preferred_directory);
-    QDir().mkpath(log_dir_path);
-
-    const QString timestamp =
-        QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
-    const qint64 pid = QCoreApplication::applicationPid();
-    g_log_file_path =
-        QDir(log_dir_path).filePath(QStringLiteral("alcedo_%1_%2.log").arg(timestamp).arg(pid));
+    QDir().mkpath(QFileInfo(file_path).absolutePath());
+    g_log_file_path = file_path;
 
     auto file = std::make_unique<QFile>(g_log_file_path);
     if (!file->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
@@ -191,6 +190,21 @@ auto InitializeApplicationLogging(const QString& preferred_directory) -> QString
   qCInfo(appLog).noquote()
       << QStringLiteral("logging.initialized path=%1").arg(initialized_path);
   return initialized_path;
+}
+
+}  // namespace
+
+auto InitializeApplicationLogging(const QString& preferred_directory) -> QString {
+  const QString timestamp =
+      QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+  const qint64 pid = QCoreApplication::applicationPid();
+  return InitializeApplicationLoggingAt(
+      QDir(ResolveLogDirectory(preferred_directory))
+          .filePath(QStringLiteral("alcedo_%1_%2.log").arg(timestamp).arg(pid)));
+}
+
+auto InitializeApplicationLoggingToFile(const QString& file_path) -> QString {
+  return InitializeApplicationLoggingAt(QFileInfo(file_path).absoluteFilePath());
 }
 
 void ShutdownApplicationLogging() {

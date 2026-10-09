@@ -39,6 +39,7 @@
 #include "alcedo_version.hpp"
 #include "ui/alcedo_main/application_module_qml_types.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/alcedo_main/automation/headless_host.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_controller.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
@@ -182,6 +183,17 @@ auto VerifyQuickQanavaQmlImport(QQmlEngine& engine) -> int {
 }  // namespace
 
 int main(int argc, char* argv[]) {
+  // Keep the same org/app identity ProjectModule uses after QApplication exists.
+  QCoreApplication::setOrganizationName(QStringLiteral("Alcedo"));
+  QCoreApplication::setOrganizationDomain(QStringLiteral("alcedo.app"));
+  QCoreApplication::setApplicationName(QStringLiteral("Alcedo"));
+  QCoreApplication::setApplicationVersion(QStringLiteral(ALCEDO_APP_VERSION));
+
+  // The headless automation host runs without a GUI application, QML, or a window.
+  if (alcedo::automation::IsHeadlessHostRequested(argc, argv)) {
+    return alcedo::automation::RunHeadlessHost(argc, argv);
+  }
+
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
   QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
   QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
@@ -189,12 +201,6 @@ int main(int argc, char* argv[]) {
   QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
       Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 #endif
-
-  // Keep the same org/app identity ProjectModule uses after QApplication exists.
-  QCoreApplication::setOrganizationName(QStringLiteral("Alcedo"));
-  QCoreApplication::setOrganizationDomain(QStringLiteral("alcedo.app"));
-  QCoreApplication::setApplicationName(QStringLiteral("Alcedo"));
-  QCoreApplication::setApplicationVersion(QStringLiteral(ALCEDO_APP_VERSION));
 
   if (HasFlag(argc, argv, "--verify-qml-imports")) {
     QApplication app(argc, argv);

@@ -35,7 +35,11 @@ void AutomationServer::Close() {
   read_buffers_.clear();
   for (QLocalSocket* socket : sockets) {
     socket->disconnect(this);
-    socket->abort();
+    // Write the queued responses, for example the session.shutdown answer, before the close.
+    socket->disconnectFromServer();
+    if (socket->state() != QLocalSocket::UnconnectedState) {
+      socket->waitForDisconnected(1000);
+    }
     socket->deleteLater();
   }
 }

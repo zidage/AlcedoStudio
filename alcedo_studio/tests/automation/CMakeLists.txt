@@ -41,3 +41,25 @@ alcedo_add_automation_test(AlcedoCliTest
 target_compile_definitions(AlcedoCliTest PRIVATE
     ALCEDO_CLI_PATH="$<TARGET_FILE:alcedo_cli>")
 add_dependencies(AlcedoCliTest alcedo_cli)
+
+alcedo_add_automation_test(HeadlessFrameSinkTest
+    SOURCES headless_frame_sink_test.cpp
+    LIBRARIES AutomationHostLib)
+
+# Parses the headless options in this process and starts the real alcedo_main --headless.
+alcedo_add_automation_test(HeadlessHostTest
+    SOURCES headless_host_test.cpp
+    LIBRARIES AutomationHostLib)
+target_compile_definitions(HeadlessHostTest PRIVATE
+    ALCEDO_MAIN_PATH="$<TARGET_FILE:alcedo_main>")
+add_dependencies(HeadlessHostTest alcedo_main)
+
+# Starts, queries, and stops real headless sessions through alcedo-cli, and opens a CI RAW file
+# in an in-process host with the headless sink. Needs the GPU editor backend.
+alcedo_add_automation_test(AutomationHeadlessSessionTest
+    SOURCES automation_headless_session_test.cpp
+    LIBRARIES AutomationHostLib)
+target_compile_definitions(AutomationHeadlessSessionTest PRIVATE
+    ALCEDO_MAIN_PATH="$<TARGET_FILE:alcedo_main>"
+    ALCEDO_CLI_PATH="$<TARGET_FILE:alcedo_cli>")
+add_dependencies(AutomationHeadlessSessionTest alcedo_main alcedo_cli)

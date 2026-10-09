@@ -166,6 +166,9 @@ class ApplicationModuleHost final : public QObject {
     return editor_session_scheduler_.get();
   }
 
+  /// True when no background task runs, no import runs, and no export is in flight.
+  [[nodiscard]] auto IsIdle() const -> bool;
+
   // Explicitly idempotent so the application can shut down modules before the
   // QML engine is torn down. The destructor calls the same path.
   void Shutdown();

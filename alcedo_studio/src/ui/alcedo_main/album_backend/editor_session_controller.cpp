@@ -1288,11 +1288,28 @@ void EditorSessionController::SetWorkspacePresentationActive(bool active) {
   item->refreshPresentationAvailability();
 }
 
+auto EditorSessionController::BindHeadlessPresentationSink(alcedo::IFrameSink* sink, int width,
+                                                           int height) -> bool {
+  if (session_backend_ == nullptr || sink == nullptr || width <= 0 || height <= 0) {
+    return false;
+  }
+  headless_presentation_sink_ = sink;
+  // The same identity rule as bindPresentationViewport: the sink address names the target.
+  session_backend_->SetPresentationSinkId(
+      static_cast<alcedo::PresentationSinkId>(reinterpret_cast<std::uintptr_t>(sink)));
+  session_backend_->SetPresentationSize(width, height);
+  emit PresentationBindingChanged();
+  return true;
+}
+
 auto EditorSessionController::presentation_viewport() const -> QObject* {
   return presentation_viewport_.data();
 }
 
 auto EditorSessionController::presentation_frame_sink() const -> alcedo::IFrameSink* {
+  if (headless_presentation_sink_ != nullptr) {
+    return headless_presentation_sink_;
+  }
   // Production attach path: resolve the bound QML viewport to its direct sink.
   // Pipeline code must call this (not construct a parallel sink).
   auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());

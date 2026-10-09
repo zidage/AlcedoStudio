@@ -337,8 +337,9 @@ if(WIN32)
     target_link_libraries(AlbumBackendLib PRIVATE Rstrtmgr)
 endif()
 
-# Automation command surface: JSON-RPC command registry, schema validation, and the local
-# socket server. alcedo_main hosts it; alcedo-cli talks to it through AutomationProtocol.
+# Automation command surface: JSON-RPC command registry, schema validation, the local socket
+# server, the session commands, and the headless host. alcedo_main hosts it; alcedo-cli talks to
+# it through AutomationProtocol.
 def_library(AutomationHostLib
     SOURCES
         "${ALCEDO_UI_SHELL_ROOT}/automation/automation_json_schema.cpp"
@@ -349,10 +350,20 @@ def_library(AutomationHostLib
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_server.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/session_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_session_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/host_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_host_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/headless_frame_sink.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/headless_frame_sink.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/headless_host.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/headless_host.hpp"
     PUBLIC_DEPS
         AutomationProtocol
+        AlbumBackendLib
         Qt6::Core
         Qt6::Network
+    PRIVATE_DEPS
+        AppDiagnostics
+        TimeProvider
 )
 
 set(ALCEDO_MAIN_SOURCES
@@ -582,6 +593,7 @@ target_include_directories(alcedo_main
 target_link_libraries(alcedo_main
     PRIVATE
         AlbumBackendLib
+        AutomationHostLib
         AppDiagnostics
         UiLocalization
         QuickQanava
