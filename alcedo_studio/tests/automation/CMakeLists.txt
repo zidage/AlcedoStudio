@@ -2,20 +2,27 @@
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 include(GoogleTest)
 
+# LABEL replaces the ctest label "automation"; CATEGORIES adds test categories to "ui".
 function(alcedo_add_automation_test target_name)
-  cmake_parse_arguments(ARG "" "" "SOURCES;LIBRARIES" ${ARGN})
+  cmake_parse_arguments(ARG "" "LABEL" "SOURCES;LIBRARIES;CATEGORIES" ${ARGN})
   add_executable(${target_name}
       ${ARG_SOURCES}
       ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
   )
   target_include_directories(${target_name} PRIVATE ${ALCEDO_TEST_DIR})
   target_link_libraries(${target_name} PRIVATE ${ARG_LIBRARIES} GTest::gtest Qt6::Core Qt6::Test)
+  # gtest_discover_tests keeps only the first entry of a label list (it splits the list into
+  # separate properties), so each target has one label: LABEL, or "automation" without it.
+  set(_label "automation")
+  if(ARG_LABEL)
+    set(_label "${ARG_LABEL}")
+  endif()
   gtest_discover_tests(${target_name}
       TEST_PREFIX "${target_name}."
       DISCOVERY_MODE PRE_TEST
       DISCOVERY_TIMEOUT 120
-      PROPERTIES LABELS "automation")
-  alcedo_register_test_target(${target_name} ui)
+      PROPERTIES LABELS "${_label}")
+  alcedo_register_test_target(${target_name} ui ${ARG_CATEGORIES})
 endfunction()
 
 alcedo_add_automation_test(AutomationProtocolTest
@@ -67,4 +74,26 @@ add_dependencies(AutomationHeadlessSessionTest alcedo_main alcedo_cli)
 # project.* commands through the command registry of an in-process headless session.
 alcedo_add_automation_test(AutomationProjectCommandsTest
     SOURCES automation_project_commands_test.cpp
-    LIBRARIES AutomationHostLib)
+    LIBRARIES AutomationHostLib
+    LABEL ci_automation_flow
+    CATEGORIES ci_automation)
+
+# library.* and tasks.* parameter and state rules in an in-process headless session.
+alcedo_add_automation_test(AutomationLibraryCommandsTest
+    SOURCES automation_library_commands_test.cpp
+    LIBRARIES AutomationHostLib
+    LABEL ci_automation_flow
+    CATEGORIES ci_automation)
+
+# The library workflow through real alcedo-cli and alcedo_main --headless processes. A failed
+# test copies the session logs to automation-failures/ in the build tree; CI uploads them.
+alcedo_add_automation_test(AutomationLibraryE2ETest
+    SOURCES automation_library_e2e_test.cpp
+    LIBRARIES AutomationHostLib
+    LABEL ci_automation_flow
+    CATEGORIES ci_automation)
+target_compile_definitions(AutomationLibraryE2ETest PRIVATE
+    ALCEDO_MAIN_PATH="$<TARGET_FILE:alcedo_main>"
+    ALCEDO_CLI_PATH="$<TARGET_FILE:alcedo_cli>"
+    ALCEDO_AUTOMATION_FAILURE_DIR="${CMAKE_BINARY_DIR}/automation-failures")
+add_dependencies(AutomationLibraryE2ETest alcedo_main alcedo_cli)

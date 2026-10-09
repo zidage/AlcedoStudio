@@ -8,6 +8,7 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QEventLoop>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QObject>
 #include <QSettings>
@@ -24,9 +25,12 @@
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/automation/automation_command_registry.hpp"
 #include "ui/alcedo_main/automation/automation_host_commands.hpp"
+#include "ui/alcedo_main/automation/automation_library_commands.hpp"
 #include "ui/alcedo_main/automation/automation_project_commands.hpp"
 #include "ui/alcedo_main/automation/automation_server.hpp"
 #include "ui/alcedo_main/automation/automation_session_commands.hpp"
+#include "ui/alcedo_main/automation/automation_task_commands.hpp"
+#include "ui/alcedo_main/automation/automation_task_tracker.hpp"
 #include "ui/alcedo_main/automation/headless_frame_sink.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/diagnostics/app_logging.hpp"
@@ -152,6 +156,15 @@ auto RunHostSession(QCoreApplication& app, const HeadlessHostOptions& options,
 
   AutomationCommandRegistry registry;
   AutomationServer          server(registry);
+  AutomationTaskTracker     tracker(&host);
+  QObject::connect(&tracker, &AutomationTaskTracker::TaskUpdated, &server,
+                   [&server](const QJsonObject& task) {
+                     server.SendNotification(QStringLiteral("task.updated"), task);
+                   });
+  QObject::connect(&tracker, &AutomationTaskTracker::TaskFinished, &server,
+                   [&server](const QJsonObject& task) {
+                     server.SendNotification(QStringLiteral("task.finished"), task);
+                   });
   bool                      session_file_written = false;
   const auto                remove_session_file  = [&]() {
     if (session_file_written) {
@@ -175,7 +188,9 @@ auto RunHostSession(QCoreApplication& app, const HeadlessHostOptions& options,
                                        QCoreApplication::applicationVersion()},
           &registration_error) ||
       !RegisterAutomationHostCommands(registry, std::move(context), &registration_error) ||
-      !RegisterAutomationProjectCommands(registry, &host, &registration_error)) {
+      !RegisterAutomationProjectCommands(registry, &host, &registration_error) ||
+      !RegisterAutomationLibraryCommands(registry, &host, &tracker, &registration_error) ||
+      !RegisterAutomationTaskCommands(registry, &host, &tracker, &registration_error)) {
     ReportFailure(QStringLiteral("command registration failed: %1").arg(registration_error));
     host.Shutdown();
     return Exit(HeadlessHostExitCode::SessionError);

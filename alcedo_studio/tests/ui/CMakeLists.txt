@@ -505,6 +505,9 @@ def_ui_test(ProjectLaunchCoordinatorTest project_launch_coordinator_test.cpp)
 alcedo_register_test_target(ProjectLaunchCoordinatorTest ui)
 def_ui_test(ProjectModuleTest project_module_close_test.cpp)
 alcedo_register_test_target(ProjectModuleTest ui)
+# Import name filters read by the QML file dialog (automation plan AU5).
+def_ui_test(ImportExportHandlerTest import_export_handler_test.cpp)
+alcedo_register_test_target(ImportExportHandlerTest ui)
 
 def_ui_test(AdjustmentTransferDialogModelTest adjustment_transfer_dialog_model_test.cpp)
 alcedo_register_test_target(AdjustmentTransferDialogModelTest ui)

@@ -217,7 +217,8 @@
       "targets": [
         "alcedo_tests_ci_core",
         "alcedo_tests_ci_raw",
-        "alcedo_tests_ci_metal"
+        "alcedo_tests_ci_metal",
+        "alcedo_tests_ci_automation"
       ]
     },
     {
@@ -254,7 +255,7 @@
       "configurePreset": "macos_arm_metal_ci",
       "filter": {
         "include": {
-          "label": "ci_core_flow|ci_raw_flow|ci_metal_runtime"
+          "label": "ci_core_flow|ci_raw_flow|ci_metal_runtime|ci_automation_flow"
         }
       },
       "output": {

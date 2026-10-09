@@ -178,7 +178,7 @@ endfunction()
 
 # Register one test executable with one or more category aggregates.
 # Call after target_link_libraries. Category names match tests/CMakeLists.txt:
-#   core image io raw gpu edit ui app storage demos ci_core ci_raw ci_metal
+#   core image io raw gpu edit ui app storage demos ci_core ci_raw ci_metal ci_automation
 #
 # Category registration only. Windows DLL fixup is scheduled for the whole
 # directory (include this module or call register once).
@@ -226,6 +226,9 @@ function(alcedo_register_test_target test_target)
         ${test_target})
     elseif(category STREQUAL "ci_metal")
       alcedo_assign_test_category(ci_metal ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_metal
+        ${test_target})
+    elseif(category STREQUAL "ci_automation")
+      alcedo_assign_test_category(ci_automation ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_automation
         ${test_target})
     else()
       message(FATAL_ERROR

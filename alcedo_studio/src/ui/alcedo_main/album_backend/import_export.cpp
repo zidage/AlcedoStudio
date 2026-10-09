@@ -117,6 +117,25 @@ void ImportExportHandler::BindCollaborators(StatsEngine* stats, NikonHeRecoveryC
   semantic_ = semantic;
 }
 
+auto ImportExportHandler::SupportedImportNameFilters() -> QStringList {
+  QStringList patterns;
+  for (const auto extension : kRawExtensions) {
+    patterns.push_back(
+        QStringLiteral("*") +
+        QString::fromLatin1(extension.data(), static_cast<qsizetype>(extension.size())));
+  }
+  for (const auto& raster : kRasterImportExtensions) {
+    patterns.push_back(QStringLiteral("*") +
+                       QString::fromLatin1(raster.extension.data(),
+                                           static_cast<qsizetype>(raster.extension.size())));
+  }
+  return patterns;
+}
+
+auto ImportExportHandler::SupportedImportPatterns() -> QString {
+  return SupportedImportNameFilters().join(QLatin1Char(' '));
+}
+
 void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
   std::vector<image_path_t>        paths;
   std::unordered_set<std::wstring> seen;

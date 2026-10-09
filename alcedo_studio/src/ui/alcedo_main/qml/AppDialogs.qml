@@ -35,14 +35,10 @@ Item {
     property alias globalSearchDialog: globalSearchDialogObj
     property alias backgroundTasksDialog: backgroundTasksDialogObj
 
-    // Every extension of the import categories (type/supported_file_type.hpp). The dialog
-    // filter ignores case on Windows and macOS.
-    readonly property string supportedImagePatterns: [
-        "*.3fr", "*.arw", "*.cr2", "*.cr3", "*.crw", "*.dcr", "*.dng", "*.erf", "*.fff",
-        "*.iiq", "*.kdc", "*.mef", "*.mos", "*.mrw", "*.nef", "*.nrw", "*.orf", "*.pef",
-        "*.raf", "*.raw", "*.rw2", "*.rwl", "*.sr2", "*.srf", "*.srw", "*.x3f",
-        "*.jpg", "*.jpeg", "*.jpe", "*.jfif", "*.tif", "*.tiff", "*.png", "*.exr"
-    ].join(" ")
+    // Every extension of the import categories, read from C++
+    // (ImportExportHandler::SupportedImportPatterns). The dialog filter ignores case on
+    // Windows and macOS.
+    readonly property string supportedImagePatterns: appModules.importExport.supportedImportPatterns
 
     FileDialog {
         id: importDialogObj
