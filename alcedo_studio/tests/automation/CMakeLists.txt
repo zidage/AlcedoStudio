@@ -63,3 +63,8 @@ target_compile_definitions(AutomationHeadlessSessionTest PRIVATE
     ALCEDO_MAIN_PATH="$<TARGET_FILE:alcedo_main>"
     ALCEDO_CLI_PATH="$<TARGET_FILE:alcedo_cli>")
 add_dependencies(AutomationHeadlessSessionTest alcedo_main alcedo_cli)
+
+# project.* commands through the command registry of an in-process headless session.
+alcedo_add_automation_test(AutomationProjectCommandsTest
+    SOURCES automation_project_commands_test.cpp
+    LIBRARIES AutomationHostLib)
