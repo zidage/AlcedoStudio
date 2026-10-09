@@ -4,6 +4,8 @@ Date: 2026-10-08
 
 Status: planned. No phase has implementation evidence.
 
+Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
+
 Primary owner: Alcedo Studio application shell (`alcedo_studio/src/ui/alcedo_main`) and the new
 automation modules.
 
@@ -540,24 +542,24 @@ class AutomationCommandRegistry {
 
 ## 7. Phase summary
 
-| Phase | Result | Main modules | Dependency | Expected diff | Status |
-| --- | --- | --- | --- | ---: | --- |
-| AU1 | Protocol, registry, server | `AutomationProtocol`, `AutomationHostLib` | — | 1100–1500 | planned |
-| AU2 | `alcedo-cli` client and session files | `alcedo_cli` | AU1 | 800–1200 | planned |
-| AU3 | Headless host and session lifecycle | `main.cpp`, headless host, frame sink | AU1, AU2 | 1000–1500 | planned |
-| AU4 | Project launch and close in C++, project commands | Project coordinators, QML | AU3 | 900–1400 | planned |
-| AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | planned |
-| AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | planned |
-| AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | planned |
-| AU8 | Parameter catalog: RAW, input profile, lens, crop | Catalog, Raw and Geometry QML | AU7 | 1300–1700 | planned |
-| AU9 | Parameter catalog: display transform and color fields | Catalog, Display, Look, white balance QML | AU8 | 1200–1700 | planned |
-| AU10 | Editor commands and `render.preview` | Editor session, render port | AU3, AU7 | 1300–1800 | planned |
-| AU11 | Version commands and commit attribution | Session, journal, storage, QML | AU10 | 1300–1800 | planned |
-| AU12 | Export in C++, export commands | Export queue and recipe, QML | AU5 | 1100–1600 | planned |
-| AU13 | Search in C++, search commands | Search session, QML | AU5 | 900–1300 | planned |
-| AU14 | GUI automation server and agent control | Control owner, policy, QML banner | AU6, AU10, AU11, AU12 | 1200–1700 | planned |
-| AU15 | MCP server, operation skill, packaging | `alcedo_cli`, skill, install rules | AU14 | 1100–1600 | planned |
-| AU16 | Operation-sequence robustness and recovery tests | Tests, CI | AU11, AU12, AU13 | 900–1400 | planned |
+| Phase | Result | Main modules | Dependency | Expected diff | Status | Issue |
+| --- | --- | --- | --- | ---: | --- | --- |
+| AU1 | Protocol, registry, server | `AutomationProtocol`, `AutomationHostLib` | — | 1100–1500 | planned | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
+| AU2 | `alcedo-cli` client and session files | `alcedo_cli` | AU1 | 800–1200 | planned | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
+| AU3 | Headless host and session lifecycle | `main.cpp`, headless host, frame sink | AU1, AU2 | 1000–1500 | planned | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
+| AU4 | Project launch and close in C++, project commands | Project coordinators, QML | AU3 | 900–1400 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
+| AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
+| AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
+| AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
+| AU8 | Parameter catalog: RAW, input profile, lens, crop | Catalog, Raw and Geometry QML | AU7 | 1300–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
+| AU9 | Parameter catalog: display transform and color fields | Catalog, Display, Look, white balance QML | AU8 | 1200–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
+| AU10 | Editor commands and `render.preview` | Editor session, render port | AU3, AU7 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
+| AU11 | Version commands and commit attribution | Session, journal, storage, QML | AU10 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
+| AU12 | Export in C++, export commands | Export queue and recipe, QML | AU5 | 1100–1600 | planned | [#327](https://github.com/zidage/AlcedoStudio/issues/327) |
+| AU13 | Search in C++, search commands | Search session, QML | AU5 | 900–1300 | planned | [#327](https://github.com/zidage/AlcedoStudio/issues/327) |
+| AU14 | GUI automation server and agent control | Control owner, policy, QML banner | AU6, AU10, AU11, AU12 | 1200–1700 | planned | [#328](https://github.com/zidage/AlcedoStudio/issues/328) |
+| AU15 | MCP server, operation skill, packaging | `alcedo_cli`, skill, install rules | AU14 | 1100–1600 | planned | [#329](https://github.com/zidage/AlcedoStudio/issues/329) |
+| AU16 | Operation-sequence robustness and recovery tests | Tests, CI | AU11, AU12, AU13 | 900–1400 | planned | [#330](https://github.com/zidage/AlcedoStudio/issues/330) |
 
 AU7 to AU9 can run in parallel with AU4 to AU6. AU8 and AU9 are split because the structured
 field builders are about 700 QML lines and their tests are large. One combined phase can pass
