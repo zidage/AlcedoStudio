@@ -29,3 +29,15 @@ alcedo_add_automation_test(AutomationCommandRegistryTest
 alcedo_add_automation_test(AutomationServerTest
     SOURCES automation_server_test.cpp
     LIBRARIES AutomationHostLib Qt6::Network)
+
+alcedo_add_automation_test(AutomationSessionFileTest
+    SOURCES automation_session_file_test.cpp
+    LIBRARIES AutomationProtocol)
+
+# Runs the real alcedo-cli program against servers inside the test process.
+alcedo_add_automation_test(AlcedoCliTest
+    SOURCES alcedo_cli_test.cpp
+    LIBRARIES AutomationHostLib Qt6::Network)
+target_compile_definitions(AlcedoCliTest PRIVATE
+    ALCEDO_CLI_PATH="$<TARGET_FILE:alcedo_cli>")
+add_dependencies(AlcedoCliTest alcedo_cli)
