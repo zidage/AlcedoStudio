@@ -53,4 +53,5 @@ add_subdirectory(io)
 add_subdirectory(sidecar_client)
 add_subdirectory(app)
 
+add_subdirectory(automation)
 add_subdirectory(ui)
