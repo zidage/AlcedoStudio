@@ -37,7 +37,7 @@ class AutomationServer final : public QObject {
   /// the Qt error string to @p error when the name is in use or the listen fails.
   [[nodiscard]] auto Listen(const QString& socket_name, QString* error = nullptr) -> bool;
 
-  /// Stops listening and closes every connection.
+  /// Stops listening and closes every connection after its queued responses are written.
   void               Close();
 
   [[nodiscard]] auto IsListening() const -> bool;

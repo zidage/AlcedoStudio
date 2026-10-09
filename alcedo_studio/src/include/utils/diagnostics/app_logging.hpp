@@ -25,6 +25,9 @@ Q_DECLARE_LOGGING_CATEGORY(editorLog)
 Q_DECLARE_LOGGING_CATEGORY(editorPresentLog)
 
 auto InitializeApplicationLogging(const QString& preferred_directory = {}) -> QString;
+/// Writes the application log to @p file_path (appends). Creates the parent directory. Returns
+/// the absolute path, or an empty string when the file cannot be opened.
+auto InitializeApplicationLoggingToFile(const QString& file_path) -> QString;
 void ShutdownApplicationLogging();
 auto CurrentLogFilePath() -> QString;
 /// Write buffered info/debug lines to the log file now. For a line that must survive a crash

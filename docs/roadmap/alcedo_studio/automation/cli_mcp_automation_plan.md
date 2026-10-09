@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1 and AU2 have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1, AU2, and AU3 have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -562,7 +562,7 @@ class AutomationCommandRegistry {
 | --- | --- | --- | --- | ---: | --- | --- |
 | AU1 | Protocol, registry, server | `AutomationProtocol`, `AutomationHostLib` | — | 1100–1500 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU2 | `alcedo-cli` client and session files | `alcedo_cli` | AU1 | 800–1200 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
-| AU3 | Headless host and session lifecycle | `main.cpp`, headless host, frame sink | AU1, AU2 | 1000–1500 | planned | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
+| AU3 | Headless host and session lifecycle | `main.cpp`, headless host, frame sink | AU1, AU2 | 1000–1500 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU4 | Project launch and close in C++, project commands | Project coordinators, QML | AU3 | 900–1400 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
@@ -965,7 +965,96 @@ macOS: run the same tests in `build/macos-debug` configured with `-DALCEDO_BUILD
 
 **Expected diff:** 1000–1500 lines.
 
-**Completion record:** see section 13.
+**Completion record:**
+
+```text
+Phase / date / status: AU3 / 2026-10-09 / implemented.
+Source revision and branch: feature/alcedo-cli-session-files (AU2); branch
+  feature/headless-alcedo-main-session. Actual diff: 1685 lines (23 files), below the
+  2000-line split limit.
+Actual changed modules: AutomationHostLib (headless host, headless frame sink, host commands;
+  now links AlbumBackendLib), alcedo_main (main.cpp headless branch), EditorSessionController
+  (BindHeadlessPresentationSink), ApplicationModuleHost (IsIdle), app logging
+  (InitializeApplicationLoggingToFile), alcedo_cli (session start, session stop),
+  AutomationServer (Close writes queued responses), tests.
+Implemented behavior:
+  - main.cpp checks --headless right after the organization and application names are set,
+    before any GUI call, and returns RunHeadlessHost. The GUI path is unchanged otherwise.
+  - Options --project, --create <folder> <name>, --session, --session-dir, --editor-backend,
+    --viewport WxH, --settings-dir, --log-file. Exit codes: 0, 2 usage, 3 backend, 4 project
+    load, 5 server or session file.
+  - --settings-dir: QSettings::setDefaultFormat(IniFormat) and setPath(IniFormat, UserScope)
+    before the first QSettings. The headless host reads the saved backend with the default
+    format, so the redirection applies.
+  - Backend: --editor-backend, then the saved setting, then the platform default (OpenCL on
+    Windows builds with OpenCL, Metal on macOS). ResolveAcceleratorBackend starts it; Metal
+    also needs MetalContext::Instance().Device(). A failure exits 3 with the real error. No
+    other backend is tried.
+  - HeadlessFrameSink: host-visible RGBA32F buffer for CUDA, an OpenCL RGBA32F image of the
+    active OpenCL context for OpenCL, SubmitMetalFrame (not retained) for Metal; a mutex
+    guards the buffers; NotifyFrameReady counts frames.
+  - EditorSessionController::BindHeadlessPresentationSink sets the sink, the presentation sink
+    id (sink address), and the presentation size; presentation_frame_sink() returns it, so the
+    scheduler sink resolver needs no change.
+  - ApplicationModuleHost::IsIdle(); ShutdownModules uses it.
+  - session.shutdown (persist accepts only true) responds after ApplicationModuleHost::Shutdown,
+    removes the session file, and quits; AutomationServer::Close writes the queued response
+    before the connection closes. state.get returns project, workspace, editor state and
+    identity, control (held: true in headless), running tasks, and idle.
+  - alcedo-cli session start: finds alcedo_main (--host-binary, the CLI directory,
+    ../MacOS/alcedo_main, alcedo_main.app/Contents/MacOS/alcedo_main), starts it detached with
+    stderr in <session-dir>/<name>.start.log, waits for the session file of that process and a
+    session.ping answer; when the process exits first, prints the stderr tail (or the log tail)
+    and exits 3. --create takes <folder>,<name> (split on the last comma).
+  - alcedo-cli session stop: session.shutdown, then waits up to 60 s for the process to exit.
+Explicitly unimplemented items: session.shutdown persist=false. Closing without persistence
+  is the project.close behavior of AU4; the schema accepts only true until then.
+Deviations: the headless host lives in AutomationHostLib
+  (include/ui/alcedo_main/automation/headless_host.hpp) instead of src/ui/alcedo_main, so the
+  tests can call it. The options are parsed by hand, because --create takes two values, which
+  QCommandLineParser cannot express. --log-file needed InitializeApplicationLoggingToFile.
+  GUI main.cpp still reads the backend with NativeFormat; only the headless host takes
+  --settings-dir.
+QML timer check: update checks (UpdateNotice.qml, WelcomeDialog.qml) and accelerator
+  preparation (ProjectLaunchController.qml StartAcceleratorPreparation) start only from QML.
+  The headless host does not run them and does not need them.
+Primary success call chain: alcedo-cli session start --headless --create D,name ->
+  QProcess::startDetached(alcedo_main --headless ...) -> RunHeadlessHost -> QCoreApplication ->
+  StartHeadlessEditorBackend -> ApplicationModuleHost -> BindHeadlessPresentationSink ->
+  ProjectModule::CreateProjectInFolderNamed (wait for ProjectLoadStateChanged) ->
+  AutomationServer::Listen -> WriteAutomationSessionFile -> CLI ping ok -> exit 0.
+Primary failure and restore call chain: --project missing.alcd -> OpenProject error
+  "Project file was not found." -> exit 4, no session file -> CLI sees the process exit before
+  the session file -> prints "alcedo_main --headless: the project cannot be opened: ..." ->
+  exit 3.
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main alcedo_cli
+    AutomationProtocolTest AutomationCommandRegistryTest AutomationServerTest
+    AutomationSessionFileTest AlcedoCliTest HeadlessFrameSinkTest HeadlessHostTest
+    AutomationHeadlessSessionTest ApplicationModuleHostIdleTest
+    ApplicationModuleHostLifecycleTest ApplicationModuleHostShutdownTest EditorAppLoggingTest
+    EditorSessionRenderSchedulerPortTest --parallel 4  -> 0
+  ctest --test-dir build/debug -R "<the targets above>" -j 1 --output-on-failure  -> 8
+Discovered / passed / failed / skipped counts: 103 / 97 / 5 / 1 (plus UiFuzzAutomationTest,
+  matched by the pattern and not built).
+  - AU1 to AU3 tests: 53 discovered, 52 passed, 1 skipped
+    (EditorOpenReachesInteractiveWithHeadlessSink/metal: platform unavailable on Windows).
+  - ApplicationModuleHostLifecycleTest, ApplicationModuleHostShutdownTest, EditorAppLoggingTest:
+    all passed.
+  - EditorSessionRenderSchedulerPortTest: 5 failed. The same 5 tests fail at main b7c1bd36e
+    (rebuilt and run in the same build directory), so they are not caused by AU3.
+Backend evidence: EditorOpenReachesInteractiveWithHeadlessSink reached Interactive with
+  ready frames on CUDA and on OpenCL (Windows, in-process host). A real headless process
+  started, answered, and stopped with exit code 0 on CUDA (--editor-backend cuda, log
+  "editor.backend=cuda") and on the default OpenCL backend.
+Manual verification: CLI start / list / state.get / schema / unknown method (exit 1) / stop
+  and the missing-project start (exit 3 with the host error) were run by hand. The GUI start
+  check was not run by the agent; the user records it.
+Evidence path: build/tmp/automation_au3/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS Metal not run (no macOS host in this
+  session; these tests are not in the macOS CI preset). EditorSessionRenderSchedulerPortTest
+  has 5 failures that exist on main.
+```
 
 ### Phase AU4 — Project launch and close in C++, project commands
 

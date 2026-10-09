@@ -634,10 +634,7 @@ void ApplicationModuleHost::ShutdownModules() {
     // alive. Export is a wait-for-finish task; its completion releases the DB
     // barrier and the installed callback drains analysis results immediately.
     const QDeadlineTimer deadline(15000);
-    while (((background_tasks_ && background_tasks_->RunningCount() > 0) ||
-            (import_export_ &&
-             (import_export_->ImportRunning() || import_export_->export_inflight()))) &&
-           !deadline.hasExpired()) {
+    while (!IsIdle() && !deadline.hasExpired()) {
       QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
     }
     if (image_analysis_sink_ && (!db_write_barrier_ || !db_write_barrier_->IsHeld())) {
@@ -735,6 +732,14 @@ ApplicationModuleHost::~ApplicationModuleHost() {
 }
 
 void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
+
+auto ApplicationModuleHost::IsIdle() const -> bool {
+  if (background_tasks_ && background_tasks_->RunningCount() > 0) {
+    return false;
+  }
+  return !import_export_ ||
+         (!import_export_->ImportRunning() && !import_export_->export_inflight());
+}
 
 void ApplicationModuleHost::RemovePendingWorkspace() {
   if (pending_workspace_removal_.empty()) {
