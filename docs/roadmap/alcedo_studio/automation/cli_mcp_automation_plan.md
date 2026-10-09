@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1 has implementation evidence (completion record in its phase section).
+Status: in progress. AU1 and AU2 have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -561,7 +561,7 @@ class AutomationCommandRegistry {
 | Phase | Result | Main modules | Dependency | Expected diff | Status | Issue |
 | --- | --- | --- | --- | ---: | --- | --- |
 | AU1 | Protocol, registry, server | `AutomationProtocol`, `AutomationHostLib` | — | 1100–1500 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
-| AU2 | `alcedo-cli` client and session files | `alcedo_cli` | AU1 | 800–1200 | planned | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
+| AU2 | `alcedo-cli` client and session files | `alcedo_cli` | AU1 | 800–1200 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU3 | Headless host and session lifecycle | `main.cpp`, headless host, frame sink | AU1, AU2 | 1000–1500 | planned | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU4 | Project launch and close in C++, project commands | Project coordinators, QML | AU3 | 900–1400 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
@@ -812,7 +812,46 @@ ctest --test-dir build/debug -R "AlcedoCliTest|AutomationSessionFileTest" --outp
 
 **Expected diff:** 800–1200 lines.
 
-**Completion record:** see section 13.
+**Completion record:**
+
+```text
+Phase / date / status: AU2 / 2026-10-09 / implemented.
+Source revision and branch: feature/automation-protocol-server (AU1); branch
+  feature/alcedo-cli-session-files.
+Actual changed modules: AutomationProtocol (session files, blocking client), alcedo_cli (new,
+  src/ui/alcedo_cli, output name alcedo-cli), automation tests.
+Implemented behavior:
+  - AutomationSessionFile write (QSaveFile), read, directory listing, removal,
+    DefaultAutomationSessionDir, session name rule [A-Za-z0-9._-]{1,64}.
+  - Stale detection: unreadable file or no process (OpenProcess / kill(pid, 0)); the CLI adds
+    the session.ping check.
+  - AutomationClient: connect, call with id matching (notifications ignored), read
+    notification, wait limit.
+  - alcedo-cli: global options at any position (--session, --session-dir, --json, --timeout),
+    session selection order of 2.2, call, schema, session list, session prune, watch, help.
+    --timeout is sent as timeout_ms; the client waits 5 s longer for the session answer.
+    A file with another protocol major value is listed as unsupported-protocol and not used.
+  - Exit codes 0 / 1 / 2 / 3 / 4 as in 2.7.
+Explicitly unimplemented items: session start and session stop (AU3).
+Deviation: AutomationClient lives in AutomationProtocol, so that alcedo-cli and later the
+  MCP server share one client.
+Primary success call chain: alcedo-cli call session.ping '{}' -> ParseOptions ->
+  SelectSession -> AutomationClient::Connect -> Call -> PrintResponse -> exit 0.
+Primary failure and restore call chain: two live sessions, no --session -> SelectSession
+  error with both names -> exit 2; socket does not answer -> Connect fails -> exit 3 with the
+  socket name and the Qt error string.
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_cli AlcedoCliTest
+    AutomationSessionFileTest --parallel 4  -> 0
+  ctest --test-dir build/debug -R "AlcedoCliTest|AutomationSessionFileTest|
+    Automation(Protocol|CommandRegistry|Server)Test" --output-on-failure  -> 0
+Discovered / passed / failed / skipped counts: 39 / 39 / 0 / 0 (13 new AU2 tests).
+Link check: the alcedo-cli link line in build.ninja holds AutomationProtocol.lib, Qt6Core,
+  Qt6Network, and system libraries only. No album backend library.
+Manual verification: not required for AU2.
+Evidence path: build/tmp/automation_au2/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS tests not run locally.
+```
 
 ### Phase AU3 — Headless host and session lifecycle
 
