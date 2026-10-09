@@ -135,13 +135,18 @@ class HostPixelFrameSink final : public alcedo::IFrameSink {
   void NotifyFrameReady(const alcedo::FrameCompletionSubmission& /*submission*/) override {
     ready_count_.fetch_add(1, std::memory_order_acq_rel);
   }
+  void BindFrameSubmission(const alcedo::FrameCompletionSubmission& submission) override {
+    bound_submission = submission;
+  }
   [[nodiscard]] auto GetWidth() const -> int override { return pixels.cols; }
   [[nodiscard]] auto GetHeight() const -> int override { return pixels.rows; }
   [[nodiscard]] auto ready_count() const -> int {
     return ready_count_.load(std::memory_order_acquire);
   }
 
-  cv::Mat            pixels;
+  cv::Mat                           pixels;
+  /// Submission the presenter bound with the last frame.
+  alcedo::FrameCompletionSubmission bound_submission{};
 
  private:
   std::atomic<int> ready_count_ = 0;
@@ -236,6 +241,17 @@ auto MakeRequest(std::uint64_t request_id, std::uint64_t image_load_request,
   request.intent.requested_height      = 180;
   request.intent.presentation_sink_id  = sink_id;
   return request;
+}
+
+/// Submission the renderer hands to the frame presenter for @p request: the port's render
+/// description through the pipeline task. The presenter binds it to the sink with the frame.
+auto PresentedSubmission(const alcedo::EditorRenderRequest& request)
+    -> alcedo::FrameCompletionSubmission {
+  alcedo::PipelineTask task;
+  task.pipeline_executor_ =
+      std::make_shared<alcedo::PipelineExecutor>(alcedo::ExecutorRole::Interactive);
+  task.options_.render_desc_ = MakeEditorRenderDesc(request);
+  return task.MakeApplyRequest().submission;
 }
 
 auto MakeReadyContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
@@ -578,12 +594,18 @@ TEST(EditorSessionRenderSchedulerPortTest,
   scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
   scheduler->InstallSessionContext(MakeReadyContext(7, 22, 11));
 
-  ASSERT_TRUE(ScheduleAndWait(*scheduler, MakeRequest(33, 7)).has_value());
+  const auto request = MakeRequest(33, 7);
+  ASSERT_TRUE(ScheduleAndWait(*scheduler, request).has_value());
 
-  // Production Dispatch never calls EnsureSize.
+  // The frame reached the port's executor with the resolved sink attached.
+  const auto executor = scheduler->interactive_executor();
+  ASSERT_NE(executor, nullptr);
+  EXPECT_EQ(executor->GetFrameSink(), &sink);
+  // The port never binds or sizes the sink: the presenter binds the submission with the frame.
+  // The fixture has no image bytes, so the render fails before it presents.
   EXPECT_EQ(sink.ensure_size_count(), 0);
-  EXPECT_GE(sink.bind_count(), 1);
-  EXPECT_EQ(sink.last_submission.metadata.presentation_request_id, 33u);
+  EXPECT_EQ(sink.bind_count(), 0);
+  EXPECT_EQ(PresentedSubmission(request).metadata.presentation_request_id, 33u);
   EXPECT_EQ(scheduler->context_payload_load_count(), 0u);
 }
 
@@ -617,58 +639,32 @@ TEST(EditorSessionRenderSchedulerPortTest,
 }
 
 TEST(EditorSessionRenderSchedulerPortTest, ViewDrivenReasonsDisableScopeFrameReplacement) {
-  HeldImage held;
-  auto      scheduler = MakeSchedulerHoldingImage(held);
-  ASSERT_TRUE(held.lease.has_value()) << held.error;
-  RecordingFrameSink sink;
-  scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
-  scheduler->InstallSessionContext(MakeReadyContext(20, 22, 11));
-
   const std::array view_reasons = {alcedo::EditorRenderReason::ZoomPan,
                                    alcedo::EditorRenderReason::Resize,
                                    alcedo::EditorRenderReason::DetailRefresh};
   for (std::size_t index = 0; index < view_reasons.size(); ++index) {
     auto request          = MakeRequest(60 + index, 20);
     request.intent.reason = view_reasons[index];
-    ASSERT_TRUE(ScheduleAndWait(*scheduler, request).has_value());
-    EXPECT_FALSE(sink.last_submission.metadata.scope_update_allowed);
-    EXPECT_EQ(sink.ensure_size_count(), 0);
+    EXPECT_FALSE(PresentedSubmission(request).metadata.scope_update_allowed) << index;
   }
 }
 
 TEST(EditorSessionRenderSchedulerPortTest, ScopeRefreshMarksFrameAsRequestedScopeInput) {
-  HeldImage held;
-  auto      scheduler = MakeSchedulerHoldingImage(held);
-  ASSERT_TRUE(held.lease.has_value()) << held.error;
-  RecordingFrameSink sink;
-  scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
-  scheduler->InstallSessionContext(MakeReadyContext(32, 22, 11));
-
   auto request          = MakeRequest(72, 32);
   request.intent.reason = alcedo::EditorRenderReason::ScopeRefresh;
-  ASSERT_TRUE(ScheduleAndWait(*scheduler, request).has_value());
 
-  EXPECT_TRUE(sink.last_submission.metadata.scope_update_allowed);
-  EXPECT_TRUE(sink.last_submission.metadata.scope_refresh_requested);
-  EXPECT_EQ(sink.last_submission.metadata.preview_generation, 0u);
-  EXPECT_EQ(sink.last_submission.metadata.presentation_request_id, request.request_id);
-  EXPECT_EQ(sink.ensure_size_count(), 0);
-  EXPECT_GE(sink.bind_count(), 1);
+  const auto metadata = PresentedSubmission(request).metadata;
+  EXPECT_TRUE(metadata.scope_update_allowed);
+  EXPECT_TRUE(metadata.scope_refresh_requested);
+  EXPECT_EQ(metadata.preview_generation, 0u);
+  EXPECT_EQ(metadata.presentation_request_id, request.request_id);
 }
 
 TEST(EditorSessionRenderSchedulerPortTest, SessionDoesNotStampPreviewGenerationFromIntent) {
-  HeldImage held;
-  auto      scheduler = MakeSchedulerHoldingImage(held);
-  ASSERT_TRUE(held.lease.has_value()) << held.error;
-  RecordingFrameSink sink;
-  scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
-  scheduler->InstallSessionContext(MakeReadyContext(41, 22, 11));
-
-  auto request = MakeRequest(88, 41);
-  ASSERT_TRUE(ScheduleAndWait(*scheduler, request).has_value());
-
-  EXPECT_EQ(sink.last_submission.metadata.preview_generation, 0u);
-  EXPECT_EQ(sink.last_submission.metadata.presentation_request_id, request.request_id);
+  const auto request  = MakeRequest(88, 41);
+  const auto metadata = PresentedSubmission(request).metadata;
+  EXPECT_EQ(metadata.preview_generation, 0u);
+  EXPECT_EQ(metadata.presentation_request_id, request.request_id);
 }
 
 TEST(EditorSessionRenderSchedulerPortTest, RequestWithoutFrameSourceIsRejected) {
@@ -789,7 +785,9 @@ TEST(EditorSessionRenderSchedulerPortTest,
 
   ASSERT_TRUE(ScheduleAndWait(*scheduler, MakeRequest(100, 9)).has_value());
   EXPECT_EQ(scheduler->context_payload_load_count(), 0u);
-  EXPECT_GE(sink.bind_count(), 1);
+  // The frame was submitted to the port's executor without an image pool.
+  ASSERT_NE(scheduler->interactive_executor(), nullptr);
+  EXPECT_EQ(scheduler->interactive_executor()->GetFrameSink(), &sink);
   EXPECT_EQ(sink.ensure_size_count(), 0);
 }
 
@@ -1011,6 +1009,23 @@ TEST_F(EditorSessionRenderSchedulerPortGpuTest, FrameRendersThePreviewPublishedL
   ASSERT_NE(executor, nullptr);
   EXPECT_EQ(InteractiveCudaBinding(*executor),
             (alcedo::RenderBindingKey{.lineage = published->Lineage(), .element_id = 22}));
+#endif
+}
+
+// The presenter binds the submission the port stamped from the request with the frame it presents.
+TEST_F(EditorSessionRenderSchedulerPortGpuTest, PresentedFrameCarriesTheRequestMetadata) {
+#ifdef HAVE_CUDA
+  auto request          = MakeRequest(705, kEpoch);
+  request.intent.reason = alcedo::EditorRenderReason::ScopeRefresh;
+  const auto frame      = ScheduleAndWait(*scheduler_, request);
+  ASSERT_TRUE(frame.has_value());
+  ASSERT_TRUE(frame->success) << frame->message;
+
+  const auto& metadata = sink_.bound_submission.metadata;
+  EXPECT_EQ(metadata.presentation_request_id, 705u);
+  EXPECT_TRUE(metadata.scope_refresh_requested);
+  EXPECT_TRUE(metadata.scope_update_allowed);
+  EXPECT_EQ(metadata.preview_generation, 0u);
 #endif
 }
 
