@@ -23,7 +23,7 @@ Related plans:
 | Plan | Relation |
 | --- | --- |
 | [Editor Session Command Queue and Lock Simplification Plan](../ui/editor_session_command_queue_and_lock_simplification_plan.md) | Depends on it. Automation submits editor work through the same command queue. |
-| [Background Tasks and Declarative UI State Plan](../ui/background_tasks_ui_state_plan.md) | Extends it. Agent control is one more background task with interaction locks. |
+| [Background Tasks and Declarative UI State Plan](../ui/background_tasks_ui_state_plan.md) | Extends it. Agent control is one more background task with interaction locks. The existing task island and task dialog show it. |
 | [UI Fuzz Automation Platform Plan](../ui/ui_fuzz_automation_platform_plan.md) | Independent. That plan drives the QML item tree with synthesized input. This plan drives owner APIs with named commands. The two do not share code, but this plan reuses its QLocalServer and JSON Lines precedent. |
 | [Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan](../ui/editor_single_live_pipeline_wal_checkpoint_plan.md) | Depends on it. Commit attribution extends the journal record and the commit materialization step. |
 | [Phase 6C Mini-Git History and Pipeline Snapshot Plan](../ui/phase_6c_mini_git_history_and_pipeline_snapshot_plan.md) | Depends on it. Commit hashes stay unchanged. |
@@ -59,7 +59,7 @@ A session runs in one of two hosts:
 
 | Topic | Decision |
 | --- | --- |
-| Agent and user in the GUI host | **Turn-taking control.** The agent must hold control to change state. While the agent holds control, the UI blocks user edits but keeps browsing and viewing available. The user can take control back at any time. After the user takes control back, the agent cannot take control again until the user returns it from the UI. |
+| Agent and user in the GUI host | **Turn-taking control.** The agent must hold control to change state. While the agent holds control, the UI blocks user edits but keeps browsing and viewing available. The user can take control back at any time. After the user takes control back, the agent cannot take control again until the user returns it from the UI. The agent control state uses the existing background task notification path: the task island unfolds while the agent works, and a click shows the agent status. |
 | Transport | JSON-RPC 2.0 over `QLocalSocket`, one JSON object per line. |
 | QML business logic | Move it to C++. QML calls the same C++ operation. The CLI tests therefore exercise the same path that the UI uses. |
 | CLI shape | A persistent session plus one-shot subcommands. Each `alcedo-cli` invocation is a short process. |
@@ -80,6 +80,10 @@ A session runs in one of two hosts:
   operation skill that explains how to drive the CLI and MCP.
 - Paste, Merge, mask authoring, node-graph editing, and comparison-view commands. The command
   registry design must allow them later without a protocol change.
+- The detailed agent session logic in the GUI host: the content of the agent status view
+  (command history, preview images, agent notes), messages between the agent and the user, and
+  any richer control handoff. A separate plan designs it. AU14 delivers only the control
+  behavior and the task presentation in 2.8.
 
 ### 1.4 Rejected options
 
@@ -265,25 +269,36 @@ UI units apply to every editor parameter value.
 
 ### 2.8 Agent control in the GUI host
 
-Layout of the control banner in the main window:
+Agent control uses the existing background task notification path. AU14 adds no banner, no new
+window, and no new notification channel.
+
+`control.acquire` registers one background task of the new kind `AgentControl` with
+`BackgroundTaskController::RegisterTask`. The existing island (`BackgroundTaskBar.qml`) and the
+existing task dialog (`BackgroundTasksDialog.qml`) show it:
 
 ```text
-+---------------------------------------------------------------------------------+
-| [agent icon]  Agent "claude-code" is editing. Viewing stays available.  [Take control] |
-+---------------------------------------------------------------------------------+
-| (normal workspace: library or editor)                                           |
+top toolbar, agent at work (island unfolded, lamp pulses, indeterminate progress hairline):
+  ... [ (o) Agent · claude-code · editor.set saturation 20 ] [right sidebar toggle]
 ```
 
-After the user takes control back:
-
-```text
-+---------------------------------------------------------------------------------+
-| [agent icon]  You took control from "claude-code".             [Return control] [x] |
-+---------------------------------------------------------------------------------+
-```
+| Task field | Value |
+| --- | --- |
+| Kind label | "Agent" |
+| Title | The holder name, for example `claude-code` |
+| Detail | The summary of the running command, for example `editor.set saturation 20`. "Waiting for the next command" between commands. |
+| Progress | Indeterminate (-1) |
+| Cancelable | Yes. Cancel equals **Take control**. |
+| State | Running while the agent holds control. Succeeded when the agent releases control. Canceled when the user takes control. |
+| Locks | `UserStateChange` (global) |
 
 Rules:
 
+- The island unfolds while the agent works, by the existing rule for a running task.
+- A click on the island shows the agent status through the existing task path
+  (`BackgroundTasksDialog.qml` and its `taskDetailsRequested` signal). AU14 shows only the task
+  fields above. The full agent status view belongs to the separate session design (1.3).
+- The handler of each state-changing command calls `BackgroundTaskController::UpdateTask` with
+  the command summary when the command starts. It sets the waiting text when the command ends.
 - `control.acquire` succeeds when no other agent holds control, the user did not revoke control,
   and the editor has no unsealed slider input. If the editor has unsealed input, the acquire waits
   for the Release or Cancel boundary, with the command timeout.
@@ -292,14 +307,15 @@ Rules:
   the editor, import, delete, rating, export start, and project open, create, or close.
 - While the agent holds control, the UI keeps these actions: library browsing, thumbnail
   scrolling, zoom and pan in the viewport, the History and Versions panels as read-only views,
-  search, and settings.
-- The agent control task appears in the background task popover. Its cancel action equals
-  **Take control**.
-- **Take control** releases agent control at once. The next agent command returns
-  `control_revoked_by_user`.
-- **Return control** clears the revoked state. The agent can then acquire control again.
-- The banner text uses the translation system. The `.ts` files are edited manually.
+  search, settings, and the task island and task dialog.
+- **Take control** is the cancel action of the agent task. It releases agent control at once.
+  The next agent command returns `control_revoked_by_user`.
+- After **Take control**, `control.acquire` returns `control_revoked_by_user` until the user
+  selects **Return control**. AU14 adds **Return control** as one row action on the canceled agent
+  task in `BackgroundTasksDialog.qml`.
+- New strings use the translation system. The `.ts` files are edited manually.
 - In the headless host the agent always holds control. `control.*` commands report `held: true`.
+  The headless host registers no agent task.
 
 ### 2.9 Parameter catalog
 
@@ -346,7 +362,7 @@ Rules:
 | `alcedo_cli` executable (proposed, output name `alcedo-cli`) | CLI client and MCP server. |
 | Album backend controllers | New C++ operations that replace QML logic. |
 | Editor session service and Mini-Git storage | Completion correlation for settled input, commit attribution. |
-| QML | Calls the new C++ operations, reads the parameter catalog, shows the control banner and attribution. |
+| QML | Calls the new C++ operations, reads the parameter catalog, shows the agent control task and attribution. |
 | Tests and CI | Automation unit tests, headless end-to-end tests, CI label and preset changes. |
 | Packaging | Install rules for `alcedo-cli` on Windows and macOS. |
 | `.agents/skills/alcedo-automation/` (proposed) | Operation skill for agents. |
@@ -415,7 +431,7 @@ Host mode B: alcedo_main --headless -> QCoreApplication + HeadlessFrameSink + Au
 | `AutomationServer` | Socket lines | Response and notification lines | Connection table | Registry | Session | JSON-RPC errors | GUI thread |
 | `AutomationCommandRegistry` | Method, params | Result or error | Nothing directly | Handler table | Session | Error codes in 2.3 | Handler |
 | Command handlers | Validated params | Result JSON | Through owner operations only | Owner read APIs | Per call | Owner error mapped to 2.3 | Handler completion on the GUI thread |
-| `AgentControlOwner` | `control.*`, banner actions | Control state, lock task | Control state, its background task | Editor pending input state | Session | `control_*` errors | GUI thread |
+| `AgentControlOwner` | `control.*`, agent task cancel, Return control | Control state, agent task | Control state, its background task | Editor pending input state | Session | `control_*` errors | GUI thread |
 | `HeadlessFrameSink` | Frames from the render scheduler | Latest host frame | Its own pixel buffer | — | Headless session | Frame failure through the existing render result | Render worker writes, GUI thread reads under its mutex |
 | `EditorParameterCatalog` | Field key, UI value | Model JSON, UI value | Nothing | Catalog table | Static | Range or shape error | Caller |
 | `EditCommitAttribution` storage | Attribution in journal records | Table rows | Its table | Commit table | Project | Storage error through the existing persistence result | Persistence worker |
@@ -484,7 +500,7 @@ editor.batch_set (3 changes) in progress, change 1 committed
   `ShellSignals.qml`, `GlobalSearchDialog.qml`, `EditorTonePanel.qml`, `EditorLookPanel.qml`,
   `EditorPostProcessPanel.qml`, `EditorRawDecodePanel.qml`, `EditorGeometryPanel.qml`,
   `EditorDisplayTransformPanel.qml`, `EditorWhiteBalanceSliders.qml`, `EditorVersionsPanel.qml`,
-  the History panel delegate.
+  `BackgroundTaskBar.qml`, `BackgroundTasksDialog.qml`, the History panel delegate.
 - Root `CMakeLists.txt`, `scripts/verify_windows_install_tree.ps1`, `CMakePresets.json`,
   `.github/workflows/cpp-ci.yml`.
 - `docs/roadmap/README.md` — link to this plan.
@@ -557,7 +573,7 @@ class AutomationCommandRegistry {
 | AU11 | Version commands and commit attribution | Session, journal, storage, QML | AU10 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
 | AU12 | Export in C++, export commands | Export queue and recipe, QML | AU5 | 1100–1600 | planned | [#327](https://github.com/zidage/AlcedoStudio/issues/327) |
 | AU13 | Search in C++, search commands | Search session, QML | AU5 | 900–1300 | planned | [#327](https://github.com/zidage/AlcedoStudio/issues/327) |
-| AU14 | GUI automation server and agent control | Control owner, policy, QML banner | AU6, AU10, AU11, AU12 | 1200–1700 | planned | [#328](https://github.com/zidage/AlcedoStudio/issues/328) |
+| AU14 | GUI automation server and agent control | Control owner, policy, background task island | AU6, AU10, AU11, AU12 | 1100–1600 | planned | [#328](https://github.com/zidage/AlcedoStudio/issues/328) |
 | AU15 | MCP server, operation skill, packaging | `alcedo_cli`, skill, install rules | AU14 | 1100–1600 | planned | [#329](https://github.com/zidage/AlcedoStudio/issues/329) |
 | AU16 | Operation-sequence robustness and recovery tests | Tests, CI | AU11, AU12, AU13 | 900–1400 | planned | [#330](https://github.com/zidage/AlcedoStudio/issues/330) |
 
@@ -1708,8 +1724,14 @@ ctest --test-dir build/debug -R "SearchSessionTest|AutomationSearchE2ETest" -j 1
 - `AgentControlOwner` and the commands `control.acquire`, `control.release`, `control.get`.
 - A new interaction capability that blocks user-facing state changes while the agent holds
   control.
-- The control banner and the read-only behavior in QML.
+- The agent control task in the existing background task island and task dialog, as specified
+  in 2.8. No banner and no new notification channel.
+- **Return control** as a row action on the canceled agent task.
 - Notifications `control.changed`.
+
+The detailed agent session logic (status view content, messages, richer handoff) is not part
+of this phase. A separate plan designs it (1.3). Keep the agent task fields in 2.8 stable so that
+design can read them.
 
 **Inputs and prerequisites**
 
@@ -1718,9 +1740,9 @@ ctest --test-dir build/debug -R "SearchSessionTest|AutomationSearchE2ETest" -j 1
 **Modules, files, and APIs**
 
 - Proposed: `agent_control_owner.{hpp,cpp}`, owned by `ApplicationModuleHost`, exposed as
-  `Q_PROPERTY agentControl`.
+  `Q_PROPERTY agentControl`. It receives `BackgroundTaskController*` through its constructor.
 - `background_task_controller.hpp`: `InteractionCapability::UserStateChange` and
-  `BackgroundTaskKind::AgentControl`.
+  `BackgroundTaskKind::AgentControl`, plus `"agentControl"` in `BackgroundTaskController::KindToString`.
 - `interaction_policy_controller.{hpp,cpp}`: `canChangeStateAsUser`, `changeStateAsUserReason`,
   `EvaluateChangeStateAsUser()`.
 - `EditorSessionController`: its QML-facing write, undo, redo, version, and navigation
@@ -1730,50 +1752,72 @@ ctest --test-dir build/debug -R "SearchSessionTest|AutomationSearchE2ETest" -j 1
 - Other QML-facing invokables that start user state changes (import, delete, rating, export,
   project open, create, close) check the same capability in their controller adapter. The shared
   C++ operations from AU4 to AU12 do not check it.
+- `AutomationCommandRegistry`: for `changes_state` commands in the GUI host, call
+  `AgentControlOwner::BeginCommand(summary)` before the handler and `EndCommand()` after the
+  reply. These update the agent task detail.
 - `main.cpp`: start the server after the host exists. Respect the setting
   `automation/serverEnabled`.
-- QML: the banner in `Main.qml`; `enabled` bindings on the editor panels, viewport edit tools,
-  Versions actions, import, delete, rating, and export controls.
+- QML (load the `alcedo-qml-ui` skill first):
+  - `BackgroundTaskBar.qml`: `kindLabel("agentControl")` returns "Agent".
+  - `BackgroundTasksDialog.qml`: the **Return control** row action on a canceled agent task,
+    visible while `agentControl.revokedByUser` is true.
+  - `enabled` bindings on the editor panels, viewport edit tools, Versions actions, import,
+    delete, rating, and export controls.
 - Translations: add the new strings to the `.ts` files by hand.
 
 **Data rules and invariants**
 
 - Control state: `held`, `holder_name`, `revoked_by_user`. Only `AgentControlOwner` changes it.
+- One agent task exists while control is held. `AgentControlOwner` keeps its task id and is the
+  only caller of `UpdateTask` and `FinishTask` for it.
 - `control.acquire` waits for the pending input Release or Cancel when the editor has unsealed
   input. It uses the existing pending-input state. It does not add a new signal source.
-- **Take control** finishes the agent control task, sets `revoked_by_user`, and emits
-  `control.changed` once.
+- The task cancel callback (**Take control**) finishes the agent task as Canceled, sets
+  `revoked_by_user`, and emits `control.changed` once.
+- `control.release` finishes the agent task as Succeeded and emits `control.changed` once.
+- **Return control** clears `revoked_by_user` and emits `control.changed`. It does not acquire
+  control for the agent.
 - A state-changing command checks control when it starts and between batch steps. A command
   already submitted to an owner runs to completion.
-- Shutdown cancels the agent control task like other tasks.
+- Shutdown cancels the agent task like other tasks.
 
 **Implementation steps**
 
 1. Add the capability, task kind, and policy properties.
-2. Write `AgentControlOwner`.
-3. Add the control check to the registry for `changes_state` commands in GUI host mode.
+2. Write `AgentControlOwner` with task registration, detail updates, cancel, release, and
+   Return control.
+3. Add the control check and the `BeginCommand` and `EndCommand` calls to the registry for
+   `changes_state` commands in GUI host mode.
 4. Add the user-facing checks to the controller adapters.
 5. Start the server in GUI mode and write the session file.
-6. Write the banner and the bindings (load the `alcedo-qml-ui` skill first).
+6. Add the kind label, the Return control row action, and the `enabled` bindings.
 7. Add the translations.
 
 **Primary success call chain**
 
 ```text
-control.acquire claude-code -> no unsealed input -> RegisterTask(AgentControl, lock UserStateChange)
-  -> PolicyChanged -> QML banner shown, panels disabled -> respond held
+control.acquire claude-code -> no unsealed input
+  -> BackgroundTaskController::RegisterTask(AgentControl, lock UserStateChange, cancel cb)
+  -> PolicyChanged -> QML panels disabled; island unfolds after the grace delay -> respond held
+editor.set saturation 20 -> BeginCommand -> UpdateTask(detail "editor.set saturation 20")
+  -> ... -> reply -> EndCommand -> UpdateTask(detail waiting text)
 ```
 
 **Primary failure and restore call chain**
 
-See 5.5.
+See 5.5. The user cancels the agent task in the island or the task dialog. The task finishes as
+Canceled, the lock is released, and the user edits at once.
 
 **Tests and evidence**
 
 | Test | Assertion |
 | --- | --- |
 | `AgentControlOwnerTest.AcquireWaitsForPendingInputRelease` | Held only after the Release boundary. |
-| `AgentControlOwnerTest.TakeControlSetsRevokedAndBlocksReacquire` | Acquire returns -32004 until Return control. |
+| `AgentControlOwnerTest.AcquireRegistersRunningAgentTaskWithUserStateChangeLock` | One running task of kind `AgentControl` with the global lock. |
+| `AgentControlOwnerTest.CommandSummaryUpdatesAgentTaskDetail` | Task detail equals the summary during the command and the waiting text after it. |
+| `AgentControlOwnerTest.CancelingAgentTaskRevokesControl` | Task state Canceled, `revoked_by_user` true, next state-changing command returns -32004. |
+| `AgentControlOwnerTest.ReacquireIsRefusedUntilReturnControl` | Acquire returns -32004, then succeeds after Return control. |
+| `AgentControlOwnerTest.ReleaseFinishesAgentTaskAsSucceeded` | Task state Succeeded, lock released. |
 | `InteractionPolicyControllerTest.UserStateChangeLockDoesNotRestrictSessionAdmission` | `EditorBackgroundActionRestrictions` stays all false. |
 | `EditorSessionControllerTest.UserWriteIsRejectedWhileAgentHoldsControl` | `submitPatch` returns false; no commit. |
 | `AutomationGuiSessionTest.AgentEditAppearsInControllerProjection` | After `editor.set` through the GUI host socket, the controller panel projection shows the value. This test constructs the host and server without loading QML. |
@@ -1789,10 +1833,11 @@ ctest --test-dir build/debug -R "AgentControlOwnerTest|InteractionPolicyControll
 **Exit criteria**
 
 - [ ] Tests pass.
-- [ ] Manual GUI check, recorded by the user: the agent edits while the user watches; Take
-      control blocks the agent; Return control lets it continue.
+- [ ] Manual GUI check, recorded by the user: the island unfolds while the agent edits; a click
+      shows the agent task with the running command; cancel takes control and blocks the agent;
+      Return control lets the agent acquire control again.
 
-**Expected diff:** 1200–1700 lines.
+**Expected diff:** 1100–1600 lines.
 
 **Completion record:** see section 13.
 
