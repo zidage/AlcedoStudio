@@ -1,12 +1,12 @@
 import QtQuick
 import QtQml
 
-// Owns project open/create launch orchestration: the welcome-dialog visibility
-// state machine, the launch + accelerator-preparation timers, and the
-// save-project / language-index helpers used by the welcome and File menu.
-// State lives here; Main exposes it through aliases so existing bindings and
-// the Connections routers keep resolving. appModules is a global context
-// property; `welcomeDialog` is assigned by the host on completion.
+// Presentation of the project launch: the welcome-dialog visibility rule, the
+// accelerator-preparation start timer, the startup preview, and the save-project /
+// language-index helpers used by the welcome and File menu. The launch sequence and its
+// rollback live in C++ (appModules.projectLaunch, ProjectLaunchCoordinator); this item reads
+// its state. appModules is a global context property; `welcomeDialog` is assigned by the host
+// on completion.
 // Launch stays in the already-open window: the loading overlay is raised first,
 // then welcome is dismissed, so the empty library never flashes in between.
 // The welcome surface stays open until the user enters a project
@@ -18,23 +18,22 @@ Item {
     property var welcomeDialog: null
     property bool automationMode: false
 
-    property bool projectLaunchPending: false
-    property bool welcomeDismissedForLaunch: false
-    property var pendingProjectLaunchAction: null
-    property bool restoreWelcomeOnProjectLaunchFailure: false
     property bool welcomeOpenScheduled: false
     property int welcomeReadyAttempts: 0
     // The startup preview runs once, after the welcome surface opens and the
     // accelerator preparation has finished.
     property bool startupPreviewRequested: false
 
-    // A preview load runs under the welcome surface, so only enter-mode work shows the ring.
-    readonly property bool projectLoadingOverlayVisible: root.projectLaunchPending
-                                                         || (appModules.project.projectLoading
-                                                             && appModules.project.projectLoadEntryMode === "enter")
-    readonly property bool projectLaunchBusy: root.projectLoadingOverlayVisible || root.pendingProjectLaunchAction !== null
+    readonly property bool projectLoadingOverlayVisible: appModules.projectLaunch.loadingOverlayVisible
+    readonly property bool projectLaunchBusy: appModules.projectLaunch.launchBusy
 
-    onWelcomeDismissedForLaunchChanged: root.updateWelcomeDialogVisibility()
+    Connections {
+        target: appModules.projectLaunch
+
+        function onLaunchStateChanged() {
+            root.updateWelcomeDialogVisibility()
+        }
+    }
 
     Timer {
         id: acceleratorPreparationStartTimer
@@ -43,25 +42,6 @@ Item {
         onTriggered: {
             appModules.project.StartAcceleratorPreparation()
             root.requestStartupPreview()
-        }
-    }
-
-    Timer {
-        id: projectLaunchTimer
-        interval: 16
-        repeat: false
-        onTriggered: {
-            const loadAction = root.pendingProjectLaunchAction
-            root.pendingProjectLaunchAction = null
-            const started = loadAction ? loadAction() : false
-            if (!started && !appModules.project.projectLoading) {
-                root.projectLaunchPending = false
-                if (root.restoreWelcomeOnProjectLaunchFailure) {
-                    root.welcomeDismissedForLaunch = false
-                }
-                root.updateWelcomeDialogVisibility()
-            }
-            root.restoreWelcomeOnProjectLaunchFailure = false
         }
     }
 
@@ -132,15 +112,13 @@ Item {
     // the Library is visible.
     function continueWelcomeProject() {
         const loadRunning = appModules.project.projectLoading
-        if (!appModules.project.EnterLoadedProject()) {
+        if (!appModules.projectLaunch.ContinueWelcomeProject()) {
             return false
         }
+        root.updateWelcomeDialogVisibility()
         if (loadRunning) {
-            root.dismissWelcomeForProjectLaunch()
-            root.updateWelcomeDialogVisibility()
             return true
         }
-        root.updateWelcomeDialogVisibility()
         if (root.host && root.host.revealLibraryAfterProjectLoad) {
             root.host.revealLibraryAfterProjectLoad()
         }
@@ -168,35 +146,10 @@ Item {
         return 0
     }
 
-    function dismissWelcomeForProjectLaunch() {
-        root.welcomeDismissedForLaunch = true
-    }
-
-    function beginProjectLaunch(loadAction) {
-        if (appModules.project.acceleratorPreparing) {
-            return
-        }
-        root.restoreWelcomeOnProjectLaunchFailure = !appModules.project.projectEntered
-        root.pendingProjectLaunchAction = loadAction
-        // Show the loading overlay in the same window before closing welcome so
-        // the empty library never flashes between the two surfaces.
-        root.startPendingProjectLaunch()
-        root.dismissWelcomeForProjectLaunch()
-        root.updateWelcomeDialogVisibility()
-    }
-
-    function startPendingProjectLaunch() {
-        if (!root.pendingProjectLaunchAction || projectLaunchTimer.running) {
-            return
-        }
-        root.projectLaunchPending = true
-        projectLaunchTimer.restart()
-    }
-
     function updateWelcomeDialogVisibility() {
         // welcomeDismissedForLaunch covers the enter-mode load that runs while no
         // project is entered yet; the ring shows in place of the welcome surface.
-        const shouldShowWelcome = !root.welcomeDismissedForLaunch
+        const shouldShowWelcome = !appModules.projectLaunch.welcomeDismissedForLaunch
                                   && !root.automationMode
                                   && !appModules.project.projectEntered
         if (!root.welcomeDialog) {

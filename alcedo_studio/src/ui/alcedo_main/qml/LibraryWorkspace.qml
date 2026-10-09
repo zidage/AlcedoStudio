@@ -495,9 +495,7 @@ RowLayout {
                         text: qsTr("Load Project")
                         Material.background: root.colButtonPrimary
                         Material.foreground: root.colText
-                        onClicked: host.beginProjectLaunch(function() {
-                            return appModules.project.PromptAndLoadProject()
-                        })
+                        onClicked: appModules.projectLaunch.BeginPromptOpen()
                     }
                 }
             }

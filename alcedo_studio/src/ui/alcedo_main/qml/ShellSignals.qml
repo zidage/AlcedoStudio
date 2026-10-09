@@ -45,8 +45,6 @@ Item {
         ignoreUnknownSignals: true
         function onProjectChanged() {
             if (root.host) {
-                root.host.projectLaunchPending = false
-                root.host.welcomeDismissedForLaunch = false
                 root.host.updateWelcomeDialogVisibility()
             }
             if (root.selectionState) {
@@ -83,12 +81,6 @@ Item {
             }
         }
         function onProjectLoadStateChanged() {
-            if (root.host) {
-                root.host.projectLaunchPending = false
-            }
-            if (!appModules.project.projectLoading && root.host) {
-                root.host.welcomeDismissedForLaunch = false
-            }
             if (root.host) {
                 root.host.updateWelcomeDialogVisibility()
             }

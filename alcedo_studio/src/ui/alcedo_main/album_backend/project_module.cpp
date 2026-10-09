@@ -633,6 +633,49 @@ bool ProjectModule::PreviewProject(const QString& projectUrlOrPath) {
 
 bool ProjectModule::EnterLoadedProject() { return handler_.RequestEnterLoadedProject(); }
 
+auto ProjectModule::ProjectCloseBlockReason() const -> QString {
+  if (handler_.project_loading()) {
+    return PL_TEXT("Please wait until project loading finishes.").Render();
+  }
+  if (!handler_.project()) {
+    return PL_TEXT("No project is loaded yet.").Render();
+  }
+  return ProjectSwitchBlockReason();
+}
+
+bool ProjectModule::CloseProject(bool persist) {
+  if (const QString reason = ProjectCloseBlockReason(); !reason.isEmpty()) {
+    SetServiceMessageForCurrentProject(PL_TEXT("%1", reason));
+    return false;
+  }
+  if (lifecycle_hooks_.editor_session_busy && lifecycle_hooks_.editor_session_busy()) {
+    SetServiceMessageForCurrentProject(
+        PL_TEXT("Close the editor image before you close the project."));
+    return false;
+  }
+  // The editor has no image, so this only forgets the last edited image of this project and
+  // shows the Library.
+  FinalizeEditorSession();
+  if (persist) {
+    QString error;
+    if (!handler_.PersistProjectForClose(&error)) {
+      SetServiceMessageForCurrentProject(error.isEmpty() ? PL_TEXT("Project save failed.")
+                                                         : PL_TEXT("%1", error));
+      SetTaskState(PL_TEXT("Project save failed."), 0, false);
+      return false;
+    }
+  }
+  handler_.CloseProject();
+  welcome_project_path_.clear();
+  preview_error_message_.clear();
+  SetServiceState(false, PL_TEXT("Project closed."));
+  SetTaskState(PL_TEXT("No background tasks"), 0, false);
+  emit ProjectChanged();
+  emit projectChanged();
+  NotifyProjectEntryStateChanged();
+  return true;
+}
+
 bool ProjectModule::StartPackedProjectLoad(const std::filesystem::path& projectPath,
                                            const ProjectEntryMode       entryMode,
                                            i18n::LocalizedText* error, bool* fileRejected) {

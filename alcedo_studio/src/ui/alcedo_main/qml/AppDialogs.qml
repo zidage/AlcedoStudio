@@ -357,22 +357,16 @@ Item {
             appModules.project.PreviewProject(projectPath)
         }
         onContinueRequested: host.continueWelcomeProject()
-        onOpenRequested: {
-            host.beginProjectLaunch(function() {
-                return appModules.project.PromptAndLoadProject()
-            })
-        }
+        onOpenRequested: appModules.projectLaunch.BeginPromptOpen()
         onCreateRequested: function(storageLocation, projectName) {
-            host.beginProjectLaunch(function() {
-                return appModules.project.CreateProjectInFolderNamed(storageLocation, projectName)
-            })
+            appModules.projectLaunch.BeginCreate(storageLocation, projectName)
         }
         onExitRequested: Qt.quit()
         onLanguageRequested: function(languageCode) {
             languageManager.setLanguage(languageCode)
         }
         onAcceleratorWarningAcknowledged: appModules.project.AcknowledgeAcceleratorWarning()
-        onClosed: host.startPendingProjectLaunch()
+        onClosed: appModules.projectLaunch.StartPendingLaunch()
     }
 
     GlobalSearchDialog {

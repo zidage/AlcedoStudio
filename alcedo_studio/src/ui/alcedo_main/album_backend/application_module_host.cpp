@@ -440,6 +440,11 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
   editor_behavior_ = std::make_unique<EditorBehaviorPreferences>(this);
   RecordConstruction("EditorBehaviorPreferences", editor_behavior_.get());
+  project_launch_ = std::make_unique<ProjectLaunchCoordinator>(project_.get(), this);
+  RecordConstruction("ProjectLaunchCoordinator", project_launch_.get());
+  application_close_ = std::make_unique<ApplicationCloseCoordinator>(
+      editor_session_.get(), workspace_router_.get(), project_.get(), this);
+  RecordConstruction("ApplicationCloseCoordinator", application_close_.get());
 
   library_->BindCollaborators(folders_.get(), search_.get(), stats_.get());
   library_->SetSemanticLabelProvider(
@@ -481,6 +486,11 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     if (workspace_router) {
       workspace_router->OpenLibrary();
     }
+  };
+  lifecycle_hooks.editor_session_busy = [editor_session = editor_session_.get()] {
+    return editor_session != nullptr &&
+           (editor_session->active() || editor_session->has_image() ||
+            editor_session->close_in_flight() || editor_session->persist_in_flight());
   };
   lifecycle_hooks.clear_project_ui_state = [library = library_.get(), folders = folders_.get(),
                                             import_export = import_export_.get()] {
@@ -645,27 +655,11 @@ void ApplicationModuleHost::ShutdownModules() {
     if (project_) {
       pending_workspace_removal_ = project_->handler().workspace_dir();
     }
-    if (project_ && !project_->handler().project_entered()) {
-      // The user did not enter the loaded project (welcome surface preview), so it has no user
-      // changes. Keep its package as it is on disk; flush only the thumbnail cache index.
-      if (const auto& thumbnails = project_->handler().thumbnail_service();
-          thumbnails && thumbnails->GetDiskCacheStats().enabled) {
-        thumbnails->FlushDiskCacheMetadata();
-      }
-    } else if (project_) {
-      auto psvc = project_->handler().pipeline_service();
-      if (psvc) {
-        psvc->Sync();
-        // Clean-exit Mini-Git garbage collection: delete EditCommit rows not
-        // reachable from any Version head (including abandoned redo paths).
-        // Abnormal shutdown must not run this path.
-        (void)psvc->CollectUnreachableEditCommits();
-      }
-      (void)project_->handler().PurgeUninstalledSemanticModels();
-      if (project_->handler().PersistCurrentProjectState()) {
-        QString ignored_error;
-        (void)project_->handler().PackageCurrentProjectFiles(&ignored_error);
-      }
+    // A project that the user did not enter (welcome surface preview) has no user changes; its
+    // package stays as it is on disk and only the thumbnail cache index is flushed.
+    if (project_) {
+      QString ignored_error;
+      (void)project_->handler().PersistProjectForClose(&ignored_error);
     }
   } catch (...) {
   }
@@ -687,6 +681,8 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     pointer.reset();
     RecordDestruction(type_name, object);
   };
+  destroy(application_close_, "ApplicationCloseCoordinator");
+  destroy(project_launch_, "ProjectLaunchCoordinator");
   destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");
   destroy(lut_target_, "LutLibraryController");

@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1, AU2, and AU3 have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1, AU2, AU3, and AU4a have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -563,7 +563,8 @@ class AutomationCommandRegistry {
 | AU1 | Protocol, registry, server | `AutomationProtocol`, `AutomationHostLib` | — | 1100–1500 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU2 | `alcedo-cli` client and session files | `alcedo_cli` | AU1 | 800–1200 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU3 | Headless host and session lifecycle | `main.cpp`, headless host, frame sink | AU1, AU2 | 1000–1500 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
-| AU4 | Project launch and close in C++, project commands | Project coordinators, QML | AU3 | 900–1400 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
+| AU4a | Project launch and close in C++ | Project coordinators, `ProjectModule`, QML | AU3 | 1400–1600 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
+| AU4b | Project commands | `AutomationHostLib` | AU4a | 600–800 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
@@ -1058,6 +1059,14 @@ Remaining defects or unavailable platforms: macOS Metal not run (no macOS host i
 
 ### Phase AU4 — Project launch and close in C++, project commands
 
+**Split:** the implemented diff passed 2000 lines (section 12), so this phase ships as two pull
+requests. **AU4a** contains the owners and the QML change: `ProjectLaunchCoordinator`,
+`ApplicationCloseCoordinator`, `ProjectModule::CloseProject`, and their tests
+(`ApplicationCloseCoordinatorTest`, `ProjectLaunchCoordinatorTest`, `ProjectModuleTest`).
+**AU4b** contains the commands `project.create`, `project.open`, `project.save`, and
+`project.close` and `AutomationProjectCommandsTest`. The exit criteria below apply to the two
+parts together.
+
 **Objective and deliverables**
 
 - `ProjectLaunchCoordinator` owns launch sequencing and rollback now in
@@ -1142,7 +1151,82 @@ ctest --test-dir build/debug -R "ApplicationCloseCoordinatorTest|ProjectLaunchCo
 
 **Expected diff:** 900–1400 lines.
 
-**Completion record:** see section 13.
+**Completion record (AU4a):**
+
+```text
+Phase / date / status: AU4a / 2026-10-10 / implemented.
+Source revision and branch: main f5edecb45; branch feature/automation-project-launch-close.
+  Actual diff: 1582 lines (25 files, this record included).
+Actual changed modules: ProjectHandler (PersistProjectForClose, CloseProject), ProjectModule
+  (ProjectCloseBlockReason, CloseProject, editor_session_busy lifecycle hook), new
+  ProjectLaunchCoordinator and ApplicationCloseCoordinator (AlbumBackendLib, owned by
+  ApplicationModuleHost, QML properties projectLaunch and applicationClose),
+  ApplicationModuleHost (ShutdownModules uses PersistProjectForClose), QML (Main.qml,
+  ProjectLaunchController.qml, ShellSignals.qml, AppDialogs.qml, TopToolbar.qml,
+  LibraryWorkspace.qml), translations (5 new strings, .ts edited by hand), tests.
+Implemented behavior:
+  - ProjectLaunchCoordinator owns the queued launch request (prompt open, prompt create, open
+    path, create in folder), launchPending, welcomeDismissedForLaunch, the 16 ms repaint delay,
+    and the rollback: a request that does not start a load clears launchPending and restores
+    the welcome surface when no project was entered. ProjectLoadStateChanged and
+    ProjectChanged clear the launch state, which ShellSignals.qml did before.
+    LaunchRequestFinished(started) reports the result of the request.
+  - QML keeps presentation only: the welcome-dialog visibility rule (it reads
+    welcomeDismissedForLaunch), the accelerator start timer, and the startup preview. The JS
+    launch callbacks are replaced by BeginPromptOpen, BeginPromptCreate, and BeginCreate.
+  - ApplicationCloseCoordinator owns CloseNeedsConfirmation, EditorPersistBusy, and the close
+    state machine of pollEditorCloseSave: wait on Saving, Switching, closeInFlight, or
+    persistInFlight; abort on a pending recovery, RetainedImageFailure, or Failed; finish on
+    NoImage or ShuttingDown, or at once for a persist-only wait. The editor session
+    StateChanged signal (queued) drives it instead of polling. Main.qml keeps the dialog and
+    the update install hand-off and reacts to ApplicationCloseFinished and
+    ApplicationCloseAborted.
+  - BeginProjectClose(persist) finalizes the editor image and then calls
+    ProjectModule::CloseProject; ProjectCloseFinished(closed, message) reports the result.
+    The GUI does not call it yet; the project commands of AU4b do.
+  - ProjectModule::CloseProject(persist): rejected while a load, an import, or an export runs,
+    or while the editor session has an image or runs a close or a persist. With persist it
+    runs ProjectHandler::PersistProjectForClose, the project steps that ShutdownModules ran
+    (Mini-Git sync and collection, semantic purge, metadata save, package write); a save
+    failure keeps the project open. Then ProjectHandler::CloseProject retires the services
+    and the workspace, and ProjectChanged and ProjectEnteredChanged are emitted.
+  - A failed project load now sets the service message before the load state changes, so a
+    reader of the load end reads the failure.
+Explicitly unimplemented items: the project commands (AU4b).
+Primary success call chain: BeginProjectClose(true) -> EditorSessionController::Finalize(true)
+  -> StateChanged (NoImage) -> EvaluateEditorClose -> ProjectModule::CloseProject(true) ->
+  ProjectHandler::PersistProjectForClose -> ProjectHandler::CloseProject ->
+  ProjectCloseFinished(true).
+Primary failure and restore call chain: Finalize(true) -> the session reaches
+  RetainedImageFailure -> EvaluateEditorClose -> Abort(last_error) ->
+  ProjectCloseFinished(false, message); the project stays open and the editor keeps the image
+  (ApplicationCloseCoordinatorTest.SaveFailureAbortsClose).
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target ApplicationCloseCoordinatorTest
+    ProjectLaunchCoordinatorTest ProjectModuleTest ApplicationModuleHostLifecycleTest
+    AlbumBackendProjectTest ApplicationModuleHostShutdownTest ApplicationModuleHostIdleTest
+    AutomationHeadlessSessionTest HeadlessHostTest AlcedoCliTest AutomationCommandRegistryTest
+    MainQmlWorkflowTest alcedo_main --parallel 8  -> 0
+  ctest --test-dir build/debug -R "ApplicationCloseCoordinatorTest|ProjectLaunchCoordinatorTest|
+    ProjectModuleTest|ApplicationModuleHostLifecycleTest" -j 1  -> 0
+  ctest --test-dir build/debug -R "AlbumBackendProjectTest|ApplicationModuleHostShutdownTest|
+    ApplicationModuleHostIdleTest|AutomationHeadlessSessionTest|HeadlessHostTest|AlcedoCliTest|
+    AutomationCommandRegistryTest|MainQmlWorkflowTest" -j 1  -> 8
+Discovered / passed / failed / skipped counts:
+  - AU4a tests: ApplicationCloseCoordinatorTest 5/5, ProjectLaunchCoordinatorTest 3/3,
+    ProjectModuleTest 4/4, ApplicationModuleHostLifecycleTest 2/2 passed.
+  - Regression: 84 discovered, 79 passed, 1 failed, 4 skipped (3 AlbumBackendProjectTest cases
+    that need an external project from the environment; the Metal case of
+    EditorOpenReachesInteractiveWithHeadlessSink, platform unavailable on Windows). The
+    failure, MainQmlWorkflowTests.ProductionWindowLoadsAndRoutesCoreWorkspaceActions
+    (warning "Material/Dialog.qml:67:13: Unable to assign [undefined] to double"), also fails
+    at main f5edecb45 (rebuilt and run in the same build directory), so AU4a does not cause it.
+Manual verification: not run by the agent. The user records the GUI checks (quit with an open
+  edited image saves and exits; quit during a save waits; open and create from the welcome
+  surface and the File menu).
+Evidence path: build/tmp/automation_au4/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS not run in this session.
+```
 
 ### Phase AU5 — Import, library reads, thumbnails, tasks, and CI wiring
 

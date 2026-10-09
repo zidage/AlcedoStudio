@@ -1482,6 +1482,14 @@ Alcedo 将改用 %1。</translation>
         <source>Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed</source>
         <translation>导入完成：已导入 %1 张，未选择类型 %2 个，不受支持 %3 个，失败 %4 个</translation>
     </message>
+    <message>
+        <source>Close the editor image before you close the project.</source>
+        <translation>关闭项目前，请先关闭编辑器中的图像。</translation>
+    </message>
+    <message>
+        <source>Project closed.</source>
+        <translation>项目已关闭。</translation>
+    </message>
 </context>
 <context>
     <name>AppDialogs</name>
@@ -7487,6 +7495,21 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>
             <numerusform>%n 张照片</numerusform>
         </translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ApplicationCloseCoordinator</name>
+    <message>
+        <source>Another close is in progress.</source>
+        <translation>另一个关闭操作正在进行。</translation>
+    </message>
+    <message>
+        <source>No project is loaded yet.</source>
+        <translation>尚未加载项目。</translation>
+    </message>
+    <message>
+        <source>The editor image cannot be saved.</source>
+        <translation>无法保存编辑器中的图像。</translation>
     </message>
 </context>
 </TS>
