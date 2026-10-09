@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: planned. No phase has implementation evidence.
+Status: in progress. AU1 has implementation evidence (completion record in its phase section).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -560,7 +560,7 @@ class AutomationCommandRegistry {
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status | Issue |
 | --- | --- | --- | --- | ---: | --- | --- |
-| AU1 | Protocol, registry, server | `AutomationProtocol`, `AutomationHostLib` | — | 1100–1500 | planned | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
+| AU1 | Protocol, registry, server | `AutomationProtocol`, `AutomationHostLib` | — | 1100–1500 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU2 | `alcedo-cli` client and session files | `alcedo_cli` | AU1 | 800–1200 | planned | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU3 | Headless host and session lifecycle | `main.cpp`, headless host, frame sink | AU1, AU2 | 1000–1500 | planned | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU4 | Project launch and close in C++, project commands | Project coordinators, QML | AU3 | 900–1400 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
@@ -696,7 +696,45 @@ Put logs under `build/tmp/automation_au1/`.
 
 **Expected diff:** 1100–1500 lines.
 
-**Completion record:** see the template in section 13.
+**Completion record:**
+
+```text
+Phase / date / status: AU1 / 2026-10-09 / implemented.
+Source revision and branch: main at b7c1bd36e; branch feature/automation-protocol-server.
+Actual changed modules: AutomationProtocol (new, src/automation), AutomationHostLib (new,
+  src/ui/alcedo_main/automation), automation test directory (new, tests/automation).
+Implemented behavior:
+  - ParseAutomationLine / SerializeAutomationMessage for requests, responses, and
+    notifications; error codes -32700..-32603 and -32001..-32007 with snake_case names.
+  - Client requests must carry an id. A method line without an id gets -32600 with id null.
+  - JSON Schema subset check at registration and parameter validation with the JSON pointer
+    of the first failure (data.pointer, data.reason).
+  - AutomationCommandRegistry: unique methods, closed parameter schemas, a required result
+    schema, an added optional timeout_ms parameter (default 120000), -32006 when a handler
+    does not answer in time, one-reply AutomationReply with the dropped-request error.
+  - AutomationServer: QLocalServer with UserAccessOption, one read buffer per connection,
+    16 MiB line limit (parse error, then the connection closes), notification broadcast.
+  - session.ping and session.describe.
+Explicitly unimplemented items: none for AU1.
+Deviation: AutomationHostLib links AutomationProtocol and Qt Network only. It links
+  AlbumBackendLib in AU3, where the first handler reads ApplicationModuleHost.
+Primary success call chain: QLocalSocket readyRead -> AutomationServer::HandleReadyRead
+  (split on newline) -> ParseAutomationLine -> AutomationCommandRegistry::Dispatch ->
+  ValidateAutomationJson -> handler -> AutomationReply::SendResult -> QLocalSocket::write.
+Primary failure and restore call chain: invalid params -> ValidateAutomationJson violation ->
+  -32602 with data.pointer -> connection stays open; handler drops the reply ->
+  ~AutomationReply -> -32603 "handler dropped the request".
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AutomationProtocolTest
+    AutomationCommandRegistryTest AutomationServerTest --parallel 4  -> 0
+  ctest --test-dir build/debug -R "Automation(Protocol|CommandRegistry|Server)Test"
+    --output-on-failure  -> 0
+Discovered / passed / failed / skipped counts: 26 / 26 / 0 / 0 (Windows debug).
+Manual verification: not required for AU1.
+Evidence path: build/tmp/automation_au1/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS tests not run locally; the macOS CI job
+  configures and builds the tree.
+```
 
 ### Phase AU2 — `alcedo-cli` client and session files
 

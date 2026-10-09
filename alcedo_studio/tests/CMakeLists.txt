@@ -71,6 +71,7 @@ add_subdirectory(edit)
 add_subdirectory(cuda)
 add_subdirectory(ci)
 add_subdirectory(app)
+add_subdirectory(automation)
 
 # Category aggregate membership is registered via alcedo_register_test_target
 # in each domain manifest. The root keeps infrastructure only.

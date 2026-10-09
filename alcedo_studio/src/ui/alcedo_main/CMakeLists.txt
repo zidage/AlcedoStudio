@@ -337,6 +337,24 @@ if(WIN32)
     target_link_libraries(AlbumBackendLib PRIVATE Rstrtmgr)
 endif()
 
+# Automation command surface: JSON-RPC command registry, schema validation, and the local
+# socket server. alcedo_main hosts it; alcedo-cli talks to it through AutomationProtocol.
+def_library(AutomationHostLib
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_json_schema.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_json_schema.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_command_registry.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_command_registry.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/automation_server.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_server.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/session_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_session_commands.hpp"
+    PUBLIC_DEPS
+        AutomationProtocol
+        Qt6::Core
+        Qt6::Network
+)
+
 set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_UI_SHELL_ROOT}/main.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
