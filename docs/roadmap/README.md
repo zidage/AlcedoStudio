@@ -48,6 +48,10 @@ use their own top-level category.
   (includes **Final locked identity model**: history owns HEAD; pipeline = params table; chain hash unit = one commit)
 - [UI Fuzz Automation Platform Plan](alcedo_studio/ui/ui_fuzz_automation_platform_plan.md)
 
+## Alcedo Studio — Automation
+
+- [CLI, MCP, and Shared-Session Automation Plan](alcedo_studio/automation/cli_mcp_automation_plan.md)
+
 ## External website
 
 - [Alcedo Studio Website Redesign Plan](website/alcedo_website_redesign_plan.md)
