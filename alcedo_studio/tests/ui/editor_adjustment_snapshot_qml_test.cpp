@@ -231,6 +231,45 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneExposureAndContrastResetToZeroNotProdu
   EXPECT_TRUE(session.lastSettled());
 }
 
+TEST(EditorAdjustmentSnapshotQmlTest, LookHlsLoadsCatalogUiValuesAndRanges) {
+  // The Model stores lightness and chroma divided by the panel scale.
+  alcedo::EditorPanelHlsValue hls;
+  hls.hls_adj_table[2] = alcedo::HlsVec3{12.0f, 0.02f, -0.04f};
+  hls.h_range_table.fill(45.0f);
+  hls.h_range_table[2] = 60.0f;
+  hls.target_hls       = alcedo::HlsVec3{90.0f, 0.5f, 0.5f};
+  alcedo::EditorPanelProjection projection;
+  projection.session_generation = 1;
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = "hls";
+  field.value     = hls;
+  projection.fields.push_back(std::move(field));
+
+  SnapshotSession              session(alcedo::ui::PanelProjectionToVariantMap(projection), 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* model = harness.root()->findChild<QObject*>(QStringLiteral("lookHlsModel"));
+  ASSERT_NE(model, nullptr);
+  EXPECT_EQ(model->property("activeHueIndex").toInt(), 2);
+  EXPECT_NEAR(model->property("hueShift").toDouble(), 12.0, 1.0e-4);
+  EXPECT_NEAR(model->property("lightness").toDouble(), 20.0, 1.0e-4);
+  EXPECT_NEAR(model->property("chroma").toDouble(), -40.0, 1.0e-4);
+  EXPECT_EQ(session.submitCount(), 0);
+
+  // The slider ranges come from the catalog in UI units.
+  const auto range = [&](const char* object_name) -> std::pair<double, double> {
+    auto* row = harness.root()->findChild<QObject*>(QString::fromLatin1(object_name));
+    EXPECT_NE(row, nullptr) << object_name;
+    return row != nullptr ? std::pair{row->property("from").toDouble(), row->property("to").toDouble()}
+                          : std::pair{0.0, 0.0};
+  };
+  EXPECT_EQ(range("lookHlsHueShiftSlider"), (std::pair{-30.0, 30.0}));
+  EXPECT_EQ(range("lookHlsLightnessSlider"), (std::pair{-100.0, 100.0}));
+  EXPECT_EQ(range("lookHlsChromaSlider"), (std::pair{-100.0, 100.0}));
+  EXPECT_EQ(range("lookHlsSmoothnessSlider"), (std::pair{1.0, 180.0}));
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test
 

@@ -38,11 +38,12 @@ auto PropertySchema() -> QJsonObject {
       QJsonObject{{"name", QJsonObject{{"type", "string"}}},
                   {"type", QJsonObject{{"type", "string"},
                                        {"enum", QJsonArray{"number", "boolean", "string",
-                                                           "option"}}}},
+                                                           "option", "number_list"}}}},
                   {"ui_min", number},
                   {"ui_max", number},
                   {"ui_step", number},
                   {"ui_decimals", QJsonObject{{"type", "integer"}}},
+                  {"ui_count", QJsonObject{{"type", "integer"}}},
                   {"ui_slider", SliderSchema()},
                   {"options", QJsonObject{{"type", "array"}, {"items", OptionSchema()}}}},
       QJsonArray{"name", "type"});
@@ -60,7 +61,8 @@ auto CatalogEntrySchema() -> QJsonObject {
   return AutomationObjectSchema(
       QJsonObject{
           {"field", QJsonObject{{"type", "string"}}},
-          {"kind", QJsonObject{{"type", "string"}, {"enum", QJsonArray{"scalar", "object"}}}},
+          {"kind",
+           QJsonObject{{"type", "string"}, {"enum", QJsonArray{"scalar", "object", "model"}}}},
           {"panel", QJsonObject{{"type", "string"}}},
           {"ui_min", number},
           {"ui_max", number},
@@ -68,6 +70,7 @@ auto CatalogEntrySchema() -> QJsonObject {
           {"ui_step", number},
           {"ui_decimals", QJsonObject{{"type", "integer"}}},
           {"properties", QJsonObject{{"type", "array"}, {"items", PropertySchema()}}},
+          {"model_shape", QJsonObject{{"type", "string"}}},
           {"encoding_eotf_by_space", EotfBySpaceSchema()},
           {"aliases",
            QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "string"}}}}}},
@@ -89,7 +92,9 @@ auto RegisterAutomationEditorCommands(AutomationCommandRegistry& registry, QStri
       "Returns every editor field that editor.set accepts, in UI units: the values that the "
       "editor panels show. A scalar field has its range (ui_min, ui_max), default, step, and "
       "shown decimals. An object field lists its properties (number range, boolean, string, or "
-      "option list) and its default object; a write may give some of the properties. A Kelvin "
+      "option list, or a list of numbers) and its default object; a write may give some of the "
+      "properties. A model field (curve, lut) takes its Model JSON, described in model_shape; a "
+      "write gives the complete value. A Kelvin "
       "property also has its slider position scale (ui_slider), and odt lists the valid "
       "encoding_eotf values of each encoding_space. A value outside the range or the option "
       "list is rejected; it is not clamped.");

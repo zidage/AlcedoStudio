@@ -54,6 +54,11 @@ void RenameJsonKeyIfAbsent(nlohmann::json& params, const char* from, const char*
 
 }  // namespace
 
+auto EditorAdjustmentFieldKeys()
+    -> std::span<const std::pair<std::string_view, EditorAdjustmentField>> {
+  return kFieldKeys;
+}
+
 auto ResolveEditorAdjustmentField(const std::string& field_key)
     -> std::optional<EditorAdjustmentField> {
   for (const auto& [key, field] : kFieldKeys) {

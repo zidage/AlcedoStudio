@@ -21,6 +21,9 @@ enum class EditorParameterValueKind {
   Scalar,
   /// An object of named properties in panel units. A write may give some of the properties.
   Object,
+  /// The Model JSON that ParseEditorParameterWrite accepts: the UI shape is the Model shape. A
+  /// write gives the complete value. The entry describes the shape in `model_shape`.
+  Model,
 };
 
 /// Conversion between the UI value of a scalar field and its Model value.
@@ -50,6 +53,8 @@ enum class EditorParameterPropertyType {
   String,
   /// A string from the property option list.
   Option,
+  /// A list of `count` numbers, each in the property range.
+  NumberList,
 };
 
 /// One choice of an option property. @p label is the English panel text; QML translates it.
@@ -73,12 +78,15 @@ struct EditorParameterProperty {
   EditorParameterPropertyType            type = EditorParameterPropertyType::Number;
   /// Option: the allowed values in menu order.
   std::span<const EditorParameterOption> options{};
-  /// Number: the range, inclusive, the slider step, and the decimal places that the panel shows.
+  /// Number and NumberList: the range of one value, inclusive, the slider step, and the decimal
+  /// places that the panel shows.
   double                                 minimum  = 0.0;
   double                                 maximum  = 0.0;
   double                                 step     = 0.0;
   int                                    decimals = 0;
   EditorParameterSliderScale             slider   = EditorParameterSliderScale::Linear;
+  /// NumberList: the number of values.
+  int                                    count    = 0;
 };
 
 /// Size of the presented source image in reference pixels. Zero when no frame is presented.
@@ -123,12 +131,14 @@ struct EditorParameterCatalogEntry {
   EditorScalarUiRange        range      = {};
   /// Object: the properties of the UI value.
   std::span<const EditorParameterProperty> properties = {};
-  /// Object: the UI value of the field default.
+  /// Model: the shape of the Model JSON, in words.
+  std::string_view                         model_shape = {};
+  /// Object and Model: the UI value of the field default.
   auto (*ui_default)() -> nlohmann::json = nullptr;
-  /// Object: the UI value of field Model JSON or of its panel projection form.
+  /// Object and Model: the UI value of field Model JSON or of its panel projection form.
   auto (*model_to_ui)(const nlohmann::json& model_json, std::string* error)
       -> std::optional<nlohmann::json> = nullptr;
-  /// Object: the Model JSON of a complete, valid UI value.
+  /// Object and Model: the Model JSON of a complete, valid UI value.
   auto (*ui_to_model)(const nlohmann::json& ui_value) -> nlohmann::json = nullptr;
   /// Object, optional: constraint that runs on the merged UI value before ui_to_model.
   /// @p ui_change is the partial value that the caller wrote; @p current_ui is the complete UI
@@ -136,6 +146,9 @@ struct EditorParameterCatalogEntry {
   auto (*constrain)(const nlohmann::json& merged_ui, const nlohmann::json& ui_change,
                     const nlohmann::json& current_ui, const EditorParameterSource& source,
                     std::string* error) -> std::optional<nlohmann::json> = nullptr;
+  /// Object, optional: rule across the properties of a complete UI value. It runs before
+  /// ui_to_model on every write, also on UiStateToModelJson.
+  auto (*validate)(const nlohmann::json& ui_value, std::string* error) -> bool = nullptr;
 };
 
 /**
@@ -191,8 +204,9 @@ class EditorParameterCatalog {
    * they replace the matching properties of @p current_model_json (the field default when it is
    * null), the entry constraint runs, and the result is one complete write. The crop constraint
    * can move or resize the frame (aspect lock, rotated source); the written value is the result.
+   * A Model field value is the complete Model JSON; ParseEditorParameterWrite checks its shape.
    *
-   * @param ui_value Number for a scalar field, object for an object field.
+   * @param ui_value Number for a scalar field, object for an object or Model field.
    * @param current_model_json Current Model JSON of the field, or its panel projection form.
    *        Scalar fields do not read it. Null means the field default.
    * @param source Presented source size, for the crop constraint.

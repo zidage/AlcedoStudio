@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1 to AU8 and AU9a have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1 to AU9 have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -571,7 +571,7 @@ class AutomationCommandRegistry {
 | AU8a | Parameter catalog: RAW, input profile, lens, crop entries | Catalog, `editor.catalog` | AU7 | 1300–1400 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU8b | RAW and Geometry panels use the catalog | Catalog QML adapter, Raw and Geometry QML | AU8a | 600–700 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU9a | Parameter catalog: display transform and white balance | Catalog, Display and white balance QML | AU8 | 1100–1200 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
-| AU9b | Parameter catalog: HLS, color wheels, curve, LUT | Catalog, Look QML, editor_support modules | AU9a | 900–1100 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
+| AU9b | Parameter catalog: HLS, color wheels, curve, LUT | Catalog, Look QML, editor_support modules | AU9a | 900–1100 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU10 | Editor commands and `render.preview` | Editor session, render port | AU3, AU7 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
 | AU11 | Version commands and commit attribution | Session, journal, storage, QML | AU10 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
 | AU12 | Export in C++, export commands | Export queue and recipe, QML | AU5 | 1100–1600 | planned | [#327](https://github.com/zidage/AlcedoStudio/issues/327) |
@@ -2008,7 +2008,7 @@ ctest --test-dir build/debug -R "EditorParameterCatalogTest" --output-on-failure
 
 **Exit criteria**
 
-- [ ] Tests pass.
+- [x] Tests pass.
 - [ ] Manual GUI check: Display transform and Look panels behave as before.
 
 **Expected diff:** 1200–1700 lines.
@@ -2089,7 +2089,68 @@ Evidence path: build/tmp/automation_au9/ (removed after the phase).
 Remaining defects or unavailable platforms: macOS Metal runs only in CI.
 ```
 
-**Completion record (AU9b):** see section 13.
+**Completion record (AU9b):**
+
+```text
+Phase / date / status: AU9b / 2026-10-10 / implemented.
+Source revision and branch: AU9a (feature/automation-parameter-catalog-color, 44a5ce0bb);
+  branch feature/automation-parameter-catalog-look. Actual diff: about 1150 lines (19 files,
+  this record included).
+Actual changed modules: EditorParameterCatalog (hls, color_wheel, curve, lut entries; the model
+  value kind; the number list property type; the validate hook; crop constraint), Qt-free
+  editor_support modules hls_math and color_wheel_math (moved from hls and color_wheel, which
+  keep the QColor and QPointF wrappers), EditorAdjustmentFieldKeys, editor.catalog result
+  schema, EditorLookPanel.qml, tests.
+Implemented behavior:
+  - hls (alias HLS): {hue one of the 8 bin hues 0..315, hue_shift [-30, 30], lightness
+    [-100, 100], chroma [-100, 100], hue_smoothness [1, 180]}. The last four are lists of 8
+    numbers, one per bin; the Model tables store lightness and chroma divided by
+    kAdjUiToParamScale (1000). The hue reads back as the closest bin (ClosestCandidateHueIndex).
+    A hue that is no bin is rejected with the bin list.
+  - color_wheel: {lift|gamma|gain _x, _y [-1, 1], _master [-800, 800]}. The write equals the
+    trackball write (DiscToCdlDelta at kStrengthDefault, gamma inverted, master / 8000). A disc
+    point outside the unit disc is rejected.
+  - curve and lut (alias ocio_lmt): kind model. The UI value is the Model JSON value; the entry
+    lists the shape (model_shape) and the default. A value that is no object is rejected with the
+    shape.
+  - The validate hook runs on the editor.set path and on the panel path (UiStateToModelJson), so
+    the panels get the same rejection.
+  - Look panel: the HLS slider ranges and the CDL Master range come from the catalog; the HLS
+    loader reads the catalog UI value (the x1000 conversion in JS is deleted).
+  - EveryCatalogFieldCoversEveryFieldKey: each kFieldKeys key has an entry with the same
+    adjustment; an alias maps to the entry of its field.
+Deviations from the phase text: the HLS UI value holds all 8 bins as number lists plus the
+  selected hue, because the Model writes the 8 bin tables in one object. curve and lut use a new
+  value kind (model) instead of an object property list. The CDL loader in the Look panel keeps
+  reading luminance_offset from the Model, because the trackball uses the exact Model value. The
+  crop constraint now follows only the values that change from the current value: a full UI
+  value with an unchanged aspect size (for example the defaults of every catalog entry) does not
+  select the custom preset; an aspect size change without a preset still selects custom.
+Explicitly unimplemented items: none for #325.
+Primary success call chain: ToModelJson("hls", {"hue": 90, "lightness": [0, 0, 20, ...],
+  "chroma": [0, 0, -40, ...]}) -> HlsUiToModel -> {"HLS": {"hls_adj_table": [..., [0, 0.02,
+  -0.04], ...], "target_hls": [90, 0.5, 0.5], ...}} -> ParseEditorParameterWrite ok
+  (EditorParameterCatalogTest.HlsUiScaleMatchesModuleConstant).
+Primary failure and restore call chain: ToModelJson("hls", {"hue": 30}) -> HlsValidate ->
+  nullopt, "hls.hue must be one of: 0, 45, 90, 135, 180, 225, 270, 315" -> nothing written.
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main
+    EditorParameterCatalogTest AutomationEditorCommandsTest EditorAdjustmentSnapshotQmlTest
+    EditorLookPanelInteractionTest EditorLookModelTest EditorCdlTrackballGeometryTest
+    EditorDisplayTransformSnapshotQmlTest EditorRawDecodePanelQmlTest EditorGeometryPanelQmlTest
+    EditorAdjustmentModelTest HeadlessHostTest --parallel 8 -> 0
+  ctest --test-dir build/debug -R "<the same 11 test names>" -j 1 -> 0 (128/128)
+Discovered / passed / failed / skipped counts: EditorParameterCatalogTest 25/25 (5 new),
+  AutomationEditorCommandsTest 2/2, EditorAdjustmentSnapshotQmlTest 4/4 (1 new),
+  EditorLookPanelInteractionTest 16/16, EditorLookModelTest 23/23,
+  EditorCdlTrackballGeometryTest 5/5, EditorDisplayTransformSnapshotQmlTest 12/12,
+  EditorRawDecodePanelQmlTest 8/8, EditorGeometryPanelQmlTest 9/9, EditorAdjustmentModelTest
+  19/19, HeadlessHostTest 5/5. The QML test executables print no QML warnings.
+Manual verification: not run by the agent. The user records the GUI check (Display transform and
+  Look panels behave as before).
+Evidence path: build/tmp/automation_au9/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS Metal runs only in CI.
+```
 
 ### Phase AU10 — Editor commands and `render.preview`
 
