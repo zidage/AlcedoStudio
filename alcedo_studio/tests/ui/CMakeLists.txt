@@ -498,6 +498,14 @@ alcedo_register_test_target(ApplicationModuleHostShutdownTest ui)
 def_ui_test(ApplicationModuleHostIdleTest application_module_host_idle_test.cpp)
 alcedo_register_test_target(ApplicationModuleHostIdleTest ui)
 
+# Project launch and close owners moved out of QML (automation plan AU4).
+def_ui_test(ApplicationCloseCoordinatorTest application_close_coordinator_test.cpp)
+alcedo_register_test_target(ApplicationCloseCoordinatorTest ui)
+def_ui_test(ProjectLaunchCoordinatorTest project_launch_coordinator_test.cpp)
+alcedo_register_test_target(ProjectLaunchCoordinatorTest ui)
+def_ui_test(ProjectModuleTest project_module_close_test.cpp)
+alcedo_register_test_target(ProjectModuleTest ui)
+
 def_ui_test(AdjustmentTransferDialogModelTest adjustment_transfer_dialog_model_test.cpp)
 alcedo_register_test_target(AdjustmentTransferDialogModelTest ui)
 

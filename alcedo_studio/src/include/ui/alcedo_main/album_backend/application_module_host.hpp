@@ -21,6 +21,7 @@ class QQmlEngine;
 #include "app/model_download_service.hpp"
 #include "app/update_service.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
+#include "ui/alcedo_main/album_backend/application_close_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/editor_comparison_controller.hpp"
@@ -38,6 +39,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_db_write_barrier.hpp"
+#include "ui/alcedo_main/album_backend/project_launch_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
@@ -79,6 +81,10 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(EditorComparisonController* editorComparison READ editor_comparison CONSTANT)
   Q_PROPERTY(WorkspaceRouter* workspaceRouter READ workspace_router CONSTANT)
   Q_PROPERTY(EditorBehaviorPreferences* editorBehavior READ editor_behavior CONSTANT)
+  /// Project open and create launch state and requests.
+  Q_PROPERTY(ProjectLaunchCoordinator* projectLaunch READ project_launch CONSTANT)
+  /// Application quit decision and the editor finalize sequence of a window or project close.
+  Q_PROPERTY(ApplicationCloseCoordinator* applicationClose READ application_close CONSTANT)
 
  public:
   struct LifecycleEvent {
@@ -154,6 +160,10 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto editor_behavior() -> EditorBehaviorPreferences* {
     return editor_behavior_.get();
   }
+  [[nodiscard]] auto project_launch() -> ProjectLaunchCoordinator* { return project_launch_.get(); }
+  [[nodiscard]] auto application_close() -> ApplicationCloseCoordinator* {
+    return application_close_.get();
+  }
   /// Phase 5A application-layer editor session (owned by the host, not QML).
   [[nodiscard]] auto editor_session_service() -> alcedo::EditorSessionService* {
     return editor_session_runtime_ ? editor_session_runtime_->service.get() : nullptr;
@@ -221,6 +231,8 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<LutLibraryController>                lut_target_;
   std::unique_ptr<WorkspaceRouter>                     workspace_router_;
   std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
+  std::unique_ptr<ProjectLaunchCoordinator>            project_launch_;
+  std::unique_ptr<ApplicationCloseCoordinator>         application_close_;
 
   LifecycleObserver                                    lifecycle_observer_{};
   bool                                                 shutting_down_ = false;

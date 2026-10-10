@@ -59,6 +59,16 @@ class ProjectHandler {
   /// Returns false and changes nothing in every other state.
   bool RequestEnterLoadedProject();
   bool PersistCurrentProjectState();
+  /// Saves the loaded project before it closes. For an entered project: Mini-Git sync and
+  /// garbage collection of unreachable commits, the purge of uninstalled semantic models, the
+  /// metadata save, and the package write. A project that the user did not enter has no user
+  /// changes, so only its thumbnail cache index is flushed. Returns false and writes @p error
+  /// when a step fails. UI thread only.
+  bool PersistProjectForClose(QString* error);
+  /// Closes the loaded project without saving it: clears the project UI state and the project
+  /// paths, and retires the services and the unpacked workspace. Call PersistProjectForClose
+  /// first to keep the changes. Does nothing when no project is loaded. UI thread only.
+  void CloseProject();
   bool PackageCurrentProjectFiles(QString* errorOut = nullptr) const;
   /// Returns a job that saves the project metadata and then packs the project file. The job
   /// keeps its own references to the project and paths, so a worker thread can run it

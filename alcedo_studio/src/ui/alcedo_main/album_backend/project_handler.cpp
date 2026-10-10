@@ -7,6 +7,7 @@
 #include <QMetaObject>
 #include <QPointer>
 
+#include <exception>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -255,11 +256,13 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
           auto& ph = self->handler();
 
           if (!result->success_) {
-            ph.SetProjectLoadingState(false, {});
+            // The message is set before the load state changes, so a reader of the load end
+            // reads the failure.
             self->SetServiceMessageForCurrentProject(
                 ph.project_ ? PL_TEXT("Requested project failed to open: %1", result->error_)
                             : PL_TEXT("Project open failed: %1", result->error_));
             self->SetTaskState(PL_TEXT("Project open failed."), 0, false);
+            ph.SetProjectLoadingState(false, {});
             // A load that PreviewProject started reports the failure on the welcome surface,
             // also when the user changed it to kEnter while it ran.
             if (started_as_preview) {
@@ -400,6 +403,62 @@ bool ProjectHandler::PersistCurrentProjectState() {
   } catch (...) {
     return false;
   }
+}
+
+bool ProjectHandler::PersistProjectForClose(QString* error) {
+  if (!project_) {
+    return true;
+  }
+  try {
+    if (!project_entered_) {
+      if (thumbnail_service_ && thumbnail_service_->GetDiskCacheStats().enabled) {
+        thumbnail_service_->FlushDiskCacheMetadata();
+      }
+      return true;
+    }
+    if (pipeline_service_) {
+      pipeline_service_->Sync();
+      // Clean-close Mini-Git garbage collection: delete EditCommit rows that no Version head
+      // reaches. An abnormal exit does not run this path.
+      (void)pipeline_service_->CollectUnreachableEditCommits();
+    }
+    (void)PurgeUninstalledSemanticModels();
+  } catch (const std::exception& e) {
+    if (error != nullptr) {
+      *error = QString::fromUtf8(e.what());
+    }
+    return false;
+  }
+  if (!PersistCurrentProjectState()) {
+    if (error != nullptr) {
+      *error = PL_TEXT("Project save failed.").Render();
+    }
+    return false;
+  }
+  return PackageCurrentProjectFiles(error);
+}
+
+void ProjectHandler::CloseProject() {
+  if (!project_) {
+    return;
+  }
+  auto retired                     = std::make_shared<RetiredProject>();
+  retired->project_                = std::move(project_);
+  retired->pipeline_service_       = std::move(pipeline_service_);
+  retired->thumbnail_service_      = std::move(thumbnail_service_);
+  retired->mask_thumbnail_service_ = std::move(mask_thumbnail_service_);
+  retired->import_service_         = std::move(import_service_);
+  retired->export_service_         = std::move(export_service_);
+  retired->workspace_dir_          = project_workspace_dir_;
+  db_path_.clear();
+  meta_path_.clear();
+  project_package_path_.clear();
+  project_workspace_dir_.clear();
+  recent_project_path_.clear();
+  project_entered_ = false;
+  project_overview_.reset();
+  ClearProjectData();
+  RetireProject(std::move(retired));
 }
 
 namespace {

@@ -30,6 +30,8 @@ namespace alcedo::ui {
 struct ProjectLifecycleHooks {
   std::function<QString()>            project_switch_block_reason;
   std::function<void()>               finalize_editor_session;
+  /// True while the editor session has an image or runs a close or a persist.
+  std::function<bool()>               editor_session_busy;
   std::function<void()>               clear_project_ui_state;
   std::function<void()>               project_opened;
   std::function<bool(const QString&)> should_keep_semantic_model_data;
@@ -144,6 +146,17 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   Q_INVOKABLE bool   PreviewProject(const QString& projectUrlOrPath);
   /// Enters the previewed project (ProjectHandler::RequestEnterLoadedProject).
   Q_INVOKABLE bool   EnterLoadedProject();
+  /// The reason why the loaded project cannot close now: a load runs, no project is loaded, or
+  /// an import or an export runs. Empty when the project can close. The editor session rule of
+  /// CloseProject is not part of it.
+  [[nodiscard]] auto ProjectCloseBlockReason() const -> QString;
+  /// Closes the loaded project. With @p persist, saves and packs it first
+  /// (ProjectHandler::PersistProjectForClose); without it, the changes since the last save are
+  /// discarded. Returns false, sets the service message, and keeps the project open when
+  /// ProjectCloseBlockReason is not empty, the editor session still has an image or runs a
+  /// close or a persist, or the save fails. On success no project is loaded, and ProjectChanged
+  /// and ProjectEnteredChanged are emitted.
+  bool               CloseProject(bool persist);
 
   // ── Internals used by ProjectHandler / host ────────────────────────────
   void               InitializeAcceleratorSettings();

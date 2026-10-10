@@ -1315,6 +1315,14 @@ Alcedo will use %1 instead.</translation>
         <source>Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Close the editor image before you close the project.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Project closed.</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>AppDialogs</name>
@@ -6640,6 +6648,21 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
             <numerusform>%n photo</numerusform>
             <numerusform>%n photos</numerusform>
         </translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ApplicationCloseCoordinator</name>
+    <message>
+        <source>Another close is in progress.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No project is loaded yet.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The editor image cannot be saved.</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 </TS>
