@@ -67,6 +67,9 @@ class ProjectLaunchCoordinator final : public QObject {
   void LaunchStateChanged();
   /// The queued request ran. @p started is true when it started a project load.
   void LaunchRequestFinished(bool started);
+  // QML Connections maps a handler onFoo to the signal foo, so a signal that starts with an
+  // uppercase letter needs a lowercase twin for QML.
+  void launchStateChanged();
 
  private:
   enum class LaunchKind : std::uint8_t { kPromptOpen, kPromptCreate, kOpen, kCreate };

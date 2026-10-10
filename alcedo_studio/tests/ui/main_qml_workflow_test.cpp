@@ -6,6 +6,7 @@
 /// @brief Loads the production Main.qml and verifies its real module wiring.
 
 #include <QFont>
+#include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
@@ -430,6 +431,52 @@ TEST_F(MainQmlWorkflowTests, TextInputAndCapturePriorityPreventProductCommandAct
   EXPECT_EQ(registry->keySequenceTexts(QStringLiteral("library.selectAll")),
             QStringList{QStringLiteral("Ctrl+A")});
   ASSERT_TRUE(QMetaObject::invokeMethod(settings, "close"));
+}
+
+// A Connections handler onFoo reaches only a signal named foo. A handler that names no signal of
+// its target never runs, as the application close handlers did: the close owner finished and the
+// window stayed open behind the save dialog.
+TEST_F(MainQmlWorkflowTests, ConnectionsHandlersReachOwnerSignalsAndApplicationCloseClosesWindow) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                     PathToQString(temp_dir_ / "settings"));
+  QCoreApplication::setOrganizationName(QStringLiteral("AlcedoTests"));
+  QCoreApplication::setApplicationName(QStringLiteral("MainQmlWorkflowTest"));
+  alcedo::ui::AppTheme::RegisterFonts();
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(CreateTestProject(host));
+  alcedo::ui::LanguageManager language_manager(QCoreApplication::instance());
+  alcedo::ui::AppTheme::SetEffectiveLanguageCode(language_manager.EffectiveLanguageCode());
+  QQuickStyle::setStyle(QStringLiteral("Material"));
+
+  QQmlApplicationEngine  engine;
+  std::vector<QQmlError> qml_warnings;
+  QObject*               root = LoadMainQml(host, language_manager, engine, qml_warnings);
+  ASSERT_NE(root, nullptr) << (qml_warnings.empty()
+                                   ? std::string{}
+                                   : qml_warnings.front().toString().toStdString());
+  auto* window = qobject_cast<QQuickWindow*>(root);
+  ASSERT_NE(window, nullptr);
+  ProcessEvents(100);
+
+  for (const auto& warning : qml_warnings) {
+    EXPECT_FALSE(warning.description().contains(QStringLiteral("no signal of the target matches")))
+        << warning.toString().toStdString();
+  }
+
+  // The window closes in this test; the test process keeps running.
+  const bool quit_on_last_window_closed = QGuiApplication::quitOnLastWindowClosed();
+  QGuiApplication::setQuitOnLastWindowClosed(false);
+  ASSERT_TRUE(window->isVisible());
+  // No editor image is open, so the persist wait finishes at once and Main.qml closes the window.
+  ASSERT_FALSE(host.application_close()->CloseNeedsConfirmation());
+  host.application_close()->BeginPersistWait();
+  ProcessEvents(100);
+  EXPECT_FALSE(host.application_close()->waiting());
+  EXPECT_FALSE(window->isVisible());
+  QGuiApplication::setQuitOnLastWindowClosed(quit_on_last_window_closed);
 }
 
 }  // namespace

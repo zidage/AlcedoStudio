@@ -86,6 +86,9 @@ class AdjustmentTransferController final : public QObject {
   void PasteInProgressChanged();
   /// Result of the worker-thread part of @ref Paste.
   void PasteFinished(const QVariantMap& result);
+  // QML Connections maps a handler onFoo to the signal foo, so a signal that starts with an
+  // uppercase letter needs a lowercase twin for QML.
+  void pasteFinished(const QVariantMap& result);
 
  private:
   ProjectModule*                                      project_       = nullptr;

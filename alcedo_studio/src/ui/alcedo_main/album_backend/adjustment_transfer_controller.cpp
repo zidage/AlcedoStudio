@@ -90,6 +90,8 @@ AdjustmentTransferController::AdjustmentTransferController(
           &AdjustmentTransferController::PasteInProgressChanged);
   connect(apply_coordinator_.get(), &AdjustmentTransferApplyCoordinator::ApplyFinished, this,
           &AdjustmentTransferController::PasteFinished);
+  connect(this, &AdjustmentTransferController::PasteFinished, this,
+          &AdjustmentTransferController::pasteFinished);
   // Paste writes the edits to storage; an edit-ordered library shows them.
   connect(apply_coordinator_.get(), &AdjustmentTransferApplyCoordinator::ApplyFinished, this,
           [this](const QVariantMap& result) {

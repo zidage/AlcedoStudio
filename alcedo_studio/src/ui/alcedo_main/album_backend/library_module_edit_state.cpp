@@ -52,6 +52,7 @@ void LibraryModule::SetPendingReveal(uint fileId) {
   }
   pending_reveal_file_id_ = fileId;
   emit PendingRevealChanged();
+  emit pendingRevealChanged();
 }
 
 void LibraryModule::RevealLastEditedFile() {
