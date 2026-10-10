@@ -91,3 +91,11 @@ jobs:
 
       - name: Test
         run: ctest --preset macos_arm_metal_ci --output-on-failure
+
+      - name: Upload automation failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-failures
+          path: build/macos-arm-metal-ci/automation-failures/
+          if-no-files-found: ignore

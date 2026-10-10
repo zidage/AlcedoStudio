@@ -98,6 +98,24 @@ inline constexpr std::array<std::string_view, 26> kRawExtensions = {
     ".iiq", ".kdc", ".mef", ".mos", ".mrw", ".nef", ".nrw", ".orf", ".pef",
     ".raf", ".raw", ".rw2", ".rwl", ".sr2", ".srf", ".srw", ".x3f"};
 
+/// One raster extension of an import category.
+struct RasterImportExtension {
+  std::string_view   extension;
+  ImportFileCategory category;
+};
+
+/// Raster extensions of the JPEG, TIFF, PNG, and OpenEXR import categories.
+inline constexpr std::array<RasterImportExtension, 8> kRasterImportExtensions = {{
+    {".jpg", ImportFileCategory::Jpeg},
+    {".jpeg", ImportFileCategory::Jpeg},
+    {".jpe", ImportFileCategory::Jpeg},
+    {".jfif", ImportFileCategory::Jpeg},
+    {".tif", ImportFileCategory::Tiff},
+    {".tiff", ImportFileCategory::Tiff},
+    {".png", ImportFileCategory::Png},
+    {".exr", ImportFileCategory::OpenExr},
+}};
+
 /// Category of the extension @p ext, with its leading dot. Matching ignores ASCII case.
 [[nodiscard]] inline auto CategoryForExtension(std::string_view ext) -> ImportFileCategory {
   if (ext.size() > 8) {
@@ -107,12 +125,9 @@ inline constexpr std::array<std::string_view, 26> kRawExtensions = {
   for (auto& c : lower) {
     if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
   }
-  if (lower == ".jpg" || lower == ".jpeg" || lower == ".jpe" || lower == ".jfif") {
-    return ImportFileCategory::Jpeg;
+  for (const auto& raster : kRasterImportExtensions) {
+    if (lower == raster.extension) return raster.category;
   }
-  if (lower == ".tif" || lower == ".tiff") return ImportFileCategory::Tiff;
-  if (lower == ".png") return ImportFileCategory::Png;
-  if (lower == ".exr") return ImportFileCategory::OpenExr;
   for (const auto raw : kRawExtensions) {
     if (lower == raw) return ImportFileCategory::Raw;
   }

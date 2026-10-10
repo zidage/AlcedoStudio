@@ -111,7 +111,7 @@
         "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON",
         "ALCEDO_BUILD_CI_TESTS": "ON",
         "ALCEDO_MACOS_BUNDLE": "OFF",
-        "ALCEDO_GENERATE_QMLTYPES": "OFF",
+        "ALCEDO_GENERATE_QMLTYPES": "ON",
         "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
         "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
@@ -132,7 +132,7 @@
         "ALCEDO_BUILD_TESTS_BY_DEFAULT": "OFF",
         "ALCEDO_BUILD_CI_TESTS": "ON",
         "ALCEDO_MACOS_BUNDLE": "OFF",
-        "ALCEDO_GENERATE_QMLTYPES": "OFF",
+        "ALCEDO_GENERATE_QMLTYPES": "ON",
         "PUERHLAB_USE_BUNDLED_LIBRAW": "ON",
         "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
@@ -217,7 +217,8 @@
       "targets": [
         "alcedo_tests_ci_core",
         "alcedo_tests_ci_raw",
-        "alcedo_tests_ci_metal"
+        "alcedo_tests_ci_metal",
+        "alcedo_tests_ci_automation"
       ]
     },
     {
@@ -254,7 +255,7 @@
       "configurePreset": "macos_arm_metal_ci",
       "filter": {
         "include": {
-          "label": "ci_core_flow|ci_raw_flow|ci_metal_runtime"
+          "label": "ci_core_flow|ci_raw_flow|ci_metal_runtime|ci_automation_flow"
         }
       },
       "output": {

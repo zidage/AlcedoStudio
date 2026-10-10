@@ -20,7 +20,10 @@
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/automation/automation_command_registry.hpp"
 #include "ui/alcedo_main/automation/automation_host_commands.hpp"
+#include "ui/alcedo_main/automation/automation_library_commands.hpp"
 #include "ui/alcedo_main/automation/automation_project_commands.hpp"
+#include "ui/alcedo_main/automation/automation_task_commands.hpp"
+#include "ui/alcedo_main/automation/automation_task_tracker.hpp"
 
 namespace alcedo::automation::test {
 
@@ -34,8 +37,11 @@ class InProcessAutomationSession {
     context.host      = &host_;
     context.host_mode = QStringLiteral("headless");
     QString    error;
-    const bool registered = RegisterAutomationHostCommands(registry_, std::move(context), &error) &&
-                            RegisterAutomationProjectCommands(registry_, &host_, &error);
+    const bool registered =
+        RegisterAutomationHostCommands(registry_, std::move(context), &error) &&
+        RegisterAutomationProjectCommands(registry_, &host_, &error) &&
+        RegisterAutomationLibraryCommands(registry_, &host_, &tracker_, &error) &&
+        RegisterAutomationTaskCommands(registry_, &host_, &tracker_, &error);
     EXPECT_TRUE(registered) << error.toStdString();
   }
 
@@ -77,6 +83,7 @@ class InProcessAutomationSession {
 
  private:
   ui::ApplicationModuleHost host_;
+  AutomationTaskTracker     tracker_{&host_};
   AutomationCommandRegistry registry_;
   int                       next_id_ = 0;
 };

@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1, AU2, AU3, AU4a, and AU4b have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1, AU2, AU3, AU4a, AU4b, and AU5 have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -565,7 +565,7 @@ class AutomationCommandRegistry {
 | AU3 | Headless host and session lifecycle | `main.cpp`, headless host, frame sink | AU1, AU2 | 1000–1500 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU4a | Project launch and close in C++ | Project coordinators, `ProjectModule`, QML | AU3 | 1400–1600 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU4b | Project commands | `AutomationHostLib` | AU4a | 600–800 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
-| AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
+| AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU8 | Parameter catalog: RAW, input profile, lens, crop | Catalog, Raw and Geometry QML | AU7 | 1300–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
@@ -1361,7 +1361,78 @@ CI: the next PR run shows the label in the ctest output.
 
 **Expected diff:** 1000–1500 lines.
 
-**Completion record:** see section 13.
+**Completion record:**
+
+```text
+Phase / date / status: AU5 / 2026-10-10 / implemented.
+Source revision and branch: AU4b (feature/automation-project-commands); branch
+  feature/automation-library-import-tasks. Actual diff: 1580 lines (23 files, this record
+  included), plus one commit that converts CMakePresets.json from CRLF to LF.
+Actual changed modules: supported_file_type (kRasterImportExtensions; CategoryForExtension reads
+  it), ImportExportHandler (SupportedImportNameFilters, supportedImportPatterns), AppDialogs.qml,
+  AutomationHostLib (AutomationTaskTracker, task commands, library commands, headless host
+  registration and task notifications), test registration (ci_automation category,
+  alcedo_tests_ci_automation), CMakePresets.json, cpp-ci.yml, tests.
+Implemented behavior:
+  - The QML import filter reads ImportExportHandler::supportedImportPatterns, built from
+    kRawExtensions and kRasterImportExtensions. CategoryForExtension reads the same raster table.
+  - AutomationTaskTracker gives each import run the protocol id import-N (ImportExportHandler has
+    no task id and runs one import at a time), keeps the final counts of a finished import for its
+    id, reports background tasks by their BackgroundTaskController id and an export in flight as
+    "export", and emits task.updated and task.finished. The headless host forwards both as
+    notifications.
+  - library.import {paths | folder, recursive}: paths go to StartImportPaths; a recursive folder
+    goes through the folder scan model and StartFolderImport, the GUI path; a non-recursive
+    folder imports its supported files. Zero supported files give a finished import task with
+    zero counts. Errors: -32602 for a missing file or folder (data.pointer), -32001 without an
+    entered project, -32005 while an import runs, -32002 when the handler does not start.
+  - library.folders: the full folder tree from AlbumBrowseService::ListFolders, root first.
+  - library.list {folder_id, offset, limit, sort, descending}: one page of
+    AlbumBrowseService::ReadAlbumQuery (the library query), ordered by the sort and then by
+    element id; folder_id defaults to the root folder.
+  - library.thumbnail {element_id, out, long_edge}: ThumbnailService::GetThumbnailDetailed at the
+    smallest tier not below long_edge, scaled to long_edge, written with QImage::save.
+  - tasks.list and tasks.wait {task_id | idle}: the wait listens to ImportStateChanged,
+    ExportStateChanged, TasksChanged, and TaskFinished; the idle check runs queued.
+  - CI: ci_automation category and alcedo_tests_ci_automation target, the macOS preset builds it
+    and filters ci_automation_flow, and the workflow uploads automation-failures/ on failure.
+Deviations:
+  - The failure log folder is build/macos-arm-metal-ci/automation-failures/ (the binary directory
+    of the macos_arm_metal_ci preset), not build/macos-ci/automation-failures/.
+  - gtest_discover_tests keeps only the first entry of a label list, so the CI targets have the
+    single label ci_automation_flow instead of "automation;ci_automation_flow".
+  - AutomationLibraryCommandsTest (in-process) was added for the parameter and state rules.
+  - The end-to-end tests need alcedo_main. With ALCEDO_GENERATE_QMLTYPES OFF the QML module
+    plugin references qml_register_types_Alcedo_Main, which is then not generated, so
+    alcedo_main did not link in macos_arm_metal_ci (first CI run). The macos_arm_metal_ci and
+    macos_debug_tests presets now set ALCEDO_GENERATE_QMLTYPES ON, like the other presets.
+Primary success call chain: alcedo-cli call library.import {paths} -> AutomationServer ->
+  registry -> StartImportAndAnswer -> ImportExportHandler::StartImportPaths -> ImportStateChanged
+  -> AutomationTaskTracker assigns import-1 -> {"task_id": "import-1"}; tasks.wait import-1 ->
+  CompleteImport -> ImportStateChanged (not running) -> TaskFinished -> final counts;
+  library.list -> AlbumBrowseService::ReadAlbumQuery -> items.
+Primary failure and restore call chain: library.import with a missing path -> -32602
+  data.pointer "/paths/0" -> no import starts, tasks.list is empty
+  (AutomationLibraryE2ETest.ImportOfMissingPathIsRejectedWithoutTask).
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main alcedo_cli
+    ImportExportHandlerTest AutomationLibraryCommandsTest AutomationLibraryE2ETest
+    AutomationProjectCommandsTest ImportContentClassificationTest AlbumBackendImportTest
+    --parallel 8  -> 0
+  ctest --test-dir build/debug -R "ImportExportHandlerTest|AutomationLibraryCommandsTest|
+    AutomationLibraryE2ETest|AutomationProjectCommandsTest" -j 1  -> 0
+  ctest --test-dir build/debug -L ci_automation_flow -j 1  -> 0 (12 tests)
+  ctest --test-dir build/debug -R "ImportContentClassificationTest|AlbumBackendImportTest"
+    -j 1  -> 0
+Discovered / passed / failed / skipped counts: ImportExportHandlerTest 2/2,
+  AutomationLibraryCommandsTest 4/4, AutomationLibraryE2ETest 4/4 (real alcedo-cli and
+  alcedo_main --headless processes, default OpenCL backend), AutomationProjectCommandsTest 4/4;
+  regression ImportContentClassificationTest and AlbumBackendImportTest 38/38.
+CI run: recorded in the pull request after the macOS run.
+Manual verification: the user records the GUI import dialog filter check.
+Evidence path: build/tmp/automation_au5/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS Metal runs only in CI.
+```
 
 ### Phase AU6 — Selection, rating, and delete in C++
 

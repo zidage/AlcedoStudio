@@ -53,6 +53,7 @@ add_custom_target(alcedo_tests_demos)
 add_custom_target(alcedo_tests_ci_core)
 add_custom_target(alcedo_tests_ci_raw)
 add_custom_target(alcedo_tests_ci_metal)
+add_custom_target(alcedo_tests_ci_automation)
 
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 

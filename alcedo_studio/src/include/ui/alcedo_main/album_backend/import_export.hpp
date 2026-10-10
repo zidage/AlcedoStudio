@@ -39,6 +39,8 @@ class IUiStatusSink;
 class ImportExportHandler final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString defaultExportFolder READ DefaultExportFolder CONSTANT)
+  /// Every import extension as space-separated `*.ext` patterns, for the file dialog filter.
+  Q_PROPERTY(QString supportedImportPatterns READ SupportedImportPatterns CONSTANT)
   Q_PROPERTY(FolderImportScanModel* folderScan READ FolderScan CONSTANT)
   Q_PROPERTY(bool importRunning READ ImportRunning NOTIFY ImportStateChanged)
   /// "preparing" while the import service registers the files, "reading" while metadata is read,
@@ -117,6 +119,12 @@ class ImportExportHandler final : public QObject {
   Q_INVOKABLE bool         SaveExportFileNamePreset(const QString& name, const QString& pattern,
                                                     const QString& replacedName);
   Q_INVOKABLE bool         DeleteExportFileNamePreset(const QString& name);
+
+  /// `*.ext` patterns of every import category: the RAW extensions (kRawExtensions), then the
+  /// raster extensions (kRasterImportExtensions). A file dialog filter ignores case on Windows
+  /// and macOS.
+  [[nodiscard]] static auto SupportedImportNameFilters() -> QStringList;
+  [[nodiscard]] static auto SupportedImportPatterns() -> QString;
 
   void StartImportPaths(const std::vector<image_path_t>& paths, bool preserveTarget = false,
                         ImportCategoryMask allowedCategories = kAllImportCategories);
