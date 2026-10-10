@@ -292,6 +292,7 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   void FocusPositionReady(uint fileId, qint64 occurrence, int sectionRow);
   void focusPositionReady(uint fileId, qint64 occurrence, int sectionRow);
   void PendingRevealChanged();
+  void pendingRevealChanged();
   /// The project's last edited photo was read (see RevealLastEditedFile).
   void LastEditedFileFound(uint elementId, uint imageId);
 

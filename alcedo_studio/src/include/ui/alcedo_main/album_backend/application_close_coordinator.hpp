@@ -68,6 +68,10 @@ class ApplicationCloseCoordinator final : public QObject {
   /// @p closed is false when the editor finalize or the project close failed; @p message then
   /// holds the reason.
   void ProjectCloseFinished(bool closed, const QString& message);
+  // QML Connections maps a handler onFoo to the signal foo, so a signal that starts with an
+  // uppercase letter needs a lowercase twin for QML.
+  void applicationCloseFinished();
+  void applicationCloseAborted(const QString& message);
 
  private:
   enum class Mode : std::uint8_t { kIdle, kApplicationExit, kProjectClose };

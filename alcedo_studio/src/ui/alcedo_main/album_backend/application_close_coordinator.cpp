@@ -28,6 +28,10 @@ ApplicationCloseCoordinator::ApplicationCloseCoordinator(EditorSessionController
       editor_session_(editor_session),
       workspace_router_(workspace_router),
       project_(project) {
+  connect(this, &ApplicationCloseCoordinator::ApplicationCloseFinished, this,
+          &ApplicationCloseCoordinator::applicationCloseFinished);
+  connect(this, &ApplicationCloseCoordinator::ApplicationCloseAborted, this,
+          &ApplicationCloseCoordinator::applicationCloseAborted);
   if (editor_session_ != nullptr) {
     // Queued: the evaluation reads the session after the change that emitted the signal, and a
     // finalize that changes state synchronously does not finish the close inside the Begin call.

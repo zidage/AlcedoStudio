@@ -13,6 +13,8 @@ ProjectLaunchCoordinator::ProjectLaunchCoordinator(ProjectModule* project, QObje
   launch_timer_.setSingleShot(true);
   launch_timer_.setInterval(kLaunchRepaintDelayMs);
   connect(&launch_timer_, &QTimer::timeout, this, &ProjectLaunchCoordinator::RunPendingLaunch);
+  connect(this, &ProjectLaunchCoordinator::LaunchStateChanged, this,
+          &ProjectLaunchCoordinator::launchStateChanged);
   if (project_ != nullptr) {
     connect(project_, &ProjectModule::ProjectLoadStateChanged, this,
             &ProjectLaunchCoordinator::OnProjectLoadStateChanged);
