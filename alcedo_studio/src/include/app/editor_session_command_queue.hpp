@@ -80,6 +80,8 @@ enum class EditorSessionCommandKind : std::uint8_t {
   RetryComparison,
   /// Close the open comparison and release its documents and images.
   CloseComparison,
+  /// Render Root and the working values of the open image to host pixels for a client.
+  RenderPreviewImages,
 };
 
 /// Worker messages that are delivered back to the session owner.
@@ -293,6 +295,11 @@ class EditorSessionCommandQueue final {
   /// submission may execute before this method returns; a nested submission is
   /// retained until the active reduction returns.
   auto               Submit(EditorSessionCommand command, CommandHandler handler) -> Submission;
+
+  /// Allocate a command id from the same sequence as Submit without queueing a command. Input
+  /// that the pending-input queue admits synchronously uses it so its boundary has an id that
+  /// the results of the later consume carry. Returns 0 once the queue stops accepting.
+  auto                       ReserveCommandId() -> std::uint64_t;
 
   /// Post a completion to the owner thread. Unlike Submit, this path never
   /// runs the task inline, including when called from the owner thread.

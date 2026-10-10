@@ -138,6 +138,7 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
                                     alcedo::EditorImageRenderCompletion on_complete, std::string* error)
       -> std::uint64_t override;
   void               CancelImages(std::uint64_t job_id) override;
+  [[nodiscard]] auto HasImageJob() const -> bool override;
   [[nodiscard]] auto last_scheduled() const -> std::vector<alcedo::EditorRenderRequest>;
   /// The editor's executor, or null before the first frame. Diagnostics and tests only.
   [[nodiscard]] auto interactive_executor() const -> std::shared_ptr<alcedo::PipelineExecutor>;

@@ -247,6 +247,15 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_INVOKABLE bool   submitPatch(QString fieldKey, QString paramsJson, bool settled) override;
   auto               submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
       -> bool override;
+  /**
+   * @brief submitWrite that returns the session result of the enqueue.
+   *
+   * A settled write is a Release boundary: the result carries the operation_id that the commit
+   * and frame results of the later consume carry. A write the controller refuses before the
+   * session sees it returns Rejected with the reason.
+   */
+  auto EnqueueFieldWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> alcedo::EditorSessionResult;
   /// Queue a node-switch seal so later writes start a new sequence. Old
   /// sequence ids keep their captured target. No live mutation.
   Q_INVOKABLE bool enqueueNodeSwitchBoundary();
@@ -295,6 +304,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_INVOKABLE void   RemoveVersion(const QString& versionId);
   Q_INVOKABLE void   Undo();
   Q_INVOKABLE void   Redo();
+  /// Undo and Redo that return the session result; its operation_id identifies the command.
+  auto               RequestUndo() -> alcedo::EditorSessionResult;
+  auto               RequestRedo() -> alcedo::EditorSessionResult;
   Q_INVOKABLE void   MoveHeadToCommit(const QString& commitId);
   Q_INVOKABLE void   Close();
   Q_INVOKABLE void   Shutdown();
@@ -438,6 +450,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void HistoryOperationFinished();
   /// The bound node selection source or its primary selection changed.
   void NodeSelectionChanged();
+  /// Every result the session publishes, on the controller thread, before the change
+  /// notification that the same publication queues.
+  void SessionResultObserved(const alcedo::EditorSessionResult& result);
 
  private:
   void                     LoadFilmstripUiPrefs();
@@ -448,10 +463,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     RefreshImageExifDisplay();
   void                     ApplyExifRowText(const alcedo::EditorExifRowText& text);
   void                     ApplyExifLensIdentity(const alcedo::EditorImageExifDisplay& display);
-  /// Enqueue @p patch (std::nullopt means the write was rejected before enqueueing) and keep
-  /// the viewport's interactive present loop in step with @p settled.
-  auto EnqueueAdjustmentPatch(std::optional<alcedo::EditorAdjustmentPatch> patch, bool settled)
-      -> bool;
+  /// Enqueue @p patch (std::nullopt means the write was rejected before enqueueing, for
+  /// @p rejection) and keep the viewport's interactive present loop in step with @p settled.
+  auto EnqueueAdjustmentPatch(std::optional<alcedo::EditorAdjustmentPatch> patch, bool settled,
+                              std::string rejection) -> alcedo::EditorSessionResult;
+  auto RequestUndoRedo(bool undo) -> alcedo::EditorSessionResult;
   void                     ApplyOpenLocal(uint elementId, uint imageId);
   void                     ApplyCloseLocal();
   void                     SyncViewportIdentity();

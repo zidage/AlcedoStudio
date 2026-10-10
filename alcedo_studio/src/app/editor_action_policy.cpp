@@ -223,6 +223,9 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::RetryComparison:
     case EditorSessionCommandKind::CloseComparison:
       return std::nullopt;
+    // Reads the open image only; the reducer reports its own refusal to the caller.
+    case EditorSessionCommandKind::RenderPreviewImages:
+      return std::nullopt;
     case EditorSessionCommandKind::SetPresentationTarget:
     case EditorSessionCommandKind::SetPresentationSize:
     case EditorSessionCommandKind::SetGeometryOverlay:
