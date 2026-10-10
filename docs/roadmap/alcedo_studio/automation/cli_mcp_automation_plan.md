@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1, AU2, AU3, and AU4a have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1, AU2, AU3, AU4a, and AU4b have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -564,7 +564,7 @@ class AutomationCommandRegistry {
 | AU2 | `alcedo-cli` client and session files | `alcedo_cli` | AU1 | 800–1200 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU3 | Headless host and session lifecycle | `main.cpp`, headless host, frame sink | AU1, AU2 | 1000–1500 | implemented | [#323](https://github.com/zidage/AlcedoStudio/issues/323) |
 | AU4a | Project launch and close in C++ | Project coordinators, `ProjectModule`, QML | AU3 | 1400–1600 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
-| AU4b | Project commands | `AutomationHostLib` | AU4a | 600–800 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
+| AU4b | Project commands | `AutomationHostLib` | AU4a | 600–800 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | planned | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
@@ -1224,6 +1224,53 @@ Discovered / passed / failed / skipped counts:
 Manual verification: not run by the agent. The user records the GUI checks (quit with an open
   edited image saves and exits; quit during a save waits; open and create from the welcome
   surface and the File menu).
+Evidence path: build/tmp/automation_au4/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS not run in this session.
+```
+
+**Completion record (AU4b):**
+
+```text
+Phase / date / status: AU4b / 2026-10-10 / implemented.
+Source revision and branch: AU4a (feature/automation-project-launch-close); branch
+  feature/automation-project-commands. Actual diff: 706 lines (10 files, this record
+  included).
+Actual changed modules: AutomationHostLib (automation_command_support, project_commands,
+  headless host registration), automation tests (InProcessAutomationSession,
+  AutomationProjectCommandsTest).
+Implemented behavior:
+  - project.create {folder, name} and project.open {path}: the parameters are checked first
+    (-32602 with data.pointer for a missing folder, an empty name, or a missing file), so a
+    wrong request keeps the loaded project open. A loaded project closes first through
+    ApplicationCloseCoordinator::BeginProjectClose(persist true). The launch runs through
+    ProjectLaunchCoordinator (BeginCreate, BeginOpen). The response is the project summary
+    (path, name, entered, photo_count) when the load ends with the project entered;
+    -32002 when the request does not start a load, -32007 when the close or the load fails,
+    -32005 when another launch is queued or the accelerator preparation runs.
+  - project.save: ProjectModule::SaveProject (the File > Save Project operation); -32001
+    without a loaded project, -32007 with the owner message on failure.
+  - project.close {persist (default true)}: BeginProjectClose; -32001 without a loaded project,
+    -32002 when the close cannot start, -32007 when the editor save or the project save fails.
+  - AutomationCommandWait keeps the reply of a command that waits for owner signals; the
+    connections end when the command answers.
+  - The headless host registers the project commands.
+Explicitly unimplemented items: session.shutdown persist=false stays rejected; project.close
+  with persist false covers closing without persistence.
+Primary success call chain: project.open P1 (P2 loaded) -> CloseLoadedProjectThen ->
+  BeginProjectClose(true) -> ProjectCloseFinished(true) -> LaunchAndAnswer ->
+  ProjectLaunchCoordinator::BeginOpen -> LaunchRequestFinished(true) ->
+  ProjectLoadStateChanged (load ended, ProjectChanged seen) -> project summary.
+Primary failure and restore call chain: project.open with a missing file -> -32602
+  data.pointer "/path" -> no close starts, the loaded project stays open
+  (AutomationProjectCommandsTest.OpenMissingFileIsRejectedAndKeepsProjectOpen).
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AutomationProjectCommandsTest
+    alcedo_main --parallel 8  -> 0
+  ctest --test-dir build/debug -R "AutomationProjectCommandsTest" -j 1  -> 0
+Discovered / passed / failed / skipped counts: AutomationProjectCommandsTest 4 / 4 / 0 / 0
+  (OpenSecondProjectClosesFirstWithPersist: the first package exists after the switch and the
+  reopened first project reports the imported photo count).
+Manual verification: none needed beyond the tests; the commands have no GUI surface.
 Evidence path: build/tmp/automation_au4/ (removed after the phase).
 Remaining defects or unavailable platforms: macOS not run in this session.
 ```

@@ -24,6 +24,7 @@
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/automation/automation_command_registry.hpp"
 #include "ui/alcedo_main/automation/automation_host_commands.hpp"
+#include "ui/alcedo_main/automation/automation_project_commands.hpp"
 #include "ui/alcedo_main/automation/automation_server.hpp"
 #include "ui/alcedo_main/automation/automation_session_commands.hpp"
 #include "ui/alcedo_main/automation/headless_frame_sink.hpp"
@@ -173,7 +174,8 @@ auto RunHostSession(QCoreApplication& app, const HeadlessHostOptions& options,
           AutomationSessionDescription{QLatin1String(kHostMode),
                                        QCoreApplication::applicationVersion()},
           &registration_error) ||
-      !RegisterAutomationHostCommands(registry, std::move(context), &registration_error)) {
+      !RegisterAutomationHostCommands(registry, std::move(context), &registration_error) ||
+      !RegisterAutomationProjectCommands(registry, &host, &registration_error)) {
     ReportFailure(QStringLiteral("command registration failed: %1").arg(registration_error));
     host.Shutdown();
     return Exit(HeadlessHostExitCode::SessionError);
