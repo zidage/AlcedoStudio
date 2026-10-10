@@ -205,7 +205,7 @@ void EditorAdjustmentValueModel::setMinimum(double v) {
   }
   minimum_ = v;
   emit minimumChanged();
-  applyValue(value_);
+  applyCompleteRange();
 }
 
 void EditorAdjustmentValueModel::setMaximum(double v) {
@@ -214,7 +214,7 @@ void EditorAdjustmentValueModel::setMaximum(double v) {
   }
   maximum_ = v;
   emit maximumChanged();
-  applyValue(value_);
+  applyCompleteRange();
 }
 
 void EditorAdjustmentValueModel::setStep(double v) {
@@ -371,6 +371,14 @@ auto EditorAdjustmentValueModel::clamp(double v) const -> double {
     return value_;
   }
   return std::clamp(v, minimum_, maximum_);
+}
+
+void EditorAdjustmentValueModel::applyCompleteRange() {
+  // QML bindings set the bounds in any order: [100, 1000] can arrive as minimum 100 while the
+  // maximum is still the construction value 1. The value is clamped when the range is complete.
+  if (minimum_ <= maximum_) {
+    applyValue(value_);
+  }
 }
 
 auto EditorAdjustmentValueModel::applyValue(double v) -> bool {

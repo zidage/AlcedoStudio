@@ -94,6 +94,19 @@ QVariantList EditorParameterCatalogAdapter::options(const QString& field,
   return propertySpec(field, name).value(QStringLiteral("options")).toList();
 }
 
+QVariantList EditorParameterCatalogAdapter::odtEotfOptions(const QString& encodingSpace) const {
+  QVariantList result;
+  for (const auto& option : EditorParameterCatalog::OdtEotfOptions(encodingSpace.toStdString())) {
+    QVariantMap map;
+    map.insert(QStringLiteral("value"), QString::fromUtf8(option.value.data(),
+                                                          static_cast<qsizetype>(option.value.size())));
+    map.insert(QStringLiteral("label"), QString::fromUtf8(option.label.data(),
+                                                          static_cast<qsizetype>(option.label.size())));
+    result.push_back(map);
+  }
+  return result;
+}
+
 QVariantMap EditorParameterCatalogAdapter::uiDefault(const QString& field) const {
   const auto* found = EditorParameterCatalog::Find(field.toStdString());
   if (found == nullptr || found->kind != EditorParameterValueKind::Object) {

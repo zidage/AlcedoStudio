@@ -233,7 +233,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, MethodModelDefaultIsOpenDrt) {
   EXPECT_EQ(entries[1].toMap().value("value").toString().toStdString(), "open_drt");
 }
 
-TEST(EditorDisplayTransformSnapshotQmlTest, EncodingSpaceHasSixEntries) {
+TEST(EditorDisplayTransformSnapshotQmlTest, EncodingSpaceListsTheModelSpaces) {
   auto snapshot = MakeOpenDrtSnapshot();
   DisplayTransformSession session(snapshot, 0);
   AdjustmentStackHarness harness(&session);
@@ -243,10 +243,42 @@ TEST(EditorDisplayTransformSnapshotQmlTest, EncodingSpaceHasSixEntries) {
   auto* spaceModel = harness.findModel<QObject>(QStringLiteral("displayEncodingSpaceModel"));
   ASSERT_NE(spaceModel, nullptr);
 
+  // The DrtColorSpace values of the display transform Model, from the catalog.
   auto entries = spaceModel->property("entries").toList();
-  ASSERT_EQ(entries.size(), 6);
+  ASSERT_EQ(entries.size(), 3);
   EXPECT_EQ(entries[0].toMap().value("value").toString().toStdString(), "rec709");
-  EXPECT_EQ(entries[5].toMap().value("value").toString().toStdString(), "rec2020");
+  EXPECT_EQ(entries[1].toMap().value("value").toString().toStdString(), "p3_d65");
+  EXPECT_EQ(entries[2].toMap().value("value").toString().toStdString(), "rec2020");
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, EncodingSpaceChangeSelectsAnEotfOfTheSpace) {
+  auto                    snapshot = MakeOpenDrtSnapshot();
+  DisplayTransformSession session(snapshot, 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* space_model =
+      harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayEncodingSpaceModel"));
+  auto* eotf_model = harness.findModel<QObject>(QStringLiteral("displayEncodingEotfModel"));
+  ASSERT_NE(space_model, nullptr);
+  ASSERT_NE(eotf_model, nullptr);
+
+  space_model->selectIndex(2);  // rec2020
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+
+  const auto entries = eotf_model->property("entries").toList();
+  ASSERT_EQ(entries.size(), 2);
+  EXPECT_EQ(entries[0].toMap().value("value").toString().toStdString(), "st2084");
+  EXPECT_EQ(entries[1].toMap().value("value").toString().toStdString(), "hlg");
+  EXPECT_EQ(eotf_model->property("currentValue").toString().toStdString(), "st2084");
+
+  ASSERT_GE(session.submitCount(), 1);
+  const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->encoding_space.has_value());
+  EXPECT_EQ(*drt->encoding_space, alcedo::DrtColorSpace::Rec2020);
+  ASSERT_TRUE(drt->encoding_eotf.has_value());
+  EXPECT_EQ(*drt->encoding_eotf, alcedo::DrtEotf::St2084);
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, PeakLuminanceRangeIsCorrect) {

@@ -58,6 +58,15 @@ struct EditorParameterOption {
   std::string_view label;
 };
 
+/// Position scale of the slider that shows a number property.
+enum class EditorParameterSliderScale {
+  /// The slider position is the value.
+  Linear,
+  /// Kelvin on the RAW white balance track: positions 0..4096, linear on each side of the
+  /// 6000 K pivot at position 2048 (EditorParameterCatalog::KelvinToSliderPosition).
+  KelvinPivot,
+};
+
 /// One property of an object field in UI units.
 struct EditorParameterProperty {
   std::string_view                       name;
@@ -69,6 +78,7 @@ struct EditorParameterProperty {
   double                                 maximum  = 0.0;
   double                                 step     = 0.0;
   int                                    decimals = 0;
+  EditorParameterSliderScale             slider   = EditorParameterSliderScale::Linear;
 };
 
 /// Size of the presented source image in reference pixels. Zero when no frame is presented.
@@ -121,10 +131,11 @@ struct EditorParameterCatalogEntry {
   /// Object: the Model JSON of a complete, valid UI value.
   auto (*ui_to_model)(const nlohmann::json& ui_value) -> nlohmann::json = nullptr;
   /// Object, optional: constraint that runs on the merged UI value before ui_to_model.
-  /// @p ui_change is the partial value that the caller wrote.
+  /// @p ui_change is the partial value that the caller wrote; @p current_ui is the complete UI
+  /// value before the change.
   auto (*constrain)(const nlohmann::json& merged_ui, const nlohmann::json& ui_change,
-                    const EditorParameterSource& source, std::string* error)
-      -> std::optional<nlohmann::json> = nullptr;
+                    const nlohmann::json& current_ui, const EditorParameterSource& source,
+                    std::string* error) -> std::optional<nlohmann::json> = nullptr;
 };
 
 /**
@@ -236,6 +247,17 @@ class EditorParameterCatalog {
   [[nodiscard]] static auto CropLockedAspectRatio(const nlohmann::json&        crop_ui,
                                                   const EditorParameterSource& source)
       -> std::optional<double>;
+
+  /// The EOTF choices of the display transform for @p encoding_space, in menu order. Empty for
+  /// a space that is not an `odt.encoding_space` option.
+  [[nodiscard]] static auto OdtEotfOptions(std::string_view encoding_space)
+      -> std::span<const EditorParameterOption>;
+
+  /// Slider position (0..4096) of @p kelvin on the white balance track. 6000 K is position 2048.
+  [[nodiscard]] static auto KelvinToSliderPosition(double kelvin) -> int;
+
+  /// Kelvin at slider position @p position of the white balance track.
+  [[nodiscard]] static auto SliderPositionToKelvin(int position) -> double;
 
   /// The `editor.catalog` form of @p entry: field, kind, panel, and the UI range or schema.
   [[nodiscard]] static auto EntryJson(const EditorParameterCatalogEntry& entry) -> nlohmann::json;

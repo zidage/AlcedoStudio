@@ -1,10 +1,12 @@
 import QtQuick
 import QtQuick.Layouts
+import Alcedo.Main 1.0
 
 // Temperature + Tint slider pair shared by RAW Decode White Balance and the
 // Look page Color Grade white balance. The temperature track uses the RAW
-// non-linear Kelvin position scale (0..4096, 6000 K at the midpoint); tint is
-// linear on -150..150. The owner model applies edits and supplies values.
+// non-linear Kelvin position scale (6000 K at the midpoint); tint is linear.
+// The track ranges come from the editor parameter catalog entry of fieldKey.
+// The owner model applies edits and supplies values.
 ColumnLayout {
     id: root
 
@@ -14,6 +16,12 @@ ColumnLayout {
     property color mutedColor: appTheme.textMutedColor
     property string temperatureObjectName: ""
     property string tintObjectName: ""
+    /// Catalog field and its Kelvin property: color_temp/kelvin or grade_white_balance/temperature.
+    property string fieldKey: "color_temp"
+    property string temperatureProperty: "kelvin"
+    readonly property var temperatureSlider: parameterCatalog.propertySpec(
+                                                 root.fieldKey, root.temperatureProperty).ui_slider
+    readonly property var tintSpec: parameterCatalog.propertySpec(root.fieldKey, "tint")
     property real temperature: 6000
     property int temperatureSliderPos: 2048
     property real tint: 0
@@ -29,12 +37,16 @@ ColumnLayout {
 
     spacing: appTheme.spaceSm
 
+    EditorParameterCatalog {
+        id: parameterCatalog
+    }
+
     SliderRow {
         objectName: root.temperatureObjectName
         title: qsTr("Temperature")
         valueText: Math.round(root.temperature) + " K"
-        from: 0
-        to: 4096
+        from: root.temperatureSlider.position_min
+        to: root.temperatureSlider.position_max
         value: root.temperatureSliderPos
         gradientStops: Gradient {
             orientation: Gradient.Horizontal
@@ -52,8 +64,8 @@ ColumnLayout {
         objectName: root.tintObjectName
         title: qsTr("Tint")
         valueText: String(Math.round(root.tint))
-        from: -150
-        to: 150
+        from: root.tintSpec.ui_min
+        to: root.tintSpec.ui_max
         value: root.tint
         gradientStops: Gradient {
             orientation: Gradient.Horizontal

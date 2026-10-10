@@ -12,9 +12,12 @@
 #include <utility>
 
 #include "app/editor_adjustment_context.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "edit/geometry/crop_frame.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/develop_raster_input.hpp"
+#include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "ui/alcedo_main/editor_support/modules/color_temp.hpp"
 #include "ui/alcedo_main/editor_support/modules/geometry.hpp"
 
 namespace alcedo {
@@ -278,9 +281,10 @@ auto LensUiToModel(const json& ui_value) -> json {
   return model;
 }
 
-auto LensConstrain(const json& merged_ui, const json& ui_change,
+auto LensConstrain(const json& merged_ui, const json& ui_change, const json& current_ui,
                    const EditorParameterSource& source, std::string* error)
     -> std::optional<json> {
+  static_cast<void>(current_ui);
   static_cast<void>(source);
   if (ui_change.contains("lens_model") && !ui_change.at("lens_model").get_ref<const std::string&>().empty() &&
       merged_ui.at("lens_maker").get_ref<const std::string&>().empty()) {
@@ -427,9 +431,10 @@ auto CropDriverFromChange(const json& ui_change) -> EditorCropDriver {
   return EditorCropDriver::None;
 }
 
-auto CropConstrain(const json& merged_ui, const json& ui_change,
+auto CropConstrain(const json& merged_ui, const json& ui_change, const json& current_ui,
                    const EditorParameterSource& source, std::string* error)
     -> std::optional<json> {
+  static_cast<void>(current_ui);
   // A fixed preset sets the aspect size to its own ratio, so a fixed preset and an aspect size
   // in one write disagree.
   if (ui_change.contains("aspect_preset") &&
@@ -450,12 +455,360 @@ auto SourceAspect(const EditorParameterSource& source) -> double {
 }
 
 // ---------------------------------------------------------------------------------------------
+// odt: display transform. Method, output encoding, and the method presets.
+
+constexpr std::array kOdtMethodOptions = {
+    EditorParameterOption{"aces_2_0", "ACES 2.0"},
+    EditorParameterOption{"open_drt", "OpenDRT"},
+};
+
+// The DrtColorSpace values of the display transform Model (ParseDrtColorSpace).
+constexpr std::array kOdtEncodingSpaceOptions = {
+    EditorParameterOption{"rec709", "Rec.709"},
+    EditorParameterOption{"p3_d65", "P3-D65"},
+    EditorParameterOption{"rec2020", "Rec.2020"},
+};
+
+constexpr std::array kOdtLimitingSpaceOptions = {
+    EditorParameterOption{"rec709", "Rec.709"},
+    EditorParameterOption{"rec2020", "Rec.2020"},
+    EditorParameterOption{"p3_d65", "P3-D65"},
+};
+
+// Every EOTF of the per-space lists below.
+constexpr std::array kOdtEotfOptions = {
+    EditorParameterOption{"bt1886", "BT.1886"},
+    EditorParameterOption{"gamma_2_2", "Gamma 2.2"},
+    EditorParameterOption{"srgb_piecewise", "sRGB"},
+    EditorParameterOption{"st2084", "ST 2084 (PQ)"},
+    EditorParameterOption{"hlg", "HLG"},
+};
+
+constexpr std::array kOdtEotfRec709Options = {
+    EditorParameterOption{"bt1886", "BT.1886"},
+    EditorParameterOption{"gamma_2_2", "Gamma 2.2"},
+    EditorParameterOption{"srgb_piecewise", "sRGB"},
+};
+
+constexpr std::array kOdtEotfP3D65Options = {
+    EditorParameterOption{"gamma_2_2", "Gamma 2.2"},
+    EditorParameterOption{"srgb_piecewise", "sRGB"},
+    EditorParameterOption{"st2084", "ST 2084 (PQ)"},
+};
+
+constexpr std::array kOdtEotfRec2020Options = {
+    EditorParameterOption{"st2084", "ST 2084 (PQ)"},
+    EditorParameterOption{"hlg", "HLG"},
+};
+
+constexpr std::array kOdtLookOptions = {
+    EditorParameterOption{"standard", "Standard"},
+    EditorParameterOption{"arriba", "Arriba"},
+    EditorParameterOption{"sylvan", "Sylvan"},
+    EditorParameterOption{"colorful", "Colorful"},
+    EditorParameterOption{"aery", "Aery"},
+    EditorParameterOption{"dystopic", "Dystopic"},
+    EditorParameterOption{"umbra", "Umbra"},
+    EditorParameterOption{"custom", "Custom"},
+};
+
+constexpr std::array kOdtTonescaleOptions = {
+    EditorParameterOption{"use_look_preset", "Use Look Preset"},
+    EditorParameterOption{"low_contrast", "Low Contrast"},
+    EditorParameterOption{"medium_contrast", "Medium Contrast"},
+    EditorParameterOption{"high_contrast", "High Contrast"},
+    EditorParameterOption{"arriba_tonescale", "Arriba Tonescale"},
+    EditorParameterOption{"sylvan_tonescale", "Sylvan Tonescale"},
+    EditorParameterOption{"colorful_tonescale", "Colorful Tonescale"},
+    EditorParameterOption{"aery_tonescale", "Aery Tonescale"},
+    EditorParameterOption{"dystopic_tonescale", "Dystopic Tonescale"},
+    EditorParameterOption{"umbra_tonescale", "Umbra Tonescale"},
+    EditorParameterOption{"aces_1_x", "ACES 1.x"},
+    EditorParameterOption{"aces_2_0", "ACES 2.0"},
+    EditorParameterOption{"marvelous_tonscape", "Marvelous Tonscape"},
+    EditorParameterOption{"dagrinchi_tonegroan", "Dagrinchi Tonegroan"},
+    EditorParameterOption{"custom", "Custom"},
+};
+
+constexpr std::array kOdtCreativeWhiteOptions = {
+    EditorParameterOption{"use_look_preset", "Use Look Preset"},
+    EditorParameterOption{"d93", "D93"},
+    EditorParameterOption{"d75", "D75"},
+    EditorParameterOption{"d65", "D65"},
+    EditorParameterOption{"d60", "D60"},
+    EditorParameterOption{"d55", "D55"},
+    EditorParameterOption{"d50", "D50"},
+};
+
+constexpr std::array kOdtProperties = {
+    EditorParameterProperty{"method", PropertyType::Option, kOdtMethodOptions},
+    EditorParameterProperty{"encoding_space", PropertyType::Option, kOdtEncodingSpaceOptions},
+    EditorParameterProperty{"encoding_eotf", PropertyType::Option, kOdtEotfOptions},
+    EditorParameterProperty{"peak_luminance", PropertyType::Number, {}, 100.0, 1000.0, 1.0, 0},
+    EditorParameterProperty{"limiting_space", PropertyType::Option, kOdtLimitingSpaceOptions},
+    EditorParameterProperty{"look_preset", PropertyType::Option, kOdtLookOptions},
+    EditorParameterProperty{"tonescale_preset", PropertyType::Option, kOdtTonescaleOptions},
+    EditorParameterProperty{"creative_white", PropertyType::Option, kOdtCreativeWhiteOptions},
+};
+
+/// OpenDRT preset properties: the Model holds them under `open_drt`.
+constexpr std::array<const char*, 3> kOdtOpenDrtKeys = {"look_preset", "tonescale_preset",
+                                                        "creative_white"};
+
+auto OdtUiDefault() -> json {
+  return {{"method", "open_drt"},
+          {"encoding_space", "rec709"},
+          {"encoding_eotf", "gamma_2_2"},
+          {"peak_luminance", 100.0},
+          {"limiting_space", "rec709"},
+          {"look_preset", "standard"},
+          {"tonescale_preset", "use_look_preset"},
+          {"creative_white", "use_look_preset"}};
+}
+
+auto OdtModelToUi(const json& model_json, std::string* error) -> std::optional<json> {
+  const auto& odt = UnwrapObject(model_json, "odt");
+  if (!RequireObject(odt, "odt", error)) {
+    return std::nullopt;
+  }
+  const auto  defaults = OdtUiDefault();
+  json        ui       = json::object();
+  for (const char* key : {"method", "encoding_space", "encoding_eotf", "limiting_space"}) {
+    std::string value;
+    if (!ReadString(odt, key, defaults.at(key).get<std::string>(), "odt", &value, error)) {
+      return std::nullopt;
+    }
+    ui[key] = value;
+  }
+  double peak = 0.0;
+  if (!ReadNumber(odt, "peak_luminance", defaults.at("peak_luminance").get<double>(), "odt", &peak,
+                  error)) {
+    return std::nullopt;
+  }
+  ui["peak_luminance"] = peak;
+  static const json kEmpty   = json::object();
+  const auto        drt_it   = odt.find("open_drt");
+  const json&       open_drt = drt_it != odt.end() ? *drt_it : kEmpty;
+  if (!RequireObject(open_drt, "odt.open_drt", error)) {
+    return std::nullopt;
+  }
+  for (const char* key : kOdtOpenDrtKeys) {
+    std::string value;
+    if (!ReadString(open_drt, key, defaults.at(key).get<std::string>(), "odt", &value, error)) {
+      return std::nullopt;
+    }
+    ui[key] = value;
+  }
+  return ui;
+}
+
+auto OdtUiToModel(const json& ui_value) -> json {
+  // The panel writes the controls of the selected method only.
+  json odt = {{"method", ui_value.at("method")},
+              {"encoding_space", ui_value.at("encoding_space")},
+              {"encoding_eotf", ui_value.at("encoding_eotf")},
+              {"peak_luminance", ui_value.at("peak_luminance")}};
+  if (ui_value.at("method").get_ref<const std::string&>() == "aces_2_0") {
+    odt["limiting_space"] = ui_value.at("limiting_space");
+  } else {
+    json open_drt = json::object();
+    for (const char* key : kOdtOpenDrtKeys) {
+      open_drt[key] = ui_value.at(key);
+    }
+    odt["open_drt"] = std::move(open_drt);
+  }
+  return {{"odt", std::move(odt)}};
+}
+
+auto OptionsText(std::span<const EditorParameterOption> options) -> std::string {
+  std::string text;
+  for (const auto& option : options) {
+    if (!text.empty()) {
+      text += ", ";
+    }
+    text += option.value;
+  }
+  return text;
+}
+
+auto HasOption(std::span<const EditorParameterOption> options, std::string_view value) -> bool {
+  return std::any_of(options.begin(), options.end(),
+                     [value](const EditorParameterOption& option) { return option.value == value; });
+}
+
+/// True when @p ui_change sets @p key to a value other than the current one.
+auto ChangesValue(const json& ui_change, const json& current_ui, const char* key) -> bool {
+  const auto it = ui_change.find(key);
+  return it != ui_change.end() && *it != current_ui.at(key);
+}
+
+auto OdtConstrain(const json& merged_ui, const json& ui_change, const json& current_ui,
+                  const EditorParameterSource& source, std::string* error)
+    -> std::optional<json> {
+  static_cast<void>(source);
+  json        ui    = merged_ui;
+  const auto& space = ui.at("encoding_space").get_ref<const std::string&>();
+  const auto  eotfs = EditorParameterCatalog::OdtEotfOptions(space);
+  if (!HasOption(eotfs, ui.at("encoding_eotf").get_ref<const std::string&>())) {
+    if (ui_change.contains("encoding_eotf")) {
+      SetError(error, "odt.encoding_eotf must be one of: " + OptionsText(eotfs) +
+                          " for encoding_space " + space);
+      return std::nullopt;
+    }
+    // The panel rule: a new encoding space keeps the EOTF when the space has it, else it
+    // selects the first EOTF of the space.
+    ui["encoding_eotf"] = std::string{eotfs.front().value};
+  }
+  // The Model write holds the controls of the selected method only, so a change of the other
+  // method controls is not written.
+  const auto& method = ui.at("method").get_ref<const std::string&>();
+  if (method != "aces_2_0" && ChangesValue(ui_change, current_ui, "limiting_space")) {
+    SetError(error, "odt.limiting_space needs method aces_2_0");
+    return std::nullopt;
+  }
+  if (method != "open_drt") {
+    for (const char* key : kOdtOpenDrtKeys) {
+      if (ChangesValue(ui_change, current_ui, key)) {
+        SetError(error, std::string{"odt."} + key + " needs method open_drt");
+        return std::nullopt;
+      }
+    }
+  }
+  return ui;
+}
+
+// ---------------------------------------------------------------------------------------------
+// color_temp: Develop white balance of a RAW document. Kelvin and tint on the RAW Custom WB
+// scale; as_shot uses the white balance that the camera recorded.
+
+constexpr std::array kColorTempModeOptions = {
+    EditorParameterOption{"as_shot", "As Shot"},
+    EditorParameterOption{"custom", "Custom"},
+};
+
+constexpr std::array kColorTempProperties = {
+    EditorParameterProperty{"mode", PropertyType::Option, kColorTempModeOptions},
+    EditorParameterProperty{"kelvin", PropertyType::Number, {},
+                            static_cast<double>(ui::color_temp::kCctMin),
+                            static_cast<double>(ui::color_temp::kCctMax), 1.0, 0,
+                            EditorParameterSliderScale::KelvinPivot},
+    EditorParameterProperty{"tint", PropertyType::Number, {},
+                            static_cast<double>(ui::color_temp::kTintMin),
+                            static_cast<double>(ui::color_temp::kTintMax), 1.0, 0},
+};
+
+auto ColorTempUiDefault() -> json {
+  const EditorPanelColorTempValue defaults;
+  return {{"mode", defaults.mode},
+          {"kelvin", static_cast<double>(defaults.custom_cct)},
+          {"tint", static_cast<double>(defaults.custom_tint)}};
+}
+
+auto ColorTempModelToUi(const json& model_json, std::string* error) -> std::optional<json> {
+  const auto& temp = UnwrapObject(model_json, "color_temp");
+  if (!RequireObject(temp, "color_temp", error)) {
+    return std::nullopt;
+  }
+  const auto  defaults = ColorTempUiDefault();
+  std::string mode;
+  if (!ReadString(temp, "mode", defaults.at("mode").get<std::string>(), "color_temp", &mode,
+                  error)) {
+    return std::nullopt;
+  }
+  // The UI value is the pair that the panel shows: the custom pair in custom mode, the
+  // recorded camera pair in as_shot mode.
+  const bool  custom      = mode == "custom";
+  const char* kelvin_key  = custom ? "custom_cct" : "as_shot_cct";
+  const char* tint_key    = custom ? "custom_tint" : "as_shot_tint";
+  double      kelvin      = 0.0;
+  double      tint        = 0.0;
+  if (!ReadNumber(temp, kelvin_key, defaults.at("kelvin").get<double>(), "color_temp", &kelvin,
+                  error) ||
+      !ReadNumber(temp, tint_key, defaults.at("tint").get<double>(), "color_temp", &tint, error)) {
+    return std::nullopt;
+  }
+  return json{{"mode", mode}, {"kelvin", kelvin}, {"tint", tint}};
+}
+
+auto ColorTempUiToModel(const json& ui_value) -> json {
+  if (ui_value.at("mode").get_ref<const std::string&>() == "custom") {
+    return {{"color_temp",
+             {{"mode", "custom"},
+              {"custom_cct", ui_value.at("kelvin")},
+              {"custom_tint", ui_value.at("tint")}}}};
+  }
+  // As Shot keeps the custom pair of the document for a later switch back to custom.
+  return {{"color_temp", {{"mode", "as_shot"}}}};
+}
+
+auto ColorTempConstrain(const json& merged_ui, const json& ui_change, const json& current_ui,
+                        const EditorParameterSource& source, std::string* error)
+    -> std::optional<json> {
+  static_cast<void>(source);
+  const bool sets_pair =
+      ChangesValue(ui_change, current_ui, "kelvin") || ChangesValue(ui_change, current_ui, "tint");
+  if (!sets_pair) {
+    return merged_ui;
+  }
+  if (ui_change.contains("mode") && ui_change.at("mode").get_ref<const std::string&>() != "custom") {
+    SetError(error, "color_temp.kelvin and tint need mode custom");
+    return std::nullopt;
+  }
+  // The panel rule: a Kelvin or tint edit selects custom mode.
+  json ui    = merged_ui;
+  ui["mode"] = "custom";
+  return ui;
+}
+
+// ---------------------------------------------------------------------------------------------
+// grade_white_balance: Color Grade CAT02 white balance in the grading color space.
+
+constexpr std::array kGradeWhiteBalanceProperties = {
+    EditorParameterProperty{"temperature", PropertyType::Number, {},
+                            static_cast<double>(kCat02TemperatureMin),
+                            static_cast<double>(kCat02TemperatureMax), 1.0, 0,
+                            EditorParameterSliderScale::KelvinPivot},
+    EditorParameterProperty{"tint", PropertyType::Number, {}, static_cast<double>(kCat02TintMin),
+                            static_cast<double>(kCat02TintMax), 1.0, 0},
+};
+static_assert(kCat02TemperatureMin == static_cast<float>(ui::color_temp::kCctMin) &&
+                  kCat02TemperatureMax == static_cast<float>(ui::color_temp::kCctMax),
+              "grade_white_balance uses the Kelvin range of the white balance track");
+
+auto GradeWhiteBalanceUiDefault() -> json {
+  return {{"temperature", static_cast<double>(kCat02DefaultTemperature)},
+          {"tint", static_cast<double>(kCat02DefaultTint)}};
+}
+
+auto GradeWhiteBalanceModelToUi(const json& model_json, std::string* error)
+    -> std::optional<json> {
+  const auto& white_balance = UnwrapObject(model_json, "grade_white_balance");
+  if (!RequireObject(white_balance, "grade_white_balance", error)) {
+    return std::nullopt;
+  }
+  double temperature = 0.0;
+  double tint        = 0.0;
+  if (!ReadNumber(white_balance, "temperature", static_cast<double>(kCat02DefaultTemperature),
+                  "grade_white_balance", &temperature, error) ||
+      !ReadNumber(white_balance, "tint", static_cast<double>(kCat02DefaultTint),
+                  "grade_white_balance", &tint, error)) {
+    return std::nullopt;
+  }
+  return json{{"temperature", temperature}, {"tint", tint}};
+}
+
+auto GradeWhiteBalanceUiToModel(const json& ui_value) -> json {
+  return {{"grade_white_balance",
+           {{"temperature", ui_value.at("temperature")}, {"tint", ui_value.at("tint")}}}};
+}
+
+// ---------------------------------------------------------------------------------------------
 
 auto ObjectEntry(std::string_view field, EditorAdjustmentField adjustment, std::string_view panel,
                  std::span<const EditorParameterProperty> properties, json (*ui_default)(),
                  std::optional<json> (*model_to_ui)(const json&, std::string*),
                  json (*ui_to_model)(const json&),
-                 std::optional<json> (*constrain)(const json&, const json&,
+                 std::optional<json> (*constrain)(const json&, const json&, const json&,
                                                   const EditorParameterSource&, std::string*))
     -> EditorParameterCatalogEntry {
   EditorParameterCatalogEntry entry{field, {}, adjustment, EditorParameterValueKind::Object, panel};
@@ -467,10 +820,11 @@ auto ObjectEntry(std::string_view field, EditorAdjustmentField adjustment, std::
   return entry;
 }
 
-// Values of the Tone, Look, Post Processing, RAW Decode, and Geometry panels. The exposure
-// default is the neutral reset value; the product Default document starts at +1.5 EV.
-auto Table() -> const std::array<EditorParameterCatalogEntry, 17>& {
-  static const std::array<EditorParameterCatalogEntry, 17> entries = {
+// Values of the Tone, Look, Post Processing, RAW Decode, Geometry, and Display Transform
+// panels. The exposure default is the neutral reset value; the product Default document starts
+// at +1.5 EV.
+auto Table() -> const std::array<EditorParameterCatalogEntry, 20>& {
+  static const std::array<EditorParameterCatalogEntry, 20> entries = {
       Scalar("exposure", {}, EditorAdjustmentField::Exposure, "tone", "exposure_ev",
              Conversion::Identity, EditorScalarUiRange{-10.0, 10.0, 0.0, 0.01, 2}),
       Scalar("contrast", {}, EditorAdjustmentField::Contrast, "tone", "contrast",
@@ -506,6 +860,14 @@ auto Table() -> const std::array<EditorParameterCatalogEntry, 17>& {
                   &LensUiDefault, &LensModelToUi, &LensUiToModel, &LensConstrain),
       ObjectEntry("crop_rotate", EditorAdjustmentField::CropRotate, "geometry", CropProperties(),
                   &CropUiDefault, &CropModelToUi, &CropUiToModel, &CropConstrain),
+      ObjectEntry("odt", EditorAdjustmentField::Drt, "display", kOdtProperties, &OdtUiDefault,
+                  &OdtModelToUi, &OdtUiToModel, &OdtConstrain),
+      ObjectEntry("color_temp", EditorAdjustmentField::ColorTemperature, "raw", kColorTempProperties,
+                  &ColorTempUiDefault, &ColorTempModelToUi, &ColorTempUiToModel,
+                  &ColorTempConstrain),
+      ObjectEntry("grade_white_balance", EditorAdjustmentField::GradeWhiteBalance, "look",
+                  kGradeWhiteBalanceProperties, &GradeWhiteBalanceUiDefault,
+                  &GradeWhiteBalanceModelToUi, &GradeWhiteBalanceUiToModel, nullptr),
   };
   return entries;
 }
@@ -626,6 +988,13 @@ auto PropertyJson(const EditorParameterProperty& property) -> json {
     result["ui_max"]      = property.maximum;
     result["ui_step"]     = property.step;
     result["ui_decimals"] = property.decimals;
+    if (property.slider == EditorParameterSliderScale::KelvinPivot) {
+      result["ui_slider"] = {{"scale", "kelvin_pivot"},
+                             {"position_min", ui::color_temp::kSliderUiMin},
+                             {"position_max", ui::color_temp::kSliderUiMax},
+                             {"pivot_position", ui::color_temp::kSliderUiMid},
+                             {"pivot_kelvin", static_cast<double>(ui::color_temp::kPivotCct)}};
+    }
   }
   if (property.type == PropertyType::Option) {
     json options = json::array();
@@ -730,21 +1099,22 @@ auto EditorParameterCatalog::ToModelJson(std::string_view field_key, const json&
     if (!ValidateObjectUiValue(*entry, ui_value, error)) {
       return std::nullopt;
     }
-    json merged;
+    json current_ui;
     if (current_model_json.is_null()) {
-      merged = entry->ui_default();
+      current_ui = entry->ui_default();
     } else {
       auto current = entry->model_to_ui(current_model_json, error);
       if (!current.has_value()) {
         return std::nullopt;
       }
-      merged = CompleteObject(*entry, *current);
+      current_ui = CompleteObject(*entry, *current);
     }
+    json merged = current_ui;
     for (const auto& [key, value] : ui_value.items()) {
       merged[key] = value;
     }
     if (entry->constrain != nullptr) {
-      auto constrained = entry->constrain(merged, ui_value, source, error);
+      auto constrained = entry->constrain(merged, ui_value, current_ui, source, error);
       if (!constrained.has_value()) {
         return std::nullopt;
       }
@@ -895,6 +1265,28 @@ auto EditorParameterCatalog::ConstrainCrop(const json& crop_ui, EditorCropDriver
   return ui;
 }
 
+auto EditorParameterCatalog::OdtEotfOptions(std::string_view encoding_space)
+    -> std::span<const EditorParameterOption> {
+  if (encoding_space == "rec709") {
+    return kOdtEotfRec709Options;
+  }
+  if (encoding_space == "p3_d65") {
+    return kOdtEotfP3D65Options;
+  }
+  if (encoding_space == "rec2020") {
+    return kOdtEotfRec2020Options;
+  }
+  return {};
+}
+
+auto EditorParameterCatalog::KelvinToSliderPosition(double kelvin) -> int {
+  return ui::color_temp::CctToSliderPos(static_cast<float>(kelvin));
+}
+
+auto EditorParameterCatalog::SliderPositionToKelvin(int position) -> double {
+  return static_cast<double>(ui::color_temp::SliderPosToCct(position));
+}
+
 auto EditorParameterCatalog::EntryJson(const EditorParameterCatalogEntry& entry) -> json {
   json result = {
       {"field", std::string{entry.field}},
@@ -908,6 +1300,17 @@ auto EditorParameterCatalog::EntryJson(const EditorParameterCatalogEntry& entry)
     }
     result["properties"] = std::move(properties);
     result["ui_default"] = entry.ui_default();
+    if (entry.field == "odt") {
+      json by_space = json::object();
+      for (const auto& space : kOdtEncodingSpaceOptions) {
+        json values = json::array();
+        for (const auto& eotf : OdtEotfOptions(space.value)) {
+          values.push_back(std::string{eotf.value});
+        }
+        by_space[std::string{space.value}] = std::move(values);
+      }
+      result["encoding_eotf_by_space"] = std::move(by_space);
+    }
   } else {
     result["ui_min"]      = entry.range.minimum;
     result["ui_max"]      = entry.range.maximum;

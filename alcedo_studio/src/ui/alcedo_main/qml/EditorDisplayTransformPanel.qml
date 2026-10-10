@@ -7,8 +7,10 @@ import Alcedo.Main 1.0
 // ACES tone mapping, transfer function (EOTF), peak luminance, and HDR
 // display intent. Method-specific controls for ACES 2.0 (limiting space) and
 // OpenDRT (look/tonescale/creative-white presets). All models share fieldKey
-// "odt" with a panel-level paramsBuilder that collects the complete nested
-// state so every partial edit carries the full ODT JSON.
+// "odt" with a panel-level paramsBuilder that collects the complete state so
+// every partial edit carries the full ODT JSON. The option lists, the EOTF
+// choices of each encoding space, the peak range, and the parameter object
+// come from the editor parameter catalog.
 Item {
     id: root
     objectName: "editorAdjustmentPanel_display"
@@ -25,38 +27,33 @@ Item {
     readonly property color colBase: theme ? theme.colBgBase : appTheme.bgBaseColor
     readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
 
-    // EOTF choices supported by the unified display-transform model.
-    readonly property var eotfOptionsRec709: [
-        { value: "bt1886", label: qsTr("BT.1886") },
-        { value: "gamma_2_2", label: qsTr("Gamma 2.2") },
-        { value: "srgb_piecewise", label: qsTr("sRGB") }
-    ]
-    readonly property var eotfOptionsP3D65: [
-        { value: "gamma_2_2", label: qsTr("Gamma 2.2") },
-        { value: "srgb_piecewise", label: qsTr("sRGB") },
-        { value: "st2084", label: qsTr("ST 2084 (PQ)") }
-    ]
-    readonly property var eotfOptionsP3Theater: [
-        { value: "gamma_2_6", label: qsTr("Gamma 2.6") }
-    ]
-    readonly property var eotfOptionsRec2020: [
-        { value: "st2084", label: qsTr("ST 2084 (PQ)") },
-        { value: "hlg", label: qsTr("HLG") }
-    ]
-    readonly property var eotfOptionsDefault: [
-        { value: "gamma_2_2", label: qsTr("Gamma 2.2") }
-    ]
+    readonly property var odtDefaults: parameterCatalog.uiDefault("odt")
+    readonly property var peakSpec: parameterCatalog.propertySpec("odt", "peak_luminance")
 
+    EditorParameterCatalog {
+        id: parameterCatalog
+        objectName: "displayParameterCatalog"
+    }
+
+    /// Translated `{value, label}` menu entries of an option list of the catalog.
+    function translatedEntries(options) {
+        var result = []
+        for (var i = 0; i < options.length; ++i)
+            result.push({ value: String(options[i].value), label: qsTr(String(options[i].label)) })
+        return result
+    }
+
+    function catalogEntries(name) {
+        return root.translatedEntries(parameterCatalog.options("odt", name))
+    }
+
+    /// EOTF choices of the display transform for an encoding space.
     function eotfOptionsForSpace(spaceValue) {
-        switch (spaceValue) {
-        case "rec709": return root.eotfOptionsRec709
-        case "p3_d65": return root.eotfOptionsP3D65
-        case "p3_d60":
-        case "p3_dci":
-        case "xyz": return root.eotfOptionsP3Theater
-        case "rec2020": return root.eotfOptionsRec2020
-        default: return root.eotfOptionsDefault
-        }
+        return root.translatedEntries(parameterCatalog.odtEotfOptions(String(spaceValue)))
+    }
+
+    function defaultIndexOf(entries, name) {
+        return Math.max(0, root.indexOfValue(entries, root.odtDefaults[name]))
     }
 
     /// Find index of a value in an entries array. Returns -1 when missing so
@@ -78,43 +75,26 @@ Item {
         return -1
     }
 
+    function selectedValue(model, name) {
+        const entry = model.entries[model.currentIndex]
+        return entry ? String(entry.value) : String(root.odtDefaults[name])
+    }
+
     // ── Shared params builder: collects every current model value into the
-    //    complete nested {"odt": {...}} JSON. Each model's paramsBuilder
-    //    delegates to this so patches always carry the full ODT state.
+    //    complete ODT state. Each model's paramsBuilder delegates to this so
+    //    patches always carry the full ODT state; the catalog writes the
+    //    controls of the selected method.
     function buildOdtParams() {
-        var odt = {}
-
-        // method
-        var me = methodModel.entries[methodModel.currentIndex]
-        odt.method = me ? String(me.value) : "open_drt"
-
-        // encoding space
-        var se = encodingSpaceModel.entries[encodingSpaceModel.currentIndex]
-        odt.encoding_space = se ? String(se.value) : "rec709"
-
-        // EOTF
-        var ee = encodingEotfModel.entries[encodingEotfModel.currentIndex]
-        odt.encoding_eotf = ee ? String(ee.value) : "gamma_2_2"
-
-        // peak luminance
-        odt.peak_luminance = peakLuminanceModel.value
-
-        if (odt.method === "aces_2_0") {
-            var le = acesLimitingSpaceModel.entries[acesLimitingSpaceModel.currentIndex]
-            odt.limiting_space = le ? String(le.value) : "rec709"
-        } else {
-            // OpenDRT
-            var lk = openDrtLookModel.entries[openDrtLookModel.currentIndex]
-            var tn = openDrtTonescaleModel.entries[openDrtTonescaleModel.currentIndex]
-            var cw = openDrtCreativeWhiteModel.entries[openDrtCreativeWhiteModel.currentIndex]
-            odt.open_drt = {
-                look_preset: lk ? String(lk.value) : "standard",
-                tonescale_preset: tn ? String(tn.value) : "use_look_preset",
-                creative_white: cw ? String(cw.value) : "use_look_preset"
-            }
-        }
-
-        return JSON.stringify({ odt: odt })
+        return parameterCatalog.modelParamsJson("odt", {
+            method: root.selectedValue(methodModel, "method"),
+            encoding_space: root.selectedValue(encodingSpaceModel, "encoding_space"),
+            encoding_eotf: root.selectedValue(encodingEotfModel, "encoding_eotf"),
+            peak_luminance: peakLuminanceModel.value,
+            limiting_space: root.selectedValue(acesLimitingSpaceModel, "limiting_space"),
+            look_preset: root.selectedValue(openDrtLookModel, "look_preset"),
+            tonescale_preset: root.selectedValue(openDrtTonescaleModel, "tonescale_preset"),
+            creative_white: root.selectedValue(openDrtCreativeWhiteModel, "creative_white")
+        })
     }
 
     function wireEnabled() {
@@ -154,19 +134,16 @@ Item {
             model.currentIndex = idx
     }
 
-    /// Unwrap operator-shaped ODT params. BuildSnapshotMap stores
-    /// snapshot["odt"] = {"odt": {...}}; tolerate a flat inner map too.
-    function unwrapOdt(snapshot) {
+    /// ODT UI value of the snapshot. BuildSnapshotMap stores
+    /// snapshot["odt"] = {"odt": {...}}; the catalog also reads a flat map.
+    function odtUiValue(snapshot) {
         if (snapshot === undefined || snapshot === null)
             return null
         const wrap = snapshot["odt"]
         if (wrap === undefined || wrap === null)
             return null
-        if (wrap["odt"] !== undefined && wrap["odt"] !== null)
-            return wrap["odt"]
-        if (wrap["method"] !== undefined || wrap["encoding_space"] !== undefined)
-            return wrap
-        return null
+        const odt = parameterCatalog.uiValue("odt", wrap)
+        return odt.method !== undefined ? odt : null
     }
 
     onControlsEnabledChanged: wireEnabled()
@@ -185,7 +162,7 @@ Item {
     /// Load display transform values from the session adjustment snapshot.
     /// The snapshot stores odt params as snapshot["odt"] = {"odt": {...}}.
     function loadFromSnapshot(snapshot) {
-        const odt = unwrapOdt(snapshot)
+        const odt = odtUiValue(snapshot)
         if (odt === null)
             return
 
@@ -205,13 +182,9 @@ Item {
         }
 
         setEnumFromSnapshot(acesLimitingSpaceModel, odt["limiting_space"])
-
-        const drt = odt["open_drt"]
-        if (drt !== undefined && drt !== null) {
-            setEnumFromSnapshot(openDrtLookModel, drt["look_preset"])
-            setEnumFromSnapshot(openDrtTonescaleModel, drt["tonescale_preset"])
-            setEnumFromSnapshot(openDrtCreativeWhiteModel, drt["creative_white"])
-        }
+        setEnumFromSnapshot(openDrtLookModel, odt["look_preset"])
+        setEnumFromSnapshot(openDrtTonescaleModel, odt["tonescale_preset"])
+        setEnumFromSnapshot(openDrtCreativeWhiteModel, odt["creative_white"])
     }
 
     /// Rebuild EOTF entries based on current encoding space, preserving EOTF
@@ -223,12 +196,7 @@ Item {
             if (pe)
                 prevValue = String(pe["value"] !== undefined ? pe["value"] : pe.value)
         }
-        var spaceEntry = encodingSpaceModel.entries[encodingSpaceModel.currentIndex]
-        var spaceVal = "rec709"
-        if (spaceEntry) {
-            spaceVal = String(spaceEntry["value"] !== undefined ? spaceEntry["value"]
-                                                                : spaceEntry.value)
-        }
+        const spaceVal = root.selectedValue(encodingSpaceModel, "encoding_space")
         encodingEotfModel.entries = root.eotfOptionsForSpace(spaceVal)
         var newIdx = indexOfValue(encodingEotfModel.entries, prevValue)
         if (newIdx < 0)
@@ -243,11 +211,8 @@ Item {
         objectName: "displayMethodModel"
         fieldKey: "odt"
         label: qsTr("Method")
-        entries: [
-            { value: "aces_2_0", label: qsTr("ACES 2.0") },
-            { value: "open_drt", label: qsTr("OpenDRT") }
-        ]
-        defaultIndex: 1  // open_drt
+        entries: root.catalogEntries("method")
+        defaultIndex: root.defaultIndexOf(entries, "method")
         submitter: root.editorSession
         paramsBuilder: root.buildOdtParams
     }
@@ -257,15 +222,8 @@ Item {
         objectName: "displayEncodingSpaceModel"
         fieldKey: "odt"
         label: qsTr("Encoding Space")
-        entries: [
-            { value: "rec709", label: qsTr("Rec.709") },
-            { value: "p3_d65", label: qsTr("P3-D65") },
-            { value: "p3_d60", label: qsTr("P3-D60") },
-            { value: "p3_dci", label: qsTr("P3-DCI") },
-            { value: "xyz", label: qsTr("XYZ") },
-            { value: "rec2020", label: qsTr("Rec.2020") }
-        ]
-        defaultIndex: 0
+        entries: root.catalogEntries("encoding_space")
+        defaultIndex: root.defaultIndexOf(entries, "encoding_space")
         submitter: root.editorSession
         paramsBuilder: root.buildOdtParams
     }
@@ -275,8 +233,8 @@ Item {
         objectName: "displayEncodingEotfModel"
         fieldKey: "odt"
         label: qsTr("Encoding EOTF")
-        entries: root.eotfOptionsRec709
-        defaultIndex: 1  // gamma_2_2
+        entries: root.eotfOptionsForSpace(root.odtDefaults.encoding_space)
+        defaultIndex: root.defaultIndexOf(entries, "encoding_eotf")
         submitter: root.editorSession
         paramsBuilder: root.buildOdtParams
     }
@@ -286,11 +244,11 @@ Item {
         objectName: "displayPeakLuminanceModel"
         fieldKey: "odt"
         label: qsTr("Peak Luminance")
-        minimum: 100
-        maximum: 1000
-        defaultValue: 100
-        step: 1
-        precision: 0
+        minimum: root.peakSpec.ui_min
+        maximum: root.peakSpec.ui_max
+        defaultValue: root.odtDefaults.peak_luminance
+        step: root.peakSpec.ui_step
+        precision: root.peakSpec.ui_decimals
         suffix: " nits"
         submitter: root.editorSession
         paramsBuilder: root.buildOdtParams
@@ -301,16 +259,8 @@ Item {
         objectName: "displayAcesLimitingSpaceModel"
         fieldKey: "odt"
         label: qsTr("Limiting Space")
-        entries: [
-            { value: "rec709", label: qsTr("Rec.709") },
-            { value: "rec2020", label: qsTr("Rec.2020") },
-            { value: "p3_d65", label: qsTr("P3-D65") },
-            { value: "p3_d60", label: qsTr("P3-D60") },
-            { value: "p3_dci", label: qsTr("P3-DCI") },
-            { value: "prophoto", label: qsTr("ProPhoto RGB") },
-            { value: "adobe_rgb", label: qsTr("Adobe RGB") }
-        ]
-        defaultIndex: 0
+        entries: root.catalogEntries("limiting_space")
+        defaultIndex: root.defaultIndexOf(entries, "limiting_space")
         submitter: root.editorSession
         paramsBuilder: root.buildOdtParams
     }
@@ -320,17 +270,8 @@ Item {
         objectName: "displayOpenDrtLookModel"
         fieldKey: "odt"
         label: qsTr("Look")
-        entries: [
-            { value: "standard", label: qsTr("Standard") },
-            { value: "arriba", label: qsTr("Arriba") },
-            { value: "sylvan", label: qsTr("Sylvan") },
-            { value: "colorful", label: qsTr("Colorful") },
-            { value: "aery", label: qsTr("Aery") },
-            { value: "dystopic", label: qsTr("Dystopic") },
-            { value: "umbra", label: qsTr("Umbra") },
-            { value: "custom", label: qsTr("Custom") }
-        ]
-        defaultIndex: 0
+        entries: root.catalogEntries("look_preset")
+        defaultIndex: root.defaultIndexOf(entries, "look_preset")
         submitter: root.editorSession
         paramsBuilder: root.buildOdtParams
     }
@@ -340,24 +281,8 @@ Item {
         objectName: "displayOpenDrtTonescaleModel"
         fieldKey: "odt"
         label: qsTr("Tonescale")
-        entries: [
-            { value: "use_look_preset", label: qsTr("Use Look Preset") },
-            { value: "low_contrast", label: qsTr("Low Contrast") },
-            { value: "medium_contrast", label: qsTr("Medium Contrast") },
-            { value: "high_contrast", label: qsTr("High Contrast") },
-            { value: "arriba_tonescale", label: qsTr("Arriba Tonescale") },
-            { value: "sylvan_tonescale", label: qsTr("Sylvan Tonescale") },
-            { value: "colorful_tonescale", label: qsTr("Colorful Tonescale") },
-            { value: "aery_tonescale", label: qsTr("Aery Tonescale") },
-            { value: "dystopic_tonescale", label: qsTr("Dystopic Tonescale") },
-            { value: "umbra_tonescale", label: qsTr("Umbra Tonescale") },
-            { value: "aces_1_x", label: qsTr("ACES 1.x") },
-            { value: "aces_2_0", label: qsTr("ACES 2.0") },
-            { value: "marvelous_tonscape", label: qsTr("Marvelous Tonscape") },
-            { value: "dagrinchi_tonegroan", label: qsTr("Dagrinchi Tonegroan") },
-            { value: "custom", label: qsTr("Custom") }
-        ]
-        defaultIndex: 0
+        entries: root.catalogEntries("tonescale_preset")
+        defaultIndex: root.defaultIndexOf(entries, "tonescale_preset")
         submitter: root.editorSession
         paramsBuilder: root.buildOdtParams
     }
@@ -367,16 +292,8 @@ Item {
         objectName: "displayOpenDrtCreativeWhiteModel"
         fieldKey: "odt"
         label: qsTr("Creative White")
-        entries: [
-            { value: "use_look_preset", label: qsTr("Use Look Preset") },
-            { value: "d93", label: qsTr("D93") },
-            { value: "d75", label: qsTr("D75") },
-            { value: "d65", label: qsTr("D65") },
-            { value: "d60", label: qsTr("D60") },
-            { value: "d55", label: qsTr("D55") },
-            { value: "d50", label: qsTr("D50") }
-        ]
-        defaultIndex: 0
+        entries: root.catalogEntries("creative_white")
+        defaultIndex: root.defaultIndexOf(entries, "creative_white")
         submitter: root.editorSession
         paramsBuilder: root.buildOdtParams
     }

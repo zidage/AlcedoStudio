@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1 to AU8 have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1 to AU8 and AU9a have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -570,7 +570,8 @@ class AutomationCommandRegistry {
 | AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU8a | Parameter catalog: RAW, input profile, lens, crop entries | Catalog, `editor.catalog` | AU7 | 1300–1400 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU8b | RAW and Geometry panels use the catalog | Catalog QML adapter, Raw and Geometry QML | AU8a | 600–700 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
-| AU9 | Parameter catalog: display transform and color fields | Catalog, Display, Look, white balance QML | AU8 | 1200–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
+| AU9a | Parameter catalog: display transform and white balance | Catalog, Display and white balance QML | AU8 | 1100–1200 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
+| AU9b | Parameter catalog: HLS, color wheels, curve, LUT | Catalog, Look QML, editor_support modules | AU9a | 900–1100 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU10 | Editor commands and `render.preview` | Editor session, render port | AU3, AU7 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
 | AU11 | Version commands and commit attribution | Session, journal, storage, QML | AU10 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
 | AU12 | Export in C++, export commands | Export queue and recipe, QML | AU5 | 1100–1600 | planned | [#327](https://github.com/zidage/AlcedoStudio/issues/327) |
@@ -1930,6 +1931,14 @@ Remaining defects or unavailable platforms: macOS Metal runs only in CI.
 
 ### Phase AU9 — Parameter catalog: display transform and color fields
 
+**Split:** the phase passes 2000 lines (section 12), so it ships as two pull requests. **AU9a**
+contains the `odt`, `color_temp`, and `grade_white_balance` entries, the EOTF rule, the Kelvin
+slider scale, the Display Transform panel and white balance slider changes, and the tests
+`InvalidEotfForSpaceIsRejectedWithValidList` and `ColorTempKelvinRoundTripsThroughSliderPivot`.
+**AU9b** contains the `hls`, `color_wheel`, `curve`, and `lut` entries, the Qt-free HLS and color
+wheel equations, the Look panel changes, and the tests `HlsUiScaleMatchesModuleConstant` and
+`EveryCatalogFieldCoversEveryFieldKey`. The exit criteria below apply to the two parts together.
+
 **Objective and deliverables**
 
 - Catalog entries and builders for `odt`, `color_temp`, `hls`, `color_wheel`,
@@ -2004,7 +2013,83 @@ ctest --test-dir build/debug -R "EditorParameterCatalogTest" --output-on-failure
 
 **Expected diff:** 1200–1700 lines.
 
-**Completion record:** see section 13.
+**Completion record (AU9a):**
+
+```text
+Phase / date / status: AU9a / 2026-10-10 / implemented.
+Source revision and branch: AU8b (feature/automation-parameter-catalog-raw-geometry-panels,
+  ae55a43a1); branch feature/automation-parameter-catalog-color. Actual diff: about 1150 lines
+  (15 files, this record included).
+Actual changed modules: EditorParameterCatalog (odt, color_temp, grade_white_balance entries;
+  the constraint gets the current UI value; Kelvin slider scale), EditorParameterCatalogAdapter
+  (odtEotfOptions), EditorAdjustmentValueModel (range order), editor.catalog result schema,
+  EditorDisplayTransformPanel.qml, EditorWhiteBalanceSliders.qml and its two callers, tests.
+Implemented behavior:
+  - odt: {method, encoding_space, encoding_eotf, peak_luminance [100, 1000], limiting_space,
+    look_preset, tonescale_preset, creative_white} with the panel option lists. The EOTF choices
+    of each encoding space (rec709: bt1886, gamma_2_2, srgb_piecewise; p3_d65: gamma_2_2,
+    srgb_piecewise, st2084; rec2020: st2084, hlg) are in C++ (OdtEotfOptions) and in
+    editor.catalog (encoding_eotf_by_space). An EOTF of another space is rejected with the valid
+    list ("odt.encoding_eotf must be one of: st2084, hlg for encoding_space rec2020"); a space
+    change without an EOTF keeps a valid EOTF, else it selects the first EOTF of the space (the
+    panel rule). The write holds the controls of the selected method only (limiting_space for
+    ACES 2.0, open_drt presets for OpenDRT), as the previous panel builder did; a change of a
+    control that the selected method does not write is rejected
+    ("odt.limiting_space needs method aces_2_0").
+  - color_temp: {mode as_shot|custom, kelvin [2000, 15000], tint [-150, 150]}. The UI value is
+    the pair that the panel shows (custom pair in custom mode, the recorded pair in as_shot
+    mode). A Kelvin or tint edit selects custom; together with mode as_shot it is rejected. As
+    Shot writes the mode only. The Kelvin property carries the slider position scale
+    (ui_slider: positions 0..4096, 6000 K at 2048); KelvinToSliderPosition and
+    SliderPositionToKelvin call color_temp::CctToSliderPos and SliderPosToCct.
+  - grade_white_balance: {temperature [2000, 15000], tint [-150, 150]} with the CAT02 identity
+    default (kCat02DefaultTemperature, kCat02DefaultTint) and the same slider scale.
+  - Display Transform panel: option lists, EOTF lists, peak range and default, and the odt
+    parameter object come from the catalog (modelParamsJson); the JS EOTF tables and builder are
+    deleted. White balance sliders: the track ranges come from the catalog entry of fieldKey
+    (color_temp/kelvin on the RAW page, grade_white_balance/temperature on the Look page).
+  - EditorAdjustmentValueModel re-clamps after a bound change only when minimum <= maximum, so a
+    bound binding can arrive in any order (the [100, 1000] peak range asserted in std::clamp
+    when minimum 100 came before the maximum).
+Deviations from the phase text: the EOTF property is encoding_eotf (the Model key), not eotf.
+  The panel encoding space list had P3-D60, P3-DCI, and XYZ, and the limiting space list had
+  P3-D60, P3-DCI, ProPhoto RGB, and Adobe RGB. The display transform Model has only rec709,
+  p3_d65, and rec2020 (DrtColorSpace, ParseDrtColorSpace), so those choices were always
+  rejected; the catalog lists the three Model spaces. A value that is no EOTF lists every EOTF.
+Explicitly unimplemented items: hls, color_wheel, curve, lut, and the Look panel HLS and color
+  wheel ranges (AU9b).
+Primary success call chain: ToModelJson("color_temp", {"kelvin": 5200, "tint": 8}) ->
+  ColorTempConstrain (selects custom) -> {"color_temp": {"mode": "custom", "custom_cct": 5200,
+  "custom_tint": 8}} -> ParseEditorParameterWrite ok
+  (EditorParameterCatalogTest.ColorTempKelvinRoundTripsThroughSliderPivot).
+Primary failure and restore call chain: ToModelJson("odt", {"encoding_space": "rec2020",
+  "encoding_eotf": "bt1886"}) -> OdtConstrain -> nullopt, "odt.encoding_eotf must be one of:
+  st2084, hlg for encoding_space rec2020" -> nothing written
+  (EditorParameterCatalogTest.InvalidEotfForSpaceIsRejectedWithValidList).
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorParameterCatalogTest
+    AutomationEditorCommandsTest --parallel 8 -> 0
+  ctest --test-dir build/debug -R "EditorParameterCatalogTest|AutomationEditorCommandsTest"
+    -j 1 -> 0
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main
+    EditorAdjustmentModelTest EditorDisplayTransformSnapshotQmlTest EditorRawDecodePanelQmlTest
+    EditorLookPanelInteractionTest EditorGeometryPanelQmlTest EditorAdjustmentSnapshotQmlTest
+    HeadlessHostTest --parallel 8 -> 0
+  ctest --test-dir build/debug -R "EditorAdjustmentModelTest|EditorDisplayTransformSnapshotQmlTest|
+    EditorRawDecodePanelQmlTest|EditorLookPanelInteractionTest|EditorGeometryPanelQmlTest|
+    EditorAdjustmentSnapshotQmlTest|HeadlessHostTest" -j 1 -> 0
+Discovered / passed / failed / skipped counts: EditorParameterCatalogTest 20/20 (4 new),
+  AutomationEditorCommandsTest 2/2, EditorAdjustmentModelTest 19/19 (1 new),
+  EditorDisplayTransformSnapshotQmlTest 12/12 (1 new, 1 changed), EditorRawDecodePanelQmlTest
+  8/8 (1 new), EditorLookPanelInteractionTest 16/16, EditorGeometryPanelQmlTest 9/9,
+  EditorAdjustmentSnapshotQmlTest 3/3, HeadlessHostTest 5/5.
+Manual verification: not run by the agent. The user records the GUI check (Display transform and
+  white balance controls behave as before).
+Evidence path: build/tmp/automation_au9/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS Metal runs only in CI.
+```
+
+**Completion record (AU9b):** see section 13.
 
 ### Phase AU10 — Editor commands and `render.preview`
 
