@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1 to AU7 have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1 to AU7 and AU8a have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -568,7 +568,8 @@ class AutomationCommandRegistry {
 | AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
-| AU8 | Parameter catalog: RAW, input profile, lens, crop | Catalog, Raw and Geometry QML | AU7 | 1300–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
+| AU8a | Parameter catalog: RAW, input profile, lens, crop entries | Catalog, `editor.catalog` | AU7 | 1300–1400 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
+| AU8b | RAW and Geometry panels use the catalog | Catalog QML adapter, Raw and Geometry QML | AU8a | 600–700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU9 | Parameter catalog: display transform and color fields | Catalog, Display, Look, white balance QML | AU8 | 1200–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU10 | Editor commands and `render.preview` | Editor session, render port | AU3, AU7 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
 | AU11 | Version commands and commit attribution | Session, journal, storage, QML | AU10 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
@@ -1717,6 +1718,12 @@ Remaining defects or unavailable platforms: macOS Metal runs only in CI.
 
 ### Phase AU8 — Parameter catalog: RAW decode, input profile, lens, crop
 
+**Split:** the implemented diff passed 2000 lines (section 12), so this phase ships as two pull
+requests. **AU8a** contains the catalog object entries, their conversions and constraints, the
+`editor.catalog` object form, and the named catalog tests. **AU8b** contains the QML adapter
+`EditorParameterCatalog` and the RAW Decode and Geometry panel changes that call it. The exit
+criteria below apply to the two parts together.
+
 **Objective and deliverables**
 
 - Structured catalog entries and UI-unit schemas for `raw_decode`, `input_profile`,
@@ -1792,7 +1799,76 @@ ctest --test-dir build/debug -R "EditorParameterCatalogTest|EditorGeometryMathTe
 
 **Expected diff:** 1300–1700 lines.
 
-**Completion record:** see section 13.
+**Completion record (AU8a):**
+
+```text
+Phase / date / status: AU8a / 2026-10-10 / implemented.
+Source revision and branch: AU7 (feature/automation-parameter-catalog-scalar, c8095cc49); branch
+  feature/automation-parameter-catalog-raw-geometry. Actual diff: about 1400 lines (8 files,
+  this record included).
+Actual changed modules: EditorParameterCatalog (object entries, merge, crop constraint), new
+  Qt-free library EditorSupportModules (the geometry and color temperature equations of
+  editor_support/modules, moved out of the AlbumBackendLib sources), editor.catalog result
+  schema, tests.
+Implemented behavior:
+  - New value kind Object. An object entry has a property table (name; number with range, step,
+    and decimals; boolean; string; or option with the option list and English labels), its
+    default object, and its Model JSON conversions. ValidateObjectUiValue rejects unknown
+    properties, wrong types, numbers out of range, and options that are not in the list, with
+    the allowed values in the text ("crop_rotate.width must be in [0.0001, 1]",
+    "raw_decode.method must be one of: default, legacy, neural_engine").
+  - ToModelJson(field, ui_object, current, source) merges a partial UI object into the UI value
+    of the current Model JSON or panel projection (the default when it is null), runs the entry
+    constraint, and returns one complete write. UiStateToModelJson converts a complete panel
+    state without a merge or a constraint. ToUiValue reads the wrapped and flat Model forms.
+  - raw_decode: {method, highlights_reconstruct}. The write is the previous panel object:
+    {"raw": {method, highlights_reconstruct, use_camera_wb: true, user_wb: 7600,
+    backend: "alcedo"}}.
+  - input_profile: {profile_override} with the seven Develop overrides (static_assert against
+    kRasterInputProfileOverrides).
+  - lens_calib: {enabled, lens_maker, lens_model} on MakeDefaultLensCalibrationWriteJson(). An
+    empty maker writes an empty model (the panel Auto rule); a write that gives a model while
+    the maker stays empty is rejected ("lens_calib.lens_model needs a lens_maker").
+  - crop_rotate: {x, y, width, height, angle_degrees, aspect_preset, aspect_width,
+    aspect_height} with the panel ranges and the twelve aspect presets of
+    ui::geometry::CropAspectPresetOptions(). ConstrainCrop runs the panel sequence: a preset
+    choice sets the aspect size to the preset ratio, an aspect size edit selects custom, a
+    locked aspect refits (MakeMaxAspectCropRect) or resizes (ResizeAspectRectAroundCenter) the
+    frame, and ClampCropToRotatedSource keeps the rotated corners in the source when the source
+    size is known. CropLockedAspectRatio flips a fixed preset for a portrait source. A partial
+    write picks the change from its keys (aspect preset, aspect size, width, height, position,
+    rotation). A fixed preset and an aspect size in one write are rejected.
+  - editor.catalog lists the object entries with kind "object", properties, and ui_default.
+Deviations from the phase text: the rotation property is angle_degrees (the Model key), not
+  angle. The catalog is Qt-free, so it calls the pure equations that EditorGeometryMath and
+  EditorInteractionController::clampCropRect wrap, not the QObject adapters; the call sequence
+  is the panel sequence. The error text starts with the field name.
+Explicitly unimplemented items: the QML adapter and the panel changes (AU8b); display transform
+  and color fields (AU9).
+Primary success call chain: ToModelJson("crop_rotate", {"angle_degrees": 2.5}, projection) ->
+  CompleteObject(model_to_ui(projection)) -> merge -> CropConstrain (Rotation, no source) ->
+  CropUiToModel -> ParseEditorParameterWrite ok, only the angle changes
+  (EditorParameterCatalogTest.PartialCropMergesWithCurrentValue).
+Primary failure and restore call chain: ToModelJson("crop_rotate", {"width": 1.5}, ...) ->
+  ValidateObjectUiValue -> nullopt, "crop_rotate.width must be in [0.0001, 1]" -> nothing
+  written.
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorParameterCatalogTest
+    EditorGeometryMathTest AutomationEditorCommandsTest EditorRawDecodePanelQmlTest
+    EditorGeometryPanelQmlTest HeadlessHostTest alcedo_main --parallel 8 -> 0
+  ctest --test-dir build/debug -R "EditorParameterCatalogTest|EditorGeometryMathTest|
+    AutomationEditorCommandsTest" -j 1 -> 0
+  ctest --test-dir build/debug -R "EditorRawDecodePanelQmlTest|EditorGeometryPanelQmlTest|
+    HeadlessHostTest" -j 1 -> 0
+Discovered / passed / failed / skipped counts: EditorParameterCatalogTest 16/16 (6 new),
+  EditorGeometryMathTest 3/3, AutomationEditorCommandsTest 2/2. Regression (panels unchanged in
+  AU8a): EditorRawDecodePanelQmlTest 7/7, EditorGeometryPanelQmlTest 9/9, HeadlessHostTest 5/5.
+Manual verification: not applicable (no panel change in AU8a).
+Evidence path: build/tmp/automation_au8/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS Metal runs only in CI.
+```
+
+**Completion record (AU8b):** see section 13.
 
 ### Phase AU9 — Parameter catalog: display transform and color fields
 
