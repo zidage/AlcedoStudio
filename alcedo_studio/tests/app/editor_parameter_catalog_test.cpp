@@ -3,8 +3,8 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 // EditorParameterCatalog: UI ranges of the editor fields, UI-to-Model conversions, range
-// rejection, and the object fields of the RAW Decode, Geometry, Display Transform, and white
-// balance controls. The converted Model
+// rejection, the object fields of the RAW Decode, Geometry, Display Transform, white balance,
+// HLS, and color wheel controls, and the Model JSON fields curve and lut. The converted Model
 // JSON must parse through ParseEditorParameterWrite, the parser that history replay and the QML
 // collection boundary use.
 
@@ -27,6 +27,9 @@
 #include "edit/geometry/types.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/hls_model.hpp"
+#include "ui/alcedo_main/editor_support/modules/color_wheel_math.hpp"
+#include "ui/alcedo_main/editor_support/modules/hls_math.hpp"
 
 namespace alcedo {
 namespace {
@@ -53,6 +56,22 @@ auto UiToModelJson(std::string_view field, double ui_value, std::string* error =
 
 auto IsScalar(const EditorParameterCatalogEntry& entry) -> bool {
   return entry.kind == EditorParameterValueKind::Scalar;
+}
+
+auto IsObject(const EditorParameterCatalogEntry& entry) -> bool {
+  return entry.kind == EditorParameterValueKind::Object;
+}
+
+auto KindName(const EditorParameterCatalogEntry& entry) -> std::string {
+  switch (entry.kind) {
+    case EditorParameterValueKind::Object:
+      return "object";
+    case EditorParameterValueKind::Model:
+      return "model";
+    case EditorParameterValueKind::Scalar:
+    default:
+      return "scalar";
+  }
 }
 
 /// Crop projection form of the Geometry panel snapshot.
@@ -206,8 +225,8 @@ TEST(EditorParameterCatalogTest, ModelJsonParsesThroughParameterWriteParser) {
   for (const auto& entry : EditorParameterCatalog::Entries()) {
     if (!IsScalar(entry)) {
       std::string error;
-      const auto  model = EditorParameterCatalog::ToModelJson(entry.field, nlohmann::json::object(),
-                                                              nlohmann::json{}, &error);
+      const auto  model = EditorParameterCatalog::ToModelJson(
+          entry.field, EditorParameterCatalog::UiDefault(entry), nlohmann::json{}, &error);
       ASSERT_TRUE(model.has_value()) << entry.field << ": " << error;
       EXPECT_TRUE(ParseEditorParameterWrite(entry.field, *model, &error).has_value())
           << entry.field << " " << model->dump() << ": " << error;
@@ -291,7 +310,7 @@ TEST(EditorParameterCatalogTest, CatalogJsonListsEveryEntryWithUiRange) {
   for (const auto& item : catalog) {
     const auto* entry = EditorParameterCatalog::Find(item.at("field").get<std::string>());
     ASSERT_NE(entry, nullptr) << item.dump();
-    EXPECT_EQ(item.at("kind"), IsScalar(*entry) ? "scalar" : "object");
+    EXPECT_EQ(item.at("kind"), KindName(*entry));
     if (item.at("field") == "saturation") saturation = &item;
     if (item.at("field") == "white") white = &item;
     if (item.at("field") == "crop_rotate") crop = &item;
@@ -329,10 +348,12 @@ TEST(EditorParameterCatalogTest, ObjectFieldsAreKnownFieldKeysWithPanels) {
       {"odt", "display"},
       {"color_temp", "raw"},
       {"grade_white_balance", "look"},
+      {"hls", "look"},
+      {"color_wheel", "look"},
   };
   std::set<std::pair<std::string, std::string>> listed;
   for (const auto& entry : EditorParameterCatalog::Entries()) {
-    if (IsScalar(entry)) {
+    if (!IsObject(entry)) {
       continue;
     }
     listed.insert({std::string{entry.field}, std::string{entry.panel}});
@@ -514,6 +535,29 @@ TEST(EditorParameterCatalogTest, PartialCropMergesWithCurrentValue) {
                    current, &error)
                    .has_value());
   EXPECT_EQ(error, "crop_rotate.aspect_width and aspect_height need aspect_preset custom");
+}
+
+TEST(EditorParameterCatalogTest, CompleteCropValueConstrainsForTheChangedValueOnly) {
+  // editor.get -> change the angle -> editor.set with the complete value: the locked 16:9 frame
+  // keeps its rectangle, because only the rotation changed.
+  const auto  current = CropProjection(0.1, 0.2, 0.5, 0.4, 0.0, "ratio_16_9", 16.0, 9.0);
+  std::string error;
+  auto        ui = EditorParameterCatalog::ToUiValue("crop_rotate", current, &error);
+  ASSERT_TRUE(ui.has_value()) << error;
+  (*ui)["angle_degrees"] = 2.0;
+  const auto model = EditorParameterCatalog::ToModelJson("crop_rotate", *ui, current, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  const auto& rect = model->at("crop_rotate").at("crop_rect");
+  EXPECT_DOUBLE_EQ(rect.at("x").get<double>(), 0.1);
+  EXPECT_DOUBLE_EQ(rect.at("y").get<double>(), 0.2);
+  EXPECT_DOUBLE_EQ(rect.at("w").get<double>(), 0.5);
+  EXPECT_DOUBLE_EQ(rect.at("h").get<double>(), 0.4);
+  EXPECT_DOUBLE_EQ(model->at("crop_rotate").at("angle_degrees").get<double>(), 2.0);
+  // An aspect size change without a preset selects custom.
+  const auto custom =
+      EditorParameterCatalog::ToModelJson("crop_rotate", {{"aspect_width", 3.0}}, current, &error);
+  ASSERT_TRUE(custom.has_value()) << error;
+  EXPECT_EQ(custom->at("crop_rotate").at("aspect_ratio_preset"), "custom");
 }
 
 TEST(EditorParameterCatalogTest, PortraitAspectFlipFollowsOrientation) {
@@ -743,6 +787,136 @@ TEST(EditorParameterCatalogTest, GradeWhiteBalanceDefaultIsTheCat02Identity) {
                                                    nlohmann::json{}, &error)
                    .has_value());
   EXPECT_EQ(error, "grade_white_balance.tint must be in [-150, 150]");
+}
+
+TEST(EditorParameterCatalogTest, HlsUiScaleMatchesModuleConstant) {
+  // Lightness 20 and chroma -40 on the 90 degree bin; the Model value is UI / 1000.
+  nlohmann::json lightness = nlohmann::json::array({0, 0, 20, 0, 0, 0, 0, 0});
+  nlohmann::json chroma    = nlohmann::json::array({0, 0, -40, 0, 0, 0, 0, 0});
+  std::string    error;
+  const auto     model = EditorParameterCatalog::ToModelJson(
+      "hls", {{"hue", 90}, {"lightness", lightness}, {"chroma", chroma}}, nlohmann::json{},
+      &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  const auto& table = model->at("HLS").at("hls_adj_table");
+  EXPECT_DOUBLE_EQ(table.at(2).at(1).get<double>(), 20.0 / ui::hls::kAdjUiToParamScale);
+  EXPECT_DOUBLE_EQ(table.at(2).at(2).get<double>(), -40.0 / ui::hls::kAdjUiToParamScale);
+  EXPECT_DOUBLE_EQ(model->at("HLS").at("target_hls").at(0).get<double>(), 90.0);
+
+  const auto write = ParseEditorParameterWrite("hls", *model, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  const auto* update = std::get_if<HlsUpdate>(&*write);
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->hls_adj_table.has_value());
+  EXPECT_FLOAT_EQ(update->hls_adj_table->at(2).l, 0.02f);
+  EXPECT_FLOAT_EQ(update->hls_adj_table->at(2).s, -0.04f);
+  ASSERT_TRUE(update->hls_adj.has_value());
+  EXPECT_FLOAT_EQ(update->hls_adj->l, 0.02f);
+  ASSERT_TRUE(update->h_range.has_value());
+  EXPECT_FLOAT_EQ(*update->h_range, ui::hls::kDefaultHueRange);
+
+  // The Model tables read back in UI units; the HLS alias names the same entry.
+  const auto ui = EditorParameterCatalog::ToUiValue("HLS", *model, &error);
+  ASSERT_TRUE(ui.has_value()) << error;
+  EXPECT_NEAR(ui->at("lightness").at(2).get<double>(), 20.0, 1e-6);
+  EXPECT_NEAR(ui->at("chroma").at(2).get<double>(), -40.0, 1e-6);
+  EXPECT_DOUBLE_EQ(ui->at("hue").get<double>(), 90.0);
+
+  // Panel ranges, and a hue that is not a bin.
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "hls", {{"lightness", nlohmann::json::array({0, 0, 120, 0, 0, 0, 0, 0})}},
+                   nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "hls.lightness must be a list of 8 numbers in [-100, 100]");
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "hls", {{"hue_shift", nlohmann::json::array({31, 0, 0, 0, 0, 0, 0, 0})}},
+                   nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "hls.hue_shift must be a list of 8 numbers in [-30, 30]");
+  EXPECT_FALSE(
+      EditorParameterCatalog::ToModelJson("hls", {{"hue", 30}}, nlohmann::json{}, &error)
+          .has_value());
+  EXPECT_EQ(error, "hls.hue must be one of: 0, 45, 90, 135, 180, 225, 270, 315");
+}
+
+TEST(EditorParameterCatalogTest, ColorWheelUiMatchesTrackballWrite) {
+  std::string error;
+  const auto  model = EditorParameterCatalog::ToModelJson(
+      "color_wheel", {{"lift_x", 0.5}, {"lift_y", 0.0}, {"gamma_master", 100}}, nlohmann::json{},
+      &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  const auto& lift  = model->at("color_wheel").at("lift");
+  const auto& gamma = model->at("color_wheel").at("gamma");
+  const auto& gain  = model->at("color_wheel").at("gain");
+  // Lift: the disc color offset at the panel strength around 0.
+  const auto  delta = ui::color_wheel::DiscToCdlDelta(0.5f, 0.0f, ui::color_wheel::kStrengthDefault);
+  EXPECT_FLOAT_EQ(lift.at("color_offset").at("x").get<float>(), delta[0]);
+  EXPECT_FLOAT_EQ(lift.at("strength").get<float>(), ui::color_wheel::kStrengthDefault);
+  // Gamma: the Master is inverted on the Model scale; the neutral offset is 1.
+  EXPECT_DOUBLE_EQ(gamma.at("luminance_offset").get<double>(),
+                   -100.0 / ui::color_wheel::kSliderToParam);
+  EXPECT_FLOAT_EQ(gain.at("color_offset").at("y").get<float>(), 1.0f);
+
+  const auto write = ParseEditorParameterWrite("color_wheel", *model, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  const auto ui = EditorParameterCatalog::ToUiValue("color_wheel", *model, &error);
+  ASSERT_TRUE(ui.has_value()) << error;
+  EXPECT_DOUBLE_EQ(ui->at("gamma_master").get<double>(), 100.0);
+  EXPECT_DOUBLE_EQ(ui->at("lift_x").get<double>(), 0.5);
+
+  // Ranges of the panel, and a disc point outside the wheel.
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson("color_wheel", {{"gain_master", 900}},
+                                                   nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "color_wheel.gain_master must be in [-800, 800]");
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "color_wheel", {{"gain_x", 0.8}, {"gain_y", 0.8}}, nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error,
+            "color_wheel.gain_x and gain_y must be inside the unit disc (x * x + y * y <= 1)");
+}
+
+TEST(EditorParameterCatalogTest, CurveAndLutUseTheModelShape) {
+  std::string          error;
+  const nlohmann::json curve = {
+      {"points", {{{"x", 0.0}, {"y", 0.0}}, {{"x", 0.5}, {"y", 0.6}}, {{"x", 1.0}, {"y", 1.0}}}}};
+  const auto model = EditorParameterCatalog::ToModelJson("curve", curve, nlohmann::json{}, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(*model, curve);
+  EXPECT_TRUE(ParseEditorParameterWrite("curve", *model, &error).has_value()) << error;
+  const auto ui = EditorParameterCatalog::ToUiValue("curve", {{"curve", curve}}, &error);
+  ASSERT_TRUE(ui.has_value()) << error;
+  EXPECT_EQ(*ui, curve);
+
+  // The ocio_lmt alias names the lut entry; {} is no LUT.
+  const auto* lut = EditorParameterCatalog::Find("ocio_lmt");
+  ASSERT_NE(lut, nullptr);
+  EXPECT_EQ(lut->field, "lut");
+  EXPECT_EQ(EditorParameterCatalog::UiDefault(*lut), nlohmann::json::object());
+  const auto entry = EditorParameterCatalog::EntryJson(*lut);
+  EXPECT_EQ(entry.at("kind"), "model");
+  EXPECT_FALSE(entry.at("model_shape").get<std::string>().empty());
+  EXPECT_FALSE(
+      EditorParameterCatalog::ToModelJson("lut", nlohmann::json(3), nlohmann::json{}, &error)
+          .has_value());
+  EXPECT_EQ(error.rfind("lut must be its Model JSON: ", 0), 0U) << error;
+}
+
+TEST(EditorParameterCatalogTest, EveryCatalogFieldCoversEveryFieldKey) {
+  std::set<EditorAdjustmentField> adjustments;
+  for (const auto& [key, adjustment] : EditorAdjustmentFieldKeys()) {
+    const auto* entry = EditorParameterCatalog::Find(key);
+    ASSERT_NE(entry, nullptr) << key;
+    EXPECT_EQ(entry->adjustment, adjustment) << key;
+    EXPECT_TRUE(key == entry->field || key == entry->alias) << key;
+    adjustments.insert(adjustment);
+  }
+  // One entry per adjustment: an alias maps to the entry of its field.
+  EXPECT_EQ(adjustments.size(), EditorParameterCatalog::Entries().size());
+  for (const auto& entry : EditorParameterCatalog::Entries()) {
+    EXPECT_EQ(ResolveEditorAdjustmentField(std::string{entry.field}), entry.adjustment)
+        << entry.field;
+  }
 }
 
 }  // namespace

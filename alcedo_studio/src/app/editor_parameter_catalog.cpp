@@ -17,8 +17,12 @@
 #include "edit/geometry/types.hpp"
 #include "edit/graph/develop_raster_input.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/curve_model.hpp"
+#include "edit/operators/models/hls_model.hpp"
 #include "ui/alcedo_main/editor_support/modules/color_temp.hpp"
+#include "ui/alcedo_main/editor_support/modules/color_wheel_math.hpp"
 #include "ui/alcedo_main/editor_support/modules/geometry.hpp"
+#include "ui/alcedo_main/editor_support/modules/hls_math.hpp"
 
 namespace alcedo {
 namespace {
@@ -63,6 +67,8 @@ auto KindText(EditorParameterValueKind kind) -> const char* {
   switch (kind) {
     case EditorParameterValueKind::Object:
       return "object";
+    case EditorParameterValueKind::Model:
+      return "model";
     case EditorParameterValueKind::Scalar:
     default:
       return "scalar";
@@ -77,6 +83,8 @@ auto PropertyTypeText(PropertyType type) -> const char* {
       return "string";
     case PropertyType::Option:
       return "option";
+    case PropertyType::NumberList:
+      return "number_list";
     case PropertyType::Number:
     default:
       return "number";
@@ -434,16 +442,23 @@ auto CropDriverFromChange(const json& ui_change) -> EditorCropDriver {
 auto CropConstrain(const json& merged_ui, const json& ui_change, const json& current_ui,
                    const EditorParameterSource& source, std::string* error)
     -> std::optional<json> {
-  static_cast<void>(current_ui);
-  // A fixed preset sets the aspect size to its own ratio, so a fixed preset and an aspect size
-  // in one write disagree.
+  // The constraint follows the values that the write changes. A write of the complete current
+  // value (for example from editor.get) with one changed value constrains for that value only.
+  json changed = json::object();
+  for (const auto& [key, value] : ui_change.items()) {
+    if (value != current_ui.at(key)) {
+      changed[key] = value;
+    }
+  }
+  // A fixed preset sets the aspect size to its own ratio, so a write that gives a fixed preset
+  // and changes the aspect size disagrees. An aspect size change alone selects custom.
   if (ui_change.contains("aspect_preset") &&
       IsFixedAspectPreset(ui_change.at("aspect_preset").get_ref<const std::string&>()) &&
-      (ui_change.contains("aspect_width") || ui_change.contains("aspect_height"))) {
+      (changed.contains("aspect_width") || changed.contains("aspect_height"))) {
     SetError(error, "crop_rotate.aspect_width and aspect_height need aspect_preset custom");
     return std::nullopt;
   }
-  return EditorParameterCatalog::ConstrainCrop(merged_ui, CropDriverFromChange(ui_change), source);
+  return EditorParameterCatalog::ConstrainCrop(merged_ui, CropDriverFromChange(changed), source);
 }
 
 /// Source width / height, or 1 when no frame is presented.
@@ -803,6 +818,310 @@ auto GradeWhiteBalanceUiToModel(const json& ui_value) -> json {
 }
 
 // ---------------------------------------------------------------------------------------------
+// hls: eight hue bins of the Look panel Selective Color. The UI value holds every bin in panel
+// units and the selected bin (the target hue).
+
+constexpr int kHlsBinCount = static_cast<int>(ui::hls::kCandidateHues.size());
+static_assert(kHlsBinCount == kHlsHueBinCount, "the panel shows every HLS hue bin");
+
+constexpr std::array kHlsProperties = {
+    EditorParameterProperty{"hue", PropertyType::Number, {},
+                            static_cast<double>(ui::hls::kCandidateHues.front()),
+                            static_cast<double>(ui::hls::kCandidateHues.back()), 45.0, 0},
+    EditorParameterProperty{"hue_shift", PropertyType::NumberList, {},
+                            -static_cast<double>(ui::hls::kMaxHueShiftDegrees),
+                            static_cast<double>(ui::hls::kMaxHueShiftDegrees), 1.0, 0,
+                            EditorParameterSliderScale::Linear, kHlsBinCount},
+    EditorParameterProperty{"lightness", PropertyType::NumberList, {},
+                            static_cast<double>(ui::hls::kAdjUiMin),
+                            static_cast<double>(ui::hls::kAdjUiMax), 1.0, 0,
+                            EditorParameterSliderScale::Linear, kHlsBinCount},
+    EditorParameterProperty{"chroma", PropertyType::NumberList, {},
+                            static_cast<double>(ui::hls::kAdjUiMin),
+                            static_cast<double>(ui::hls::kAdjUiMax), 1.0, 0,
+                            EditorParameterSliderScale::Linear, kHlsBinCount},
+    EditorParameterProperty{"hue_smoothness", PropertyType::NumberList, {},
+                            static_cast<double>(ui::hls::kHueRangeUiMin),
+                            static_cast<double>(ui::hls::kHueRangeUiMax), 1.0, 0,
+                            EditorParameterSliderScale::Linear, kHlsBinCount},
+};
+
+auto FilledList(double value) -> json {
+  json list = json::array();
+  for (int i = 0; i < kHlsBinCount; ++i) {
+    list.push_back(value);
+  }
+  return list;
+}
+
+auto HlsUiDefault() -> json {
+  return {{"hue", static_cast<double>(ui::hls::kCandidateHues.front())},
+          {"hue_shift", FilledList(0.0)},
+          {"lightness", FilledList(0.0)},
+          {"chroma", FilledList(0.0)},
+          {"hue_smoothness", FilledList(static_cast<double>(ui::hls::kDefaultHueRange))}};
+}
+
+/// The finite number at @p index of the array @p list, or nullopt.
+auto ListNumber(const json& list, std::size_t index) -> std::optional<double> {
+  if (!list.is_array() || index >= list.size() || !list.at(index).is_number()) {
+    return std::nullopt;
+  }
+  const double value = list.at(index).get<double>();
+  return std::isfinite(value) ? std::optional<double>{value} : std::nullopt;
+}
+
+auto HlsModelToUi(const json& model_json, std::string* error) -> std::optional<json> {
+  const auto& hls = UnwrapObject(UnwrapObject(model_json, "HLS"), "hls");
+  if (!RequireObject(hls, "hls", error)) {
+    return std::nullopt;
+  }
+  auto ui = HlsUiDefault();
+  if (const auto it = hls.find("hls_adj_table"); it != hls.end()) {
+    if (!it->is_array() || it->size() != kHlsHueBinCount) {
+      SetError(error, "hls Model JSON hls_adj_table must hold eight [h, l, s] rows");
+      return std::nullopt;
+    }
+    for (std::size_t i = 0; i < it->size(); ++i) {
+      const auto h = ListNumber(it->at(i), 0);
+      const auto l = ListNumber(it->at(i), 1);
+      const auto s = ListNumber(it->at(i), 2);
+      if (!h || !l || !s) {
+        SetError(error, "hls Model JSON hls_adj_table must hold eight [h, l, s] rows");
+        return std::nullopt;
+      }
+      // The Model stores lightness and chroma divided by the panel scale.
+      ui["hue_shift"][i] = *h;
+      ui["lightness"][i] = *l * static_cast<double>(ui::hls::kAdjUiToParamScale);
+      ui["chroma"][i]    = *s * static_cast<double>(ui::hls::kAdjUiToParamScale);
+    }
+  }
+  if (const auto it = hls.find("h_range_table"); it != hls.end()) {
+    if (!it->is_array() || it->size() != kHlsHueBinCount) {
+      SetError(error, "hls Model JSON h_range_table must hold eight numbers");
+      return std::nullopt;
+    }
+    for (std::size_t i = 0; i < it->size(); ++i) {
+      const auto range = ListNumber(*it, i);
+      if (!range) {
+        SetError(error, "hls Model JSON h_range_table must hold eight numbers");
+        return std::nullopt;
+      }
+      ui["hue_smoothness"][i] = *range;
+    }
+  }
+  if (const auto it = hls.find("target_hls"); it != hls.end()) {
+    const auto hue = ListNumber(*it, 0);
+    if (!hue) {
+      SetError(error, "hls Model JSON target_hls must start with the target hue");
+      return std::nullopt;
+    }
+    // The panel selects the candidate hue that is nearest to the target.
+    ui["hue"] = static_cast<double>(
+        ui::hls::kCandidateHues[static_cast<std::size_t>(
+            ui::hls::ClosestCandidateHueIndex(static_cast<float>(*hue)))]);
+  }
+  return ui;
+}
+
+/// Index of the candidate hue @p hue, or -1.
+auto CandidateHueIndex(double hue) -> int {
+  for (int i = 0; i < kHlsBinCount; ++i) {
+    if (static_cast<double>(ui::hls::kCandidateHues[static_cast<std::size_t>(i)]) == hue) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+auto HlsUiToModel(const json& ui_value) -> json {
+  // The Look panel write: every bin, the selected bin as the target, and the fixed L/S ranges.
+  const double scale = static_cast<double>(ui::hls::kAdjUiToParamScale);
+  json         bins  = json::array();
+  json         table = json::array();
+  json         range = json::array();
+  for (std::size_t i = 0; i < ui::hls::kCandidateHues.size(); ++i) {
+    bins.push_back(static_cast<double>(ui::hls::kCandidateHues[i]));
+    table.push_back(json::array({ui_value.at("hue_shift").at(i).get<double>(),
+                                 ui_value.at("lightness").at(i).get<double>() / scale,
+                                 ui_value.at("chroma").at(i).get<double>() / scale}));
+    range.push_back(ui_value.at("hue_smoothness").at(i));
+  }
+  // HlsValidate accepted the hue, so it is a candidate hue.
+  const auto active  = static_cast<std::size_t>(CandidateHueIndex(ui_value.at("hue").get<double>()));
+  json       hls_adj = table.at(active);
+  json       h_range = range.at(active);
+  json       target  = json::array({static_cast<double>(ui::hls::kCandidateHues[active]),
+                                    static_cast<double>(ui::hls::kFixedTargetLightness),
+                                    static_cast<double>(ui::hls::kFixedTargetSaturation)});
+  json       hls     = json::object();
+  hls["hue_bins"]      = std::move(bins);
+  hls["hls_adj_table"] = std::move(table);
+  hls["h_range_table"] = std::move(range);
+  hls["target_hls"]    = std::move(target);
+  hls["hls_adj"]       = std::move(hls_adj);
+  hls["h_range"]       = std::move(h_range);
+  hls["l_range"]       = static_cast<double>(ui::hls::kFixedLightnessRange);
+  hls["s_range"]       = static_cast<double>(ui::hls::kFixedSaturationRange);
+  return {{"HLS", std::move(hls)}};
+}
+
+auto HlsValidate(const json& ui_value, std::string* error) -> bool {
+  if (CandidateHueIndex(ui_value.at("hue").get<double>()) < 0) {
+    return SetError(error, "hls.hue must be one of: 0, 45, 90, 135, 180, 225, 270, 315");
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// color_wheel: lift, gamma, and gain wheels. The UI value is the disc position of each wheel in
+// the unit disc and its Master slider value.
+
+constexpr std::array<const char*, 3> kWheelNames = {"lift", "gamma", "gain"};
+
+constexpr auto WheelProperties() -> std::array<EditorParameterProperty, 9> {
+  std::array<EditorParameterProperty, 9> result{};
+  constexpr std::array<std::array<std::string_view, 3>, 3> kNames = {{
+      {"lift_x", "lift_y", "lift_master"},
+      {"gamma_x", "gamma_y", "gamma_master"},
+      {"gain_x", "gain_y", "gain_master"},
+  }};
+  for (std::size_t wheel = 0; wheel < kNames.size(); ++wheel) {
+    result[wheel * 3]     = {kNames[wheel][0], PropertyType::Number, {}, -1.0, 1.0, 0.001, 3};
+    result[wheel * 3 + 1] = {kNames[wheel][1], PropertyType::Number, {}, -1.0, 1.0, 0.001, 3};
+    result[wheel * 3 + 2] = {kNames[wheel][2], PropertyType::Number, {},
+                             static_cast<double>(ui::color_wheel::kSliderUiMin),
+                             static_cast<double>(ui::color_wheel::kSliderUiMax), 1.0, 0};
+  }
+  return result;
+}
+
+constexpr auto kColorWheelProperties = WheelProperties();
+
+/// Gamma inverts its disc delta and its Master: a positive Master brightens every wheel.
+auto WheelSign(std::string_view wheel) -> double { return wheel == "gamma" ? -1.0 : 1.0; }
+
+/// Neutral color offset: 0 for lift, 1 for gamma and gain.
+auto WheelBase(std::string_view wheel) -> double { return wheel == "lift" ? 0.0 : 1.0; }
+
+auto ColorWheelUiDefault() -> json {
+  json ui = json::object();
+  for (const char* wheel : kWheelNames) {
+    const std::string name{wheel};
+    ui[name + "_x"]      = 0.0;
+    ui[name + "_y"]      = 0.0;
+    ui[name + "_master"] = 0.0;
+  }
+  return ui;
+}
+
+auto ColorWheelModelToUi(const json& model_json, std::string* error) -> std::optional<json> {
+  const auto& wheels = UnwrapObject(model_json, "color_wheel");
+  if (!RequireObject(wheels, "color_wheel", error)) {
+    return std::nullopt;
+  }
+  static const json kEmpty = json::object();
+  json              ui     = ColorWheelUiDefault();
+  for (const char* wheel : kWheelNames) {
+    const std::string name{wheel};
+    const json*       control = &kEmpty;
+    if (const auto it = wheels.find(name); it != wheels.end()) {
+      control = &*it;
+    }
+    if (!RequireObject(*control, "color_wheel." + name, error)) {
+      return std::nullopt;
+    }
+    const json* disc = &kEmpty;
+    if (const auto it = control->find("disc"); it != control->end()) {
+      disc = &*it;
+    }
+    if (!RequireObject(*disc, "color_wheel." + name + ".disc", error)) {
+      return std::nullopt;
+    }
+    double x = 0.0, y = 0.0, offset = 0.0;
+    if (!ReadNumber(*disc, "x", 0.0, "color_wheel", &x, error) ||
+        !ReadNumber(*disc, "y", 0.0, "color_wheel", &y, error) ||
+        !ReadNumber(*control, "luminance_offset", 0.0, "color_wheel", &offset, error)) {
+      return std::nullopt;
+    }
+    ui[name + "_x"]      = x;
+    ui[name + "_y"]      = y;
+    ui[name + "_master"] =
+        WheelSign(name) * offset * static_cast<double>(ui::color_wheel::kSliderToParam);
+  }
+  return ui;
+}
+
+auto ColorWheelUiToModel(const json& ui_value) -> json {
+  // The CDL trackball write: the disc, the panel strength, the color offset of the disc, and the
+  // Master as the luminance offset.
+  json wheels = json::object();
+  for (const char* wheel : kWheelNames) {
+    const std::string name{wheel};
+    const double      x     = ui_value.at(name + "_x").get<double>();
+    const double      y     = ui_value.at(name + "_y").get<double>();
+    const double      sign  = WheelSign(name);
+    const double      base  = WheelBase(name);
+    const auto        delta = ui::color_wheel::DiscToCdlDelta(
+        static_cast<float>(x), static_cast<float>(y), ui::color_wheel::kStrengthDefault);
+    wheels[name] = {
+        {"disc", {{"x", x}, {"y", y}}},
+        {"strength", static_cast<double>(ui::color_wheel::kStrengthDefault)},
+        {"color_offset",
+         {{"x", static_cast<double>(static_cast<float>(base + sign * delta[0]))},
+          {"y", static_cast<double>(static_cast<float>(base + sign * delta[1]))},
+          {"z", static_cast<double>(static_cast<float>(base + sign * delta[2]))}}},
+        {"luminance_offset", sign * ui_value.at(name + "_master").get<double>() /
+                                 static_cast<double>(ui::color_wheel::kSliderToParam)}};
+  }
+  return {{"color_wheel", std::move(wheels)}};
+}
+
+auto ColorWheelValidate(const json& ui_value, std::string* error) -> bool {
+  for (const char* wheel : kWheelNames) {
+    const std::string name{wheel};
+    const double      x = ui_value.at(name + "_x").get<double>();
+    const double      y = ui_value.at(name + "_y").get<double>();
+    if (x * x + y * y > 1.0 + static_cast<double>(ui::color_wheel::kEpsilon)) {
+      return SetError(error, "color_wheel." + name + "_x and " + name +
+                                 "_y must be inside the unit disc (x * x + y * y <= 1)");
+    }
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// curve and lut: the UI value is the Model JSON.
+
+auto CurveUiDefault() -> json {
+  json points = json::array();
+  for (const auto& point : CurvePayload{}.points) {
+    points.push_back({{"x", static_cast<double>(point.x)}, {"y", static_cast<double>(point.y)}});
+  }
+  return {{"points", std::move(points)}};
+}
+
+auto CurveModelToUi(const json& model_json, std::string* error) -> std::optional<json> {
+  const auto& curve = UnwrapObject(model_json, "curve");
+  if (!RequireObject(curve, "curve", error)) {
+    return std::nullopt;
+  }
+  return curve;
+}
+
+auto LutUiDefault() -> json { return json::object(); }
+
+auto LutModelToUi(const json& model_json, std::string* error) -> std::optional<json> {
+  const auto& lut = UnwrapObject(model_json, "lut");
+  if (!RequireObject(lut, "lut", error)) {
+    return std::nullopt;
+  }
+  return lut;
+}
+
+auto ModelIdentity(const json& ui_value) -> json { return ui_value; }
+
+// ---------------------------------------------------------------------------------------------
 
 auto ObjectEntry(std::string_view field, EditorAdjustmentField adjustment, std::string_view panel,
                  std::span<const EditorParameterProperty> properties, json (*ui_default)(),
@@ -820,11 +1139,36 @@ auto ObjectEntry(std::string_view field, EditorAdjustmentField adjustment, std::
   return entry;
 }
 
-// Values of the Tone, Look, Post Processing, RAW Decode, Geometry, and Display Transform
+auto WithAlias(EditorParameterCatalogEntry entry, std::string_view alias)
+    -> EditorParameterCatalogEntry {
+  entry.alias = alias;
+  return entry;
+}
+
+auto WithValidate(EditorParameterCatalogEntry entry, bool (*validate)(const json&, std::string*))
+    -> EditorParameterCatalogEntry {
+  entry.validate = validate;
+  return entry;
+}
+
+auto ModelEntry(std::string_view field, std::string_view alias, EditorAdjustmentField adjustment,
+                std::string_view panel, std::string_view model_shape, json (*ui_default)(),
+                std::optional<json> (*model_to_ui)(const json&, std::string*))
+    -> EditorParameterCatalogEntry {
+  EditorParameterCatalogEntry entry{field, alias, adjustment, EditorParameterValueKind::Model,
+                                    panel};
+  entry.model_shape = model_shape;
+  entry.ui_default  = ui_default;
+  entry.model_to_ui = model_to_ui;
+  entry.ui_to_model = &ModelIdentity;
+  return entry;
+}
+
+// Values of the Tone, Look, LUT, Post Processing, RAW Decode, Geometry, and Display Transform
 // panels. The exposure default is the neutral reset value; the product Default document starts
 // at +1.5 EV.
-auto Table() -> const std::array<EditorParameterCatalogEntry, 20>& {
-  static const std::array<EditorParameterCatalogEntry, 20> entries = {
+auto Table() -> const std::array<EditorParameterCatalogEntry, 24>& {
+  static const std::array<EditorParameterCatalogEntry, 24> entries = {
       Scalar("exposure", {}, EditorAdjustmentField::Exposure, "tone", "exposure_ev",
              Conversion::Identity, EditorScalarUiRange{-10.0, 10.0, 0.0, 0.01, 2}),
       Scalar("contrast", {}, EditorAdjustmentField::Contrast, "tone", "contrast",
@@ -868,6 +1212,24 @@ auto Table() -> const std::array<EditorParameterCatalogEntry, 20>& {
       ObjectEntry("grade_white_balance", EditorAdjustmentField::GradeWhiteBalance, "look",
                   kGradeWhiteBalanceProperties, &GradeWhiteBalanceUiDefault,
                   &GradeWhiteBalanceModelToUi, &GradeWhiteBalanceUiToModel, nullptr),
+      WithValidate(WithAlias(ObjectEntry("hls", EditorAdjustmentField::Hls, "look",
+                                         kHlsProperties, &HlsUiDefault, &HlsModelToUi,
+                                         &HlsUiToModel, nullptr),
+                             "HLS"),
+                   &HlsValidate),
+      WithValidate(ObjectEntry("color_wheel", EditorAdjustmentField::ColorWheel, "look",
+                               kColorWheelProperties, &ColorWheelUiDefault, &ColorWheelModelToUi,
+                               &ColorWheelUiToModel, nullptr),
+                   &ColorWheelValidate),
+      ModelEntry("curve", {}, EditorAdjustmentField::Curve, "tone",
+                 "{\"points\": [{\"x\": number, \"y\": number}, ...]}: at least two control "
+                 "points in the unit square",
+                 &CurveUiDefault, &CurveModelToUi),
+      ModelEntry("lut", "ocio_lmt", EditorAdjustmentField::Lut, "lut",
+                 "{\"cube_path\": string} or a tagged {\"reference\": object}, and optional "
+                 "\"name\", \"strength\" (0 to 1), \"input_encoding\", and "
+                 "\"output_encoding\" (color encoding ids). {} is no LUT",
+                 &LutUiDefault, &LutModelToUi),
   };
   return entries;
 }
@@ -952,6 +1314,20 @@ auto ValidateProperty(const EditorParameterCatalogEntry& entry,
       return value.is_boolean() || SetError(error, name + " must be a boolean");
     case PropertyType::String:
       return value.is_string() || SetError(error, name + " must be a string");
+    case PropertyType::NumberList: {
+      const std::string text = name + " must be a list of " + std::to_string(property.count) +
+                               " numbers in " + RangeText(property.minimum, property.maximum);
+      if (!value.is_array() || value.size() != static_cast<std::size_t>(property.count)) {
+        return SetError(error, text);
+      }
+      for (const auto& item : value) {
+        if (!item.is_number() || !std::isfinite(item.get<double>()) ||
+            item.get<double>() < property.minimum || item.get<double>() > property.maximum) {
+          return SetError(error, text);
+        }
+      }
+      return true;
+    }
     case PropertyType::Option: {
       if (value.is_string()) {
         const auto& text = value.get_ref<const std::string&>();
@@ -983,7 +1359,10 @@ auto ObjectTypeError(const EditorParameterCatalogEntry& entry, std::string* erro
 
 auto PropertyJson(const EditorParameterProperty& property) -> json {
   json result = {{"name", std::string{property.name}}, {"type", PropertyTypeText(property.type)}};
-  if (property.type == PropertyType::Number) {
+  if (property.type == PropertyType::NumberList) {
+    result["ui_count"] = property.count;
+  }
+  if (property.type == PropertyType::Number || property.type == PropertyType::NumberList) {
     result["ui_min"]      = property.minimum;
     result["ui_max"]      = property.maximum;
     result["ui_step"]     = property.step;
@@ -1095,6 +1474,14 @@ auto EditorParameterCatalog::ToModelJson(std::string_view field_key, const json&
     SetError(error, "Unknown editor parameter field: " + std::string{field_key});
     return std::nullopt;
   }
+  if (entry->kind == EditorParameterValueKind::Model) {
+    if (!ui_value.is_object()) {
+      SetError(error, std::string{entry->field} + " must be its Model JSON: " +
+                          std::string{entry->model_shape});
+      return std::nullopt;
+    }
+    return entry->ui_to_model(ui_value);
+  }
   if (entry->kind == EditorParameterValueKind::Object) {
     if (!ValidateObjectUiValue(*entry, ui_value, error)) {
       return std::nullopt;
@@ -1120,6 +1507,9 @@ auto EditorParameterCatalog::ToModelJson(std::string_view field_key, const json&
       }
       merged = std::move(*constrained);
     }
+    if (entry->validate != nullptr && !entry->validate(merged, error)) {
+      return std::nullopt;
+    }
     return entry->ui_to_model(merged);
   }
   if (!ui_value.is_number()) {
@@ -1142,6 +1532,9 @@ auto EditorParameterCatalog::UiStateToModelJson(std::string_view field_key, cons
     SetError(error, "Unknown editor parameter field: " + std::string{field_key});
     return std::nullopt;
   }
+  if (entry->kind == EditorParameterValueKind::Model) {
+    return ToModelJson(field_key, ui_value, json{}, error);
+  }
   if (entry->kind != EditorParameterValueKind::Object) {
     SetError(error, std::string{entry->field} + " is not an object field");
     return std::nullopt;
@@ -1149,7 +1542,11 @@ auto EditorParameterCatalog::UiStateToModelJson(std::string_view field_key, cons
   if (!ValidateObjectUiValue(*entry, ui_value, error)) {
     return std::nullopt;
   }
-  return entry->ui_to_model(CompleteObject(*entry, ui_value));
+  const json complete = CompleteObject(*entry, ui_value);
+  if (entry->validate != nullptr && !entry->validate(complete, error)) {
+    return std::nullopt;
+  }
+  return entry->ui_to_model(complete);
 }
 
 auto EditorParameterCatalog::ToUiValue(std::string_view field_key, const json& model_json,
@@ -1158,6 +1555,9 @@ auto EditorParameterCatalog::ToUiValue(std::string_view field_key, const json& m
   if (entry == nullptr) {
     SetError(error, "Unknown editor parameter field: " + std::string{field_key});
     return std::nullopt;
+  }
+  if (entry->kind == EditorParameterValueKind::Model) {
+    return entry->model_to_ui(model_json, error);
   }
   if (entry->kind == EditorParameterValueKind::Object) {
     auto ui = entry->model_to_ui(model_json, error);
@@ -1176,7 +1576,7 @@ auto EditorParameterCatalog::ToUiValue(std::string_view field_key, const json& m
 }
 
 auto EditorParameterCatalog::UiDefault(const EditorParameterCatalogEntry& entry) -> json {
-  if (entry.kind == EditorParameterValueKind::Object) {
+  if (entry.kind != EditorParameterValueKind::Scalar) {
     return entry.ui_default();
   }
   return json(entry.range.default_value);
@@ -1293,7 +1693,10 @@ auto EditorParameterCatalog::EntryJson(const EditorParameterCatalogEntry& entry)
       {"kind", KindText(entry.kind)},
       {"panel", std::string{entry.panel}},
   };
-  if (entry.kind == EditorParameterValueKind::Object) {
+  if (entry.kind == EditorParameterValueKind::Model) {
+    result["model_shape"] = std::string{entry.model_shape};
+    result["ui_default"]  = entry.ui_default();
+  } else if (entry.kind == EditorParameterValueKind::Object) {
     json properties = json::array();
     for (const auto& property : entry.properties) {
       properties.push_back(PropertyJson(property));

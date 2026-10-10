@@ -31,6 +31,17 @@ Item {
     readonly property color colHandleBorder: "#1A1B1C"
     readonly property int handleSize: 22
     readonly property int sliderRowHeight: 32
+    // Slider ranges of the HLS and color wheel controls, in UI units.
+    readonly property var hlsHueShiftSpec: parameterCatalog.propertySpec("hls", "hue_shift")
+    readonly property var hlsLightnessSpec: parameterCatalog.propertySpec("hls", "lightness")
+    readonly property var hlsChromaSpec: parameterCatalog.propertySpec("hls", "chroma")
+    readonly property var hlsSmoothnessSpec: parameterCatalog.propertySpec("hls", "hue_smoothness")
+    readonly property var cdlMasterSpec: parameterCatalog.propertySpec("color_wheel", "lift_master")
+
+    EditorParameterCatalog {
+        id: parameterCatalog
+        objectName: "lookParameterCatalog"
+    }
 
     function wireEnabled() {
         const on = root.controlsEnabled
@@ -67,27 +78,17 @@ Item {
         if (hlsModel.dragActive)
             return
         const entry = snapshot.hls !== undefined ? snapshot.hls : snapshot.HLS
-        const hls = entry.HLS !== undefined ? entry.HLS : entry
-        if (!hls)
+        if (!entry)
             return
-        const table = hls.hls_adj_table || []
-        const ranges = hls.h_range_table || []
-        // Operator stores L/S scaled by 1/1000; convert to UI units for load.
+        // The catalog reads the Model tables in UI units (the Model stores lightness and
+        // chroma divided by the panel scale).
+        const hls = parameterCatalog.uiValue("hls", entry)
+        if (hls.hue === undefined)
+            return
         var uiTable = []
-        for (var i = 0; i < table.length; ++i) {
-            var row = table[i]
-            // Qt 6.9 QML does not fully unwrap nested QVariantList (from
-            // BuildSnapshotMap) to native JS Arrays — Array.isArray(row) is
-            // false even though row supports indexed access and has .length.
-            // Check via typeof to handle both native Arrays and QVariantList.
-            if (row && typeof row[0] !== "undefined" && typeof row[1] !== "undefined" && typeof row[2] !== "undefined") {
-                uiTable.push([Number(row[0]), Number(row[1]) * 1000.0, Number(row[2]) * 1000.0])
-            }
-        }
-        var target = 0
-        if (hls.target_hls && hls.target_hls.length > 0)
-            target = Number(hls.target_hls[0])
-        hlsModel.loadFromTables(uiTable, ranges, target)
+        for (var i = 0; i < hls.hue_shift.length; ++i)
+            uiTable.push([hls.hue_shift[i], hls.lightness[i], hls.chroma[i]])
+        hlsModel.loadFromTables(uiTable, hls.hue_smoothness, hls.hue)
     }
 
     function loadCdlFromSnapshot(snapshot) {
@@ -425,8 +426,8 @@ Item {
             font.pixelSize: appTheme.fontSizeCaption
         }
         MonoSlider {
-            from: -800
-            to: 800
+            from: root.cdlMasterSpec.ui_min
+            to: root.cdlMasterSpec.ui_max
             externalValue: masterRoot.valueUi
             enabled: root.controlsEnabled
             onBegin: function () { cdlModel.beginMasterDrag(masterRoot.wheelRole) }
@@ -684,8 +685,8 @@ Item {
                         objectName: "lookHlsHueShiftSlider"
                         title: qsTr("Hue Shift")
                         valueText: Math.round(hlsModel.hueShift) + "°"
-                        from: -30
-                        to: 30
+                        from: root.hlsHueShiftSpec.ui_min
+                        to: root.hlsHueShiftSpec.ui_max
                         value: hlsModel.hueShift
                         rowEnabled: root.controlsEnabled
                         onBegin: function () { hlsModel.beginHueShiftDrag() }
@@ -697,8 +698,8 @@ Item {
                         objectName: "lookHlsLightnessSlider"
                         title: qsTr("Lightness")
                         valueText: String(Math.round(hlsModel.lightness))
-                        from: -100
-                        to: 100
+                        from: root.hlsLightnessSpec.ui_min
+                        to: root.hlsLightnessSpec.ui_max
                         value: hlsModel.lightness
                         rowEnabled: root.controlsEnabled
                         onBegin: function () { hlsModel.beginLightnessDrag() }
@@ -710,8 +711,8 @@ Item {
                         objectName: "lookHlsChromaSlider"
                         title: qsTr("Chroma")
                         valueText: String(Math.round(hlsModel.chroma))
-                        from: -100
-                        to: 100
+                        from: root.hlsChromaSpec.ui_min
+                        to: root.hlsChromaSpec.ui_max
                         value: hlsModel.chroma
                         rowEnabled: root.controlsEnabled
                         onBegin: function () { hlsModel.beginChromaDrag() }
@@ -723,8 +724,8 @@ Item {
                         objectName: "lookHlsSmoothnessSlider"
                         title: qsTr("Hue Smoothness")
                         valueText: Math.round(hlsModel.hueSmoothness) + "°"
-                        from: 1
-                        to: 180
+                        from: root.hlsSmoothnessSpec.ui_min
+                        to: root.hlsSmoothnessSpec.ui_max
                         value: hlsModel.hueSmoothness
                         rowEnabled: root.controlsEnabled
                         onBegin: function () { hlsModel.beginHueSmoothnessDrag() }

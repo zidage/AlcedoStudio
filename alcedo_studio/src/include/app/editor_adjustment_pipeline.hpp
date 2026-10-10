@@ -6,7 +6,10 @@
 
 #include <json.hpp>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include "app/editor_adjustment_types.hpp"
 
@@ -40,6 +43,11 @@ enum class EditorAdjustmentField {
   /// Raster input profile override (Develop `input.profile_override`).
   InputProfile,
 };
+
+/// Every accepted field key with the adjustment it controls, including the aliases that panels
+/// and older history rows use.
+auto EditorAdjustmentFieldKeys()
+    -> std::span<const std::pair<std::string_view, EditorAdjustmentField>>;
 
 /// Resolve a stable QML field key (or one of its aliases) to the adjustment it controls.
 auto ResolveEditorAdjustmentField(const std::string& field_key)

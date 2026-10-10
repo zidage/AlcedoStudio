@@ -7,17 +7,11 @@
 #include <QPointF>
 #include <array>
 
+#include "ui/alcedo_main/editor_support/modules/color_wheel_math.hpp"
+
 namespace alcedo::ui::color_wheel {
 
-constexpr int   kSliderUiMin     = -800;
-constexpr int   kSliderUiMax     = 800;
-constexpr float kSliderToParam   = 8000.0f;
-constexpr float kStrengthDefault = 0.10f;
-constexpr float kEpsilon         = 1e-6f;
-
-auto            ClampDiscPoint(const QPointF& p) -> QPointF;
-auto            DiscToCdlDelta(const QPointF& position, float strength) -> std::array<float, 3>;
-auto            CdlSliderUiToMaster(int slider_value) -> float;
-auto            CdlMasterToSliderUi(float master_value) -> int;
+auto ClampDiscPoint(const QPointF& p) -> QPointF;
+auto DiscToCdlDelta(const QPointF& position, float strength) -> std::array<float, 3>;
 
 }  // namespace alcedo::ui::color_wheel

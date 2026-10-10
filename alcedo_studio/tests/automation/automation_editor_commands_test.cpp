@@ -54,6 +54,12 @@ TEST(AutomationEditorCommandsTest, EditorCatalogListsEveryFieldInUiUnits) {
     const QJsonObject field = FindField(fields, QString::fromUtf8(entry.field.data(),
                                                                   static_cast<int>(entry.field.size())));
     ASSERT_FALSE(field.isEmpty()) << entry.field;
+    if (entry.kind == EditorParameterValueKind::Model) {
+      EXPECT_EQ(field.value("kind").toString(), QStringLiteral("model"));
+      EXPECT_FALSE(field.value("model_shape").toString().isEmpty()) << entry.field;
+      EXPECT_TRUE(field.value("ui_default").isObject()) << entry.field;
+      continue;
+    }
     if (entry.kind == EditorParameterValueKind::Object) {
       EXPECT_EQ(field.value("kind").toString(), QStringLiteral("object"));
       EXPECT_EQ(static_cast<std::size_t>(field.value("properties").toArray().size()),
