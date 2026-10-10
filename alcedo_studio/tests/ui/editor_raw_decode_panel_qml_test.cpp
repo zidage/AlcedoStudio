@@ -317,6 +317,22 @@ TEST(EditorRawDecodePanelQmlTest, ControlsEnabledWhenImageSelected) {
   EXPECT_TRUE(raw_lens->property("expanded").toBool());
 }
 
+TEST(EditorRawDecodePanelQmlTest, WhiteBalanceTracksUseCatalogRanges) {
+  RawDecodeSession       session(Snapshot(QStringLiteral("default"), true));
+  AdjustmentStackHarness harness(&session);
+
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* temperature = harness.findObject<QObject>(QStringLiteral("rawCctSlider"));
+  auto* tint        = harness.findObject<QObject>(QStringLiteral("rawTintSlider"));
+  ASSERT_NE(temperature, nullptr);
+  ASSERT_NE(tint, nullptr);
+  // The Kelvin track is the slider position scale of the catalog; tint is in UI units.
+  EXPECT_DOUBLE_EQ(temperature->property("from").toDouble(), 0.0);
+  EXPECT_DOUBLE_EQ(temperature->property("to").toDouble(), 4096.0);
+  EXPECT_DOUBLE_EQ(tint->property("from").toDouble(), -150.0);
+  EXPECT_DOUBLE_EQ(tint->property("to").toDouble(), 150.0);
+}
+
 TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
   RawDecodeSession       session(Snapshot(QStringLiteral("default"), true));
   AdjustmentStackHarness harness(&session);

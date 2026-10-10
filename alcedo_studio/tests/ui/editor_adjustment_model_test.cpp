@@ -173,6 +173,20 @@ TEST(EditorAdjustmentModelTest, OutOfRangeValueIsClampedBeforeSubmit) {
   EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(*sub.lastSettledWrite()), 5.0f);
 }
 
+// 5b. QML bindings set the bounds in any order. A minimum above the construction maximum waits
+// for the maximum; the value is clamped to the complete range.
+TEST(EditorAdjustmentModelTest, RangeAboveConstructionMaximumAppliesInEitherOrder) {
+  EditorAdjustmentValueModel minimum_first;
+  minimum_first.setMinimum(100.0);
+  minimum_first.setMaximum(1000.0);
+  EXPECT_DOUBLE_EQ(minimum_first.value(), 100.0);
+
+  EditorAdjustmentValueModel maximum_first;
+  maximum_first.setMaximum(1000.0);
+  maximum_first.setMinimum(100.0);
+  EXPECT_DOUBLE_EQ(maximum_first.value(), 100.0);
+}
+
 // 6. A reported invalid field entry sets valid=false and does not submit; a
 // subsequent valid edit clears the invalid state and submits.
 TEST(EditorAdjustmentModelTest, InvalidValueSetsValidFalseAndDoesNotSubmit) {

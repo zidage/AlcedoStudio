@@ -3,7 +3,8 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 // EditorParameterCatalog: UI ranges of the editor fields, UI-to-Model conversions, range
-// rejection, and the object fields of the RAW Decode and Geometry panels. The converted Model
+// rejection, and the object fields of the RAW Decode, Geometry, Display Transform, and white
+// balance controls. The converted Model
 // JSON must parse through ParseEditorParameterWrite, the parser that history replay and the QML
 // collection boundary use.
 
@@ -24,6 +25,8 @@
 #include "app/editor_parameter_write.hpp"
 #include "edit/geometry/crop_frame.hpp"
 #include "edit/geometry/types.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/operators/models/cat02_white_balance_model.hpp"
 
 namespace alcedo {
 namespace {
@@ -323,6 +326,9 @@ TEST(EditorParameterCatalogTest, ObjectFieldsAreKnownFieldKeysWithPanels) {
       {"input_profile", "raw"},
       {"lens_calib", "raw"},
       {"crop_rotate", "geometry"},
+      {"odt", "display"},
+      {"color_temp", "raw"},
+      {"grade_white_balance", "look"},
   };
   std::set<std::pair<std::string, std::string>> listed;
   for (const auto& entry : EditorParameterCatalog::Entries()) {
@@ -553,6 +559,190 @@ TEST(EditorParameterCatalogTest, PortraitAspectFlipFollowsOrientation) {
       &error);
   ASSERT_TRUE(wide.has_value()) << error;
   EXPECT_NEAR(FramePixelAspect(*wide, 4000.0, 3000.0), 16.0 / 9.0, 1e-3);
+}
+
+TEST(EditorParameterCatalogTest, InvalidEotfForSpaceIsRejectedWithValidList) {
+  // An EOTF of another encoding space: the error lists the EOTFs of the selected space.
+  std::string error;
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "odt", {{"encoding_space", "rec2020"}, {"encoding_eotf", "bt1886"}},
+                   nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "odt.encoding_eotf must be one of: st2084, hlg for encoding_space rec2020");
+  // A value that is no EOTF: the error lists every EOTF.
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "odt", {{"encoding_space", "rec2020"}, {"encoding_eotf", "gamma_9"}},
+                   nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error,
+            "odt.encoding_eotf must be one of: bt1886, gamma_2_2, srgb_piecewise, st2084, hlg");
+  // An encoding space that the display transform Model does not have.
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson("odt", {{"encoding_space", "p3_dci"}},
+                                                   nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "odt.encoding_space must be one of: rec709, p3_d65, rec2020");
+
+  // The panel rule: a space change keeps a valid EOTF, else it selects the first EOTF.
+  auto model = EditorParameterCatalog::ToModelJson("odt", {{"encoding_space", "p3_d65"}},
+                                                   nlohmann::json{}, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(model->at("odt").at("encoding_eotf"), "gamma_2_2");
+  model = EditorParameterCatalog::ToModelJson("odt", {{"encoding_space", "rec2020"}},
+                                              nlohmann::json{}, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(model->at("odt").at("encoding_eotf"), "st2084");
+  const auto write = ParseEditorParameterWrite("odt", *model, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  const auto* drt = std::get_if<DrtParameterUpdate>(&*write);
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->encoding_space.has_value());
+  EXPECT_EQ(*drt->encoding_space, DrtColorSpace::Rec2020);
+  ASSERT_TRUE(drt->encoding_eotf.has_value());
+  EXPECT_EQ(*drt->encoding_eotf, DrtEotf::St2084);
+
+  // editor.catalog lists the EOTFs of each space.
+  const auto entry = EditorParameterCatalog::EntryJson(*EditorParameterCatalog::Find("odt"));
+  EXPECT_EQ(entry.at("encoding_eotf_by_space").at("rec2020"),
+            nlohmann::json::array({"st2084", "hlg"}));
+  EXPECT_EQ(entry.at("encoding_eotf_by_space").at("rec709"),
+            nlohmann::json::array({"bt1886", "gamma_2_2", "srgb_piecewise"}));
+}
+
+TEST(EditorParameterCatalogTest, OdtWriteHoldsTheControlsOfTheSelectedMethod) {
+  // The previous panel builder for the default state (OpenDRT).
+  std::string error;
+  const auto  open_drt = EditorParameterCatalog::ToModelJson("odt", nlohmann::json::object(),
+                                                             nlohmann::json{}, &error);
+  ASSERT_TRUE(open_drt.has_value()) << error;
+  EXPECT_EQ(*open_drt, (nlohmann::json{{"odt",
+                                        {{"method", "open_drt"},
+                                         {"encoding_space", "rec709"},
+                                         {"encoding_eotf", "gamma_2_2"},
+                                         {"peak_luminance", 100.0},
+                                         {"open_drt",
+                                          {{"look_preset", "standard"},
+                                           {"tonescale_preset", "use_look_preset"},
+                                           {"creative_white", "use_look_preset"}}}}}}));
+
+  // ACES writes the limiting space and no OpenDRT presets.
+  const auto aces = EditorParameterCatalog::ToModelJson(
+      "odt", {{"method", "aces_2_0"}, {"limiting_space", "rec2020"}}, nlohmann::json{}, &error);
+  ASSERT_TRUE(aces.has_value()) << error;
+  EXPECT_EQ(aces->at("odt").at("limiting_space"), "rec2020");
+  EXPECT_FALSE(aces->at("odt").contains("open_drt"));
+
+  // A change of a control that the selected method does not write is rejected.
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson("odt", {{"limiting_space", "rec2020"}},
+                                                   nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "odt.limiting_space needs method aces_2_0");
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "odt", {{"method", "aces_2_0"}, {"look_preset", "umbra"}}, nlohmann::json{},
+                   &error)
+                   .has_value());
+  EXPECT_EQ(error, "odt.look_preset needs method open_drt");
+  // The complete current value (for example from editor.get) writes without an error.
+  EXPECT_TRUE(EditorParameterCatalog::ToModelJson(
+                  "odt", EditorParameterCatalog::UiDefault(*EditorParameterCatalog::Find("odt")),
+                  nlohmann::json{}, &error)
+                  .has_value())
+      << error;
+}
+
+TEST(EditorParameterCatalogTest, ColorTempKelvinRoundTripsThroughSliderPivot) {
+  for (const double kelvin : {2000.0, 6000.0, 15000.0}) {
+    const int position = EditorParameterCatalog::KelvinToSliderPosition(kelvin);
+    EXPECT_DOUBLE_EQ(EditorParameterCatalog::SliderPositionToKelvin(position), kelvin) << kelvin;
+  }
+  EXPECT_EQ(EditorParameterCatalog::KelvinToSliderPosition(2000.0), 0);
+  EXPECT_EQ(EditorParameterCatalog::KelvinToSliderPosition(6000.0), 2048);
+  EXPECT_EQ(EditorParameterCatalog::KelvinToSliderPosition(15000.0), 4096);
+
+  // The UI value is Kelvin, not the slider position.
+  const auto* entry = EditorParameterCatalog::Find("color_temp");
+  ASSERT_NE(entry, nullptr);
+  const auto json   = EditorParameterCatalog::EntryJson(*entry);
+  const auto kelvin = json.at("properties").at(1);
+  EXPECT_EQ(kelvin.at("name"), "kelvin");
+  EXPECT_DOUBLE_EQ(kelvin.at("ui_min").get<double>(), 2000.0);
+  EXPECT_DOUBLE_EQ(kelvin.at("ui_max").get<double>(), 15000.0);
+  EXPECT_EQ(kelvin.at("ui_slider").at("position_max"), 4096);
+  EXPECT_EQ(kelvin.at("ui_slider").at("pivot_position"), 2048);
+
+  // editor.set color_temp {"kelvin": 5200, "tint": 8}: a Kelvin edit selects custom mode.
+  std::string error;
+  const auto  model = EditorParameterCatalog::ToModelJson(
+      "color_temp", {{"kelvin", 5200}, {"tint", 8}}, nlohmann::json{}, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(*model, (nlohmann::json{
+                        {"color_temp", {{"mode", "custom"}, {"custom_cct", 5200}, {"custom_tint", 8}}}}));
+  const auto write = ParseEditorParameterWrite("color_temp", *model, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  const auto* update = std::get_if<DevelopColorTemperatureUpdate>(&*write);
+  ASSERT_NE(update, nullptr);
+  EXPECT_EQ(update->wb_mode, std::optional<std::string>{"custom"});
+  EXPECT_FLOAT_EQ(update->custom_cct.value_or(0.0f), 5200.0f);
+  EXPECT_FLOAT_EQ(update->custom_tint.value_or(0.0f), 8.0f);
+
+  // Out of the Kelvin range, and a Kelvin edit together with As Shot.
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson("color_temp", {{"kelvin", 1500}},
+                                                   nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "color_temp.kelvin must be in [2000, 15000]");
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "color_temp", {{"mode", "as_shot"}, {"kelvin", 5200}}, nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "color_temp.kelvin and tint need mode custom");
+
+  // The projection shows the recorded pair in As Shot mode and the custom pair in custom mode.
+  const nlohmann::json projection = {{"color_temp",
+                                      {{"mode", "as_shot"},
+                                       {"custom_cct", 4100.0},
+                                       {"custom_tint", -3.0},
+                                       {"as_shot_cct", 5600.0},
+                                       {"as_shot_tint", 4.0}}}};
+  auto ui = EditorParameterCatalog::ToUiValue("color_temp", projection, &error);
+  ASSERT_TRUE(ui.has_value()) << error;
+  EXPECT_EQ(*ui, (nlohmann::json{{"mode", "as_shot"}, {"kelvin", 5600.0}, {"tint", 4.0}}));
+  auto custom                          = projection;
+  custom["color_temp"]["mode"]         = "custom";
+  ui                                   = EditorParameterCatalog::ToUiValue("color_temp", custom, &error);
+  ASSERT_TRUE(ui.has_value()) << error;
+  EXPECT_EQ(*ui, (nlohmann::json{{"mode", "custom"}, {"kelvin", 4100.0}, {"tint", -3.0}}));
+  // The panel Custom choice starts from the recorded pair; As Shot writes the mode only.
+  const auto to_custom =
+      EditorParameterCatalog::ToModelJson("color_temp", {{"mode", "custom"}}, projection, &error);
+  ASSERT_TRUE(to_custom.has_value()) << error;
+  EXPECT_EQ(to_custom->at("color_temp").at("custom_cct"), 5600.0);
+  const auto to_as_shot =
+      EditorParameterCatalog::ToModelJson("color_temp", {{"mode", "as_shot"}}, custom, &error);
+  ASSERT_TRUE(to_as_shot.has_value()) << error;
+  EXPECT_EQ(*to_as_shot, (nlohmann::json{{"color_temp", {{"mode", "as_shot"}}}}));
+}
+
+TEST(EditorParameterCatalogTest, GradeWhiteBalanceDefaultIsTheCat02Identity) {
+  const auto* entry = EditorParameterCatalog::Find("grade_white_balance");
+  ASSERT_NE(entry, nullptr);
+  const auto ui_default = EditorParameterCatalog::UiDefault(*entry);
+  EXPECT_DOUBLE_EQ(ui_default.at("temperature").get<double>(),
+                   static_cast<double>(kCat02DefaultTemperature));
+  EXPECT_DOUBLE_EQ(ui_default.at("tint").get<double>(), static_cast<double>(kCat02DefaultTint));
+
+  std::string error;
+  const auto  model = EditorParameterCatalog::ToModelJson(
+      "grade_white_balance", {{"temperature", 4800}}, nlohmann::json{}, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  const auto write = ParseEditorParameterWrite("grade_white_balance", *model, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  const auto* update = std::get_if<Cat02WhiteBalanceUpdate>(&*write);
+  ASSERT_NE(update, nullptr);
+  EXPECT_FLOAT_EQ(update->temperature.value_or(0.0f), 4800.0f);
+  EXPECT_FLOAT_EQ(update->tint.value_or(0.0f), kCat02DefaultTint);
+
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson("grade_white_balance", {{"tint", 151}},
+                                                   nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "grade_white_balance.tint must be in [-150, 150]");
 }
 
 }  // namespace

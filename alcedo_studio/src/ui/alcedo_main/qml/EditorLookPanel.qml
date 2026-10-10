@@ -602,6 +602,8 @@ Item {
                         mutedColor: root.colMuted
                         temperatureObjectName: "lookGradeTemperatureSlider"
                         tintObjectName: "lookGradeTintSlider"
+                        fieldKey: "grade_white_balance"
+                        temperatureProperty: "temperature"
                         temperature: gradeWhiteBalanceModel.temperature
                         temperatureSliderPos: gradeWhiteBalanceModel.temperatureSliderPos
                         tint: gradeWhiteBalanceModel.tint

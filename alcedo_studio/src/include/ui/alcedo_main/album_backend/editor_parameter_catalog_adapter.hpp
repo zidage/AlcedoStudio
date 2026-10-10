@@ -15,8 +15,9 @@ namespace alcedo::ui {
 /**
  * @brief QML view over EditorParameterCatalog (QML type `EditorParameterCatalog`).
  *
- * The RAW Decode and Geometry panels read their option lists, ranges, and defaults here and
- * build their parameter writes with the catalog conversions. Labels are the English catalog
+ * The RAW Decode, Geometry, and Display Transform panels and the white balance sliders read
+ * their option lists, ranges, and defaults here and build their parameter writes with the
+ * catalog conversions. Labels are the English catalog
  * text; the panels translate them with qsTr in their own translation context.
  */
 class EditorParameterCatalogAdapter : public QObject {
@@ -33,6 +34,9 @@ class EditorParameterCatalogAdapter : public QObject {
 
   /// The `{value, label}` choices of option property @p name of @p field, in menu order.
   Q_INVOKABLE QVariantList options(const QString& field, const QString& name) const;
+
+  /// The `{value, label}` EOTF choices of the display transform for @p encodingSpace.
+  Q_INVOKABLE QVariantList odtEotfOptions(const QString& encodingSpace) const;
 
   /// UI value of the default of object field @p field.
   Q_INVOKABLE QVariantMap  uiDefault(const QString& field) const;

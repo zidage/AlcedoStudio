@@ -203,6 +203,8 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   // Clamp + set + clear invalid + emit valueChanged. Returns whether the value
   // (or valid state) actually changed.
   auto applyValue(double v) -> bool;
+  // Re-clamp the value after a bound change, once minimum <= maximum.
+  void applyCompleteRange();
   void submitInteractive(double v);
   void submitSettled(double v);
   void onDebounceTimeout();

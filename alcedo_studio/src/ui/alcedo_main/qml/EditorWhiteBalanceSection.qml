@@ -101,6 +101,8 @@ Item {
                 mutedColor: root.colMuted
                 temperatureObjectName: "rawCctSlider"
                 tintObjectName: "rawTintSlider"
+                fieldKey: "color_temp"
+                temperatureProperty: "kelvin"
                 temperature: colorTempModel.cct
                 temperatureSliderPos: colorTempModel.cctSliderPos
                 tint: colorTempModel.tint
