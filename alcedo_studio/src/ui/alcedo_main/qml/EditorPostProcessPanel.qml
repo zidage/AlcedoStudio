@@ -41,70 +41,12 @@ Item {
     function loadFromSnapshot(snapshot) {
         if (snapshot === undefined || snapshot === null)
             return
-        loadNestedPercent(diffusionModel, "diffusion", "strength", snapshot)
-        loadModelFromSnapshot(clarityModel, "clarity", snapshot)
-        loadSharpenFromSnapshot(snapshot)
-        loadNestedPercent(filmGrainModel, "film_grain", "strength", snapshot)
-        loadNestedPercent(halationModel, "halation", "strength", snapshot)
-    }
-
-    function loadModelFromSnapshot(model, fieldKey, snapshot) {
-        if (!model || !fieldKey || !snapshot)
-            return
-        if (model.dragActive)
-            return
-        const entry = snapshot[fieldKey]
-        if (entry === undefined)
-            return
-        const val = entry[fieldKey] !== undefined ? entry[fieldKey] : entry.value
-        if (val === undefined)
-            return
-        const num = Number(val)
-        if (isNaN(num))
-            return
-        if (Math.abs(model.value - num) > (model.step * 0.1))
-            model.value = num
-    }
-
-    /// Stored 0..1 strengths show as 0..100 on the slider.
-    function loadNestedPercent(model, fieldKey, nestedKey, snapshot) {
-        if (!model || !snapshot)
-            return
-        if (model.dragActive)
-            return
-        const entry = snapshot[fieldKey]
-        if (entry === undefined)
-            return
-        const nested = entry[fieldKey]
-        const val = (nested && nested[nestedKey] !== undefined) ? nested[nestedKey]
-                  : (entry[nestedKey] !== undefined ? entry[nestedKey] : undefined)
-        if (val === undefined)
-            return
-        const num = Number(val) * 100.0
-        if (isNaN(num))
-            return
-        if (Math.abs(model.value - num) > (model.step * 0.1))
-            model.value = num
-    }
-
-    function loadSharpenFromSnapshot(snapshot) {
-        if (!snapshot)
-            return
-        if (sharpenModel.dragActive)
-            return
-        const entry = snapshot.sharpen
-        if (entry === undefined)
-            return
-        const nested = entry.sharpen
-        const val = (nested && nested.offset !== undefined) ? nested.offset
-                  : (entry.offset !== undefined ? entry.offset : undefined)
-        if (val === undefined)
-            return
-        const num = Number(val)
-        if (isNaN(num))
-            return
-        if (Math.abs(sharpenModel.value - num) > 0.1)
-            sharpenModel.value = num
+        // Each model converts its Model value to UI units through EditorParameterCatalog.
+        diffusionModel.loadFromSnapshot(snapshot)
+        clarityModel.loadFromSnapshot(snapshot)
+        sharpenModel.loadFromSnapshot(snapshot)
+        filmGrainModel.loadFromSnapshot(snapshot)
+        halationModel.loadFromSnapshot(snapshot)
     }
 
     EditorAdjustmentValueModel {
@@ -112,11 +54,6 @@ Item {
         objectName: "postDiffusionModel"
         fieldKey: "diffusion"
         label: qsTr("Strength")
-        minimum: 0
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
     }
     EditorAdjustmentValueModel {
@@ -124,11 +61,6 @@ Item {
         objectName: "postClarityModel"
         fieldKey: "clarity"
         label: qsTr("Clarity")
-        minimum: -100
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
     }
     EditorAdjustmentValueModel {
@@ -136,11 +68,6 @@ Item {
         objectName: "postSharpenModel"
         fieldKey: "sharpen"
         label: qsTr("Sharpen")
-        minimum: 0
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
     }
     EditorAdjustmentValueModel {
@@ -148,11 +75,6 @@ Item {
         objectName: "postFilmGrainModel"
         fieldKey: "film_grain"
         label: qsTr("Film Grain")
-        minimum: 0
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
     }
     EditorAdjustmentValueModel {
@@ -160,11 +82,6 @@ Item {
         objectName: "postHalationModel"
         fieldKey: "halation"
         label: qsTr("Halation")
-        minimum: 0
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
     }
 

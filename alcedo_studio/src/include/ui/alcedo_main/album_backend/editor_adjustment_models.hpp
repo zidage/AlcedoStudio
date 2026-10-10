@@ -8,6 +8,7 @@
 #include <QJSValue>
 #include <QString>
 #include <QVariantList>
+#include <QVariantMap>
 
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 
@@ -106,6 +107,11 @@ class EditorAdjustmentModelBase : public QObject {
 /// Numeric adjustment (exposure, contrast, saturation, …). Owns the pointer
 /// drag state and a debounced settled commit for keyboard/wheel bursts. One
 /// settled transaction per completed drag.
+///
+/// Values are UI units. When `fieldKey` names a scalar field of EditorParameterCatalog, the
+/// model takes minimum, maximum, defaultValue, step, and precision from the catalog entry, and
+/// converts UI values to Model values (and back in loadFromSnapshot) with the catalog
+/// conversion. A setter call after the field key change replaces the catalog value.
 class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   Q_OBJECT
   Q_PROPERTY(double value READ value WRITE setValue NOTIFY valueChanged)
@@ -159,6 +165,12 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   // and does NOT submit. A subsequent setValue/editValue clears it.
   Q_INVOKABLE void setInvalid(const QString& message);
   [[nodiscard]] Q_INVOKABLE bool hasPendingSettled() const;
+  /// Programmatic load of the `fieldKey` entry of an adjustment snapshot map (the panel
+  /// projection form). Converts the Model value to UI units with the catalog conversion and
+  /// sets it without a submit. Does nothing while a pointer drag owns the value, when the
+  /// entry is missing or not a catalog scalar, or when the value differs by less than a tenth
+  /// of a step.
+  Q_INVOKABLE void loadFromSnapshot(const QVariantMap& snapshot);
   // C++-only test hook: stabilization interval in ms (default 180). Setting 0
   // makes the debounce fire on the next event-loop iteration so QSignalSpy::wait
   // catches it deterministically.
@@ -185,6 +197,8 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   [[nodiscard]] virtual auto valueWrite(double v) const -> alcedo::EditorParameterWrite;
 
  private:
+  /// Applies the catalog range of `fieldKey` when the field is a catalog scalar.
+  void applyCatalogEntry();
   [[nodiscard]] auto clamp(double v) const -> double;
   // Clamp + set + clear invalid + emit valueChanged. Returns whether the value
   // (or valid state) actually changed.

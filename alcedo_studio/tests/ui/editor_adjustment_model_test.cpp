@@ -14,6 +14,7 @@
 
 #include <QSignalSpy>
 #include <QString>
+#include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
 #include <memory>
@@ -313,6 +314,74 @@ TEST(EditorAdjustmentModelTest, SharpenSliderKeepsPercentAmountForNeighborPackin
   ASSERT_TRUE(update->amount.has_value());
   EXPECT_FLOAT_EQ(*update->amount, 65.0f);
   model.commitImmediately();
+}
+
+TEST(EditorAdjustmentModelTest, CatalogFieldKeyAppliesCatalogRange) {
+  EditorAdjustmentValueModel exposure;
+  exposure.setFieldKey(QStringLiteral("exposure"));
+  EXPECT_DOUBLE_EQ(exposure.minimum(), -10.0);
+  EXPECT_DOUBLE_EQ(exposure.maximum(), 10.0);
+  EXPECT_DOUBLE_EQ(exposure.defaultValue(), 0.0);
+  EXPECT_DOUBLE_EQ(exposure.step(), 0.01);
+  EXPECT_EQ(exposure.precision(), 2);
+
+  EditorAdjustmentValueModel film_grain;
+  film_grain.setFieldKey(QStringLiteral("film_grain"));
+  EXPECT_DOUBLE_EQ(film_grain.minimum(), 0.0);
+  EXPECT_DOUBLE_EQ(film_grain.maximum(), 100.0);
+  EXPECT_DOUBLE_EQ(film_grain.step(), 1.0);
+  EXPECT_EQ(film_grain.precision(), 0);
+
+  // A field that is not a catalog scalar keeps the values that its panel sets.
+  EditorAdjustmentValueModel export_quality;
+  export_quality.setFieldKey(QStringLiteral("export_sdr_quality"));
+  EXPECT_DOUBLE_EQ(export_quality.minimum(), 0.0);
+  EXPECT_DOUBLE_EQ(export_quality.maximum(), 1.0);
+}
+
+TEST(EditorAdjustmentModelTest, LoadFromSnapshotConvertsModelUnitsWithoutSubmit) {
+  struct Case {
+    const char* field;
+    QVariant    entry;
+    double      ui_value;
+  };
+  const Case cases[] = {
+      {"saturation", QVariantMap{{QStringLiteral("saturation"), 1.4}}, 40.0},
+      {"exposure", QVariantMap{{QStringLiteral("exposure"), 1.5}}, 1.5},
+      {"film_grain",
+       QVariantMap{{QStringLiteral("film_grain"), QVariantMap{{QStringLiteral("strength"), 0.35}}}},
+       35.0},
+      {"sharpen",
+       QVariantMap{{QStringLiteral("sharpen"), QVariantMap{{QStringLiteral("offset"), 65.0}}}},
+       65.0},
+  };
+  for (const auto& test_case : cases) {
+    RecordingSubmitter         sub;
+    EditorAdjustmentValueModel model;
+    model.setSubmitter(&sub);
+    model.setFieldKey(QString::fromLatin1(test_case.field));
+    QVariantMap snapshot;
+    snapshot.insert(QString::fromLatin1(test_case.field), test_case.entry);
+    model.loadFromSnapshot(snapshot);
+    EXPECT_NEAR(model.value(), test_case.ui_value, 1e-4) << test_case.field;
+    EXPECT_TRUE(sub.calls.empty()) << test_case.field;
+  }
+}
+
+TEST(EditorAdjustmentModelTest, LoadFromSnapshotDoesNotReplaceValueDuringDrag) {
+  RecordingSubmitter         sub;
+  EditorAdjustmentValueModel model;
+  model.setSubmitter(&sub);
+  model.setFieldKey(QStringLiteral("saturation"));
+  model.beginDrag();
+  model.updateDrag(20.0);
+  QVariantMap snapshot;
+  snapshot.insert(QStringLiteral("saturation"), QVariantMap{{QStringLiteral("saturation"), 1.5}});
+  model.loadFromSnapshot(snapshot);
+  EXPECT_DOUBLE_EQ(model.value(), 20.0);
+  model.finishDrag();
+  model.loadFromSnapshot(snapshot);
+  EXPECT_NEAR(model.value(), 50.0, 1e-4);
 }
 
 }  // namespace

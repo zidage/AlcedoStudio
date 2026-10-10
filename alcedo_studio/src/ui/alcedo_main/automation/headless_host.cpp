@@ -24,6 +24,7 @@
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/automation/automation_command_registry.hpp"
+#include "ui/alcedo_main/automation/automation_editor_commands.hpp"
 #include "ui/alcedo_main/automation/automation_host_commands.hpp"
 #include "ui/alcedo_main/automation/automation_library_commands.hpp"
 #include "ui/alcedo_main/automation/automation_project_commands.hpp"
@@ -191,7 +192,8 @@ auto RunHostSession(QCoreApplication& app, const HeadlessHostOptions& options,
       !RegisterAutomationProjectCommands(registry, &host, &registration_error) ||
       !RegisterAutomationLibraryCommands(registry, &host, &tracker, QLatin1String(kHostMode),
                                          &registration_error) ||
-      !RegisterAutomationTaskCommands(registry, &host, &tracker, &registration_error)) {
+      !RegisterAutomationTaskCommands(registry, &host, &tracker, &registration_error) ||
+      !RegisterAutomationEditorCommands(registry, &registration_error)) {
     ReportFailure(QStringLiteral("command registration failed: %1").arg(registration_error));
     host.Shutdown();
     return Exit(HeadlessHostExitCode::SessionError);
