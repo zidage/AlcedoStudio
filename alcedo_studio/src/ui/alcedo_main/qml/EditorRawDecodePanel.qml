@@ -5,7 +5,8 @@ import Alcedo.Main 1.0
 
 // RAW Decode panel. Import already asked LibRaw whether the file is
 // decodable; this panel only presents controls and submits complete operator
-// parameter objects through the typed adjustment models. For a raster image
+// parameter objects through the typed adjustment models. The option lists,
+// defaults, and parameter objects come from EditorParameterCatalog. For a raster image
 // (JPEG, PNG, TIFF, OpenEXR) it hides white balance and the RAW decode
 // controls and shows the input color and the input profile menu instead.
 Item {
@@ -16,7 +17,6 @@ Item {
     property var editorSession: null
     property bool controlsEnabled: true
     property bool restoring: false
-    property var rawParams: ({})
     // Develop `input` object of a raster document, from the "input_profile"
     // projection. rasterInput is false for a RAW document.
     property bool rasterInput: false
@@ -35,23 +35,34 @@ Item {
             && editorSession.exifLensModel !== undefined
             ? String(editorSession.exifLensModel) : ""
 
-    // ponytail: fixed method list; no per-image capability map.
-    readonly property var rawMethodEntries: [
-        { value: "default", label: qsTr("Default") },
-        { value: "legacy", label: qsTr("Legacy") },
-        { value: "neural_engine", label: qsTr("Neural Engine") }
-    ]
-
+    readonly property var rawDefaults: parameterCatalog.uiDefault("raw_decode")
+    readonly property var lensDefaults: parameterCatalog.uiDefault("lens_calib")
+    // Fixed method list; no per-image capability map.
+    readonly property var rawMethodEntries: root.catalogEntries("raw_decode", "method")
     // Decision D5: Auto keeps the description read from the file.
-    readonly property var inputProfileEntries: [
-        { value: "auto", label: qsTr("Auto (from file)") },
-        { value: "srgb", label: qsTr("sRGB") },
-        { value: "display_p3", label: qsTr("Display P3") },
-        { value: "adobe_rgb", label: qsTr("Adobe RGB") },
-        { value: "rec2020", label: qsTr("Rec.2020") },
-        { value: "prophoto", label: qsTr("ProPhoto") },
-        { value: "linear_rec709", label: qsTr("Linear Rec.709") }
-    ]
+    readonly property var inputProfileEntries: root.catalogEntries("input_profile",
+                                                                   "profile_override")
+
+    EditorParameterCatalog {
+        id: parameterCatalog
+        objectName: "rawParameterCatalog"
+    }
+
+    // Catalog choices with the labels translated in this panel's context.
+    function catalogEntries(field, name) {
+        var result = []
+        const options = parameterCatalog.options(field, name)
+        for (var i = 0; i < options.length; ++i)
+            result.push({ value: String(options[i].value), label: qsTr(String(options[i].label)) })
+        return result
+    }
+
+    // UI value of a snapshot entry, or the field default when the entry is missing.
+    function catalogUiValue(field, entry) {
+        if (entry === undefined || entry === null)
+            return parameterCatalog.uiDefault(field)
+        return parameterCatalog.uiValue(field, entry)
+    }
 
     function inputOriginText(origin) {
         switch (String(origin)) {
@@ -94,7 +105,9 @@ Item {
     }
 
     function buildInputProfileParams() {
-        return JSON.stringify({ profile_override: String(inputProfileModel.currentValue || "auto") })
+        return parameterCatalog.modelParamsJson("input_profile", {
+            profile_override: String(inputProfileModel.currentValue || "auto")
+        })
     }
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
@@ -128,29 +141,6 @@ Item {
         objectName: "rawLensCatalog"
     }
 
-    function buildDefaultRawParams() {
-        return {
-            raw: {
-                // No accelerator backend: the decode backend is a runtime
-                // property of the pipeline (user setting), not an edit param.
-                method: "default",
-                highlights_reconstruct: true,
-                use_camera_wb: true,
-                user_wb: 7600.0,
-                backend: "alcedo"
-            }
-        }
-    }
-
-    function mergeRawParams(rawEntry) {
-        var params = root.buildDefaultRawParams()
-        if (rawEntry) {
-            for (var key in rawEntry)
-                params.raw[key] = rawEntry[key]
-        }
-        return params
-    }
-
     function setEnumValue(model, value, fallbackIndex) {
         if (!model)
             return
@@ -165,22 +155,10 @@ Item {
     }
 
     function buildRawParams() {
-        // Pure builder: do not write root.rawParams during submit (avoids
-        // binding churn while the patch is already enqueued).
-        var base = root.rawParams && root.rawParams.raw
-                ? root.rawParams
-                : root.buildDefaultRawParams()
-        var raw = {}
-        if (base.raw) {
-            var src = base.raw
-            for (var k in src) {
-                if (Object.prototype.hasOwnProperty.call(src, k))
-                    raw[k] = src[k]
-            }
-        }
-        raw.method = String(rawMethodModel.currentValue || "default")
-        raw.highlights_reconstruct = Boolean(rawHighlightsModel.value)
-        return JSON.stringify({ raw: raw })
+        return parameterCatalog.modelParamsJson("raw_decode", {
+            method: String(rawMethodModel.currentValue || "default"),
+            highlights_reconstruct: Boolean(rawHighlightsModel.value)
+        })
     }
 
     function buildLensEntries(values) {
@@ -225,20 +203,13 @@ Item {
         root.setEnumValue(lensModelModel, requestedModel, 0)
     }
 
+    // The catalog keeps the lens model empty while the maker is empty (Auto).
     function buildLensParams() {
-        var payload = {}
-        try {
-            payload = JSON.parse(lensCatalog.defaultParamsJson)
-        } catch (error) {
-            payload = { lens_calib: {} }
-        }
-        if (!payload.lens_calib)
-            payload.lens_calib = {}
-        const brand = String(lensBrandModel.currentValue)
-        payload.lens_calib.enabled = Boolean(lensEnabledModel.value)
-        payload.lens_calib.lens_maker = brand
-        payload.lens_calib.lens_model = brand.length > 0 ? String(lensModelModel.currentValue) : ""
-        return JSON.stringify(payload)
+        return parameterCatalog.modelParamsJson("lens_calib", {
+            enabled: Boolean(lensEnabledModel.value),
+            lens_maker: String(lensBrandModel.currentValue || ""),
+            lens_model: String(lensModelModel.currentValue || "")
+        })
     }
 
     function submitLens(settled) {
@@ -310,18 +281,18 @@ Item {
 
     function loadLensSnapshot(snapshot) {
         const raw = snapshot ? snapshot["lens_calib"] : undefined
-        const entry = raw && raw["lens_calib"] !== undefined ? raw["lens_calib"] : raw
         root.restoring = true
-        if (!entry) {
+        if (!raw) {
             root.resetLensModels()
             root.restoring = false
             root.wireLensEnabled()
             return
         }
-        lensEnabledModel.value = entry["enabled"] !== undefined
-                                 ? Boolean(entry["enabled"]) : lensEnabledModel.defaultValue
-        const brand = entry["lens_maker"] !== undefined ? String(entry["lens_maker"]) : ""
-        const model = entry["lens_model"] !== undefined ? String(entry["lens_model"]) : ""
+        const entry = parameterCatalog.uiValue("lens_calib", raw)
+        lensEnabledModel.value = entry.enabled !== undefined
+                                 ? Boolean(entry.enabled) : lensEnabledModel.defaultValue
+        const brand = entry.lens_maker !== undefined ? String(entry.lens_maker) : ""
+        const model = entry.lens_model !== undefined ? String(entry.lens_model) : ""
         if (brand.length > 0) {
             var brandKnown = false
             for (var brandIndex = 0; brandIndex < lensBrandModel.entries.length; ++brandIndex) {
@@ -346,15 +317,10 @@ Item {
 
     function loadFromSnapshot(snapshot) {
         root.restoring = true
-        var rawWrapper = snapshot ? snapshot["raw_decode"] : undefined
-        var rawEntry = rawWrapper && rawWrapper["raw"] !== undefined
-                ? rawWrapper["raw"] : rawWrapper
-        root.rawParams = root.mergeRawParams(rawEntry)
-
-        const method = rawEntry && rawEntry.method !== undefined
-                ? String(rawEntry.method) : "default"
-        root.setEnumValue(rawMethodModel, method, rawMethodModel.defaultIndex)
-        rawHighlightsModel.value = rawEntry && rawEntry.highlights_reconstruct !== undefined
+        const rawEntry = root.catalogUiValue("raw_decode",
+                                             snapshot ? snapshot["raw_decode"] : undefined)
+        root.setEnumValue(rawMethodModel, rawEntry.method, rawMethodModel.defaultIndex)
+        rawHighlightsModel.value = rawEntry.highlights_reconstruct !== undefined
                 ? Boolean(rawEntry.highlights_reconstruct) : rawHighlightsModel.defaultValue
         if (typeof whiteBalanceSection.loadFromSnapshot === "function")
             whiteBalanceSection.loadFromSnapshot(snapshot)
@@ -649,8 +615,8 @@ Item {
         objectName: "rawHighlightsModel"
         fieldKey: "raw_decode"
         label: qsTr("Enable Highlight Reconstruction")
-        defaultValue: true
-        value: true
+        defaultValue: Boolean(root.rawDefaults.highlights_reconstruct)
+        value: Boolean(root.rawDefaults.highlights_reconstruct)
         enabled: root.controlsEnabled
         submitter: root.editorSession
         paramsBuilder: root.buildRawParams
@@ -673,8 +639,8 @@ Item {
         objectName: "rawLensEnabledModel"
         fieldKey: "lens_calib"
         label: qsTr("Enable Lens Calibration")
-        defaultValue: false
-        value: false
+        defaultValue: Boolean(root.lensDefaults.enabled)
+        value: Boolean(root.lensDefaults.enabled)
         submitter: root.editorSession
         paramsBuilder: function (value) { return root.buildLensParams() }
     }

@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1 to AU7 and AU8a have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1 to AU8 have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -569,7 +569,7 @@ class AutomationCommandRegistry {
 | AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU8a | Parameter catalog: RAW, input profile, lens, crop entries | Catalog, `editor.catalog` | AU7 | 1300–1400 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
-| AU8b | RAW and Geometry panels use the catalog | Catalog QML adapter, Raw and Geometry QML | AU8a | 600–700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
+| AU8b | RAW and Geometry panels use the catalog | Catalog QML adapter, Raw and Geometry QML | AU8a | 600–700 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU9 | Parameter catalog: display transform and color fields | Catalog, Display, Look, white balance QML | AU8 | 1200–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU10 | Editor commands and `render.preview` | Editor session, render port | AU3, AU7 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
 | AU11 | Version commands and commit attribution | Session, journal, storage, QML | AU10 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
@@ -1793,7 +1793,7 @@ ctest --test-dir build/debug -R "EditorParameterCatalogTest|EditorGeometryMathTe
 
 **Exit criteria**
 
-- [ ] Tests pass.
+- [x] Tests pass.
 - [ ] Manual GUI check: RAW panel and Geometry panel edits produce the same history entries as
       before.
 
@@ -1868,7 +1868,65 @@ Evidence path: build/tmp/automation_au8/ (removed after the phase).
 Remaining defects or unavailable platforms: macOS Metal runs only in CI.
 ```
 
-**Completion record (AU8b):** see section 13.
+**Completion record (AU8b):**
+
+```text
+Phase / date / status: AU8b / 2026-10-10 / implemented.
+Source revision and branch: AU8a (feature/automation-parameter-catalog-raw-geometry,
+  a111ebf83); branch feature/automation-parameter-catalog-raw-geometry-panels. Actual diff:
+  about 700 lines (8 files, this record included).
+Actual changed modules: new QML type EditorParameterCatalog (EditorParameterCatalogAdapter in
+  AlbumBackendLib), EditorRawDecodePanel.qml, EditorGeometryPanel.qml, RAW panel QML test.
+Implemented behavior:
+  - EditorParameterCatalog (QML) exposes entry, propertySpec, options, uiDefault, uiValue,
+    modelParamsJson, constrainCrop, and cropLockedAspectRatio. Values cross as QVariantMap
+    through QJsonDocument. An invalid state returns an empty result and a warning; submitPatch
+    rejects the empty parameter string, so nothing is written.
+  - RAW Decode panel: the method and input profile option lists, the highlight and lens switch
+    defaults, and the raw_decode, input_profile, and lens_calib parameter objects come from the
+    catalog. The JS builders buildDefaultRawParams and mergeRawParams and the rawParams copy are
+    deleted. The raw_decode and lens snapshot loaders read through uiValue. Option labels are
+    translated with qsTr in the panel context, so the existing translations stay in use.
+  - Geometry panel: the slider ranges, steps, decimals, and defaults, the aspect preset list,
+    the constraint (applyConstraints -> constrainCrop with the change name), the overlay aspect
+    lock (cropLockedAspectRatio), and the crop_rotate object (modelParamsJson) come from the
+    catalog. currentAspectRatio, hasLockedAspect, selectCustomAspect, and the preset-ratio copy
+    in the aspect paramsBuilder are deleted; the catalog constraint does those steps.
+  - History entries are unchanged: the projection of raw_decode has only method and
+    highlights_reconstruct, so the previous builder also wrote use_camera_wb true and user_wb
+    7600 on every RAW edit. The RAW QML test fixture had white balance keys that the projection
+    never produces; the test now expects the catalog object.
+Explicitly unimplemented items: display transform and color fields (AU9). EditorGeometryMath
+  stays registered for EditorGeometryMathTest; no panel uses it now.
+Primary success call chain: user picks Neural Engine -> rawMethodModel.selectIndex ->
+  paramsBuilder buildRawParams -> EditorParameterCatalog.modelParamsJson("raw_decode", state) ->
+  UiStateToModelJson -> submitPatch -> ParseEditorParameterWrite -> DevelopRawDecodeUpdate
+  (EditorRawDecodePanelQmlTest.UserChangesSubmitCompleteRawOperatorParams).
+Primary failure and restore call chain: a crop state outside the catalog ranges ->
+  modelParamsJson returns "" with a warning -> submitPatch rejects the parameters -> nothing
+  written.
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main
+    EditorRawDecodePanelQmlTest EditorGeometryPanelQmlTest EditorLensPickerQuickTest
+    EditorGeometryMathTest EditorAdjustmentModelTest EditorAdjustmentSnapshotQmlTest
+    --parallel 8 -> 0
+  ctest --test-dir build/debug -R "EditorRawDecodePanelQmlTest|EditorGeometryPanelQmlTest|
+    EditorLensPickerQuickTest|EditorGeometryMathTest|EditorAdjustmentModelTest|
+    EditorAdjustmentSnapshotQmlTest" -j 1 -> 0
+  The same tree (AU8a plus AU8b) also ran: EditorParameterCatalogTest,
+    AutomationEditorCommandsTest, EditorLookPanelInteractionTest,
+    AutomationProjectCommandsTest, AutomationLibraryCommandsTest, HeadlessHostTest -> 0
+Discovered / passed / failed / skipped counts: EditorRawDecodePanelQmlTest 7/7,
+  EditorGeometryPanelQmlTest 9/9, EditorLensPickerQuickTest 1/1, EditorGeometryMathTest 3/3,
+  EditorAdjustmentModelTest 18/18, EditorAdjustmentSnapshotQmlTest 3/3. Same tree:
+  EditorParameterCatalogTest 16/16, AutomationEditorCommandsTest 2/2,
+  EditorLookPanelInteractionTest 16/16, AutomationProjectCommandsTest 4/4,
+  AutomationLibraryCommandsTest 7/7, HeadlessHostTest 5/5.
+Manual verification: not run by the agent. The user records the GUI check (RAW panel and
+  Geometry panel edits produce the same history entries as before).
+Evidence path: build/tmp/automation_au8/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS Metal runs only in CI.
+```
 
 ### Phase AU9 — Parameter catalog: display transform and color fields
 

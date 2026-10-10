@@ -8,8 +8,9 @@ import Alcedo.Main 1.0
 // The output is the crop frame: an axis-aligned rectangle through which the
 // source is seen rotated about the frame center. No frame corner may leave the
 // source, so the frame shrinks when a rotation needs it
-// (EditorInteractionController::clampCropRect, the same constraint the render
-// applies).
+// (EditorParameterCatalog::ConstrainCrop, the same constraint the overlay and
+// the render apply). The ranges, the aspect presets, and the parameter object
+// come from EditorParameterCatalog.
 //
 // Edits follow the path every adjustment uses: slider drags submit interactive
 // patches and a settled patch on release; keyboard and field edits submit
@@ -43,6 +44,8 @@ Item {
     readonly property bool hasSourceSize: root.sourceImageWidth > 0 && root.sourceImageHeight > 0
     readonly property double imageAspect: root.hasSourceSize
                                           ? root.sourceImageWidth / root.sourceImageHeight : 1.0
+    readonly property var cropDefaults: parameterCatalog.uiDefault("crop_rotate")
+    readonly property var cropSpecs: root.buildCropSpecs()
     readonly property bool inputActive: root.overlayInputActive
                                       || cropXModel.dragActive
                                       || cropYModel.dragActive
@@ -52,14 +55,23 @@ Item {
                                       || aspectWidthModel.dragActive
                                       || aspectHeightModel.dragActive
 
-    EditorGeometryMath {
-        id: geometryMath
-        objectName: "geometryMath"
+    EditorParameterCatalog {
+        id: parameterCatalog
+        objectName: "geometryParameterCatalog"
+    }
+
+    /// Catalog property specs of the crop field by name: ui_min, ui_max, ui_step, ui_decimals.
+    function buildCropSpecs() {
+        var result = {}
+        const properties = parameterCatalog.entry("crop_rotate").properties || []
+        for (var i = 0; i < properties.length; ++i)
+            result[String(properties[i].name)] = properties[i]
+        return result
     }
 
     function buildAspectEntries() {
         var result = []
-        const presets = geometryMath.aspectPresets
+        const presets = parameterCatalog.options("crop_rotate", "aspect_preset")
         for (var i = 0; i < presets.length; ++i)
             result.push({ value: String(presets[i].value), label: qsTr(String(presets[i].label)) })
         return result
@@ -73,27 +85,26 @@ Item {
         return -1
     }
 
-    /// Crop width / height in source pixels for the selected aspect.
-    function currentAspectRatio() {
-        if (aspectModel.currentValue === "custom")
-            return geometryMath.aspectRatio(aspectWidthModel.value, aspectHeightModel.value)
-        const ratio = geometryMath.presetRatio(aspectModel.currentValue)
-        if (ratio.length < 2)
-            return 1.0
-        let value = Number(ratio[0]) / Math.max(Number(ratio[1]), 0.0001)
-        // Fixed presets describe an unoriented frame shape. Match that shape to
-        // the source image so 16:9 becomes 9:16 for a portrait photograph.
-        const sourcePortrait = root.imageAspect < 1.0
-        const presetPortrait = value < 1.0
-        if (Math.abs(value - 1.0) > 0.0001 && sourcePortrait !== presetPortrait)
-            value = 1.0 / Math.max(value, 0.0001)
-        return value
+    /// The whole crop state of the models in catalog UI units.
+    function cropState() {
+        return {
+            x: Number(cropXModel.value),
+            y: Number(cropYModel.value),
+            width: Number(cropWidthModel.value),
+            height: Number(cropHeightModel.value),
+            angle_degrees: Number(rotationModel.value),
+            aspect_preset: String(aspectModel.currentValue),
+            aspect_width: Number(aspectWidthModel.value),
+            aspect_height: Number(aspectHeightModel.value)
+        }
     }
 
-    function hasLockedAspect() {
-        return geometryMath.hasLockedAspect(aspectModel.currentValue,
-                                            aspectWidthModel.value,
-                                            aspectHeightModel.value)
+    /// Crop width / height in source pixels for a locked aspect, oriented to
+    /// the source (16:9 becomes 9:16 for a portrait photograph). Undefined when
+    /// the aspect is not locked.
+    function lockedAspectRatio() {
+        return parameterCatalog.cropLockedAspectRatio(root.cropState(), root.sourceImageWidth,
+                                                      root.sourceImageHeight)
     }
 
     function rectFromModels() {
@@ -110,58 +121,45 @@ Item {
         root.restoring = wasRestoring
     }
 
+    /// Write a constrained crop state to the models without a submit.
+    function setStateModels(state) {
+        const wasRestoring = root.restoring
+        root.restoring = true
+        root.setRectModels(Qt.rect(state.x, state.y, state.width, state.height))
+        aspectWidthModel.value = Number(state.aspect_width)
+        aspectHeightModel.value = Number(state.aspect_height)
+        const presetIndex = root.indexOfAspect(state.aspect_preset)
+        if (presetIndex >= 0)
+            aspectModel.currentIndex = presetIndex
+        root.restoring = wasRestoring
+    }
+
     function syncOverlay() {
         if (!root.interaction)
             return
-        const locked = root.hasLockedAspect()
-        root.interaction.setCropAspectLock(locked, locked ? root.currentAspectRatio() : 1.0)
+        const ratio = root.lockedAspectRatio()
+        const locked = ratio !== undefined
+        root.interaction.setCropAspectLock(locked, locked ? ratio : 1.0)
         root.interaction.setCropRotationDegrees(rotationModel.value)
         root.interaction.setCropRectNormalized(root.rectFromModels())
     }
 
-    /// Apply the aspect lock and the rotated-source constraint after the model
-    /// named by @p driver changed, then show the result on the overlay.
+    /// Apply the catalog crop constraint after the change @p driver (position,
+    /// width, height, rotation, aspect_preset, aspect_size), then show the
+    /// result on the overlay. A fixed preset sets the aspect size to its ratio;
+    /// an aspect size edit selects the custom preset.
     function applyConstraints(driver) {
-        let rect = root.rectFromModels()
-        if (root.hasLockedAspect()) {
-            let fitted = null
-            if (driver === "aspect") {
-                fitted = geometryMath.maxAspectCropRect(root.imageAspect, root.currentAspectRatio())
-            } else if (driver === "width" || driver === "height") {
-                fitted = geometryMath.resizeAspectCropRect(rect.x, rect.y, rect.width, rect.height,
-                                                           root.imageAspect,
-                                                           root.currentAspectRatio(),
-                                                           driver === "width")
-            }
-            if (fitted && fitted.length >= 4)
-                rect = Qt.rect(fitted[0], fitted[1], fitted[2], fitted[3])
-        }
-        if (root.interaction)
-            rect = root.interaction.clampCropRect(rect, rotationModel.value)
-        root.setRectModels(rect)
+        const state = parameterCatalog.constrainCrop(root.cropState(), driver,
+                                                     root.sourceImageWidth,
+                                                     root.sourceImageHeight)
+        if (state.x !== undefined)
+            root.setStateModels(state)
+        root.wireEnabled()
         root.syncOverlay()
     }
 
     function buildCropParams() {
-        return JSON.stringify({
-            crop_rotate: {
-                crop_rect: { x: cropXModel.value, y: cropYModel.value,
-                             w: cropWidthModel.value, h: cropHeightModel.value },
-                angle_degrees: Number(rotationModel.value),
-                aspect_ratio_preset: String(aspectModel.currentValue),
-                aspect_ratio: { width: Number(aspectWidthModel.value),
-                                height: Number(aspectHeightModel.value) }
-            }
-        })
-    }
-
-    /// Editing the custom width or height switches the preset to custom.
-    function selectCustomAspect() {
-        const index = root.indexOfAspect("custom")
-        if (index < 0 || aspectModel.currentIndex === index)
-            return
-        aspectModel.currentIndex = index
-        root.wireEnabled()
+        return parameterCatalog.modelParamsJson("crop_rotate", root.cropState())
     }
 
     /// paramsBuilder for the models: constrain, then send the whole geometry.
@@ -294,12 +292,12 @@ Item {
         fieldKey: "crop_rotate"
         label: qsTr("Crop X")
         // With a rotation the unrotated rectangle of the frame may start left of
-        // the source; clampCropRect decides the valid range.
-        minimum: -1
-        maximum: 1
-        defaultValue: 0
-        step: 0.001
-        precision: 3
+        // the source; the rotated-source constraint decides the valid range.
+        minimum: root.cropSpecs.x.ui_min
+        maximum: root.cropSpecs.x.ui_max
+        defaultValue: root.cropDefaults.x
+        step: root.cropSpecs.x.ui_step
+        precision: root.cropSpecs.x.ui_decimals
         submitter: root.editorSession
         paramsBuilder: function () { return root.paramsAfter("position") }
     }
@@ -308,11 +306,11 @@ Item {
         objectName: "geometryCropYModel"
         fieldKey: "crop_rotate"
         label: qsTr("Crop Y")
-        minimum: -1
-        maximum: 1
-        defaultValue: 0
-        step: 0.001
-        precision: 3
+        minimum: root.cropSpecs.y.ui_min
+        maximum: root.cropSpecs.y.ui_max
+        defaultValue: root.cropDefaults.y
+        step: root.cropSpecs.y.ui_step
+        precision: root.cropSpecs.y.ui_decimals
         submitter: root.editorSession
         paramsBuilder: function () { return root.paramsAfter("position") }
     }
@@ -321,11 +319,11 @@ Item {
         objectName: "geometryCropWidthModel"
         fieldKey: "crop_rotate"
         label: qsTr("Crop Width")
-        minimum: 0.0001
-        maximum: 1
-        defaultValue: 1
-        step: 0.001
-        precision: 3
+        minimum: root.cropSpecs.width.ui_min
+        maximum: root.cropSpecs.width.ui_max
+        defaultValue: root.cropDefaults.width
+        step: root.cropSpecs.width.ui_step
+        precision: root.cropSpecs.width.ui_decimals
         submitter: root.editorSession
         paramsBuilder: function () { return root.paramsAfter("width") }
     }
@@ -334,11 +332,11 @@ Item {
         objectName: "geometryCropHeightModel"
         fieldKey: "crop_rotate"
         label: qsTr("Crop Height")
-        minimum: 0.0001
-        maximum: 1
-        defaultValue: 1
-        step: 0.001
-        precision: 3
+        minimum: root.cropSpecs.height.ui_min
+        maximum: root.cropSpecs.height.ui_max
+        defaultValue: root.cropDefaults.height
+        step: root.cropSpecs.height.ui_step
+        precision: root.cropSpecs.height.ui_decimals
         submitter: root.editorSession
         paramsBuilder: function () { return root.paramsAfter("height") }
     }
@@ -347,11 +345,11 @@ Item {
         objectName: "geometryRotationModel"
         fieldKey: "crop_rotate"
         label: qsTr("Rotation")
-        minimum: -180
-        maximum: 180
-        defaultValue: 0
-        step: 0.1
-        precision: 1
+        minimum: root.cropSpecs.angle_degrees.ui_min
+        maximum: root.cropSpecs.angle_degrees.ui_max
+        defaultValue: root.cropDefaults.angle_degrees
+        step: root.cropSpecs.angle_degrees.ui_step
+        precision: root.cropSpecs.angle_degrees.ui_decimals
         suffix: "°"
         submitter: root.editorSession
         paramsBuilder: function () { return root.paramsAfter("rotation") }
@@ -364,50 +362,33 @@ Item {
         entries: root.aspectEntries
         defaultIndex: 0
         submitter: root.editorSession
-        paramsBuilder: function () {
-            if (aspectModel.currentValue !== "custom") {
-                const ratio = geometryMath.presetRatio(aspectModel.currentValue)
-                const wasRestoring = root.restoring
-                root.restoring = true
-                aspectWidthModel.value = ratio.length >= 2 ? Number(ratio[0]) : 1.0
-                aspectHeightModel.value = ratio.length >= 2 ? Number(ratio[1]) : 1.0
-                root.restoring = wasRestoring
-            }
-            root.wireEnabled()
-            return root.paramsAfter("aspect")
-        }
+        paramsBuilder: function () { return root.paramsAfter("aspect_preset") }
     }
     EditorAdjustmentValueModel {
         id: aspectWidthModel
         objectName: "geometryAspectWidthModel"
         fieldKey: "crop_rotate"
         label: qsTr("Aspect Width")
-        minimum: 0.0001
-        maximum: 100
-        defaultValue: 1
-        step: 0.01
-        precision: 2
+        minimum: root.cropSpecs.aspect_width.ui_min
+        maximum: root.cropSpecs.aspect_width.ui_max
+        defaultValue: root.cropDefaults.aspect_width
+        step: root.cropSpecs.aspect_width.ui_step
+        precision: root.cropSpecs.aspect_width.ui_decimals
         submitter: root.editorSession
-        paramsBuilder: function () {
-            root.selectCustomAspect()
-            return root.paramsAfter("aspect")
-        }
+        paramsBuilder: function () { return root.paramsAfter("aspect_size") }
     }
     EditorAdjustmentValueModel {
         id: aspectHeightModel
         objectName: "geometryAspectHeightModel"
         fieldKey: "crop_rotate"
         label: qsTr("Aspect Height")
-        minimum: 0.0001
-        maximum: 100
-        defaultValue: 1
-        step: 0.01
-        precision: 2
+        minimum: root.cropSpecs.aspect_height.ui_min
+        maximum: root.cropSpecs.aspect_height.ui_max
+        defaultValue: root.cropDefaults.aspect_height
+        step: root.cropSpecs.aspect_height.ui_step
+        precision: root.cropSpecs.aspect_height.ui_decimals
         submitter: root.editorSession
-        paramsBuilder: function () {
-            root.selectCustomAspect()
-            return root.paramsAfter("aspect")
-        }
+        paramsBuilder: function () { return root.paramsAfter("aspect_size") }
     }
 
     Connections {

@@ -23,6 +23,7 @@
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_geometry_math.hpp"
+#include "ui/alcedo_main/album_backend/editor_parameter_catalog_adapter.hpp"
 #include "ui/alcedo_main/album_backend/editor_grade_white_balance_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
@@ -558,6 +559,7 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<LutLibraryModel>("Alcedo.Main", 1, 0, "LutLibraryModel");
   qmlRegisterType<LutLibraryController>("Alcedo.Main", 1, 0, "LutLibraryController");
   qmlRegisterType<EditorGeometryMath>("Alcedo.Main", 1, 0, "EditorGeometryMath");
+  qmlRegisterType<EditorParameterCatalogAdapter>("Alcedo.Main", 1, 0, "EditorParameterCatalog");
   qmlRegisterType<EditorLensCatalogModel>("Alcedo.Main", 1, 0, "EditorLensCatalogModel");
   EditorScopeItem::RegisterQmlType();
 }
