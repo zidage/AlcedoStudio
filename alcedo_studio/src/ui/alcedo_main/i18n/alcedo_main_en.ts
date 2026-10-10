@@ -6665,4 +6665,26 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
 </context>
+<context>
+    <name>alcedo::ui::LibrarySelection</name>
+    <message>
+        <source>(unnamed)</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::LibraryMutationOperations</name>
+    <message>
+        <source>(unnamed)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No valid image was selected.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rating must be between 0 and 5.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
 </TS>

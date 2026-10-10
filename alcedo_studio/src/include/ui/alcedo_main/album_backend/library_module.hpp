@@ -26,6 +26,7 @@
 #include "ui/alcedo_main/album_backend/album_section_model.hpp"
 #include "ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
+#include "ui/alcedo_main/album_backend/library_selection.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/search_request_worker.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_manager.hpp"
@@ -120,6 +121,8 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   Q_PROPERTY(bool queryUpdating READ QueryUpdating NOTIFY QueryStateChanged)
   Q_PROPERTY(QString queryError READ QueryError NOTIFY QueryStateChanged)
   Q_PROPERTY(uint pendingRevealFileId READ PendingRevealFileId NOTIFY PendingRevealChanged)
+  /// The library image selection.
+  Q_PROPERTY(LibrarySelection* selection READ selection CONSTANT)
 
  public:
   explicit LibraryModule(ProjectModule* project, QObject* parent = nullptr);
@@ -131,6 +134,8 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
 
   [[nodiscard]] auto thumbs() -> ThumbnailManager& { return thumbs_; }
   [[nodiscard]] auto thumbs() const -> const ThumbnailManager& { return thumbs_; }
+  [[nodiscard]] auto selection() -> LibrarySelection* { return &selection_; }
+  [[nodiscard]] auto selection() const -> const LibrarySelection* { return &selection_; }
   [[nodiscard]] auto model() -> AlbumThumbnailModel& { return thumbnail_model_; }
   [[nodiscard]] auto model() const -> const AlbumThumbnailModel& { return thumbnail_model_; }
   [[nodiscard]] auto project() -> ProjectModule* { return project_; }
@@ -173,6 +178,9 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   Q_INVOKABLE void SetThumbnailCacheHint(uint visibleCells, uint maxEdge = 1024);
   Q_INVOKABLE bool LoadMoreThumbnails();
   Q_INVOKABLE bool LoadThumbnailsThroughIndex(int index);
+  /// Selects every photo of the current view that is loaded after a load through the last
+  /// photo (Select All). Clears the selection when the view is empty.
+  Q_INVOKABLE void SelectAllInCurrentView();
   /// Row in the current collection + filter listing, not just the loaded page.
   /// Returns -1 when the element is outside that listing.
   Q_INVOKABLE int IndexOfElementInCurrentView(uint elementId);
@@ -325,6 +333,7 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   ThumbnailManager    thumbs_;
   AlbumThumbnailModel thumbnail_model_{};
   AlbumViewState      view_state_{};
+  LibrarySelection    selection_{this};
 
   bool    thumbnail_disk_cache_enabled_      = true;
   QString thumbnail_disk_cache_root_;

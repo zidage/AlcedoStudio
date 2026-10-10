@@ -7512,4 +7512,26 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>无法保存编辑器中的图像。</translation>
     </message>
 </context>
+<context>
+    <name>alcedo::ui::LibrarySelection</name>
+    <message>
+        <source>(unnamed)</source>
+        <translation>（未命名）</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::LibraryMutationOperations</name>
+    <message>
+        <source>(unnamed)</source>
+        <translation>（未命名）</translation>
+    </message>
+    <message>
+        <source>No valid image was selected.</source>
+        <translation>未选择有效的图像。</translation>
+    </message>
+    <message>
+        <source>Rating must be between 0 and 5.</source>
+        <translation>评分必须介于 0 到 5 之间。</translation>
+    </message>
+</context>
 </TS>

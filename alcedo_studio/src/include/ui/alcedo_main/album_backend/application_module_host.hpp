@@ -34,6 +34,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
@@ -85,6 +86,8 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(ProjectLaunchCoordinator* projectLaunch READ project_launch CONSTANT)
   /// Application quit decision and the editor finalize sequence of a window or project close.
   Q_PROPERTY(ApplicationCloseCoordinator* applicationClose READ application_close CONSTANT)
+  /// Library delete targets, delete scope, post-delete pruning, and rating rules.
+  Q_PROPERTY(LibraryMutationOperations* libraryMutations READ library_mutations CONSTANT)
 
  public:
   struct LifecycleEvent {
@@ -164,6 +167,9 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto application_close() -> ApplicationCloseCoordinator* {
     return application_close_.get();
   }
+  [[nodiscard]] auto library_mutations() -> LibraryMutationOperations* {
+    return library_mutations_.get();
+  }
   /// Phase 5A application-layer editor session (owned by the host, not QML).
   [[nodiscard]] auto editor_session_service() -> alcedo::EditorSessionService* {
     return editor_session_runtime_ ? editor_session_runtime_->service.get() : nullptr;
@@ -233,6 +239,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
   std::unique_ptr<ProjectLaunchCoordinator>            project_launch_;
   std::unique_ptr<ApplicationCloseCoordinator>         application_close_;
+  std::unique_ptr<LibraryMutationOperations>           library_mutations_;
 
   LifecycleObserver                                    lifecycle_observer_{};
   bool                                                 shutting_down_ = false;

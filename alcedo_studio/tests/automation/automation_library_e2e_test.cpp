@@ -16,6 +16,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QSet>
@@ -293,6 +294,91 @@ TEST_F(AutomationLibraryE2ETest, ImportOfMissingPathIsRejectedWithoutTask) {
   EXPECT_EQ(error.value("code").toInt(), -32602);
   EXPECT_EQ(error.value("data").toObject().value("pointer").toString(), QStringLiteral("/paths/0"));
   EXPECT_TRUE(Result(QStringLiteral("tasks.list")).value("tasks").toArray().isEmpty());
+  Stop();
+}
+
+/// The rating of each listed photo, by element id.
+auto RatingsById(const QJsonArray& items) -> QMap<double, int> {
+  QMap<double, int> ratings;
+  for (const QJsonValue& value : items) {
+    ratings.insert(value.toObject().value("element_id").toDouble(),
+                   value.toObject().value("rating").toInt());
+  }
+  return ratings;
+}
+
+TEST_F(AutomationLibraryE2ETest, RatingPersistsAfterReopen) {
+  const auto raw_files = CollectCiRawFiles();
+  ASSERT_GE(raw_files.size(), 4u) << "the CI RAW files are missing under " << TEST_IMG_PATH;
+  const QString project_path = StartWithNewProject(QStringLiteral("rating_project"));
+  ASSERT_FALSE(project_path.isEmpty());
+  ASSERT_EQ(ImportAndWait(raw_files).value("state").toString(), QStringLiteral("succeeded"));
+  const QJsonArray items = ListItems();
+  ASSERT_EQ(items.size(), static_cast<qsizetype>(raw_files.size()));
+  const QJsonValue  first  = items.at(0).toObject().value("element_id");
+  const QJsonValue  second = items.at(1).toObject().value("element_id");
+  const QJsonValue  third  = items.at(2).toObject().value("element_id");
+  const QJsonValue  last   = items.last().toObject().value("element_id");
+
+  // One photo uses the direct path.
+  const QJsonObject single = Result(QStringLiteral("library.rate"),
+                                    QJsonObject{{"element_ids", QJsonArray{first}}, {"rating", 5}});
+  EXPECT_EQ(single.value("applied_count").toInt(), 1);
+  // Two photos use the batch save task.
+  const QJsonObject batch =
+      Result(QStringLiteral("library.rate"),
+             QJsonObject{{"element_ids", QJsonArray{second, third}}, {"rating", 2}});
+  const QString task_id = batch.value("task_id").toString();
+  ASSERT_FALSE(task_id.isEmpty());
+  EXPECT_EQ(Result(QStringLiteral("tasks.wait"), QJsonObject{{"task_id", task_id}})
+                .value("state")
+                .toString(),
+            QStringLiteral("succeeded"));
+  // Delete one photo, as the CI workflow does.
+  EXPECT_EQ(Result(QStringLiteral("library.delete"),
+                   QJsonObject{{"element_ids", QJsonArray{last}}, {"scope", "project"}})
+                .value("deleted_ids")
+                .toArray(),
+            QJsonArray{last});
+  EXPECT_EQ(Result(QStringLiteral("tasks.wait"), QJsonObject{{"idle", true}}).value("idle"),
+            QJsonValue(true));
+  const QJsonArray before = ListItems();
+  ASSERT_EQ(before.size(), items.size() - 1);
+  Stop();
+
+  ASSERT_TRUE(StartWithProject(project_path));
+  const QJsonArray after = ListItems();
+  EXPECT_EQ(after, before);
+  const QMap<double, int> ratings = RatingsById(after);
+  EXPECT_EQ(ratings.value(first.toDouble()), 5);
+  EXPECT_EQ(ratings.value(second.toDouble()), 2);
+  EXPECT_EQ(ratings.value(third.toDouble()), 2);
+  EXPECT_FALSE(ratings.contains(last.toDouble()));
+  Stop();
+}
+
+TEST_F(AutomationLibraryE2ETest, RatingOutsideRangeIsRejected) {
+  const auto raw_files = CollectCiRawFiles();
+  ASSERT_FALSE(raw_files.empty()) << "the CI RAW files are missing under " << TEST_IMG_PATH;
+  ASSERT_FALSE(StartWithNewProject(QStringLiteral("range_project")).isEmpty());
+  ASSERT_EQ(ImportAndWait({raw_files.front()}).value("counts").toObject().value("completed"),
+            QJsonValue(1));
+  const QJsonValue element = ListItems().at(0).toObject().value("element_id");
+
+  for (const int rating : {6, -1}) {
+    const CliRun run = Call(QStringLiteral("library.rate"),
+                            QJsonObject{{"element_ids", QJsonArray{element}}, {"rating", rating}});
+    EXPECT_EQ(run.exit_code, 1);
+    const QJsonObject error = run.json.value("error").toObject();
+    EXPECT_EQ(error.value("code").toInt(), -32602);
+    EXPECT_EQ(error.value("data").toObject().value("pointer").toString(),
+              QStringLiteral("/rating"));
+    const QString expected_range =
+        rating > 5 ? QStringLiteral("maximum 5") : QStringLiteral("minimum 0");
+    EXPECT_TRUE(error.value("message").toString().contains(expected_range))
+        << error.value("message").toString().toStdString();
+  }
+  EXPECT_EQ(ListItems().at(0).toObject().value("rating").toInt(), 0);
   Stop();
 }
 

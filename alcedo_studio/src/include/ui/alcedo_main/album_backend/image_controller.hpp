@@ -72,7 +72,8 @@ class ImageController final : public QObject {
   Q_INVOKABLE QVariantMap SetImageRatings(const QVariantList& targetEntries, int rating);
   // Same batch as SetImageRatings, but the library shows the new stars at once and the
   // database write and project save run on a worker thread as a background task.
-  // Returns {started, message}; ImageRatingsFinished carries the SetImageRatings result.
+  // Returns {started, taskId, message}; taskId is the RatingUpdate background task.
+  // ImageRatingsFinished carries the SetImageRatings result.
   Q_INVOKABLE QVariantMap StartSetImageRatings(const QVariantList& targetEntries, int rating);
   Q_INVOKABLE QVariantMap SetImageDescription(uint elementId, const QString& caption);
   Q_INVOKABLE QVariantMap SetImageRatingReasons(uint elementId, const QString& reasons);
