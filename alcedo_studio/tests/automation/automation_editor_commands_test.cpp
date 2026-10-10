@@ -54,6 +54,14 @@ TEST(AutomationEditorCommandsTest, EditorCatalogListsEveryFieldInUiUnits) {
     const QJsonObject field = FindField(fields, QString::fromUtf8(entry.field.data(),
                                                                   static_cast<int>(entry.field.size())));
     ASSERT_FALSE(field.isEmpty()) << entry.field;
+    if (entry.kind == EditorParameterValueKind::Object) {
+      EXPECT_EQ(field.value("kind").toString(), QStringLiteral("object"));
+      EXPECT_EQ(static_cast<std::size_t>(field.value("properties").toArray().size()),
+                entry.properties.size())
+          << entry.field;
+      EXPECT_TRUE(field.value("ui_default").isObject()) << entry.field;
+      continue;
+    }
     EXPECT_EQ(field.value("kind").toString(), QStringLiteral("scalar"));
     EXPECT_DOUBLE_EQ(field.value("ui_min").toDouble(), entry.range.minimum) << entry.field;
     EXPECT_DOUBLE_EQ(field.value("ui_max").toDouble(), entry.range.maximum) << entry.field;
@@ -65,6 +73,12 @@ TEST(AutomationEditorCommandsTest, EditorCatalogListsEveryFieldInUiUnits) {
   EXPECT_EQ(saturation.value("panel").toString(), QStringLiteral("look"));
   EXPECT_DOUBLE_EQ(saturation.value("ui_min").toDouble(), -100.0);
   EXPECT_DOUBLE_EQ(saturation.value("ui_max").toDouble(), 100.0);
+  const QJsonObject raw = FindField(fields, QStringLiteral("raw_decode"));
+  EXPECT_EQ(raw.value("panel").toString(), QStringLiteral("raw"));
+  const QJsonObject method = raw.value("properties").toArray().first().toObject();
+  EXPECT_EQ(method.value("name").toString(), QStringLiteral("method"));
+  EXPECT_EQ(method.value("type").toString(), QStringLiteral("option"));
+  EXPECT_EQ(method.value("options").toArray().size(), 3);
 }
 
 TEST(AutomationEditorCommandsTest, EditorCatalogRejectsUnknownParameter) {

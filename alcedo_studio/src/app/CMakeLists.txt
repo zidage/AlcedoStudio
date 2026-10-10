@@ -468,11 +468,21 @@ def_library(EditorAdjustmentPipeline
 
 # UI ranges, defaults, and UI-to-Model conversions of the editor fields. Qt-free; the QML value
 # models and the automation editor commands read the same table.
+# Qt-free crop and color temperature equations of the editor panels.
+def_library(EditorSupportModules
+    SOURCES
+        "${ALCEDO_SRC_ROOT}/ui/alcedo_main/editor_support/modules/geometry.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/geometry.hpp"
+        "${ALCEDO_SRC_ROOT}/ui/alcedo_main/editor_support/modules/color_temp.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/color_temp.hpp"
+)
+
 def_library(EditorParameterCatalog
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_parameter_catalog.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_catalog.hpp"
-    PUBLIC_DEPS EditorAdjustmentPipeline JSON
+    PUBLIC_DEPS EditorAdjustmentPipeline EditorPanelProjection EditorSupportModules EditGeometry
+                EditGraph JSON
 )
 
 def_library(EditorParameterWrite
