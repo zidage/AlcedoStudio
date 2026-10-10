@@ -102,6 +102,65 @@ TEST_F(EditorPendingInputSessionTest, EnqueueDoesNotCaptureHistoryOrApplyLivePat
   EXPECT_EQ(exposure->identity.image_id, static_cast<image_id_t>(20));
 }
 
+TEST_F(EditorPendingInputSessionTest, ReleaseBoundaryResultsCarryBoundaryOperationId) {
+  OpenInteractive();
+  const auto results_before = service_->results().size();
+  const int  commits_before = history_->commit_count;
+
+  const auto preview =
+      service_->EnqueueAdjustmentInput(test::ScalarPatch("exposure", 0.25f, false));
+  ASSERT_EQ(preview.kind, EditorSessionResultKind::Accepted);
+  EXPECT_EQ(preview.operation_id, 0u) << "a write inside a drag is not a command";
+  const auto released = service_->EnqueueAdjustmentInput(test::ScalarPatch("exposure", 0.4f, true));
+  ASSERT_EQ(released.kind, EditorSessionResultKind::Accepted);
+  const auto boundary_id = released.operation_id;
+  ASSERT_NE(boundary_id, 0u);
+  service_->DrainCommandQueueForTests();
+
+  auto results = service_->results();
+  ASSERT_GT(results.size(), results_before);
+  std::uint64_t render_request_id = 0;
+  for (std::size_t i = results_before; i < results.size(); ++i) {
+    EXPECT_EQ(results[i].operation_id, boundary_id) << "result " << i << ": " << results[i].message;
+    if (results[i].kind == EditorSessionResultKind::RenderRouted) {
+      render_request_id = results[i].render_request_id;
+    }
+  }
+  ASSERT_NE(render_request_id, 0u) << "the commit routes a render";
+  EXPECT_EQ(history_->commit_count, commits_before + 1);
+
+  const auto frame_results_before = results.size();
+  runtime_->coordinator->NotifySchedulerCompleted(render_request_id, true);
+  service_->DrainCommandQueueForTests();
+  results        = service_->results();
+  bool presented = false;
+  for (std::size_t i = frame_results_before; i < results.size(); ++i) {
+    if (results[i].kind == EditorSessionResultKind::FramePresented) {
+      presented = true;
+      EXPECT_EQ(results[i].operation_id, boundary_id);
+      EXPECT_EQ(results[i].render_request_id, render_request_id);
+    }
+  }
+  EXPECT_TRUE(presented);
+
+  // A separate boundary after a drag carries its own id the same way.
+  ASSERT_EQ(service_->EnqueueAdjustmentInput(test::ScalarPatch("exposure", 0.6f, false)).kind,
+            EditorSessionResultKind::Accepted);
+  const auto boundary =
+      service_->EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind::Release);
+  ASSERT_EQ(boundary.kind, EditorSessionResultKind::Accepted);
+  ASSERT_NE(boundary.operation_id, 0u);
+  EXPECT_NE(boundary.operation_id, boundary_id);
+  const auto second_before = service_->results().size();
+  service_->DrainCommandQueueForTests();
+  results = service_->results();
+  ASSERT_GT(results.size(), second_before);
+  for (std::size_t i = second_before; i < results.size(); ++i) {
+    EXPECT_EQ(results[i].operation_id, boundary.operation_id) << results[i].message;
+  }
+  EXPECT_EQ(history_->commit_count, commits_before + 2);
+}
+
 TEST_F(EditorPendingInputSessionTest, EnqueueRejectedWhenSessionIsNotInteractive) {
   EditorAdjustmentPatch patch = test::ScalarPatch("exposure", 0.25f);
   const auto rejected = service_->EnqueueAdjustmentInput(patch);

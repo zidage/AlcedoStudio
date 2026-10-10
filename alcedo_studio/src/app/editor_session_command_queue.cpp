@@ -224,6 +224,14 @@ auto EditorSessionCommandQueue::Submit(EditorSessionCommand command, CommandHand
   return submission;
 }
 
+auto EditorSessionCommandQueue::ReserveCommandId() -> std::uint64_t {
+  std::scoped_lock lock(state_->mutex);
+  if (state_->state != EditorSessionQueueState::Accepting) {
+    return 0;
+  }
+  return state_->next_command_id++;
+}
+
 void EditorSessionCommandQueue::PostCompletion(Task task) {
   if (!task) {
     return;

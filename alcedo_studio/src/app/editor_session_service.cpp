@@ -1240,16 +1240,22 @@ auto EditorSessionService::EnqueueAdjustmentInput(EditorAdjustmentPatch patch)
     return Reject("Close the comparison before editing");
   }
   const auto identity = lifecycle_.identity();
-  const auto admitted = pending_input_.AdmitFieldChange(identity, patch);
+  // Admission stays on the caller thread so a slider drag never waits for the owner queue. A
+  // settled write is a Release boundary; it takes an id so the commit and frame results of the
+  // later consume can be matched to it.
+  const auto boundary_operation_id = patch.settled ? command_queue_.ReserveCommandId() : 0;
+  const auto admitted =
+      pending_input_.AdmitFieldChange(identity, std::move(patch), boundary_operation_id);
   if (!admitted.accepted) {
     return Reject(admitted.error.empty() ? "Queued adjustment input was rejected" : admitted.error);
   }
   RequestPendingInputConsume();
   EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = identity;
-  result.message  = "Adjustment input queued";
+  result.kind         = EditorSessionResultKind::Accepted;
+  result.state        = lifecycle_.state();
+  result.identity     = identity;
+  result.operation_id = boundary_operation_id;
+  result.message      = "Adjustment input queued";
   return result;
 }
 
@@ -1264,18 +1270,20 @@ auto EditorSessionService::EnqueuePendingInputBoundary(EditorPendingInputBoundar
   if (comparison_active_.load(std::memory_order_acquire)) {
     return Reject("Close the comparison before editing");
   }
-  const auto identity = lifecycle_.identity();
-  const auto admitted = pending_input_.AdmitBoundary(identity, kind);
+  const auto identity              = lifecycle_.identity();
+  const auto boundary_operation_id = command_queue_.ReserveCommandId();
+  const auto admitted = pending_input_.AdmitBoundary(identity, kind, boundary_operation_id);
   if (!admitted.accepted) {
     return Reject(admitted.error.empty() ? "Queued adjustment boundary was rejected"
                                          : admitted.error);
   }
   RequestPendingInputConsume();
   EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = identity;
-  result.message  = "Adjustment input boundary queued";
+  result.kind         = EditorSessionResultKind::Accepted;
+  result.state        = lifecycle_.state();
+  result.identity     = identity;
+  result.operation_id = boundary_operation_id;
+  result.message      = "Adjustment input boundary queued";
   return result;
 }
 
@@ -1723,13 +1731,18 @@ void EditorSessionService::TryConsumePendingInput() {
     serial_admission_.AbortCycle();
     return;
   }
-  const auto result = ConsumeTakenSequence(*batch);
+  // The results and the render of this batch belong to the boundary that sealed it, or to no
+  // command for an interactive batch; not to the command whose completion runs this consume.
+  const auto previous_operation = current_operation_id_;
+  current_operation_id_         = batch->boundary_operation_id;
+  const auto result             = ConsumeTakenSequence(*batch);
   if (result.kind == EditorSessionResultKind::Rejected ||
       result.kind == EditorSessionResultKind::Failed) {
     serial_admission_.AbortCycle();
     (void)Emit(result);
     RequestPendingInputConsume();
   }
+  current_operation_id_ = previous_operation;
   PublishRenderProgressIfChanged();
 }
 
@@ -1818,6 +1831,9 @@ auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& seq
     dropped.identity = ident;
     dropped.message  = "Discarded adjustment input queued for another image";
     RequestPendingInputConsume();
+    if (sequence.boundary_operation_id != 0) {
+      return EmitQuiet(std::move(dropped));
+    }
     return dropped;
   }
   const bool time_apply = diag::PreviewPerformanceEnabled();
@@ -1849,6 +1865,9 @@ auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& seq
       BumpHistoryRevision();
       return Emit(std::move(result));
     }
+    if (sequence.boundary_operation_id != 0) {
+      return EmitQuiet(std::move(result));
+    }
     return result;
   }
   const auto route_identity           = lifecycle_.identity();
@@ -1879,6 +1898,9 @@ auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& seq
   result.message           = outcome.message;
   if (commit) {
     return Emit(std::move(result));
+  }
+  if (sequence.boundary_operation_id != 0) {
+    return EmitQuiet(std::move(result));
   }
   return result;
 }
@@ -2089,14 +2111,16 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
   const auto undo_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
+  std::uint64_t request_id            = 0;
   if (outcome.schedule_render) {
-    render_.RouteInitialRender(outcome.render_command, undo_identity, load_request);
+    request_id = render_.RouteInitialRender(outcome.render_command, undo_identity, load_request);
   }
   EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = undo_identity;
-  result.message  = outcome.message;
+  result.kind              = EditorSessionResultKind::Accepted;
+  result.state             = lifecycle_.state();
+  result.identity          = undo_identity;
+  result.render_request_id = request_id;
+  result.message           = outcome.message;
   BumpHistoryRevision();
   return Emit(std::move(result));
 }
@@ -2124,14 +2148,16 @@ auto EditorSessionService::Redo() -> EditorSessionResult {
   const auto redo_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
+  std::uint64_t request_id            = 0;
   if (outcome.schedule_render) {
-    render_.RouteInitialRender(outcome.render_command, redo_identity, load_request);
+    request_id = render_.RouteInitialRender(outcome.render_command, redo_identity, load_request);
   }
   EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = redo_identity;
-  result.message  = outcome.message;
+  result.kind              = EditorSessionResultKind::Accepted;
+  result.state             = lifecycle_.state();
+  result.identity          = redo_identity;
+  result.render_request_id = request_id;
+  result.message           = outcome.message;
   BumpHistoryRevision();
   return Emit(std::move(result));
 }
@@ -2160,14 +2186,16 @@ auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id) -> E
   const auto move_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
+  std::uint64_t request_id            = 0;
   if (outcome.schedule_render) {
-    render_.RouteInitialRender(outcome.render_command, move_identity, load_request);
+    request_id = render_.RouteInitialRender(outcome.render_command, move_identity, load_request);
   }
   EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = move_identity;
-  result.message  = outcome.message;
+  result.kind              = EditorSessionResultKind::Accepted;
+  result.state             = lifecycle_.state();
+  result.identity          = move_identity;
+  result.render_request_id = request_id;
+  result.message           = outcome.message;
   BumpHistoryRevision();
   return Emit(std::move(result));
 }
@@ -2480,6 +2508,102 @@ auto EditorSessionService::RetryComparison() -> EditorSessionResult {
   return Emit(std::move(result));
 }
 
+auto EditorSessionService::RenderPreviewImages(RenderRequest                 geometry,
+                                               EditorPreviewImagesCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("Preview images require a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::RenderPreviewImages;
+    auto shared_completion =
+        std::make_shared<EditorPreviewImagesCompletion>(std::move(on_complete));
+    return SubmitCommand(std::move(command),
+                         [this, geometry, shared_completion](const EditorSessionCommand&) {
+                           return RenderPreviewImages(geometry, std::move(*shared_completion));
+                         });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  const auto refuse = [&](EditorPreviewImagesStatus status, std::string message) {
+    accepted.message = message;
+    EditorPreviewImagesResult refused;
+    refused.status  = status;
+    refused.message = std::move(message);
+    on_complete(std::move(refused));
+    return accepted;
+  };
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return refuse(EditorPreviewImagesStatus::Rejected,
+                  "Preview images require an interactive session");
+  }
+  if (!dependencies_.pipeline || !dependencies_.history || !lifecycle_.has_history_guard()) {
+    return refuse(EditorPreviewImagesStatus::Rejected,
+                  "Preview images require an open image history");
+  }
+  if (!dependencies_.images) {
+    return refuse(EditorPreviewImagesStatus::Rejected, "Image rendering is not available");
+  }
+  if (dependencies_.images->HasImageJob()) {
+    return refuse(EditorPreviewImagesStatus::Busy, "The image renderer is running another job");
+  }
+  const auto identity = lifecycle_.identity();
+  auto       current  = dependencies_.pipeline->CurrentPreview(identity.element_id);
+  if (!current) {
+    return refuse(EditorPreviewImagesStatus::Rejected,
+                  "The working state of the image is not available");
+  }
+  EditorComparisonInputPair pair;
+  std::string               error;
+  if (!dependencies_.history->BuildComparisonInputs(
+          lifecycle_.history_guard(), current, EditorComparisonSource::Root(),
+          EditorComparisonSource::Current(), &pair, &error)) {
+    return refuse(EditorPreviewImagesStatus::Failed,
+                  error.empty() ? "The preview documents could not be prepared" : error);
+  }
+  EditorImageRenderRequest request;
+  request.element_id            = identity.element_id;
+  request.image_id              = identity.image_id;
+  request.image_load_request_id = lifecycle_.active_image_load_request();
+  request.snapshots             = {pair.a.snapshot, pair.b.snapshot};
+  request.geometry              = geometry;
+  // The port calls the completion only for an accepted job; a refused job keeps it here.
+  auto shared_completion = std::make_shared<EditorPreviewImagesCompletion>(std::move(on_complete));
+  const auto job_id      = dependencies_.images->ScheduleImages(
+      std::move(request),
+      [shared_completion](EditorImageRenderResult rendered) {
+        EditorPreviewImagesResult result;
+        result.message = std::move(rendered.message);
+        if (rendered.status == EditorImageRenderStatus::Completed && rendered.images.size() == 2) {
+          result.status  = EditorPreviewImagesStatus::Completed;
+          result.root    = std::move(rendered.images[0]);
+          result.current = std::move(rendered.images[1]);
+        } else if (rendered.status == EditorImageRenderStatus::Cancelled) {
+          result.status = EditorPreviewImagesStatus::Failed;
+          if (result.message.empty()) {
+            result.message = "The preview render was cancelled";
+          }
+        } else {
+          result.status = EditorPreviewImagesStatus::Failed;
+          if (result.message.empty()) {
+            result.message = "The preview render failed";
+          }
+        }
+        (*shared_completion)(std::move(result));
+      },
+      &error);
+  if (job_id == 0) {
+    on_complete = std::move(*shared_completion);
+    return refuse(EditorPreviewImagesStatus::Failed,
+                  error.empty() ? "The preview render could not be scheduled" : error);
+  }
+  accepted.message = "Preview images scheduled";
+  return accepted;
+}
+
 auto EditorSessionService::CloseComparison(bool                                refresh_current_view,
                                            std::optional<ViewportRenderRegion> region)
     -> EditorSessionResult {
@@ -2563,6 +2687,15 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
     BeginPublication();
     render_.NotifyRenderResult(completion.render_result, lifecycle_.identity(),
                                lifecycle_.active_image_load_request(), lifecycle_.state());
+    if (completion.render_result.kind == EditorRenderResultKind::FrameReady &&
+        current_operation_id_ != 0) {
+      EditorSessionResult presented;
+      presented.kind              = EditorSessionResultKind::FramePresented;
+      presented.state             = lifecycle_.state();
+      presented.identity          = lifecycle_.identity();
+      presented.render_request_id = completion.request_id;
+      (void)EmitQuiet(std::move(presented));
+    }
     FinishSerialFrameIfNeeded(completion.render_result);
     PublishRenderProgressIfChanged();
     EndPublication();

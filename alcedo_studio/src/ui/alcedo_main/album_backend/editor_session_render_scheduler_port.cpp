@@ -682,6 +682,11 @@ void EditorSessionRenderSchedulerPort::CancelImages(std::uint64_t job_id) {
   }
 }
 
+auto EditorSessionRenderSchedulerPort::HasImageJob() const -> bool {
+  std::scoped_lock lock(mutex_);
+  return image_job_.has_value();
+}
+
 void EditorSessionRenderSchedulerPort::RunImageJob(
     std::uint64_t job_id, const std::shared_ptr<alcedo::PipelineExecutor>& executor,
     const std::shared_ptr<alcedo::ImageBuffer>& input,

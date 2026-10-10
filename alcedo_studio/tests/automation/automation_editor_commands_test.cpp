@@ -43,7 +43,7 @@ auto FindField(const QJsonArray& fields, const QString& name) -> QJsonObject {
 TEST(AutomationEditorCommandsTest, EditorCatalogListsEveryFieldInUiUnits) {
   AutomationCommandRegistry registry;
   QString                   error;
-  ASSERT_TRUE(RegisterAutomationEditorCommands(registry, &error)) << error.toStdString();
+  ASSERT_TRUE(RegisterAutomationEditorCatalogCommand(registry, &error)) << error.toStdString();
 
   const auto responses = Dispatch(registry, QStringLiteral("editor.catalog"));
   ASSERT_EQ(responses.size(), 1U);
@@ -89,7 +89,7 @@ TEST(AutomationEditorCommandsTest, EditorCatalogListsEveryFieldInUiUnits) {
 
 TEST(AutomationEditorCommandsTest, EditorCatalogRejectsUnknownParameter) {
   AutomationCommandRegistry registry;
-  ASSERT_TRUE(RegisterAutomationEditorCommands(registry));
+  ASSERT_TRUE(RegisterAutomationEditorCatalogCommand(registry));
 
   const auto responses =
       Dispatch(registry, QStringLiteral("editor.catalog"), QJsonObject{{"field", "saturation"}});

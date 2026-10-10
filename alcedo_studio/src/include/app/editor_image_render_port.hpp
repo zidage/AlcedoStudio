@@ -106,6 +106,9 @@ class IEditorImageRenderPort {
    * its pixels are dropped. The completion still runs, with status Cancelled.
    */
   virtual void CancelImages(std::uint64_t job_id) = 0;
+
+  /// True while an accepted image job has not returned from its completion. Any thread.
+  [[nodiscard]] virtual auto HasImageJob() const -> bool        = 0;
 };
 
 }  // namespace alcedo

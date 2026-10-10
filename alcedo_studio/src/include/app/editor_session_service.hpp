@@ -54,6 +54,30 @@ struct EditorPendingPresentationTarget {
   ImageLoadRequestId image_load_request{};
 };
 
+/// Terminal state of one preview image request.
+enum class EditorPreviewImagesStatus : std::uint8_t {
+  /// Both images rendered.
+  Completed,
+  /// The image render port runs another job (for example the comparison); nothing was started.
+  Busy,
+  /// The session cannot render the open image now; the message says why.
+  Rejected,
+  /// The render failed or was cancelled; the message says why.
+  Failed,
+};
+
+/// Root and Current images of the open image, in host pixels.
+struct EditorPreviewImagesResult {
+  EditorPreviewImagesStatus status = EditorPreviewImagesStatus::Failed;
+  std::string               message;
+  /// Set only when Completed.
+  RenderedPipelineImage     root;
+  RenderedPipelineImage     current;
+};
+
+/// Receives the outcome of RenderPreviewImages, once, on the session owner or the render worker.
+using EditorPreviewImagesCompletion = std::function<void(EditorPreviewImagesResult result)>;
+
 /// Narrow backend surface for EditorSessionController tests. Production uses
 /// EditorSessionService; tests may inject a recording fake.
 class IEditorSessionBackend {
@@ -469,6 +493,23 @@ class IEditorSessionBackend {
       -> EditorSessionResult {
     return RejectComparison("Comparison is not supported by this backend");
   }
+  /**
+   * @brief Render the imported root and the working values of the open image to host pixels.
+   *
+   * Uses the image render port with @p geometry; presents nothing and writes nothing. The
+   * working values include input that is not settled yet.
+   * @return Rejected only when the command queue refuses the command. Every other outcome,
+   *         including a refusal on the owner, reaches @p on_complete exactly once.
+   */
+  virtual auto RenderPreviewImages(RenderRequest /*geometry*/,
+                                   EditorPreviewImagesCompletion /*on_complete*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = state();
+    result.message = "Preview images are not supported by this backend";
+    return result;
+  }
   /// Published state of the open comparison; Inactive when none is open. Any thread.
   [[nodiscard]] virtual auto comparison_state() const -> EditorComparisonState { return {}; }
   /// Move the Ready pair @p pair_id (A, B) out of the backend; empty when it is not Ready.
@@ -726,6 +767,8 @@ class EditorSessionService final : public IEditorSessionBackend {
                                EditorComparisonSource b) -> EditorSessionResult override;
   auto RetryComparison() -> EditorSessionResult override;
   auto CloseComparison(bool refresh_current_view, std::optional<ViewportRenderRegion> region)
+      -> EditorSessionResult override;
+  auto RenderPreviewImages(RenderRequest geometry, EditorPreviewImagesCompletion on_complete)
       -> EditorSessionResult override;
   [[nodiscard]] auto comparison_state() const -> EditorComparisonState override {
     return comparison_.state();

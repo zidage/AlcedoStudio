@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1 to AU9 have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1 to AU10 have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -572,7 +572,7 @@ class AutomationCommandRegistry {
 | AU8b | RAW and Geometry panels use the catalog | Catalog QML adapter, Raw and Geometry QML | AU8a | 600–700 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU9a | Parameter catalog: display transform and white balance | Catalog, Display and white balance QML | AU8 | 1100–1200 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU9b | Parameter catalog: HLS, color wheels, curve, LUT | Catalog, Look QML, editor_support modules | AU9a | 900–1100 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
-| AU10 | Editor commands and `render.preview` | Editor session, render port | AU3, AU7 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
+| AU10 | Editor commands and `render.preview` | Editor session, render port | AU3, AU7 | 1300–1800 | implemented | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
 | AU11 | Version commands and commit attribution | Session, journal, storage, QML | AU10 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
 | AU12 | Export in C++, export commands | Export queue and recipe, QML | AU5 | 1100–1600 | planned | [#327](https://github.com/zidage/AlcedoStudio/issues/327) |
 | AU13 | Search in C++, search commands | Search session, QML | AU5 | 900–1300 | planned | [#327](https://github.com/zidage/AlcedoStudio/issues/327) |
@@ -2168,6 +2168,21 @@ Remaining defects or unavailable platforms: macOS Metal runs only in CI.
 
 - `EditorSessionService::EnqueuePendingInputBoundary`: route through `SubmitCommand` so the
   boundary gets a command id. The consume path emits results with that `operation_id`.
+- Correlation point (step 1 finding, 2026-10-10): the consume does not run in the command scope
+  of the boundary. `EnqueueAdjustmentInput` and `EnqueuePendingInputBoundary` admit on the caller
+  thread into `EditorPendingInputQueue`; the owner consumes later in `TryConsumePendingInput`,
+  from a posted consume request or from the completion of the previous frame, so
+  `current_operation_id_` there is 0 or the id of an unrelated render. Routing the boundary
+  through `SubmitCommand` would move admission behind the owner queue and change the slider
+  path. The implemented point: the boundary takes an id from the command id sequence at
+  admission (`EditorSessionCommandQueue::ReserveCommandId`; a settled write is a Release
+  boundary and takes one too), the sealed `EditorPendingSequence` keeps it
+  (`boundary_operation_id`), and `TryConsumePendingInput` sets it as `current_operation_id_`
+  around the consume of that sequence. The commit result, the render intent, and the frame
+  results then carry it. No new id type: the id is an `operation_id` from the existing
+  sequence. A frame of a command-routed render is published as the non-terminal result
+  `FramePresented` with its `render_request_id`, so `editor.set` can wait for the frame of its
+  commit.
 - Proposed: `editor_commands.cpp`, `render_commands.cpp`.
 - `render.preview` builds Root and Current snapshots with the existing
   `BuildEditorComparisonInputs` (`editor_comparison_service.cpp:137-158`) and calls
@@ -2215,7 +2230,7 @@ session" -> -32002 with the owner message -> history unchanged
 
 | Test | Assertion |
 | --- | --- |
-| `EditorSessionServiceTest.ReleaseBoundaryResultsCarryBoundaryOperationId` | Every result after the boundary has its id. |
+| `EditorPendingInputSessionTest.ReleaseBoundaryResultsCarryBoundaryOperationId` | Every result after the boundary has its id. |
 | `AutomationEditorE2ETest.SetExposureCreatesOneCommitAndReadsBackUiValue` | One new commit; `editor.get` returns the value. |
 | `AutomationEditorE2ETest.UndoRestoresPreviousUiValue` | Value equals the value before set. |
 | `AutomationEditorE2ETest.BatchStopsAtFirstInvalidValueAndReportsApplied` | `applied` equals 1 for an invalid second change. |
@@ -2226,18 +2241,113 @@ session" -> -32002 with the owner message -> history unchanged
 **Build and run commands**
 
 ```powershell
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AutomationEditorE2ETest EditorSessionServiceTest --parallel 4
-ctest --test-dir build/debug -R "AutomationEditorE2ETest|EditorSessionServiceTest" -j 1 --output-on-failure
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AutomationEditorE2ETest EditorPendingInputSessionTest --parallel 4
+ctest --test-dir build/debug -R "AutomationEditorE2ETest|EditorPendingInputSessionTest" -j 1 --output-on-failure
 ```
 
 **Exit criteria**
 
-- [ ] Tests pass on Windows CUDA locally and on macOS Metal in CI.
-- [ ] The GUI slider path still creates the same commits (existing editor session tests pass).
+- [x] Tests pass on Windows CUDA locally; macOS Metal in CI runs on the pull request.
+- [x] The GUI slider path still creates the same commits (existing editor session tests pass).
 
 **Expected diff:** 1300–1800 lines.
 
-**Completion record:** see section 13.
+**Completion record (AU10):**
+
+```text
+Phase / date / status: AU10 / 2026-10-10 / implemented (macOS Metal runs in the pull request CI).
+Source revision and branch: main d20a14b0c; branch feature/automation-editor-commands. Actual
+  diff: about 2250 lines (27 files, this record included).
+Actual changed modules: EditorSessionCommandQueue (ReserveCommandId, RenderPreviewImages kind),
+  EditorPendingInputQueue (boundary_operation_id on a sealed sequence), EditorSessionService
+  (boundary ids, FramePresented, undo / redo render ids, RenderPreviewImages),
+  EditorSessionResultKind::FramePresented, IEditorImageRenderPort::HasImageJob and the scheduler
+  port, EditorSessionController (EnqueueFieldWrite, RequestUndo / RequestRedo,
+  SessionResultObserved), editor_commands.cpp, render_commands.cpp (new), headless host
+  registration, tests (shared E2E fixture automation_e2e_session.hpp, AutomationEditorE2ETest).
+Implemented behavior:
+  - editor.open {element_id} opens the photo and answers when the session is Interactive for that
+    image and editing is allowed; a failed load answers the owner message. editor.close
+    {persist = true} finalizes and returns to the library.
+  - editor.get {fields?} reads the UI values of the current document (catalog ToUiValue) for the
+    selected node, or for the current panel nodes when none is selected. It does not depend on a
+    panel being shown, so a headless session reads every field right after open.
+  - editor.set {field, value}: catalog ToModelJson -> EditorSessionController::EnqueueFieldWrite
+    (settled) -> answers after the result of its boundary id and the presented frame of its
+    render request, with the value that the editor now shows and head_commit. A value equal to
+    the current one makes no commit (the history keeps no empty commit) and answers the
+    unchanged head.
+  - editor.batch_set {changes[<= 64]} applies the changes in order, each after the frame of the
+    previous one; the first failure stops it with data {reason, applied, head_commit, pointer}.
+  - editor.undo / editor.redo answer {head_commit, can_undo, can_redo} after the frame.
+    editor.history answers the commits of the active Version with position applied / current /
+    future. editor.actions lists every EditorAction with allowed and reason.
+  - render.preview {out_dir, long_edge [16, 4096] = 2048, region?} renders Root and Current
+    through ScheduleImages and writes <file_stem>_current.png and <file_stem>_root.png; the PNG
+    encode runs on the global thread pool. Busy -> -32005 while another image job runs (that job
+    continues); a region outside the image -> -32602.
+Deviations from the phase text:
+  - Correlation point: the boundary is not routed through SubmitCommand (section "Modules,
+    files, and APIs", step 1 finding). It takes an id from ReserveCommandId at admission and
+    TryConsumePendingInput sets it around the consume of the sealed sequence. Steps 1 and 2 of
+    the implementation steps are replaced by this.
+  - A frame of a command-routed render is published as the non-terminal result FramePresented
+    (render_request_id); editor.set and undo / redo wait for it.
+  - No extracted target resolution function: editor.set calls the new
+    EditorSessionController::EnqueueFieldWrite, which submitWrite now wraps, so both use the same
+    code.
+  - The test EditorSessionServiceTest.ReleaseBoundaryResultsCarryBoundaryOperationId is
+    EditorPendingInputSessionTest.ReleaseBoundaryResultsCarryBoundaryOperationId (the pending
+    input fixture drives the consume path). The build commands use these target names.
+  - The rejection message of editor.set before Interactive is the CommitAdjustment reason of the
+    action policy (the same message that the panels show), not the owner admission text.
+  - A frame that is cancelled after a commit (a newer request replaces it) is covered: a later
+    request id also finishes the wait. A render that fails after the commit answers the Failed
+    result; a frame that never arrives answers the registry timeout (-32006).
+Explicitly unimplemented items: none for AU10. Crop values read from the document carry no source
+  size (the catalog crop entry does not need it).
+Primary success call chain: editor.set exposure 0.5 -> PrepareWrite -> EnqueueFieldWrite(settled)
+  -> EnqueueAdjustmentInput (ReserveCommandId = n, sealed Release) -> TryConsumePendingInput
+  (current_operation_id_ = n) -> HandlePendingSequence -> CommitAdjustment ->
+  PublishAppliedTypedBatch -> RenderRouted {operation_id n, render_request_id r} ->
+  FramePresented {r} -> {"field": "exposure", "value": 0.5, "head_commit": "<new>"}
+  (AutomationEditorE2ETest.SetExposureCreatesOneCommitAndReadsBackUiValue).
+Primary failure and restore call chain: editor.set before editor.open -> EnqueueAdjustmentPatch
+  rejects with the CommitAdjustment policy reason -> -32002, data.reason equal to the message ->
+  history unchanged (AutomationEditorE2ETest.SetBeforeInteractiveIsRejectedWithTheOwnerMessage).
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main alcedo_cli
+    AutomationEditorE2ETest AutomationLibraryE2ETest EditorPendingInputSessionTest
+    EditorComparisonServiceTest --parallel 4 -> 0
+  ctest --test-dir build/debug -R "AutomationEditorE2ETest" -j 1 --output-on-failure -> 0 (7/7,
+    --editor-backend cuda)
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AutomationLibraryCommandsTest
+    AutomationProjectCommandsTest HeadlessHostTest AutomationEditorCommandsTest
+    EditorSerialFrameConsumptionTest EditorHistoryMoveDuringInputTest
+    EditorSessionControllerPhase5ATest EditorHistoryOperationPublisherTest
+    EditorSessionCommandQueueBaselineTest EditorSessionActionPolicyCq3Test
+    EditorSessionCq5QualificationTest EditorAdjustmentModelTest
+    EditorSessionRenderSchedulerPortTest --parallel 4 -> 0
+  ctest --test-dir build/debug -R "^(<these 13 targets>|AutomationLibraryE2ETest|
+    EditorPendingInputSessionTest|EditorComparisonServiceTest)\." -j 1 -> 8 (207/209)
+Discovered / passed / failed / skipped counts: AutomationEditorE2ETest 7/7 (new),
+  EditorPendingInputSessionTest 11/11 (1 new), EditorComparisonServiceTest 10/10 (2 new),
+  AutomationLibraryE2ETest 6/6, AutomationLibraryCommandsTest 7/7, AutomationProjectCommandsTest
+  4/4, HeadlessHostTest 5/5, AutomationEditorCommandsTest 2/2, EditorSerialFrameConsumptionTest
+  12/12, EditorHistoryMoveDuringInputTest 3/3, EditorSessionControllerPhase5ATest 53/53,
+  EditorHistoryOperationPublisherTest 4/4, EditorSessionCq5QualificationTest 6/6,
+  EditorAdjustmentModelTest 19/19, EditorSessionRenderSchedulerPortTest 35/35,
+  EditorSessionCommandQueueBaselineTest 17/18, EditorSessionActionPolicyCq3Test 13/14. The two
+  failures (RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection,
+  AdjustmentPanelsReloadOnlyWhenCommittedContentChanges) fail the same way with the sources of
+  d20a14b0c. EditorSerialInputBoundaryTest does not compile on d20a14b0c (it includes the removed
+  editor_lut_catalog_model.hpp).
+Manual verification: alcedo-cli session with --editor-backend cuda: open, get, set, history,
+  undo, redo on a CI RAW file. The GUI slider path is covered by the editor session tests above;
+  the user records the GUI check.
+Evidence path: build/tmp/automation_au10/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS Metal runs only in CI.
+```
 
 ### Phase AU11 — Version commands and commit attribution
 

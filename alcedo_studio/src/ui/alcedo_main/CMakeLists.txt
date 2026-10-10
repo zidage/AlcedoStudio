@@ -370,6 +370,7 @@ def_library(AutomationHostLib
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/library_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_library_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/editor_commands.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/render_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_editor_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/headless_frame_sink.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/headless_frame_sink.hpp"

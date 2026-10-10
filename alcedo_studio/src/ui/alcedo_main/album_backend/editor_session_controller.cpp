@@ -797,26 +797,31 @@ void EditorSessionController::RemoveVersion(const QString& versionId) {
   }
 }
 
-void EditorSessionController::Undo() {
-  const QString action = QStringLiteral("undo");
-  if (!session_backend_) {
-    PublishHistoryRejected(action, QStringLiteral("Editor session backend is unavailable"));
-    return;
-  }
-  auto result = session_backend_->Undo();
-  emit StateChanged();
-  PublishHistoryInvokableReturn(action, result);
+void EditorSessionController::Undo() { (void)RequestUndo(); }
+
+void EditorSessionController::Redo() { (void)RequestRedo(); }
+
+auto EditorSessionController::RequestUndo() -> alcedo::EditorSessionResult {
+  return RequestUndoRedo(true);
 }
 
-void EditorSessionController::Redo() {
-  const QString action = QStringLiteral("redo");
+auto EditorSessionController::RequestRedo() -> alcedo::EditorSessionResult {
+  return RequestUndoRedo(false);
+}
+
+auto EditorSessionController::RequestUndoRedo(bool undo) -> alcedo::EditorSessionResult {
+  const QString action = undo ? QStringLiteral("undo") : QStringLiteral("redo");
   if (!session_backend_) {
-    PublishHistoryRejected(action, QStringLiteral("Editor session backend is unavailable"));
-    return;
+    alcedo::EditorSessionResult rejected;
+    rejected.kind    = alcedo::EditorSessionResultKind::Rejected;
+    rejected.message = "Editor session backend is unavailable";
+    PublishHistoryRejected(action, QString::fromStdString(rejected.message));
+    return rejected;
   }
-  auto result = session_backend_->Redo();
+  auto result = undo ? session_backend_->Undo() : session_backend_->Redo();
   emit StateChanged();
   PublishHistoryInvokableReturn(action, result);
+  return result;
 }
 
 auto EditorSessionController::SubmitRenameColorGrade(const alcedo::NodeId& node_id,
@@ -952,6 +957,7 @@ void EditorSessionController::OnBackendSessionResult(const alcedo::EditorSession
     SetPersistInFlight(false);
     emit StateChanged();
   }
+  emit SessionResultObserved(result);
   auto published = history_ops_.CorrelateObservedResult(result);
   if (!published.has_value()) {
     return;
@@ -1503,6 +1509,13 @@ auto EditorSessionController::can_discard_current_commit() const -> bool {
 
 bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParameterWrite write,
                                           bool settled) {
+  return !alcedo::EditorSessionResultIsFailure(
+      EnqueueFieldWrite(std::move(fieldKey), std::move(write), settled).kind);
+}
+
+auto EditorSessionController::EnqueueFieldWrite(QString                      fieldKey,
+                                                alcedo::EditorParameterWrite write, bool settled)
+    -> alcedo::EditorSessionResult {
   alcedo::EditorAdjustmentPatch patch;
   patch.field_key = fieldKey.toStdString();
   patch.write     = std::move(write);
@@ -1510,7 +1523,7 @@ bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParame
   if (can_edit() && session_backend_ != nullptr && node_controller_ != nullptr) {
     const auto document = pipeline_document();
     if (!document) {
-      return EnqueueAdjustmentPatch(std::nullopt, settled);
+      return EnqueueAdjustmentPatch(std::nullopt, settled, "Editor document is unavailable");
     }
     std::string error;
     auto        target = alcedo::CompleteSelectedNodeParameterTarget(
@@ -1519,25 +1532,28 @@ bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParame
                                            patch.field_key),
         patch.field_key, &error);
     if (!target.has_value()) {
-      return EnqueueAdjustmentPatch(std::nullopt, settled);
+      return EnqueueAdjustmentPatch(std::nullopt, settled, std::move(error));
     }
     patch.target = std::move(*target);
   }
-  return EnqueueAdjustmentPatch(std::move(patch), settled);
+  return EnqueueAdjustmentPatch(std::move(patch), settled, {});
 }
 
 auto EditorSessionController::SubmitTargetedWrite(const alcedo::EditorParameterTarget& target,
                                                   alcedo::EditorParameterWrite         write,
                                                   bool settled) -> bool {
-  if (!alcedo::DescribeEditorParameterTargetError(target, target.field_key).empty()) {
-    return EnqueueAdjustmentPatch(std::nullopt, settled);
+  auto target_error = alcedo::DescribeEditorParameterTargetError(target, target.field_key);
+  if (!target_error.empty()) {
+    return !alcedo::EditorSessionResultIsFailure(
+        EnqueueAdjustmentPatch(std::nullopt, settled, std::move(target_error)).kind);
   }
   alcedo::EditorAdjustmentPatch patch;
   patch.field_key = target.field_key;
   patch.write     = std::move(write);
   patch.settled   = settled;
   patch.target    = target;
-  return EnqueueAdjustmentPatch(std::move(patch), settled);
+  return !alcedo::EditorSessionResultIsFailure(
+      EnqueueAdjustmentPatch(std::move(patch), settled, {}).kind);
 }
 
 auto EditorSessionController::selected_node_id() const -> alcedo::NodeId {
@@ -1551,13 +1567,26 @@ auto EditorSessionController::lut_panel_node_id() const -> alcedo::NodeId {
 }
 
 auto EditorSessionController::EnqueueAdjustmentPatch(
-    std::optional<alcedo::EditorAdjustmentPatch> patch, bool settled) -> bool {
+    std::optional<alcedo::EditorAdjustmentPatch> patch, bool settled, std::string rejection)
+    -> alcedo::EditorSessionResult {
   auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
   if (!patch.has_value() || !can_edit() || session_backend_ == nullptr) {
     if (settled && viewport) {
       viewport->endInteractivePresentLoop();
     }
-    return false;
+    alcedo::EditorSessionResult rejected;
+    rejected.kind  = alcedo::EditorSessionResultKind::Rejected;
+    rejected.state = session_state();
+    if (session_backend_ == nullptr) {
+      rejected.message = "Editor session backend is unavailable";
+    } else if (!patch.has_value()) {
+      rejected.message = std::move(rejection);
+    } else {
+      rejected.message = session_backend_->action_availability()
+                             .For(alcedo::EditorAction::CommitAdjustment)
+                             .reason;
+    }
+    return rejected;
   }
   if (viewport) {
     if (settled) {
@@ -1570,9 +1599,7 @@ auto EditorSessionController::EnqueueAdjustmentPatch(
   if (alcedo::diag::PreviewPerformanceEnabled()) {
     patch->qml_write_ns = alcedo::diag::PreviewPerformance::NowNs();
   }
-  const auto result = session_backend_->EnqueueAdjustmentInput(std::move(*patch));
-  return result.kind != alcedo::EditorSessionResultKind::Rejected &&
-         result.kind != alcedo::EditorSessionResultKind::Failed;
+  return session_backend_->EnqueueAdjustmentInput(std::move(*patch));
 }
 
 bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {

@@ -11,10 +11,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -89,6 +91,10 @@ class ControllableImageRenderPort final : public IEditorImageRenderPort {
     return next_id;
   }
   void CancelImages(std::uint64_t job_id) override { cancelled.push_back(job_id); }
+  [[nodiscard]] auto HasImageJob() const -> bool override {
+    return std::any_of(jobs.begin(), jobs.end(),
+                       [](const Job& job) { return static_cast<bool>(job.completion); });
+  }
 
   /// Runs the completion of the last accepted job with @p status.
   void CompleteLast(EditorImageRenderStatus status, std::string message = {}) {
@@ -568,6 +574,72 @@ TEST_F(EditorComparisonServiceTest, PairPublishesOnceAndRenderFailureKeepsCompar
   state = service_->comparison_state();
   EXPECT_EQ(state.status, EditorComparisonStatus::Failed);
   EXPECT_EQ(state.error, "Another image job is accepted");
+}
+
+TEST_F(EditorComparisonServiceTest, PreviewImagesRenderRootAndWorkingValuesWithRequestedGeometry) {
+  OpenInteractive();
+  const auto commits_before = Graph()->CommitCount();
+  ASSERT_EQ(service_
+                ->EnqueueAdjustmentInput(test::WithColorGradeTarget(
+                    test::PatchFromJson("exposure", R"({"exposure":2.0})", false)))
+                .kind,
+            EditorSessionResultKind::Accepted);
+  Drain();
+
+  RenderRequest geometry                   = EditorImageRenderRequest{}.geometry;
+  geometry.resolution.max_edge             = 512;
+  geometry.view.visible_rect_in_edit_space = NormalizedRect{0.25f, 0.25f, 0.5f, 0.25f};
+  auto       outcome  = std::make_shared<std::optional<EditorPreviewImagesResult>>();
+  const auto accepted = service_->RenderPreviewImages(
+      geometry, [outcome](EditorPreviewImagesResult result) { *outcome = std::move(result); });
+  ASSERT_NE(accepted.kind, EditorSessionResultKind::Rejected) << accepted.message;
+  Drain();
+
+  ASSERT_EQ(images_->jobs.size(), 1u) << LastMessage();
+  const auto& request = images_->jobs.front().request;
+  ASSERT_EQ(request.snapshots.size(), 2u);
+  EXPECT_FLOAT_EQ(ExposureEv(request.snapshots[0]->Document()), ExposureEv(lease_.root_->document))
+      << "the first image is the imported root";
+  EXPECT_FLOAT_EQ(ExposureEv(request.snapshots[1]->Document()), 2.0f)
+      << "the second image has the working values, including an unreleased drag";
+  EXPECT_EQ(request.geometry.resolution.max_edge, 512u);
+  EXPECT_FLOAT_EQ(request.geometry.view.visible_rect_in_edit_space.w, 0.5f);
+  EXPECT_FLOAT_EQ(request.geometry.view.visible_rect_in_edit_space.h, 0.25f);
+  EXPECT_FALSE(outcome->has_value()) << "nothing is reported before the job ends";
+
+  images_->CompleteLast(EditorImageRenderStatus::Completed);
+  ASSERT_TRUE(outcome->has_value());
+  EXPECT_EQ((*outcome)->status, EditorPreviewImagesStatus::Completed) << (*outcome)->message;
+  EXPECT_EQ(Graph()->CommitCount(), commits_before) << "a preview commits nothing";
+  EXPECT_EQ(checkpoints_->materialize_count, 0);
+}
+
+TEST_F(EditorComparisonServiceTest,
+       PreviewImagesReportBusyWhileTheComparisonRendersAndLeaveItsJob) {
+  OpenInteractive();
+  OpenComparison();
+  ASSERT_EQ(images_->jobs.size(), 1u);
+
+  auto       outcome = std::make_shared<std::optional<EditorPreviewImagesResult>>();
+  const auto record = [outcome](EditorPreviewImagesResult result) { *outcome = std::move(result); };
+  (void)service_->RenderPreviewImages(EditorImageRenderRequest{}.geometry, record);
+  Drain();
+  ASSERT_TRUE(outcome->has_value());
+  EXPECT_EQ((*outcome)->status, EditorPreviewImagesStatus::Busy);
+  EXPECT_EQ(images_->jobs.size(), 1u) << "no second job was started";
+  EXPECT_TRUE(images_->cancelled.empty()) << "the comparison job was not cancelled";
+
+  images_->CompleteLast(EditorImageRenderStatus::Completed);
+  Drain();
+  EXPECT_EQ(service_->comparison_state().status, EditorComparisonStatus::Ready);
+  outcome->reset();
+  (void)service_->RenderPreviewImages(EditorImageRenderRequest{}.geometry, record);
+  Drain();
+  EXPECT_EQ(images_->jobs.size(), 2u) << "the port is free again";
+  images_->CompleteLast(EditorImageRenderStatus::Failed, "device lost");
+  ASSERT_TRUE(outcome->has_value());
+  EXPECT_EQ((*outcome)->status, EditorPreviewImagesStatus::Failed);
+  EXPECT_EQ((*outcome)->message, "device lost");
 }
 
 }  // namespace

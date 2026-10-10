@@ -74,17 +74,19 @@ namespace {
 }  // namespace
 
 auto EditorPendingInputQueue::AdmitFieldChange(EditorSessionIdentity identity,
-                                               EditorAdjustmentPatch patch)
+                                               EditorAdjustmentPatch patch,
+                                               std::uint64_t         boundary_operation_id)
     -> EditorPendingInputAdmitResult {
   std::scoped_lock lock(mutex_);
-  return AdmitFieldChangeLocked(identity, std::move(patch));
+  return AdmitFieldChangeLocked(identity, std::move(patch), boundary_operation_id);
 }
 
 auto EditorPendingInputQueue::AdmitBoundary(EditorSessionIdentity          identity,
-                                            EditorPendingInputBoundaryKind kind)
+                                            EditorPendingInputBoundaryKind kind,
+                                            std::uint64_t                  boundary_operation_id)
     -> EditorPendingInputAdmitResult {
   std::scoped_lock lock(mutex_);
-  return AdmitBoundaryLocked(identity, kind);
+  return AdmitBoundaryLocked(identity, kind, boundary_operation_id);
 }
 
 auto EditorPendingInputQueue::Peek() const -> EditorPendingInputView {
@@ -134,7 +136,8 @@ auto EditorPendingInputQueue::HasConsumableWorkLocked() const -> bool {
 }
 
 auto EditorPendingInputQueue::AdmitFieldChangeLocked(EditorSessionIdentity identity,
-                                                     EditorAdjustmentPatch patch)
+                                                     EditorAdjustmentPatch patch,
+                                                     std::uint64_t         boundary_operation_id)
     -> EditorPendingInputAdmitResult {
   if (patch.field_key.empty()) {
     return RejectAdmit("Adjustment input requires a field key");
@@ -192,13 +195,14 @@ auto EditorPendingInputQueue::AdmitFieldChangeLocked(EditorSessionIdentity ident
 
   const auto sequence_id = open_->sequence_id;
   if (patch.settled) {
-    SealOpenLocked(EditorPendingInputBoundaryKind::Release);
+    SealOpenLocked(EditorPendingInputBoundaryKind::Release, boundary_operation_id);
   }
   return AcceptAdmit(sequence_id);
 }
 
 auto EditorPendingInputQueue::AdmitBoundaryLocked(EditorSessionIdentity          identity,
-                                                  EditorPendingInputBoundaryKind kind)
+                                                  EditorPendingInputBoundaryKind kind,
+                                                  std::uint64_t boundary_operation_id)
     -> EditorPendingInputAdmitResult {
   if (kind == EditorPendingInputBoundaryKind::None) {
     return RejectAdmit("Pending input boundary requires Release, Cancel, or NodeSwitch");
@@ -217,7 +221,7 @@ auto EditorPendingInputQueue::AdmitBoundaryLocked(EditorSessionIdentity         
     open_->fields.clear();
     open_field_index_.clear();
   }
-  SealOpenLocked(kind);
+  SealOpenLocked(kind, boundary_operation_id);
   return AcceptAdmit(sequence_id);
 }
 
@@ -233,11 +237,13 @@ auto EditorPendingInputQueue::StartSequenceLocked(EditorSessionIdentity        i
   return *open_;
 }
 
-void EditorPendingInputQueue::SealOpenLocked(EditorPendingInputBoundaryKind kind) {
+void EditorPendingInputQueue::SealOpenLocked(EditorPendingInputBoundaryKind kind,
+                                             std::uint64_t                  boundary_operation_id) {
   if (!open_.has_value()) {
     return;
   }
-  open_->seal = kind;
+  open_->seal                  = kind;
+  open_->boundary_operation_id = boundary_operation_id;
   sealed_.push_back(std::move(*open_));
   open_.reset();
   open_field_index_.clear();
