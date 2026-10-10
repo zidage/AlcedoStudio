@@ -19,6 +19,7 @@
 #include "automation/automation_protocol.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/automation/automation_command_registry.hpp"
+#include "ui/alcedo_main/automation/automation_editor_commands.hpp"
 #include "ui/alcedo_main/automation/automation_host_commands.hpp"
 #include "ui/alcedo_main/automation/automation_library_commands.hpp"
 #include "ui/alcedo_main/automation/automation_project_commands.hpp"
@@ -42,7 +43,8 @@ class InProcessAutomationSession {
         RegisterAutomationHostCommands(registry_, std::move(context), &error) &&
         RegisterAutomationProjectCommands(registry_, &host_, &error) &&
         RegisterAutomationLibraryCommands(registry_, &host_, &tracker_, host_mode, &error) &&
-        RegisterAutomationTaskCommands(registry_, &host_, &tracker_, &error);
+        RegisterAutomationTaskCommands(registry_, &host_, &tracker_, &error) &&
+        RegisterAutomationEditorCommands(registry_, &error);
     EXPECT_TRUE(registered) << error.toStdString();
   }
 

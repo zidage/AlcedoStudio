@@ -2,7 +2,7 @@
 
 Date: 2026-10-08
 
-Status: in progress. AU1 to AU6 have implementation evidence (completion records in their phase sections).
+Status: in progress. AU1 to AU7 have implementation evidence (completion records in their phase sections).
 
 Tracking issue: [#331](https://github.com/zidage/AlcedoStudio/issues/331). Progress is tracked in the issues, not in this document.
 
@@ -567,7 +567,7 @@ class AutomationCommandRegistry {
 | AU4b | Project commands | `AutomationHostLib` | AU4a | 600–800 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU5 | Import, library reads, thumbnails, tasks, CI wiring | Import, library, CI | AU4 | 1000–1500 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
 | AU6 | Selection, rating, delete in C++, commands | Library operations, QML | AU5 | 900–1300 | implemented | [#324](https://github.com/zidage/AlcedoStudio/issues/324) |
-| AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
+| AU7 | Parameter catalog: scalar fields | Catalog, Tone, Look, PostProcess QML | AU1 | 1100–1600 | implemented | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU8 | Parameter catalog: RAW, input profile, lens, crop | Catalog, Raw and Geometry QML | AU7 | 1300–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU9 | Parameter catalog: display transform and color fields | Catalog, Display, Look, white balance QML | AU8 | 1200–1700 | planned | [#325](https://github.com/zidage/AlcedoStudio/issues/325) |
 | AU10 | Editor commands and `render.preview` | Editor session, render port | AU3, AU7 | 1300–1800 | planned | [#326](https://github.com/zidage/AlcedoStudio/issues/326) |
@@ -1653,12 +1653,67 @@ ctest --test-dir build/debug -R "EditorParameterCatalogTest|EditorAdjustmentMode
 
 **Exit criteria**
 
-- [ ] Tests pass.
+- [x] Tests pass.
 - [ ] Manual GUI check: every changed slider shows the same range and default as before.
 
 **Expected diff:** 1100–1600 lines.
 
-**Completion record:** see section 13.
+**Completion record:**
+
+```text
+Phase / date / status: AU7 / 2026-10-10 / implemented.
+Source revision and branch: main 381c727d4; branch feature/automation-parameter-catalog-scalar.
+  Actual diff: about 1250 lines (19 files, this record included).
+Actual changed modules: new EditorParameterCatalog library (src/app, Qt-free, links
+  EditorAdjustmentPipeline for the field identity), EditorAdjustmentValueModel (catalog range and
+  conversion, loadFromSnapshot), EditorTonePanel.qml, EditorLookPanel.qml,
+  EditorPostProcessPanel.qml, new editor_commands.cpp in AutomationHostLib, headless host
+  registration, tests.
+Implemented behavior:
+  - EditorParameterCatalog::Entries() holds the 13 scalar fields with field, alias (white/whites,
+    black/blacks), adjustment, panel (tone, look, post), Model JSON key, conversion, and UI range
+    (min, max, default, step, decimals). Find() resolves the field key or its alias.
+  - ToModelJson(field, ui_value, current_model_json) rejects a value that is not a number or is
+    outside the range ("saturation must be in [-100, 100]") and returns the Model JSON that
+    ParseEditorParameterWrite accepts: {"exposure_ev": v}, {"saturation": 1 + v / 100},
+    {"strength": v / 100} for diffusion, film_grain, halation, {"offset": v} for sharpen,
+    {"<field>": v} for the other fields. ToUiValue reads that JSON and the panel projection forms.
+  - EditorAdjustmentValueModel takes minimum, maximum, defaultValue, step, and precision from the
+    catalog when fieldKey names a catalog scalar, converts UI values to Model values with the
+    catalog (the duplicate UiValueToModelValue is deleted), and loadFromSnapshot converts the
+    projected Model value to UI units. The three panels no longer state ranges and no longer have
+    JS loaders for these fields. The slider clamp in the value model stays (a slider produces only
+    values in range).
+  - editor.catalog returns {"fields": [...]} with each entry in the 2.9 form plus ui_decimals and
+    aliases. Registered in the headless host; the GUI server arrives in AU14.
+Explicitly unimplemented items: structured fields (AU8, AU9).
+Primary success call chain: EditorAdjustmentValueModel::setFieldKey("saturation") ->
+  applyCatalogEntry -> EditorParameterCatalog::Find -> minimum -100, maximum 100, default 0.
+Primary failure and restore call chain: ToModelJson("saturation", 150) -> nullopt, error
+  "saturation must be in [-100, 100]" -> nothing written
+  (EditorParameterCatalogTest.OutOfRangeValueIsRejectedWithRange).
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorParameterCatalogTest
+    EditorAdjustmentModelTest AutomationEditorCommandsTest --parallel 8 -> 0
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main
+    EditorAdjustmentSnapshotQmlTest EditorLookPanelInteractionTest --parallel 8 -> 0
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AutomationProjectCommandsTest
+    AutomationLibraryCommandsTest HeadlessHostTest --parallel 8 -> 0
+  ctest --test-dir build/debug -R "EditorParameterCatalogTest|EditorAdjustmentModelTest|
+    AutomationEditorCommandsTest" -j 1 -> 0
+  ctest --test-dir build/debug -R "EditorAdjustmentSnapshotQmlTest|EditorLookPanelInteractionTest"
+    -j 1 -> 0
+  ctest --test-dir build/debug -R "AutomationProjectCommandsTest|AutomationLibraryCommandsTest|
+    HeadlessHostTest" -j 1 -> 0
+Discovered / passed / failed / skipped counts: EditorParameterCatalogTest 10/10,
+  EditorAdjustmentModelTest 18/18 (3 new), AutomationEditorCommandsTest 2/2. Regression:
+  EditorAdjustmentSnapshotQmlTest and EditorLookPanelInteractionTest 19/19,
+  AutomationProjectCommandsTest, AutomationLibraryCommandsTest, and HeadlessHostTest 16/16.
+Manual verification: not run by the agent. The user records the GUI check (Tone, Look, and Post
+  Processing sliders show the same ranges and defaults).
+Evidence path: build/tmp/automation_au7/ (removed after the phase).
+Remaining defects or unavailable platforms: macOS Metal runs only in CI.
+```
 
 ### Phase AU8 — Parameter catalog: RAW decode, input profile, lens, crop
 

@@ -7,13 +7,17 @@
 #include <QtQml/qqml.h>
 
 #include <QJSValue>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <json.hpp>
 
+#include "app/editor_parameter_catalog.hpp"
 #include "app/editor_parameter_write.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
@@ -34,15 +38,41 @@ namespace alcedo::ui {
 
 namespace {
 
-auto UiValueToModelValue(const QString& field_key, double value) -> float {
-  if (field_key == QLatin1String("saturation")) {
-    return static_cast<float>(std::max(0.0, 1.0 + value / 100.0));
+/// nlohmann JSON form of a QML value: numbers, booleans, strings, objects, and arrays.
+auto ToNlohmannJson(const QJsonValue& value) -> nlohmann::json {
+  if (value.isBool()) {
+    return value.toBool();
   }
-  if (field_key == QLatin1String("film_grain") || field_key == QLatin1String("halation") ||
-      field_key == QLatin1String("diffusion")) {
-    return static_cast<float>(std::clamp(value / 100.0, 0.0, 1.0));
+  if (value.isDouble()) {
+    return value.toDouble();
   }
-  return static_cast<float>(value);
+  if (value.isString()) {
+    return value.toString().toStdString();
+  }
+  if (value.isObject()) {
+    nlohmann::json object = nlohmann::json::object();
+    const QJsonObject source = value.toObject();
+    for (auto it = source.begin(); it != source.end(); ++it) {
+      object[it.key().toStdString()] = ToNlohmannJson(it.value());
+    }
+    return object;
+  }
+  if (value.isArray()) {
+    nlohmann::json array = nlohmann::json::array();
+    for (const QJsonValue& item : value.toArray()) {
+      array.push_back(ToNlohmannJson(item));
+    }
+    return array;
+  }
+  return nullptr;
+}
+
+auto CatalogScalarEntry(const QString& field_key) -> const alcedo::EditorParameterCatalogEntry* {
+  const auto* entry = alcedo::EditorParameterCatalog::Find(field_key.toStdString());
+  if (entry == nullptr || entry->kind != alcedo::EditorParameterValueKind::Scalar) {
+    return nullptr;
+  }
+  return entry;
 }
 
 }  // namespace
@@ -154,6 +184,8 @@ EditorAdjustmentValueModel::EditorAdjustmentValueModel(QObject* parent)
   debounceTimer_->setSingleShot(true);
   debounceTimer_->setInterval(debounceIntervalMs_);
   connect(debounceTimer_, &QTimer::timeout, this, &EditorAdjustmentValueModel::onDebounceTimeout);
+  connect(this, &EditorAdjustmentModelBase::fieldKeyChanged, this,
+          &EditorAdjustmentValueModel::applyCatalogEntry);
 }
 
 void EditorAdjustmentValueModel::setValue(double v) { applyValue(v); }
@@ -295,6 +327,44 @@ void EditorAdjustmentValueModel::setDebounceIntervalMs(int ms) {
   debounceTimer_->setInterval(ms);
 }
 
+void EditorAdjustmentValueModel::loadFromSnapshot(const QVariantMap& snapshot) {
+  if (dragActive_) {
+    return;
+  }
+  const auto* entry = CatalogScalarEntry(fieldKey());
+  const auto  found = snapshot.constFind(fieldKey());
+  if (entry == nullptr || found == snapshot.constEnd()) {
+    return;
+  }
+  const auto ui_value = alcedo::EditorParameterCatalog::ToUiValue(
+      entry->field, ToNlohmannJson(QJsonValue::fromVariant(found.value())), nullptr);
+  if (!ui_value.has_value()) {
+    return;
+  }
+  const double value = ui_value->get<double>();
+  if (std::abs(value_ - value) > step_ * 0.1) {
+    setValue(value);
+  }
+}
+
+void EditorAdjustmentValueModel::applyCatalogEntry() {
+  const auto* entry = CatalogScalarEntry(fieldKey());
+  if (entry == nullptr) {
+    return;
+  }
+  // Keep minimum <= maximum at each step: applyValue clamps between them.
+  if (entry->range.minimum > maximum_) {
+    setMaximum(entry->range.maximum);
+    setMinimum(entry->range.minimum);
+  } else {
+    setMinimum(entry->range.minimum);
+    setMaximum(entry->range.maximum);
+  }
+  setDefaultValue(entry->range.default_value);
+  setStep(entry->range.step);
+  setPrecision(entry->range.decimals);
+}
+
 auto EditorAdjustmentValueModel::clamp(double v) const -> double {
   if (!std::isfinite(v)) {
     return value_;
@@ -319,10 +389,13 @@ auto EditorAdjustmentValueModel::applyValue(double v) -> bool {
 }
 
 auto EditorAdjustmentValueModel::valueWrite(double v) const -> alcedo::EditorParameterWrite {
+  const auto*  entry = CatalogScalarEntry(fieldKey());
+  const double model = entry != nullptr ? alcedo::EditorParameterCatalog::ScalarUiToModel(*entry, v)
+                                        : v;
   if (fieldKey() == QLatin1String("sharpen")) {
-    return alcedo::SharpenUpdate{static_cast<float>(v), std::nullopt, std::nullopt};
+    return alcedo::SharpenUpdate{static_cast<float>(model), std::nullopt, std::nullopt};
   }
-  return alcedo::EditorScalarWrite{UiValueToModelValue(fieldKey(), v)};
+  return alcedo::EditorScalarWrite{static_cast<float>(model)};
 }
 
 void EditorAdjustmentValueModel::submitInteractive(double v) {

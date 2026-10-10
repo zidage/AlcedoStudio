@@ -54,31 +54,10 @@ Item {
             return
         if (snapshot.grade_white_balance !== undefined)
             gradeWhiteBalanceModel.loadFromSnapshot(snapshot)
-        loadModelFromSnapshot(saturationModel, "saturation", snapshot)
-        loadModelFromSnapshot(vibranceModel, "vibrance", snapshot)
+        saturationModel.loadFromSnapshot(snapshot)
+        vibranceModel.loadFromSnapshot(snapshot)
         loadHlsFromSnapshot(snapshot)
         loadCdlFromSnapshot(snapshot)
-    }
-
-    function loadModelFromSnapshot(model, fieldKey, snapshot) {
-        if (!model || !fieldKey || !snapshot)
-            return
-        // In-flight pointer drag owns the value; snapshot echo must not fight it.
-        if (model.dragActive)
-            return
-        const entry = snapshot[fieldKey]
-        if (entry === undefined)
-            return
-        const val = entry[fieldKey] !== undefined ? entry[fieldKey] : entry.value
-        if (val === undefined)
-            return
-        var num = Number(val)
-        if (isNaN(num))
-            return
-        if (fieldKey === "saturation")
-            num = (num - 1.0) * 100.0
-        if (Math.abs(model.value - num) > (model.step * 0.1))
-            model.value = num
     }
 
     function loadHlsFromSnapshot(snapshot) {
@@ -144,11 +123,6 @@ Item {
         objectName: "lookSaturationModel"
         fieldKey: "saturation"
         label: qsTr("Saturation")
-        minimum: -100
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
     }
     EditorAdjustmentValueModel {
@@ -156,11 +130,6 @@ Item {
         objectName: "lookVibranceModel"
         fieldKey: "vibrance"
         label: qsTr("Vibrance")
-        minimum: -100
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
         submitter: root.editorSession
     }
     EditorHlsModel {

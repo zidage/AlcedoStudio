@@ -85,6 +85,13 @@ alcedo_add_automation_test(AutomationLibraryCommandsTest
     LABEL ci_automation_flow
     CATEGORIES ci_automation)
 
+# editor.* commands through the command registry.
+alcedo_add_automation_test(AutomationEditorCommandsTest
+    SOURCES automation_editor_commands_test.cpp
+    LIBRARIES AutomationHostLib
+    LABEL ci_automation_flow
+    CATEGORIES ci_automation)
+
 # The library workflow through real alcedo-cli and alcedo_main --headless processes. A failed
 # test copies the session logs to automation-failures/ in the build tree; CI uploads them.
 alcedo_add_automation_test(AutomationLibraryE2ETest

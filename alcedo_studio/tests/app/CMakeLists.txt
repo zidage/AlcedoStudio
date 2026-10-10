@@ -111,6 +111,16 @@ gtest_discover_tests(EditorPanelProjectionTest
     TEST_PREFIX "EditorPanelProjectionTest.")
 alcedo_register_test_target(EditorPanelProjectionTest app)
 
+add_executable(EditorParameterCatalogTest
+    ${ALCEDO_TEST_ROOT}/app/editor_parameter_catalog_test.cpp)
+target_include_directories(EditorParameterCatalogTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorParameterCatalogTest
+    PRIVATE GTest::gtest_main EditorParameterCatalog EditorParameterWrite EditGraph JSON)
+gtest_discover_tests(EditorParameterCatalogTest
+    TEST_PREFIX "EditorParameterCatalogTest.")
+alcedo_register_test_target(EditorParameterCatalogTest app)
+
 add_executable(EditorAdjustmentContextTest
     ${ALCEDO_TEST_ROOT}/app/editor_adjustment_context_test.cpp)
 target_include_directories(EditorAdjustmentContextTest

@@ -466,6 +466,15 @@ def_library(EditorAdjustmentPipeline
     PUBLIC_DEPS EditPipeline PipelineHistory JSON EditorPipelineCommandService
 )
 
+# UI ranges, defaults, and UI-to-Model conversions of the editor fields. Qt-free; the QML value
+# models and the automation editor commands read the same table.
+def_library(EditorParameterCatalog
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_parameter_catalog.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_catalog.hpp"
+    PUBLIC_DEPS EditorAdjustmentPipeline JSON
+)
+
 def_library(EditorParameterWrite
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_parameter_write.cpp"
