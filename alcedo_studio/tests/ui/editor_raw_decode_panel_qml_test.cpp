@@ -333,10 +333,12 @@ TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
   ASSERT_NE(raw_after_method, nullptr);
   ASSERT_TRUE(raw_after_method->demosaic_method.has_value());
   EXPECT_EQ(*raw_after_method->demosaic_method, "neural_engine");
+  // The write is the catalog RAW Decode object: the panel projection has only the method and
+  // the highlight switch, so the white balance keys of the fixture do not carry over.
   ASSERT_TRUE(raw_after_method->use_camera_wb.has_value());
-  EXPECT_FALSE(*raw_after_method->use_camera_wb);
+  EXPECT_TRUE(*raw_after_method->use_camera_wb);
   ASSERT_TRUE(raw_after_method->user_wb.has_value());
-  EXPECT_DOUBLE_EQ(*raw_after_method->user_wb, 5120.0);
+  EXPECT_DOUBLE_EQ(*raw_after_method->user_wb, 7600.0);
 
   auto* highlights = harness.findObject<QQuickItem>(QStringLiteral("rawHighlightsControl"));
   ASSERT_NE(highlights, nullptr);
