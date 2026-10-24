@@ -132,31 +132,39 @@ void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
-void EncodeRaster(MetalRenderDevice& device, MetalBackend::Texture2D& output,
-                  const AiSegmentationMaskSource& source, const MaskModel& mask,
-                  const ExecutionPlan& plan) {
-  auto&       workspace = device.Workspace();
-  // The upload records a blit before the compute encoder of the pass.
-  const auto  coverage  = workspace.AcquireAiMaskCoverage(source, device.CommandContext());
-  const auto  sampling  = MakeRasterMaskSamplingPlan(
-      plan.geometry, coverage->descriptor.reference_bounds, coverage->descriptor.extent);
+/// Raster sampling of @p coverage on the render grid of @p geometry into @p output: R8 for
+/// MaskEvaluate, RGBA32F for the coverage display. mask_raster writes (value, 0, 0, 1).
+/// @pre A coverage upload, if any, was recorded before (its blit precedes the compute encoder).
+void EncodeRasterSampling(MetalRenderDevice&                     device,
+                          const MaskCoverageImage<MetalBackend>& coverage,
+                          const ResolvedRenderGeometry& geometry, bool invert, float opacity,
+                          MetalBackend::Texture2D& output) {
+  const auto sampling = MakeRasterMaskSamplingPlan(geometry, coverage.descriptor.reference_bounds,
+                                                   coverage.descriptor.extent);
   auto*            encoder  = Encoder(device);
   auto             pipeline = Pipeline("mask_raster", "Metal Mask raster");
   MaskRasterParams params;
   CopyMatrix(params.render_to_texture_uv, sampling.render_to_texture_uv);
   params.width          = output.Width();
   params.height         = output.Height();
-  params.texture_width  = coverage->descriptor.extent.width;
-  params.texture_height = coverage->descriptor.extent.height;
+  params.texture_width  = coverage.descriptor.extent.width;
+  params.texture_height = coverage.descriptor.extent.height;
   params.samples        = RasterMaskSamplesPerAxis(sampling);
-  params.invert         = mask.invert ? 1u : 0u;
-  params.opacity        = mask.opacity;
+  params.invert         = invert ? 1u : 0u;
+  params.opacity        = opacity;
   encoder->setComputePipelineState(pipeline.get());
-  encoder->setTexture(static_cast<MTL::Texture*>(coverage->texture.Native()), 0);
+  encoder->setTexture(static_cast<MTL::Texture*>(coverage.texture.Native()), 0);
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 1);
   encoder->setBytes(&params, sizeof(params), 0);
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
+}
+
+void EncodeRaster(MetalRenderDevice& device, MetalBackend::Texture2D& output,
+                  const AiSegmentationMaskSource& source, const MaskModel& mask,
+                  const ExecutionPlan& plan) {
+  const auto coverage = device.Workspace().AcquireAiMaskCoverage(source, device.CommandContext());
+  EncodeRasterSampling(device, *coverage, plan.geometry, mask.invert, mask.opacity, output);
 }
 
 void EncodeFillZero(MetalRenderDevice& device, MetalBackend::Texture2D& output) {
@@ -311,6 +319,19 @@ auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
     }
   }
   return result;
+}
+
+void RecordMaskCoverageDisplay(MetalRenderDevice&                     device,
+                               const MaskCoverageImage<MetalBackend>& coverage,
+                               const MaskCoverageDisplayRequest&      request,
+                               MetalBackend::Texture2D&               output) {
+  const auto extent = request.geometry.render_extent;
+  if (output.Native() == nullptr || output.Format() != TextureFormat::Rgba32f ||
+      output.Width() != extent.width || output.Height() != extent.height) {
+    throw std::runtime_error(
+        "RecordMaskCoverageDisplay: the output is not an RGBA32F texture of the photo frame size");
+  }
+  EncodeRasterSampling(device, coverage, request.geometry, request.invert, request.opacity, output);
 }
 
 }  // namespace alcedo

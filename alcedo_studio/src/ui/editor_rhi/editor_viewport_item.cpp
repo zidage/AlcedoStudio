@@ -27,11 +27,13 @@ namespace alcedo::editor_rhi {
 
 EditorViewportItem::EditorViewportItem(QQuickItem* parent)
     : QQuickRhiItem(parent),
-      present_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())) {
+      present_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())),
+      coverage_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())) {
   setColorBufferFormat(QQuickRhiItem::TextureFormat::RGBA32F);
   setMirrorVertically(false);
   setAlphaBlending(false);
-  frame_sink_  = std::make_shared<DirectFrameSink>(this);
+  frame_sink_    = std::make_shared<DirectFrameSink>(this);
+  coverage_sink_ = std::make_shared<ViewportMaskCoverageSink>(this, coverage_queue_);
   consume_arm_ = std::make_shared<std::atomic<EditorViewportRenderer*>>(nullptr);
   connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow* window) {
     attachWindow(window);
@@ -64,12 +66,14 @@ EditorViewportItem::EditorViewportItem(QQuickItem* parent)
   // runs on the scene-graph thread. This prevents a producer from waiting on a
   // window that is exposed but has not created this item's renderer yet.
   present_queue_->SetConsumerAvailable(false);
+  coverage_queue_->SetConsumerAvailable(false);
 }
 
 EditorViewportItem::~EditorViewportItem() {
   stopInteractivePresentLoop();
   detachWindow();
   present_queue_->Shutdown();
+  coverage_queue_->Shutdown();
   setStatusText(QStringLiteral("viewport shutting down"));
 }
 
@@ -180,6 +184,9 @@ void EditorViewportItem::setSessionEpoch(qulonglong epoch) {
     return;
   }
   present_queue_->InvalidateSessionEpoch(epoch, imageIdentity());
+  // Coverage belongs to one image session: its frames end with the session.
+  coverage_queue_->InvalidateSessionEpoch(epoch, imageIdentity());
+  coverage_sink_->ClearPendingMetalCoverage();
   stopInteractivePresentLoop();
   emit SessionEpochChanged();
   notifyDiagnosticsChanged();
@@ -191,6 +198,8 @@ void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   const auto next = session_epoch_.load(std::memory_order_acquire) + 1;
   session_epoch_.store(next, std::memory_order_release);
   present_queue_->InvalidateSessionEpoch(next, imageIdentity);
+  coverage_queue_->InvalidateSessionEpoch(next, imageIdentity);
+  coverage_sink_->ClearPendingMetalCoverage();
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
   }
@@ -236,11 +245,20 @@ auto EditorViewportItem::frameSink() -> DirectFrameSink* { return frame_sink_.ge
 
 void EditorViewportItem::requestRendererInvalidation() {
   present_queue_->InvalidateTargetGeneration();
+  coverage_queue_->InvalidateTargetGeneration();
+  requestPresentUpdate();
+}
+
+void EditorViewportItem::clearMaskCoverage() {
+  coverage_sink_->ClearPendingMetalCoverage();
+  mask_coverage_clear_requested_.store(true, std::memory_order_release);
   requestPresentUpdate();
 }
 
 void EditorViewportItem::cancelPendingFrames() {
   present_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
+  coverage_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
+  coverage_sink_->ClearPendingMetalCoverage();
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
   }
@@ -254,6 +272,8 @@ void EditorViewportItem::suspendPresentation() {
   // change sees the suspension and fails at once.
   present_queue_->SetPresentationSuspended(true);
   present_queue_->SetConsumerAvailable(false);
+  coverage_queue_->SetPresentationSuspended(true);
+  coverage_queue_->SetConsumerAvailable(false);
   notifyDiagnosticsChanged();
   if (!presentation_suspended_.exchange(true, std::memory_order_acq_rel)) {
     emit PresentationSuspendedChanged();
@@ -264,6 +284,7 @@ void EditorViewportItem::resumePresentation() {
   presentation_requested_.store(true, std::memory_order_release);
   // Producers wait for the next synchronize() again, as at startup.
   present_queue_->SetPresentationSuspended(false);
+  coverage_queue_->SetPresentationSuspended(false);
   requestPresentUpdate();
   if (presentation_suspended_.exchange(false, std::memory_order_acq_rel)) {
     emit PresentationSuspendedChanged();
@@ -377,7 +398,11 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
   // resources; the queue operation itself is thread-safe.
   scene_graph_invalidated_connection_ = connect(
       attached_window_, &QQuickWindow::sceneGraphInvalidated, this,
-      [queue = present_queue_] { queue->SetConsumerAvailable(false); }, Qt::DirectConnection);
+      [queue = present_queue_, coverage = coverage_queue_] {
+        queue->SetConsumerAvailable(false);
+        coverage->SetConsumerAvailable(false);
+      },
+      Qt::DirectConnection);
   scene_graph_initialized_connection_ = connect(
       attached_window_, &QQuickWindow::sceneGraphInitialized, this,
       [this] {
@@ -394,9 +419,12 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
   // racing item destruction touches no item members.
   before_rendering_connection_ = connect(
       attached_window_, &QQuickWindow::beforeRendering, this,
-      [queue = present_queue_, sink = frame_sink_, arm = consume_arm_] {
+      [queue = present_queue_, sink = frame_sink_, coverage_queue = coverage_queue_,
+       coverage_sink = coverage_sink_, arm = consume_arm_] {
         const bool ready = (queue && queue->HasReadyFrame()) ||
-                           (sink && sink->HasPendingImportedFrame());
+                           (sink && sink->HasPendingImportedFrame()) ||
+                           (coverage_queue && coverage_queue->HasReadyFrame()) ||
+                           (coverage_sink && coverage_sink->HasPendingMetalCoverage());
         if (!ready) {
           return;
         }

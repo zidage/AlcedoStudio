@@ -208,6 +208,7 @@ void CudaBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
 void CudaBackend::DownloadBufferRange(const Buffer& buffer, std::uint32_t offset,
                                       std::span<std::byte> out,
                                       CommandContext&      command_context) const {
+  ++d2h_copy_count_;
   if (out.empty()) {
     return;
   }
@@ -300,6 +301,7 @@ void CudaBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> bytes
 
 void CudaBackend::DownloadTexture2D(const Texture2D& texture, std::span<std::byte> out,
                                     CommandContext& command_context) const {
+  ++d2h_copy_count_;
   if (texture.DevicePointer() == nullptr) {
     throw std::runtime_error("CudaBackend::DownloadTexture2D: empty texture");
   }
@@ -438,6 +440,7 @@ void CudaBackend::ResetCounters() {
   malloc_count_     = 0;
   free_count_       = 0;
   h2d_copy_count_   = 0;
+  d2h_copy_count_   = 0;
   h2d_bytes_        = 0;
   lut_upload_bytes_ = 0;
   host_wait_count_  = 0;

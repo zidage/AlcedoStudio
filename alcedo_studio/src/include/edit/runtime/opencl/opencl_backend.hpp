@@ -444,6 +444,9 @@ class OpenClBackend {
   [[nodiscard]] auto FlushCount() const -> std::uint64_t { return flush_count_; }
   [[nodiscard]] auto WaitCount() const -> std::uint64_t { return wait_count_; }
   [[nodiscard]] auto HostToDeviceCopyCount() const -> std::uint64_t { return h2d_copy_count_; }
+  /// Host downloads (DownloadTexture2D, DownloadBufferRange) since construction or the last
+  /// counter reset.
+  [[nodiscard]] auto DeviceToHostCopyCount() const -> std::uint64_t { return d2h_copy_count_; }
   [[nodiscard]] auto HostToDeviceBytes() const -> std::uint64_t { return h2d_bytes_; }
   [[nodiscard]] auto LastHostToDeviceRanges() const -> const std::vector<ByteRange>& {
     return last_h2d_ranges_;
@@ -519,6 +522,7 @@ class OpenClBackend {
   std::uint64_t          flush_count_              = 0;
   std::uint64_t          wait_count_               = 0;
   std::uint64_t          h2d_copy_count_           = 0;
+  mutable std::uint64_t   d2h_copy_count_           = 0;
   std::uint64_t          h2d_bytes_                = 0;
   std::uint64_t          next_resource_id_         = 1;
   std::uint64_t          next_submission_          = 0;

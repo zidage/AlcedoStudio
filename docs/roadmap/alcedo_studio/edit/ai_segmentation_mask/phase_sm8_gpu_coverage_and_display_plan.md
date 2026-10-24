@@ -4,7 +4,8 @@ Date: 2026-10-24. Status: SM8.1 complete on 2026-10-24 on Windows and macOS (sec
 SM8.2 complete on 2026-10-24 on Windows CUDA (section 7.2.1).
 SM8.3 complete on 2026-10-24 on Windows OpenCL (section 7.3.1).
 SM8.4 complete on 2026-10-24 on macOS Metal (section 7.4.1).
-SM8.5 to SM8.8 are planned; no implementation evidence exists for them.
+SM8.5 complete on 2026-10-24 on Windows and macOS (section 7.5.1).
+SM8.6 to SM8.8 are planned; no implementation evidence exists for them.
 
 Parent: [AI Segmentation Mask Master Plan](../ai_segmentation_mask_master_plan.md), sections 1.5 and 9.7.
 Prerequisites: [SM4](phase_sm4_analysis_render_plan.md), [SM5](phase_sm5_ai_mask_source_and_session_plan.md),
@@ -282,7 +283,7 @@ The transport/composite split separates resource lifetime evidence from pixel co
 | SM8.2 | CUDA edge computation and committed-render reuse | SM8.1 | 1200-1900 | complete 2026-10-24 (7.2.1) |
 | SM8.3 | OpenCL edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | complete 2026-10-24 (7.3.1) |
 | SM8.4 | Metal edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | complete 2026-10-24 (7.4.1) |
-| SM8.5 | Dedicated GPU coverage presentation channel | SM8.1 | 1200-1900 | planned |
+| SM8.5 | Dedicated GPU coverage presentation channel | SM8.1 | 1200-1900 | complete 2026-10-24 (7.5.1) |
 | SM8.6 | One viewport composite for candidate and committed coverage | SM8.2-SM8.5 | 1000-1700 | planned |
 | SM8.7 | Session preview, replacement, Undo/Redo, Commit, and Cancel | SM8.6 | 1100-1800 | planned |
 | SM8.8 | Cross-backend resource and latency evidence | SM8.7 | 500-1000 | planned |
@@ -808,7 +809,166 @@ Use real native adapters on CUDA, OpenCL, and Metal. Do not infer transfer corre
 
 **Commands.** Groups A-C and the proposed presentation target; discover its tests before naming them in results.
 **Exit.** Real transfers and dual-owner release pass on all backends.
-**Expected diff.** 1200-1900 lines. **Completion record.** Section 11; unfilled.
+**Expected diff.** 1200-1900 lines. **Completion record.** Section 7.5.1.
+
+#### 7.5.1 SM8.5 completion record
+
+```text
+Phase / date / status: SM8.5 / 2026-10-24 / complete on Windows (CUDA, OpenCL) and macOS (Metal).
+Source revision and branch: base 36dc153a (SM8.4, pull request #507); branch
+  feature/ai-segmentation-sm8-5-coverage-presentation-channel (fifth pull request of the SM8
+  stack).
+Actual changed modules and diff size: 36 files, +2348 / -51 (2399 changed lines; estimate
+  1200-1900). The end-to-end test is 719 lines: it needs its own render thread, a QRhi per
+  backend on the device of the editor startup, the real lease adapter, and a test-only readback.
+  Production code is about 1630 changed lines. Largest files: mask_coverage_presentation_test.cpp
+  719, viewport_mask_coverage_sink.cpp 315, viewport_mask_coverage_layer.cpp 214,
+  mask_coverage_display.hpp 161.
+Implemented behavior:
+  1. Coverage display write: RecordMaskCoverageDisplay (CUDA, OpenCL, Metal) samples the processed
+     R8 coverage on the grid of the presented photo frame (MaskCoverageDisplayRequest: the
+     ResolveRenderGeometry result, invert, opacity) into an RGBA32F target: red is the R8 value
+     / 255, green and blue are 0, alpha is 1. It is the raster sampling of committed MaskEvaluate:
+     OpenCL and Metal dispatch the same mask_raster kernel with an RGBA32F output (it already
+     writes (value, 0, 0, 1)); CUDA shares RasterMaskCode and MakeRasterMaskParams between
+     RasterMaskKernel and RasterMaskDisplayKernel.
+  2. MaskCoverageDisplayTargets (workspace owner, not the texture pool): one RGBA32F target per
+     size that no presentation reader holds. CUDA and OpenCL keep one target; Metal keeps one more
+     per frame that the viewport still displays. A failed allocation leaves the targets unchanged.
+     Cleared by ReleaseSessionResources.
+  3. PresentMaskCoverage(device, selection, request, identity, sink): coverage-only work
+     (BeginCoverageWork, candidate or stored acquisition, display write, EndCoverageWork), then
+     FramePresenter<Backend>::PresentMaskCoverage. CUDA: cudaMemcpy2DToArrayAsync into the mapped
+     CUDA array and stream completion. OpenCL: clEnqueueCopyImage into the shared image, release
+     to OpenGL and clFinish, FinalizePresentation. Metal: wait for the command buffer, then hand
+     the MTLTexture and the reader identity of its display target to the viewport. No host
+     readback, no photo DAG, no photo result change.
+  4. IMaskCoverageSink (ui/edit_viewer/mask_coverage_sink.hpp): the producer side, separate from
+     IFrameSink, so a coverage frame cannot reach SubmitFinalDisplayFrame (scope input).
+     MaskCoveragePresentation carries the image session (MaskCoverageFrameIdentity) and the photo
+     frame geometry. MaskCoveragePublication reports Published or DiscardedForImageChange.
+  5. Viewport channel: EditorViewportItem owns a second DirectPresentQueue (coverage queue) and
+     ViewportMaskCoverageSink. The coverage queue follows the photo queue for session changes,
+     cancel, suspension, renderer invalidation, scene-graph invalidation, and shutdown. Native
+     targets come from the same lease adapters with the new LeaseFrameLayer::MaskCoverage.
+     ViewportMaskCoverageLayer (owned by EditorViewportRenderer) creates the requested targets,
+     imports the newest frame, and releases the previous frame only after the replacement is
+     imported (OpenCL: glFinish before the slot returns). It releases the frame on
+     clearMaskCoverage, an image session change, and QRhi recreation or teardown. The renderer
+     does not bind the coverage texture yet (SM8.6).
+  6. The sink drops a frame of another image session at map and at publication; the layer checks
+     the identity that the frame carries before import.
+  7. Backends count host downloads (DeviceToHostCopyCount) for the transfer assertions.
+Primary success call chain:
+  render thread: PresentMaskCoverage -> BasicRenderDevice/CudaRenderDevice::BeginCoverageWork
+    -> AcquireAiMaskCandidateCoverage | AcquireAiMaskCoverage (resident upload, device edge work)
+    -> AcquireMaskCoverageDisplayTarget -> RecordMaskCoverageDisplay (raster sampling, RGBA32F)
+    -> EndCoverageWork (Submit) -> FramePresenter<Backend>::PresentMaskCoverage
+    -> ViewportMaskCoverageSink::MapCoverageTarget (PrepareWrite, size request, WaitForWritableSlot,
+       BeginWrite, ProducerAcquireWritable) -> device copy -> completion
+    -> UnmapCoverageTarget (ProducerReleaseWritable, OpenCL clFinish, EndWrite)
+    -> PublishCoverage (identity check, NotifyReady) -> requestPresentUpdate
+  scene-graph thread: EditorViewportRenderer::render
+    -> ViewportMaskCoverageLayer::FulfillTargetRequests (adapter CreateTarget, PublishCreatedSlot)
+    -> ConsumeNewest (ConsumeNewestReady, identity check, QRhiTexture::createFrom)
+    -> Install: Release of the previous frame (CompleteRendererRead or owner reset)
+    -> Texture() is the viewport coverage input.
+  Metal: FramePresenter<MetalBackend>::PresentMaskCoverage -> SubmitMetalCoverage
+    -> TakePendingMetalCoverage -> import with the frame owner.
+Primary failure and restore call chain:
+  validation / acquisition / display allocation / encode error -> CancelCoverageWork -> exception
+    to the caller; the sink is not touched; the displayed coverage stays.
+  no native target (adapter failure -> FailSizeRequest) or a failed copy -> AbandonCoverageTarget
+    -> std::runtime_error ("presentation suspended" prefix when minimized) -> displayed coverage
+    stays; the next frame recovers.
+  image session changed before the map or the publication -> DiscardedForImageChange, slot
+    abandoned; the session change already invalidated the queue and released the layer.
+  import failure -> the slot returns to the queue; the displayed coverage stays.
+Commands and exit codes:
+  Windows: cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH=... (0)
+    cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target
+      MaskCoveragePresentationTest MaskCoverageTextureCacheTest GpuDagCudaMaskTest
+      GpuDagOpenClGradeTest AiMaskCoverageTextureTest GpuDagCudaWorkspaceTest
+      AiMaskEditSessionTest EditorViewportSuspensionTest alcedo_main (0)
+    cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target
+      GpuDagCudaDrtProductTest GpuDagOpenClDrtProductTest HeadlessFrameSinkTest
+      EditorSessionRenderSchedulerPortTest EditorRealRawGpuE2eTest (0)
+    ctest --test-dir build/debug -j 1 --output-on-failure -R
+      '^(MaskCoveragePresentationTest|MaskCoverageTextureCacheTest|AiMaskCoverageTextureTest|AiMaskEditSessionTest|GpuDagCudaMaskTest|GpuDagCudaWorkspaceTest|EditorViewportSuspensionTest)\.|^GpuDagOpenClGradeTest\.OpenClMaskFixture\.' (0)
+    ctest --test-dir build/debug -j 1 --output-on-failure -R
+      '^(GpuDagCudaDrtProductTest|GpuDagOpenClDrtProductTest|HeadlessFrameSinkTest|EditorSessionRenderSchedulerPortTest|EditorRealRawGpuE2eTest)' (0)
+    ctest --test-dir build/debug -j 1 --output-on-failure -R '^MaskCoveragePresentationTest\.'
+      (0, after the last change)
+  macOS (yurunmac.local, build/macos-debug with ALCEDO_BUILD_TESTS=ON):
+    cmake --build build/macos-debug --target MaskCoveragePresentationTest GpuDagMetalGradeTest (0)
+    ctest --test-dir build/macos-debug -j 1 --output-on-failure -R '^MaskCoveragePresentationTest\.' (0)
+    ctest --test-dir build/macos-debug -j 1 --output-on-failure -R
+      '^GpuDagMetalGradeTest\.MetalMaskFixture\.' (8: the two #497 tests)
+Discovered / passed / failed / skipped counts:
+  MaskCoveragePresentationTest: Windows CUDA 6/6, Windows OpenCL 6/6 (NVIDIA RTX 3080 Laptop GPU,
+    D3D11 and OpenGL QRhi), macOS Metal 6/6 (Apple M4): CoverageTransferLeavesPhotoSlotsUnchanged,
+    OldCoverageLivesUntilRendererRelease, CoverageTransferDoesNotReadBackToHost,
+    CoverageChannelClosesBeforeImageReplacement, CoverageDoesNotReplaceScopePhotoInput,
+    FailedTargetCreationKeepsDisplayedCoverage.
+  Windows regression group 1: 135 discovered, 135 passed (the 12 above, MaskCoverageTextureCacheTest,
+    AiMaskCoverageTextureTest, AiMaskEditSessionTest, GpuDagCudaMaskTest, GpuDagCudaWorkspaceTest,
+    EditorViewportSuspensionTest, OpenClMaskFixture).
+  Windows regression group 2: 159 discovered, 159 reported passed, 0 failed. The two
+    EditorRealRawGpuE2eTest entries end in GTEST_SKIP (disabled in the repository unless
+    ALCEDO_RUN_DEADLOCKING_RAW_GPU_E2E is set), so they give no evidence.
+  macOS MetalMaskFixture: 26 discovered, 24 passed, 2 failed (#497, unchanged since SM8.1).
+  Mutation check: with invert dropped from the display request in PresentMaskCoverage,
+    CoverageTransferDoesNotReadBackToHost fails on CUDA (texel 0 red 2 / 255, expected 126 / 255);
+    restored before the final run.
+Manual verification: none; the coverage texture is not composited before SM8.6.
+Numeric differences, latency, and resource measurements:
+  Every displayed texel equals the double-precision host reference of the raster Mask rule
+    (EvaluateAiMaskR8) within one code on all three backends, with a crop of (0.1, 0.15, 0.8, 0.7),
+    12 degrees of rotation, render scales 1 and 0.5, and invert with opacity 0.5. Green and blue
+    are exactly 0 and alpha is exactly 1.
+  Host transfers: the first presentation of a candidate uploads its R8 once; a presentation with
+    another invert and opacity uploads nothing; no presentation downloads to the host.
+  Display memory: one RGBA32F target of the photo frame size per producer on CUDA and OpenCL (16
+    bytes per photo pixel), plus the native coverage targets of the viewport (at most three slots of
+    the same size); Metal keeps one display target per frame that the viewport still holds (two
+    during a replacement). No latency measurement in this assignment (SM8.8).
+Remaining issues or unavailable platforms: #497 (existing). #508: the photo present queue accepts a
+  frame that was written across an image session change of the same image; the coverage channel
+  checks the frame identity itself. No AMD or Intel OpenCL device was available. The scene-graph
+  glue in EditorViewportRenderer (synchronize and render calls of the coverage layer) is built and
+  is exercised only by SM8.6 and later window tests: the real-window E2E test is disabled in the
+  repository.
+```
+
+Decisions made during SM8.5 (AGENTS.md "Make implementation decisions"):
+
+- The coverage channel is a second `DirectPresentQueue` owned by `EditorViewportItem`, not a fourth
+  layer of the photo queue. The photo queue has three slots for three photo layers; a displayed
+  coverage frame would hold one of them and stall the next photo write. The second queue reuses
+  the slot states, the size handshake, suspension, and the session invalidation unchanged.
+- The display write is the committed raster MaskEvaluate with an RGBA32F output, not a new
+  sampling kernel. OpenCL and Metal already write `(value, 0, 0, 1)`; CUDA shares the per-pixel
+  function. The same Mask therefore has the same effective values in the photo and in the display,
+  which SM8.6 needs for `CandidateAndCommittedCoverageUseSameComposite`.
+- CUDA and OpenCL write into a workspace display target and copy it into the native target, as the
+  photo presenter does with the DRT output. Writing directly into the CUDA array would need the
+  surface load/store flag on the shared photo targets. The copy is device-to-device.
+- The frame carries its image session in `FramePreviewMetadata` (`session_epoch`,
+  `image_identity`), and the sink and the layer compare it. The queue alone does not drop a frame
+  that was written across a session change of the same image (#508).
+- The SM8.5 surface ends at the render-thread coverage input (`ViewportMaskCoverageLayer::Texture`
+  and `Presentation`). The app facade (`UpdateAiMaskCandidateCoverage`,
+  `SelectMaskCoveragePreview`, `ClearMaskCoveragePreview`) belongs to SM8.7, where the session and
+  the render executor submit this operation; `EditorViewportItem::clearMaskCoverage` is the
+  viewport half of the clear operation.
+- `EditorMaskCoveragePreviewTest` is not created: SM8.5 adds no app operation. The named behaviors
+  are in `MaskCoveragePresentationTest`, which runs each test once per backend
+  (`ALCEDO_TEST_EDITOR_BACKEND`, one process per test).
+- The failure test also fails the display target allocation on the device, so the failure chain
+  has evidence on Metal, where the viewport creates no coverage target.
+- The diff exceeds the 2000-line threshold of section 10 by the end-to-end test. Splitting the
+  runtime operation from the viewport channel would leave the first part without a test that can
+  observe it, so the assignment stays one pull request; #500 records the size.
 
 ### 7.6 SM8.6 - One viewport composite
 

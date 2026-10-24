@@ -104,6 +104,9 @@ struct FrameWriteMapping {
   /// viewport is suspended. The frame is not an error: the owner renders again
   /// when presentation resumes.
   bool                 presentation_suspended = false;
+  /// Set on an empty coverage mapping (IMaskCoverageSink) when the viewport changed to another
+  /// image session before the write. The frame is not an error: it belongs to a closed image.
+  bool                 image_changed          = false;
 
   explicit             operator bool() const { return data != nullptr || image_array != nullptr; }
 };

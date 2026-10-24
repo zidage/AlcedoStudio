@@ -609,6 +609,7 @@ void MetalBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
 
 void MetalBackend::DownloadBufferRange(const Buffer& buffer, std::uint32_t offset,
                                        std::span<std::byte> out, CommandContext& command_context) {
+  ++d2h_copy_count_;
   if (out.empty()) {
     return;
   }
@@ -704,6 +705,7 @@ void MetalBackend::UploadR8TextureRect(Texture2D& texture, RectI rectangle,
 
 void MetalBackend::DownloadTexture2D(const Texture2D& texture, std::span<std::byte> out,
                                      CommandContext& command_context) {
+  ++d2h_copy_count_;
   if (texture.Native() == nullptr) {
     throw std::runtime_error("MetalBackend::DownloadTexture2D: empty texture");
   }
@@ -1031,6 +1033,7 @@ void MetalBackend::ResetCounters() {
   heap_create_count_           = 0;
   command_buffer_create_count_ = 0;
   h2d_copy_count_              = 0;
+  d2h_copy_count_              = 0;
   h2d_bytes_                   = 0;
   compute_dispatch_count_      = 0;
   lut_upload_bytes_            = 0;
