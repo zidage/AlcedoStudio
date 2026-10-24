@@ -1059,6 +1059,10 @@ auto AppTheme::maskOverlayGripSpanT0() const -> qreal { return 0.38; }
 
 auto AppTheme::maskOverlayGripSpanT1() const -> qreal { return 0.62; }
 
+auto AppTheme::maskCoverageTintColor() const -> QColor { return accentColor(); }
+
+auto AppTheme::maskCoverageTintOpacity() const -> qreal { return 0.4; }
+
 auto AppTheme::scopePlotBorderColor() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.42);
 }

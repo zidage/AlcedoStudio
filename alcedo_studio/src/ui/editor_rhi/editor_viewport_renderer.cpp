@@ -5,16 +5,11 @@
 #include "ui/editor_rhi/editor_viewport_renderer.hpp"
 
 #include <QDebug>
-#include <QFile>
 #include <QSize>
 #include <QString>
 #include <algorithm>
-#include <array>
 #include <cmath>
-#include <cstring>
-#include <limits>
 
-#include "ui/edit_viewer/viewport_mapper.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
@@ -27,10 +22,7 @@ using alcedo::diag::editorPresentLog;
 namespace alcedo::editor_rhi {
 namespace {
 
-constexpr const char* kVertexShaderResource   = ":/shaders/editor_rhi/editor_viewport.vert.qsb";
-constexpr const char* kFragmentShaderResource = ":/shaders/editor_rhi/editor_viewport.frag.qsb";
-
-auto                  BackendForRhi(QRhi* rhi) -> EditorBackend {
+auto BackendForRhi(QRhi* rhi) -> EditorBackend {
   if (!rhi) {
     return ActiveEditorBackend();
   }
@@ -91,7 +83,11 @@ auto RoleToLeaseLayer(FrameRole role) -> LeaseFrameLayer {
 
 }  // namespace
 
-EditorViewportRenderer::EditorViewportRenderer() = default;
+EditorViewportRenderer::EditorViewportRenderer() {
+  // The composite binds the displayed coverage texture; drop the bindings before it is destroyed.
+  coverage_layer_.SetTextureReleaseObserver(
+      [this](const QRhiTexture* texture) { composite_.ForgetTexture(texture); });
+}
 
 EditorViewportRenderer::~EditorViewportRenderer() {
   if (consume_arm_slot_) {
@@ -114,6 +110,7 @@ EditorViewportRenderer::~EditorViewportRenderer() {
   if (adapter_) {
     coverage_layer_.DestroyNatives(*adapter_);
   }
+  coverage_layer_.SetTextureReleaseObserver({});
   adapter_.reset();
 }
 
@@ -141,34 +138,13 @@ auto EditorViewportRenderer::layerForRole(FrameRole role) const -> LayerId {
   return LayerId::InteractivePrimary;
 }
 
-auto EditorViewportRenderer::loadShader(const char* path) const -> QShader {
-  QFile file(QString::fromUtf8(path));
-  if (!file.open(QIODevice::ReadOnly)) {
-    return {};
-  }
-  return QShader::fromSerialized(file.readAll());
-}
-
 void EditorViewportRenderer::destroyResource(QRhiTexture*& resource) { DestroyRhi(resource); }
-void EditorViewportRenderer::destroyResource(QRhiBuffer*& resource) { DestroyRhi(resource); }
-void EditorViewportRenderer::destroyResource(QRhiSampler*& resource) { DestroyRhi(resource); }
-void EditorViewportRenderer::destroyResource(QRhiShaderResourceBindings*& resource) {
-  DestroyRhi(resource);
-}
-void EditorViewportRenderer::destroyResource(QRhiGraphicsPipeline*& resource) {
-  DestroyRhi(resource);
-}
 
 void EditorViewportRenderer::releaseLayer(LayerState& layer) {
   // Shader bindings retain the imported QRhiTexture pointer. Invalidate them
   // before destroying a layer texture so a view-driven stale-detail release is
   // safe even when no replacement frame is available yet.
-  if (layer.texture &&
-      (bound_primary_texture_ == layer.texture || bound_detail_texture_ == layer.texture)) {
-    destroyResource(shader_resource_bindings_);
-    bound_primary_texture_ = nullptr;
-    bound_detail_texture_  = nullptr;
-  }
+  composite_.ForgetTexture(layer.texture);
   // OpenCL/GL: the three-slot queue recycles this native texture on the next
   // producer write (second node switch, or Add Mask releasing an auxiliary
   // layer). CompleteRendererRead only drops the CPU import; glFinish waits for
@@ -212,17 +188,7 @@ void EditorViewportRenderer::releaseResources() {
   for (auto& layer : layers_) {
     releaseLayer(layer);
   }
-  destroyResource(pipeline_);
-  destroyResource(shader_resource_bindings_);
-  destroyResource(vertex_buffer_);
-  destroyResource(uniform_buffer_);
-  destroyResource(primary_sampler_);
-  destroyResource(detail_sampler_);
-  destroyResource(placeholder_texture_);
-  bound_primary_texture_ = nullptr;
-  bound_detail_texture_  = nullptr;
-  static_upload_pending_ = false;
-  target_generation_     = 0;
+  target_generation_ = 0;
   if (present_queue_) {
     present_queue_->InvalidateTargetGeneration();
   }
@@ -235,7 +201,7 @@ void EditorViewportRenderer::releaseResources() {
   if (adapter_) {
     coverage_layer_.DestroyRetiredNatives(*adapter_);
   }
-  render_target_ = nullptr;
+  composite_.Release();
 }
 
 void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
@@ -326,6 +292,7 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     coverage_layer_.Release();
     content_dirty_ = true;
   }
+  coverage_style_ = item_->maskCoverageStyle();
 
   if (item_->takeAdjustmentFrameRequest()) {
     // The old QRhiWidget presenter kept one active full-frame slot and made the
@@ -388,69 +355,6 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   }
   view_state_    = next_view;
   content_dirty_ = true;
-}
-
-void EditorViewportRenderer::ensureStaticResources(QRhiRenderTarget*  render_target,
-                                                   QRhiCommandBuffer* command_buffer) {
-  if (!rhi_ || !render_target) {
-    return;
-  }
-  if (render_target_ != render_target) {
-    destroyResource(pipeline_);
-    render_target_ = render_target;
-    content_dirty_ = true;
-  }
-
-  if (!placeholder_texture_) {
-    placeholder_texture_ = rhi_->newTexture(QRhiTexture::RGBA32F, QSize(1, 1), 1);
-    if (!placeholder_texture_->create()) {
-      destroyResource(placeholder_texture_);
-    } else {
-      static_upload_pending_ = true;
-    }
-  }
-  if (!primary_sampler_) {
-    primary_sampler_ = rhi_->newSampler(QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
-                                        QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
-    primary_sampler_->create();
-  }
-  if (!detail_sampler_) {
-    detail_sampler_ =
-        rhi_->newSampler(QRhiSampler::Nearest, QRhiSampler::Nearest, QRhiSampler::None,
-                         QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
-    detail_sampler_->create();
-  }
-  if (!uniform_buffer_) {
-    uniform_buffer_ =
-        rhi_->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(UniformData));
-    uniform_buffer_->create();
-  }
-  if (!vertex_buffer_) {
-    vertex_buffer_ =
-        rhi_->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, 4 * sizeof(VertexData));
-    vertex_buffer_->create();
-    static_upload_pending_ = true;
-  }
-
-  if (command_buffer && static_upload_pending_ && vertex_buffer_ && placeholder_texture_) {
-    static constexpr std::array<VertexData, 4> vertices = {
-        VertexData{{-1.0f, -1.0f}, {0.0f, 1.0f}},
-        VertexData{{1.0f, -1.0f}, {1.0f, 1.0f}},
-        VertexData{{-1.0f, 1.0f}, {0.0f, 0.0f}},
-        VertexData{{1.0f, 1.0f}, {1.0f, 0.0f}},
-    };
-    static constexpr std::array<float, 4> black   = {0.0f, 0.0f, 0.0f, 1.0f};
-    auto*                                 updates = rhi_->nextResourceUpdateBatch();
-    updates->uploadStaticBuffer(vertex_buffer_, vertices.data());
-    QByteArray data(reinterpret_cast<const char*>(black.data()), static_cast<int>(sizeof(black)));
-    QRhiTextureSubresourceUploadDescription description(data);
-    description.setDataStride(static_cast<quint32>(sizeof(black)));
-    description.setSourceSize(QSize(1, 1));
-    updates->uploadTexture(placeholder_texture_,
-                           QRhiTextureUploadDescription(QRhiTextureUploadEntry(0, 0, description)));
-    command_buffer->resourceUpdate(updates);
-    static_upload_pending_ = false;
-  }
 }
 
 void EditorViewportRenderer::fulfillTargetRequests() {
@@ -619,6 +523,7 @@ void EditorViewportRenderer::consumeDirectFrames() {
     NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
     layer.presentation_mode = frame->slot.presentation_mode;
     layer.preview_metadata  = frame->slot.preview_metadata;
+    layer.geometry          = frame->slot.geometry;
     layer.ready_frame       = *frame;
     layer.imported_owner.reset();
     layer.imported_native_handle = frame->slot.native.native_handle;
@@ -676,6 +581,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
       layer.imported_owner                     = std::move(frame.owner);
       layer.presentation_mode                  = frame.presentation_mode;
       layer.preview_metadata                   = frame.preview_metadata;
+      layer.geometry                           = frame.geometry;
       layer.ready_frame                        = {};
       layer.ready_frame.slot.width             = frame.width;
       layer.ready_frame.slot.height            = frame.height;
@@ -729,6 +635,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     layer.imported_native_handle             = frame.texture_handle;
     layer.presentation_mode                  = frame.presentation_mode;
     layer.preview_metadata                   = frame.preview_metadata;
+    layer.geometry                           = frame.geometry;
     layer.ready_frame                        = {};
     layer.ready_frame.slot.width             = frame.width;
     layer.ready_frame.slot.height            = frame.height;
@@ -954,34 +861,6 @@ auto EditorViewportRenderer::selectedDetailLayer() const -> const LayerState* {
   return &layers_[layerIndex(LayerId::DetailPatch)];
 }
 
-void EditorViewportRenderer::recreateShaderResources(QRhiTexture* primary, QRhiTexture* detail) {
-  destroyResource(shader_resource_bindings_);
-  if (!rhi_ || !uniform_buffer_ || !primary_sampler_ || !detail_sampler_ || !primary || !detail) {
-    bound_primary_texture_ = nullptr;
-    bound_detail_texture_  = nullptr;
-    return;
-  }
-  shader_resource_bindings_ = rhi_->newShaderResourceBindings();
-  shader_resource_bindings_->setBindings(
-      {QRhiShaderResourceBinding::uniformBuffer(
-           0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
-           uniform_buffer_),
-       QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage,
-                                                 primary, primary_sampler_),
-       QRhiShaderResourceBinding::sampledTexture(2, QRhiShaderResourceBinding::FragmentStage,
-                                                 detail, detail_sampler_)});
-  if (!shader_resource_bindings_->create()) {
-    destroyResource(shader_resource_bindings_);
-    return;
-  }
-  // Every frame uses the same binding layout (one UBO + two sampled textures),
-  // so an existing graphics pipeline remains compatible with the replacement
-  // bindings. Rebuilding it for every triple-buffer slot rotation was pure
-  // render-thread overhead during slider drags.
-  bound_primary_texture_ = primary;
-  bound_detail_texture_  = detail;
-}
-
 void EditorViewportRenderer::publishDiagnosticsIfChanged() {
   if (item_) {
     item_->notifyDiagnosticsChanged();
@@ -1009,83 +888,37 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   if (coverage_layer_.ConsumeNewest(rhi_, session_epoch_, image_identity_)) {
     content_dirty_ = true;
   }
-  ensureStaticResources(render_target, command_buffer);
-  auto*        updates       = rhi_->nextResourceUpdateBatch();
 
-  const auto*  primary_layer = selectedPrimaryLayer();
-  const auto*  detail_layer  = selectedDetailLayer();
-  QRhiTexture* primary       = primary_layer ? primary_layer->texture : placeholder_texture_;
-  QRhiTexture* detail        = detail_layer ? detail_layer->texture : placeholder_texture_;
-  if (primary != bound_primary_texture_ || detail != bound_detail_texture_ ||
-      !shader_resource_bindings_) {
-    recreateShaderResources(primary, detail);
-    content_dirty_ = true;
-  }
+  const auto* primary_layer = selectedPrimaryLayer();
+  const auto* detail_layer  = selectedDetailLayer();
+  auto*       coverage      = coverage_layer_.Texture();
 
-  if (!pipeline_ && shader_resource_bindings_) {
-    pipeline_ = rhi_->newGraphicsPipeline();
-    QRhiVertexInputLayout layout;
-    layout.setBindings({QRhiVertexInputBinding(sizeof(VertexData))});
-    layout.setAttributes(
-        {QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float2, 0),
-         QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float))});
-    pipeline_->setTopology(QRhiGraphicsPipeline::TriangleStrip);
-    pipeline_->setCullMode(QRhiGraphicsPipeline::None);
-    pipeline_->setSampleCount(render_target->sampleCount());
-    pipeline_->setShaderStages(
-        {QRhiShaderStage(QRhiShaderStage::Vertex, loadShader(kVertexShaderResource)),
-         QRhiShaderStage(QRhiShaderStage::Fragment, loadShader(kFragmentShaderResource))});
-    pipeline_->setVertexInputLayout(layout);
-    pipeline_->setShaderResourceBindings(shader_resource_bindings_);
-    pipeline_->setRenderPassDescriptor(render_target->renderPassDescriptor());
-    if (!pipeline_->create()) {
-      destroyResource(pipeline_);
-    }
-  }
-
-  UniformData uniform{};
+  ViewportCompositeLayout layout;
+  layout.target_size = render_target->pixelSize();
   if (primary_layer) {
-    const auto scale = ViewportMapper::ComputeLetterboxScale(
-        ViewportWidgetInfo{render_target->pixelSize().width(), render_target->pixelSize().height(),
-                           1.0f},
-        ViewportImageInfo{primary_layer->width, primary_layer->height});
-    uniform.scale_zoom[0] = scale.x;
-    uniform.scale_zoom[1] = scale.y;
-    uniform.scale_zoom[2] = view_state_.snapshot.view_transform.zoom;
-    uniform.pan_mode[0]   = view_state_.snapshot.view_transform.pan.x();
-    uniform.pan_mode[1]   = view_state_.snapshot.view_transform.pan.y();
-    if (primary_layer->presentation_mode == FramePresentationMode::RoiFrame) {
-      uniform.scale_zoom[2] = 1.0f;
-      uniform.pan_mode[0]   = 0.0f;
-      uniform.pan_mode[1]   = 0.0f;
-      uniform.pan_mode[2]   = 1.0f;
-    }
+    layout.primary = {primary_layer->width, primary_layer->height,
+                      primary_layer->presentation_mode, primary_layer->geometry};
+    layout.zoom    = view_state_.snapshot.view_transform.zoom;
+    layout.pan_x   = view_state_.snapshot.view_transform.pan.x();
+    layout.pan_y   = view_state_.snapshot.view_transform.pan.y();
   }
   if (detail_layer) {
-    const auto& roi         = detail_layer->preview_metadata.source_roi_norm;
-    uniform.detail_roi[0]   = roi.x;
-    uniform.detail_roi[1]   = roi.y;
-    uniform.detail_roi[2]   = roi.width;
-    uniform.detail_roi[3]   = roi.height;
-    uniform.detail_flags[0] = 1.0f;
+    layout.detail_roi = detail_layer->preview_metadata.source_roi_norm;
   }
-  if (uniform_buffer_) {
-    updates->updateDynamicBuffer(uniform_buffer_, 0, sizeof(uniform), &uniform);
+  if (coverage != nullptr) {
+    layout.coverage_geometry = &coverage_layer_.Presentation().geometry;
   }
+  layout.coverage_style = coverage_style_;
 
-  command_buffer->beginPass(render_target, Qt::black, {1.0f, 0}, updates);
-  const bool drew_primary =
-      primary_layer && pipeline_ && shader_resource_bindings_ && vertex_buffer_;
-  if (drew_primary) {
-    const QRhiCommandBuffer::VertexInput vertex_input[] = {{vertex_buffer_, 0}};
-    const QSize                          size           = render_target->pixelSize();
-    command_buffer->setGraphicsPipeline(pipeline_);
-    command_buffer->setViewport(QRhiViewport(0, 0, size.width(), size.height()));
-    command_buffer->setShaderResources(shader_resource_bindings_);
-    command_buffer->setVertexInput(0, 1, vertex_input);
-    command_buffer->draw(4);
+  const auto outcome = composite_.Record(
+      rhi_, command_buffer, render_target,
+      {primary_layer ? primary_layer->texture : nullptr,
+       detail_layer ? detail_layer->texture : nullptr, coverage},
+      BuildViewportCompositeUniforms(layout));
+  const bool drew_primary = outcome == ViewportCompositeOutcome::Drawn;
+  if (outcome == ViewportCompositeOutcome::Failed) {
+    qCWarning(editorPresentLog, "[EditorPresent] %s", composite_.LastError().c_str());
   }
-  command_buffer->endPass();
 
   // Composition metrics are renderer-owned diagnostics. They do not feed back
   // into request scheduling; FrameReady already completed the blocking job.
@@ -1102,6 +935,9 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
 
   if (drew_primary) {
     item_->setStatusText(QStringLiteral("presented"));
+  } else if (outcome == ViewportCompositeOutcome::Failed) {
+    // Nothing reached the screen: report the display error, not a successful preview.
+    item_->setStatusText(QString::fromStdString(composite_.LastError()));
   } else if (!target_error_.empty()) {
     item_->setStatusText(QString::fromStdString(target_error_));
   } else {

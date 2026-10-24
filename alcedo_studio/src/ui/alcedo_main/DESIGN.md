@@ -669,9 +669,9 @@ QML; null resets the QuickQanava default instead of disabling it.
 ### Editor viewport Mask overlay
 
 Retained QSG Mask controls sit on `EditorOverlayItem` above the photograph. They
-use a two-layer high-contrast stroke. Existing-mask editing never paints a
-coverage fill, heatmap, or completed Brush path; the Interactive photograph
-supplies coverage feedback. Temporary Brush cursor/path guides are allowed during initial
+use a two-layer high-contrast stroke. The QSG overlay never paints a coverage
+fill, heatmap, or completed Brush path; the Interactive photograph supplies
+coverage feedback. Temporary Brush cursor/path guides are allowed during initial
 drawing. Selected Radial shows the base ellipse and inner/outer feather boundary
 lines during creation and later editing. Selected Gradient uses three parallel
 lines with Geometry crop-style dual high-contrast strokes and short edge grips, without a kite,
@@ -690,8 +690,8 @@ disabled when Mask editing ends, so the Nodes graph resumes ownership of
 
 Handle and stroke widths are logical pixels and stay constant at any zoom or
 DPR. Image-space Brush cursor radius is transformed through the shared
-ReferenceSpace mapping. Do not add a coverage-area color. Do not use Material
-controls, badges, pills, or status dots on this overlay.
+ReferenceSpace mapping. Do not add a coverage-area color to the QSG overlay. Do
+not use Material controls, badges, pills, or status dots on this overlay.
 
 Selected Radial shows the base ellipse plus inner and outer feather boundary
 lines from the evaluator inverse. Coincident rhos are drawn once. A collapsed
@@ -718,6 +718,29 @@ polygon. Crop overlay dimming is not reused.
 | `maskOverlayGripInnerWidth` | 2.4 | Geometry-crop inner edge-grip width (logical px) |
 | `maskOverlayGripSpanT0` | 0.38 | Start of the short edge grip along a visible guide |
 | `maskOverlayGripSpanT1` | 0.62 | End of the short edge grip along a visible guide |
+
+### Editor viewport Mask coverage display
+
+The selected Mask coverage preview (an AI Mask candidate, one committed Mask, or
+a Grade Mask Union) is shown by the one viewport composite in
+`editor_viewport.frag`, after the base/detail photograph selection:
+`a = clamp(coverage, 0, 1) * maskCoverageTintOpacity`,
+`rgb = photo * (1 - a) + maskCoverageTintColor * a`. Uncovered pixels keep the
+photograph value and every pixel keeps its alpha. The QSG Mask controls stay
+above this draw and keep their input; the coverage takes no pointer or keyboard
+input.
+
+The tint is presentation state: changing it or hiding the coverage redraws the
+viewport without a photo render. It never reaches export, thumbnails, or scopes.
+The tint color is used as a display-encoded value of the photograph's display
+encoding. Do not add a second coverage composite in QSG, QML, or the photo
+pipeline. The visibility control belongs to the AI Mask tool controls; there is
+no separate settings panel.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `maskCoverageTintColor` | `accentColor` | Coverage tint of the viewport composite |
+| `maskCoverageTintOpacity` | 0.4 | Overlay opacity at full coverage |
 
 ### Color Grade node content
 

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <QtGui/rhi/qrhi.h>
-#include <QtGui/rhi/qshader.h>
 
 #include <QQuickRhiItem>
 #include <array>
@@ -15,10 +14,12 @@
 #include <string>
 #include <vector>
 
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
+#include "ui/editor_rhi/viewport_composite_pass.hpp"
 #include "ui/editor_rhi/viewport_mask_coverage_layer.hpp"
 #include "ui/viewer/viewer_view_state.hpp"
 
@@ -67,19 +68,9 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
     std::uintptr_t                 imported_native_handle = 0;
     FramePresentationMode          presentation_mode      = FramePresentationMode::FullFrame;
     FramePreviewMetadata           preview_metadata{};
+    // ResolveRenderGeometry result of the frame; maps coverage to this layer (SM8.6).
+    ResolvedRenderGeometry         geometry{};
     DirectPresentQueue::ReadyFrame ready_frame{};
-  };
-
-  struct UniformData {
-    float scale_zoom[4]   = {1.0f, 1.0f, 1.0f, 0.0f};
-    float pan_mode[4]     = {0.0f, 0.0f, 0.0f, 0.0f};
-    float detail_roi[4]   = {0.0f, 0.0f, 1.0f, 1.0f};
-    float detail_flags[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-  };
-
-  struct VertexData {
-    float position[2];
-    float uv[2];
   };
 
  private:
@@ -87,16 +78,10 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
     return static_cast<std::size_t>(layer);
   }
   [[nodiscard]] auto layerForRole(FrameRole role) const -> LayerId;
-  [[nodiscard]] auto loadShader(const char* path) const -> QShader;
   void               destroyResource(QRhiTexture*& resource);
-  void               destroyResource(QRhiBuffer*& resource);
-  void               destroyResource(QRhiSampler*& resource);
-  void               destroyResource(QRhiShaderResourceBindings*& resource);
-  void               destroyResource(QRhiGraphicsPipeline*& resource);
   void               releaseLayer(LayerState& layer);
   void               releaseResources();
   void               releaseQueuedNatives();
-  void ensureStaticResources(QRhiRenderTarget* render_target, QRhiCommandBuffer* command_buffer);
   void fulfillTargetRequests();
   void consumeDirectFrames();
   void consumeImportedGpuFrames();
@@ -108,15 +93,18 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
       -> bool;
   void traceDetailDecision(const char* decision, const LayerState* detail, const LayerState* base,
                            const std::optional<FrameRoiRect>& current_roi) const;
-  void recreateShaderResources(QRhiTexture* primary, QRhiTexture* detail);
   void publishDiagnosticsIfChanged();
 
   EditorViewportItem*                  item_ = nullptr;
   std::shared_ptr<DirectPresentQueue>  present_queue_;
-  // Coverage presentation channel (SM8.5): the viewport coverage input. Not composited until
-  // SM8.6 binds it; its frames never enter the photo layers.
+  // Coverage presentation channel (SM8.5): the viewport coverage input of the composite. Its
+  // frames never enter the photo layers.
   std::shared_ptr<DirectPresentQueue>                   coverage_queue_;
   ViewportMaskCoverageLayer                             coverage_layer_;
+  // The one display composite (SM8.6): photo base/detail selection and the coverage tint.
+  ViewportCompositePass                                 composite_;
+  // Copied from EditorViewportItem::maskCoverageStyle in synchronize().
+  MaskCoverageDisplayStyle                              coverage_style_{};
   std::shared_ptr<std::atomic<EditorViewportRenderer*>> consume_arm_slot_;
   std::unique_ptr<ILeaseTargetAdapter> adapter_;
   // Maps adapter_cookie (native_handle) -> last WritableTargetLease for destroy.
@@ -128,18 +116,6 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   std::uint64_t                        session_epoch_            = 0;
   std::uint64_t                        image_identity_           = 0;
   QRhi*                                rhi_                      = nullptr;
-  QRhiRenderTarget*                    render_target_            = nullptr;
-
-  QRhiTexture*                         placeholder_texture_      = nullptr;
-  QRhiSampler*                         primary_sampler_          = nullptr;
-  QRhiSampler*                         detail_sampler_           = nullptr;
-  QRhiBuffer*                          uniform_buffer_           = nullptr;
-  QRhiBuffer*                          vertex_buffer_            = nullptr;
-  QRhiShaderResourceBindings*          shader_resource_bindings_ = nullptr;
-  QRhiGraphicsPipeline*                pipeline_                 = nullptr;
-  QRhiTexture*                         bound_primary_texture_    = nullptr;
-  QRhiTexture*                         bound_detail_texture_     = nullptr;
-  bool                                 static_upload_pending_    = false;
   bool                                 content_dirty_            = false;
   std::string                          target_error_;
   // ROI tracing is transition-based so a rejected patch does not print

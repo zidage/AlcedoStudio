@@ -11,6 +11,7 @@
 #include <QScreen>
 #include <QThread>
 #include <QVector2D>
+#include <algorithm>
 #include <cmath>
 #include <mutex>
 
@@ -253,6 +254,49 @@ void EditorViewportItem::clearMaskCoverage() {
   coverage_sink_->ClearPendingMetalCoverage();
   mask_coverage_clear_requested_.store(true, std::memory_order_release);
   requestPresentUpdate();
+}
+
+auto EditorViewportItem::maskCoverageColor() const -> QColor {
+  return QColor::fromRgbF(mask_coverage_style_.red, mask_coverage_style_.green,
+                          mask_coverage_style_.blue);
+}
+
+void EditorViewportItem::setMaskCoverageVisible(bool visible) {
+  if (mask_coverage_style_.visible == visible) {
+    return;
+  }
+  mask_coverage_style_.visible = visible;
+  emit MaskCoverageStyleChanged();
+  update();
+}
+
+void EditorViewportItem::setMaskCoverageColor(const QColor& color) {
+  const auto rgb   = color.toRgb();
+  const auto red   = static_cast<float>(rgb.redF());
+  const auto green = static_cast<float>(rgb.greenF());
+  const auto blue  = static_cast<float>(rgb.blueF());
+  if (mask_coverage_style_.red == red && mask_coverage_style_.green == green &&
+      mask_coverage_style_.blue == blue) {
+    return;
+  }
+  mask_coverage_style_.red   = red;
+  mask_coverage_style_.green = green;
+  mask_coverage_style_.blue  = blue;
+  emit MaskCoverageStyleChanged();
+  update();
+}
+
+void EditorViewportItem::setMaskCoverageOpacity(qreal opacity) {
+  if (!std::isfinite(opacity)) {
+    return;
+  }
+  const auto clamped = static_cast<float>(std::clamp(opacity, 0.0, 1.0));
+  if (mask_coverage_style_.opacity == clamped) {
+    return;
+  }
+  mask_coverage_style_.opacity = clamped;
+  emit MaskCoverageStyleChanged();
+  update();
 }
 
 void EditorViewportItem::cancelPendingFrames() {

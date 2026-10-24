@@ -529,7 +529,7 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
                               << metadata.source_roi_norm.y << ',' << metadata.source_roi_norm.width
                               << ',' << metadata.source_roi_norm.height;
   }
-  item_->present_queue()->NotifyReady(slot_index, mode, metadata);
+  item_->present_queue()->NotifyReady(slot_index, mode, metadata, submission.geometry);
   diag::NoteRenderE2eProducerReady(metadata.presentation_request_id);
   qCDebug(editorPresentLog,
           "[EditorPresent] submitted frame request=%llu image=%llu epoch=%llu slot=%d",
@@ -584,6 +584,9 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
     }
     request_id        = imported.preview_metadata.presentation_request_id;
     imported.sequence = ++imported_sequence_;
+    if (bound_submission_valid_) {
+      imported.geometry = bound_submission_.geometry;
+    }
     const auto layer  = LayerIndexForRole(imported.preview_metadata.frame_role);
     if (pending_imported_[layer].has_value()) {
       const auto superseded = pending_imported_[layer]->preview_metadata.presentation_request_id;

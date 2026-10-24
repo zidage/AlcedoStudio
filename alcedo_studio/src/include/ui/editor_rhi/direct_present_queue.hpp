@@ -13,6 +13,7 @@
 #include <optional>
 #include <vector>
 
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/frame_presentation_lease.hpp"
@@ -82,6 +83,10 @@ class DirectPresentQueue final {
     SlotNative            native{};
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata  preview_metadata{};
+    /// ResolveRenderGeometry result of the frame (FrameCompletionSubmission::geometry). Set by
+    /// NotifyReady; empty for a frame without geometry. Valid while the slot is Ready or
+    /// RendererReading.
+    ResolvedRenderGeometry geometry{};
     std::uint64_t         session_epoch  = 0;
     std::uint64_t         image_identity = 0;
     std::uint64_t         sequence       = 0;
@@ -146,8 +151,10 @@ class DirectPresentQueue final {
   // old surface lock that spans map→write→unmap).
   [[nodiscard]] auto BeginWrite(int slot_index) -> std::optional<SlotSnapshot>;
   void               EndWrite(int slot_index);
-  void               NotifyReady(int slot_index, FramePresentationMode mode,
-                                 const FramePreviewMetadata& metadata);
+  /// Hand a written slot to the render thread. @p geometry is the ResolveRenderGeometry result of
+  /// the frame; the viewport maps coverage to the photo with it (SM8.6).
+  void NotifyReady(int slot_index, FramePresentationMode mode, const FramePreviewMetadata& metadata,
+                   const ResolvedRenderGeometry& geometry = {});
   void               AbandonWrite(int slot_index);
 
   // Render-thread consumption. Newest compatible ready frame wins per layer;
@@ -199,6 +206,7 @@ class DirectPresentQueue final {
     SlotNative            native{};
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata  preview_metadata{};
+    ResolvedRenderGeometry geometry{};
     std::uint64_t         session_epoch  = 0;
     std::uint64_t         image_identity = 0;
     std::uint64_t         sequence       = 0;
