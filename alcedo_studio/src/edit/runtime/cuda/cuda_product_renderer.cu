@@ -117,6 +117,47 @@ void FramePresenter<CudaBackend>::Present(CudaRenderDevice& device, const GraphV
   sink.NotifyFrameReady(submission);
 }
 
+auto FramePresenter<CudaBackend>::PresentMaskCoverage(
+    CudaRenderDevice& device, const MaskCoverageDisplayTarget<CudaBackend>& target,
+    const MaskCoveragePresentation& presentation, IMaskCoverageSink& sink)
+    -> MaskCoveragePublication {
+  const auto& texture   = target.texture;
+  const auto  width     = static_cast<int>(texture.Width());
+  const auto  height    = static_cast<int>(texture.Height());
+  const auto  row_bytes = static_cast<std::size_t>(width) * sizeof(float4);
+  const auto  mapping =
+      sink.MapCoverageTarget(presentation, width, height, FrameMemoryDomain::CudaDevice);
+  if (!mapping) {
+    if (mapping.image_changed) {
+      return MaskCoveragePublication::DiscardedForImageChange;
+    }
+    if (mapping.presentation_suspended) {
+      throw std::runtime_error(std::string(kPresentationSuspendedMessage) +
+                               "Mask coverage display: the viewport is minimized or hidden");
+    }
+    throw std::runtime_error("Mask coverage display: the coverage channel has no writable target");
+  }
+  try {
+    if (mapping.pixel_format != FramePixelFormat::RGBA32F ||
+        mapping.target_type != FrameWriteTargetType::CudaArray ||
+        mapping.memory_domain != FrameMemoryDomain::CudaDevice || mapping.image_array == nullptr) {
+      throw std::runtime_error("Mask coverage display: the target is not a CUDA RGBA32F array");
+    }
+    cuda::CheckCuda(
+        ::cudaMemcpy2DToArrayAsync(reinterpret_cast<cudaArray_t>(mapping.image_array), 0, 0,
+                                   texture.DevicePointer(), row_bytes, row_bytes, height,
+                                   cudaMemcpyDeviceToDevice, device.CommandContext().Stream()),
+        "Mask coverage display: copy to the coverage target");
+    cuda::CheckCuda(::cudaStreamSynchronize(device.CommandContext().Stream()),
+                    "Mask coverage display: wait for the coverage copy");
+    sink.UnmapCoverageTarget();
+  } catch (...) {
+    sink.AbandonCoverageTarget();
+    throw;
+  }
+  return sink.PublishCoverage();
+}
+
 auto FramePresenter<CudaBackend>::Download(CudaRenderDevice& device, const GraphValueId& output_id)
     -> std::shared_ptr<ImageBuffer> {
   auto* lease = device.Workspace().Images().Find(output_id);

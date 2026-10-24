@@ -9,6 +9,8 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/mask_coverage_display.hpp"
+#include "edit/runtime/mask_coverage_texture_cache.hpp"
 
 namespace alcedo {
 
@@ -52,5 +54,19 @@ struct CudaMaskResult {
  */
 [[nodiscard]] auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                                    const PipelineDocument& document) -> CudaMaskResult;
+
+/**
+ * @brief Record the coverage display write of @p coverage (SM8.5): the raster sampling of the
+ *        committed AI MaskEvaluate on the photo frame grid of @p request, with its invert and
+ *        opacity, into @p output (RGBA32F; red is the R8 value / 255, green and blue 0, alpha 1).
+ *
+ * @pre @p output has the render extent of @p request.geometry; the device stream orders the
+ *      coverage writes before this dispatch.
+ * @throws std::runtime_error for a wrong output or a failed launch.
+ */
+void               RecordMaskCoverageDisplay(CudaRenderDevice&                     device,
+                                             const MaskCoverageImage<CudaBackend>& coverage,
+                                             const MaskCoverageDisplayRequest&     request,
+                                             CudaBackend::Texture2D&               output);
 
 }  // namespace alcedo

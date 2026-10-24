@@ -145,28 +145,36 @@ void EncodeAnalytic(OpenClRenderDevice& device, OpenClBackend::Texture2D& output
   Dispatch2D(device, kernel, output.Width(), output.Height(), "analytic mask");
 }
 
-void EncodeRaster(OpenClRenderDevice& device, OpenClBackend::Texture2D& output,
-                  const AiSegmentationMaskSource& source, const MaskModel& mask,
-                  const ExecutionPlan& plan) {
-  auto&       workspace = device.Workspace();
-  const auto  coverage  = workspace.AcquireAiMaskCoverage(source, device.CommandContext());
-  const auto  sampling  = MakeRasterMaskSamplingPlan(
-      plan.geometry, coverage->descriptor.reference_bounds, coverage->descriptor.extent);
+/// Raster sampling of @p coverage on the render grid of @p geometry into @p output: R8 for
+/// MaskEvaluate, RGBA32F for the coverage display. mask_raster_r8 writes (value, 0, 0, 1).
+void EncodeRasterSampling(OpenClRenderDevice&                     device,
+                          const MaskCoverageImage<OpenClBackend>& coverage,
+                          const ResolvedRenderGeometry& geometry, bool invert, float opacity,
+                          OpenClBackend::Texture2D& output) {
+  const auto sampling = MakeRasterMaskSamplingPlan(geometry, coverage.descriptor.reference_bounds,
+                                                   coverage.descriptor.extent);
   const auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskRasterKernelName);
   MaskRasterParams params;
   SetMatrix(params.render_to_texture_uv, sampling.render_to_texture_uv);
   params.width          = output.Width();
   params.height         = output.Height();
-  params.texture_width  = coverage->descriptor.extent.width;
-  params.texture_height = coverage->descriptor.extent.height;
+  params.texture_width  = coverage.descriptor.extent.width;
+  params.texture_height = coverage.descriptor.extent.height;
   params.samples        = RasterMaskSamplesPerAxis(sampling);
-  params.invert         = mask.invert ? 1u : 0u;
-  params.opacity        = mask.opacity;
-  SetMem(kernel, 0, coverage->texture.Native(), "raster mask texture");
+  params.invert         = invert ? 1u : 0u;
+  params.opacity        = opacity;
+  SetMem(kernel, 0, coverage.texture.Native(), "raster mask texture");
   SetMem(kernel, 1, output.Native(), "raster mask output");
   SetParams(kernel, 2, params, "raster mask parameters");
   Dispatch2D(device, kernel, output.Width(), output.Height(), "raster mask");
+}
+
+void EncodeRaster(OpenClRenderDevice& device, OpenClBackend::Texture2D& output,
+                  const AiSegmentationMaskSource& source, const MaskModel& mask,
+                  const ExecutionPlan& plan) {
+  const auto coverage = device.Workspace().AcquireAiMaskCoverage(source, device.CommandContext());
+  EncodeRasterSampling(device, *coverage, plan.geometry, mask.invert, mask.opacity, output);
 }
 
 void EncodeFillZero(OpenClRenderDevice& device, OpenClBackend::Texture2D& output) {
@@ -303,6 +311,19 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
     }
   }
   return result;
+}
+
+void RecordMaskCoverageDisplay(OpenClRenderDevice&                     device,
+                               const MaskCoverageImage<OpenClBackend>& coverage,
+                               const MaskCoverageDisplayRequest&       request,
+                               OpenClBackend::Texture2D&               output) {
+  const auto extent = request.geometry.render_extent;
+  if (output.Native() == nullptr || output.Format() != TextureFormat::Rgba32f ||
+      output.Width() != extent.width || output.Height() != extent.height) {
+    throw std::runtime_error(
+        "RecordMaskCoverageDisplay: the output is not an RGBA32F image of the photo frame size");
+  }
+  EncodeRasterSampling(device, coverage, request.geometry, request.invert, request.opacity, output);
 }
 
 }  // namespace alcedo

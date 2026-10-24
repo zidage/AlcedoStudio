@@ -109,6 +109,49 @@ void FramePresenter<OpenClBackend>::Present(BasicRenderDevice<OpenClBackend>& de
   }
 }
 
+auto FramePresenter<OpenClBackend>::PresentMaskCoverage(
+    BasicRenderDevice<OpenClBackend>&               device,
+    const MaskCoverageDisplayTarget<OpenClBackend>& target,
+    const MaskCoveragePresentation& presentation, IMaskCoverageSink& sink)
+    -> MaskCoveragePublication {
+  const auto& texture = target.texture;
+  const auto  mapping =
+      sink.MapCoverageTarget(presentation, static_cast<int>(texture.Width()),
+                             static_cast<int>(texture.Height()), FrameMemoryDomain::OpenClDevice);
+  if (!mapping) {
+    if (mapping.image_changed) {
+      return MaskCoveragePublication::DiscardedForImageChange;
+    }
+    if (mapping.presentation_suspended) {
+      throw std::runtime_error(std::string(kPresentationSuspendedMessage) +
+                               "Mask coverage display: the viewport is minimized or hidden");
+    }
+    throw std::runtime_error("Mask coverage display: the coverage channel has no writable target");
+  }
+  try {
+    if (mapping.pixel_format != FramePixelFormat::RGBA32F ||
+        mapping.target_type != FrameWriteTargetType::OpenClImage ||
+        mapping.memory_domain != FrameMemoryDomain::OpenClDevice || mapping.data == nullptr) {
+      throw std::runtime_error("Mask coverage display: the target is not an OpenCL RGBA32F image");
+    }
+    const std::size_t origin[3]  = {0, 0, 0};
+    const std::size_t region[3]  = {texture.Width(), texture.Height(), 1};
+    cl_event          copy_event = nullptr;
+    CheckOpenCl(clEnqueueCopyImage(device.Workspace().Device().NativeQueue(), texture.Native(),
+                                   reinterpret_cast<cl_mem>(mapping.data), origin, origin, region,
+                                   0, nullptr, &copy_event),
+                "Mask coverage display: clEnqueueCopyImage(coverage)");
+    device.Workspace().Device().TrackKernelEvent(device.CommandContext(), copy_event);
+    // The sink releases the shared image to OpenGL and waits for the queue.
+    sink.UnmapCoverageTarget();
+    device.Workspace().Device().FinalizePresentation(device.CommandContext());
+  } catch (...) {
+    sink.AbandonCoverageTarget();
+    throw;
+  }
+  return sink.PublishCoverage();
+}
+
 auto FramePresenter<OpenClBackend>::Download(BasicRenderDevice<OpenClBackend>& device,
                                              const GraphValueId&               output_id)
     -> std::shared_ptr<ImageBuffer> {

@@ -262,6 +262,9 @@ class CudaBackend {
   [[nodiscard]] auto MallocCount() const -> std::uint64_t { return malloc_count_; }
   [[nodiscard]] auto FreeCount() const -> std::uint64_t { return free_count_; }
   [[nodiscard]] auto HostToDeviceCopyCount() const -> std::uint64_t { return h2d_copy_count_; }
+  /// Host downloads (DownloadTexture2D, DownloadBufferRange) since construction or the last
+  /// counter reset.
+  [[nodiscard]] auto DeviceToHostCopyCount() const -> std::uint64_t { return d2h_copy_count_; }
   [[nodiscard]] auto HostToDeviceBytes() const -> std::uint64_t { return h2d_bytes_; }
   [[nodiscard]] auto LastHostToDeviceRanges() const -> const std::vector<ByteRange>& {
     return last_h2d_ranges_;
@@ -300,6 +303,7 @@ class CudaBackend {
   std::uint64_t          malloc_count_         = 0;
   std::uint64_t          free_count_           = 0;
   std::uint64_t          h2d_copy_count_       = 0;
+  mutable std::uint64_t        d2h_copy_count_       = 0;
   std::uint64_t          h2d_bytes_            = 0;
   std::uint64_t          next_resource_id_     = 1;
   std::uint64_t          next_submission_      = 0;
