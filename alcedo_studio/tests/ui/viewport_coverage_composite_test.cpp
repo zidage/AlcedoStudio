@@ -838,7 +838,12 @@ TEST_F(ViewportCoverageCompositeTest, UncoveredHdrPixelsStayUnchanged) {
         continue;
       }
       ++uncovered;
-      if (std::memcmp(&output[i * 4], &photo_rgba[i * 4], 4 * sizeof(float)) != 0) {
+      // Equal values: the Metal draw returns +0 for a -0 texel, so the sign of zero is not
+      // compared.
+      const bool unchanged =
+          output[i * 4] == photo_rgba[i * 4] && output[i * 4 + 1] == photo_rgba[i * 4 + 1] &&
+          output[i * 4 + 2] == photo_rgba[i * 4 + 2] && output[i * 4 + 3] == photo_rgba[i * 4 + 3];
+      if (!unchanged) {
         ADD_FAILURE() << "uncovered pixel " << i << " changed: (" << output[i * 4] << ", "
                       << output[i * 4 + 1] << ", " << output[i * 4 + 2] << ", " << output[i * 4 + 3]
                       << ")";
