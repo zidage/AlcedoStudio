@@ -102,17 +102,14 @@ class MaskCoverageDisplayTargets {
   /**
    * @brief A target of @p extent for the work of @p submission.
    *
-   * First destroys targets of another size that no reader holds and no in-flight submission uses.
-   * The returned reference stays valid until the next Acquire or Clear.
+   * Reuses a target of @p extent that no reader holds. Otherwise allocates one and then destroys
+   * the targets of another size that no reader holds and no in-flight submission uses. The
+   * returned reference stays valid until the next Acquire or Clear.
    *
    * @throws std::runtime_error with a "Mask coverage display:" message when the allocation fails;
    *         the existing targets are unchanged.
    */
   auto Acquire(Extent2D extent, Backend& backend, std::uint64_t submission) -> Target& {
-    std::erase_if(targets_, [&](const std::unique_ptr<Target>& target) {
-      return target->extent != extent && target->readers.use_count() == 1 &&
-             !backend.IsResourceBusy(target->last_used_submission);
-    });
     for (auto& target : targets_) {
       if (target->extent == extent && target->readers.use_count() == 1) {
         target->last_used_submission = submission;
@@ -130,6 +127,10 @@ class MaskCoverageDisplayTargets {
     }
     target->extent               = extent;
     target->last_used_submission = submission;
+    std::erase_if(targets_, [&](const std::unique_ptr<Target>& other) {
+      return other->extent != extent && other->readers.use_count() == 1 &&
+             !backend.IsResourceBusy(other->last_used_submission);
+    });
     targets_.push_back(std::move(target));
     ++create_count_;
     return *targets_.back();

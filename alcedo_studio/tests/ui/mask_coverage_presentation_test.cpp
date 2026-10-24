@@ -187,6 +187,8 @@ class CoverageProducer {
                        const MaskCoverageFrameIdentity& identity, IMaskCoverageSink& sink)
       -> MaskCoveragePublication              = 0;
   virtual auto Counters() -> ProducerCounters = 0;
+  /// Fail the next texture allocation of the device (FailTextureAllocationAfter(0)).
+  virtual void FailNextTextureAllocation()    = 0;
 };
 
 template <class Device>
@@ -201,6 +203,9 @@ class DeviceCoverageProducer final : public CoverageProducer {
     const auto& workspace = device_.Workspace();
     return {workspace.Device().HostToDeviceCopyCount(), workspace.Device().DeviceToHostCopyCount(),
             workspace.MaskCoverageDisplay().Count(), workspace.MaskCoverageDisplay().CreateCount()};
+  }
+  void FailNextTextureAllocation() override {
+    device_.Workspace().Device().FailTextureAllocationAfter(0);
   }
 
  private:
@@ -640,28 +645,46 @@ TEST_F(MaskCoveragePresentationTest, CoverageDoesNotReplaceScopePhotoInput) {
 }
 
 TEST_F(MaskCoveragePresentationTest, FailedTargetCreationKeepsDisplayedCoverage) {
-  if (!UsesQueuedTargets()) {
-    GTEST_SKIP() << "Metal presents its own texture; the viewport creates no coverage target";
-  }
   const auto                 pixels = MakeCandidatePixels(0);
   MaskCoverageDisplayRequest request{MakePhotoGeometry(1.0f), false, 1.0f};
   ASSERT_EQ(Present(Candidate(pixels), request, Identity(61)), MaskCoveragePublication::Published);
   ASSERT_TRUE(Consume());
+  // A resized photo frame needs a new display target (and, for CUDA and OpenCL, a new viewport
+  // target).
+  MaskCoverageDisplayRequest resized{MakePhotoGeometry(0.5f), false, 1.0f};
+  const auto                 targets_before = Counters().display_targets;
 
-  // A resized photo frame needs a new target, and the render thread cannot create it.
-  UnsupportedLeaseTargetAdapter failing(g_backend);
-  MaskCoverageDisplayRequest    resized{MakePhotoGeometry(0.5f), false, 1.0f};
-  EXPECT_THROW(
-      (void)Present(Candidate(MakeCandidatePixels(2)), resized, Identity(62), nullptr, &failing),
-      std::runtime_error);
-  EXPECT_FALSE(layer_.LastError().empty());
+  // The device cannot allocate the display target.
+  render_thread_.Post([this] { producer_->FailNextTextureAllocation(); }).get();
+  try {
+    (void)Present(Candidate(pixels), resized, Identity(62));
+    ADD_FAILURE() << "the failed display target allocation was not reported";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("Mask coverage display: allocating"),
+              std::string::npos)
+        << error.what();
+  }
+  EXPECT_EQ(Counters().display_targets, targets_before);
   EXPECT_FALSE(Consume());
   EXPECT_EQ(layer_.Presentation().identity.request_id, 61u);
-  ExpectDisplayed(ExpectedCoverageR8(pixels, request), "coverage kept after the failure");
+  ExpectDisplayed(ExpectedCoverageR8(pixels, request), "coverage kept after the device failure");
+
+  if (UsesQueuedTargets()) {
+    // The viewport render thread cannot create the coverage target.
+    UnsupportedLeaseTargetAdapter failing(g_backend);
+    EXPECT_THROW(
+        (void)Present(Candidate(MakeCandidatePixels(2)), resized, Identity(63), nullptr, &failing),
+        std::runtime_error);
+    EXPECT_FALSE(layer_.LastError().empty());
+    EXPECT_FALSE(Consume());
+    EXPECT_EQ(layer_.Presentation().identity.request_id, 61u);
+    ExpectDisplayed(ExpectedCoverageR8(pixels, request), "coverage kept after the target failure");
+  }
 
   // The channel recovers with the next frame.
-  ASSERT_EQ(Present(Candidate(pixels), resized, Identity(63)), MaskCoveragePublication::Published);
+  ASSERT_EQ(Present(Candidate(pixels), resized, Identity(64)), MaskCoveragePublication::Published);
   ASSERT_TRUE(Consume());
+  EXPECT_EQ(layer_.Presentation().identity.request_id, 64u);
   ExpectDisplayed(ExpectedCoverageR8(pixels, resized), "coverage after the recovery");
 }
 
