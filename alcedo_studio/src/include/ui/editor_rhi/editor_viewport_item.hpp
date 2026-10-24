@@ -134,8 +134,9 @@ class EditorViewportItem : public QQuickRhiItem {
       -> const std::shared_ptr<ViewportMaskCoverageSink>& {
     return coverage_sink_;
   }
-  /// Stop displaying coverage. The render thread releases the displayed frame on its next pass;
-  /// a frame that waits for import is dropped. Idempotent; thread-safe.
+  /// Stop displaying coverage (ViewportMaskCoverageSink::ClearCoverage). The render thread
+  /// releases the displayed frame on its next pass; a frame published before the call is never
+  /// displayed. Idempotent; thread-safe.
   void               clearMaskCoverage();
 
   /**
@@ -250,9 +251,6 @@ class EditorViewportItem : public QQuickRhiItem {
   [[nodiscard]] auto takeAdjustmentFrameRequest() -> bool {
     return adjustment_frame_requested_.exchange(false, std::memory_order_acq_rel);
   }
-  [[nodiscard]] auto takeMaskCoverageClearRequest() -> bool {
-    return mask_coverage_clear_requested_.exchange(false, std::memory_order_acq_rel);
-  }
   void                                stopInteractivePresentLoop();
   void                                setBackendName(const QString& name);
   void                                setStatusText(const QString& text);
@@ -271,7 +269,6 @@ class EditorViewportItem : public QQuickRhiItem {
   // Coverage presentation channel (SM8.5). The queue outlives the sink that writes into it.
   std::shared_ptr<DirectPresentQueue>                   coverage_queue_;
   std::shared_ptr<ViewportMaskCoverageSink>             coverage_sink_;
-  std::atomic<bool>                                     mask_coverage_clear_requested_{false};
   // GUI thread only; read by the renderer in synchronize().
   MaskCoverageDisplayStyle                              mask_coverage_style_{};
   /// Render-thread handoff for prompt Ready-frame consumption. createRenderer

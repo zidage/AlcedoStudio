@@ -211,7 +211,7 @@ auto ViewportMaskCoverageSink::PublishCoverage() -> MaskCoveragePublication {
   {
     std::lock_guard lock(mutex_);
     slot_presentations_[static_cast<std::size_t>(slot_index)] = presentation;
-    ++published_count_;
+    slot_sequences_[static_cast<std::size_t>(slot_index)]     = ++published_count_;
   }
   FramePreviewMetadata metadata;
   metadata.presentation_request_id = presentation.identity.request_id;
@@ -243,6 +243,17 @@ void ViewportMaskCoverageSink::AbandonCoverageTarget() {
   queue_->AbandonWrite(slot_index);
 }
 
+void ViewportMaskCoverageSink::ClearCoverage() {
+  {
+    std::lock_guard lock(mutex_);
+    cleared_through_ = published_count_;
+#ifdef HAVE_METAL
+    pending_metal_.reset();
+#endif
+  }
+  item_->requestPresentUpdate();
+}
+
 void ViewportMaskCoverageSink::ResetMappedLocked() {
   mapped_slot_         = -1;
   unmapped_            = false;
@@ -261,8 +272,8 @@ auto ViewportMaskCoverageSink::SubmitMetalCoverage(const MaskCoveragePresentatio
   }
   {
     std::lock_guard lock(mutex_);
-    pending_metal_ = PendingMetalCoverage{frame, presentation};
     ++published_count_;
+    pending_metal_ = PendingMetalCoverage{frame, presentation, published_count_};
   }
   item_->requestPresentUpdate();
   return MaskCoveragePublication::Published;
@@ -307,9 +318,22 @@ auto ViewportMaskCoverageSink::PresentationOfSlot(int slot_index) const
   return slot_presentations_[static_cast<std::size_t>(slot_index)];
 }
 
+auto ViewportMaskCoverageSink::SequenceOfSlot(int slot_index) const -> std::uint64_t {
+  std::lock_guard lock(mutex_);
+  if (slot_index < 0 || slot_index >= DirectPresentQueue::kSlotCount) {
+    return 0;
+  }
+  return slot_sequences_[static_cast<std::size_t>(slot_index)];
+}
+
 auto ViewportMaskCoverageSink::PublishedCount() const -> std::uint64_t {
   std::lock_guard lock(mutex_);
   return published_count_;
+}
+
+auto ViewportMaskCoverageSink::ClearedThrough() const -> std::uint64_t {
+  std::lock_guard lock(mutex_);
+  return cleared_through_;
 }
 
 }  // namespace alcedo::editor_rhi

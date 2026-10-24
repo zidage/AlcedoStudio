@@ -359,18 +359,19 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     // pacing deadlines, and serial frame consumption never wait on the GUI
     // thread's event loop or window-update waits.
     // The scheduler port is also the comparison's image port: comparison pairs render on the
-    // editor's own executor and worker. ShutdownModules shuts it down (waiting for an image job)
-    // before the session service is destroyed.
+    // editor's own executor and worker. It is also the coverage port of the AI Mask preview, on
+    // the same executor and device as the frames. ShutdownModules shuts it down (waiting for an
+    // image job or a coverage job) before the session service is destroyed.
     // AI Mask R8 assets live in the project database of the open project.
     auto session_mask_assets = std::make_shared<EditorSessionMaskAssetPort>(
         [this]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
           return project_ ? project_->handler().pipeline_service() : nullptr;
         });
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
-        session_pipeline, session_history, session_tasks, session_scheduler,
-        session_checkpoint, session_thumbnail, save_coordinator,
+        session_pipeline, session_history, session_tasks, session_scheduler, session_checkpoint,
+        session_thumbnail, save_coordinator,
         std::make_shared<alcedo::EditorSessionThreadedCommandExecutor>(), session_scheduler,
-        std::move(session_mask_assets));
+        std::move(session_mask_assets), session_scheduler);
     // Completion is forward: coordinator installs on_complete at Schedule.
     editor_session_scheduler_ = std::move(session_scheduler);
   }
@@ -451,6 +452,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   if (editor_session_scheduler_) {
     editor_session_scheduler_->SetSinkResolver([this]() -> alcedo::IFrameSink* {
       return editor_session_ ? editor_session_->presentation_frame_sink() : nullptr;
+    });
+    editor_session_scheduler_->SetMaskCoverageSinkResolver([this]() -> alcedo::IMaskCoverageSink* {
+      return editor_session_ ? editor_session_->presentation_mask_coverage_sink() : nullptr;
     });
   }
   // An export renders on its own executor. The editor releases its GPU resources before the

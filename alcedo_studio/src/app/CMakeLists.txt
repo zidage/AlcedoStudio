@@ -641,6 +641,17 @@ def_library(EditorWorkingDocument
     PUBLIC_DEPS EditGraph
 )
 
+# Coverage preview of the editor (SM8.7): the candidate or committed AI Mask selection and its
+# presentation requests on the editor executor.
+def_library(EditorMaskCoveragePreview
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_mask_coverage_preview.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_mask_coverage_preview.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_mask_coverage_port.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/edit/runtime/mask_coverage_selection.hpp"
+    PUBLIC_DEPS EditMaskCore
+)
+
 def_library(EditorSessionService
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_service.cpp"
@@ -663,6 +674,8 @@ def_library(EditorSessionService
                  EditorSerialFrameAdmission EditorMaskCreationController EditorComparisonService
                  AiMaskAnalysisImage
 )
+# The session header holds the coverage preview by value.
+target_link_libraries(EditorSessionService PUBLIC EditorMaskCoveragePreview)
 
 # Facade consumers (tests/UI) include session headers that pull metal_image.hpp
 # under HAVE_METAL. Private session-controller deps do not propagate metal-cpp

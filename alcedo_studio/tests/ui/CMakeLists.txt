@@ -311,6 +311,46 @@ alcedo_ui_gtest_discover_tests(EditorComparisonServiceTest
   PROPERTIES LABELS "editor_session;editor_comparison")
 alcedo_register_test_target(EditorComparisonServiceTest ui)
 
+# The AI Mask coverage preview through the production session facade over the real history port
+# (SM8.7): a real AiMaskEditSession over a fake runner and a recording coverage port.
+add_executable(EditorMaskCoveragePreviewTest
+    ${ALCEDO_TEST_ROOT}/app/editor_mask_coverage_preview_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorMaskCoveragePreviewTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorMaskCoveragePreviewTest
+  EditorSessionService
+  EditorMaskCoveragePreview
+  AiMaskEditSession
+  EditorComparisonService
+  AiMaskAnalysisImage
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorMaskCoveragePreviewTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorMaskCoveragePreviewTest
+  TEST_PREFIX "EditorMaskCoveragePreviewTest."
+  PROPERTIES LABELS "editor_session;ai_mask")
+alcedo_register_test_target(EditorMaskCoveragePreviewTest ui)
+
 # Undo, Redo, head moves, and Paste refused while a slider input sequence or a Mask edit is open,
 # through the production session facade over the real history port.
 add_executable(EditorHistoryMoveDuringInputTest

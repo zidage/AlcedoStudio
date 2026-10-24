@@ -250,11 +250,7 @@ void EditorViewportItem::requestRendererInvalidation() {
   requestPresentUpdate();
 }
 
-void EditorViewportItem::clearMaskCoverage() {
-  coverage_sink_->ClearPendingMetalCoverage();
-  mask_coverage_clear_requested_.store(true, std::memory_order_release);
-  requestPresentUpdate();
-}
+void EditorViewportItem::clearMaskCoverage() { coverage_sink_->ClearCoverage(); }
 
 auto EditorViewportItem::maskCoverageColor() const -> QColor {
   return QColor::fromRgbF(mask_coverage_style_.red, mask_coverage_style_.green,

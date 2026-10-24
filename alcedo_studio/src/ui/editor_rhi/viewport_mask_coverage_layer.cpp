@@ -25,8 +25,29 @@ void ViewportMaskCoverageLayer::Attach(std::shared_ptr<DirectPresentQueue>      
     return;
   }
   Release();
-  queue_ = std::move(queue);
-  sink_  = std::move(sink);
+  queue_         = std::move(queue);
+  sink_          = std::move(sink);
+  applied_clear_ = sink_ ? sink_->ClearedThrough() : 0;
+}
+
+auto ViewportMaskCoverageLayer::ApplyClear() -> bool {
+  if (!sink_) {
+    return false;
+  }
+  const auto cleared_through = sink_->ClearedThrough();
+  if (cleared_through == applied_clear_) {
+    return false;
+  }
+  applied_clear_ = cleared_through;
+  if (texture_ == nullptr || sequence_ > cleared_through) {
+    return false;
+  }
+  Release();
+  return true;
+}
+
+auto ViewportMaskCoverageLayer::ClearedBySink(std::uint64_t sequence) const -> bool {
+  return sink_ && sequence <= sink_->ClearedThrough();
 }
 
 void ViewportMaskCoverageLayer::FulfillTargetRequests(QRhi* rhi, ILeaseTargetAdapter& adapter,
@@ -107,13 +128,19 @@ auto ViewportMaskCoverageLayer::ConsumeQueued(QRhi* rhi, std::uint64_t session_e
     queue_->CompleteRendererRead(slot.index);
     return false;
   }
+  const auto sequence = sink_ ? sink_->SequenceOfSlot(slot.index) : 0;
+  if (ClearedBySink(sequence)) {
+    // Published before a ClearCoverage: never displayed.
+    queue_->CompleteRendererRead(slot.index);
+    return false;
+  }
   auto* texture = Import(rhi, slot.width, slot.height, slot.native.native_handle);
   if (texture == nullptr) {
     queue_->CompleteRendererRead(slot.index);
     return false;
   }
   Install(texture, slot.index, {},
-          sink_ ? sink_->PresentationOfSlot(slot.index) : MaskCoveragePresentation{});
+          sink_ ? sink_->PresentationOfSlot(slot.index) : MaskCoveragePresentation{}, sequence);
   return true;
 }
 
@@ -124,7 +151,7 @@ auto ViewportMaskCoverageLayer::ConsumeMetal(QRhi* rhi, std::uint64_t session_ep
     return false;
   }
   auto pending = sink_->TakePendingMetalCoverage(session_epoch, image_identity);
-  if (!pending.has_value()) {
+  if (!pending.has_value() || ClearedBySink(pending->sequence)) {
     return false;
   }
   auto* texture =
@@ -132,7 +159,7 @@ auto ViewportMaskCoverageLayer::ConsumeMetal(QRhi* rhi, std::uint64_t session_ep
   if (texture == nullptr) {
     return false;
   }
-  Install(texture, -1, std::move(pending->frame.owner), pending->presentation);
+  Install(texture, -1, std::move(pending->frame.owner), pending->presentation, pending->sequence);
   return true;
 #else
   (void)rhi;
@@ -159,13 +186,15 @@ auto ViewportMaskCoverageLayer::Import(QRhi* rhi, int width, int height,
 
 void ViewportMaskCoverageLayer::Install(QRhiTexture* texture, int slot_index,
                                         std::shared_ptr<const void>     owner,
-                                        const MaskCoveragePresentation& presentation) {
+                                        const MaskCoveragePresentation& presentation,
+                                        std::uint64_t                   sequence) {
   // The replacement is imported; only now may the previous frame go.
   Release();
   texture_      = texture;
   slot_index_   = slot_index;
   owner_        = std::move(owner);
   presentation_ = presentation;
+  sequence_     = sequence;
   last_error_.clear();
 }
 
@@ -189,6 +218,7 @@ void ViewportMaskCoverageLayer::Release() {
   slot_index_ = -1;
   owner_.reset();
   presentation_ = {};
+  sequence_     = 0;
 }
 
 void ViewportMaskCoverageLayer::DestroyRetiredNatives(ILeaseTargetAdapter& adapter) {

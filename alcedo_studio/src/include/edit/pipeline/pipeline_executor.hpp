@@ -14,10 +14,12 @@
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
 #include "edit/runtime/mask_asset_reader.hpp"
+#include "edit/runtime/mask_coverage_selection.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/rendered_pipeline_image.hpp"
 #include "image/image_buffer.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "ui/edit_viewer/mask_coverage_sink.hpp"
 
 namespace alcedo {
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
@@ -162,6 +164,25 @@ class PipelineExecutor {
    */
   auto ApplyImage(const PipelineGraphSnapshot& snapshot, std::shared_ptr<ImageBuffer> input,
                   const PipelineApplyRequest& request) -> RenderedPipelineImage;
+
+  /**
+   * @brief Coverage-only presentation of @p selection (SM8 C4, C5): the processed coverage of the
+   *        candidate or committed AI Mask, written on the grid of the last presented photo frame
+   *        and handed to the coverage channel @p sink.
+   *
+   * Runs PresentMaskCoverage on the device of the interactive renderer of the resolved backend,
+   * with the geometry of its last presented full photo frame (Renderer::PresentedFrameGeometry)
+   * and @p mask. It compiles and executes no photo DAG and changes no photo result or binding.
+   *
+   * @pre Caller holds GetRenderLock() or has exclusive access; this executor serves Interactive.
+   * @return Published, or DiscardedForImageChange when the viewport changed image first.
+   * @throws std::runtime_error with a "Mask coverage display:" message when no photo frame of the
+   *         current binding was presented, and every error of PresentMaskCoverage (validation,
+   *         acquisition, display write, transfer). The displayed coverage then stays unchanged.
+   */
+  auto PresentMaskCoverage(const MaskCoverageSelection& selection, MaskCoverageInvertOpacity mask,
+                           const MaskCoverageFrameIdentity& identity, IMaskCoverageSink& sink)
+      -> MaskCoveragePublication;
 
   /// Attach the editor frame sink that later requests read. Caller holds render_lock_ or has
   /// exclusive access.

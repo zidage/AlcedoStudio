@@ -132,7 +132,8 @@ struct EditorSessionRuntime {
       std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator = nullptr,
       std::shared_ptr<IEditorSessionCommandExecutor>   command_executor = nullptr,
       std::shared_ptr<IEditorImageRenderPort>          image_render     = nullptr,
-      std::shared_ptr<IEditorMaskAssetPort>            mask_assets      = nullptr)
+      std::shared_ptr<IEditorMaskAssetPort>            mask_assets      = nullptr,
+      std::shared_ptr<IEditorMaskCoveragePort>         mask_coverage    = nullptr)
       -> std::unique_ptr<EditorSessionRuntime> {
     auto runtime              = std::make_unique<EditorSessionRuntime>();
     runtime->pipeline         = std::move(pipeline);
@@ -159,6 +160,7 @@ struct EditorSessionRuntime {
     deps.command_executor             = runtime->command_executor;
     deps.images                       = std::move(image_render);
     deps.mask_assets                  = std::move(mask_assets);
+    deps.mask_coverage                = std::move(mask_coverage);
     runtime->service                  = std::make_unique<EditorSessionService>(std::move(deps));
 
     EditorSessionService* service_ptr = runtime->service.get();

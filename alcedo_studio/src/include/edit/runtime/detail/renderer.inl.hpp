@@ -288,6 +288,9 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
       presented.geometry                  = plan.geometry;
       FramePresenter<Backend>::Present(*render_device, output_id, *request.sink, presented,
                                        display_config);
+      if (IsRenderReferenceFrame(presented.mode, presented.metadata.frame_role)) {
+        presented_frame_geometry_ = plan.geometry;
+      }
     }
     if (request.require_host_output) {
       auto host = FramePresenter<Backend>::Download(*render_device, output_id);

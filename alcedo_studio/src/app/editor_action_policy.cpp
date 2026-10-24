@@ -252,6 +252,13 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::CommitAiMaskEdit:
     case EditorSessionCommandKind::CancelAiMaskEdit:
       return std::nullopt;
+    // Presentation only: no document, history, or Version write. The reducer reports its own
+    // refusal to the caller's completion.
+    case EditorSessionCommandKind::UpdateAiMaskCandidateCoverage:
+    case EditorSessionCommandKind::SelectMaskCoveragePreview:
+    case EditorSessionCommandKind::ClearMaskCoveragePreview:
+    case EditorSessionCommandKind::RetryMaskCoveragePreview:
+      return std::nullopt;
     case EditorSessionCommandKind::SetPresentationTarget:
     case EditorSessionCommandKind::SetPresentationSize:
     case EditorSessionCommandKind::SetGeometryOverlay:

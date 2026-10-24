@@ -71,6 +71,13 @@ class ViewportMaskCoverageLayer {
   /// Release the displayed frame (hide, image change, close, device recreation). Idempotent.
   void Release();
 
+  /**
+   * @brief Apply a new ViewportMaskCoverageSink::ClearCoverage: release the displayed frame when
+   *        it was published before the clear. ConsumeNewest skips such frames as well.
+   * @return True when the displayed frame was released.
+   */
+  auto ApplyClear() -> bool;
+
   /// Destroy the native targets that the queue retired, through @p adapter.
   void DestroyRetiredNatives(ILeaseTargetAdapter& adapter);
   /// Destroy every native target that this layer created. @pre @ref Release; the queue no longer
@@ -95,7 +102,9 @@ class ViewportMaskCoverageLayer {
   auto ConsumeMetal(QRhi* rhi, std::uint64_t session_epoch, std::uint64_t image_identity) -> bool;
   auto Import(QRhi* rhi, int width, int height, std::uintptr_t native_handle) -> QRhiTexture*;
   void Install(QRhiTexture* texture, int slot_index, std::shared_ptr<const void> owner,
-               const MaskCoveragePresentation& presentation);
+               const MaskCoveragePresentation& presentation, std::uint64_t sequence);
+  /// True when the frame of publication @p sequence was published before the last clear.
+  [[nodiscard]] auto                        ClearedBySink(std::uint64_t sequence) const -> bool;
 
   std::shared_ptr<DirectPresentQueue>       queue_;
   std::shared_ptr<ViewportMaskCoverageSink> sink_;
@@ -104,6 +113,10 @@ class ViewportMaskCoverageLayer {
   int                                       slot_index_ = -1;
   std::shared_ptr<const void>               owner_;
   MaskCoveragePresentation                  presentation_{};
+  /// Publication sequence of the displayed frame.
+  std::uint64_t                             sequence_      = 0;
+  /// ClearedThrough of the sink when ApplyClear last ran.
+  std::uint64_t                             applied_clear_ = 0;
   std::string                               last_error_;
   std::function<void(const QRhiTexture*)>   texture_release_observer_;
 };

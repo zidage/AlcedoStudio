@@ -288,8 +288,7 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     content_dirty_  = true;
   }
 
-  if (item_->takeMaskCoverageClearRequest()) {
-    coverage_layer_.Release();
+  if (coverage_layer_.ApplyClear()) {
     content_dirty_ = true;
   }
   coverage_style_ = item_->maskCoverageStyle();

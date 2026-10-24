@@ -18,6 +18,8 @@
 #include "app/editor_comparison_service.hpp"
 #include "app/editor_comparison_types.hpp"
 #include "app/editor_image_render_port.hpp"
+#include "app/editor_mask_coverage_port.hpp"
+#include "app/editor_mask_coverage_preview.hpp"
 #include "app/editor_mask_creation_controller.hpp"
 #include "app/editor_panel_projection.hpp"
 #include "app/editor_pending_input.hpp"
@@ -656,9 +658,60 @@ class IEditorSessionBackend {
   virtual auto CommitAiMaskEdit(EditorAiMaskCommit /*commit*/) -> EditorSessionResult {
     return RejectComparison("AI Mask edit is not supported by this backend");
   }
-  /// End the open AI Mask edit and release its lease. Publishes and stores nothing.
+  /// End the open AI Mask edit and release its lease. Publishes and stores nothing. The coverage
+  /// preview returns to the selected committed AI Mask, or hides when none is selected.
   virtual auto CancelAiMaskEdit() -> EditorSessionResult {
     return RejectComparison("AI Mask edit is not supported by this backend");
+  }
+  /**
+   * @brief Present @p candidate, the current coverage of the AI Mask edit session, in the
+   *        viewport (SM8.7 UpdateAiMaskCandidateCoverage).
+   *
+   * @p candidate.pixels is the shared read of AiMaskEditSession::AcquireCoveragePixels; the
+   * session keeps it unchanged, so the presentation holds it without a copy until the upload
+   * completes. Requires the open AI Mask edit. The viewport keeps the coverage it displays until
+   * the GPU work of this request completes. Writes nothing.
+   * @return Rejected only when the command queue refuses the command. Every other outcome reaches
+   *         @p on_complete exactly once, on the session owner thread.
+   */
+  virtual auto UpdateAiMaskCandidateCoverage(MaskCoverageCandidateSelection /*candidate*/,
+                                             EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult {
+    return RefuseMaskCoverage(std::move(on_complete));
+  }
+  /**
+   * @brief Select committed AI Mask @p mask_id of Color Grade @p grade_id as the coverage preview
+   *        and present it (SM8.7 SelectMaskCoveragePreview). Refused during an AI Mask edit.
+   *
+   * Without @p mask_id the selection is the Union of the Grade, which the coverage-only operation
+   * does not evaluate; it is refused with that reason, as is an analytic Mask.
+   * @return Rejected only when the command queue refuses the command. Every other outcome reaches
+   *         @p on_complete exactly once, on the session owner thread.
+   */
+  virtual auto SelectMaskCoveragePreview(const NodeId& /*grade_id*/,
+                                         std::optional<MaskId> /*mask_id*/,
+                                         EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult {
+    return RefuseMaskCoverage(std::move(on_complete));
+  }
+  /// Forget the coverage preview (candidate and committed selection) and hide it after the
+  /// presentation in flight. Idempotent.
+  virtual auto ClearMaskCoveragePreview() -> EditorSessionResult {
+    return RejectComparison("Coverage preview is not supported by this backend");
+  }
+  /**
+   * @brief Present the newest coverage request again after a failed presentation (status
+   *        Previous). Uses the same shared pixels and edge values; runs no model.
+   * @return Rejected only when the command queue refuses the command. Every other outcome reaches
+   *         @p on_complete exactly once, on the session owner thread.
+   */
+  virtual auto RetryMaskCoveragePreview(EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult {
+    return RefuseMaskCoverage(std::move(on_complete));
+  }
+  /// Published state of the coverage preview. Any thread.
+  [[nodiscard]] virtual auto mask_coverage_preview_state() const -> EditorMaskCoveragePreviewState {
+    return {};
   }
   /// True from AI Mask edit Open to Commit, Cancel, or image change. Any thread.
   [[nodiscard]] virtual auto ai_mask_edit_open() const -> bool { return false; }
@@ -693,6 +746,14 @@ class IEditorSessionBackend {
     result.identity = identity();
     result.message  = std::move(message);
     return result;
+  }
+  /// Default refusal of the coverage preview requests: the completion receives Rejected.
+  auto RefuseMaskCoverage(EditorMaskCoverageCompletion on_complete) const -> EditorSessionResult {
+    auto refused = RejectComparison("Coverage preview is not supported by this backend");
+    if (on_complete) {
+      on_complete({EditorMaskCoverageOutcome::Rejected, refused.message, {}});
+    }
+    return refused;
   }
 
   void NotifyChange() {
@@ -762,6 +823,9 @@ class EditorSessionService final : public IEditorSessionBackend {
     std::shared_ptr<IEditorImageRenderPort>          images;
     /// AI Mask R8 asset store. Null rejects AI Mask Commit and the Open of a stored AI Mask.
     std::shared_ptr<IEditorMaskAssetPort>            mask_assets;
+    /// Coverage-only presentation on the editor executor (SM8.7). Null makes every coverage
+    /// preview request fail with that reason.
+    std::shared_ptr<IEditorMaskCoveragePort>         mask_coverage;
   };
 
   explicit EditorSessionService(Dependencies dependencies);
@@ -942,6 +1006,19 @@ class EditorSessionService final : public IEditorSessionBackend {
                                     EditorAiMaskEditOpenCompletion on_complete) -> EditorSessionResult override;
   auto               CommitAiMaskEdit(EditorAiMaskCommit commit) -> EditorSessionResult override;
   auto               CancelAiMaskEdit() -> EditorSessionResult override;
+  auto               UpdateAiMaskCandidateCoverage(MaskCoverageCandidateSelection candidate,
+                                                   EditorMaskCoverageCompletion   on_complete)
+      -> EditorSessionResult override;
+  auto SelectMaskCoveragePreview(const NodeId& grade_id, std::optional<MaskId> mask_id,
+                                 EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult override;
+  auto ClearMaskCoveragePreview() -> EditorSessionResult override;
+  auto RetryMaskCoveragePreview(EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult override;
+  [[nodiscard]] auto mask_coverage_preview_state() const
+      -> EditorMaskCoveragePreviewState override {
+    return coverage_preview_.State();
+  }
   [[nodiscard]] auto ai_mask_edit_open() const -> bool override {
     return ai_mask_edit_active_.load(std::memory_order_acquire);
   }
@@ -996,9 +1073,22 @@ class EditorSessionService final : public IEditorSessionBackend {
    */
   auto CloseComparisonOnOwner(bool refresh_current_view, std::optional<ViewportRenderRegion> region)
       -> bool;
-  /// End the open AI Mask edit on the owner thread and release its lease. Image selection, editor
-  /// close, and shutdown call this before they release the image. Returns true when one was open.
+  /// End the open AI Mask edit on the owner thread and release its lease. Returns true when one
+  /// was open.
   auto               EndAiMaskEditOnOwner() -> bool;
+  /// End the open AI Mask edit and the coverage preview of the image. Image selection, editor
+  /// close, and shutdown call this before they release the image.
+  void               EndAiMaskWorkForImageChange();
+  /// The image that coverage preview requests present on: the held image and its load request.
+  [[nodiscard]] auto CoveragePreviewTarget() const -> EditorMaskCoveragePreview::ImageTarget;
+  /**
+   * @brief Read the committed AI Mask @p mask_id of Grade @p grade_id from the working document.
+   * @return The selection, or nullopt with @p error set when the Grade, the Mask, or an AI source
+   *         is missing.
+   */
+  [[nodiscard]] auto ReadCommittedAiMask(const NodeId& grade_id, const MaskId& mask_id,
+                                         std::string* error) const
+      -> std::optional<EditorMaskCoveragePreview::CommittedMask>;
   /**
    * @brief CommitAdjustment admission on the owner thread.
    *
@@ -1164,6 +1254,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   std::optional<AiMaskEditTarget>                ai_mask_edit_;
   /// True from AI Mask edit Open to its end. Read by input admission off the owner thread.
   std::atomic<bool>                              ai_mask_edit_active_{false};
+  /// Coverage preview of the image: candidate or committed selection and its requests (SM8.7).
+  EditorMaskCoveragePreview                      coverage_preview_;
   std::vector<EditorMaskCreationCommand>         pending_mask_commands_;
   mutable std::mutex                             mask_command_mutex_;
   bool                                           reducing_command_     = false;
