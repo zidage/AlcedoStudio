@@ -5,7 +5,8 @@ SM8.2 complete on 2026-10-24 on Windows CUDA (section 7.2.1).
 SM8.3 complete on 2026-10-24 on Windows OpenCL (section 7.3.1).
 SM8.4 complete on 2026-10-24 on macOS Metal (section 7.4.1).
 SM8.5 complete on 2026-10-24 on Windows and macOS (section 7.5.1).
-SM8.6 to SM8.8 are planned; no implementation evidence exists for them.
+SM8.6 complete on 2026-10-24 on Windows and macOS (section 7.6.1).
+SM8.7 and SM8.8 are planned; no implementation evidence exists for them.
 
 Parent: [AI Segmentation Mask Master Plan](../ai_segmentation_mask_master_plan.md), sections 1.5 and 9.7.
 Prerequisites: [SM4](phase_sm4_analysis_render_plan.md), [SM5](phase_sm5_ai_mask_source_and_session_plan.md),
@@ -284,7 +285,7 @@ The transport/composite split separates resource lifetime evidence from pixel co
 | SM8.3 | OpenCL edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | complete 2026-10-24 (7.3.1) |
 | SM8.4 | Metal edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | complete 2026-10-24 (7.4.1) |
 | SM8.5 | Dedicated GPU coverage presentation channel | SM8.1 | 1200-1900 | complete 2026-10-24 (7.5.1) |
-| SM8.6 | One viewport composite for candidate and committed coverage | SM8.2-SM8.5 | 1000-1700 | planned |
+| SM8.6 | One viewport composite for candidate and committed coverage | SM8.2-SM8.5 | 1000-1700 | complete 2026-10-24 (7.6.1) |
 | SM8.7 | Session preview, replacement, Undo/Redo, Commit, and Cancel | SM8.6 | 1100-1800 | planned |
 | SM8.8 | Cross-backend resource and latency evidence | SM8.7 | 500-1000 | planned |
 
@@ -995,7 +996,149 @@ Use one shader path for all selected coverage sources.
 
 **Commands.** Groups A-C; build `alcedo_main` and the proposed presentation test target.
 **Exit.** Pixel, mapping, and dispatch assertions pass. Manual appearance is recorded separately.
-**Expected diff.** 1000-1700 lines. **Completion record.** Section 11; unfilled.
+**Expected diff.** 1000-1700 lines. **Completion record.** Section 7.6.1.
+
+#### 7.6.1 SM8.6 completion record
+
+```text
+Phase / date / status: SM8.6 / 2026-10-24 / complete on Windows (CUDA, OpenCL) and macOS (Metal).
+Source revision and branch: base b04e5a01 (SM8.5, pull request #509); branch
+  feature/ai-segmentation-sm8-6-viewport-coverage-composite (sixth pull request of the SM8
+  stack), commits be16a279 and 7c15a508.
+Actual changed modules and diff size: 23 files, +2289 / -661 (2950 changed lines; estimate
+  1000-1700). About 830 changed lines move the SM8.5 test harness into a shared support header
+  without a change of behavior; the new test file is 912 lines. Production code (including
+  shaders, theme, QML, DESIGN.md, and CMake) is about 1050 changed lines. Largest files:
+  viewport_coverage_composite_test.cpp 912, mask_coverage_presentation_test_support.hpp 513,
+  viewport_composite_pass.cpp 375, viewport_composite_pass.hpp 199. editor_viewport_renderer.cpp
+  went from 1114 to 950 lines.
+Implemented behavior:
+  1. The one composite: editor_viewport.frag samples the coverage channel (binding 3) after the
+     base/detail photo selection: a = clamp(coverage, 0, 1) * opacity,
+     rgb = photo_rgb * (1 - a) + tint_rgb * a, only where a > 0. Alpha is the photo alpha. Pixels
+     with a = 0 keep their photo value, including negative and above-one values. Candidate,
+     committed Mask, and Grade Union coverage use the same draw; the coverage frame has no texels
+     outside its photo frame, so coverage there is 0.
+  2. ViewportCompositePass (new module) owns the QRhi resources of the viewport draw (samplers,
+     uniform and vertex buffers, bindings, pipeline) and records the pass. Outcome Drawn, NoPhoto,
+     or Failed with LastError. EditorViewportRenderer routes the selected photo layer, the visible
+     DetailPatch, and the displayed coverage through it, and drops the bindings before a photo or
+     coverage texture is destroyed (ViewportMaskCoverageLayer::SetTextureReleaseObserver).
+  3. Coverage follows the photo through the common reference space: MapPhotoUvToCoverageUv
+     composes photo UV -> photo render -> render_to_reference -> coverage reference_to_render ->
+     coverage UV from the two ResolveRenderGeometry results. Photo frames now carry their geometry
+     to the render thread: DirectPresentQueue::NotifyReady stores it in the slot (CUDA, OpenCL)
+     and DirectFrameSink copies the bound submission geometry into the Metal import. Crop,
+     rotation, render scale, RoiFrame primaries, zoom, pan, and the DetailPatch (sampled at the
+     base UV) need no separate coordinate rounding. Frames of different reference extents give no
+     map and no tint.
+  4. Presentation state: EditorViewportItem::maskCoverageVisible, maskCoverageColor, and
+     maskCoverageOpacity (GUI thread, read in synchronize). A change emits
+     MaskCoverageStyleChanged and calls update() only. EditorWorkspace.qml binds the color and
+     opacity to the new AppTheme roles maskCoverageTintColor (accentColor) and
+     maskCoverageTintOpacity (0.4); DESIGN.md has the section "Editor viewport Mask coverage
+     display" and limits the old "no coverage-area color" rule to the QSG overlay.
+  5. The QSG Mask controls stay in EditorOverlayItem (z 2) above the viewport draw and keep their
+     input; the composite takes no input.
+Primary success call chain:
+  scene-graph thread: EditorViewportRenderer::synchronize (copies maskCoverageStyle)
+    -> render: consumeDirectFrames / consumeImportedGpuFrames (photo texture + slot geometry)
+    -> ViewportMaskCoverageLayer::ConsumeNewest (coverage texture + presentation geometry)
+    -> BuildViewportCompositeUniforms (letterbox, zoom, pan, detail ROI,
+       MapPhotoUvToCoverageUv, tint) -> ViewportCompositePass::Record (bindings: photo, detail,
+       coverage) -> one draw -> QSG controls above it.
+  style change: EditorViewportItem::setMaskCoverage* -> MaskCoverageStyleChanged + update()
+    -> next synchronize/render; no frame sink, render scheduler, or device call.
+Primary failure and restore call chain:
+  shader load, binding, or pipeline error -> ViewportCompositePass::Record clears the target and
+    returns Failed with LastError -> the renderer logs it and sets the viewport status text to the
+    error; it does not report "presented" or note a composed frame.
+  no common reference space (different reference extents or empty geometry) -> no coverage map ->
+    the photo is drawn without tint.
+  coverage texture release (clear, image change, QRhi teardown, replacement) -> observer drops the
+    bindings first -> the next draw rebinds the placeholder or the replacement.
+Commands and exit codes:
+  Windows: cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target
+      ViewportCoverageCompositeTest MaskCoveragePresentationTest alcedo_main (0)
+    cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target
+      EditorViewportSuspensionTest HeadlessFrameSinkTest EditorSessionRenderSchedulerPortTest
+      PipelineSchedulerRequestIdTest MaskCoverageTextureCacheTest AiMaskCoverageTextureTest (0)
+    ctest --test-dir build/debug -j 1 --output-on-failure -R
+      '^(ViewportCoverageCompositeTest|MaskCoveragePresentationTest)\.' (0, after 7c15a508)
+    ctest --test-dir build/debug -j 1 --output-on-failure -R
+      '^(EditorViewportSuspensionTest|HeadlessFrameSinkTest|EditorSessionRenderSchedulerPortTest|PipelineSchedulerRequestIdTest|MaskCoverageTextureCacheTest|AiMaskCoverageTextureTest)\.' (0)
+  macOS (yurunmac.local, build/macos-debug with ALCEDO_BUILD_TESTS=ON):
+    cmake --build build/macos-debug --target ViewportCoverageCompositeTest
+      MaskCoveragePresentationTest GpuDagMetalGradeTest alcedo_main (0)
+    ctest --test-dir build/macos-debug -j 1 --output-on-failure -R
+      '^(ViewportCoverageCompositeTest|MaskCoveragePresentationTest)\.' (0)
+    ctest --test-dir build/macos-debug -j 1 -R '^GpuDagMetalGradeTest\.MetalMaskFixture\.'
+      (8: the two #497 tests)
+Discovered / passed / failed / skipped counts:
+  ViewportCoverageCompositeTest: Windows CUDA 7/7, Windows OpenCL 7/7 (NVIDIA RTX 3080 Laptop GPU,
+    D3D11 and OpenGL QRhi), macOS Metal 7/7 (Apple M4), each run with gtest [ OK ] output (no
+    skip): PhotoUvMapsToCoverageUvThroughTheReferenceSpace,
+    CandidateAndCommittedCoverageUseSameComposite, OverlayToggleDoesNotExecutePhotoDag,
+    CoverageFollowsCropRotationZoomAndDetailRoi, CoverageTintNeverAppearsInExportOrScopes,
+    UncoveredHdrPixelsStayUnchanged, ShaderLoadFailureReportsDisplayError.
+  MaskCoveragePresentationTest on the shared harness: Windows CUDA 6/6, OpenCL 6/6, macOS Metal 6/6.
+  Windows callers: 71 discovered, 71 passed (EditorViewportSuspensionTest, HeadlessFrameSinkTest,
+    EditorSessionRenderSchedulerPortTest, PipelineSchedulerRequestIdTest,
+    MaskCoverageTextureCacheTest, AiMaskCoverageTextureTest).
+  macOS MetalMaskFixture: 26 discovered, 24 passed, 2 failed (#497, unchanged since SM8.1).
+  First macOS run: UncoveredHdrPixelsStayUnchanged failed because the Metal draw returns +0 for a
+    -0 photo texel and the check compared bytes; 7c15a508 compares each channel by value.
+  Mutation check (Windows CUDA): an identity coverage map made
+    PhotoUvMapsToCoverageUvThroughTheReferenceSpace and
+    CoverageFollowsCropRotationZoomAndDetailRoi fail; a tint that also blends alpha made
+    UncoveredHdrPixelsStayUnchanged fail. Both were restored before the final runs.
+Manual verification: none. The renderer glue (synchronize/render calls of the pass) is built
+  with alcedo_main; no window test drives it, because the real-window E2E test is disabled in the
+  repository. No coverage is presented in the application before SM8.7, so the appearance is not
+  visible yet.
+Numeric differences, latency, and resource measurements:
+  1:1 draws: every pixel equals the composite equation of the read-back coverage texel within
+    1e-5 (relative for values above one); uncovered pixels keep their exact photo value, with
+    values -0.75, 0, 0.5, 1, 2.5, and 16 and alpha 0.5. Candidate and committed coverage of the
+    same R8 and edge (Feather 1.5, Expand 1) give byte-identical composites.
+  Mapped draws: a half-scale crop-and-rotation frame at zoom 1.6 with pan and a DetailPatch, and a
+    viewport ROI frame, match the independent mapping of the test within 0.01 at more than 1000
+    pixels each, including covered and uncovered pixels.
+  Export and scope: the export download is byte-identical before and after a tinted coverage
+    display on the same device; the scope tap receives a new frame of the same size and image;
+    the photo frame of the viewport is byte-identical to the export download; the Mask changes
+    the export pixels.
+  Style changes: no photo DAG pass counter, host transfer, display target allocation, photo frame,
+    adjustment frame request, or size request.
+  Resources: the pass adds one 1x1 RGBA32F placeholder, two samplers, one uniform buffer, and one
+    vertex buffer, as before; the coverage texture is the SM8.5 channel texture. No latency
+    measurement in this assignment (SM8.8).
+Remaining issues or unavailable platforms: #497 (existing). No AMD or Intel OpenCL device was
+  available. The scope check reads the frame identity of the tap, not its pixels; the pixels
+  are the display output that the export check compares.
+```
+
+Decisions made during SM8.6 (AGENTS.md "Make implementation decisions"):
+
+- The draw moved into `ViewportCompositePass`. The renderer file was above 1000 lines, and the
+  pass needs a real-QRhi test without a scene graph. The renderer keeps layer selection and
+  consumption; the pass owns the draw resources.
+- Coverage is mapped through the reference space with the geometry of each photo layer, not
+  sampled at the photo UV. The photo and coverage grids differ for a RoiFrame primary, a render
+  scale change, and a crop change before SM8.7 presents new coverage. The photo queue slot and
+  the Metal import now carry the frame geometry that the renderer already stamps.
+- The tint color is used as a display-encoded value of the photo display encoding, without a
+  color conversion. The tint is decorative and never reaches export or scopes.
+- Coverage is visible by default; SM9 adds the visibility control (`maskCoverageVisible`).
+- A composite failure clears the target and replaces the status text with the error. SM8.7 adds
+  the app-facing completion signal when it presents coverage.
+- The tests are in a new `ViewportCoverageCompositeTest` target instead of
+  `mask_coverage_presentation_test.cpp`. Both use the harness of
+  `mask_coverage_presentation_test_support.hpp`, which also renders a photo on the producer
+  device (photo DAG, FramePresenter::Present, and FramePresenter::Download, the export path).
+- The diff exceeds the 2000-line threshold of section 10 because of the harness move and the
+  real-resource test. Without the move, the new test could not render a photo on the coverage
+  device, so the assignment stays one pull request; #501 records the size.
 
 ### 7.7 SM8.7 - Session replacement and temporary history
 
