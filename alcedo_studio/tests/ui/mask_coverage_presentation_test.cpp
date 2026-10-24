@@ -258,8 +258,8 @@ auto MakeRhi(EditorBackend backend, std::unique_ptr<QOffscreenSurface>& surface)
 #if defined(HAVE_METAL)
       QRhiMetalInitParams    params;
       QRhiMetalNativeHandles device;
-      device.dev      = MetalContext::Instance().Device();
-      device.cmdQueue = MetalContext::Instance().Queue();
+      device.dev      = reinterpret_cast<MTLDevice*>(MetalContext::Instance().Device());
+      device.cmdQueue = reinterpret_cast<MTLCommandQueue*>(MetalContext::Instance().Queue());
       return std::unique_ptr<QRhi>(QRhi::create(QRhi::Metal, &params, {}, &device));
 #else
       return nullptr;
