@@ -70,6 +70,13 @@ Close has the same result as Cancel.
 Commit stores original coverage and publishes one main history operation through SM5.
 Keep the session open if asset write or history publication fails.
 Cancel writes no asset or history and restores the previous committed preview selection.
+Commit and Cancel both end the candidate display. The viewport then shows the photo without the
+coverage, unless the user selected the coverage of a committed Mask before the edit
+(`SelectMaskCoveragePreview`, for example from a Mask list selection that requests it; SM9.3 owns
+that control). Commit does not select the committed Mask. When the selected Mask is the committed
+one, it shows its new coverage (#516).
+The coverage tint is the AppTheme role `maskCoverageTintColor`, a fixed light red in every theme
+(#515).
 An image switch ends the edit through the existing editor lifecycle.
 Unload models when returning to ordinary adjustment, under D15 and D22.
 Drain the serial session worker safely before destroying its model-output store.
@@ -333,4 +340,53 @@ Remaining issues or unavailable platforms (tracking issue #520):
     decodes at 256 x 256 logits, SM3.C C5); visible as an untinted sky band.
   - No stroke prompt, no input markers, no keyboard/Escape rules, no translations, no
     thumbnails; SM9.1-SM9.3 own them. macOS not built.
+```
+
+### 7.2 MVP fixes #515 and #516
+
+```text
+Phase / date / status: SM9 MVP fixes / 2026-10-24 / implemented on Windows.
+Source revision and branch: 98039bdb; branch feature/ai-segmentation-sm9-mvp (PR #521).
+Actual changed modules and diff size: about 330 lines.
+  - AppTheme maskCoverageTintColor/maskCoverageTintOpacity, DESIGN.md, and the default
+    MaskCoverageDisplayStyle of the viewport (#515).
+  - EditorMaskCoveragePreview::EndCandidateAfterCommit replaces ReplaceCandidateWithCommitted;
+    EditorSessionService::CommitAiMaskEdit calls it (#516).
+Implemented behavior:
+  - #515: the coverage tint is #FF5050 at opacity 0.5 in every theme, not accentColor at 0.4.
+    The composite rule of SM8.6 and the uncovered pixels are unchanged.
+  - #516: Commit does not select the committed Mask. Commit and Cancel end the candidate with
+    the same rule: a committed selection made before the edit (SelectMaskCoveragePreview) is
+    shown again, with its new state when it is the committed Mask; without a selection the
+    coverage is hidden. Section 1 and SM8 section 4.3 state the rule.
+Decisions made during the work:
+  - The tint role is CONSTANT: it no longer depends on the theme.
+  - The selected Mask is presented again after its Commit also when no candidate was presented,
+    because the selection held the source from before the Commit.
+Primary success call chain: CommitAiMaskEdit -> PutMaskAsset -> publish -> ReadCommittedAiMask
+  -> EndCandidateAfterCommit -> EndCandidate -> Hide -> ClearMaskCoverage (no selection), or
+  -> committed-source job (selection).
+Primary failure and restore call chain: unchanged; a refused or failed Commit keeps the
+  candidate and the preview.
+Commands and exit codes:
+  scripts\msvc_env.cmd --build --preset win_debug --target EditorMaskCoveragePreviewTest
+    EditorComparisonServiceTest ViewportCoverageCompositeTest MaskCoveragePresentationTest
+    alcedo_main: 0
+  ctest -j 1 -R '^(EditorMaskCoveragePreviewTest|EditorComparisonServiceTest|
+    ViewportCoverageCompositeTest|MaskCoveragePresentationTest)\.': 64/64 passed, 0 skipped.
+  New or changed: CommitStoresOriginalCoverageAndPublishesOneHistoryOperation (Commit without a
+    selection: one clear, no job, Hidden), CommitOfSelectedMaskPresentsItsNewState,
+    CommitOfAnotherMaskRestoresTheSelection, ViewportCoverageCompositeTest
+    CommitWithoutSelectionShowsPhotoWithoutTint (CUDA and OpenCL: the tint of the default style
+    changes covered blue pixels by more than 0.2; after the Commit the composite equals the photo
+    bytes).
+Manual product checks (real window, debug build, CUDA editor backend, DirectML sidecar):
+  - DSC0027.ARW: Sky task, then point prompts on the pond and the forest: the tint is clearly
+    visible on pale sky, water, grass, and conifer forest. Commit: the panel closes and the
+    photo is shown without the tint; the Mask limits the Grade.
+  - om5ii.raw: point prompts on the ram face and the deep blue sky: the tint is clearly visible
+    on both. Close (Cancel): the photo is shown without the tint and unchanged.
+Remaining issues or unavailable platforms:
+  - No photo with skin was available in the test project; skin was not checked in the window.
+  - macOS not built.
 ```
