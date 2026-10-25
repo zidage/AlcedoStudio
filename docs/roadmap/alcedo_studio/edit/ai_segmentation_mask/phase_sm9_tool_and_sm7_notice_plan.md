@@ -31,11 +31,14 @@ Feather
 Expand
 Undo  Redo (icons)
 Error alert with Retry for a failed display; notice text
-Cancel                                              Commit
+Confirm (one full-width button; Close cancels)
 Stage progress (while an operation runs)
 ```
 
-Every control is an icon action with an accessible name and a tooltip. The panel shows no
+Every control is an icon action with an accessible name and a tooltip. The only text button is
+Confirm (Commit), a full-width button in the Browse LUTs style; there is no Cancel button,
+because Close in the header has the same result. Controls use the raised control fills of
+AppTheme (`controlFillColor`), so they read apart from the panel surface. The panel shows no
 busy text. While an operation runs, the existing yellow working border (`RotatingTaskBorder`)
 turns around the whole panel, and a progress bar at the bottom names the running stage. The
 Open stages are counted (1 to 5): open the edit, render the analysis image, start the AI

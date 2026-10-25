@@ -59,6 +59,11 @@ struct ThemeColors {
   QColor button_pressed_fill;
   QColor button_selected_fill;
   QColor disabled_surface;  // bg_panel blended toward bg_canvas (simulates 0.55 opacity)
+  // Raised controls (secondary buttons, combo fields, tool icon actions).
+  QColor control_fill;
+  QColor control_hovered_fill;
+  QColor control_pressed_fill;
+  QColor control_border;
 };
 
 auto BrandBlueBase() -> QColor { return QColor(104, 146, 185); }
@@ -102,6 +107,11 @@ auto MakePuerhTheme() -> ThemeColors {
       .button_pressed_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover / bg_deep
       .button_selected_fill = QColor(0x1A, 0x1A, 0x1A),  // = pressed / hover
       .disabled_surface     = QColor(0x0E, 0x0E, 0x0E),  // between panel and canvas
+      // Raised controls: about 0x13 above the panel, so they read apart from it.
+      .control_fill         = QColor(0x24, 0x24, 0x24),
+      .control_hovered_fill = QColor(0x2E, 0x2E, 0x2E),
+      .control_pressed_fill = QColor(0x1E, 0x1E, 0x1E),
+      .control_border       = QColor(255, 255, 255, 28),
   };
 }
 
@@ -137,6 +147,10 @@ auto MakeClassicTheme() -> ThemeColors {
       .button_pressed_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover
       .button_selected_fill = QColor(0x1A, 0x1A, 0x1A),  // = pressed / hover
       .disabled_surface     = QColor(0x0E, 0x0E, 0x0E),  // between panel and canvas
+      .control_fill         = QColor(0x27, 0x27, 0x27),
+      .control_hovered_fill = QColor(0x31, 0x31, 0x31),
+      .control_pressed_fill = QColor(0x21, 0x21, 0x21),
+      .control_border       = QColor(255, 255, 255, 28),
   };
 }
 
@@ -1283,6 +1297,18 @@ auto AppTheme::buttonSelectedFillColor() const -> QColor {
 }
 auto AppTheme::disabledSurfaceColor() const -> QColor {
   return GetTheme(current_theme_index_).disabled_surface;
+}
+auto AppTheme::controlFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).control_fill;
+}
+auto AppTheme::controlHoveredFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).control_hovered_fill;
+}
+auto AppTheme::controlPressedFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).control_pressed_fill;
+}
+auto AppTheme::controlBorderColor() const -> QColor {
+  return GetTheme(current_theme_index_).control_border;
 }
 
 auto AppTheme::currentThemeIndex() const -> int { return current_theme_index_; }

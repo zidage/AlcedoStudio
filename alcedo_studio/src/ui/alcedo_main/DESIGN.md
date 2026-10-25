@@ -245,6 +245,10 @@ parallel palette to satisfy the policy.
 | **Button hovered fill** | **`buttonHoveredFillColor`** | **Opaque hover-state fill** (between panel and engaged) |
 | **Button pressed fill** | **`buttonPressedFillColor`** | **Opaque pressed-state fill** (= hover well) |
 | **Button selected fill** | **`buttonSelectedFillColor`** | **Opaque selected-state fill** (= pressed / hover well) |
+| **Control fill** | **`controlFillColor`** | **Raised control surface**: `DialogActionButton` "normal" (Browse LUTs), `AdjustmentCombo` / `SearchableAdjustmentCombo` fields, AI Mask tool actions. About 0x13 above the panel so the control reads apart from card and `bgBaseColor` surfaces |
+| **Control hovered fill** | **`controlHoveredFillColor`** | **Hover state of a raised control** |
+| **Control pressed fill** | **`controlPressedFillColor`** | **Pressed state of a raised control** |
+| **Control border** | **`controlBorderColor`** | **1 px edge of a raised control** (white at alpha 28) |
 | **Disabled surface** | **`disabledSurfaceColor`** | **Reserved muted shell token** (not used for editor side-panel shells) |
 | **List selected fill** | **`editorListSelectedFillColor`** | **Monochrome light well for dense catalog rows** (LUT browser, inverted selection) |
 | **List selected ink** | **`editorListSelectedInkColor`** | **Text / icon ink on the light selected well** (= `bgBaseColor`) |
@@ -763,7 +767,8 @@ panel has no section captions and no busy text. From top to bottom:
    (Tabler `users`). People shows the selected fill while People is the last
    component.
 3. People list while People is the last component: one flat row per person
-   (`ai-people.svg` icon and `Person N`) in a `cardSurfaceColor` well. A
+   (`ai-people.svg` icon and `Person N`) in a sunken `bgBaseColor` well with a
+   `controlBorderColor` edge. A
    selected (included) person uses `editorListSelectedFillColor` /
    `editorListSelectedInkColor`. A click toggles the person; hover outlines that
    person in the viewport with a dashed frame.
@@ -779,13 +784,21 @@ panel has no section captions and no busy text. From top to bottom:
 8. Errors use `AlertBadge`; a failed coverage display adds a `retry.svg` Retry
    action next to its badge. A notice (no object found, the 64-point limit)
    is muted caption text.
-9. Cancel and Commit `DialogActionButton`s stay below the scroll area.
+9. One full-width Confirm `DialogActionButton` ("normal", the Browse LUTs
+   style) stays below the scroll area. There is no Cancel button: Close in the
+   header cancels.
 10. While an operation runs (after `motionFadeMs`, so Undo does not flash), a
     `RotatingTaskBorder` in `backgroundTaskWorkingColor` turns around the whole
     panel and a `ThemedProgressBar` at the bottom shows the stage. The stage
     label names the step (`Starting the AI runtime`, `Loading the models`,
     `Running the model`, ...) with a separate `n/5` data label for the Open
     stages. A model run without stages uses the indeterminate bar.
+
+The panel uses `cardSurfaceColor`. Icon actions use the raised control fills
+(`controlFillColor`, hovered, pressed); a selected action (People while People
+is active) uses `editorListSelectedFillColor` with `editorListSelectedInkColor`
+ink. The `SlidingIconNav` tracks use `controlFillColor` with a
+`controlBorderColor` edge and `iconColor` idle icons.
 
 The AI icons are normalized to the 24×24 viewBox and white source stroke with
 the user-approved 2 px stroke.

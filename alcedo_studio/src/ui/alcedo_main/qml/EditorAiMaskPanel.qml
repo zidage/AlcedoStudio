@@ -24,7 +24,7 @@ Rectangle {
     readonly property int busyRevealDelayMs: appTheme.motionFadeMs
     property bool busyShown: false
 
-    color: appTheme.bgBaseColor
+    color: appTheme.cardSurfaceColor
     radius: appTheme.controlRadius
     Accessible.role: Accessible.Pane
     Accessible.name: qsTr("AI Mask")
@@ -64,14 +64,22 @@ Rectangle {
         color: appTheme.dividerColor
     }
 
+    // Raised control fills, so the actions read apart from the panel surface. A selected
+    // action uses the monochrome light well with dark ink.
     component ToolIconButton: IconActionButton {
         compact: true
-        iconColorDefault: appTheme.iconColor
+        iconColorDefault: selected ? appTheme.editorListSelectedInkColor : appTheme.iconColor
         iconColorMuted: root.colMuted
-        fillIdle: appTheme.buttonIdleFillColor
-        fillHover: appTheme.buttonHoveredFillColor
-        fillPressed: appTheme.buttonPressedFillColor
-        fillSelected: appTheme.buttonSelectedFillColor
+        fillIdle: appTheme.controlFillColor
+        fillHover: appTheme.controlHoveredFillColor
+        fillPressed: appTheme.controlPressedFillColor
+        fillSelected: appTheme.editorListSelectedFillColor
+    }
+
+    component ToolNav: SlidingIconNav {
+        trackColor: appTheme.controlFillColor
+        trackBorderColor: appTheme.controlBorderColor
+        idleIconColor: appTheme.iconColor
     }
 
     // Feather and Expand drive the shared AdjustmentSlider through this value model: a handle
@@ -266,9 +274,9 @@ Rectangle {
                         anchors.fill: parent
                         z: -1
                         radius: appTheme.controlRadiusSmall
-                        color: appTheme.cardSurfaceColor
+                        color: appTheme.bgBaseColor
                         border.width: 1
-                        border.color: appTheme.cardBorderColor
+                        border.color: appTheme.controlBorderColor
                     }
 
                     delegate: Rectangle {
@@ -342,7 +350,7 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: appTheme.spaceSm
 
-                    SlidingIconNav {
+                    ToolNav {
                         objectName: "editorAiMaskPromptTools"
                         thumbObjectName: "editorAiMaskPromptToolThumb"
                         controlsEnabled: root.toolReady
@@ -361,7 +369,7 @@ Rectangle {
                         onActivated: function (key) { root.tool.setPromptTool(key) }
                     }
                     Item { Layout.fillWidth: true }
-                    SlidingIconNav {
+                    ToolNav {
                         objectName: "editorAiMaskMode"
                         thumbObjectName: "editorAiMaskModeThumb"
                         controlsEnabled: root.toolReady
@@ -379,7 +387,7 @@ Rectangle {
                 }
 
                 // Level of a single click: a larger circle selects a larger region.
-                SlidingIconNav {
+                ToolNav {
                     objectName: "editorAiMaskLevels"
                     thumbObjectName: "editorAiMaskLevelThumb"
                     visible: !!(root.tool && root.tool.levelCount > 0)
@@ -469,28 +477,15 @@ Rectangle {
             }
         }
 
-        RowLayout {
+        // One full-width Confirm in the Browse LUTs style. Close in the header cancels.
+        DialogActionButton {
+            objectName: "editorAiMaskCommit"
             Layout.fillWidth: true
-            spacing: appTheme.spaceSm
-
-            DialogActionButton {
-                objectName: "editorAiMaskCancel"
-                Layout.fillWidth: true
-                Layout.preferredWidth: 0
-                buttonHeight: appTheme.iconButtonHitSizeCompact
-                text: qsTr("Cancel")
-                onClicked: root.tool.cancel()
-            }
-            DialogActionButton {
-                objectName: "editorAiMaskCommit"
-                Layout.fillWidth: true
-                Layout.preferredWidth: 0
-                buttonHeight: appTheme.iconButtonHitSizeCompact
-                kind: "accent"
-                text: qsTr("Commit")
-                enabled: root.canStep && root.tool.previewStatus !== "Previous"
-                onClicked: root.tool.commit()
-            }
+            buttonHeight: appTheme.iconButtonHitSizeCompact
+            font.pixelSize: appTheme.fontSizeBody
+            text: qsTr("Confirm")
+            enabled: root.canStep && root.tool.previewStatus !== "Previous"
+            onClicked: root.tool.commit()
         }
 
         // Stage progress of the running operation: the Open stages advance the bar, a model

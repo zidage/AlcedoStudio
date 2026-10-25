@@ -159,6 +159,13 @@ class AppTheme final : public QObject {
   // Opaque disabled surface: cardSurfaceColor blended with bgCanvasColor so a
   // disabled panel shell reads as a single concrete fill rather than 0.55 opacity.
   Q_PROPERTY(QColor disabledSurfaceColor READ disabledSurfaceColor NOTIFY ThemeChanged)
+  // Raised controls on card and panel surfaces: secondary action buttons (DialogActionButton
+  // "normal"), combo fields, and tool icon actions. Clearly lighter than cardSurfaceColor and
+  // bgBaseColor so the control reads apart from its surface.
+  Q_PROPERTY(QColor controlFillColor READ controlFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor controlHoveredFillColor READ controlHoveredFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor controlPressedFillColor READ controlPressedFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor controlBorderColor READ controlBorderColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderTrackColor READ editorSliderTrackColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderPositiveColor READ editorSliderPositiveColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderNegativeColor READ editorSliderNegativeColor NOTIFY ThemeChanged)
@@ -406,6 +413,10 @@ class AppTheme final : public QObject {
   auto        buttonPressedFillColor() const -> QColor;
   auto        buttonSelectedFillColor() const -> QColor;
   auto        disabledSurfaceColor() const -> QColor;
+  auto        controlFillColor() const -> QColor;
+  auto        controlHoveredFillColor() const -> QColor;
+  auto        controlPressedFillColor() const -> QColor;
+  auto        controlBorderColor() const -> QColor;
   auto        editorSliderTrackColor() const -> QColor { return EditorSliderTrackColor(); }
   auto        editorSliderPositiveColor() const -> QColor { return EditorSliderAccentColor(true); }
   auto        editorSliderNegativeColor() const -> QColor { return EditorSliderAccentColor(false); }

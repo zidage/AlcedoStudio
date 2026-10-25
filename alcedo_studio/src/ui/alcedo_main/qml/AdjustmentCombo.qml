@@ -6,8 +6,8 @@ import QtQuick.Layouts
 // (entries: [{value, label}, ...]) and commits one settled transaction on
 // selection. The ComboBox follows model.currentIndex for programmatic loads;
 // onActivated pushes the user's choice to the model. Visuals use appTheme
-// tokens (DESIGN.md): sunken dark field matching AdjustmentField / Widgets
-// EditorComboBoxStyle (bgBase).
+// tokens (DESIGN.md): a raised field (controlFillColor) that reads apart from
+// the card surface.
 Item {
     id: root
     objectName: "adjustmentCombo"
@@ -15,7 +15,7 @@ Item {
     property var model: null
     property bool showResetButton: true
     // Editor panels stay dense (28). Settings and other spacious surfaces can
-    // raise this without changing the sunken-field chrome.
+    // raise this without changing the field chrome.
     property int controlHeight: 28
     // Panels may expose a stable object name for behavior tests and
     // accessibility tooling without changing the shared wrapper name.
@@ -30,7 +30,8 @@ Item {
     readonly property color colText: appTheme.textColor
     readonly property color colMuted: appTheme.textMutedColor
     readonly property color colBorder: appTheme.cardBorderColor
-    readonly property color colField: appTheme.bgBaseColor
+    // Raised control fill: the field reads apart from card and panel surfaces.
+    readonly property color colField: appTheme.controlFillColor
     readonly property color colPopup: appTheme.bgBaseColor
     readonly property color colHover: appTheme.hoverColor
     readonly property color colSelectedFill: appTheme.editorListSelectedFillColor
@@ -82,7 +83,7 @@ Item {
                 }
             }
 
-            // Dark sunken field — Basic style paints a light chrome by default.
+            // Raised field; Basic style paints a light chrome by default.
             background: Rectangle {
                 implicitHeight: root.controlHeight
                 radius: appTheme.controlRadiusSmall
@@ -90,7 +91,7 @@ Item {
                 border.width: 1
                 border.color: combo.activeFocus || combo.hovered
                               ? root.colMuted
-                              : root.colBorder
+                              : appTheme.controlBorderColor
             }
 
             contentItem: Text {
