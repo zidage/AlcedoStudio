@@ -64,10 +64,12 @@ void               ValidateAiMaskModelOutput(const AiMaskModelOutput& output, Ex
  * @brief Convert one model output to a component coverage of @p extent.
  *
  * Logits: `cv::resize` (bilinear, half-pixel centers) to @p extent; 255 where the value is > 0,
- * else 0. Alpha grid: the session pixels whose centers lie inside the box take the grid resized
- * (`cv::resize`, bilinear, half-pixel centers) to their rectangle, `round(clamp(alpha) * 255)`
- * with ties to even;
- * the other pixels are 0. R8 mask: the values as given.
+ * else 0. Alpha grid: the session pixels whose centers lie inside the box take the grid smoothed
+ * by a Gaussian of sigma 0.8 cells (`BORDER_REPLICATE`) and resized (`cv::resize`, bilinear,
+ * half-pixel centers) to their rectangle, then `round(clamp((alpha - 0.5) * gain + 0.5) * 255)`
+ * with ties to even, where gain is the larger upscale factor of the two axes and at least 1. The
+ * edge is then about 2 session pixels wide without the steps of the grid (#522). The other pixels
+ * are 0. R8 mask: the values as given.
  *
  * @return @p extent.width * @p extent.height values, row-major.
  * @throws std::invalid_argument when @ref ValidateAiMaskModelOutput fails or @p extent is empty.

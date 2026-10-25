@@ -61,6 +61,11 @@ auto ConvertLogits(const AiMaskSamLogits& logits, Extent2D extent) -> std::vecto
   return coverage;
 }
 
+/// Standard deviation, in alpha grid cells, of the Gaussian that smooths an alpha grid before its
+/// upscale (#522). It removes the steps of the grid from a near-binary S3OD edge on diagonal and
+/// curved edges; a feature of one grid cell is dimmed, features of two cells and more stay.
+constexpr double kAlphaEdgeSigma = 0.8;
+
 auto ConvertAlpha(const AiMaskAlphaGrid& alpha, Extent2D extent) -> std::vector<std::uint8_t> {
   std::vector<std::uint8_t> coverage(PixelCount(extent), 0);
   const auto [left, right] = CenterSpan(alpha.box.x0, alpha.box.x1, extent.width);
@@ -70,11 +75,19 @@ auto ConvertAlpha(const AiMaskAlphaGrid& alpha, Extent2D extent) -> std::vector<
   }
   const cv::Mat grid(static_cast<int>(alpha.height), static_cast<int>(alpha.width), CV_32F,
                      const_cast<float*>(alpha.values.data()));
-  cv::Mat       resized;
-  cv::resize(grid, resized, cv::Size(right - left, bottom - top), 0.0, 0.0, cv::INTER_LINEAR);
-  // round(alpha * 255) saturated to [0, 255]: the clamp of alpha to [0, 1].
+  cv::Mat       smoothed;
+  cv::GaussianBlur(grid, smoothed, cv::Size(), kAlphaEdgeSigma, kAlphaEdgeSigma,
+                   cv::BORDER_REPLICATE);
+  cv::Mat resized;
+  cv::resize(smoothed, resized, cv::Size(right - left, bottom - top), 0.0, 0.0, cv::INTER_LINEAR);
+  // The smoothed edge is about 2 cells wide; a gain of the upscale factor around 0.5 makes it about
+  // 2 session pixels wide at every scale. A grid at the session scale or finer keeps its values.
+  const double gain =
+      std::max({1.0, static_cast<double>(right - left) / static_cast<double>(alpha.width),
+                static_cast<double>(bottom - top) / static_cast<double>(alpha.height)});
+  // round(((alpha - 0.5) * gain + 0.5) * 255) saturated to [0, 255]: the clamp to [0, 1].
   cv::Mat out = CoverageMat(coverage, extent)(cv::Rect(left, top, right - left, bottom - top));
-  resized.convertTo(out, CV_8U, 255.0);
+  resized.convertTo(out, CV_8U, 255.0 * gain, 127.5 * (1.0 - gain));
   return coverage;
 }
 

@@ -262,10 +262,11 @@ TEST(AiMaskEditSessionTest, LogitsConvertToSessionSizeWithThresholdZero) {
 
 TEST(AiMaskEditSessionTest, AlphaGridPastesThroughMaskBox) {
   constexpr Extent2D kExtent{1024, 768};
-  AiMaskAlphaGrid    person{32, 32, std::vector<float>(32 * 32, 0.6f), {0.5f, 0.5f, 0.75f, 0.75f}};
-  const auto         coverage   = ConvertModelOutputToCoverage(person, kExtent);
-  const auto         expected   = static_cast<std::uint8_t>(std::lround(0.6f * 255.0f));
-  std::size_t        mismatches = 0;
+  // The 32 x 32 grid fills 256 x 192 pixels: gain 8, so 0.5625 gives (0.0625 * 8 + 0.5) = 1.
+  AiMaskAlphaGrid person{32, 32, std::vector<float>(32 * 32, 0.5625f), {0.5f, 0.5f, 0.75f, 0.75f}};
+  const auto      coverage   = ConvertModelOutputToCoverage(person, kExtent);
+  const auto      expected   = std::uint8_t{255};
+  std::size_t     mismatches = 0;
   for (std::uint32_t y = 0; y < kExtent.height; ++y) {
     for (std::uint32_t x = 0; x < kExtent.width; ++x) {
       const bool inside = x >= 512 && x < 768 && y >= 384 && y < 576;
@@ -282,6 +283,50 @@ TEST(AiMaskEditSessionTest, AlphaGridPastesThroughMaskBox) {
   const auto      low  = ConvertModelOutputToCoverage(under, kSessionExtent);
   EXPECT_TRUE(std::all_of(high.begin(), high.end(), [](std::uint8_t v) { return v == 255; }));
   EXPECT_TRUE(std::all_of(low.begin(), low.end(), [](std::uint8_t v) { return v == 0; }));
+
+  // A grid at the session scale has gain 1: the values stay round(alpha * 255).
+  AiMaskAlphaGrid same{
+      kSessionExtent.width,
+      kSessionExtent.height,
+      std::vector<float>(static_cast<std::size_t>(kSessionExtent.width) * kSessionExtent.height,
+                         0.6f),
+      {0.0f, 0.0f, 1.0f, 1.0f}};
+  const auto kept = ConvertModelOutputToCoverage(same, kSessionExtent);
+  EXPECT_TRUE(std::all_of(kept.begin(), kept.end(), [](std::uint8_t v) { return v == 153; }));
+}
+
+TEST(AiMaskEditSessionTest, AlphaGridEdgeHasNoGridSteps) {
+  // A binary grid of a straight edge, upscaled 4 times like an S3OD alpha on a 4096 analysis image.
+  // The bilinear upscale alone keeps the grid steps: 0.75 px (slope 1/2) and 1.38 px (slope 1/4)
+  // off the line. The coverage edge must stay near the line (#522).
+  constexpr std::uint32_t        kGrid  = 64;
+  constexpr std::uint32_t        kScale = 4;
+  constexpr Extent2D             kExtent{kGrid * kScale, kGrid * kScale};
+  const std::pair<float, double> cases[] = {{0.5f, 0.5}, {0.25f, 1.0}};
+  for (const auto& [slope, tolerance] : cases) {
+    std::vector<float> values(static_cast<std::size_t>(kGrid) * kGrid);
+    for (std::uint32_t y = 0; y < kGrid; ++y) {
+      for (std::uint32_t x = 0; x < kGrid; ++x) {
+        const bool inside =
+            static_cast<float>(y) + 0.5f > 8.0f + slope * (static_cast<float>(x) + 0.5f);
+        values[static_cast<std::size_t>(y) * kGrid + x] = inside ? 1.0f : 0.0f;
+      }
+    }
+    const auto coverage = ConvertModelOutputToCoverage(
+        AiMaskAlphaGrid{kGrid, kGrid, values, {0.0f, 0.0f, 1.0f, 1.0f}}, kExtent);
+    // The edge row of each column from its covered area, away from the left and right borders.
+    double worst = 0.0;
+    for (std::uint32_t x = 16; x + 16 < kExtent.width; ++x) {
+      double covered = 0.0;
+      for (std::uint32_t y = 0; y < kExtent.height; ++y) {
+        covered += coverage[static_cast<std::size_t>(y) * kExtent.width + x] / 255.0;
+      }
+      const double edge  = static_cast<double>(kExtent.height) - covered;
+      const double ideal = 8.0 * kScale + slope * (static_cast<double>(x) + 0.5);
+      worst              = std::max(worst, std::abs(edge - ideal));
+    }
+    EXPECT_LT(worst, tolerance) << "slope " << slope;
+  }
 }
 
 TEST(AiMaskEditSessionTest, FoldAddsWithMaximumAndSubtractsWithInverse) {
@@ -424,7 +469,7 @@ TEST(AiMaskEditSessionTest, NewStepAfterUndoDropsRedo) {
 
 TEST(AiMaskEditSessionTest, PeopleClickUsesInSubjectThenToggles) {
   FakeRunner runner;
-  auto       people                       = AlphaResult(16, 12, 0.8f);
+  auto       people                       = AlphaResult(16, 12, 0.5625f);
   people.people                           = {Person(0, {0.0f, 0.0f, 0.25f, 0.5f}, true),
                                              Person(1, {0.5f, 0.5f, 0.75f, 1.0f}, false)};
   runner.tasks[SegmentationTask::kPeople] = people;
@@ -435,7 +480,8 @@ TEST(AiMaskEditSessionTest, PeopleClickUsesInSubjectThenToggles) {
   ASSERT_EQ(session.People().size(), 2U);
   EXPECT_TRUE(session.PersonIncluded(0));
   EXPECT_FALSE(session.PersonIncluded(1));
-  EXPECT_EQ(At(session.Coverage(), 5, 5), 204);  // round(0.8 * 255)
+  // Gain 4 (16 x 12 to 64 x 48): round(((0.5625 - 0.5) * 4 + 0.5) * 255) = round(191.25).
+  EXPECT_EQ(At(session.Coverage(), 5, 5), 191);
 
   ASSERT_TRUE(Applied(session.TogglePerson(0)));
   const auto& first = std::get<AiMaskTaskComponent>(session.Recipe().components[0].content);
@@ -444,7 +490,7 @@ TEST(AiMaskEditSessionTest, PeopleClickUsesInSubjectThenToggles) {
   EXPECT_EQ(first.person_toggles[0].box, (AiMaskBox{0.0f, 0.0f, 0.25f, 0.5f}));
   EXPECT_FALSE(session.PersonIncluded(0));
   EXPECT_EQ(At(session.Coverage(), 5, 5), 0);      // inside the person crop
-  EXPECT_EQ(At(session.Coverage(), 40, 30), 204);  // outside it: unchanged
+  EXPECT_EQ(At(session.Coverage(), 40, 30), 191);  // outside it: unchanged
 
   ASSERT_TRUE(Applied(session.TogglePerson(0)));
   const auto& second = std::get<AiMaskTaskComponent>(session.Recipe().components[0].content);
@@ -667,7 +713,7 @@ TEST(AiMaskEditSessionTest, ReopenShowsStoredCoverageWithoutModelCall) {
 
 TEST(AiMaskEditSessionTest, QueuedCoverageReadSurvivesNextModelResult) {
   FakeRunner runner;
-  runner.tasks[SegmentationTask::kSubject] = AlphaResult(16, 12, 0.5f);
+  runner.tasks[SegmentationTask::kSubject] = AlphaResult(16, 12, 0.5625f);
   runner.tasks[SegmentationTask::kSky] =
       AlphaResult(16, 12, 1.0f, SegmentationBox{0.0f, 0.0f, 1.0f, 0.5f});
   AiMaskEditSession session(runner, SessionImage());
@@ -687,7 +733,7 @@ TEST(AiMaskEditSessionTest, QueuedCoverageReadSurvivesNextModelResult) {
   EXPECT_NE(*current, subject_bytes);
   EXPECT_EQ(At(*current, 5, 5), 255);
   EXPECT_EQ(*queued, subject_bytes);
-  EXPECT_EQ(At(*queued, 5, 5), 128);  // round(0.5 * 255)
+  EXPECT_EQ(At(*queued, 5, 5), 191);  // gain 4: round(((0.5625 - 0.5) * 4 + 0.5) * 255)
 
   // Undo composes the Subject coverage again; the queued read is still a separate allocation.
   ASSERT_TRUE(session.Undo());
