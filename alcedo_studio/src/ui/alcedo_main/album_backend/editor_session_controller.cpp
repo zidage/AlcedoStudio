@@ -1473,6 +1473,15 @@ auto EditorSessionController::presentation_frame_sink() const -> alcedo::IFrameS
   return item->frameSink();
 }
 
+auto EditorSessionController::presentation_mask_coverage_sink() const
+    -> alcedo::IMaskCoverageSink* {
+  if (headless_presentation_sink_ != nullptr) {
+    return nullptr;
+  }
+  auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
+  return item ? item->maskCoverageSink() : nullptr;
+}
+
 auto EditorSessionController::render_busy() const -> bool {
   // Reflects coordinator diagnostics only — never a pipeline task pointer.
   return session_backend_ && session_backend_->render_busy();

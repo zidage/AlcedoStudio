@@ -11,14 +11,19 @@
 #include <stdexcept>
 #include <utility>
 
+#include "edit/runtime/mask_coverage_display.hpp"
+#include "edit/runtime/mask_coverage_presentation.hpp"
 #include "image/image_buffer.hpp"
 #ifdef HAVE_CUDA
+#include "edit/runtime/cuda/cuda_mask_pass.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #endif
 #ifdef HAVE_METAL
+#include "edit/runtime/metal/metal_mask_pass.hpp"
 #include "edit/runtime/metal/metal_renderer.hpp"
 #endif
 #ifdef HAVE_OPENCL
+#include "edit/runtime/opencl/opencl_mask_pass.hpp"
 #include "edit/runtime/opencl/opencl_renderer.hpp"
 #endif
 
@@ -49,6 +54,23 @@ void ReleaseRoleRenderers(Renderers& renderers) {
   if (renderers.batch) {
     renderers.batch->ReleaseBinding();
   }
+}
+
+/** @brief Coverage-only presentation on the device of the interactive @p renderer. */
+template <class RendererType>
+auto PresentInteractiveMaskCoverage(const std::shared_ptr<RendererType>& renderer,
+                                    const MaskCoverageSelection&         selection,
+                                    MaskCoverageInvertOpacity            mask,
+                                    const MaskCoverageFrameIdentity&     identity,
+                                    IMaskCoverageSink& sink) -> MaskCoveragePublication {
+  if (!renderer || !renderer->PresentedFrameGeometry().has_value()) {
+    throw std::runtime_error(
+        "Mask coverage display: the editor has not presented a photo frame of the image");
+  }
+  const MaskCoverageDisplayRequest request{.geometry = *renderer->PresentedFrameGeometry(),
+                                           .invert   = mask.invert,
+                                           .opacity  = mask.opacity};
+  return alcedo::PresentMaskCoverage(renderer->Device(), selection, request, identity, sink);
 }
 
 template <class Renderers>
@@ -119,6 +141,40 @@ auto PipelineExecutor::Render(const PipelineGraphSnapshot&        snapshot,
   (void)snapshot;
   (void)input;
   throw std::runtime_error("PipelineExecutor: product rendering requires a supported GPU backend");
+}
+
+auto PipelineExecutor::PresentMaskCoverage(const MaskCoverageSelection&     selection,
+                                           MaskCoverageInvertOpacity        mask,
+                                           const MaskCoverageFrameIdentity& identity,
+                                           IMaskCoverageSink& sink) -> MaskCoveragePublication {
+  if (!serves_interactive_) {
+    throw std::invalid_argument(
+        "PipelineExecutor: coverage presentation needs the Interactive role");
+  }
+#ifdef HAVE_CUDA
+  if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
+    return PresentInteractiveMaskCoverage(cuda_renderers_.interactive, selection, mask, identity,
+                                          sink);
+  }
+#endif
+#ifdef HAVE_METAL
+  if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
+    return PresentInteractiveMaskCoverage(metal_renderers_.interactive, selection, mask, identity,
+                                          sink);
+  }
+#endif
+#ifdef HAVE_OPENCL
+  if (resolved_accelerator_backend_ == GpuBackendKind::OpenCL) {
+    return PresentInteractiveMaskCoverage(opencl_renderers_.interactive, selection, mask, identity,
+                                          sink);
+  }
+#endif
+  (void)selection;
+  (void)mask;
+  (void)identity;
+  (void)sink;
+  throw std::runtime_error(
+      "PipelineExecutor: coverage presentation requires a supported GPU backend");
 }
 
 void PipelineExecutor::SetAcceleratorBackendPreference(

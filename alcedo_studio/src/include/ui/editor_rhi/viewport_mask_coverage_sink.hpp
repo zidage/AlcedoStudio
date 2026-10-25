@@ -40,6 +40,8 @@ class ViewportMaskCoverageSink final : public IMaskCoverageSink {
   struct PendingMetalCoverage {
     MaskCoverageMetalFrame   frame{};
     MaskCoveragePresentation presentation{};
+    /// Publication sequence of the frame (@ref PublishedCount after its publication).
+    std::uint64_t            sequence = 0;
   };
 #endif
 
@@ -51,6 +53,14 @@ class ViewportMaskCoverageSink final : public IMaskCoverageSink {
   void UnmapCoverageTarget() override;
   auto PublishCoverage() -> MaskCoveragePublication override;
   void AbandonCoverageTarget() override;
+  /**
+   * @brief Hide the displayed coverage and every frame published so far (IMaskCoverageSink).
+   *
+   * Records the current publication sequence as @ref ClearedThrough and drops a submitted Metal
+   * frame; the render thread releases the displayed frame and skips the queued frames whose
+   * sequence is not above it. Thread: any; it does not touch a mapped target.
+   */
+  void ClearCoverage() override;
 #ifdef HAVE_METAL
   auto               SubmitMetalCoverage(const MaskCoveragePresentation& presentation,
                                          const MaskCoverageMetalFrame& frame) -> MaskCoveragePublication override;
@@ -69,8 +79,14 @@ class ViewportMaskCoverageSink final : public IMaskCoverageSink {
   /// or RendererReading: the producer does not write the slot again before the renderer recycles
   /// it.
   [[nodiscard]] auto PresentationOfSlot(int slot_index) const -> MaskCoveragePresentation;
-  /// Number of published frames (both paths) since construction.
+  /// Publication sequence of the frame published into queue slot @p slot_index; same validity as
+  /// @ref PresentationOfSlot.
+  [[nodiscard]] auto SequenceOfSlot(int slot_index) const -> std::uint64_t;
+  /// Number of published frames (both paths) since construction. The n-th publication has
+  /// sequence n.
   [[nodiscard]] auto PublishedCount() const -> std::uint64_t;
+  /// Sequence of the last frame that @ref ClearCoverage hid; 0 before the first clear.
+  [[nodiscard]] auto ClearedThrough() const -> std::uint64_t;
 
  private:
   [[nodiscard]] auto  MatchesViewportImage(const MaskCoverageFrameIdentity& identity) const -> bool;
@@ -85,10 +101,12 @@ class ViewportMaskCoverageSink final : public IMaskCoverageSink {
   bool                                                                 unmapped_    = false;
   MaskCoveragePresentation                                             mapped_presentation_{};
   std::array<MaskCoveragePresentation, DirectPresentQueue::kSlotCount> slot_presentations_{};
+  std::array<std::uint64_t, DirectPresentQueue::kSlotCount>            slot_sequences_{};
 #ifdef HAVE_METAL
   std::optional<PendingMetalCoverage> pending_metal_;
 #endif
   std::uint64_t published_count_ = 0;
+  std::uint64_t cleared_through_ = 0;
 };
 
 }  // namespace alcedo::editor_rhi

@@ -99,6 +99,14 @@ class IMaskCoverageSink {
   virtual auto PublishCoverage() -> MaskCoveragePublication = 0;
   /// Return a mapped or unmapped target without publishing it. No effect without a mapped target.
   virtual void AbandonCoverageTarget()                      = 0;
+  /**
+   * @brief Hide the displayed coverage and drop every published frame that the render thread has
+   *        not displayed yet (SM8.7 ClearMaskCoveragePreview).
+   *
+   * A frame published before this call is never displayed after it; a frame published after it is
+   * displayed normally. @pre No target is mapped. Thread: the producing render thread.
+   */
+  virtual void ClearCoverage()                              = 0;
 #ifdef HAVE_METAL
   /// Hand a completed Metal coverage texture to the render thread.
   virtual auto SubmitMetalCoverage(const MaskCoveragePresentation& presentation,

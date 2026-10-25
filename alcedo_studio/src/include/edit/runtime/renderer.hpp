@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "edit/geometry/render_request.hpp"
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
@@ -170,6 +171,18 @@ class Renderer {
   /// Binding of the last interactive render; empty for a batch renderer and after a release.
   [[nodiscard]] auto Binding() const -> const std::optional<RenderBindingKey>& { return binding_; }
 
+  /**
+   * @brief Geometry of the last full photo frame (IsRenderReferenceFrame) that a render of this
+   *        renderer presented to a sink; empty before the first one and after @ref ReleaseBinding.
+   *
+   * Coverage-only presentation (SM8 section 5.2) writes coverage on this grid, so the coverage
+   * frame follows the photo frame that the viewport displays.
+   */
+  [[nodiscard]] auto PresentedFrameGeometry() const
+      -> const std::optional<ResolvedRenderGeometry>& {
+    return presented_frame_geometry_;
+  }
+
   /// Live allocations of this renderer's device and source cache.
   [[nodiscard]] auto Resources() const -> RenderSessionResources;
 
@@ -211,6 +224,7 @@ class Renderer {
   PreparedSourceCache             source_cache_;
   StaticExecutionPlanCache        plan_cache_{Backend::kCapabilityVersion};
   std::optional<RenderBindingKey> binding_;
+  std::optional<ResolvedRenderGeometry>      presented_frame_geometry_;
   std::shared_ptr<const LutResourceResolver> lut_resources_;
   std::shared_ptr<const MaskAssetReader>     mask_assets_;
 };
@@ -302,6 +316,7 @@ void Renderer<Backend>::ReleaseBinding() {
   source_cache_.Clear();
   plan_cache_.Clear();
   binding_.reset();
+  presented_frame_geometry_.reset();
   ReleaseDeviceResources();
   if (device_) {
     device_->ResetPassStats();

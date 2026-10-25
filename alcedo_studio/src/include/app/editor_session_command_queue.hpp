@@ -95,6 +95,14 @@ enum class EditorSessionCommandKind : std::uint8_t {
   CommitAiMaskEdit,
   /// End the open AI Mask edit without a change.
   CancelAiMaskEdit,
+  /// Present the current coverage of the AI Mask edit session (SM8.7).
+  UpdateAiMaskCandidateCoverage,
+  /// Select one committed AI Mask as the coverage preview and present it.
+  SelectMaskCoveragePreview,
+  /// Forget and hide the coverage preview.
+  ClearMaskCoveragePreview,
+  /// Present the newest coverage request again after a failed presentation.
+  RetryMaskCoveragePreview,
 };
 
 /// Worker messages that are delivered back to the session owner.

@@ -74,6 +74,16 @@ struct FrameCompletionSubmission {
   ResolvedRenderGeometry geometry{};
 };
 
+/**
+ * @brief True when a frame of @p mode and @p role covers the whole render reference of the
+ *        image (a full photo frame), so its geometry is the reference of Mask mapping and coverage
+ *        display. A RoiFrame or a DetailPatch renders a subrect of the same reference space.
+ */
+[[nodiscard]] inline auto IsRenderReferenceFrame(FramePresentationMode mode, FrameRole role)
+    -> bool {
+  return mode != FramePresentationMode::RoiFrame && role != FrameRole::DetailPatch;
+}
+
 enum class FramePixelFormat {
   RGBA32F,
 };

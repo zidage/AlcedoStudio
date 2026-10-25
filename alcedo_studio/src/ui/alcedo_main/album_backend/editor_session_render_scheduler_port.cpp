@@ -135,7 +135,8 @@ void EditorSessionRenderSchedulerPort::Shutdown() {
       // A document that has not started is skipped; a running one finishes and is dropped.
       image_job_->cancelled = true;
     }
-    sink_resolver_ = {};
+    sink_resolver_               = {};
+    mask_coverage_sink_resolver_ = {};
   }
   if (running_cancellation) {
     running_cancellation->Cancel();
@@ -144,7 +145,10 @@ void EditorSessionRenderSchedulerPort::Shutdown() {
   // Drain in-flight pool work before tearing down this port: its completion calls back into this
   // object. The in-flight frame may wait for the scene graph to hand over a present slot, which
   // needs the GUI thread, so a GUI-thread caller keeps delivering events while it waits.
-  const auto drained = [this] { return !running_job_.has_value() && !image_job_.has_value(); };
+  const auto drained = [this] {
+    return !running_job_.has_value() && !image_job_.has_value() && !mask_coverage_job_ &&
+           pending_mask_coverage_clears_ == 0;
+  };
   for (;;) {
     {
       std::unique_lock lock(mutex_);
@@ -166,6 +170,12 @@ void EditorSessionRenderSchedulerPort::Shutdown() {
 void EditorSessionRenderSchedulerPort::SetSinkResolver(EditorSessionFrameSinkResolver resolver) {
   std::scoped_lock lock(mutex_);
   sink_resolver_ = std::move(resolver);
+}
+
+void EditorSessionRenderSchedulerPort::SetMaskCoverageSinkResolver(
+    EditorSessionMaskCoverageSinkResolver resolver) {
+  std::scoped_lock lock(mutex_);
+  mask_coverage_sink_resolver_ = std::move(resolver);
 }
 
 void EditorSessionRenderSchedulerPort::SetPipelinePort(
@@ -831,6 +841,147 @@ void EditorSessionRenderSchedulerPort::FinishImageJob(
 auto EditorSessionRenderSchedulerPort::ImageJobIsCancelled(std::uint64_t job_id) const -> bool {
   std::scoped_lock lock(mutex_);
   return shutting_down_ || !image_job_ || image_job_->job_id != job_id || image_job_->cancelled;
+}
+
+auto EditorSessionRenderSchedulerPort::ScheduleMaskCoverage(
+    alcedo::EditorMaskCoverageRequest request, alcedo::EditorMaskCoverageJobCompletion on_complete,
+    std::string* error) -> std::uint64_t {
+  const auto reject = [error](std::string message) -> std::uint64_t {
+    if (error) {
+      *error = std::move(message);
+    }
+    return 0;
+  };
+  EditorSessionMaskCoverageSinkResolver     resolver;
+  std::shared_ptr<alcedo::PipelineExecutor> executor;
+  {
+    std::scoped_lock lock(mutex_);
+    if (shutting_down_) {
+      return reject("The editor render port is shutting down");
+    }
+    if (released_for_export_) {
+      return reject(std::string(alcedo::kPresentationSuspendedMessage) + kExportRunningMessage);
+    }
+    if (mask_coverage_job_) {
+      return reject("Another coverage job is running");
+    }
+    // Coverage belongs to the image the session bound; it never binds another one.
+    if (!session_context_ || !ContextMatches(*session_context_, request.image_load_request_id.value,
+                                             request.element_id, request.image_id)) {
+      return reject("The requested image is not the bound editor image");
+    }
+    resolver = mask_coverage_sink_resolver_;
+    executor = executor_;
+  }
+  // The coverage frame uses the grid and device of the photo frames: without a frame there is
+  // neither.
+  if (!executor) {
+    return reject("Mask coverage display: the editor has not presented a photo frame of the image");
+  }
+  auto* sink = resolver ? resolver() : nullptr;
+  if (sink == nullptr) {
+    return reject("No viewport coverage channel is bound");
+  }
+  std::uint64_t job_id = 0;
+  {
+    std::scoped_lock lock(mutex_);
+    if (shutting_down_ || mask_coverage_job_) {
+      return reject(shutting_down_ ? "The editor render port is shutting down"
+                                   : "Another coverage job is running");
+    }
+    job_id             = ++next_mask_coverage_job_id_;
+    mask_coverage_job_ = true;
+  }
+  EnsurePipelineScheduler()->ScheduleWork([this, executor = std::move(executor),
+                                           request     = std::move(request), sink,
+                                           on_complete = std::move(on_complete)] {
+    RunMaskCoverageJob(executor, request, *sink, on_complete);
+  });
+  return job_id;
+}
+
+void EditorSessionRenderSchedulerPort::RunMaskCoverageJob(
+    const std::shared_ptr<alcedo::PipelineExecutor>& executor,
+    const alcedo::EditorMaskCoverageRequest& request, alcedo::IMaskCoverageSink& sink,
+    const alcedo::EditorMaskCoverageJobCompletion& on_complete) {
+  alcedo::EditorMaskCoverageJobResult result;
+  try {
+    // An export that started after this job was accepted released the executor; the job must
+    // not allocate it again.
+    if (gpu_resources_released_for_export()) {
+      throw std::runtime_error(std::string(alcedo::kPresentationSuspendedMessage) +
+                               kExportRunningMessage);
+    }
+    const alcedo::MaskCoverageFrameIdentity identity{
+        .request_id     = request.request_id,
+        .session_epoch  = request.image_load_request_id.value,
+        .image_identity = static_cast<std::uint64_t>(request.image_id)};
+    std::unique_lock render_lock(executor->GetRenderLock());
+    const auto       publication =
+        executor->PresentMaskCoverage(request.selection, request.mask, identity, sink);
+    result.status = publication == alcedo::MaskCoveragePublication::Published
+                        ? alcedo::EditorMaskCoverageJobStatus::Presented
+                        : alcedo::EditorMaskCoverageJobStatus::DiscardedForImageChange;
+  } catch (const std::exception& ex) {
+    result.status  = alcedo::EditorMaskCoverageJobStatus::Failed;
+    result.message = ex.what();
+  } catch (...) {
+    result.status  = alcedo::EditorMaskCoverageJobStatus::Failed;
+    result.message = "Mask coverage display failed";
+  }
+  if (result.status == alcedo::EditorMaskCoverageJobStatus::Failed) {
+    qCWarning(editorPresentLog).noquote()
+        << QStringLiteral("editor coverage presentation failed: %1")
+               .arg(QString::fromStdString(result.message));
+  }
+  // The job stays accepted until its completion returns: Shutdown waits for the completion,
+  // which calls into the owner that requested the job.
+  if (on_complete) {
+    try {
+      on_complete(std::move(result));
+    } catch (...) {
+    }
+  }
+  FinishMaskCoverageWork(true);
+}
+
+void EditorSessionRenderSchedulerPort::ClearMaskCoverage() {
+  EditorSessionMaskCoverageSinkResolver resolver;
+  {
+    std::scoped_lock lock(mutex_);
+    if (shutting_down_) {
+      return;
+    }
+    resolver = mask_coverage_sink_resolver_;
+  }
+  auto* sink = resolver ? resolver() : nullptr;
+  if (sink == nullptr) {
+    return;
+  }
+  {
+    std::scoped_lock lock(mutex_);
+    ++pending_mask_coverage_clears_;
+  }
+  // The single worker runs it after the accepted coverage job, so that job's frame is cleared.
+  EnsurePipelineScheduler()->ScheduleWork([this, sink] {
+    sink->ClearCoverage();
+    FinishMaskCoverageWork(false);
+  });
+}
+
+auto EditorSessionRenderSchedulerPort::HasMaskCoverageWork() const -> bool {
+  std::scoped_lock lock(mutex_);
+  return mask_coverage_job_ || pending_mask_coverage_clears_ != 0;
+}
+
+void EditorSessionRenderSchedulerPort::FinishMaskCoverageWork(bool coverage_job) {
+  std::scoped_lock lock(mutex_);
+  if (coverage_job) {
+    mask_coverage_job_ = false;
+  } else if (pending_mask_coverage_clears_ != 0) {
+    --pending_mask_coverage_clears_;
+  }
+  jobs_changed_.notify_all();
 }
 
 auto EditorSessionRenderSchedulerPort::last_scheduled() const

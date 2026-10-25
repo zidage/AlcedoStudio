@@ -84,7 +84,9 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
                   dependencies_.history.get(), &navigation_state_),
       comparison_(EditorComparisonService::Dependencies{
           dependencies_.history.get(), dependencies_.images,
-          [this](std::function<void()> task) { PostOwnerTask(std::move(task)); }}) {
+          [this](std::function<void()> task) { PostOwnerTask(std::move(task)); }}),
+      coverage_preview_(dependencies_.mask_coverage,
+                        [this](std::function<void()> task) { PostOwnerTask(std::move(task)); }) {
   // Session mutations must run on the command-queue owner thread, not on the
   // thread that constructed the facade.
   lifecycle_.SetOwnerCheck([this] { return command_queue_.IsOwnerThread(); });
@@ -537,7 +539,7 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
   }
   AbortMaskCreation();
   (void)CloseComparisonOnOwner(false, std::nullopt);
-  (void)EndAiMaskEditOnOwner();
+  EndAiMaskWorkForImageChange();
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, false);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -1035,7 +1037,7 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
   }
   AbortMaskCreation();
   (void)CloseComparisonOnOwner(false, std::nullopt);
-  (void)EndAiMaskEditOnOwner();
+  EndAiMaskWorkForImageChange();
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, true);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -1122,7 +1124,7 @@ auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
   }
   AbortMaskCreation();
   (void)CloseComparisonOnOwner(false, std::nullopt);
-  (void)EndAiMaskEditOnOwner();
+  EndAiMaskWorkForImageChange();
   if (persist_changes && pending_history_checkpoint_.has_value()) {
     pending_close_after_persist_ = true;
     EditorSessionResult waiting;
@@ -2313,7 +2315,7 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
   }
   // Cancel the comparison image job; the render port's own shutdown waits for it.
   (void)CloseComparisonOnOwner(false, std::nullopt);
-  (void)EndAiMaskEditOnOwner();
+  EndAiMaskWorkForImageChange();
   // Cancel outstanding save work. Each in-flight checkpoint publishes one
   // terminal cancellation through the posted completion path; navigation keeps
   // image A on that failure path and clears the pending action.
@@ -2992,6 +2994,11 @@ auto EditorSessionService::CommitAiMaskEdit(EditorAiMaskCommit commit) -> Editor
       commit.asset.descriptor != commit.source.descriptor) {
     return Reject("The AI Mask asset does not match the key and bounds of its source");
   }
+  if (coverage_preview_.CommitBlocked()) {
+    const auto preview = coverage_preview_.State();
+    return Reject("The viewport shows a previous AI Mask result because its preview failed (" +
+                  preview.error + "); retry the preview before the commit");
+  }
   if (!dependencies_.mask_assets) {
     return Reject("AI Mask assets are not available");
   }
@@ -3035,6 +3042,18 @@ auto EditorSessionService::CommitAiMaskEdit(EditorAiMaskCommit commit) -> Editor
     return fail(error.empty() ? "The AI Mask could not be published" : std::move(error));
   }
   (void)EndAiMaskEditOnOwner();
+  if (coverage_preview_.HasCandidate()) {
+    // The committed Mask becomes the preview; the candidate frame stays until its frame replaces
+    // it. Both present the same original R8 and edge values with the Mask fields.
+    const auto  mask_id = commit.mask_id.value_or(published.mask_id);
+    std::string read_error;
+    if (auto committed = ReadCommittedAiMask(commit.grade_id, mask_id, &read_error)) {
+      coverage_preview_.ReplaceCandidateWithCommitted(CoveragePreviewTarget(),
+                                                      std::move(*committed), current_operation_id_);
+    } else {
+      coverage_preview_.Clear();
+    }
+  }
   if (!published.committed) {
     EditorSessionResult unchanged;
     unchanged.kind     = EditorSessionResultKind::Accepted;
@@ -3053,13 +3072,202 @@ auto EditorSessionService::CancelAiMaskEdit() -> EditorSessionResult {
     return SubmitCommand(std::move(command),
                          [this](const EditorSessionCommand&) { return CancelAiMaskEdit(); });
   }
-  const bool          ended = EndAiMaskEditOnOwner();
+  const bool ended = EndAiMaskEditOnOwner();
+  if (ended) {
+    coverage_preview_.EndCandidate(CoveragePreviewTarget(), current_operation_id_);
+  }
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = ended ? "AI Mask edit cancelled" : "No AI Mask edit is open";
   return Emit(std::move(result));
+}
+
+auto EditorSessionService::UpdateAiMaskCandidateCoverage(MaskCoverageCandidateSelection candidate,
+                                                         EditorMaskCoverageCompletion   on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("The AI Mask candidate coverage requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::UpdateAiMaskCandidateCoverage;
+    auto shared =
+        std::make_shared<std::pair<MaskCoverageCandidateSelection, EditorMaskCoverageCompletion>>(
+            std::move(candidate), std::move(on_complete));
+    return SubmitCommand(std::move(command), [this, shared](const EditorSessionCommand&) {
+      return UpdateAiMaskCandidateCoverage(std::move(shared->first), std::move(shared->second));
+    });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  const auto refuse = [&](std::string message) {
+    accepted.message = message;
+    on_complete(
+        {EditorMaskCoverageOutcome::Rejected, std::move(message), coverage_preview_.State()});
+    return accepted;
+  };
+  if (!ai_mask_edit_.has_value()) {
+    return refuse("The AI Mask candidate coverage requires an open AI Mask edit");
+  }
+  const auto& extent = candidate.analysis_extent;
+  if (!candidate.pixels || extent.Empty() ||
+      candidate.pixels->size() != static_cast<std::size_t>(extent.width) * extent.height) {
+    return refuse("The AI Mask candidate coverage does not hold one R8 value per analysis pixel");
+  }
+  // A new Mask uses the default invert and opacity; an opened Mask keeps its own unchanged fields.
+  MaskCoverageInvertOpacity mask;
+  if (ai_mask_edit_->mask_id.has_value()) {
+    std::string error;
+    const auto  committed =
+        ReadCommittedAiMask(ai_mask_edit_->grade_id, *ai_mask_edit_->mask_id, &error);
+    if (!committed.has_value()) {
+      return refuse(error);
+    }
+    mask = committed->mask;
+  }
+  coverage_preview_.UpdateCandidate(CoveragePreviewTarget(), std::move(candidate), mask,
+                                    current_operation_id_, std::move(on_complete));
+  accepted.message = "AI Mask candidate coverage requested";
+  return accepted;
+}
+
+auto EditorSessionService::SelectMaskCoveragePreview(const NodeId&                grade_id,
+                                                     std::optional<MaskId>        mask_id,
+                                                     EditorMaskCoverageCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("The coverage preview selection requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind    = EditorSessionCommandKind::SelectMaskCoveragePreview;
+    command.node_id = grade_id;
+    auto shared     = std::make_shared<EditorMaskCoverageCompletion>(std::move(on_complete));
+    return SubmitCommand(
+        std::move(command), [this, mask_id, shared](const EditorSessionCommand& queued) {
+          return SelectMaskCoveragePreview(queued.node_id, mask_id, std::move(*shared));
+        });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  const auto refuse = [&](std::string message) {
+    accepted.message = message;
+    on_complete(
+        {EditorMaskCoverageOutcome::Rejected, std::move(message), coverage_preview_.State()});
+    return accepted;
+  };
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return refuse("The coverage preview requires an interactive session");
+  }
+  if (ai_mask_edit_.has_value()) {
+    return refuse("The AI Mask edit shows its candidate; commit or cancel it first");
+  }
+  if (!mask_id.has_value()) {
+    return refuse(
+        "The coverage preview of a Grade Union is not available: the coverage-only operation "
+        "evaluates one AI Mask");
+  }
+  std::string error;
+  auto        committed = ReadCommittedAiMask(grade_id, *mask_id, &error);
+  if (!committed.has_value()) {
+    return refuse(error);
+  }
+  coverage_preview_.SelectCommitted(CoveragePreviewTarget(), std::move(*committed),
+                                    current_operation_id_, std::move(on_complete));
+  accepted.message = "Coverage preview selected";
+  return accepted;
+}
+
+auto EditorSessionService::ClearMaskCoveragePreview() -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::ClearMaskCoveragePreview;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand&) {
+      return ClearMaskCoveragePreview();
+    });
+  }
+  coverage_preview_.Clear();
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Coverage preview cleared";
+  return result;
+}
+
+auto EditorSessionService::RetryMaskCoveragePreview(EditorMaskCoverageCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("The coverage preview retry requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::RetryMaskCoveragePreview;
+    auto shared  = std::make_shared<EditorMaskCoverageCompletion>(std::move(on_complete));
+    return SubmitCommand(std::move(command), [this, shared](const EditorSessionCommand&) {
+      return RetryMaskCoveragePreview(std::move(*shared));
+    });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  if (!coverage_preview_.Retry(current_operation_id_, on_complete)) {
+    accepted.message = "The coverage preview has no failed presentation to retry";
+    on_complete({EditorMaskCoverageOutcome::Rejected, accepted.message, coverage_preview_.State()});
+    return accepted;
+  }
+  accepted.message = "Coverage preview retry requested";
+  return accepted;
+}
+
+void EditorSessionService::EndAiMaskWorkForImageChange() {
+  (void)EndAiMaskEditOnOwner();
+  coverage_preview_.Clear();
+}
+
+auto EditorSessionService::CoveragePreviewTarget() const -> EditorMaskCoveragePreview::ImageTarget {
+  const auto identity = lifecycle_.identity();
+  return {identity.element_id, identity.image_id, lifecycle_.active_image_load_request()};
+}
+
+auto EditorSessionService::ReadCommittedAiMask(const NodeId& grade_id, const MaskId& mask_id,
+                                               std::string* error) const
+    -> std::optional<EditorMaskCoveragePreview::CommittedMask> {
+  const auto fail = [error](std::string message) {
+    *error = std::move(message);
+    return std::nullopt;
+  };
+  const auto working =
+      dependencies_.pipeline
+          ? dependencies_.pipeline->CurrentPreview(lifecycle_.identity().element_id)
+          : nullptr;
+  if (!working) {
+    return fail("The working state of the image is not available");
+  }
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(working->Document().Graph().FindNode(grade_id));
+  if (grade == nullptr) {
+    return fail("The coverage preview target is not a Color Grade");
+  }
+  const auto* mask = grade->FindMask(mask_id);
+  if (mask == nullptr) {
+    return fail("The Mask is missing");
+  }
+  const auto* source = std::get_if<AiSegmentationMaskSource>(&mask->source);
+  if (source == nullptr) {
+    return fail(
+        "The coverage preview of an analytic Mask is not available: the coverage-only operation "
+        "evaluates AI Masks");
+  }
+  return EditorMaskCoveragePreview::CommittedMask{
+      grade_id, mask_id, *source, MaskCoverageInvertOpacity{mask->invert, mask->opacity}};
 }
 
 auto EditorSessionService::EndAiMaskEditOnOwner() -> bool {

@@ -6,7 +6,8 @@ SM8.3 complete on 2026-10-24 on Windows OpenCL (section 7.3.1).
 SM8.4 complete on 2026-10-24 on macOS Metal (section 7.4.1).
 SM8.5 complete on 2026-10-24 on Windows and macOS (section 7.5.1).
 SM8.6 complete on 2026-10-24 on Windows and macOS (section 7.6.1).
-SM8.7 and SM8.8 are planned; no implementation evidence exists for them.
+SM8.7 complete on 2026-10-24 on Windows and macOS (section 7.7.1).
+SM8.8 is planned; no implementation evidence exists for it.
 
 Parent: [AI Segmentation Mask Master Plan](../ai_segmentation_mask_master_plan.md), sections 1.5 and 9.7.
 Prerequisites: [SM4](phase_sm4_analysis_render_plan.md), [SM5](phase_sm5_ai_mask_source_and_session_plan.md),
@@ -286,7 +287,7 @@ The transport/composite split separates resource lifetime evidence from pixel co
 | SM8.4 | Metal edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | complete 2026-10-24 (7.4.1) |
 | SM8.5 | Dedicated GPU coverage presentation channel | SM8.1 | 1200-1900 | complete 2026-10-24 (7.5.1) |
 | SM8.6 | One viewport composite for candidate and committed coverage | SM8.2-SM8.5 | 1000-1700 | complete 2026-10-24 (7.6.1) |
-| SM8.7 | Session preview, replacement, Undo/Redo, Commit, and Cancel | SM8.6 | 1100-1800 | planned |
+| SM8.7 | Session preview, replacement, Undo/Redo, Commit, and Cancel | SM8.6 | 1100-1800 | complete 2026-10-24 (7.7.1) |
 | SM8.8 | Cross-backend resource and latency evidence | SM8.7 | 500-1000 | planned |
 
 ### 7.1 SM8.1 - Source lifetime and workspace operations
@@ -1168,7 +1169,188 @@ Their registration is in `tests/app/CMakeLists.txt` and the existing editor sess
 
 **Commands.** Groups A and B, plus relevant existing service tests discovered with `ctest -N -R`.
 **Exit.** The retained-output and temporary-history cases pass through the production facade.
-**Expected diff.** 1100-1800 lines. **Completion record.** Section 11; unfilled.
+**Expected diff.** 1100-1800 lines. **Completion record.** Section 7.7.1.
+
+#### 7.7.1 SM8.7 completion record
+
+```text
+Phase / date / status: SM8.7 / 2026-10-24 / complete on Windows (CUDA, OpenCL) and macOS (Metal).
+Source revision and branch: base f4e9f4aa (SM8.6, pull request #510); branch
+  feature/ai-segmentation-sm8-7-session-coverage-preview (seventh pull request of the SM8
+  stack), commit 80a1b499.
+Actual changed modules and diff size: 34 files, +2544 / -60 (2604 changed lines; estimate
+  1100-1800). Tests are 1178 changed lines (editor_mask_coverage_preview_test.cpp 813, the
+  scheduler port GPU tests 295, the clear test 30, CMake 40); production code is about 1426
+  changed lines. Largest production changes: editor_mask_coverage_preview.cpp 241 (new),
+  editor_mask_coverage_preview.hpp 219 (new), editor_session_service.cpp +214,
+  editor_session_render_scheduler_port.cpp +153, editor_session_service.hpp +95,
+  editor_mask_coverage_port.hpp 94 (new).
+Implemented behavior:
+  1. Session facade (EditorSessionService, queued on the session owner like the other AI Mask
+     commands): UpdateAiMaskCandidateCoverage(MaskCoverageCandidateSelection, completion),
+     SelectMaskCoveragePreview(grade_id, optional mask_id, completion), ClearMaskCoveragePreview(),
+     RetryMaskCoveragePreview(completion), and mask_coverage_preview_state() (any thread). Each
+     request reaches its completion exactly once on the owner: Presented, Superseded, Failed,
+     Discarded, or Rejected, with the preview state after it. The candidate needs the open AI Mask
+     edit and one R8 value per analysis pixel; an opened Mask uses its own invert and opacity read
+     from the working document, a new Mask uses false and 1.
+  2. EditorMaskCoveragePreview (new module, owner thread): the source is the candidate, else the
+     selected committed AI Mask, else none. One job in flight and the newest pending request; a
+     newer request supersedes the pending one. Each request carries the shared original R8 (or the
+     committed source), the edge values, invert, and opacity, so superseding loses no session state
+     and Retry resubmits the newest request with the same allocation. Status Hidden, Pending,
+     Current, or Previous (a presentation failed after the last Current; the real error is kept).
+  3. Rules of section 4.3: the displayed coverage stays until the GPU work of its replacement
+     completes; a failed presentation keeps it, labels it Previous, and CommitAiMaskEdit is refused
+     until the newest request is presented (Retry or a later request); Retry runs no model.
+     Commit stores PrepareCommit's original R8 through the existing asset-first publication, then
+     selects the committed Mask, whose frame replaces the candidate frame without a clear in
+     between. Cancel restores the committed selection, or hides the coverage when none is
+     selected. Open, Switch, Close, and Shutdown clear the preview (EndAiMaskWorkForImageChange);
+     a job of the previous image completes as Discarded.
+  4. IEditorMaskCoveragePort (new app port) and its production implementation in
+     EditorSessionRenderSchedulerPort: ScheduleMaskCoverage queues one work item on the editor
+     worker, after the frame or job in flight. It holds the executor render lock and runs
+     PipelineExecutor::PresentMaskCoverage, the new coverage-only entry point that calls the SM8.5
+     PresentMaskCoverage on the device of the interactive renderer of the resolved backend.
+     ClearMaskCoverage queues IMaskCoverageSink::ClearCoverage after the accepted job. Rejected:
+     another coverage job, another image than the bound one, no executor yet, no viewport coverage
+     channel, an export holding the GPU (presentation-suspended message), shutdown. Shutdown waits
+     for coverage jobs and clears like it waits for image jobs.
+  5. The coverage grid is the grid of the last presented full photo frame:
+     Renderer::PresentedFrameGeometry() is set when a render presents a frame for which the new
+     IsRenderReferenceFrame (moved from direct_frame_sink.cpp to frame_sink.hpp) is true, and is
+     reset by ReleaseBinding (image change, export release).
+  6. Ordered viewport clear: ViewportMaskCoverageSink::ClearCoverage records the publication
+     sequence it clears through and drops a pending Metal frame; ViewportMaskCoverageLayer releases
+     the displayed frame and skips queued frames only when their sequence is not above it.
+     EditorViewportItem::clearMaskCoverage calls it; the old boolean clear request is removed.
+  7. Host wiring: the scheduler port is the coverage port of the runtime (CreateWithPorts gains
+     mask_coverage) and resolves the coverage channel through
+     EditorSessionController::presentation_mask_coverage_sink (null for the headless host).
+Primary success call chain:
+  AI Mask tool worker: AiMaskEditSession step -> AcquireCoveragePixels (shared, no copy)
+    -> EditorSessionService::UpdateAiMaskCandidateCoverage (queued command)
+    -> owner: EditorMaskCoveragePreview::UpdateCandidate -> Enqueue -> DispatchPending
+    -> EditorSessionRenderSchedulerPort::ScheduleMaskCoverage (bound image, executor, sink)
+    -> editor worker: RunMaskCoverageJob (render lock) -> PipelineExecutor::PresentMaskCoverage
+    -> PresentMaskCoverage(renderer device, selection, PresentedFrameGeometry + invert/opacity)
+    -> coverage work (resident source, device edge work) -> display write -> viewport coverage
+       channel -> PublishCoverage -> job completion
+    -> PostOwnerTask -> EditorMaskCoveragePreview::OnJobCompleted -> status Current
+    -> completion Presented; SM8.6 composite draws the frame.
+  Undo/Redo: AiMaskEditSession::Undo/Redo (retained outputs) -> same chain; no model, asset
+    write, or history change.
+  Commit: CommitAiMaskEdit (not blocked) -> PutMaskAsset -> AddMask/ReplaceMaskSource publish
+    -> ReplaceCandidateWithCommitted -> committed-source job -> frame replaces the candidate.
+  Cancel: CancelAiMaskEdit -> EndCandidate -> committed-source job, or Hide -> ClearMaskCoverage
+    -> worker: ClearCoverage after the job in flight -> render thread: ApplyClear.
+Primary failure and restore call chain:
+  model failure / NotFound -> AiMaskEditSession keeps its state -> no request -> displayed
+    coverage and status unchanged.
+  GPU failure (acquisition, edge work, display allocation, transfer, no presented photo frame)
+    -> PresentMaskCoverage cancels its work -> job Failed with the real error -> status Previous
+    -> completion Failed -> CommitAiMaskEdit Rejected ("The viewport shows a previous AI Mask
+    result ...") -> RetryMaskCoveragePreview -> same shared pixels and edge -> Presented ->
+    Current -> Commit admitted.
+  port rejection (export, no channel, other image) -> status Previous with that reason ->
+    completion Failed.
+  image change -> preview cleared, pending request Discarded, job in flight Discarded at its
+    completion; the viewport image session already dropped its frame.
+Commands and exit codes:
+  Windows: cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target
+      alcedo_main EditorMaskCoveragePreviewTest EditorSessionRenderSchedulerPortTest
+      MaskCoveragePresentationTest ViewportCoverageCompositeTest EditorComparisonServiceTest
+      EditorSessionActionPolicyCq3Test EditorViewportSuspensionTest HeadlessFrameSinkTest
+      GpuDagCudaMaskTest GpuDagOpenClGradeTest (0, after formatting)
+    ctest --test-dir build/debug -j 1 --output-on-failure -R
+      '^(EditorMaskCoveragePreviewTest|EditorSessionRenderSchedulerPortTest|MaskCoveragePresentationTest|ViewportCoverageCompositeTest|EditorComparisonServiceTest|EditorSessionActionPolicyCq3Test|EditorViewportSuspensionTest|HeadlessFrameSinkTest|GpuDagCudaMaskTest)\.|^GpuDagOpenClGradeTest\.OpenClMaskFixture\.' (0)
+    Earlier in the same change: EditorSessionServiceFacadeTest, EditorSessionCommandQueueBaselineTest,
+      MaskCoverageTextureCacheTest, AiMaskEditSessionTest (0).
+  macOS (yurunmac.local, build/macos-debug with ALCEDO_BUILD_TESTS=ON):
+    cmake --build build/macos-debug --target alcedo_main EditorMaskCoveragePreviewTest
+      MaskCoveragePresentationTest ViewportCoverageCompositeTest (0)
+    ctest --test-dir build/macos-debug -j 1 --output-on-failure -R
+      '^(EditorMaskCoveragePreviewTest|MaskCoveragePresentationTest|ViewportCoverageCompositeTest)\.' (0)
+Discovered / passed / failed / skipped counts:
+  EditorMaskCoveragePreviewTest: Windows 10/10, macOS 10/10:
+    NewModelRequestKeepsOpenedMaskAndDisplayedCoverage, FailedModelRequestKeepsStackAndPreview,
+    UndoAfterNewModelResultRestoresOpenedMaskWithoutInference, RedoUsesRetainedModelOutputs,
+    GpuPreviewFailureKeepsDesiredStateAndBlocksCommit, CancelRestoresCommittedPreview,
+    CommitStoresOriginalCoverageAndPublishesOneHistoryOperation,
+    NewestPendingRequestSupersedesOlderPendingRequest,
+    ImageSwitchDiscardsPreviewAndKeepsNoSelection,
+    SelectionOfUnionOrAnalyticMaskIsRefusedWithTheReason.
+  EditorSessionRenderSchedulerPortTest: 43/43 (17 GPU, CUDA, NVIDIA RTX 3080 Laptop GPU), with the
+    new CoverageJobPresentsCandidateOnThePhotoFrameGridWithoutAPhotoRender,
+    EdgeOnlyCoverageJobsUploadTheCandidateOnce, ClearRunsAfterTheAcceptedCoverageJob,
+    CoverageJobAfterExportReleaseFailsUntilTheNextPhotoFrame, and
+    CoverageJobOfAnotherImageIsRejected; the five coverage tests also ran directly with gtest
+    [ OK ] output (no skip).
+  MaskCoveragePresentationTest with the new ClearHidesOnlyFramesPublishedBeforeIt: Windows CUDA
+    7/7, OpenCL 7/7, macOS Metal 7/7 ([ OK ] output checked on Metal).
+  ViewportCoverageCompositeTest: Windows CUDA 7/7, OpenCL 7/7, macOS Metal 7/7.
+  Windows final targeted run: 171 discovered, 171 passed (also EditorComparisonServiceTest 22,
+    EditorSessionActionPolicyCq3Test 15, EditorViewportSuspensionTest 3, HeadlessFrameSinkTest 4,
+    GpuDagCudaMaskTest CudaMaskFixture 23, GpuDagOpenClGradeTest OpenClMaskFixture 23).
+  Earlier caller run: EditorSessionServiceFacadeTest 4/4, EditorSessionCommandQueueBaselineTest
+    19/19, MaskCoverageTextureCacheTest 10/10, AiMaskEditSessionTest 19/19.
+  First run: NewModelRequestKeepsOpenedMaskAndDisplayedCoverage expected one decode for a stroke
+    on the opened Mask; the stroke joins the open prompt group, so the session decodes the stored
+    group and the step (2). The test also read a job through a pointer into a vector that grew.
+    Both were test errors; the test now checks that the opened display needs no decode and that
+    the new request decodes, and keeps the shared pixels instead of the pointer.
+  Mutation check: with CommitBlocked() returning false,
+    GpuPreviewFailureKeepsDesiredStateAndBlocksCommit fails (the refused Commit is accepted and
+    stores the asset); restored before the final runs.
+Manual verification: none. No user control calls the facade before SM9; the real-window E2E test
+  is disabled in the repository.
+Numeric differences, latency, and resource measurements:
+  A uniform candidate of 200 on the 64 x 48 analysis grid presented through the production port
+    gives red 200 / 255 within one code at every texel of the photo-frame-sized target, green and
+    blue exactly 0, alpha exactly 1; the coverage frame has the photo frame size and carries its
+    geometry, request id, session epoch, and image id.
+  Coverage-only work: no plan cache access, no sensor develop or Mask pass, no photo frame, no
+    binding change, and no host download. Three Feather values after the first presentation of a
+    candidate add no host upload.
+  No latency measurement in this assignment (SM8.8).
+Remaining issues or unavailable platforms: #511 (opened in this assignment): the coverage-only
+  operation evaluates one AI Mask, so a Grade Union or analytic Mask selection is refused with
+  that reason. #497 (existing, Metal photo Mask tests, not run here). No AMD or Intel OpenCL
+  device was available. The production port GPU tests exist for CUDA only (the scheduler port
+  fixture is CUDA); OpenCL and Metal reach the same PresentMaskCoverage through the same
+  PipelineExecutor dispatch and are covered by the SM8.5/SM8.6 real-resource tests.
+```
+
+Decisions made during SM8.7 (AGENTS.md "Make implementation decisions"):
+
+- The preview state is its own module, `EditorMaskCoveragePreview`, not more fields of
+  `EditorSessionService` (above 3000 lines). The service checks admission, reads Mask fields from
+  the working document, and routes; the module owns the queue, the status, and the selection.
+- The facade returns a per-request completion and a published state instead of an action
+  availability flag. The AI Mask tool controller of SM9 runs on its own worker and needs the
+  outcome of each request; Commit is enforced by the service, not only by a disabled control.
+- Commit is refused only in the Previous status. A Pending request (a slider value in flight) does
+  not block it, because Commit stores the original R8 and the edge values, not displayed pixels.
+- Merging uses one job in flight plus the newest pending request, without an added counter or
+  token. Each request is complete, so superseding the pending one loses no session state.
+  Stale completions are matched by the local dispatch id of the one job in flight.
+- The coverage grid is the last presented full photo frame of the renderer. The renderer is the
+  only owner that knows that geometry on the render worker; with the SM8.6 reference-space
+  mapping, a later photo geometry change keeps the coverage aligned.
+- After Commit the committed Mask becomes the preview. Its effective coverage equals the candidate
+  (same original R8, edge, invert, opacity), so the replacement frame shows the same pixels.
+- `SelectMaskCoveragePreview` is refused during an AI Mask edit: the candidate is the source until
+  the edit ends, and Cancel restores the selection made before it.
+- A Grade Union and an analytic Mask selection are refused with the reason (#511). The SM8.7 steps
+  do not list their coverage-only evaluation, and it needs new dispatches on three backends.
+- The viewport clear uses the publication sequence that the sink already counts, so a clear never
+  hides a frame published after it. The boolean clear request of SM8.5 could hide such a frame.
+- The tests live in a new `EditorMaskCoveragePreviewTest` target in `tests/ui/CMakeLists.txt`, next
+  to the AI Mask edit service tests, because they need the same history port sources.
+- The diff exceeds the 2000-line threshold of section 10 by the tests (1178 lines). The facade
+  cannot be observed without the port and the production port cannot be observed without the
+  facade request types, so the assignment stays one pull request; #502 records the size.
 
 ### 7.8 SM8.8 - Latency and resource qualification
 

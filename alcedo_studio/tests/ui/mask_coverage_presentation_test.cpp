@@ -38,6 +38,7 @@ class ImageChangeBeforePublicationSink final : public IMaskCoverageSink {
   }
   auto PublishCoverage() -> MaskCoveragePublication override { return sink_.PublishCoverage(); }
   void AbandonCoverageTarget() override { sink_.AbandonCoverageTarget(); }
+  void ClearCoverage() override { sink_.ClearCoverage(); }
 #if defined(HAVE_METAL)
   auto SubmitMetalCoverage(const MaskCoveragePresentation& presentation,
                            const MaskCoverageMetalFrame&   frame)
@@ -303,6 +304,35 @@ TEST_F(MaskCoveragePresentationTest, FailedTargetCreationKeepsDisplayedCoverage)
   ASSERT_TRUE(Consume());
   EXPECT_EQ(layer_.Presentation().identity.request_id, 64u);
   ExpectDisplayed(ExpectedCoverageR8(pixels, resized), "coverage after the recovery");
+}
+
+// SM8.7 ClearMaskCoveragePreview: a clear hides the displayed frame and the frame that was
+// published before it but not displayed yet; a frame published after the clear is displayed.
+TEST_F(MaskCoveragePresentationTest, ClearHidesOnlyFramesPublishedBeforeIt) {
+  const auto                 first  = MakeCandidatePixels(0);
+  const auto                 second = MakeCandidatePixels(1);
+  const auto                 third  = MakeCandidatePixels(2);
+  MaskCoverageDisplayRequest request{MakePhotoGeometry(1.0f), false, 1.0f};
+  ASSERT_EQ(Present(Candidate(first), request, Identity(71)), MaskCoveragePublication::Published);
+  ASSERT_TRUE(Consume());
+  // Published but not imported when the clear arrives.
+  ASSERT_EQ(Present(Candidate(second), request, Identity(72)), MaskCoveragePublication::Published);
+
+  viewport_->maskCoverageSink()->ClearCoverage();
+  EXPECT_TRUE(layer_.ApplyClear());
+  EXPECT_EQ(layer_.Texture(), nullptr);
+  EXPECT_FALSE(Consume()) << "a frame published before the clear must not be displayed";
+  EXPECT_EQ(layer_.Texture(), nullptr);
+  if (UsesQueuedTargets()) {
+    // Both slots returned to the producer.
+    EXPECT_EQ(viewport_->maskCoverageQueue()->DiagnosticsSnapshot().ready_count, 0u);
+  }
+
+  ASSERT_EQ(Present(Candidate(third), request, Identity(73)), MaskCoveragePublication::Published);
+  EXPECT_FALSE(layer_.ApplyClear());
+  ASSERT_TRUE(Consume());
+  EXPECT_EQ(layer_.Presentation().identity.request_id, 73u);
+  ExpectDisplayed(ExpectedCoverageR8(third, request), "coverage published after the clear");
 }
 
 }  // namespace

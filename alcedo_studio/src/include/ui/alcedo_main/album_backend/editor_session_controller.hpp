@@ -34,6 +34,7 @@
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_controller.hpp"
+#include "ui/edit_viewer/mask_coverage_sink.hpp"
 
 namespace alcedo {
 class CommitGraph;
@@ -453,6 +454,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Returns null when unbound or the object is not an EditorViewportItem.
   // Callers must re-resolve after PresentationBindingChanged / StateChanged.
   [[nodiscard]] auto presentation_frame_sink() const -> alcedo::IFrameSink*;
+  /// Coverage channel of the bound viewport (SM8.5), or null when unbound or headless. Same
+  /// re-resolution rule as @ref presentation_frame_sink.
+  [[nodiscard]] auto presentation_mask_coverage_sink() const -> alcedo::IMaskCoverageSink*;
   /// Headless host: binds @p sink as the presentation target without a QML viewport. The sink
   /// address becomes the presentation sink id and @p width x @p height the presentation size,
   /// so that an opened image can reach Interactive. Call on the GUI thread before the first

@@ -28,6 +28,7 @@
 #include "app/editor_comparison_inputs.hpp"
 #include "app/editor_comparison_types.hpp"
 #include "app/editor_image_render_port.hpp"
+#include "app/editor_mask_coverage_port.hpp"
 #include "app/editor_working_document.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
@@ -49,6 +50,7 @@
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
+#include "edit/runtime/mask_coverage_selection.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/rendered_pipeline_image.hpp"
 #include "image/dng_color_profile_import.hpp"
@@ -59,7 +61,10 @@
 #include "renderer/pipeline_task.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_mask_asset_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
+#include "ui/edit_viewer/mask_coverage_sink.hpp"
 #ifdef HAVE_CUDA
+#include <cuda_runtime.h>
+
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #endif
 
@@ -155,6 +160,113 @@ class HostPixelFrameSink final : public alcedo::IFrameSink {
  private:
   std::atomic<int> ready_count_ = 0;
 };
+
+#ifdef HAVE_CUDA
+/**
+ * @brief Coverage channel whose target is a CUDA RGBA32F array, like the viewport target of the
+ *        CUDA backend, that the test reads back. Records publications and clears in order.
+ */
+class CudaArrayCoverageSink final : public alcedo::IMaskCoverageSink {
+ public:
+  CudaArrayCoverageSink()                                                = default;
+  CudaArrayCoverageSink(const CudaArrayCoverageSink&)                    = delete;
+  auto operator=(const CudaArrayCoverageSink&) -> CudaArrayCoverageSink& = delete;
+  ~CudaArrayCoverageSink() override {
+    if (array_ != nullptr) {
+      (void)cudaFreeArray(array_);
+    }
+  }
+
+  auto MapCoverageTarget(const alcedo::MaskCoveragePresentation& presentation, int width,
+                         int height, alcedo::FrameMemoryDomain /*preferred_domain*/)
+      -> alcedo::FrameWriteMapping override {
+    std::scoped_lock lock(mutex_);
+    if (array_ != nullptr && (width != width_ || height != height_)) {
+      (void)cudaFreeArray(array_);
+      array_ = nullptr;
+    }
+    if (array_ == nullptr) {
+      const auto desc = cudaCreateChannelDesc<float4>();
+      if (cudaMallocArray(&array_, &desc, width, height) != cudaSuccess) {
+        array_ = nullptr;
+        return {};
+      }
+      width_  = width;
+      height_ = height;
+    }
+    mapped_ = presentation;
+    alcedo::FrameWriteMapping mapping;
+    mapping.image_array   = array_;
+    mapping.row_bytes     = static_cast<std::size_t>(width) * sizeof(float4);
+    mapping.pixel_format  = alcedo::FramePixelFormat::RGBA32F;
+    mapping.memory_domain = alcedo::FrameMemoryDomain::CudaDevice;
+    mapping.target_type   = alcedo::FrameWriteTargetType::CudaArray;
+    return mapping;
+  }
+  void UnmapCoverageTarget() override {}
+  auto PublishCoverage() -> alcedo::MaskCoveragePublication override {
+    std::scoped_lock lock(mutex_);
+    published.push_back(mapped_);
+    events.emplace_back("publish");
+    return alcedo::MaskCoveragePublication::Published;
+  }
+  void AbandonCoverageTarget() override {
+    std::scoped_lock lock(mutex_);
+    events.emplace_back("abandon");
+  }
+  void ClearCoverage() override {
+    std::scoped_lock lock(mutex_);
+    events.emplace_back("clear");
+  }
+
+  /// RGBA32F texels of the target, row by row.
+  auto ReadTexels() -> std::vector<float> {
+    std::scoped_lock   lock(mutex_);
+    std::vector<float> texels(static_cast<std::size_t>(width_) * height_ * 4);
+    const auto         row_bytes = static_cast<std::size_t>(width_) * sizeof(float4);
+    EXPECT_EQ(cudaMemcpy2DFromArray(texels.data(), row_bytes, array_, 0, 0, row_bytes, height_,
+                                    cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    return texels;
+  }
+  [[nodiscard]] auto                            Width() const -> int { return width_; }
+  [[nodiscard]] auto                            Height() const -> int { return height_; }
+
+  std::vector<alcedo::MaskCoveragePresentation> published;
+  std::vector<std::string>                      events;
+
+ private:
+  std::mutex                       mutex_;
+  cudaArray_t                      array_  = nullptr;
+  int                              width_  = 0;
+  int                              height_ = 0;
+  alcedo::MaskCoveragePresentation mapped_{};
+};
+#endif
+
+/**
+ * @brief Schedule @p request as a coverage job and wait for its completion.
+ * @return nullopt when the port rejected the job (reason in @p error) or the job did not complete
+ *         within kFrameTimeout (reported as a test failure).
+ */
+auto ScheduleMaskCoverageAndWait(EditorSessionRenderSchedulerPort& scheduler,
+                                 alcedo::EditorMaskCoverageRequest request,
+                                 std::string*                      error = nullptr)
+    -> std::optional<alcedo::EditorMaskCoverageJobResult> {
+  auto       done   = std::make_shared<std::promise<alcedo::EditorMaskCoverageJobResult>>();
+  auto       result = done->get_future();
+  const auto job_id = scheduler.ScheduleMaskCoverage(
+      std::move(request),
+      [done](alcedo::EditorMaskCoverageJobResult job) { done->set_value(std::move(job)); }, error);
+  if (job_id == 0) {
+    return std::nullopt;
+  }
+  if (result.wait_for(kFrameTimeout) != std::future_status::ready) {
+    ADD_FAILURE() << "Coverage job " << job_id << " did not complete";
+    return std::nullopt;
+  }
+  return result.get();
+}
 
 /// Result that the Schedule `on_complete` callback reported for one frame.
 struct FrameCompletion {
@@ -499,6 +611,8 @@ class EditorSessionRenderSchedulerPortGpuTest : public ::testing::Test {
     scheduler_          = std::make_shared<EditorSessionRenderSchedulerPort>(pipeline_scheduler_);
     scheduler_->SetPipelinePort(held_.pipeline_port);
     scheduler_->SetSinkResolver([this] { return static_cast<alcedo::IFrameSink*>(&sink_); });
+    scheduler_->SetMaskCoverageSinkResolver(
+        [this] { return static_cast<alcedo::IMaskCoverageSink*>(&coverage_sink_); });
     auto context  = MakeReadyContext(kEpoch, 22, 11);
     context.input = input_;
     scheduler_->InstallSessionContext(std::move(context));
@@ -568,6 +682,19 @@ class EditorSessionRenderSchedulerPortGpuTest : public ::testing::Test {
     return pair.value_or(alcedo::EditorComparisonInputPair{});
   }
 
+  /// Coverage request of image 22 with a uniform candidate of @p value on a 64 x 48 analysis grid.
+  static auto UniformCandidateRequest(std::uint64_t request_id, std::uint8_t value)
+      -> alcedo::EditorMaskCoverageRequest {
+    alcedo::EditorMaskCoverageRequest request;
+    request.element_id            = 22;
+    request.image_id              = 11;
+    request.image_load_request_id = alcedo::ImageLoadRequestId{kEpoch};
+    request.request_id            = request_id;
+    request.selection             = alcedo::MaskCoverageCandidateSelection{
+        std::make_shared<const std::vector<std::uint8_t>>(64u * 48u, value), {64, 48}, {}};
+    return request;
+  }
+
   auto PairRequest(const alcedo::EditorComparisonInputPair& pair)
       -> alcedo::EditorImageRenderRequest {
     return MakeImageRequest(kEpoch, {pair.a.snapshot, pair.b.snapshot});
@@ -595,6 +722,9 @@ class EditorSessionRenderSchedulerPortGpuTest : public ::testing::Test {
   std::filesystem::path                             meta_path_;
   std::unique_ptr<alcedo::ProjectService>           project_;
   HostPixelFrameSink                                sink_;
+#ifdef HAVE_CUDA
+  CudaArrayCoverageSink coverage_sink_;
+#endif
   std::shared_ptr<alcedo::PipelineMgmtService>      service_;
   std::shared_ptr<alcedo::PipelineDocument>         root_document_;
   std::shared_ptr<alcedo::ImageBuffer>              input_;
@@ -1771,6 +1901,171 @@ TEST_F(EditorSessionRenderSchedulerPortGpuTest,
   std::error_code ec;
   std::filesystem::remove(broken_cube, ec);
 #endif
+}
+
+// SM8.7: the coverage job of the editor runs on the executor, worker, and device of the frames.
+// It writes the candidate coverage on the grid of the presented photo frame into the coverage
+// channel, with no photo DAG work, no photo frame, and no host download.
+TEST_F(EditorSessionRenderSchedulerPortGpuTest,
+       CoverageJobPresentsCandidateOnThePhotoFrameGridWithoutAPhotoRender) {
+#ifdef HAVE_CUDA
+  const cv::Mat photo = RenderFrame(900);
+  ASSERT_FALSE(photo.empty());
+  auto* renderer = EditorRenderer();
+  ASSERT_NE(renderer, nullptr);
+  const auto photo_frames = sink_.ready_count();
+  const auto binding      = renderer->Binding();
+  const auto downloads =
+      std::as_const(*renderer).Device().Workspace().Device().DeviceToHostCopyCount();
+  renderer->ResetStats();
+
+  const auto job = ScheduleMaskCoverageAndWait(*scheduler_, UniformCandidateRequest(901, 200));
+  ASSERT_TRUE(job.has_value());
+  ASSERT_EQ(job->status, alcedo::EditorMaskCoverageJobStatus::Presented) << job->message;
+
+  // The coverage frame has the size of the photo frame and carries its geometry and identity.
+  ASSERT_EQ(coverage_sink_.published.size(), 1u);
+  const auto& presentation = coverage_sink_.published.front();
+  EXPECT_EQ(presentation.identity.request_id, 901u);
+  EXPECT_EQ(presentation.identity.session_epoch, kEpoch);
+  EXPECT_EQ(presentation.identity.image_identity, 11u);
+  EXPECT_EQ(coverage_sink_.Width(), photo.cols);
+  EXPECT_EQ(coverage_sink_.Height(), photo.rows);
+  EXPECT_EQ(presentation.geometry.render_extent.width, static_cast<std::uint32_t>(photo.cols));
+  EXPECT_EQ(presentation.geometry.render_extent.height, static_cast<std::uint32_t>(photo.rows));
+  ASSERT_TRUE(renderer->PresentedFrameGeometry().has_value());
+  EXPECT_EQ(presentation.geometry.full_reference_extent,
+            renderer->PresentedFrameGeometry()->full_reference_extent);
+
+  // A uniform candidate gives its value at every texel: red 200 / 255, green and blue 0, alpha 1.
+  const auto texels = coverage_sink_.ReadTexels();
+  ASSERT_EQ(texels.size(), static_cast<std::size_t>(photo.cols) * photo.rows * 4);
+  for (std::size_t i = 0; i < texels.size(); i += 4) {
+    ASSERT_NEAR(texels[i], 200.0f / 255.0f, 1.0f / 255.0f) << "texel " << i / 4;
+    ASSERT_EQ(texels[i + 1], 0.0f) << "texel " << i / 4;
+    ASSERT_EQ(texels[i + 2], 0.0f) << "texel " << i / 4;
+    ASSERT_EQ(texels[i + 3], 1.0f) << "texel " << i / 4;
+  }
+
+  // Coverage-only work: no photo plan, pass, frame, binding change, or host download.
+  const auto stats = renderer->Stats();
+  EXPECT_EQ(stats.plan_cache_hits + stats.plan_cache_misses, 0u);
+  EXPECT_EQ(stats.pass.sensor_develop_execute + stats.pass.sensor_develop_skip, 0u);
+  EXPECT_EQ(stats.pass.mask_execute, 0u);
+  EXPECT_EQ(sink_.ready_count(), photo_frames);
+  EXPECT_EQ(renderer->Binding(), binding);
+  EXPECT_EQ(std::as_const(*renderer).Device().Workspace().Device().DeviceToHostCopyCount(),
+            downloads);
+#endif
+}
+
+// Display-only Feather values of one candidate reuse its uploaded source: the R8 crosses to the
+// device once, and each value runs only the device edge work (acceptance row "Feather drag").
+TEST_F(EditorSessionRenderSchedulerPortGpuTest, EdgeOnlyCoverageJobsUploadTheCandidateOnce) {
+#ifdef HAVE_CUDA
+  ASSERT_FALSE(RenderFrame(930).empty());
+  auto* renderer = EditorRenderer();
+  ASSERT_NE(renderer, nullptr);
+  auto       request = UniformCandidateRequest(931, 160);
+  const auto first   = ScheduleMaskCoverageAndWait(*scheduler_, request);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_EQ(first->status, alcedo::EditorMaskCoverageJobStatus::Presented) << first->message;
+  const auto uploads =
+      std::as_const(*renderer).Device().Workspace().Device().HostToDeviceCopyCount();
+  const auto downloads =
+      std::as_const(*renderer).Device().Workspace().Device().DeviceToHostCopyCount();
+  for (const float feather : {2.0f, 5.0f, 9.0f}) {
+    auto& candidate = std::get<alcedo::MaskCoverageCandidateSelection>(request.selection);
+    candidate.edge  = alcedo::AiMaskEdgeAdjustment{feather, 1};
+    ++request.request_id;
+    const auto job = ScheduleMaskCoverageAndWait(*scheduler_, request);
+    ASSERT_TRUE(job.has_value());
+    ASSERT_EQ(job->status, alcedo::EditorMaskCoverageJobStatus::Presented) << job->message;
+  }
+  EXPECT_EQ(std::as_const(*renderer).Device().Workspace().Device().HostToDeviceCopyCount(),
+            uploads);
+  EXPECT_EQ(std::as_const(*renderer).Device().Workspace().Device().DeviceToHostCopyCount(),
+            downloads);
+  EXPECT_EQ(coverage_sink_.published.size(), 4u);
+#endif
+}
+
+// A clear queued after an accepted coverage job runs after it, so the job's frame is hidden.
+TEST_F(EditorSessionRenderSchedulerPortGpuTest, ClearRunsAfterTheAcceptedCoverageJob) {
+#ifdef HAVE_CUDA
+  ASSERT_FALSE(RenderFrame(910).empty());
+  auto        done   = std::make_shared<std::promise<alcedo::EditorMaskCoverageJobResult>>();
+  auto        result = done->get_future();
+  std::string error;
+  ASSERT_NE(
+      scheduler_->ScheduleMaskCoverage(
+          UniformCandidateRequest(911, 90),
+          [done](alcedo::EditorMaskCoverageJobResult job) { done->set_value(std::move(job)); },
+          &error),
+      0u)
+      << error;
+  scheduler_->ClearMaskCoverage();
+  ASSERT_EQ(result.wait_for(kFrameTimeout), std::future_status::ready);
+  EXPECT_EQ(result.get().status, alcedo::EditorMaskCoverageJobStatus::Presented);
+  WaitForQueuedWork(*pipeline_scheduler_);
+  ASSERT_FALSE(HasFatalFailure());
+  EXPECT_FALSE(scheduler_->HasMaskCoverageWork());
+  EXPECT_EQ(coverage_sink_.events, (std::vector<std::string>{"publish", "clear"}));
+#endif
+}
+
+// An export holds the GPU: coverage jobs are refused as suspended. Its release drops the photo
+// frame geometry with the binding, so the next coverage job fails with the real error and
+// displays nothing until a photo frame is presented again.
+TEST_F(EditorSessionRenderSchedulerPortGpuTest,
+       CoverageJobAfterExportReleaseFailsUntilTheNextPhotoFrame) {
+#ifdef HAVE_CUDA
+  ASSERT_FALSE(RenderFrame(920).empty());
+  const auto release = ReleaseForExportAndWait(*scheduler_);
+  ASSERT_TRUE(release.has_value());
+  ASSERT_TRUE(release->success) << release->error;
+
+  std::string error;
+  EXPECT_FALSE(ScheduleMaskCoverageAndWait(*scheduler_, UniformCandidateRequest(921, 50), &error)
+                   .has_value());
+  EXPECT_TRUE(alcedo::IsPresentationSuspendedMessage(error)) << error;
+
+  scheduler_->ResumeGpuResourcesAfterExport();
+  const auto failed = ScheduleMaskCoverageAndWait(*scheduler_, UniformCandidateRequest(922, 50));
+  ASSERT_TRUE(failed.has_value());
+  EXPECT_EQ(failed->status, alcedo::EditorMaskCoverageJobStatus::Failed);
+  EXPECT_NE(failed->message.find("has not presented a photo frame"), std::string::npos)
+      << failed->message;
+  EXPECT_TRUE(coverage_sink_.published.empty());
+
+  ASSERT_FALSE(RenderFrame(923).empty());
+  const auto presented = ScheduleMaskCoverageAndWait(*scheduler_, UniformCandidateRequest(924, 50));
+  ASSERT_TRUE(presented.has_value());
+  EXPECT_EQ(presented->status, alcedo::EditorMaskCoverageJobStatus::Presented)
+      << presented->message;
+  EXPECT_EQ(coverage_sink_.published.size(), 1u);
+#endif
+}
+
+// A coverage job for another image than the bound one is rejected before it reaches the worker.
+TEST(EditorSessionRenderSchedulerPortTest, CoverageJobOfAnotherImageIsRejected) {
+  HeldImage held;
+  auto      scheduler = MakeSchedulerHoldingImage(held);
+  ASSERT_TRUE(held.lease.has_value()) << held.error;
+  scheduler->InstallSessionContext(MakeReadyContext(52, 22, 11));
+  alcedo::EditorMaskCoverageRequest request;
+  request.element_id            = 23;
+  request.image_id              = 12;
+  request.image_load_request_id = alcedo::ImageLoadRequestId{52};
+  std::string error;
+  bool        completed = false;
+  EXPECT_EQ(
+      scheduler->ScheduleMaskCoverage(
+          request, [&completed](alcedo::EditorMaskCoverageJobResult) { completed = true; }, &error),
+      0u);
+  EXPECT_EQ(error, "The requested image is not the bound editor image");
+  EXPECT_FALSE(completed);
+  EXPECT_FALSE(scheduler->HasMaskCoverageWork());
 }
 
 }  // namespace

@@ -7,26 +7,12 @@
 #include <type_traits>
 #include <variant>
 
-#include "edit/geometry/types.hpp"
-#include "edit/mask/ai_mask_recipe.hpp"
-#include "edit/mask/mask_model.hpp"
-#include "edit/runtime/ai_mask_coverage_work.hpp"
 #include "edit/runtime/frame_presenter.hpp"
 #include "edit/runtime/mask_coverage_display.hpp"
+#include "edit/runtime/mask_coverage_selection.hpp"
 #include "ui/edit_viewer/mask_coverage_sink.hpp"
 
 namespace alcedo {
-
-/// The AI Mask candidate of the edit session: its shared original coverage and edge values.
-struct MaskCoverageCandidateSelection {
-  AiMaskCoveragePixels pixels{};
-  Extent2D             analysis_extent{};
-  AiMaskEdgeAdjustment edge{};
-};
-
-/// The coverage that one presentation displays: the candidate or one committed AI Mask.
-using MaskCoverageSelection =
-    std::variant<MaskCoverageCandidateSelection, AiSegmentationMaskSource>;
 
 /**
  * @brief Coverage-only presentation (SM8 C4, C5): write the processed coverage of @p selection on

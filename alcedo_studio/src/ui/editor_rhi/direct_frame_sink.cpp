@@ -22,10 +22,6 @@ using alcedo::diag::editorPresentLog;
 namespace alcedo::editor_rhi {
 namespace {
 
-auto IsRenderReferenceFrame(FramePresentationMode presentation_mode, FrameRole role) -> bool {
-  return presentation_mode != FramePresentationMode::RoiFrame && role != FrameRole::DetailPatch;
-}
-
 auto SuspendedMapping() -> FrameWriteMapping {
   FrameWriteMapping mapping{};
   mapping.presentation_suspended = true;
