@@ -38,6 +38,15 @@ auto AiMaskSegmentationService::LoadModels(const std::filesystem::path& model_di
   return client_->LoadModels(model_directory.string(), device, timeouts_.load);
 }
 
+auto AiMaskSegmentationService::Status() -> SegmentationStatus {
+  if (closed_) {
+    SegmentationStatus status;
+    status.status = LocalFailure(kClosedMessage);
+    return status;
+  }
+  return client_->GetStatus(timeouts_.control);
+}
+
 auto AiMaskSegmentationService::StartImage(const SegmentationRgb8Image& image,
                                            const std::string&           image_key)
     -> SegmentationSessionResult {

@@ -194,6 +194,19 @@ TEST(AiMaskSegmentationServiceTest, CloseEndsSessionUnloadsAndReleasesLease) {
   EXPECT_EQ(under_test.log->size(), 5U);
 }
 
+TEST(AiMaskSegmentationServiceTest, StatusReadsSidecarUntilClosed) {
+  ServiceUnderTest under_test;
+  EXPECT_TRUE(under_test.service->Status().status.ok);
+  EXPECT_EQ(*under_test.log, (CallLog{"status"}));
+
+  ASSERT_TRUE(under_test.service->Close().ok);
+  const auto closed = under_test.service->Status();
+
+  EXPECT_FALSE(closed.status.ok);
+  EXPECT_EQ(closed.status.error, "the AI Mask segmentation service is closed");
+  EXPECT_EQ(under_test.log->back(), "lease released");
+}
+
 TEST(AiMaskSegmentationServiceTest, DestructorClosesService) {
   ServiceUnderTest under_test;
   ASSERT_TRUE(under_test.service->StartImage(Image(8)).status.ok);
