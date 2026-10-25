@@ -79,6 +79,7 @@ auto DirectPresentQueue::SnapshotLocked(int index) const -> SlotSnapshot {
   snap.native            = slot.native;
   snap.presentation_mode = slot.presentation_mode;
   snap.preview_metadata  = slot.preview_metadata;
+  snap.geometry          = slot.geometry;
   snap.session_epoch  = slot.session_epoch;
   snap.image_identity    = slot.image_identity;
   snap.sequence          = slot.sequence;
@@ -344,7 +345,8 @@ void DirectPresentQueue::EndWrite(int slot_index) {
 }
 
 void DirectPresentQueue::NotifyReady(int slot_index, FramePresentationMode mode,
-                                     const FramePreviewMetadata& metadata) {
+                                     const FramePreviewMetadata&   metadata,
+                                     const ResolvedRenderGeometry& geometry) {
   std::lock_guard lock(mutex_);
   if (!IsValidSlot(slot_index)) {
     if (metadata.frame_role == FrameRole::DetailPatch) {
@@ -427,6 +429,7 @@ void DirectPresentQueue::NotifyReady(int slot_index, FramePresentationMode mode,
   slot.state             = SlotState::Ready;
   slot.presentation_mode = mode;
   slot.preview_metadata  = metadata;
+  slot.geometry          = geometry;
   slot.sequence          = ++sequence_;
   if (metadata.frame_role == FrameRole::DetailPatch) {
     qCDebug(editorPresentLog)

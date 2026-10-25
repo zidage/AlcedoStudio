@@ -195,6 +195,9 @@ Item {
                         // imageIdentity is the durable DB id; sessionEpoch is stamped
                         // from EditorSessionController::SyncViewportIdentity on the GUI thread.
                         imageIdentity: root.focusedImageId
+                        // Mask coverage composite style (presentation only, no photo render).
+                        maskCoverageColor: appTheme.maskCoverageTintColor
+                        maskCoverageOpacity: appTheme.maskCoverageTintOpacity
                         Accessible.role: Accessible.Canvas
                         Accessible.name: qsTr("Image viewport")
 

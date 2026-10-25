@@ -3,11 +3,15 @@
 layout(location = 0) in vec2 inPosition;
 layout(location = 1) in vec2 inUv;
 
+// Same block as editor_viewport.frag (ViewportCompositeUniforms).
 layout(std140, binding = 0) uniform ViewerUniforms {
   vec4 scaleZoom;
   vec4 panMode;
   vec4 detailRoi;
   vec4 detailFlags;
+  vec4 coverageU;
+  vec4 coverageV;
+  vec4 coverageTint;
 } ubo;
 
 layout(location = 0) out vec2 vUv;

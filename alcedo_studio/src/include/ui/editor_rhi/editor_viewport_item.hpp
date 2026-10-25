@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <QColor>
 #include <QMetaObject>
 #include <QQuickRhiItem>
 #include <QString>
@@ -15,6 +16,7 @@
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
+#include "ui/editor_rhi/viewport_composite_pass.hpp"
 #include "ui/editor_rhi/viewport_mask_coverage_sink.hpp"
 #include "ui/viewer/viewer_view_state.hpp"
 
@@ -54,6 +56,14 @@ class EditorViewportItem : public QQuickRhiItem {
   Q_PROPERTY(bool extendedDynamicRangeRequested READ extendedDynamicRangeRequested NOTIFY
                  DisplayConfigChanged)
   Q_PROPERTY(bool windowColorSpaceApplied READ windowColorSpaceApplied NOTIFY DisplayConfigChanged)
+  // Coverage composite style (SM8.6): presentation state only. A change redraws the viewport and
+  // requests no photo render.
+  Q_PROPERTY(bool maskCoverageVisible READ maskCoverageVisible WRITE setMaskCoverageVisible NOTIFY
+                 MaskCoverageStyleChanged)
+  Q_PROPERTY(QColor maskCoverageColor READ maskCoverageColor WRITE setMaskCoverageColor NOTIFY
+                 MaskCoverageStyleChanged)
+  Q_PROPERTY(qreal maskCoverageOpacity READ maskCoverageOpacity WRITE setMaskCoverageOpacity NOTIFY
+                 MaskCoverageStyleChanged)
 
  public:
   explicit EditorViewportItem(QQuickItem* parent = nullptr);
@@ -127,6 +137,26 @@ class EditorViewportItem : public QQuickRhiItem {
   /// Stop displaying coverage. The render thread releases the displayed frame on its next pass;
   /// a frame that waits for import is dropped. Idempotent; thread-safe.
   void               clearMaskCoverage();
+
+  /**
+   * @brief Style of the coverage composite (SM8 C10): visibility, display-encoded tint, and
+   *        opacity.
+   *
+   * GUI thread only. The renderer reads it in synchronize(), while the GUI thread is blocked. A
+   * change calls update() only: the viewport draws again with the displayed photo and coverage,
+   * and no photo frame, coverage frame, or render request is produced.
+   */
+  [[nodiscard]] auto maskCoverageStyle() const -> const MaskCoverageDisplayStyle& {
+    return mask_coverage_style_;
+  }
+  [[nodiscard]] auto maskCoverageVisible() const -> bool { return mask_coverage_style_.visible; }
+  [[nodiscard]] auto maskCoverageColor() const -> QColor;
+  [[nodiscard]] auto maskCoverageOpacity() const -> qreal { return mask_coverage_style_.opacity; }
+  void               setMaskCoverageVisible(bool visible);
+  /// Alpha of @p color is ignored; the opacity is a separate property.
+  void               setMaskCoverageColor(const QColor& color);
+  /// Clamped to [0, 1]; a value that is not finite is ignored.
+  void               setMaskCoverageOpacity(qreal opacity);
 
   Q_INVOKABLE void   requestRendererInvalidation();
   Q_INVOKABLE void   cancelPendingFrames();
@@ -203,6 +233,8 @@ class EditorViewportItem : public QQuickRhiItem {
   void PresentedMaskGeometryChanged();
   /// Emitted on the GUI thread when @ref presentationSuspended changes.
   void PresentationSuspendedChanged();
+  /// Emitted on the GUI thread when @ref maskCoverageStyle changes.
+  void MaskCoverageStyleChanged();
 
  protected:
   auto createRenderer() -> QQuickRhiItemRenderer* override;
@@ -240,6 +272,8 @@ class EditorViewportItem : public QQuickRhiItem {
   std::shared_ptr<DirectPresentQueue>                   coverage_queue_;
   std::shared_ptr<ViewportMaskCoverageSink>             coverage_sink_;
   std::atomic<bool>                                     mask_coverage_clear_requested_{false};
+  // GUI thread only; read by the renderer in synchronize().
+  MaskCoverageDisplayStyle                              mask_coverage_style_{};
   /// Render-thread handoff for prompt Ready-frame consumption. createRenderer
   /// publishes the active renderer; its destructor clears the slot with CAS so
   /// a stale arm never dereferences a dead renderer. Read on the render thread

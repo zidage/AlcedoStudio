@@ -1826,6 +1826,7 @@ target_include_directories(MaskCoveragePresentationTest
 target_link_libraries(MaskCoveragePresentationTest
     PRIVATE
         EditorRhiViewport
+        EditInput
         GTest::gtest
         Qt6::Core
         Qt6::Gui
@@ -1862,6 +1863,55 @@ if(ALCEDO_METAL_ENABLED)
         PROPERTIES LABELS "editor_rhi;presentation;mask;gpu;metal")
 endif()
 alcedo_register_test_target(MaskCoveragePresentationTest ui)
+
+# SM8.6: the one viewport composite of the photo and the Mask coverage, on the real QRhi and coverage
+# channel of each backend (one process per backend, as MaskCoveragePresentationTest).
+add_executable(ViewportCoverageCompositeTest
+    ${ALCEDO_TEST_ROOT}/ui/viewport_coverage_composite_test.cpp
+)
+target_include_directories(ViewportCoverageCompositeTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ViewportCoverageCompositeTest
+    PRIVATE
+        EditorRhiViewport
+        EditInput
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::GuiPrivate
+        Qt6::OpenGL
+)
+if(WIN32)
+    target_compile_definitions(ViewportCoverageCompositeTest PRIVATE WIN32_LEAN_AND_MEAN)
+endif()
+if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(ViewportCoverageCompositeTest PRIVATE EditRuntimeCuda)
+    alcedo_ui_gtest_discover_tests(ViewportCoverageCompositeTest
+        TEST_PREFIX "ViewportCoverageCompositeTest.Cuda."
+        TEST_LIST ViewportCoverageCompositeCudaTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                   ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=cuda")
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(ViewportCoverageCompositeTest PRIVATE EditRuntimeOpenCl)
+    if(NOT APPLE)
+        alcedo_ui_gtest_discover_tests(ViewportCoverageCompositeTest
+            TEST_PREFIX "ViewportCoverageCompositeTest.OpenCl."
+            TEST_LIST ViewportCoverageCompositeOpenClTests
+            PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                       ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=opencl")
+    endif()
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(ViewportCoverageCompositeTest PRIVATE EditRuntimeMetal)
+    alcedo_ui_gtest_discover_tests(ViewportCoverageCompositeTest
+        TEST_PREFIX "ViewportCoverageCompositeTest.Metal."
+        TEST_LIST ViewportCoverageCompositeMetalTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu;metal")
+endif()
+alcedo_register_test_target(ViewportCoverageCompositeTest ui)
 
 add_executable(AnalyticMaskCreationTest
     ${ALCEDO_TEST_ROOT}/ui/analytic_mask_creation_test.cpp

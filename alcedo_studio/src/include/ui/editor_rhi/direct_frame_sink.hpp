@@ -39,6 +39,8 @@ class DirectFrameSink final : public alcedo::IFrameSink {
     int native_layout = 0;
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata preview_metadata{};
+    // ResolveRenderGeometry result of the frame, from the bound FrameCompletionSubmission.
+    ResolvedRenderGeometry geometry{};
     std::shared_ptr<const void> owner{};
     std::uint64_t session_epoch = 0;
     std::uint64_t image_identity = 0;

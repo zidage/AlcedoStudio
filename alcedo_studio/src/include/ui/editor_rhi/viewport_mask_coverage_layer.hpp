@@ -7,8 +7,10 @@
 #include <QtGui/rhi/qrhi.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "ui/edit_viewer/mask_coverage_sink.hpp"
@@ -41,6 +43,12 @@ class ViewportMaskCoverageLayer {
   ~ViewportMaskCoverageLayer();
   ViewportMaskCoverageLayer(const ViewportMaskCoverageLayer&)                    = delete;
   auto operator=(const ViewportMaskCoverageLayer&) -> ViewportMaskCoverageLayer& = delete;
+
+  /// Called with the displayed texture just before the layer destroys it, so a draw that binds
+  /// the texture can drop its bindings first (EditorViewportRenderer, SM8.6).
+  void SetTextureReleaseObserver(std::function<void(const QRhiTexture*)> observer) {
+    texture_release_observer_ = std::move(observer);
+  }
 
   /// Use the coverage queue and sink of a viewport. Releases the displayed frame of a previous
   /// queue.
@@ -97,6 +105,7 @@ class ViewportMaskCoverageLayer {
   std::shared_ptr<const void>               owner_;
   MaskCoveragePresentation                  presentation_{};
   std::string                               last_error_;
+  std::function<void(const QRhiTexture*)>   texture_release_observer_;
 };
 
 }  // namespace alcedo::editor_rhi

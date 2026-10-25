@@ -232,6 +232,10 @@ class AppTheme final : public QObject {
   Q_PROPERTY(qreal maskOverlayGripInnerWidth READ maskOverlayGripInnerWidth CONSTANT)
   Q_PROPERTY(qreal maskOverlayGripSpanT0 READ maskOverlayGripSpanT0 CONSTANT)
   Q_PROPERTY(qreal maskOverlayGripSpanT1 READ maskOverlayGripSpanT1 CONSTANT)
+  // Mask coverage display (SM8.6): the tint of the one viewport composite. Presentation only; it
+  // never reaches export, thumbnails, or scopes.
+  Q_PROPERTY(QColor maskCoverageTintColor READ maskCoverageTintColor NOTIFY ThemeChanged)
+  Q_PROPERTY(qreal maskCoverageTintOpacity READ maskCoverageTintOpacity CONSTANT)
   Q_PROPERTY(QColor dateGraphLevel0Color READ dateGraphLevel0Color NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dateGraphLevel1Color READ dateGraphLevel1Color NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dateGraphLevel2Color READ dateGraphLevel2Color NOTIFY ThemeChanged)
@@ -455,6 +459,8 @@ class AppTheme final : public QObject {
   auto maskOverlayGripInnerWidth() const -> qreal;
   auto maskOverlayGripSpanT0() const -> qreal;
   auto maskOverlayGripSpanT1() const -> qreal;
+  auto maskCoverageTintColor() const -> QColor;
+  auto maskCoverageTintOpacity() const -> qreal;
   auto dateGraphLevel0Color() const -> QColor;
   auto dateGraphLevel1Color() const -> QColor;
   auto dateGraphLevel2Color() const -> QColor;

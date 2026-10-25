@@ -171,6 +171,9 @@ void ViewportMaskCoverageLayer::Install(QRhiTexture* texture, int slot_index,
 
 void ViewportMaskCoverageLayer::Release() {
   if (texture_ != nullptr) {
+    if (texture_release_observer_) {
+      texture_release_observer_(texture_);
+    }
     texture_->destroy();
     delete texture_;
     texture_ = nullptr;
