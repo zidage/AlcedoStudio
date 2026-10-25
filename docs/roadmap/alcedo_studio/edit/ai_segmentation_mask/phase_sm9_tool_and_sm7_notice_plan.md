@@ -519,3 +519,61 @@ Remaining issues or unavailable platforms:
     MaskGroupDelegates() finds no ListView delegate; many existing panel tests check nothing.
   - macOS not built.
 ```
+
+### 7.5 Sidecar start without the CLIP profile preparation (issue #518)
+
+```text
+Phase / date / status: SM9 MVP fix / 2026-10-25 / implemented on Windows.
+Source revision and branch: ec3ac375 (PR #527); branch fix/ai-mask-sidecar-start-without-clip-prep.
+Actual changed modules and diff size: about 450 lines.
+  - Rust sidecar: new LazySemanticEngine; EmbeddingEngine::is_prepared; GetModelInfo runs on the
+    blocking pool; GetRuntimeStatus state "model_not_prepared"; step times in the ORT CLIP log.
+  - Host: the readiness probe sends GetModelInfo only when the start requires model information.
+Implemented behavior:
+  - The sidecar listens without the CLIP profile preparation. The first request that needs the
+    semantic model (GetModelInfo or an embed request) prepares it once; a concurrent request
+    waits for the same preparation. Status reads (GetRuntimeStatus, ListCapabilities, the idle
+    unload check) do not prepare it.
+  - A start for the AI Mask tool or image analysis (require_model_info = false) sends no
+    GetModelInfo, so no CLIP work runs. A semantic start (require_model_info = true) polls
+    GetModelInfo until the preparation ends, as before; a later semantic start on a process
+    that the AI Mask tool started also polls it until the preparation ends.
+Decisions made during the work:
+  - Lazy preparation instead of a preparation after listen: the profile validation reads and
+    hashes 1.5 GB of SigLIP2 model files, which competes with the segmentation model load.
+  - GetModelInfo returns failed_precondition only for a model that is not available; while the
+    preparation runs it waits on the blocking pool. The host 500 ms GetModelInfo time limit
+    ends that call, and the next poll waits for the same preparation.
+Measured step times (release alcedo_mind.exe, SigLIP2 B32 256, warm file cache, 3 runs):
+  - Profile validation (sizes and SHA-256 of the model files): 885-954 ms.
+  - ORT environment: 0 ms.
+  - Tokenizer (textual/tokenizer.json, 34 MB): 916-917 ms.
+  - Total preparation on first GetModelInfo: 1804-1872 ms.
+  - Process start to TCP listen (PowerShell harness): 2065-2600 ms before, 525-571 ms after;
+    after the first log line the server listens within 3 ms.
+Primary success call chain: EditorAiMaskTool open -> AiSidecarRuntimeService::StartAndWait
+  (require_model_info = false) -> WaitForReadiness -> RunReadinessProbe (Ping only) -> ready ->
+  LoadSegmentationModels. Semantic search: StartAndWait (require_model_info = true) ->
+  RunReadinessProbe -> GetModelInfo -> LazySemanticEngine::engine -> build_semantic_engine.
+Primary failure and restore call chain: a missing or invalid profile makes build_semantic_engine
+  return the unavailable engine; GetModelInfo returns failed_precondition with the reason, and
+  the host polls until its start time limit, as before.
+Commands and exit codes:
+  cargo test -- --skip live_ (rust/puerh_mind): 0; 371 + 10 passed, 0 failed.
+  scripts\msvc_env.cmd --build --preset win_debug --target AiSidecarRuntimeServiceTest alcedo_main: 0
+  ctest -R '^AiSidecarRuntimeServiceTest\.' with ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH and
+    ALCEDO_SEMANTIC_LIVE_MODEL_ROOT (MobileCLIP2 S2): 36/36 passed, live test included.
+  New: StartWithoutModelInfoRequirementDoesNotRequestModelInfo (fails without the host change:
+    GetModelInfo calls 1, expected 0); Rust lazy_semantic_engine tests (4) and
+    runtime_status_leaves_the_profile_unprepared_and_model_info_prepares_it.
+Manual product checks (real window, debug app, release sidecar, DirectML, Sony ARW 2729x4096,
+  log alcedo_20261025_152640_39092.log):
+  - Sidecar start to ready: 130 ms (before: 2952 ms).
+  - Sidecar start to first possible prompt: 5.34 s (before: 9.70 s): model load 4449 ms
+    (encoder 1798, decoder 1222, head 145, subject 1269), first image 346 ms (encoder 273 ms).
+  - AI Mask button to first possible prompt: about 6.3 s; the analysis image render before the
+    sidecar start takes about 1 s.
+Remaining issues or unavailable platforms:
+  - #528: the segmentation model load (4.4 s) is now most of the wait.
+  - macOS not built (CoreML semantic engine construction is behind the same LazySemanticEngine).
+```
