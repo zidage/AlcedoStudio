@@ -13,7 +13,9 @@
 #include <chrono>
 #include <exception>
 #include <utility>
+#include <variant>
 
+#include "app/ai_mask_model_output_store.hpp"
 #include "sidecar_client/segmentation_client.hpp"
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
@@ -25,11 +27,15 @@ namespace {
 
 using namespace std::chrono_literals;
 
-/// A press that moves less than this many item pixels before release is a click prompt.
-constexpr qreal    kBoxDragThresholdPx    = 6.0;
+/// A press that moves less than this many item pixels before release is a click.
+constexpr qreal    kDragThresholdPx       = 6.0;
+/// Item distance between two recorded Path samples.
+constexpr qreal    kPathSampleSpacingPx   = 2.0;
 /// A cold sidecar start loads no CLIP model here, but the process start and the gRPC readiness
 /// poll still need more than the default 5 s on a cold disk (same value as image analysis).
 constexpr auto     kSidecarStartupTimeout = 60s;
+/// Open stages: edit lease, analysis render, sidecar start, model load, image encoder.
+constexpr int      kOpenStageCount        = 5;
 
 [[nodiscard]] auto ToQString(const std::string& value) -> QString {
   return QString::fromStdString(value);
@@ -59,6 +65,14 @@ constexpr auto     kSidecarStartupTimeout = 60s;
   return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
                                                                start)
       .count();
+}
+
+[[nodiscard]] auto ToQRectF(const AiMaskBox& box) -> QRectF {
+  return QRectF(QPointF(box.x0, box.y0), QPointF(box.x1, box.y1));
+}
+
+[[nodiscard]] auto ToQRectF(const SegmentationBox& box) -> QRectF {
+  return QRectF(QPointF(box.x0, box.y0), QPointF(box.x1, box.y1)).normalized();
 }
 
 }  // namespace
@@ -135,17 +149,20 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
   ready_               = false;
   lease_open_          = false;
   commit_operation_id_ = 0;
-  busy_text_.clear();
+  stage_               = AiMaskToolStage::None;
   error_text_.clear();
-  image_text_.clear();
-  last_step_text_.clear();
+  notice_text_.clear();
   view_     = {};
   preview_  = {};
   pointer_  = {};
+  pending_  = {};
   mask_id_  = std::move(mask_id);
   grade_id_ = {};
   emit toolChanged();
+  emit messageChanged();
   emit previewChanged();
+  emit busyChanged();
+  emit liveInputChanged();
   if (Backend() == nullptr || session_ == nullptr || !session_->has_image()) {
     Fail(QStringLiteral("Open an image in the editor first."));
     return;
@@ -173,7 +190,7 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
     request.model_directory = services_.model_directory();
   }
 
-  SetBusy(QStringLiteral("Opening the AI Mask edit..."));
+  SetStage(AiMaskToolStage::OpeningEdit);
   const auto                 serial = serial_;
   QPointer<EditorAiMaskTool> self(this);
   auto                       shared_request = std::make_shared<StartRequest>(std::move(request));
@@ -194,7 +211,7 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
               if (self && self->lease_open_ && serial == self->serial_) {
                 // The analysis image of the open image: whole source, current Develop (SM4).
                 auto* backend = self->Backend();
-                self->SetBusy(QStringLiteral("Rendering the analysis image..."));
+                self->SetStage(AiMaskToolStage::RenderingAnalysis);
                 const auto rendered = backend->RenderAiMaskAnalysisImage(
                     EditorAiMaskAnalysisContent::KeyAndPixels,
                     [self, serial, shared_request](EditorAiMaskAnalysisResult analysis) {
@@ -241,7 +258,7 @@ void EditorAiMaskTool::OnAnalysisRendered(std::uint64_t serial, EditorAiMaskAnal
     Fail(QStringLiteral("The AI Mask analysis image failed: %1").arg(ToQString(analysis.message)));
     return;
   }
-  SetBusy(QStringLiteral("Starting the AI sidecar and loading the AI Mask models..."));
+  SetStage(AiMaskToolStage::StartingSidecar);
   auto shared_analysis = std::make_shared<EditorAiMaskAnalysisResult>(std::move(analysis));
   auto shared_request  = std::make_shared<StartRequest>(std::move(request));
   PostToWorker([this, shared_analysis, shared_request](Worker& /*worker*/) {
@@ -290,6 +307,7 @@ void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartR
   auto       service    = std::make_unique<AiMaskSegmentationService>(
       std::move(lease), sidecar_client::MakeGrpcSegmentationClient(endpoint));
 
+  PostStage(serial, AiMaskToolStage::LoadingModels);
   const auto load_start = std::chrono::steady_clock::now();
   const auto loaded     = service->LoadModels(request.model_directory);
   if (!loaded.ok) {
@@ -305,6 +323,7 @@ void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartR
     return;
   }
 
+  PostStage(serial, AiMaskToolStage::EncodingImage);
   const auto image_start = std::chrono::steady_clock::now();
   const auto started     = service->StartImage(analysis.image, analysis.image_key);
   if (!started.status.ok) {
@@ -338,37 +357,33 @@ void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartR
   }
   worker_.service = std::move(service);
 
-  const auto image_text =
-      QStringLiteral(
-          "%1 x %2 | %3 on %4 (%5) | sidecar %6 ms, load %7 ms, image %8 ms "
-          "(encoder %9 ms%10)")
-          .arg(started.image_width)
-          .arg(started.image_height)
-          .arg(ToQString(models.model_set_id), ToQString(models.backend), ToQString(models.device))
-          .arg(sidecar_ms)
-          .arg(load_ms)
-          .arg(image_ms)
-          .arg(started.encoder_ms)
-          .arg(started.from_cache ? QStringLiteral(", cached") : QString{});
-  qInfo().noquote() << "[AI Mask] session started:" << image_text;
+  qInfo().noquote() << QStringLiteral(
+                           "[AI Mask] session started: %1 x %2, %3 on %4 (%5), sidecar %6 ms, "
+                           "load %7 ms, image %8 ms (encoder %9 ms%10)")
+                           .arg(started.image_width)
+                           .arg(started.image_height)
+                           .arg(ToQString(models.model_set_id), ToQString(models.backend),
+                                ToQString(models.device))
+                           .arg(sidecar_ms)
+                           .arg(load_ms)
+                           .arg(image_ms)
+                           .arg(started.encoder_ms)
+                           .arg(started.from_cache ? QStringLiteral(", cached") : QString{});
   auto view = ReadView(*worker_.session);
   QMetaObject::invokeMethod(
       this,
-      [this, serial, image_text, view = std::move(view)]() mutable {
-        OnStarted(serial, image_text, std::move(view));
-      },
+      [this, serial, view = std::move(view)]() mutable { OnStarted(serial, std::move(view)); },
       Qt::QueuedConnection);
 }
 
-void EditorAiMaskTool::OnStarted(std::uint64_t serial, QString image_text, SessionView view) {
+void EditorAiMaskTool::OnStarted(std::uint64_t serial, SessionView view) {
   if (serial != serial_ || !active_) {
     return;
   }
-  ready_      = true;
-  image_text_ = std::move(image_text);
-  view_       = std::move(view);
-  busy_text_.clear();
+  ready_ = true;
+  view_  = std::move(view);
   emit toolChanged();
+  SetStage(AiMaskToolStage::None);
   // A stored Mask shows its saved coverage without a model call (M15); a new Mask shows the
   // empty candidate, which also replaces a committed coverage preview.
   PresentCandidate(view_.candidate);
@@ -384,14 +399,19 @@ void EditorAiMaskTool::setSubtract(bool subtract) {
   emit toolChanged();
 }
 
-void EditorAiMaskTool::setInputMode(const QString& mode) {
-  const auto target =
-      mode == QLatin1String("task") ? AiMaskInputMode::Task : AiMaskInputMode::Prompt;
-  if (target == view_.input_mode) {
+void EditorAiMaskTool::setPromptTool(const QString& tool) {
+  PromptTool next = PromptTool::Point;
+  if (tool == QLatin1String("box")) {
+    next = PromptTool::Box;
+  } else if (tool == QLatin1String("path")) {
+    next = PromptTool::Path;
+  }
+  if (next == prompt_tool_) {
     return;
   }
-  RunStep(QStringLiteral("Changing the input mode..."),
-          [target](AiMaskEditSession& session) { return session.SetInputMode(target); });
+  cancelPointer();
+  prompt_tool_ = next;
+  emit toolChanged();
 }
 
 void EditorAiMaskTool::addTask(const QString& task) {
@@ -402,27 +422,35 @@ void EditorAiMaskTool::addTask(const QString& task) {
   }
   const auto operation =
       subtract_ ? AiMaskComponentOperation::Subtract : AiMaskComponentOperation::Add;
-  RunStep(QStringLiteral("Running the %1 task...").arg(task),
-          [kind = *kind, operation](AiMaskEditSession& session) {
-            return session.AddTask(kind, operation);
-          });
+  RunStep(AiMaskToolStage::RunningModel, [kind = *kind, operation](AiMaskEditSession& session) {
+    return session.AddTask(kind, operation);
+  });
 }
 
 void EditorAiMaskTool::togglePerson(int person_index) {
   if (person_index < 0) {
     return;
   }
-  RunStep(QStringLiteral("Running the person mask..."),
+  RunStep(AiMaskToolStage::RunningModel,
           [index = static_cast<std::uint32_t>(person_index)](AiMaskEditSession& session) {
             return session.TogglePerson(index);
           });
+}
+
+void EditorAiMaskTool::highlightPerson(int person_index) {
+  const int next = person_index >= 0 && person_index < view_.people.size() ? person_index : -1;
+  if (next == highlighted_person_) {
+    return;
+  }
+  highlighted_person_ = next;
+  emit highlightChanged();
 }
 
 void EditorAiMaskTool::selectLevel(int level) {
   if (level < 0) {
     return;
   }
-  RunStep(QStringLiteral("Selecting the level..."),
+  RunStep(AiMaskToolStage::RunningModel,
           [level = static_cast<std::uint32_t>(level)](AiMaskEditSession& session) {
             return session.SelectLevel(level);
           });
@@ -448,30 +476,30 @@ void EditorAiMaskTool::acceptEdge(qreal feather_px, int expand_px) {
     PresentCandidate(view_.candidate);
     return;
   }
-  RunStep(QStringLiteral("Applying Feather and Expand..."),
+  RunStep(AiMaskToolStage::Updating,
           [edge](AiMaskEditSession& session) { return session.SetEdgeAdjustment(edge); });
 }
 
 void EditorAiMaskTool::undo() {
-  RunStep(QStringLiteral("Undo..."), [](AiMaskEditSession& session) {
+  RunStep(AiMaskToolStage::Updating, [](AiMaskEditSession& session) {
     return session.Undo() ? AiMaskStepResult{}
                           : AiMaskStepResult{AiMaskStepStatus::Rejected, "Nothing to undo"};
   });
 }
 
 void EditorAiMaskTool::redo() {
-  RunStep(QStringLiteral("Redo..."), [](AiMaskEditSession& session) {
+  RunStep(AiMaskToolStage::Updating, [](AiMaskEditSession& session) {
     return session.Redo() ? AiMaskStepResult{}
                           : AiMaskStepResult{AiMaskStepStatus::Rejected, "Nothing to redo"};
   });
 }
 
-void EditorAiMaskTool::RunStep(QString busy_text, SessionOperation operation) {
+void EditorAiMaskTool::RunStep(AiMaskToolStage stage, SessionOperation operation) {
   if (!ready_ || busy()) {
     return;
   }
-  error_text_.clear();
-  SetBusy(std::move(busy_text));
+  ClearMessages();
+  SetStage(stage);
   const auto serial = serial_;
   PostToWorker([this, serial, operation = std::move(operation)](Worker& worker) {
     AiMaskStepResult result{AiMaskStepStatus::Rejected, "The AI Mask session is closed"};
@@ -485,31 +513,37 @@ void EditorAiMaskTool::RunStep(QString busy_text, SessionOperation operation) {
       }
       view = ReadView(*worker.session);
     }
-    const auto elapsed = ElapsedMs(start);
-    qInfo().noquote() << "[AI Mask] step" << StepResultText(result) << "in" << elapsed << "ms";
+    qInfo().noquote() << "[AI Mask] step" << StepResultText(result) << "in" << ElapsedMs(start)
+                      << "ms";
     QMetaObject::invokeMethod(
         this,
-        [this, serial, result, elapsed, view = std::move(view)]() mutable {
+        [this, serial, result, view = std::move(view)]() mutable {
           if (serial != serial_ || !active_) {
             return;
           }
-          last_step_text_ = QStringLiteral("%1 (%2 ms)").arg(StepResultText(result)).arg(elapsed);
-          OnStepFinished(serial, std::move(result), std::move(view));
+          OnStepFinished(std::move(result), std::move(view));
         },
         Qt::QueuedConnection);
   });
 }
 
-void EditorAiMaskTool::OnStepFinished(std::uint64_t /*serial*/, AiMaskStepResult result,
-                                      SessionView view) {
-  busy_text_.clear();
-  const bool applied = result.status == AiMaskStepStatus::Applied;
-  if (applied) {
-    view_ = std::move(view);
-  } else if (result.status == AiMaskStepStatus::Failed) {
-    error_text_ = ToQString(result.message);
+void EditorAiMaskTool::OnStepFinished(AiMaskStepResult result, SessionView view) {
+  switch (result.status) {
+    case AiMaskStepStatus::Applied:
+      view_ = std::move(view);
+      break;
+    case AiMaskStepStatus::Failed:
+      error_text_ = ToQString(result.message);
+      break;
+    case AiMaskStepStatus::NotFound:
+    case AiMaskStepStatus::Rejected:
+      notice_text_ = ToQString(result.message);
+      break;
   }
+  ClearPending();
   emit toolChanged();
+  emit messageChanged();
+  SetStage(AiMaskToolStage::None);
   // A step that did not apply keeps the session coverage; a Feather or Expand preview of a slider
   // that the step did not accept returns to it.
   PresentCandidate(view_.candidate);
@@ -518,18 +552,58 @@ void EditorAiMaskTool::OnStepFinished(std::uint64_t /*serial*/, AiMaskStepResult
 auto EditorAiMaskTool::ReadView(const AiMaskEditSession& session) -> SessionView {
   SessionView view;
   view.can_undo     = session.CanUndo();
-  view.can_redo     = session.CanRedo();
-  view.state_count  = static_cast<int>(session.StateCount());
-  view.input_mode   = session.InputMode();
+  view.can_redo      = session.CanRedo();
   view.edge         = session.Edge();
-  const auto people = session.People();
+  const auto& recipe = session.Recipe();
+  const auto* last   = recipe.components.empty() ? nullptr : &recipe.components.back();
+  const auto* group  = last != nullptr ? std::get_if<AiMaskPromptGroup>(&last->content) : nullptr;
+  const auto* task   = last != nullptr ? std::get_if<AiMaskTaskComponent>(&last->content) : nullptr;
+  if (group != nullptr && !group->steps.empty()) {
+    view.level_count = static_cast<int>(AiMaskModelOutputStore::LevelCount(*group));
+    if (view.level_count <= 1) {
+      view.level_count = 0;
+    }
+    view.selected_level = static_cast<int>(group->steps.back().level);
+  }
+  // Markers of the open prompt group, with the Add or Subtract mode of their input (SM5 M3): the
+  // first step of a group has the group operation, the later steps their point label.
+  if (group != nullptr && session.PromptGroupOpen()) {
+    for (std::size_t index = 0; index < group->steps.size(); ++index) {
+      const auto& step = group->steps[index];
+      const bool  adds = index == 0 ? last->operation == AiMaskComponentOperation::Add
+                                    : step.points.empty() ||
+                                         step.points.front().label == AiMaskComponentOperation::Add;
+      QVariantMap marker;
+      marker.insert(QStringLiteral("add"), adds);
+      if (step.box.has_value()) {
+        marker.insert(QStringLiteral("kind"), QStringLiteral("box"));
+        marker.insert(QStringLiteral("box"), ToQRectF(*step.box));
+      } else {
+        QVariantList points;
+        for (const auto& point : step.points) {
+          points.push_back(QPointF(point.x, point.y));
+        }
+        marker.insert(QStringLiteral("kind"),
+                      step.points.size() > 1 ? QStringLiteral("path") : QStringLiteral("point"));
+        marker.insert(QStringLiteral("points"), points);
+      }
+      view.prompt_steps.push_back(marker);
+    }
+  }
+  view.people_active = task != nullptr && task->task == AiMaskTaskKind::People;
+  const auto people  = session.People();
   for (std::size_t index = 0; index < people.size(); ++index) {
+    const bool  included = session.PersonIncluded(static_cast<std::uint32_t>(index));
+    const auto  box      = ToQRectF(people[index].box);
     QVariantMap person;
     person.insert(QStringLiteral("index"), static_cast<int>(index));
     person.insert(QStringLiteral("score"), people[index].score);
-    person.insert(QStringLiteral("included"),
-                  session.PersonIncluded(static_cast<std::uint32_t>(index)));
+    person.insert(QStringLiteral("included"), included);
+    person.insert(QStringLiteral("box"), box);
     view.people.push_back(person);
+    if (view.people_active && included) {
+      view.selected_person_boxes.push_back(box);
+    }
   }
   view.candidate.pixels          = session.AcquireCoveragePixels();
   view.candidate.analysis_extent = session.Image().extent;
@@ -620,8 +694,8 @@ void EditorAiMaskTool::commit() {
   if (!ready_ || busy()) {
     return;
   }
-  error_text_.clear();
-  SetBusy(QStringLiteral("Committing the AI Mask..."));
+  ClearMessages();
+  SetStage(AiMaskToolStage::Committing);
   const auto serial = serial_;
   PostToWorker([this, serial](Worker& worker) {
     auto payload =
@@ -726,27 +800,62 @@ void EditorAiMaskTool::Close(QString error) {
   ready_               = false;
   lease_open_          = false;
   commit_operation_id_ = 0;
-  busy_text_.clear();
-  error_text_ = std::move(error);
-  view_       = {};
-  preview_    = {};
-  pointer_    = {};
+  stage_               = AiMaskToolStage::None;
+  error_text_          = std::move(error);
+  notice_text_.clear();
+  view_               = {};
+  preview_            = {};
+  pointer_            = {};
+  pending_            = {};
+  highlighted_person_ = -1;
   mask_id_.reset();
   emit toolChanged();
+  emit highlightChanged();
+  emit messageChanged();
   emit previewChanged();
-  emit boxChanged();
+  emit busyChanged();
+  emit liveInputChanged();
 }
 
 void EditorAiMaskTool::Fail(QString error) {
   qWarning().noquote() << "[AI Mask]" << error;
-  busy_text_.clear();
   error_text_ = std::move(error);
-  emit toolChanged();
+  ClearPending();
+  emit messageChanged();
+  SetStage(AiMaskToolStage::None);
 }
 
-void EditorAiMaskTool::SetBusy(QString text) {
-  busy_text_ = std::move(text);
-  emit toolChanged();
+void EditorAiMaskTool::SetStage(AiMaskToolStage stage) {
+  if (stage_ == stage) {
+    return;
+  }
+  stage_ = stage;
+  emit busyChanged();
+}
+
+void EditorAiMaskTool::PostStage(std::uint64_t serial, AiMaskToolStage stage) {
+  QMetaObject::invokeMethod(
+      this,
+      [this, serial, stage] {
+        if (serial == serial_ && active_ && !ready_ && busy()) {
+          SetStage(stage);
+        }
+      },
+      Qt::QueuedConnection);
+}
+
+void EditorAiMaskTool::SetNotice(QString notice) {
+  notice_text_ = std::move(notice);
+  emit messageChanged();
+}
+
+void EditorAiMaskTool::ClearMessages() {
+  if (error_text_.isEmpty() && notice_text_.isEmpty()) {
+    return;
+  }
+  error_text_.clear();
+  notice_text_.clear();
+  emit messageChanged();
 }
 
 void EditorAiMaskTool::PostToWorker(std::function<void(Worker& worker)> task) {
@@ -764,7 +873,14 @@ auto EditorAiMaskTool::handlePress(qreal x, qreal y, int button) -> bool {
   if (!owns_left_button() || button != Qt::LeftButton) {
     return false;
   }
-  pointer_ = PointerInput{true, false, QPointF(x, y), QPointF(x, y)};
+  const QPointF item(x, y);
+  pointer_ = PointerInput{true, false, item, item, {item}};
+  if (!busy()) {
+    ClearPending();
+  }
+  if (prompt_tool_ == PromptTool::Path && !busy()) {
+    emit liveInputChanged();
+  }
   return true;
 }
 
@@ -772,12 +888,18 @@ void EditorAiMaskTool::handleMove(qreal x, qreal y, int /*buttons*/) {
   if (!pointer_.pressed) {
     return;
   }
-  pointer_.last = QPointF(x, y);
-  if (!pointer_.box && QLineF(pointer_.press, pointer_.last).length() > kBoxDragThresholdPx) {
-    pointer_.box = true;
+  const QPointF item(x, y);
+  pointer_.last = item;
+  if (!pointer_.dragging && QLineF(pointer_.press, item).length() > kDragThresholdPx) {
+    pointer_.dragging = true;
   }
-  if (pointer_.box) {
-    emit boxChanged();
+  if (prompt_tool_ == PromptTool::Path) {
+    if (QLineF(pointer_.path.back(), item).length() >= kPathSampleSpacingPx) {
+      pointer_.path.push_back(item);
+      emit liveInputChanged();
+    }
+  } else if (prompt_tool_ == PromptTool::Box && pointer_.dragging) {
+    emit liveInputChanged();
   }
 }
 
@@ -785,43 +907,79 @@ void EditorAiMaskTool::handleRelease(qreal x, qreal y, int /*button*/) {
   if (!pointer_.pressed) {
     return;
   }
-  pointer_.last    = QPointF(x, y);
-  const auto input = pointer_;
+  pointer_.last = QPointF(x, y);
+  if (prompt_tool_ == PromptTool::Path && pointer_.path.back() != pointer_.last) {
+    pointer_.path.push_back(pointer_.last);
+  }
+  const auto input = std::move(pointer_);
   pointer_         = {};
-  emit boxChanged();
+  emit liveInputChanged();
   if (busy()) {
-    last_step_text_ = QStringLiteral("Wait until the current model request returns.");
-    emit toolChanged();
+    SetNotice(QStringLiteral("Wait until the current model request returns."));
     return;
   }
+  RunPointerInput(input);
+}
+
+void EditorAiMaskTool::RunPointerInput(const PointerInput& input) {
   if (interaction_ == nullptr) {
     Fail(QStringLiteral("The viewport is not bound to the AI Mask tool."));
     return;
   }
   const auto       mapping = interaction_->maskEditViewMapping();
   AiMaskPromptStep step;
-  if (input.box) {
-    const auto rect = MapItemRectToAiMaskPromptBox(mapping, input.press, input.last);
-    if (!rect.has_value()) {
-      last_step_text_ = QStringLiteral("The box is outside the photo.");
-      emit toolChanged();
-      return;
+  auto             start = AiMaskPromptGroupStart::NewGroup;
+  PendingInput     pending;
+  pending.visible = true;
+  pending.tool    = prompt_tool_;
+  pending.add     = !subtract_;
+  switch (prompt_tool_) {
+    case PromptTool::Point: {
+      // A click refines the open prompt group (SM5 M3): Add and Subtract are its point labels.
+      const auto point = MapItemToAiMaskPromptPoint(mapping, input.press);
+      if (!point.has_value()) {
+        SetNotice(QStringLiteral("The click is outside the photo."));
+        return;
+      }
+      step.points.push_back(AiMaskPromptPoint{point->x, point->y, AiMaskComponentOperation::Add});
+      start = AiMaskPromptGroupStart::JoinOpenGroup;
+      pending.points.push_back(input.press);
+      break;
     }
-    step.box = AiMaskBox{rect->x, rect->y, rect->x + rect->w, rect->y + rect->h};
-  } else {
-    const auto point = MapItemToAiMaskPromptPoint(mapping, input.last);
-    if (!point.has_value()) {
-      last_step_text_ = QStringLiteral("The click is outside the photo.");
-      emit toolChanged();
-      return;
+    case PromptTool::Box: {
+      if (!input.dragging) {
+        SetNotice(QStringLiteral("Drag a box around the object."));
+        return;
+      }
+      const auto rect = MapItemRectToAiMaskPromptBox(mapping, input.press, input.last);
+      if (!rect.has_value()) {
+        SetNotice(QStringLiteral("The box is outside the photo."));
+        return;
+      }
+      step.box    = AiMaskBox{rect->x, rect->y, rect->x + rect->w, rect->y + rect->h};
+      pending.box = QRectF(input.press, input.last).normalized();
+      break;
     }
-    step.points.push_back(AiMaskPromptPoint{point->x, point->y, AiMaskComponentOperation::Add});
+    case PromptTool::Path: {
+      const auto points =
+          MapItemStrokeToAiMaskPromptPoints(mapping, input.path, kAiMaskMaximumStrokePromptPoints);
+      if (points.empty()) {
+        SetNotice(QStringLiteral("The path is outside the photo."));
+        return;
+      }
+      for (const auto& point : points) {
+        step.points.push_back(AiMaskPromptPoint{point.x, point.y, AiMaskComponentOperation::Add});
+      }
+      pending.points = input.path;
+      break;
+    }
   }
+  pending_ = std::move(pending);
+  emit       liveInputChanged();
   const auto mode = subtract_ ? AiMaskComponentOperation::Subtract : AiMaskComponentOperation::Add;
-  RunStep(input.box ? QStringLiteral("Running the box prompt...")
-                    : QStringLiteral("Running the click prompt..."),
-          [step = std::move(step), mode](AiMaskEditSession& session) {
-            return session.AddPromptStep(step, mode);
+  RunStep(AiMaskToolStage::RunningModel,
+          [step = std::move(step), mode, start](AiMaskEditSession& session) {
+            return session.AddPromptStep(step, mode, start);
           });
 }
 
@@ -830,14 +988,126 @@ void EditorAiMaskTool::cancelPointer() {
     return;
   }
   pointer_ = {};
-  emit boxChanged();
+  emit liveInputChanged();
+}
+
+void EditorAiMaskTool::ClearPending() {
+  if (!pending_.visible) {
+    return;
+  }
+  pending_ = {};
+  emit liveInputChanged();
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────
 
-auto EditorAiMaskTool::input_mode() const -> QString {
-  return view_.input_mode == AiMaskInputMode::Task ? QStringLiteral("task")
-                                                   : QStringLiteral("prompt");
+auto EditorAiMaskTool::live_input() const -> QVariantMap {
+  QVariantMap input;
+  const bool  add = !subtract_;
+  if (pointer_.pressed) {
+    if (prompt_tool_ == PromptTool::Path) {
+      QVariantList points;
+      for (const auto& point : pointer_.path) {
+        points.push_back(point);
+      }
+      input.insert(QStringLiteral("kind"), QStringLiteral("path"));
+      input.insert(QStringLiteral("points"), points);
+    } else if (prompt_tool_ == PromptTool::Box && pointer_.dragging) {
+      input.insert(QStringLiteral("kind"), QStringLiteral("box"));
+      input.insert(QStringLiteral("box"), QRectF(pointer_.press, pointer_.last).normalized());
+    } else {
+      return {};
+    }
+    input.insert(QStringLiteral("add"), add);
+    return input;
+  }
+  if (!pending_.visible) {
+    return {};
+  }
+  switch (pending_.tool) {
+    case PromptTool::Point:
+    case PromptTool::Path: {
+      QVariantList points;
+      for (const auto& point : pending_.points) {
+        points.push_back(point);
+      }
+      input.insert(QStringLiteral("kind"), pending_.tool == PromptTool::Path
+                                               ? QStringLiteral("path")
+                                               : QStringLiteral("point"));
+      input.insert(QStringLiteral("points"), points);
+      break;
+    }
+    case PromptTool::Box:
+      input.insert(QStringLiteral("kind"), QStringLiteral("box"));
+      input.insert(QStringLiteral("box"), pending_.box);
+      break;
+  }
+  input.insert(QStringLiteral("add"), pending_.add);
+  return input;
+}
+
+auto EditorAiMaskTool::highlighted_person_box() const -> QRectF {
+  if (highlighted_person_ < 0 || highlighted_person_ >= view_.people.size()) {
+    return {};
+  }
+  return view_.people[highlighted_person_].toMap().value(QStringLiteral("box")).toRectF();
+}
+
+auto EditorAiMaskTool::prompt_tool() const -> QString {
+  switch (prompt_tool_) {
+    case PromptTool::Point:
+      return QStringLiteral("point");
+    case PromptTool::Box:
+      return QStringLiteral("box");
+    case PromptTool::Path:
+      return QStringLiteral("path");
+  }
+  return {};
+}
+
+auto EditorAiMaskTool::busy_stage() const -> QString {
+  switch (stage_) {
+    case AiMaskToolStage::None:
+      return {};
+    case AiMaskToolStage::OpeningEdit:
+      return QStringLiteral("openingEdit");
+    case AiMaskToolStage::RenderingAnalysis:
+      return QStringLiteral("renderingAnalysis");
+    case AiMaskToolStage::StartingSidecar:
+      return QStringLiteral("startingSidecar");
+    case AiMaskToolStage::LoadingModels:
+      return QStringLiteral("loadingModels");
+    case AiMaskToolStage::EncodingImage:
+      return QStringLiteral("encodingImage");
+    case AiMaskToolStage::RunningModel:
+      return QStringLiteral("runningModel");
+    case AiMaskToolStage::Updating:
+      return QStringLiteral("updating");
+    case AiMaskToolStage::Committing:
+      return QStringLiteral("committing");
+  }
+  return {};
+}
+
+auto EditorAiMaskTool::busy_step() const -> int {
+  switch (stage_) {
+    case AiMaskToolStage::OpeningEdit:
+      return 1;
+    case AiMaskToolStage::RenderingAnalysis:
+      return 2;
+    case AiMaskToolStage::StartingSidecar:
+      return 3;
+    case AiMaskToolStage::LoadingModels:
+      return 4;
+    case AiMaskToolStage::EncodingImage:
+      return 5;
+    default:
+      return 0;
+  }
+}
+
+auto EditorAiMaskTool::busy_step_count() const -> int {
+  return busy_step() > 0 ? kOpenStageCount : 0;
 }
 
 auto EditorAiMaskTool::preview_status() const -> QString {

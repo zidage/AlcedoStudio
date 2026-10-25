@@ -18,28 +18,46 @@ Its app controller owns the existing `AiMaskEditSession` on a serial worker.
 The QML model exposes values and focused actions through the application layer.
 QML never calls a GPU backend, asset store, or sidecar directly.
 
-Required control order:
+Required control order (changed on 2026-10-25 by the user: icon actions instead of labeled
+buttons, three prompt tools, no Prompt/Tasks switch, no busy text; issue #519):
 
 ```text
-AI Mask                         Close
-Prompt / Tasks
-Prompt: Stroke / Click / Box    Add / Subtract
-Tasks: Subject  Background  Sky  People
-Level selection when the current click has three levels
-Feather                        Expand
-Show Mask
-Undo                           Redo
-Busy text or error text with the existing alert component
-Cancel                         Commit
+AI Mask icon   New AI Mask / Edit AI Mask              Close (icon)
+Tasks (icons): Subject  Background  Sky  People
+People list (while People is the last component; click toggles a person)
+Prompt tools (icons): Point  Box  Path            Add / Subtract (icons)
+Click level (icons) when the last click has three levels
+Feather
+Expand
+Undo  Redo (icons)
+Error alert with Retry for a failed display; notice text
+Cancel                                              Commit
+Stage progress (while an operation runs)
 ```
 
-Use the existing tool/adjustment panel location and shared dialog components.
-Keep the viewport visible and interactive for view navigation.
-Do not create a second viewport inside the dialog.
-At narrow widths, place controls in one scrollable column and keep Cancel/Commit reachable.
-Use existing AppTheme spacing, fonts, control sizes, and Basic style.
-Add any required visual role to AppTheme and `DESIGN.md` together.
-Do not add pills, status dots, or independent palettes.
+Every control is an icon action with an accessible name and a tooltip. The panel shows no
+busy text. While an operation runs, the existing yellow working border (`RotatingTaskBorder`)
+turns around the whole panel, and a progress bar at the bottom names the running stage. The
+Open stages are counted (1 to 5): open the edit, render the analysis image, start the AI
+runtime, load the models, read the image. A model run, an update, and the commit have no
+count and use the indeterminate bar. `DESIGN.md` ("AI Mask tool panel") has the icons.
+
+Prompt tools and groups (SM5 M3 without the input mode switch):
+
+- Point: a click adds one point. It joins the open prompt group; Add and Subtract are its
+  point labels. Without an open group it starts one with the mode as the group operation.
+- Box: a drag adds a box. It always starts a new prompt group (a new object).
+- Path: the released stroke adds points at equal arc length, about 24 item pixels apart and
+  at most 16 points per stroke (`MapItemStrokeToAiMaskPromptPoints`). It always starts a new
+  prompt group. A group still holds at most 64 points.
+- A task and a person toggle close the group (M3). The tool does not call `SetInputMode`.
+- `AiMaskEditSession::AddPromptStep` takes `AiMaskPromptGroupStart::NewGroup` for Box and Path.
+
+Viewport input (`AiMaskInputOverlayItem`, QSG): green plus and red minus discs for the points
+of the open group, the Path stroke and the Box frame in the mode color, the outline of the
+union of the selected person boxes, and a dedicated cursor for each prompt tool (the platform
+cursor is hidden over the viewport). The left button belongs to the selected prompt tool;
+the middle button and the wheel keep pan and zoom.
 
 Preserve SM5 prompt-group rules, task ordering, person toggles, level rules, and the 64-point limit.
 Reject an input that exceeds 64 points with the existing explanatory error.
@@ -50,7 +68,7 @@ Pointer movement draws input markers without inference.
 While inference runs, keep the previous coverage and controls visible.
 Disable new model input, Undo, Redo, and Commit until the request returns.
 Keep Cancel and viewport pan/zoom available.
-Show busy text that states the operation. Do not blank the photo.
+Show the working border and the stage progress. Do not blank the photo.
 Model errors and `NotFound` use the existing session result without adding a step.
 GPU errors follow SM8 section 4.3, including explicit previous-result display and Retry.
 
@@ -112,7 +130,7 @@ Do not add a second session-state object or copy full documents to supply QML pr
 Project current values through focused const reads on the owning thread.
 
 Proposed UI adapter: `ui/alcedo_main/album_backend/editor_ai_mask_tool_model.cpp` with its header under `include/ui/`.
-It exposes control values, enabled states, busy/error text, and app actions.
+It exposes control values, enabled states, stage progress, error and notice text, and app actions.
 Proposed QML file: `ui/alcedo_main/qml/AiMaskDialog.qml`.
 Register it in `ui/alcedo_main/CMakeLists.txt` and document its VI entry.
 
@@ -125,7 +143,7 @@ On failed owner reads, report the error instead of declaring the Mask aligned.
 
 | Phase | Deliverable | Dependency | Expected diff | Status |
 | --- | --- | --- | ---: | --- |
-| SM9.1 | Tool controller, QML model, Open/Close, busy/error lifecycle | SM8 | 1100-1800 | planned |
+| SM9.1 | Tool controller, QML model, Open/Close, stage progress and error lifecycle | SM8 | 1100-1800 | planned |
 | SM9.2 | Prompt/task/People controls and viewport input markers | SM9.1 | 1200-1900 | planned |
 | SM9.3 | Edge preview, temporary history controls, Commit/Cancel, thumbnails | SM9.2 | 1100-1900 | planned |
 | SM7 | Per-Mask geometry misalignment notice | SM9.3 | 400-800 | planned |
@@ -197,7 +215,7 @@ Store one original asset only at Commit. Do not read adjusted GPU pixels back fo
 
 1. Add Feather and Expand controls with display-only intermediate updates and one accepted stack step.
 2. Route local Undo/Redo and shortcuts to the session owner.
-3. Bind Show Mask to the SM8 presentation state without a main document edit.
+3. Add a Show Mask icon toggle to the panel header and bind it to the SM8 presentation state without a main document edit.
 4. Connect Retry, Commit, Cancel, and previous-result error presentation to SM8 rules.
 5. Use the existing thumbnail executor and asset reader for AI effective coverage through SM8.
    Sample the processed result to the existing 128x128 thumbnail grid. Download only this small result for the UI image.
@@ -389,4 +407,60 @@ Manual product checks (real window, debug build, CUDA editor backend, DirectML s
 Remaining issues or unavailable platforms:
   - No photo with skin was available in the test project; skin was not checked in the window.
   - macOS not built.
+```
+
+### 7.3 Tool UI redesign (issue #519), before SM9.1
+
+```text
+Phase / date / status: SM9 tool UI / 2026-10-25 / implemented on Windows; uncommitted.
+Source revision and branch: 24048971 (main); branch feature/ai-mask-tool-ui.
+Actual changed modules and diff size: about 1900 lines added, 800 removed (300 of them moved).
+  - AiMaskEditSession: AiMaskPromptGroupStart on AddPromptStep, PromptGroupOpen().
+  - ai_mask_prompt_geometry: MapItemStrokeToAiMaskPromptPoints (Path input).
+  - New overlay_triangle_primitives (the QSG triangle helpers, moved out of
+    mask_overlay_geometry.cpp without change) and ai_mask_input_overlay_geometry (markers,
+    strokes, boxes, person union outline, tool cursors).
+  - New editor_rhi AiMaskInputOverlayItem (QSG), registered as an Alcedo.Main type.
+  - EditorAiMaskTool: stages instead of busy text, Point/Box/Path tools, levels, People list
+    reads, open-group markers, live input, person highlight; no Prompt/Tasks switch.
+  - EditorAiMaskPanel.qml rewritten; EditorWorkspace overlay and hidden platform cursor;
+    pencil-ai entry icon; box-multiple Mask Groups rail icon; 14 SVGs; 2 AppTheme roles;
+    DESIGN.md "AI Mask tool panel" and "AI Mask viewport input".
+Implemented behavior: section 1 as changed on 2026-10-25.
+Decisions made during the work:
+  - Point joins the open prompt group; Box and Path start a new group (one object per box or
+    stroke). Without the Prompt/Tasks switch this is the only way to start a second object
+    while a group is open, so the session got the focused NewGroup option instead of two
+    SetInputMode steps.
+  - A Path stroke gives at most 16 points about 24 item pixels apart, so four strokes fit in
+    one group of 64 points.
+  - A marker shows the mode that the user used (the group operation for the first step, the
+    point label for the later steps), the same sign as the cursor badge.
+  - The working border and the progress show after motionFadeMs, so Undo and an edge step do
+    not flash them. Error and notice text notify on their own signal, so clearing them at a
+    step start does not rebind the Feather and Expand sliders.
+  - Feather and Expand reuse AdjustmentSlider through a QML value model; the dragged value is
+    held until the session step returns.
+  - Subject uses the user's sparkles-2 icon as a new asset: the existing panel_icons/sparkles.svg
+    is the Tabler sparkles icon, not sparkles-2.
+Primary success call chain: viewport release -> EditorAiMaskTool::RunPointerInput ->
+  MapItemToAiMaskPromptPoint / MapItemRectToAiMaskPromptBox / MapItemStrokeToAiMaskPromptPoints
+  -> worker AddPromptStep(step, mode, start) -> ReadView (promptSteps, levels, people) ->
+  AiMaskInputOverlayItem markers and UpdateAiMaskCandidateCoverage.
+Primary failure and restore call chain: input outside the photo or a busy tool -> notice, no
+  step; Rejected/NotFound -> notice; Failed -> AlertBadge; the pending input clears and the
+  session coverage is shown again.
+Commands and exit codes:
+  scripts\msvc_env.cmd --build --preset win_debug --target AiMaskEditSessionTest
+    MaskEditGeometryTest alcedo_main: 0
+  scripts\msvc_env.cmd --build --preset win_debug --target MaskOverlayControlTest: 0
+  ctest -j 1 -R '^(AiMaskEditSessionTest|MaskEditGeometryTest)\.': 39/39 passed.
+  ctest -j 1 -R '^MaskOverlayControlTest\.': 16/16 passed (primitives move).
+  New: NewGroupStepStartsAGroupWhileAGroupIsOpen, PathStrokeSamplesEqualArcLengthUpToTheLimit,
+  PersonBoxesUniteIntoOneOutlinePerConnectedGroup, PromptMarkersUseTheColorOfTheirMode,
+  InputOutsideThePhotoIsClippedButTheCursorIsNot, BusyCursorUsesTheInactiveColorWithoutModeBadge.
+Manual product checks: alcedo_main started for 30 s without a new QML warning in the log. The
+  panel, cursors, and markers were not checked in the window with a photo.
+Remaining issues or unavailable platforms: no keyboard rules or translations yet (SM9.3);
+  macOS not built.
 ```

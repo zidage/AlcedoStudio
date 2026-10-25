@@ -4,8 +4,10 @@
 
 #include "ui/edit_viewer/ai_mask_prompt_geometry.hpp"
 
+#include <QLineF>
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace alcedo {
 namespace {
@@ -58,6 +60,44 @@ auto MapItemRectToAiMaskPromptBox(const MaskEditViewMapping& mapping, const QPoi
     return std::nullopt;
   }
   return NormalizedRect{min_x, min_y, max_x - min_x, max_y - min_y};
+}
+
+auto MapItemStrokeToAiMaskPromptPoints(const MaskEditViewMapping&  mapping,
+                                       const std::vector<QPointF>& item_path,
+                                       std::size_t maximum_points) -> std::vector<Vector2> {
+  std::vector<Vector2> points;
+  if (item_path.empty() || maximum_points == 0) {
+    return points;
+  }
+  // Arc length at each pointer sample.
+  std::vector<qreal> lengths(item_path.size(), 0.0);
+  for (std::size_t index = 1; index < item_path.size(); ++index) {
+    lengths[index] = lengths[index - 1] + QLineF(item_path[index - 1], item_path[index]).length();
+  }
+  const qreal total = lengths.back();
+  const auto  count = std::clamp<std::size_t>(
+      static_cast<std::size_t>(std::lround(total / kAiMaskStrokePromptSpacingItemPx)) + 1, 1,
+      maximum_points);
+  std::size_t segment = 1;
+  for (std::size_t sample = 0; sample < count; ++sample) {
+    QPointF item = item_path.front();
+    if (count > 1) {
+      const qreal target = total * static_cast<qreal>(sample) / static_cast<qreal>(count - 1);
+      while (segment + 1 < item_path.size() && lengths[segment] < target) {
+        ++segment;
+      }
+      const auto& a      = item_path[std::min(segment, item_path.size() - 1) - 1];
+      const auto& b      = item_path[std::min(segment, item_path.size() - 1)];
+      const qreal start  = lengths[std::min(segment, item_path.size() - 1) - 1];
+      const qreal length = QLineF(a, b).length();
+      const qreal t      = length > 0.0 ? std::clamp((target - start) / length, 0.0, 1.0) : 0.0;
+      item               = a + (b - a) * t;
+    }
+    if (const auto point = MapItemToAiMaskPromptPoint(mapping, item); point.has_value()) {
+      points.push_back(*point);
+    }
+  }
+  return points;
 }
 
 auto AiMaskAnalysisToItemTransform(const MaskEditViewMapping& mapping)

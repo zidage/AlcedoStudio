@@ -7,17 +7,18 @@
 #include <QObject>
 #include <QPointF>
 #include <QPointer>
+#include <QRectF>
 #include <QString>
 #include <QThread>
 #include <QVariantList>
-#include <algorithm>
-#include <cmath>
+#include <QVariantMap>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "app/ai_mask_edit_session.hpp"
 #include "app/ai_mask_segmentation_service.hpp"
@@ -36,16 +37,21 @@
 namespace alcedo::ui {
 
 /**
- * @brief AI Mask tool of the editor (SM9 MVP, issue #513).
+ * @brief AI Mask tool of the editor (SM9 MVP, issue #513; tool controls, issue #519).
  *
  * Connects the production owners in the running editor: the sidecar segmentation service and the
  * AiMaskEditSession on one serial worker thread, the EditorSessionService AI Mask facade (Open,
  * candidate coverage, Retry, Commit, Cancel), and the main viewport coverage display. The tool
  * keeps no second renderer, stack, or coverage copy: QML reads focused values that the worker
- * projects after each session step.
+ * reads from the session after each step.
  *
- * Input: a left click in the viewport adds a click prompt, a left drag adds a box prompt. Both
- * map through the SM4 prompt geometry to normalized ReferenceSpace.
+ * Input: the selected prompt tool takes the left button in the viewport. Point adds a click to
+ * the open prompt group with the Add or Subtract label; Box and Path start a new group with the
+ * dragged box or the released stroke. All map through the SM4 prompt geometry to normalized
+ * ReferenceSpace. Tasks and person toggles close the group (SM5 M3).
+ *
+ * Progress: a running operation reports its stage (@ref busyStage). The Open stages count from 1
+ * to @ref busyStepCount; other operations have no step count.
  *
  * Threading: the GUI thread calls every Q_INVOKABLE and reads every property. The segmentation
  * service and the session live on the worker; facade completions arrive on the session owner
@@ -55,30 +61,46 @@ class EditorAiMaskTool final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool active READ active NOTIFY toolChanged)
   Q_PROPERTY(bool ready READ ready NOTIFY toolChanged)
-  Q_PROPERTY(bool busy READ busy NOTIFY toolChanged)
-  Q_PROPERTY(QString busyText READ busy_text NOTIFY toolChanged)
-  Q_PROPERTY(QString errorText READ error_text NOTIFY toolChanged)
+  Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+  /// Key of the running stage: "openingEdit", "renderingAnalysis", "startingSidecar",
+  /// "loadingModels", "encodingImage", "runningModel", "updating", "committing", or "".
+  Q_PROPERTY(QString busyStage READ busy_stage NOTIFY busyChanged)
+  /// 1-based Open stage; 0 for an operation without stages.
+  Q_PROPERTY(int busyStep READ busy_step NOTIFY busyChanged)
+  Q_PROPERTY(int busyStepCount READ busy_step_count NOTIFY busyChanged)
+  Q_PROPERTY(QString errorText READ error_text NOTIFY messageChanged)
+  /// Why the last input made no step (Rejected or NotFound); not an error.
+  Q_PROPERTY(QString noticeText READ notice_text NOTIFY messageChanged)
   Q_PROPERTY(bool ownsLeftButton READ owns_left_button NOTIFY toolChanged)
   Q_PROPERTY(bool editingStoredMask READ editing_stored_mask NOTIFY toolChanged)
   Q_PROPERTY(bool subtract READ subtract WRITE setSubtract NOTIFY toolChanged)
-  Q_PROPERTY(QString inputMode READ input_mode NOTIFY toolChanged)
+  /// "point", "box", or "path".
+  Q_PROPERTY(QString promptTool READ prompt_tool WRITE setPromptTool NOTIFY toolChanged)
   Q_PROPERTY(bool canUndo READ can_undo NOTIFY toolChanged)
   Q_PROPERTY(bool canRedo READ can_redo NOTIFY toolChanged)
-  Q_PROPERTY(int stateCount READ state_count NOTIFY toolChanged)
   Q_PROPERTY(qreal featherPx READ feather_px NOTIFY toolChanged)
   Q_PROPERTY(int expandPx READ expand_px NOTIFY toolChanged)
   Q_PROPERTY(qreal maximumFeatherPx READ maximum_feather_px CONSTANT)
   Q_PROPERTY(int maximumExpandPx READ maximum_expand_px CONSTANT)
+  /// Levels of the last prompt group: 3 for a single click without a box, else 0.
+  Q_PROPERTY(int levelCount READ level_count NOTIFY toolChanged)
+  Q_PROPERTY(int selectedLevel READ selected_level NOTIFY toolChanged)
+  /// People list: maps with index, score, included, and box (normalized QRectF).
   Q_PROPERTY(QVariantList people READ people NOTIFY toolChanged)
-  Q_PROPERTY(QString imageText READ image_text NOTIFY toolChanged)
-  Q_PROPERTY(QString lastStepText READ last_step_text NOTIFY toolChanged)
+  /// The last component is People, so a person toggle applies.
+  Q_PROPERTY(bool peopleActive READ people_active NOTIFY toolChanged)
+  /// Normalized boxes of the included people while People is active.
+  Q_PROPERTY(QVariantList selectedPersonBoxes READ selected_person_boxes NOTIFY toolChanged)
+  /// Normalized box of the person under the pointer in the People list; empty for none.
+  Q_PROPERTY(QRectF highlightedPersonBox READ highlighted_person_box NOTIFY highlightChanged)
+  /// Steps of the open prompt group for the viewport markers (AiMaskInputOverlayItem map
+  /// format, normalized analysis image coordinates).
+  Q_PROPERTY(QVariantList promptSteps READ prompt_steps NOTIFY toolChanged)
   Q_PROPERTY(QString previewStatus READ preview_status NOTIFY previewChanged)
   Q_PROPERTY(QString previewError READ preview_error NOTIFY previewChanged)
-  Q_PROPERTY(bool boxVisible READ box_visible NOTIFY boxChanged)
-  Q_PROPERTY(qreal boxX READ box_x NOTIFY boxChanged)
-  Q_PROPERTY(qreal boxY READ box_y NOTIFY boxChanged)
-  Q_PROPERTY(qreal boxWidth READ box_width NOTIFY boxChanged)
-  Q_PROPERTY(qreal boxHeight READ box_height NOTIFY boxChanged)
+  /// The input that the pointer draws, or that waits for its model step (item coordinates,
+  /// AiMaskInputOverlayItem map format); empty when there is none.
+  Q_PROPERTY(QVariantMap liveInput READ live_input NOTIFY liveInputChanged)
 
  public:
   /// Production services read on the GUI thread at Open.
@@ -106,11 +128,14 @@ class EditorAiMaskTool final : public QObject {
   Q_INVOKABLE void   openSelectedMask();
   Q_INVOKABLE void   bindInteractionItem(QObject* interaction);
   Q_INVOKABLE void   setSubtract(bool subtract);
-  /// "prompt" or "task".
-  Q_INVOKABLE void   setInputMode(const QString& mode);
+  /// "point", "box", or "path".
+  Q_INVOKABLE void          setPromptTool(const QString& tool);
   /// "subject", "background", "sky", or "people".
   Q_INVOKABLE void   addTask(const QString& task);
   Q_INVOKABLE void   togglePerson(int person_index);
+  /// Outlines person @p person_index in the viewport while the People list row is hovered; -1
+  /// clears it. Presentation only.
+  Q_INVOKABLE void          highlightPerson(int person_index);
   Q_INVOKABLE void   selectLevel(int level);
   /// Shows Feather and Expand while a slider moves; adds no session step.
   Q_INVOKABLE void   previewEdge(qreal feather_px, int expand_px);
@@ -129,68 +154,97 @@ class EditorAiMaskTool final : public QObject {
 
   [[nodiscard]] auto active() const -> bool { return active_; }
   [[nodiscard]] auto ready() const -> bool { return ready_; }
-  [[nodiscard]] auto busy() const -> bool { return !busy_text_.isEmpty(); }
-  [[nodiscard]] auto busy_text() const -> QString { return busy_text_; }
+  [[nodiscard]] auto        busy() const -> bool { return stage_ != AiMaskToolStage::None; }
+  [[nodiscard]] auto        busy_stage() const -> QString;
+  [[nodiscard]] auto        busy_step() const -> int;
+  [[nodiscard]] auto        busy_step_count() const -> int;
   [[nodiscard]] auto error_text() const -> QString { return error_text_; }
-  [[nodiscard]] auto owns_left_button() const -> bool {
-    return active_ && ready_ && view_.input_mode == AiMaskInputMode::Prompt;
-  }
+  [[nodiscard]] auto        notice_text() const -> QString { return notice_text_; }
+  [[nodiscard]] auto        owns_left_button() const -> bool { return active_ && ready_; }
   [[nodiscard]] auto        editing_stored_mask() const -> bool { return mask_id_.has_value(); }
   [[nodiscard]] auto        subtract() const -> bool { return subtract_; }
-  [[nodiscard]] auto        input_mode() const -> QString;
+  [[nodiscard]] auto        prompt_tool() const -> QString;
   [[nodiscard]] auto        can_undo() const -> bool { return view_.can_undo; }
   [[nodiscard]] auto        can_redo() const -> bool { return view_.can_redo; }
-  [[nodiscard]] auto        state_count() const -> int { return view_.state_count; }
   [[nodiscard]] auto        feather_px() const -> qreal { return view_.edge.feather_px; }
   [[nodiscard]] auto        expand_px() const -> int { return view_.edge.expand_px; }
   [[nodiscard]] static auto maximum_feather_px() -> qreal { return kAiMaskMaximumFeatherPx; }
   [[nodiscard]] static auto maximum_expand_px() -> int { return kAiMaskMaximumExpandPx; }
+  [[nodiscard]] auto        level_count() const -> int { return view_.level_count; }
+  [[nodiscard]] auto        selected_level() const -> int { return view_.selected_level; }
   [[nodiscard]] auto        people() const -> QVariantList { return view_.people; }
-  [[nodiscard]] auto        image_text() const -> QString { return image_text_; }
-  [[nodiscard]] auto        last_step_text() const -> QString { return last_step_text_; }
-  [[nodiscard]] auto        preview_status() const -> QString;
-  [[nodiscard]] auto        preview_error() const -> QString {
+  [[nodiscard]] auto        people_active() const -> bool { return view_.people_active; }
+  [[nodiscard]] auto        selected_person_boxes() const -> QVariantList {
+    return view_.selected_person_boxes;
+  }
+  [[nodiscard]] auto prompt_steps() const -> QVariantList { return view_.prompt_steps; }
+  [[nodiscard]] auto highlighted_person_box() const -> QRectF;
+  [[nodiscard]] auto preview_status() const -> QString;
+  [[nodiscard]] auto preview_error() const -> QString {
     return QString::fromStdString(preview_.error);
   }
-  [[nodiscard]] auto box_visible() const -> bool { return pointer_.box; }
-  [[nodiscard]] auto box_x() const -> qreal {
-    return std::min(pointer_.press.x(), pointer_.last.x());
-  }
-  [[nodiscard]] auto box_y() const -> qreal {
-    return std::min(pointer_.press.y(), pointer_.last.y());
-  }
-  [[nodiscard]] auto box_width() const -> qreal {
-    return std::abs(pointer_.last.x() - pointer_.press.x());
-  }
-  [[nodiscard]] auto box_height() const -> qreal {
-    return std::abs(pointer_.last.y() - pointer_.press.y());
-  }
+  [[nodiscard]] auto live_input() const -> QVariantMap;
 
  signals:
   void toolChanged();
   /// The coverage preview state changed. Separate from toolChanged, so a Feather or Expand
   /// preview during a slider drag does not rebind the slider values.
   void previewChanged();
-  void boxChanged();
+  /// The error or notice text changed. Separate from toolChanged for the same reason.
+  void messageChanged();
+  void busyChanged();
+  void liveInputChanged();
+  void highlightChanged();
 
  private:
+  /// The operation that runs (SM9 progress display; there is no busy text).
+  enum class AiMaskToolStage : std::uint8_t {
+    None,
+    OpeningEdit,
+    RenderingAnalysis,
+    StartingSidecar,
+    LoadingModels,
+    EncodingImage,
+    RunningModel,
+    Updating,
+    Committing,
+  };
+
+  enum class PromptTool : std::uint8_t { Point, Box, Path };
+
   /// Values of the current session state, read on the worker after each step.
   struct SessionView {
-    bool                           can_undo    = false;
-    bool                           can_redo    = false;
-    int                            state_count = 0;
-    AiMaskInputMode                input_mode  = AiMaskInputMode::Prompt;
+    bool                           can_undo = false;
+    bool                           can_redo = false;
     AiMaskEdgeAdjustment           edge{};
+    int                            level_count    = 0;
+    int                            selected_level = 0;
     QVariantList                   people;
+    bool                           people_active = false;
+    QVariantList                   selected_person_boxes;
+    QVariantList                   prompt_steps;
     /// Shared read of the current coverage (AcquireCoveragePixels); never copied.
     MaskCoverageCandidateSelection candidate{};
   };
 
   struct PointerInput {
-    bool    pressed = false;
-    bool    box     = false;
-    QPointF press;
-    QPointF last;
+    bool                 pressed  = false;
+    /// Moved past the drag threshold.
+    bool                 dragging = false;
+    QPointF              press;
+    QPointF              last;
+    /// Path samples in item coordinates.
+    std::vector<QPointF> path;
+  };
+
+  /// The released input that waits for its model step; the viewport shows it until the step
+  /// returns.
+  struct PendingInput {
+    bool                 visible = false;
+    PromptTool           tool    = PromptTool::Point;
+    bool                 add     = true;
+    std::vector<QPointF> points;
+    QRectF               box;
   };
 
   /// Worker-thread state: the segmentation service and the session that calls it.
@@ -220,10 +274,10 @@ class EditorAiMaskTool final : public QObject {
                           StartRequest request);
   /// Runs on the worker: starts the sidecar, loads the models, starts the image, makes the session.
   void StartOnWorker(EditorAiMaskAnalysisResult analysis, StartRequest request);
-  void OnStarted(std::uint64_t serial, QString image_text, SessionView view);
+  void               OnStarted(std::uint64_t serial, SessionView view);
   /// Runs @p operation on the worker session, then presents the new coverage.
-  void RunStep(QString busy_text, SessionOperation operation);
-  void OnStepFinished(std::uint64_t serial, AiMaskStepResult result, SessionView view);
+  void               RunStep(AiMaskToolStage stage, SessionOperation operation);
+  void               OnStepFinished(AiMaskStepResult result, SessionView view);
   void PresentCandidate(const MaskCoverageCandidateSelection& candidate);
   void OnCoveragePresented(EditorMaskCoverageResult result);
   void OnSessionResult(const EditorSessionResult& result);
@@ -231,10 +285,17 @@ class EditorAiMaskTool final : public QObject {
   /// Ends the tool: unloads the models on the worker and clears the GUI state.
   void Close(QString error);
   void Fail(QString error);
-  void SetBusy(QString text);
+  void               SetStage(AiMaskToolStage stage);
+  /// Sets @p stage of the Open with @p serial from the worker thread.
+  void               PostStage(std::uint64_t serial, AiMaskToolStage stage);
+  void               SetNotice(QString notice);
+  void               ClearMessages();
+  /// Turns the released pointer input into a prompt step, or a notice when it has none.
+  void               RunPointerInput(const PointerInput& input);
+  void               ClearPending();
   void PostToWorker(std::function<void(Worker& worker)> task);
-  [[nodiscard]] auto                Backend() const -> IEditorSessionBackend*;
-  [[nodiscard]] auto                SelectedGradeId() const -> NodeId;
+  [[nodiscard]] auto Backend() const -> IEditorSessionBackend*;
+  [[nodiscard]] auto SelectedGradeId() const -> NodeId;
   [[nodiscard]] static auto         ReadView(const AiMaskEditSession& session) -> SessionView;
   [[nodiscard]] static auto         StepResultText(const AiMaskStepResult& result) -> QString;
 
@@ -257,16 +318,19 @@ class EditorAiMaskTool final : public QObject {
   bool                                              lease_open_ = false;
   NodeId                                            grade_id_;
   std::optional<MaskId>                             mask_id_;
-  QString                                           busy_text_;
+  AiMaskToolStage                                   stage_ = AiMaskToolStage::None;
   QString                                           error_text_;
-  QString                                           image_text_;
-  QString                                           last_step_text_;
-  bool                                              subtract_ = false;
+  QString                                           notice_text_;
+  bool                                              subtract_    = false;
+  PromptTool                                        prompt_tool_ = PromptTool::Point;
   SessionView                                       view_;
   EditorMaskCoveragePreviewState                    preview_;
   /// Operation id of the queued Commit; 0 when no Commit waits for its result.
   std::uint64_t                                     commit_operation_id_ = 0;
   PointerInput                                      pointer_;
+  PendingInput                                      pending_;
+  /// People list index under the pointer; -1 for none.
+  int                                               highlighted_person_ = -1;
   QMetaObject::Connection                           result_connection_;
   QMetaObject::Connection                           state_connection_;
 };

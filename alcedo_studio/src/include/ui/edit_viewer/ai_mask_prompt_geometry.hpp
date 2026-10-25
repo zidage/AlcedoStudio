@@ -6,7 +6,9 @@
 
 #include <QPointF>
 #include <QTransform>
+#include <cstddef>
 #include <optional>
+#include <vector>
 
 #include "edit/geometry/types.hpp"
 #include "ui/edit_viewer/mask_edit_geometry.hpp"
@@ -46,6 +48,27 @@ namespace alcedo {
 [[nodiscard]] auto MapItemRectToAiMaskPromptBox(const MaskEditViewMapping& mapping,
                                                 const QPointF& corner_a, const QPointF& corner_b)
     -> std::optional<NormalizedRect>;
+
+/// Largest number of prompt points of one Path stroke (SM9). A prompt group holds at most 64.
+inline constexpr std::size_t kAiMaskMaximumStrokePromptPoints = 16;
+/// Arc length in item pixels between two prompt points of a Path stroke.
+inline constexpr qreal       kAiMaskStrokePromptSpacingItemPx = 24.0;
+
+/**
+ * @brief Normalized analysis image prompt points along the released item polyline
+ *        @p item_path (SM9 Path input).
+ *
+ * The samples sit at equal arc length along the polyline in item pixels, from its first to its
+ * last position, about @ref kAiMaskStrokePromptSpacingItemPx apart and at most
+ * @p maximum_points. A polyline without length gives one sample. Each sample maps like
+ * @ref MapItemToAiMaskPromptPoint; a sample outside the source is dropped.
+ *
+ * @return Empty when @p mapping is invalid or no sample is on the source.
+ */
+[[nodiscard]] auto           MapItemStrokeToAiMaskPromptPoints(const MaskEditViewMapping&  mapping,
+                                                               const std::vector<QPointF>& item_path,
+                                                               std::size_t                 maximum_points)
+    -> std::vector<Vector2>;
 
 /**
  * @brief Affine transform from normalized analysis image coordinates to item coordinates

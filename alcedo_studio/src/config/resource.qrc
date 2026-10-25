@@ -24,6 +24,19 @@
     <file>mask_icons/radial.svg</file>
     <file>mask_icons/gradient-add.svg</file>
     <file>mask_icons/radial-add.svg</file>
+    <file>mask_icons/ai-subject.svg</file>
+    <file>mask_icons/ai-background.svg</file>
+    <file>mask_icons/ai-sky.svg</file>
+    <file>mask_icons/ai-people.svg</file>
+    <file>mask_icons/ai-point.svg</file>
+    <file>mask_icons/ai-box.svg</file>
+    <file>mask_icons/ai-path.svg</file>
+    <file>mask_icons/ai-level-1.svg</file>
+    <file>mask_icons/ai-level-2.svg</file>
+    <file>mask_icons/ai-level-3.svg</file>
+    <file>panel_icons/pencil-ai.svg</file>
+    <file>panel_icons/box-multiple.svg</file>
+    <file>panel_icons/minus.svg</file>
     <file>panel_icons/clock-play.svg</file>
     <file>panel_icons/reset.svg</file>
     <file>panel_icons/info.svg</file>

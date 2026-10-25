@@ -275,7 +275,7 @@ Item {
                 id: maskGroupsRailButton
                 objectName: "editorMaskGroupsRailButton"
                 selected: root.activePage === "maskgroups"
-                iconSrc: "qrc:/panel_icons/nodes.svg"
+                iconSrc: "qrc:/panel_icons/box-multiple.svg"
                 label: qsTr("Mask Groups")
                 actionName: selected ? qsTr("Hide Mask Groups") : qsTr("Show Mask Groups")
                 onClicked: root.selectPage("maskgroups")

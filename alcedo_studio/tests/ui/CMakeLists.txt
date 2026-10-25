@@ -1734,6 +1734,7 @@ alcedo_register_test_target(EditorRawDecodePanelQmlTest ui)
 add_executable(MaskEditGeometryTest
     ${ALCEDO_TEST_ROOT}/ui/mask_edit_geometry_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ai_mask_prompt_geometry_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ai_mask_input_overlay_geometry_test.cpp
 )
 target_include_directories(MaskEditGeometryTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}

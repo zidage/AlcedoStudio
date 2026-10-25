@@ -1064,6 +1064,10 @@ auto AppTheme::maskCoverageTintColor() const -> QColor { return QColor(0xFF, 0x5
 
 auto AppTheme::maskCoverageTintOpacity() const -> qreal { return 0.5; }
 
+auto AppTheme::aiMaskInputAddColor() const -> QColor { return QColor(0x30, 0xA4, 0x6C); }
+
+auto AppTheme::aiMaskInputSubtractColor() const -> QColor { return QColor(0xE5, 0x48, 0x4D); }
+
 auto AppTheme::scopePlotBorderColor() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.42);
 }

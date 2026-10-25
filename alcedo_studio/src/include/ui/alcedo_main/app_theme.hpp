@@ -236,6 +236,9 @@ class AppTheme final : public QObject {
   // never reaches export, thumbnails, or scopes.
   Q_PROPERTY(QColor maskCoverageTintColor READ maskCoverageTintColor CONSTANT)
   Q_PROPERTY(qreal maskCoverageTintOpacity READ maskCoverageTintOpacity CONSTANT)
+  // AI Mask tool input markers on the photograph (SM9): fixed in every theme, like the tint.
+  Q_PROPERTY(QColor aiMaskInputAddColor READ aiMaskInputAddColor CONSTANT)
+  Q_PROPERTY(QColor aiMaskInputSubtractColor READ aiMaskInputSubtractColor CONSTANT)
   Q_PROPERTY(QColor dateGraphLevel0Color READ dateGraphLevel0Color NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dateGraphLevel1Color READ dateGraphLevel1Color NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dateGraphLevel2Color READ dateGraphLevel2Color NOTIFY ThemeChanged)
@@ -461,6 +464,8 @@ class AppTheme final : public QObject {
   auto maskOverlayGripSpanT1() const -> qreal;
   auto maskCoverageTintColor() const -> QColor;
   auto maskCoverageTintOpacity() const -> qreal;
+  auto aiMaskInputAddColor() const -> QColor;
+  auto aiMaskInputSubtractColor() const -> QColor;
   auto dateGraphLevel0Color() const -> QColor;
   auto dateGraphLevel1Color() const -> QColor;
   auto dateGraphLevel2Color() const -> QColor;

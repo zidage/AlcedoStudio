@@ -1,0 +1,19 @@
+<!--
+  Alcedo icon (no external source): AI Mask click level 3 of 3. A larger circle
+  selects a larger region of the clicked object.
+  User-approved 2 px stroke exception (DESIGN.md).
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="white"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+  <path d="M12 12l0 .01" />
+</svg>

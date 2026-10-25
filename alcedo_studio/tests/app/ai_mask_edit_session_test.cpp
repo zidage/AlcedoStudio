@@ -467,6 +467,37 @@ TEST(AiMaskEditSessionTest, SubtractStrokeAfterTaskStartsSubtractGroup) {
   EXPECT_EQ(At(session.Coverage(), 5, 3), 255);
 }
 
+TEST(AiMaskEditSessionTest, NewGroupStepStartsAGroupWhileAGroupIsOpen) {
+  FakeRunner        runner;
+  AiMaskEditSession session(runner, SessionImage());
+
+  ASSERT_TRUE(Applied(
+      session.AddPromptStep(Stroke({{0.2f, 0.2f}, {0.3f, 0.25f}}), AiMaskComponentOperation::Add)));
+  EXPECT_TRUE(session.PromptGroupOpen());
+  // A second object: the decode has only its own points and no mask_input of the first group.
+  ASSERT_TRUE(Applied(session.AddPromptStep(Stroke({{0.6f, 0.6f}, {0.7f, 0.65f}}),
+                                            AiMaskComponentOperation::Add,
+                                            AiMaskPromptGroupStart::NewGroup)));
+
+  ASSERT_EQ(runner.prompts.size(), 2U);
+  ASSERT_EQ(runner.prompts[1].points.size(), 2U);
+  EXPECT_FLOAT_EQ(runner.prompts[1].points[0].x, 0.6f);
+  EXPECT_TRUE(runner.prompts[1].mask_input.empty());
+  ASSERT_EQ(session.Recipe().components.size(), 2U);
+  EXPECT_TRUE(session.PromptGroupOpen());
+  // The Add fold keeps both objects.
+  EXPECT_EQ(At(session.Coverage(), 15, 11), 255);  // (0.25, 0.23)
+  EXPECT_EQ(At(session.Coverage(), 41, 30), 255);  // (0.65, 0.63)
+
+  // The next joined step refines the new group.
+  ASSERT_TRUE(
+      Applied(session.AddPromptStep(Stroke({{0.66f, 0.62f}}), AiMaskComponentOperation::Subtract)));
+  ASSERT_EQ(session.Recipe().components.size(), 2U);
+  const auto& group = std::get<AiMaskPromptGroup>(session.Recipe().components[1].content);
+  ASSERT_EQ(group.steps.size(), 2U);
+  EXPECT_EQ(group.steps[1].points[0].label, AiMaskComponentOperation::Subtract);
+}
+
 TEST(AiMaskEditSessionTest, UndoAndRedoNeedNoModelCall) {
   FakeRunner runner;
   runner.tasks[SegmentationTask::kSubject] = AlphaResult(16, 12, 0.5f);
