@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -75,6 +76,12 @@ inline auto MakeCommit(
   commit.position          = position;
   return commit;
 }
+
+/// One OpenAiMaskEdit call that the fake backend received.
+struct AiMaskEditOpenRequest {
+  NodeId                grade_id;
+  std::optional<MaskId> mask_id;
+};
 
 class RecordingEditorSessionBackend final : public IEditorSessionBackend {
  public:
@@ -324,6 +331,17 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return mask == nullptr ? std::nullopt : std::optional<MaskSource>{mask->source};
   }
 
+  /// Records the request and refuses it, so the AI Mask tool starts no sidecar.
+  auto OpenAiMaskEdit(const NodeId& grade_id, std::optional<MaskId> mask_id,
+                      EditorAiMaskEditOpenCompletion on_complete) -> EditorSessionResult override {
+    ai_mask_edit_open_requests_.push_back({grade_id, std::move(mask_id)});
+    EditorAiMaskEditOpenResult refused;
+    refused.result = Rejected("The fake backend does not open AI Mask edits");
+    const auto returned = refused.result;
+    on_complete(std::move(refused));
+    return returned;
+  }
+
   auto RenameColorGrade(const NodeId& node_id, std::string display_name)
       -> EditorSessionResult override {
     if (fail_node_commands_) return Rejected("mini-Git journal append failed");
@@ -484,6 +502,10 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto mask_commands() const -> const std::vector<EditorMaskCreationCommand>& {
     return mask_commands_;
   }
+  [[nodiscard]] auto ai_mask_edit_open_requests() const
+      -> const std::vector<AiMaskEditOpenRequest>& {
+    return ai_mask_edit_open_requests_;
+  }
   [[nodiscard]] auto document() const -> const std::shared_ptr<PipelineDocument>& {
     return document_;
   }
@@ -627,6 +649,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   Hash128                                last_removed_id_;
   Hash128                                last_move_head_commit_;
   std::vector<EditorMaskCreationCommand> mask_commands_;
+  std::vector<AiMaskEditOpenRequest>     ai_mask_edit_open_requests_;
   NodeId                                 selected_mask_node_id_;
   MaskId                                 selected_mask_id_;
   bool                                   mask_commands_pending_ = false;
