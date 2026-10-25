@@ -2,9 +2,9 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// SM8.1: the AI Mask coverage owner of the render workspace over a host resource factory. The
-// factory records uploads and lets each test complete submissions, so the checks observe texture
-// lifetimes, read lifetimes, and failures without a GPU.
+// SM8.1, SM8.2: the AI Mask coverage owner of the render workspace over a host resource factory.
+// The factory records uploads and edge work and lets each test complete submissions, so the checks
+// observe texture lifetimes, read lifetimes, and failures without a GPU.
 
 #include "edit/runtime/mask_coverage_texture_cache.hpp"
 
@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "ai_mask_edge_reference.hpp"
 #include "edit/mask/ai_mask_coverage_texture.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -86,6 +87,24 @@ struct HostCoverageBackend {
     ++uploads;
   }
 
+  /// Device edge work of the coverage owner, executed at record time on the host.
+  void RecordAiMaskEdge(const AiMaskEdgeDispatch&            dispatch,
+                        const AiMaskEdgeTextures<Texture2D>& textures, CommandContext&) {
+    if (fail_next_edge) {
+      fail_next_edge = false;
+      throw std::runtime_error("host edge pass failed");
+    }
+    const auto& source = textures.source->storage;
+    const auto  result = ai_mask_test::ExecuteAiMaskEdgeDispatchOnHost(
+        dispatch, std::span<const std::uint8_t>(
+                      reinterpret_cast<const std::uint8_t*>(source.data()), source.size()));
+    if (result.size() != textures.output->storage.size()) {
+      throw std::runtime_error("edge output size does not match the texture");
+    }
+    std::memcpy(textures.output->storage.data(), result.data(), result.size());
+    ++edge_work;
+  }
+
   [[nodiscard]] auto IsResourceBusy(std::uint64_t submitted_on) const -> bool {
     return submitted_on != 0 && submitted_on > completed;
   }
@@ -95,12 +114,15 @@ struct HostCoverageBackend {
   std::shared_ptr<int> live             = std::make_shared<int>(0);
   std::uint64_t        completed        = 0;
   int                  uploads          = 0;
+  int                  edge_work        = 0;
   bool                 fail_next_create = false;
   bool                 fail_next_upload = false;
+  bool                 fail_next_edge   = false;
 };
 
 using Cache = MaskCoverageTextureCache<HostCoverageBackend>;
 using Read  = Cache::Read;
+static_assert(Cache::kRecordsEdgeOnDevice);
 
 constexpr Extent2D   kAnalysis{48, 32};
 
@@ -152,7 +174,7 @@ class MaskCoverageTextureCacheTest : public ::testing::Test {
     return bytes;
   }
 
-  /// Host reference of an edge result of the whole-image candidate @p pixels.
+  /// Edge result of the whole-image candidate @p pixels by the host function of the runtime.
   static auto EdgeReference(const AiMaskCoveragePixels& pixels, AiMaskEdgeAdjustment edge)
       -> AiMaskCoverageTexture {
     MaskAsset whole;
@@ -270,19 +292,21 @@ TEST_F(MaskCoverageTextureCacheTest, CandidateEdgeChangeKeepsOriginalUploadAndOn
   const auto feathered = Candidate(pixels, feather);
   const auto reference = EdgeReference(pixels, feather);
   EXPECT_EQ(feathered->descriptor, reference.descriptor);
-  EXPECT_EQ(Bytes(feathered), reference.pixels);
+  EXPECT_LE(ai_mask_test::MaxR8Difference(Bytes(feathered), reference.pixels), 1);
   EXPECT_NE(feathered.get(), original.get());
-  EXPECT_EQ(backend_.uploads, 2);
+  EXPECT_EQ(backend_.uploads, 1) << "the edge work reads the resident original upload";
+  EXPECT_EQ(backend_.edge_work, 1);
   EXPECT_EQ(Candidate(pixels, feather).get(), feathered.get());
-  EXPECT_EQ(backend_.uploads, 2);
+  EXPECT_EQ(backend_.edge_work, 1);
 
   // A second edge value replaces the edge result; the original upload is still reused.
   const auto expanded = Candidate(pixels, expand);
   EXPECT_EQ(Bytes(expanded), EdgeReference(pixels, expand).pixels);
-  EXPECT_EQ(backend_.uploads, 3);
+  EXPECT_EQ(backend_.uploads, 1);
+  EXPECT_EQ(backend_.edge_work, 2);
   EXPECT_EQ(cache_.RetiredCount(), 1U);
   EXPECT_EQ(Candidate(pixels).get(), original.get());
-  EXPECT_EQ(backend_.uploads, 3);
+  EXPECT_EQ(backend_.uploads, 1);
   EXPECT_EQ(cache_.RetiredCount(), 2U) << "zero edge makes the original the current result";
 }
 
@@ -361,7 +385,7 @@ TEST_F(MaskCoverageTextureCacheTest, AllocationOrUploadFailureKeepsCurrentCandid
   EXPECT_EQ(Bytes(current), *first);
 }
 
-TEST_F(MaskCoverageTextureCacheTest, CancelledSubmissionDiscardsItsCoverageUploads) {
+TEST_F(MaskCoverageTextureCacheTest, CancelledSubmissionDiscardsItsCoverageWrites) {
   const auto     asset = RectAsset();
   CountingReader reader;
   reader.Put(asset);
@@ -373,24 +397,27 @@ TEST_F(MaskCoverageTextureCacheTest, CancelledSubmissionDiscardsItsCoverageUploa
   EXPECT_EQ(kept->descriptor, asset.descriptor);
   CompleteAll();
 
-  // A failed encode uploads a new edge result and a candidate, then is cancelled.
+  // A failed encode records a new edge result and uploads a candidate, then is cancelled.
   Begin();
   const auto cancelled = context_.SubmissionId();
   (void)cache_.AcquireStored(StoredMask(asset, AiMaskEdgeAdjustment{2.0f, 0}), reader, backend_,
                              context_);
   (void)Candidate(pixels);
-  EXPECT_EQ(backend_.uploads, 3);
-  cache_.DiscardUploadsOf(cancelled);
+  EXPECT_EQ(backend_.uploads, 2);
+  EXPECT_EQ(backend_.edge_work, 1);
+  cache_.DiscardWritesOf(cancelled);
   EXPECT_EQ(cache_.RetiredCount(), 2U);
 
-  // The next submission uploads them again; the completed stored entry stays.
+  // The next submission writes them again; the completed stored upload stays.
   Begin();
   EXPECT_EQ(cache_.AcquireStored(StoredMask(asset, {}), reader, backend_, context_).get(),
             kept.get());
   (void)cache_.AcquireStored(StoredMask(asset, AiMaskEdgeAdjustment{2.0f, 0}), reader, backend_,
                              context_);
   (void)Candidate(pixels);
-  EXPECT_EQ(backend_.uploads, 5);
+  EXPECT_EQ(backend_.uploads, 3);
+  EXPECT_EQ(backend_.edge_work, 2);
+  EXPECT_EQ(reader.reads, 1);
   CompleteAll();
   cache_.ReleaseIdle(backend_);
   EXPECT_EQ(cache_.RetiredCount(), 0U);
@@ -410,7 +437,7 @@ TEST_F(MaskCoverageTextureCacheTest, StoredCoverageSeparatesOriginalUploadFromEd
   const auto adjusted  = cache_.AcquireStored(StoredMask(asset, edge), reader, backend_, context_);
   const auto reference = MakeAiMaskCoverageTexture(asset, kAnalysis, edge);
   EXPECT_EQ(adjusted->descriptor, reference.descriptor);
-  EXPECT_EQ(Bytes(adjusted), reference.pixels);
+  EXPECT_LE(ai_mask_test::MaxR8Difference(Bytes(adjusted), reference.pixels), 1);
   // Margin 1 + ceil(4 * 1.5) + 1 = 8 on each side; the top side reaches the image edge.
   EXPECT_EQ(adjusted->descriptor.extent, (Extent2D{12 + 2 * 8, 8 + 2 * 8}));
 
@@ -419,8 +446,9 @@ TEST_F(MaskCoverageTextureCacheTest, StoredCoverageSeparatesOriginalUploadFromEd
             adjusted.get());
   EXPECT_EQ(cache_.AcquireStored(StoredMask(asset, {}), reader, backend_, context_).get(),
             original.get());
-  EXPECT_EQ(reader.reads, 2);
-  EXPECT_EQ(backend_.uploads, 2);
+  EXPECT_EQ(reader.reads, 1) << "the edge work reads the resident original upload";
+  EXPECT_EQ(backend_.uploads, 1);
+  EXPECT_EQ(backend_.edge_work, 1);
 }
 
 TEST_F(MaskCoverageTextureCacheTest, ClearKeepsTexturesThatReadsStillUse) {
@@ -443,6 +471,86 @@ TEST_F(MaskCoverageTextureCacheTest, ClearKeepsTexturesThatReadsStillUse) {
   cache_.ReleaseIdle(backend_);
   EXPECT_EQ(cache_.RetiredCount(), 1U);
   EXPECT_EQ(backend_.LiveTextures(), 1);
+}
+
+TEST_F(MaskCoverageTextureCacheTest, EdgeWorkReusesWorkTexturesOfTheSameOutputSize) {
+  const auto pixels = Pixels(230);
+  Begin();
+  (void)Candidate(pixels, AiMaskEdgeAdjustment{2.0f, 3});
+  // Expand 3 with Feather: two R8 morphology textures and one R32f Feather texture.
+  EXPECT_EQ(cache_.WorkTextureCount(), 3U);
+  EXPECT_EQ(cache_.WorkTextureBytes(), 2 * pixels->size() + 4 * pixels->size());
+  const auto live = backend_.LiveTextures();
+
+  // Another edge value of the same output size allocates only its result.
+  CompleteAll();
+  Begin();
+  (void)Candidate(pixels, AiMaskEdgeAdjustment{4.0f, -5});
+  EXPECT_EQ(cache_.WorkTextureCount(), 3U);
+  EXPECT_EQ(backend_.LiveTextures(), live + 1) << "the replaced result is retired, not destroyed";
+  CompleteAll();
+  cache_.ReleaseIdle(backend_);
+  EXPECT_EQ(backend_.LiveTextures(), live);
+
+  // A stored result of another output size destroys the idle work textures of the old size.
+  const auto     asset = RectAsset();
+  CountingReader reader;
+  reader.Put(asset);
+  Begin();
+  const auto stored = cache_.AcquireStored(StoredMask(asset, AiMaskEdgeAdjustment{0.0f, 2}), reader,
+                                           backend_, context_);
+  EXPECT_EQ(cache_.WorkTextureCount(), 1U) << "Expand 2 without Feather needs one work texture";
+  EXPECT_EQ(cache_.WorkTextureBytes(), static_cast<std::size_t>(stored->descriptor.extent.width) *
+                                           stored->descriptor.extent.height);
+
+  CompleteAll();
+  cache_.Clear();
+  EXPECT_EQ(cache_.WorkTextureCount(), 0U);
+  EXPECT_EQ(cache_.WorkTextureBytes(), 0U);
+}
+
+TEST_F(MaskCoverageTextureCacheTest, FailedEdgeWorkKeepsCurrentResultAndEarlierReads) {
+  const auto                 pixels = Pixels(210);
+  const AiMaskEdgeAdjustment shown{3.0f, 1};
+  Begin();
+  const auto current       = Candidate(pixels, shown);
+  const auto current_bytes = Bytes(current);
+  const auto entries       = cache_.EntryCount();
+  const auto used          = cache_.UsedBytes();
+  CompleteAll();
+
+  Begin();
+  const auto failed       = context_.SubmissionId();
+  backend_.fail_next_edge = true;
+  try {
+    (void)Candidate(pixels, AiMaskEdgeAdjustment{6.0f, 2});
+    ADD_FAILURE() << "the edge work failure was not reported";
+  } catch (const std::runtime_error& error) {
+    EXPECT_STREQ(error.what(),
+                 "AI Mask coverage: recording the Feather and Expand work failed: host edge pass "
+                 "failed");
+  }
+  backend_.fail_next_create = true;
+  try {
+    (void)Candidate(pixels, AiMaskEdgeAdjustment{6.0f, 2});
+    ADD_FAILURE() << "the output allocation failure was not reported";
+  } catch (const std::runtime_error& error) {
+    EXPECT_STREQ(error.what(),
+                 "AI Mask coverage: allocating the 48 x 32 R8 texture failed: host device is out "
+                 "of memory");
+  }
+  // The caller cancels the failed work; nothing that the cancelled submission wrote is current.
+  cache_.DiscardWritesOf(failed);
+  EXPECT_EQ(cache_.EntryCount(), entries);
+  EXPECT_EQ(cache_.UsedBytes(), used);
+  EXPECT_EQ(cache_.RetiredCount(), 0U);
+
+  // The published result stays current and unchanged; the original upload is still reused.
+  Begin();
+  EXPECT_EQ(Candidate(pixels, shown).get(), current.get());
+  EXPECT_EQ(Bytes(current), current_bytes);
+  EXPECT_EQ(backend_.uploads, 1);
+  EXPECT_EQ(backend_.edge_work, 1);
 }
 
 }  // namespace

@@ -229,6 +229,7 @@ class OpenClMaskFixture : public ::testing::Test {
                                   AiMaskEdgeAdjustment edge) {
       return ai_mask_test::AcquireCandidateInCoverageWork(*device_, pixels, analysis, edge);
     };
+    h.records_edge_on_device = MaskCoverageTextureCache<OpenClBackend>::kRecordsEdgeOnDevice;
     return h;
   }
 
@@ -559,9 +560,9 @@ TEST_F(OpenClMaskFixture, AiMaskFeatherAndExpandChangeCoverage) {
   ai_mask_test::CheckAiMaskFeatherAndExpandChangeCoverage(h);
 }
 
-TEST_F(OpenClMaskFixture, AiMaskCoverageTextureUploadsOncePerAssetAndEdge) {
+TEST_F(OpenClMaskFixture, AiMaskCoverageTextureUploadsOncePerAsset) {
   auto h = AiMaskHarness();
-  ai_mask_test::CheckAiMaskCoverageTextureUploadsOncePerAssetAndEdge(h);
+  ai_mask_test::CheckAiMaskCoverageTextureUploadsOncePerAsset(h);
 }
 
 TEST_F(OpenClMaskFixture, CoverageOnlyWorkKeepsPhotoResults) {

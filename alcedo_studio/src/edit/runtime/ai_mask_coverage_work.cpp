@@ -5,6 +5,7 @@
 #include "edit/runtime/ai_mask_coverage_work.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -79,6 +80,34 @@ auto MakeAiMaskCoverageWork(const MaskAssetDescriptor& source, Extent2D analysis
 
 auto AiMaskCandidateDescriptor(Extent2D analysis_extent) -> MaskAssetDescriptor {
   return MaskAssetDescriptor{analysis_extent, NormalizedRect{0.0f, 0.0f, 1.0f, 1.0f}};
+}
+
+auto AiMaskEdgeDispatch::MorphologyWorkTextureCount() const -> std::uint32_t {
+  // Without Feather the last morphology step writes the output.
+  const auto steps_into_work = HasFeather() ? expand_steps : std::max(expand_steps - 1, 0);
+  return static_cast<std::uint32_t>(std::min(steps_into_work, 2));
+}
+
+auto MakeAiMaskEdgeDispatch(const AiMaskCoverageWork& work) -> AiMaskEdgeDispatch {
+  if (!work.HasEdgeAdjustment()) {
+    Fail("the edge dispatch needs Feather or Expand");
+  }
+  AiMaskEdgeDispatch dispatch;
+  dispatch.output_extent = Extent2D{static_cast<std::uint32_t>(work.output_rect.width),
+                                    static_cast<std::uint32_t>(work.output_rect.height)};
+  dispatch.source_extent = work.source.extent;
+  dispatch.source_x      = work.source_rect.x - work.output_rect.x;
+  dispatch.source_y      = work.source_rect.y - work.output_rect.y;
+  dispatch.expand_steps  = std::abs(work.edge.expand_px);
+  dispatch.dilate        = work.edge.expand_px >= 0;
+  if (work.edge.feather_px > 0.0f) {
+    dispatch.feather_weights = AiMaskFeatherWeights(work.edge.feather_px);
+    if (static_cast<std::int32_t>(dispatch.feather_weights.size()) - 1 >
+        kAiMaskFeatherMaximumRadius) {
+      Fail("the Feather radius exceeds " + std::to_string(kAiMaskFeatherMaximumRadius));
+    }
+  }
+  return dispatch;
 }
 
 }  // namespace alcedo

@@ -19,6 +19,7 @@
 #include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "ai_mask_gpu_coverage_test_support.hpp"
 #include "ai_mask_raster_test_support.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -189,6 +190,15 @@ class CudaMaskFixture : public ::testing::Test {
                                   AiMaskEdgeAdjustment edge) {
       return ai_mask_test::AcquireCandidateInCoverageWork(device_, pixels, analysis, edge);
     };
+    h.stored_coverage = [this](const AiSegmentationMaskSource& source) {
+      return ai_mask_test::AcquireStoredInCoverageWork(device_, source);
+    };
+    h.cache_edge_work  = [this] { return device_.Workspace().MaskCoverage().EdgeWorkCount(); };
+    h.cache_used_bytes = [this] { return device_.Workspace().MaskCoverage().UsedBytes(); };
+    h.fail_texture_allocation_after = [this](std::uint32_t allocations_to_pass) {
+      device_.Workspace().Device().FailTextureAllocationAfter(allocations_to_pass);
+    };
+    h.records_edge_on_device = MaskCoverageTextureCache<CudaBackend>::kRecordsEdgeOnDevice;
     return h;
   }
 
@@ -532,9 +542,9 @@ TEST_F(CudaMaskFixture, AiMaskFeatherAndExpandChangeCoverage) {
   ai_mask_test::CheckAiMaskFeatherAndExpandChangeCoverage(h);
 }
 
-TEST_F(CudaMaskFixture, AiMaskCoverageTextureUploadsOncePerAssetAndEdge) {
+TEST_F(CudaMaskFixture, AiMaskCoverageTextureUploadsOncePerAsset) {
   auto h = AiMaskHarness();
-  ai_mask_test::CheckAiMaskCoverageTextureUploadsOncePerAssetAndEdge(h);
+  ai_mask_test::CheckAiMaskCoverageTextureUploadsOncePerAsset(h);
 }
 
 TEST_F(CudaMaskFixture, CoverageOnlyWorkKeepsPhotoResults) {
@@ -545,6 +555,34 @@ TEST_F(CudaMaskFixture, CoverageOnlyWorkKeepsPhotoResults) {
 TEST_F(CudaMaskFixture, AiMaskMissingAssetFailsRender) {
   auto h = AiMaskHarness();
   ai_mask_test::CheckAiMaskMissingAssetFailsRender(h);
+}
+
+// SM8.2: CUDA records Feather and Expand on the device; there is no host edge step.
+static_assert(MaskCoverageTextureCache<CudaBackend>::kRecordsEdgeOnDevice);
+
+TEST_F(CudaMaskFixture, GpuExpandMatchesAlternatingMorphologyExactly) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuExpandMatchesAlternatingMorphologyExactly(h);
+}
+
+TEST_F(CudaMaskFixture, GpuFeatherMatchesIndependentGaussianWithinOneCode) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuFeatherMatchesIndependentGaussianWithinOneCode(h);
+}
+
+TEST_F(CudaMaskFixture, GpuCoverageIncludesFullMarginAtImageBorders) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuCoverageIncludesFullMarginAtImageBorders(h);
+}
+
+TEST_F(CudaMaskFixture, EdgeChangeDoesNotUploadOriginalAgain) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckEdgeChangeDoesNotUploadOriginalAgain(h);
+}
+
+TEST_F(CudaMaskFixture, FailedEdgeWorkKeepsPublishedCoverage) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckFailedEdgeWorkKeepsPublishedCoverage(h);
 }
 
 }  // namespace

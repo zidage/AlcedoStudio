@@ -253,6 +253,7 @@ class MetalMaskFixture : public ::testing::Test {
                                   AiMaskEdgeAdjustment edge) {
       return ai_mask_test::AcquireCandidateInCoverageWork(device_, pixels, analysis, edge);
     };
+    h.records_edge_on_device = MaskCoverageTextureCache<MetalBackend>::kRecordsEdgeOnDevice;
     return h;
   }
 
@@ -667,9 +668,9 @@ TEST_F(MetalMaskFixture, AiMaskFeatherAndExpandChangeCoverage) {
   ai_mask_test::CheckAiMaskFeatherAndExpandChangeCoverage(h);
 }
 
-TEST_F(MetalMaskFixture, AiMaskCoverageTextureUploadsOncePerAssetAndEdge) {
+TEST_F(MetalMaskFixture, AiMaskCoverageTextureUploadsOncePerAsset) {
   auto h = AiMaskHarness();
-  ai_mask_test::CheckAiMaskCoverageTextureUploadsOncePerAssetAndEdge(h);
+  ai_mask_test::CheckAiMaskCoverageTextureUploadsOncePerAsset(h);
 }
 
 TEST_F(MetalMaskFixture, CoverageOnlyWorkKeepsPhotoResults) {

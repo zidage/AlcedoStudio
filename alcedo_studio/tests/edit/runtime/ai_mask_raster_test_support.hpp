@@ -179,11 +179,25 @@ inline auto MakeAiMask(const MaskAsset& asset, Extent2D analysis, std::string id
   return mask;
 }
 
-/// Result of one candidate coverage acquisition in coverage-only work, downloaded after the wait.
+/// Result of one coverage acquisition in coverage-only work, downloaded after the wait.
 struct CandidateCoverageDownload {
   MaskAssetDescriptor       descriptor{};
   std::vector<std::uint8_t> pixels;
 };
+
+/// Download the texture of @p read after the device is idle.
+template <class Device, class Read>
+auto DownloadCoverageRead(Device& device, const Read& read) -> CandidateCoverageDownload {
+  CandidateCoverageDownload download;
+  download.descriptor = read->descriptor;
+  download.pixels.resize(read->texture.Bytes());
+  device.Workspace().Device().DownloadTexture2D(
+      read->texture,
+      std::span<std::byte>(reinterpret_cast<std::byte*>(download.pixels.data()),
+                           download.pixels.size()),
+      device.CommandContext());
+  return download;
+}
 
 /**
  * @brief Coverage-only work on @p device: BeginCoverageWork, the candidate acquisition,
@@ -206,15 +220,28 @@ auto AcquireCandidateInCoverageWork(Device& device, const AiMaskCoveragePixels& 
   }();
   device.EndCoverageWork();
   device.WaitIdle();
-  CandidateCoverageDownload download;
-  download.descriptor = read->descriptor;
-  download.pixels.resize(read->texture.Bytes());
-  device.Workspace().Device().DownloadTexture2D(
-      read->texture,
-      std::span<std::byte>(reinterpret_cast<std::byte*>(download.pixels.data()),
-                           download.pixels.size()),
-      device.CommandContext());
-  return download;
+  return DownloadCoverageRead(device, read);
+}
+
+/**
+ * @brief Coverage-only work on @p device that acquires the committed AI Mask @p source through the
+ *        workspace reader, then downloads the texture. Cancels the work and rethrows on an error.
+ */
+template <class Device>
+auto AcquireStoredInCoverageWork(Device& device, const AiSegmentationMaskSource& source)
+    -> CandidateCoverageDownload {
+  device.BeginCoverageWork();
+  const auto read = [&] {
+    try {
+      return device.Workspace().AcquireAiMaskCoverage(source, device.CommandContext());
+    } catch (...) {
+      device.CancelCoverageWork();
+      throw;
+    }
+  }();
+  device.EndCoverageWork();
+  device.WaitIdle();
+  return DownloadCoverageRead(device, read);
 }
 
 /// Resource id of each published photo result of @p plan, or 0 when the result is not published.
@@ -265,6 +292,15 @@ struct AiMaskBackendHarness {
   std::function<CandidateCoverageDownload(const AiMaskCoveragePixels&, Extent2D,
                                           AiMaskEdgeAdjustment)>
       candidate_coverage;
+  /// @ref AcquireStoredInCoverageWork on the fixture device.
+  std::function<CandidateCoverageDownload(const AiSegmentationMaskSource&)> stored_coverage;
+  /// MaskCoverageTextureCache::EdgeWorkCount and UsedBytes.
+  std::function<std::uint64_t()>                                            cache_edge_work;
+  std::function<std::size_t()>                                              cache_used_bytes;
+  /// Fail the texture allocation after @p allocations_to_pass more allocations.
+  std::function<void(std::uint32_t)> fail_texture_allocation_after;
+  /// MaskCoverageTextureCache::kRecordsEdgeOnDevice of the backend.
+  bool                               records_edge_on_device = false;
 };
 
 /// Analysis image of the checks: the full reference of a 64 x 48 test source.
@@ -388,7 +424,9 @@ inline void CheckAiMaskFeatherAndExpandChangeCoverage(AiMaskBackendHarness& h) {
   EXPECT_NE(actual, ExpectedAiMaskR8(asset, {}, h.plan(), false, 1.0));
 }
 
-inline void CheckAiMaskCoverageTextureUploadsOncePerAssetAndEdge(AiMaskBackendHarness& h) {
+/// The asset is read and uploaded once; an edge change adds only an edge result (SM8.2) or, on a
+/// backend with the host edge function, an upload of it.
+inline void CheckAiMaskCoverageTextureUploadsOncePerAsset(AiMaskBackendHarness& h) {
   const auto asset  = MakeEllipseAsset(kAnalysisExtent, kAssetRect);
   const auto reader = AttachAiMask(h, asset);
   h.compile({});
@@ -404,9 +442,9 @@ inline void CheckAiMaskCoverageTextureUploadsOncePerAssetAndEdge(AiMaskBackendHa
   h.document().PrimaryGrade()->ReplaceMaskSource(kAiMaskId, source);
   h.compile({});
   h.render_mask();
-  EXPECT_EQ(h.cache_uploads(), 2u);
+  EXPECT_EQ(h.cache_uploads(), h.records_edge_on_device ? 1u : 2u);
   EXPECT_EQ(h.cache_entries(), 2u);
-  EXPECT_EQ(reader->ReadCount(), 2);
+  EXPECT_EQ(reader->ReadCount(), h.records_edge_on_device ? 1 : 2);
 
   h.release_session();
   EXPECT_EQ(h.cache_entries(), 0u);
@@ -426,7 +464,8 @@ inline auto MakeCandidatePixels(Extent2D analysis) -> AiMaskCoveragePixels {
 
 /**
  * SM8.1: coverage-only work uploads the candidate on the device submission path and leaves the
- * published photo results, the texture pool, and the next render unchanged.
+ * published photo results, the texture pool, and the next render unchanged. The edge result
+ * matches the host function within one code value (SM8.2 device Feather).
  */
 inline void CheckCoverageOnlyWorkKeepsPhotoResults(AiMaskBackendHarness& h) {
   const auto asset = MakeEllipseAsset(kAnalysisExtent, kAssetRect);
@@ -460,7 +499,7 @@ inline void CheckCoverageOnlyWorkKeepsPhotoResults(AiMaskBackendHarness& h) {
   whole_image.pixels     = *candidate;
   const auto expected    = MakeAiMaskCoverageTexture(whole_image, kAnalysisExtent, edge);
   EXPECT_EQ(adjusted.descriptor, expected.descriptor);
-  EXPECT_EQ(adjusted.pixels, expected.pixels);
+  ExpectR8Within1(adjusted.pixels, expected.pixels, "candidate edge result");
 
   EXPECT_EQ(h.photo_result_ids(), results_before);
   EXPECT_EQ(h.published_count(), published_before);

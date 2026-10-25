@@ -175,6 +175,9 @@ auto CudaBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, Tex
   if (bytes == 0) {
     return {};
   }
+  if (ConsumeInjectedFailure(allocations_before_failure_)) {
+    throw std::runtime_error("CudaBackend::CreateTexture2D: injected failure");
+  }
   void* ptr = nullptr;
   cuda::CheckCuda(::cudaMalloc(&ptr, bytes), "CudaBackend::CreateTexture2D");
   NoteMalloc();

@@ -69,16 +69,32 @@ template <class Backend>
 using MaskCoverageRead = std::shared_ptr<const MaskCoverageImage<Backend>>;
 
 /**
+ * @brief True when @p Backend records the Feather and Expand of an AI Mask on its device
+ *        (`RecordAiMaskEdge`, SM8.2 to SM8.4).
+ *
+ * The coverage owner selects the device operation at compile time. A backend without it uses the
+ * host function @ref MakeAiMaskCoverageTexture and an upload of the result; there is no runtime
+ * substitution after a device failure.
+ */
+template <class Backend>
+concept RecordsAiMaskEdgeOnDevice =
+    requires(Backend& backend, const AiMaskEdgeDispatch& dispatch,
+             const AiMaskEdgeTextures<typename Backend::Texture2D>& textures,
+             typename Backend::CommandContext&                      command_context) {
+      backend.RecordAiMaskEdge(dispatch, textures, command_context);
+    };
+
+/**
  * @brief Device R8 coverage of AI Masks: the owner of original coverage uploads and of the
- *        coverage after Feather and Expand (SM6 R6, SM8.1).
+ *        coverage after Feather and Expand (SM6 R6, SM8.1, SM8.2).
  *
  * Two acquisitions exist, one per origin of the original coverage:
  *
  * - @ref AcquireStored: a committed AI Mask. Its original coverage is the stored asset, read
- *   through the workspace reader. Entries are keyed by content (asset key and analysis size, plus
- *   the exact edge bits), so no entry can become stale. They stay for reuse under
- *   @ref kMaskCoverageTextureByteBudget: a new entry evicts the least recently used entries that
- *   no read, no current frame, and no in-flight submission uses.
+ *   through the workspace reader. Entries are keyed by content: the original upload by asset key
+ *   and analysis size, an edge result by those plus the exact edge bits, so no entry can become
+ *   stale. They stay for reuse under @ref kMaskCoverageTextureByteBudget: a new entry evicts the
+ *   least recently used entries that no read, no current frame, and no in-flight submission uses.
  * - @ref AcquireCandidate: the Mask candidate of the AI Mask edit session. Its original coverage is
  *   a shared read of the session allocation; the allocation identity identifies the pixels. The
  *   cache keeps one current original upload and one current edge result. A replacement retires the
@@ -86,18 +102,22 @@ using MaskCoverageRead = std::shared_ptr<const MaskCoverageImage<Backend>>;
  *
  * Each acquisition separates the original-coverage (source) stage from the edge-result stage. With
  * no Feather and no Expand, the read is the source texture and no edge work runs. Otherwise the
- * edge result is a separate texture of @ref AiMaskCoverageWork::output_rect. The edge result is
- * computed on the host (@ref MakeAiMaskCoverageTexture) and uploaded until each GPU backend runs
- * the operation (SM8.2 to SM8.4).
+ * edge result is a separate texture of @ref AiMaskCoverageWork::output_rect. On a backend that
+ * satisfies @ref RecordsAiMaskEdgeOnDevice, the edge result is device work on the resident source
+ * texture: an edge change uploads nothing. The morphology and Feather intermediates are work
+ * textures of this owner. They are reused for the next edge work of the same output size and are
+ * never retained as results. Another backend computes the edge result on the host
+ * (@ref MakeAiMaskCoverageTexture) and uploads it.
  *
- * A failed acquisition throws and changes no current entry; earlier reads stay valid.
+ * A failed acquisition throws and changes no current edge result; earlier reads stay valid.
  *
  * Owner: BasicRenderWorkspace. Thread: the render thread of the workspace for every call; a read
  * may be released on any thread. Released by BasicRenderWorkspace::ReleaseSessionResources (an
  * image change in the editor, the end of each batch task). The cache and its backend must outlive
- * every read.
+ * every read. Work textures are reused on the same ordered device queue only.
  *
- * @tparam Backend Resource factory with CreateTexture2D, UploadTexture2D, and IsResourceBusy.
+ * @tparam Backend Resource factory with CreateTexture2D, UploadTexture2D, and IsResourceBusy, and
+ *         optionally RecordAiMaskEdge.
  */
 template <class Backend>
 class MaskCoverageTextureCache {
@@ -107,6 +127,9 @@ class MaskCoverageTextureCache {
   using Image                                               = MaskCoverageImage<Backend>;
   using Read                                                = MaskCoverageRead<Backend>;
 
+  /// True when the edge result is device work (@ref RecordsAiMaskEdgeOnDevice).
+  static constexpr bool kRecordsEdgeOnDevice                = RecordsAiMaskEdgeOnDevice<Backend>;
+
   MaskCoverageTextureCache()                                = default;
   MaskCoverageTextureCache(const MaskCoverageTextureCache&) = delete;
   auto operator=(const MaskCoverageTextureCache&) -> MaskCoverageTextureCache& = delete;
@@ -115,42 +138,56 @@ class MaskCoverageTextureCache {
    * @brief Coverage of the committed AI Mask @p source after its Feather and Expand, for the
    *        current submission of @p command_context.
    *
+   * The original upload of the asset is reused for every edge value of the same asset and
+   * analysis size; only a miss of that upload reads the asset.
+   *
    * @throws std::runtime_error from the input validation (@ref MakeAiMaskCoverageWork), the
-   *         reader, the texture allocation, or the upload. The cache then keeps no entry for the
-   *         source.
+   *         reader, a texture allocation, the upload, or the edge work. The cache then keeps no
+   *         entry for the failed stage; a completed original upload stays.
    */
   auto AcquireStored(const AiSegmentationMaskSource& source, const MaskAssetReader& reader,
                      Backend& backend, CommandContext& command_context) -> Read {
     const auto work =
         MakeAiMaskCoverageWork(source.descriptor, source.analysis_extent, source.edge);
-    const auto key        = MakeStoredKey(source);
     const auto submission = command_context.SubmissionId();
+    const auto source_key = MakeStoredSourceKey(source);
+    const auto result_key =
+        work.HasEdgeAdjustment() ? MakeStoredResultKey(source_key, source.edge) : source_key;
     ++lru_clock_;
-    for (auto& entry : stored_) {
-      if (entry.key == key) {
-        Touch(entry, submission);
-        return entry.image;
-      }
+    if (auto* hit = FindStored(result_key)) {
+      Touch(*hit, submission);
+      return hit->image;
     }
 
-    const auto asset = reader.Read(source.asset_key);
-    if (asset.descriptor != source.descriptor) {
-      throw std::runtime_error("AI Mask coverage: the asset " + std::string{asset.key.Value()} +
-                               " does not have the size and bounds of its AI Mask");
-    }
-    const auto bytes = static_cast<std::size_t>(work.output_rect.width) * work.output_rect.height;
-    EvictStoredFor(bytes, backend, submission);
-    Entry entry;
-    if (work.HasEdgeAdjustment()) {
-      const auto edge_result = MakeAiMaskCoverageTexture(work, asset.pixels);
-      entry = Upload(edge_result.descriptor, edge_result.pixels, backend, command_context);
+    if constexpr (kRecordsEdgeOnDevice) {
+      Read original;
+      if (auto* hit = FindStored(source_key)) {
+        Touch(*hit, submission);
+        original = hit->image;
+      } else {
+        const auto asset = ReadAsset(source, reader);
+        EvictStoredFor(asset.pixels.size(), backend, submission);
+        original = InstallStored(Upload(work.source, asset.pixels, backend, command_context),
+                                 source_key, submission);
+      }
+      if (!work.HasEdgeAdjustment()) {
+        return original;
+      }
+      EvictStoredFor(OutputBytes(work), backend, submission);
+      return InstallStored(RecordEdge(work, *original, backend, command_context), result_key,
+                           submission);
     } else {
-      entry = Upload(work.source, asset.pixels, backend, command_context);
+      const auto asset = ReadAsset(source, reader);
+      EvictStoredFor(OutputBytes(work), backend, submission);
+      if (!work.HasEdgeAdjustment()) {
+        return InstallStored(Upload(work.source, asset.pixels, backend, command_context),
+                             source_key, submission);
+      }
+      const auto edge_result = MakeAiMaskCoverageTexture(work, asset.pixels);
+      return InstallStored(
+          Upload(edge_result.descriptor, edge_result.pixels, backend, command_context), result_key,
+          submission);
     }
-    entry.key = key;
-    Touch(entry, submission);
-    stored_.push_back(std::move(entry));
-    return stored_.back().image;
   }
 
   /**
@@ -166,8 +203,9 @@ class MaskCoverageTextureCache {
    *
    * @throws std::runtime_error with an "AI Mask coverage:" message for a null read, a pixel count
    *         that differs from the analysis size, the input validation of
-   *         @ref MakeAiMaskCoverageWork, the texture allocation, or the upload. The current
-   *         entries and earlier reads then stay unchanged.
+   *         @ref MakeAiMaskCoverageWork, a texture allocation, the upload, or the edge work. The
+   *         current edge result and earlier reads then stay unchanged. A completed original upload
+   *         of @p pixels stays current.
    */
   auto AcquireCandidate(const AiMaskCoveragePixels& pixels, Extent2D analysis_extent,
                         const AiMaskEdgeAdjustment& edge, Backend& backend,
@@ -188,25 +226,35 @@ class MaskCoverageTextureCache {
     const auto submission = command_context.SubmissionId();
     ++lru_clock_;
 
-    if (!work.HasEdgeAdjustment()) {
-      if (!Matches(candidate_source_, pixels, analysis_extent, edge)) {
+    if (!work.HasEdgeAdjustment() || kRecordsEdgeOnDevice) {
+      if (!MatchesSource(candidate_source_, pixels, analysis_extent)) {
         auto entry = Upload(work.source, *pixels, backend, command_context);
-        Install(candidate_source_, std::move(entry), pixels, analysis_extent, edge, pixels);
+        Install(candidate_source_, std::move(entry), pixels, analysis_extent, {}, pixels);
       }
+      Touch(candidate_source_->entry, submission);
+    }
+    if (!work.HasEdgeAdjustment()) {
       // The original coverage is the current result: an earlier edge result is not current.
       Retire(candidate_result_);
-      Touch(candidate_source_->entry, submission);
       return candidate_source_->entry.image;
     }
 
-    if (!Matches(candidate_result_, pixels, analysis_extent, edge)) {
-      const auto edge_result = MakeAiMaskCoverageTexture(work, *pixels);
-      auto entry = Upload(edge_result.descriptor, edge_result.pixels, backend, command_context);
+    if (!MatchesResult(candidate_result_, pixels, analysis_extent, edge)) {
+      Entry entry;
+      if constexpr (kRecordsEdgeOnDevice) {
+        entry = RecordEdge(work, *candidate_source_->entry.image, backend, command_context);
+      } else {
+        const auto edge_result = MakeAiMaskCoverageTexture(work, *pixels);
+        entry = Upload(edge_result.descriptor, edge_result.pixels, backend, command_context);
+      }
       Install(candidate_result_, std::move(entry), pixels, analysis_extent, edge, nullptr);
     }
-    // An original upload of another allocation is no longer current.
-    if (candidate_source_.has_value() && !SameAllocation(candidate_source_->identity, pixels)) {
-      Retire(candidate_source_);
+    if constexpr (!kRecordsEdgeOnDevice) {
+      // The host edge result reads the CPU pixels: an original upload of another allocation is
+      // no longer current.
+      if (candidate_source_.has_value() && !SameAllocation(candidate_source_->identity, pixels)) {
+        Retire(candidate_source_);
+      }
     }
     Touch(candidate_result_->entry, submission);
     return candidate_result_->entry.image;
@@ -220,21 +268,22 @@ class MaskCoverageTextureCache {
     DestroyIdleRetired(backend);
     for (auto* candidate : {&candidate_source_, &candidate_result_}) {
       if (candidate->has_value() && (*candidate)->upload_owner &&
-          !backend.IsResourceBusy((*candidate)->entry.upload_submission)) {
+          !backend.IsResourceBusy((*candidate)->entry.write_submission)) {
         (*candidate)->upload_owner.reset();
       }
     }
   }
 
   /**
-   * @brief Retire every entry whose upload belongs to the cancelled @p submission.
+   * @brief Retire every entry that the cancelled @p submission wrote: an upload or an edge
+   *        result.
    *
    * A cancelled submission is never submitted, and Metal discards its recorded command buffer, so
-   * the texture of such an entry has no defined content. The next acquisition uploads again.
+   * the texture of such an entry has no defined content. The next acquisition writes it again.
    */
-  void DiscardUploadsOf(std::uint64_t submission) {
+  void DiscardWritesOf(std::uint64_t submission) {
     for (auto it = stored_.begin(); it != stored_.end();) {
-      if (it->upload_submission == submission) {
+      if (it->write_submission == submission) {
         Retire(std::move(*it));
         it = stored_.erase(it);
       } else {
@@ -242,15 +291,15 @@ class MaskCoverageTextureCache {
       }
     }
     for (auto* candidate : {&candidate_source_, &candidate_result_}) {
-      if (candidate->has_value() && (*candidate)->entry.upload_submission == submission) {
+      if (candidate->has_value() && (*candidate)->entry.write_submission == submission) {
         Retire(*candidate);
       }
     }
   }
 
   /**
-   * @brief Drop every entry. An entry that a read still uses moves to the retired entries until
-   *        @ref ReleaseIdle finds it idle.
+   * @brief Drop every entry and every work texture. An entry that a read still uses moves to the
+   *        retired entries until @ref ReleaseIdle finds it idle.
    * @pre The GPU no longer uses the entries (the caller waited for idle).
    */
   void Clear() {
@@ -267,19 +316,29 @@ class MaskCoverageTextureCache {
       used_bytes_ -= entry.bytes;
       return true;
     });
+    work_textures_.clear();
+    work_texture_bytes_ = 0;
   }
 
-  /// Number of live textures: stored, current candidate, and retired.
+  /// Number of live coverage textures: stored, current candidate, and retired. Work textures are
+  /// counted by @ref WorkTextureCount.
   [[nodiscard]] auto EntryCount() const -> std::size_t {
     return stored_.size() + retired_.size() + (candidate_source_.has_value() ? 1 : 0) +
            (candidate_result_.has_value() ? 1 : 0);
   }
   /// Number of replaced textures that wait for a read or a submission to finish.
   [[nodiscard]] auto RetiredCount() const -> std::size_t { return retired_.size(); }
-  /// Bytes of every live texture.
+  /// Bytes of every live coverage texture; @ref kMaskCoverageTextureByteBudget applies to them.
   [[nodiscard]] auto UsedBytes() const -> std::size_t { return used_bytes_; }
-  /// Number of uploaded textures since construction; a hit does not count.
+  /// Number of original-coverage and host edge-result uploads since construction; a hit does not
+  /// count.
   [[nodiscard]] auto UploadCount() const -> std::uint64_t { return upload_count_; }
+  /// Number of edge results recorded on the device since construction.
+  [[nodiscard]] auto EdgeWorkCount() const -> std::uint64_t { return edge_work_count_; }
+  /// Number of live morphology and Feather work textures.
+  [[nodiscard]] auto WorkTextureCount() const -> std::size_t { return work_textures_.size(); }
+  /// Bytes of the live work textures. They are outside the coverage budget.
+  [[nodiscard]] auto WorkTextureBytes() const -> std::size_t { return work_texture_bytes_; }
   /// True while the cache holds candidate pixels for an upload that has not completed.
   [[nodiscard]] auto HoldsCandidateUploadPixels() const -> bool {
     return (candidate_source_.has_value() && candidate_source_->upload_owner) ||
@@ -291,8 +350,8 @@ class MaskCoverageTextureCache {
     std::string            key;
     std::shared_ptr<Image> image;
     std::size_t            bytes                = 0;
-    /// Submission that recorded the upload of the texture.
-    std::uint64_t          upload_submission    = 0;
+    /// Submission that wrote the texture: its upload or its edge work.
+    std::uint64_t          write_submission     = 0;
     std::uint64_t          last_used_submission = 0;
     std::uint64_t          lru_tick             = 0;
   };
@@ -307,13 +366,41 @@ class MaskCoverageTextureCache {
     AiMaskEdgeAdjustment                           edge{};
   };
 
-  /// Asset key, analysis size, and the exact bits of the edge values.
-  static auto MakeStoredKey(const AiSegmentationMaskSource& source) -> std::string {
+  /// A reusable intermediate texture of the edge work.
+  struct WorkTexture {
+    Texture2D     texture{};
+    Extent2D      extent{};
+    TextureFormat format               = TextureFormat::R8;
+    std::size_t   bytes                = 0;
+    std::uint64_t last_used_submission = 0;
+  };
+
+  /// Asset key and analysis size: the identity of an original upload.
+  static auto MakeStoredSourceKey(const AiSegmentationMaskSource& source) -> std::string {
     return std::string{source.asset_key.Value()} + "/" +
            std::to_string(source.analysis_extent.width) + "x" +
-           std::to_string(source.analysis_extent.height) + "/" +
-           std::to_string(std::bit_cast<std::uint32_t>(source.edge.feather_px)) + "/" +
-           std::to_string(source.edge.expand_px);
+           std::to_string(source.analysis_extent.height);
+  }
+
+  /// The original-upload key plus the exact bits of the edge values.
+  static auto MakeStoredResultKey(const std::string& source_key, const AiMaskEdgeAdjustment& edge)
+      -> std::string {
+    return source_key + "/" + std::to_string(std::bit_cast<std::uint32_t>(edge.feather_px)) + "/" +
+           std::to_string(edge.expand_px);
+  }
+
+  static auto OutputBytes(const AiMaskCoverageWork& work) -> std::size_t {
+    return static_cast<std::size_t>(work.output_rect.width) * work.output_rect.height;
+  }
+
+  static auto ReadAsset(const AiSegmentationMaskSource& source, const MaskAssetReader& reader)
+      -> MaskAsset {
+    auto asset = reader.Read(source.asset_key);
+    if (asset.descriptor != source.descriptor) {
+      throw std::runtime_error("AI Mask coverage: the asset " + std::string{asset.key.Value()} +
+                               " does not have the size and bounds of its AI Mask");
+    }
+    return asset;
   }
 
   /// True when @p identity names the allocation of @p pixels. An expired identity keeps its
@@ -323,15 +410,36 @@ class MaskCoverageTextureCache {
     return !identity.owner_before(pixels) && !pixels.owner_before(identity);
   }
 
-  static auto Matches(const std::optional<CandidateEntry>& candidate,
-                      const AiMaskCoveragePixels& pixels, Extent2D analysis_extent,
-                      const AiMaskEdgeAdjustment& edge) -> bool {
+  static auto MatchesSource(const std::optional<CandidateEntry>& candidate,
+                            const AiMaskCoveragePixels& pixels, Extent2D analysis_extent) -> bool {
     return candidate.has_value() && SameAllocation(candidate->identity, pixels) &&
-           candidate->analysis_extent == analysis_extent && candidate->edge == edge;
+           candidate->analysis_extent == analysis_extent;
+  }
+
+  static auto MatchesResult(const std::optional<CandidateEntry>& candidate,
+                            const AiMaskCoveragePixels& pixels, Extent2D analysis_extent,
+                            const AiMaskEdgeAdjustment& edge) -> bool {
+    return MatchesSource(candidate, pixels, analysis_extent) && candidate->edge == edge;
   }
 
   static auto IsIdle(const Entry& entry, const Backend& backend) -> bool {
     return entry.image.use_count() == 1 && !backend.IsResourceBusy(entry.last_used_submission);
+  }
+
+  auto FindStored(const std::string& key) -> Entry* {
+    for (auto& entry : stored_) {
+      if (entry.key == key) {
+        return &entry;
+      }
+    }
+    return nullptr;
+  }
+
+  auto InstallStored(Entry entry, const std::string& key, std::uint64_t submission) -> Read {
+    entry.key = key;
+    Touch(entry, submission);
+    stored_.push_back(std::move(entry));
+    return stored_.back().image;
   }
 
   void Touch(Entry& entry, std::uint64_t submission) {
@@ -339,39 +447,133 @@ class MaskCoverageTextureCache {
     entry.lru_tick             = lru_clock_;
   }
 
+  /// Allocate one texture of this owner; the error names the size and format.
+  static auto Allocate(Extent2D extent, TextureFormat format, Backend& backend) -> Texture2D {
+    try {
+      return backend.CreateTexture2D(extent.width, extent.height, format);
+    } catch (const std::exception& error) {
+      throw std::runtime_error("AI Mask coverage: allocating the " + std::to_string(extent.width) +
+                               " x " + std::to_string(extent.height) + " " +
+                               TextureFormatName(format) + " texture failed: " + error.what());
+    }
+  }
+
   /// Allocate and fill one R8 texture. Changes no entry on failure.
   auto Upload(const MaskAssetDescriptor& descriptor, std::span<const std::uint8_t> pixels,
               Backend& backend, CommandContext& command_context) -> Entry {
-    const auto width  = descriptor.extent.width;
-    const auto height = descriptor.extent.height;
-    const auto size   = std::to_string(width) + " x " + std::to_string(height);
-    auto       image  = std::make_shared<Image>();
+    auto image        = std::make_shared<Image>();
     image->descriptor = descriptor;
-    try {
-      image->texture = backend.CreateTexture2D(width, height, TextureFormat::R8);
-    } catch (const std::exception& error) {
-      throw std::runtime_error("AI Mask coverage: allocating the " + size +
-                               " R8 texture failed: " + error.what());
-    }
+    image->texture    = Allocate(descriptor.extent, TextureFormat::R8, backend);
     try {
       backend.UploadTexture2D(image->texture,
                               std::span<const std::byte>(
                                   reinterpret_cast<const std::byte*>(pixels.data()), pixels.size()),
                               command_context);
     } catch (const std::exception& error) {
-      throw std::runtime_error("AI Mask coverage: uploading the " + size +
-                               " R8 texture failed: " + error.what());
+      throw std::runtime_error(
+          "AI Mask coverage: uploading the " + std::to_string(descriptor.extent.width) + " x " +
+          std::to_string(descriptor.extent.height) + " R8 texture failed: " + error.what());
     }
     Entry entry;
-    entry.image             = std::move(image);
-    entry.bytes             = pixels.size();
-    entry.upload_submission = command_context.SubmissionId();
+    entry.image            = std::move(image);
+    entry.bytes            = pixels.size();
+    entry.write_submission = command_context.SubmissionId();
     used_bytes_ += entry.bytes;
     ++upload_count_;
     return entry;
   }
 
-  /// @p upload_owner is the read that the upload copied from, or null for a host-computed buffer.
+  /**
+   * @brief Record the edge work of @p work on the device: @p original (the source texture) to a
+   *        new output texture. Changes no entry on failure; the new output is then destroyed.
+   */
+  auto RecordEdge(const AiMaskCoverageWork& work, const Image& original, Backend& backend,
+                  CommandContext& command_context) -> Entry {
+    const auto dispatch = MakeAiMaskEdgeDispatch(work);
+    auto       image    = std::make_shared<Image>();
+    image->descriptor   = work.OutputDescriptor();
+    image->texture      = Allocate(dispatch.output_extent, TextureFormat::R8, backend);
+
+    AiMaskEdgeTextures<Texture2D> textures;
+    textures.source       = &original.texture;
+    textures.output       = &image->texture;
+    const auto submission = command_context.SubmissionId();
+    const auto work_textures =
+        AcquireWorkTextures(dispatch.output_extent, dispatch.MorphologyWorkTextureCount(),
+                            dispatch.HasFeather(), backend, submission);
+    for (std::uint32_t i = 0; i < dispatch.MorphologyWorkTextureCount(); ++i) {
+      textures.morphology[i] = &work_textures_[work_textures[i]].texture;
+    }
+    if (dispatch.HasFeather()) {
+      textures.feather_rows = &work_textures_[work_textures.back()].texture;
+    }
+    try {
+      backend.RecordAiMaskEdge(dispatch, textures, command_context);
+    } catch (const std::exception& error) {
+      throw std::runtime_error(
+          std::string{"AI Mask coverage: recording the Feather and Expand work failed: "} +
+          error.what());
+    }
+    Entry entry;
+    entry.image            = std::move(image);
+    entry.bytes            = OutputBytes(work);
+    entry.write_submission = submission;
+    used_bytes_ += entry.bytes;
+    ++edge_work_count_;
+    return entry;
+  }
+
+  /**
+   * @brief Indices into @ref work_textures_ of @p morphology_count R8 textures and, with
+   *        @p feather, one R32f texture (last) of @p extent, all marked used by @p submission.
+   *
+   * Idle work textures of another size are destroyed first. A matching texture is reused even
+   * when the current submission used it: the device queue is ordered.
+   */
+  auto AcquireWorkTextures(Extent2D extent, std::uint32_t morphology_count, bool feather,
+                           Backend& backend, std::uint64_t submission) -> std::vector<std::size_t> {
+    std::erase_if(work_textures_, [&](const WorkTexture& work_texture) {
+      if (work_texture.extent == extent ||
+          backend.IsResourceBusy(work_texture.last_used_submission)) {
+        return false;
+      }
+      work_texture_bytes_ -= work_texture.bytes;
+      return true;
+    });
+    std::vector<std::size_t> indices;
+    const auto               take = [&](TextureFormat format, std::uint32_t ordinal) {
+      std::uint32_t seen = 0;
+      for (std::size_t i = 0; i < work_textures_.size(); ++i) {
+        if (work_textures_[i].extent == extent && work_textures_[i].format == format &&
+            seen++ == ordinal) {
+          indices.push_back(i);
+          return;
+        }
+      }
+      WorkTexture work_texture;
+      work_texture.texture = Allocate(extent, format, backend);
+      work_texture.extent  = extent;
+      work_texture.format  = format;
+      work_texture.bytes   = static_cast<std::size_t>(extent.width) * extent.height *
+                           TextureFormatBytesPerPixel(format);
+      work_texture_bytes_ += work_texture.bytes;
+      work_textures_.push_back(std::move(work_texture));
+      indices.push_back(work_textures_.size() - 1);
+    };
+    for (std::uint32_t i = 0; i < morphology_count; ++i) {
+      take(TextureFormat::R8, i);
+    }
+    if (feather) {
+      take(TextureFormat::R32f, 0);
+    }
+    for (const auto index : indices) {
+      work_textures_[index].last_used_submission = submission;
+    }
+    return indices;
+  }
+
+  /// @p upload_owner is the read that the upload copied from, or null for device-written or
+  /// host-computed contents.
   void Install(std::optional<CandidateEntry>& slot, Entry entry, const AiMaskCoveragePixels& pixels,
                Extent2D analysis_extent, const AiMaskEdgeAdjustment& edge,
                AiMaskCoveragePixels upload_owner) {
@@ -432,9 +634,12 @@ class MaskCoverageTextureCache {
   std::optional<CandidateEntry> candidate_source_;
   std::optional<CandidateEntry> candidate_result_;
   std::vector<Entry>            retired_;
-  std::size_t                   used_bytes_   = 0;
-  std::uint64_t                 lru_clock_    = 0;
-  std::uint64_t                 upload_count_ = 0;
+  std::vector<WorkTexture>      work_textures_;
+  std::size_t                   used_bytes_         = 0;
+  std::size_t                   work_texture_bytes_ = 0;
+  std::uint64_t                 lru_clock_          = 0;
+  std::uint64_t                 upload_count_       = 0;
+  std::uint64_t                 edge_work_count_    = 0;
 };
 
 }  // namespace alcedo

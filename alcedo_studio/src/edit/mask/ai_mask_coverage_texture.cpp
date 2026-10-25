@@ -39,8 +39,11 @@ void ForEachRowBand(int rows, const Work& work) {
  * replicates only at the image edge: the result equals the single call, which runs on one
  * thread.
  */
+/// Size of the float Gaussian kernel of OpenCV for sigma > 0.
+auto FeatherKernelSize(double sigma) -> int { return cvRound(sigma * 8.0 + 1.0) | 1; }
+
 void GaussianBlurByRowBands(const cv::Mat& src, cv::Mat& dst, double sigma) {
-  const int     size   = cvRound(sigma * 8.0 + 1.0) | 1;
+  const int     size   = FeatherKernelSize(sigma);
   const cv::Mat kernel = cv::getGaussianKernel(size, sigma, CV_32F);
   const cv::Mat one    = cv::Mat::ones(1, 1, CV_32F);
   cv::Mat       horizontal(src.size(), CV_32F);
@@ -66,6 +69,21 @@ auto AiMaskEdgeMargin(const AiMaskEdgeAdjustment& edge) -> std::int32_t {
     margin += static_cast<std::int32_t>(std::ceil(4.0f * edge.feather_px)) + 1;
   }
   return margin;
+}
+
+auto AiMaskFeatherWeights(float feather_px) -> std::vector<float> {
+  if (!(feather_px > 0.0f)) {
+    throw std::runtime_error("AI Mask Feather weights need feather_px > 0");
+  }
+  ValidateAiMaskEdgeAdjustment(AiMaskEdgeAdjustment{feather_px, 0});
+  const int          size   = FeatherKernelSize(feather_px);
+  const cv::Mat      kernel = cv::getGaussianKernel(size, feather_px, CV_32F);
+  const int          radius = size / 2;
+  std::vector<float> weights(static_cast<std::size_t>(radius) + 1);
+  for (int k = 0; k <= radius; ++k) {
+    weights[static_cast<std::size_t>(k)] = kernel.at<float>(radius + k);
+  }
+  return weights;
 }
 
 auto MakeAiMaskCoverageTexture(const MaskAsset& asset, Extent2D analysis_extent,

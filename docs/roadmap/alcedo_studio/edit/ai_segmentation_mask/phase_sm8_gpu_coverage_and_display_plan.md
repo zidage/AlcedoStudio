@@ -1,7 +1,8 @@
 # SM8 GPU Coverage and One Display Composite - Phase Plan
 
 Date: 2026-10-24. Status: SM8.1 complete on 2026-10-24 on Windows and macOS (section 7.1.1).
-SM8.2 to SM8.8 are planned; no implementation evidence exists for them.
+SM8.2 complete on 2026-10-24 on Windows CUDA (section 7.2.1).
+SM8.3 to SM8.8 are planned; no implementation evidence exists for them.
 
 Parent: [AI Segmentation Mask Master Plan](../ai_segmentation_mask_master_plan.md), sections 1.5 and 9.7.
 Prerequisites: [SM4](phase_sm4_analysis_render_plan.md), [SM5](phase_sm5_ai_mask_source_and_session_plan.md),
@@ -276,7 +277,7 @@ The transport/composite split separates resource lifetime evidence from pixel co
 | Phase | Result | Dependency | Expected diff | Status |
 | --- | --- | --- | ---: | --- |
 | SM8.1 | Source lifetime and workspace operation boundary | SM5, SM6 | 900-1500 | complete 2026-10-24 (7.1.1) |
-| SM8.2 | CUDA edge computation and committed-render reuse | SM8.1 | 1200-1900 | planned |
+| SM8.2 | CUDA edge computation and committed-render reuse | SM8.1 | 1200-1900 | complete 2026-10-24 (7.2.1) |
 | SM8.3 | OpenCL edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | planned |
 | SM8.4 | Metal edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | planned |
 | SM8.5 | Dedicated GPU coverage presentation channel | SM8.1 | 1200-1900 | planned |
@@ -443,7 +444,114 @@ Test sigma 0, 0.5, 5, and 50; Expand -50, -2, 0, 2, and 50; odd sizes and image-
 
 **Commands.** Groups A and B, target `GpuDagCudaMaskTest`, `ctest -j 1` with named behavior filters.
 **Exit.** Pixel assertions pass and the production CUDA caller uses GPU edge processing.
-**Expected diff.** 1200-1900 lines. **Completion record.** Section 11; unfilled.
+**Expected diff.** 1200-1900 lines. **Completion record.** Section 7.2.1.
+
+#### 7.2.1 SM8.2 completion record
+
+```text
+Phase / date / status: SM8.2 / 2026-10-24 / complete on Windows (CUDA).
+Source revision and branch: base f3ac3db5 (SM8.1, pull request #504); branch
+  feature/ai-segmentation-sm8-2-cuda-edge-coverage (second pull request of the SM8 stack).
+Actual changed modules and diff size: 17 files, +1455 / -142 (1597 changed lines; estimate
+  1200-1900). Host Feather coefficients, AiMaskEdgeDispatch (ai_mask_coverage_work),
+  MaskCoverageTextureCache, BasicRenderWorkspace (discard of cancelled writes), CudaBackend, the
+  new cuda_ai_mask_coverage.cu, and tests. Largest changed files: mask_coverage_texture_cache.hpp
+  645 lines, mask_coverage_texture_cache_test.cpp 557 lines, ai_mask_gpu_coverage_test_support.hpp
+  364 lines.
+Implemented behavior:
+  1. AiMaskEdgeDispatch gives the device passes of one AiMaskCoverageWork: the source placed in
+     the output rectangle (zero outside it, replicated output border), |expand_px| alternating
+     cross/square 3 x 3 steps, then the two Feather passes with the half kernel of
+     AiMaskFeatherWeights. AiMaskFeatherWeights reads cv::getGaussianKernel(round(8 sigma + 1) | 1,
+     sigma, CV_32F), the kernel of the host function, so host and device use the same finite
+     coefficients and support (radius at most 200).
+  2. CudaBackend::RecordAiMaskEdge records MorphologyStepKernel steps (R8, exact), then
+     FeatherRowsKernel (R8 -> float rows, `u * (1 / 255)`) and FeatherColumnsKernel (float ->
+     R8, round half to even, clamp). The horizontal intermediate stays float. It validates every
+     texture size and format and reports launch errors; there is no host edge step on CUDA.
+  3. MaskCoverageTextureCache selects the device edge work at compile time
+     (RecordsAiMaskEdgeOnDevice). Stored coverage: one original upload per asset key and
+     analysis size, and one edge result per exact edge value, both under the 256 MiB policy; an
+     edge change reads no asset and uploads nothing. Candidate: the original upload of the
+     current allocation stays current during edge changes; one current edge result. Work
+     textures (R8 morphology x 0-2, R32f Feather rows x 0-1, output size) belong to the cache,
+     are reused for the next edge work of the same size, and are destroyed when idle and of
+     another size, and at Clear.
+  4. CUDA MaskEvaluate already acquires through BasicRenderWorkspace::AcquireAiMaskCoverage, so
+     committed renders, thumbnails, and export use the same device edge result.
+  5. A failed output or work-texture allocation or a failed recording throws an
+     "AI Mask coverage:" error and installs nothing; the cancelled submission's writes (uploads
+     and edge results) are retired (DiscardWritesOf, renamed from DiscardUploadsOf).
+Primary success call chain:
+  Committed: ExecuteCudaMask -> BasicRenderWorkspace::AcquireAiMaskCoverage
+    -> MaskCoverageTextureCache::AcquireStored -> original upload hit (or reader + upload)
+    -> RecordEdge -> MakeAiMaskEdgeDispatch -> AcquireWorkTextures
+    -> CudaBackend::RecordAiMaskEdge (morphology, Feather rows, Feather columns on the stream)
+    -> processed R8 entry -> RasterMaskKernel samples it.
+  Candidate: BeginCoverageWork -> AcquireAiMaskCandidateCoverage -> AcquireCandidate
+    -> original upload of the session allocation (once) -> RecordEdge -> EndCoverageWork.
+Primary failure and restore call chain:
+  allocation / validation / launch error in RecordEdge -> exception before Install -> the
+    unpublished output is destroyed, the current edge result and its reads are unchanged
+    -> caller cancels (CancelRender / CancelCoverageWork -> DiscardWritesOf) -> error to caller
+    -> the next acquisition of the published edge value is a hit; a retry records new work
+       from the resident original upload.
+Commands and exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target
+    MaskCoverageTextureCacheTest GpuDagCudaMaskTest AiMaskCoverageTextureTest
+    GpuDagCudaWorkspaceTest GpuDagOpenClGradeTest AiMaskEditSessionTest alcedo_main (0)
+  ctest --test-dir build/debug -j 1 --output-on-failure -R
+    '^(MaskCoverageTextureCacheTest|AiMaskCoverageTextureTest|AiMaskEditSessionTest|GpuDagCudaMaskTest|GpuDagCudaWorkspaceTest)\.|^GpuDagOpenClGradeTest\.OpenClMaskFixture\.'
+    (0)
+Discovered / passed / failed / skipped counts: 114 discovered, 114 passed, 0 failed, 0 skipped
+  (MaskCoverageTextureCacheTest 10/10, AiMaskCoverageTextureTest 8/8, AiMaskEditSessionTest
+  19/19, GpuDagCudaMaskTest 23/23, GpuDagCudaWorkspaceTest 37/37, OpenClMaskFixture 17/17 on the
+  unchanged host edge path).
+  Named SM8.2 behaviors in GpuDagCudaMaskTest: GpuExpandMatchesAlternatingMorphologyExactly
+  (Expand -50, -2, -1, 0, 1, 2, 3, 50; 67 x 45; candidate and stored),
+  GpuFeatherMatchesIndependentGaussianWithinOneCode (sigma 0.5, 5, 50 with Expand 0, -2, 2),
+  GpuCoverageIncludesFullMarginAtImageBorders (corner, side, and interior assets),
+  EdgeChangeDoesNotUploadOriginalAgain, FailedEdgeWorkKeepsPublishedCoverage: all pass.
+  Sigma 0 is the Expand-only case of the first test.
+  Mutation check: with the cross/square order swapped in the CUDA kernel,
+  GpuExpandMatchesAlternatingMorphologyExactly fails (restored before the final run).
+Manual verification: none; SM8.2 has no user-visible change before SM8.6.
+Numeric differences, latency, and resource measurements:
+  Largest difference of the CUDA result to the double-precision reference: 0 code; to the host
+    function MakeAiMaskCoverageTexture: 0 code (all cases of the Feather test). The plan
+    tolerance stays one code.
+  Kernel time, RTX 3080 Laptop GPU, driver 610.62, kernels of cuda_ai_mask_coverage.cu built
+    by nvcc -O3 -arch=sm_86 in a temporary harness, 4096 x 3072, 4 samples each: Feather sigma
+    50 rows 11.9-13.5 ms + columns 5.8-6.4 ms; sigma 20 4.8 + 2.3-3.3 ms; sigma 5 1.3 + 0.6 ms;
+    Expand 50 (50 steps) 12.3-12.5 ms. This is kernel time only, not request-to-present, and
+    not the SM8.8 qualification (no p95, no production Release build). The debug build compiles
+    CUDA with -G, so its timings are not representative.
+  Work textures at 4096 x 3072 with Expand >= 2 and Feather: 2 x 12 MiB R8 + 48 MiB R32f.
+Remaining issues or unavailable platforms: OpenCL and Metal still use the host edge function
+  until SM8.3 and SM8.4.
+```
+
+Decisions made during SM8.2 (AGENTS.md "Make implementation decisions"):
+
+- The morphology and Feather work textures belong to `MaskCoverageTextureCache`, not to the
+  workspace `TexturePool`. The pool's frame state (`BeginFrame`, `MarkSubmitted` of every leased
+  entry, `ReleaseUnused` at the end of a photo render) belongs to photo renders, and SM8.1 requires
+  that coverage-only work leave the pool unchanged (`CoverageOnlyWorkKeepsPhotoResults`). The cache
+  keeps one set per output size, reuses it on the ordered device queue, and reports
+  `WorkTextureBytes()` outside the 256 MiB coverage budget.
+- The device operation is a backend member, `RecordAiMaskEdge(dispatch, textures, context)`, and
+  the cache selects it at compile time with the `RecordsAiMaskEdgeOnDevice` concept. A backend
+  without it keeps the SM8.1 host function. This is per-backend selection, not a runtime
+  substitute; SM8.4 removes the host path when Metal has the operation.
+- `AiMaskFeatherWeights` gives the half kernel; the passes sum symmetric pairs
+  (`w_k * (left + right)`). The host function keeps `cv::sepFilter2D`.
+- `FailedEdgeWorkKeepsPublishedCoverage` fails a real texture allocation through the new test
+  hook `CudaBackend::FailTextureAllocationAfter`, the pattern of `FailUploadAfter`: first the
+  output, then the first morphology work texture after the output succeeded.
+- The SM6 check `AiMaskCoverageTextureUploadsOncePerAssetAndEdge` is renamed
+  `AiMaskCoverageTextureUploadsOncePerAsset`: on a backend with device edge work, an edge change
+  reads no asset and uploads nothing. `CheckCoverageOnlyWorkKeepsPhotoResults` compares the edge
+  result with the host function within one code instead of byte equality (section 5.1).
 
 ### 7.3 SM8.3 - OpenCL edge computation
 

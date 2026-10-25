@@ -107,7 +107,8 @@ class BasicRenderWorkspace {
   }
   [[nodiscard]] auto MaskAssets() const -> const MaskAssetReader& { return *mask_assets_; }
 
-  /// Device coverage textures of AI Masks (SM6 R6, SM8.1). Cleared by ReleaseSessionResources.
+  /// Device coverage textures of AI Masks (SM6 R6, SM8.1, SM8.2). Cleared by
+  /// ReleaseSessionResources.
   [[nodiscard]] auto MaskCoverage() const -> const MaskCoverageTextureCache<Backend>& {
     return mask_coverage_;
   }
@@ -350,12 +351,12 @@ class BasicRenderWorkspace {
   }
 
   /**
-   * @brief Leave a failed encode without submitting. Unpublished writes and the coverage uploads
+   * @brief Leave a failed encode without submitting. Unpublished writes and the coverage writes
    *        of the encode are discarded.
    */
   void CancelRender() {
     images_.DiscardUnpublished();
-    mask_coverage_.DiscardUploadsOf(open_submission_);
+    mask_coverage_.DiscardWritesOf(open_submission_);
     rendering_ = false;
   }
 
@@ -392,14 +393,14 @@ class BasicRenderWorkspace {
   }
 
   /**
-   * @brief Leave failed coverage work without submitting. Its coverage uploads are discarded;
-   *        earlier coverage reads and every photo result stay valid.
+   * @brief Leave failed coverage work without submitting. Its coverage writes (uploads and edge
+   *        work) are discarded; earlier coverage reads and every photo result stay valid.
    */
   void CancelCoverageWork() {
     if (!coverage_work_) {
       return;
     }
-    mask_coverage_.DiscardUploadsOf(open_submission_);
+    mask_coverage_.DiscardWritesOf(open_submission_);
     coverage_work_ = false;
   }
 

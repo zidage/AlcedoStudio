@@ -37,6 +37,18 @@ struct AiMaskCoverageTexture {
 [[nodiscard]] auto AiMaskEdgeMargin(const AiMaskEdgeAdjustment& edge) -> std::int32_t;
 
 /**
+ * @brief Coefficients of the Feather Gaussian with sigma @p feather_px, for one half of the
+ *        symmetric kernel: element k is the weight of the texels at offsets -k and +k.
+ *
+ * The kernel is the float kernel of OpenCV for sigma > 0 (`cv::getGaussianKernel` with size
+ * `round(8 * sigma + 1) | 1`), so the host function and the GPU backends use the same finite
+ * coefficients and support. The radius is `size() - 1`, at most 200 for sigma 50.
+ *
+ * @throws std::runtime_error when @p feather_px is not in (0, 50].
+ */
+[[nodiscard]] auto AiMaskFeatherWeights(float feather_px) -> std::vector<float>;
+
+/**
  * @brief Apply the Feather and Expand of an AI Mask to its stored asset.
  *
  * The asset lies at @ref AiMaskAssetPixelRect in an analysis image of @p analysis_extent. The
@@ -60,8 +72,8 @@ struct AiMaskCoverageTexture {
  * @brief Host Feather and Expand of @p work on the original coverage @p source_pixels (the texels
  *        of `work.source`), with the computation of the asset overload.
  *
- * The render workspace uses it for Mask candidates and committed AI Masks until each GPU backend
- * runs the operation itself (SM8.2 to SM8.4).
+ * The render workspace uses it for Mask candidates and committed AI Masks on a backend that does
+ * not record the operation on the device yet (SM8.2 to SM8.4).
  *
  * @throws std::invalid_argument when @p source_pixels does not have the size of `work.source`.
  */
