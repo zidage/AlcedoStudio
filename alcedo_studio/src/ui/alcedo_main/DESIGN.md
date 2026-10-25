@@ -737,10 +737,15 @@ encoding. Do not add a second coverage composite in QSG, QML, or the photo
 pipeline. The visibility control belongs to the AI Mask tool controls; there is
 no separate settings panel.
 
+The tint is a fixed light red in every theme. Do not derive it from `accentColor`
+or another theme color: a blue or green accent is not visible on sky, water,
+distant mountains, or foliage. The light red is visible on these and on warm
+cream tones.
+
 | Token | Value | Use |
 | --- | --- | --- |
-| `maskCoverageTintColor` | `accentColor` | Coverage tint of the viewport composite |
-| `maskCoverageTintOpacity` | 0.4 | Overlay opacity at full coverage |
+| `maskCoverageTintColor` | `#FF5050` (light red, every theme) | Coverage tint of the viewport composite |
+| `maskCoverageTintOpacity` | 0.5 | Overlay opacity at full coverage |
 
 ### Color Grade node content
 

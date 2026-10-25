@@ -1059,9 +1059,10 @@ auto AppTheme::maskOverlayGripSpanT0() const -> qreal { return 0.38; }
 
 auto AppTheme::maskOverlayGripSpanT1() const -> qreal { return 0.62; }
 
-auto AppTheme::maskCoverageTintColor() const -> QColor { return accentColor(); }
+// A fixed light red: no theme accent, so the tint stays visible on sky, water, and foliage (#515).
+auto AppTheme::maskCoverageTintColor() const -> QColor { return QColor(0xFF, 0x50, 0x50); }
 
-auto AppTheme::maskCoverageTintOpacity() const -> qreal { return 0.4; }
+auto AppTheme::maskCoverageTintOpacity() const -> qreal { return 0.5; }
 
 auto AppTheme::scopePlotBorderColor() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.42);
