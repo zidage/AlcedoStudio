@@ -612,7 +612,8 @@ Cause:
     session (each run is slow), and the DLLs (the same DirectML.dll; ORT is linked statically).
 Decisions made during the work:
   - The fixes need their own work: #532 reduces the GPU memory that the sidecar keeps (the
-    DirectML EP of this ORT version has no option to release or share its work buffers);
+    statement that the DirectML EP has no option to release its work buffers was wrong; see
+    7.7);
     #531 reduces the GPU memory of the editor.
   - The temporary app log lines are not kept: the tool already logs the step time, and the
     new sidecar lines show the model time.
@@ -631,4 +632,72 @@ Manual product checks (real window, release app and sidecar, project sm9mvp, DSC
 Remaining issues or unavailable platforms:
   - #532 (sidecar GPU memory) and #531 (editor GPU memory) fix the step time.
   - macOS not measured (Core ML has a different memory model).
+```
+
+### 7.7 Sidecar GPU memory of the segmentation models (issue #532)
+
+```text
+Phase / date / status: SM9 MVP fix / 2026-10-25 / implemented on Windows.
+Source revision and branch: 9350942c (PR #533); branch fix/ai-mask-sidecar-directml-work-memory.
+Actual changed modules and diff size: about 40 lines.
+  - Rust sidecar ort_backend.rs: the DirectML sessions of the encoder and S3OD set the session
+    configuration entry "ep.dml.disable_memory_arena" = "1". The decoder and head sessions do not
+    change. One unit test for the role selection.
+Implemented behavior:
+  - The encoder and S3OD free their DirectML work buffers after each run. The sidecar keeps
+    895 MB dedicated GPU memory after the first encoder and S3OD runs, against 2,955 MB before.
+    The outputs are the same.
+Cause (ONNX Runtime 1.28 source, DmlExecutionProvider BucketizedBufferAllocator.cpp and
+  ExecutionProvider.cpp OnSessionInitializationEnd):
+  - After a session load, the DirectML allocator rounds each allocation up to a power of two and
+    keeps it in a pool of its session until the session closes. The encoder (about 690 MB of work
+    memory during a run) and S3OD (about 1,020 MB) each keep about 1,060 MB.
+  - Each session has its own allocator (CreatePreferredAllocators of each EP instance). This ORT
+    version has no way to share one DirectML allocator between sessions. With the arena off, a
+    shared allocator is not necessary.
+Measurements (release, DirectML, RTX 3080 Laptop GPU 8 GB, temporary engine test: load, then
+  4 rounds of start, Subject, and 6 clicks on a 2729 x 4096 JPEG; GPU Process Memory counters):
+  | Point                    | Before (dedicated) | After (dedicated) |
+  | After the model load     | 838 MB             | 838 MB            |
+  | After the first encoder  | 1,894 MB           | 866 MB            |
+  | After the first S3OD     | 2,955 MB           | 895 MB            |
+  - Time without the editor (rounds 2 - 4): encoder 157 - 168 ms before, 191 - 192 ms after;
+    Subject 200 - 201 ms before, 253 - 262 ms after; clicks 5 - 7 ms before and after.
+  - With a headless editor session (release alcedo_main, OpenCL, viewport 2560 x 1440) that
+    shows 020A0059.CR3 (45 MP; the editor process went from 284 MB to 2,234 MB dedicated):
+    Subject 7,812 - 10,379 ms before (the sidecar had 2,444 MB dedicated and 1,159 MB shared),
+    243 - 247 ms after (895 MB dedicated, 646 MB shared).
+  - Peak dedicated memory during a run, after the change: S3OD session alone 1,348 MB
+    (326 MB idle), encoder session alone 921 MB (233 MB idle).
+  - Output check: the Subject alpha and the click logits are bit-identical in two runs before and
+    two runs after the change. DirectML results of this model set were the same run to run.
+  - CLIP image encoder (SigLIP2 B/32 256, float32, DirectML): 434 MB dedicated and 393 MB shared
+    after the load; 443 MB after 5 runs with the arena, 435 MB without. It unloads after 60 s
+    idle; the text encoder runs on the CPU. No change.
+Decisions made during the work:
+  - The decoder and the head keep the arena. Without it, a decoder run took about 100 ms
+    instead of 10 ms (each run creates and frees its buffers), and the 4 decoder sessions keep only
+    about 270 MB with the arena.
+  - Rejected (measured on S3OD, arena off): "ep.dml.disable_graph_fusion" (13 s per run, 5.6 GB
+    peak); "disable_metacommands" (2 - 3 times slower, different outputs, the same peak);
+    S3OD split into the ViT and the full-size DPT tail as two sessions (1,376 MB peak, slower);
+    the 8 attention query chunks of each layer forced to run in sequence (the same 1,348 MB
+    peak, so the attention is not the peak). The peak comes from the float16 DPT tail at
+    1024 x 1024 (64-channel tensors of 128 MB each).
+  - Not done: float16 or smaller models (they change the model quality).
+Primary success call chain: SegmentationEngine::load -> OrtSegmentationBackend::load_encoder /
+  load_subject_model -> load_session -> session_builder(device, role) ->
+  frees_work_buffers_after_run(role) -> with_config_entry("ep.dml.disable_memory_arena", "1").
+Commands and exit codes:
+  cargo test --release -- --skip live_ (rust/puerh_mind): 0; 372 + 10 passed, 0 failed.
+  cargo clippy --release --all-targets: 0; 70 warnings before and after the change.
+  cargo fmt -- --check: 0.
+  Temporary engine memory test and DirectML option experiments (build/tmp/issue532); not
+    committed.
+  segmentation_port_check: not run; the SM3.D port reference (build/tmp/sm3d/port_reference)
+    no longer exists, and the SM3.C reference has no person fields. The bit-identical output
+    check above replaces it for this change.
+Remaining issues or unavailable platforms:
+  - #531 (editor GPU memory).
+  - macOS not changed (Core ML backend).
 ```
