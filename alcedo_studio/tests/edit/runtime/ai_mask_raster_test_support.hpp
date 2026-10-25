@@ -299,8 +299,6 @@ struct AiMaskBackendHarness {
   std::function<std::size_t()>                                              cache_used_bytes;
   /// Fail the texture allocation after @p allocations_to_pass more allocations.
   std::function<void(std::uint32_t)> fail_texture_allocation_after;
-  /// MaskCoverageTextureCache::kRecordsEdgeOnDevice of the backend.
-  bool                               records_edge_on_device = false;
 };
 
 /// Analysis image of the checks: the full reference of a 64 x 48 test source.
@@ -424,8 +422,7 @@ inline void CheckAiMaskFeatherAndExpandChangeCoverage(AiMaskBackendHarness& h) {
   EXPECT_NE(actual, ExpectedAiMaskR8(asset, {}, h.plan(), false, 1.0));
 }
 
-/// The asset is read and uploaded once; an edge change adds only an edge result (SM8.2) or, on a
-/// backend with the host edge function, an upload of it.
+/// The asset is read and uploaded once; an edge change adds only a device edge result (SM8.2).
 inline void CheckAiMaskCoverageTextureUploadsOncePerAsset(AiMaskBackendHarness& h) {
   const auto asset  = MakeEllipseAsset(kAnalysisExtent, kAssetRect);
   const auto reader = AttachAiMask(h, asset);
@@ -442,9 +439,9 @@ inline void CheckAiMaskCoverageTextureUploadsOncePerAsset(AiMaskBackendHarness& 
   h.document().PrimaryGrade()->ReplaceMaskSource(kAiMaskId, source);
   h.compile({});
   h.render_mask();
-  EXPECT_EQ(h.cache_uploads(), h.records_edge_on_device ? 1u : 2u);
+  EXPECT_EQ(h.cache_uploads(), 1u);
   EXPECT_EQ(h.cache_entries(), 2u);
-  EXPECT_EQ(reader->ReadCount(), h.records_edge_on_device ? 1 : 2);
+  EXPECT_EQ(reader->ReadCount(), 1);
 
   h.release_session();
   EXPECT_EQ(h.cache_entries(), 0u);

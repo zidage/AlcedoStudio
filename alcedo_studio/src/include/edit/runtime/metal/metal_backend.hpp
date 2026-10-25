@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "edit/geometry/types.hpp"
+#include "edit/runtime/ai_mask_coverage_work.hpp"
 #include "edit/runtime/basic_render_device.hpp"
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/content_key.hpp"
@@ -200,6 +201,25 @@ class MetalBackend {
   [[nodiscard]] auto ResolveDeviceMemory(void* device_pointer, std::size_t bytes) const
       -> std::pair<void*, std::uint32_t>;
 
+  /**
+   * @brief Record the Feather and Expand passes of @p dispatch in the current command buffer
+   *        (SM8.4): the morphology steps and the two Feather passes of @ref AiMaskEdgeDispatch,
+   *        from `textures.source` to `textures.output`. Defined in metal_ai_mask_coverage.mm.
+   *
+   * The kernels are in the Mask metallib; pipelines come from ComputePipelineCache. A source
+   * upload earlier in the same command buffer is a blit encoder that ends before this compute
+   * encoder starts, and each dispatch is followed by @ref NoteComputeDispatch, so every pass
+   * reads the completed writes of the previous one. Does not commit or wait. The caller keeps
+   * every texture alive until the submission completes.
+   *
+   * @throws std::runtime_error when a required texture is missing or has the wrong size or
+   *         format, or when a pipeline or the encoder is missing. Recorded passes then write only
+   *         the output and work textures, which the caller discards.
+   */
+  void               RecordAiMaskEdge(const AiMaskEdgeDispatch&            dispatch,
+                                      const AiMaskEdgeTextures<Texture2D>& textures,
+                                      CommandContext&                      command_context);
+
   [[nodiscard]] auto EnsureComputeCommandEncoder(CommandContext& command_context) -> void*;
   void               EndCommandEncoders(CommandContext& command_context);
 
@@ -264,6 +284,13 @@ class MetalBackend {
    *        with std::runtime_error. @ref FailNextUpload is `FailUploadAfter(0)`.
    */
   void FailUploadAfter(std::uint32_t uploads_to_pass) { uploads_before_failure_ = uploads_to_pass; }
+  /**
+   * @brief Test hook: let @p allocations_to_pass more CreateTexture2D calls run, then fail the
+   *        next one with std::runtime_error.
+   */
+  void FailTextureAllocationAfter(std::uint32_t allocations_to_pass) {
+    allocations_before_failure_ = allocations_to_pass;
+  }
   void               NoteHostToDeviceBegin() { last_h2d_ranges_.clear(); }
 
   [[nodiscard]] auto NativeDevice() const -> void*;
@@ -298,17 +325,21 @@ class MetalBackend {
   }
 
  private:
-  /// True when the armed test failure is due on this upload call; disarms it then.
-  [[nodiscard]] auto ConsumeInjectedUploadFailure() -> bool {
-    if (!uploads_before_failure_.has_value()) {
+  /// True when the armed test failure is due on this call; disarms it then.
+  [[nodiscard]] static auto ConsumeInjectedFailure(std::optional<std::uint32_t>& calls_to_pass)
+      -> bool {
+    if (!calls_to_pass.has_value()) {
       return false;
     }
-    if (*uploads_before_failure_ == 0) {
-      uploads_before_failure_.reset();
+    if (*calls_to_pass == 0) {
+      calls_to_pass.reset();
       return true;
     }
-    --*uploads_before_failure_;
+    --*calls_to_pass;
     return false;
+  }
+  [[nodiscard]] auto ConsumeInjectedUploadFailure() -> bool {
+    return ConsumeInjectedFailure(uploads_before_failure_);
   }
 
   friend class Buffer;
@@ -346,6 +377,7 @@ class MetalBackend {
   std::uint64_t          in_flight_submission_        = 0;
   std::uint64_t          completed_submission_        = 0;
   std::optional<std::uint32_t> uploads_before_failure_;
+  std::optional<std::uint32_t> allocations_before_failure_;
   std::vector<ByteRange> last_h2d_ranges_;
   std::vector<RectI>     last_texture_rectangles_;
   std::uint64_t          compute_dispatch_count_      = 0;

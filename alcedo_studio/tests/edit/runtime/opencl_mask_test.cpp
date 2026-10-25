@@ -240,7 +240,6 @@ class OpenClMaskFixture : public ::testing::Test {
     h.fail_texture_allocation_after = [this](std::uint32_t allocations_to_pass) {
       device_->Workspace().Device().FailTextureAllocationAfter(allocations_to_pass);
     };
-    h.records_edge_on_device = MaskCoverageTextureCache<OpenClBackend>::kRecordsEdgeOnDevice;
     return h;
   }
 
@@ -585,9 +584,6 @@ TEST_F(OpenClMaskFixture, AiMaskMissingAssetFailsRender) {
   auto h = AiMaskHarness();
   ai_mask_test::CheckAiMaskMissingAssetFailsRender(h);
 }
-
-// SM8.3: OpenCL records Feather and Expand on the device; there is no host edge step.
-static_assert(MaskCoverageTextureCache<OpenClBackend>::kRecordsEdgeOnDevice);
 
 TEST_F(OpenClMaskFixture, GpuExpandMatchesAlternatingMorphologyExactly) {
   auto h = AiMaskHarness();

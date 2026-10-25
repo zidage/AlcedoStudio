@@ -163,3 +163,107 @@ kernel void mask_union_max(texture2d<float, access::read> lhs [[texture(0)]],
   const float b = rhs.read(gid).x;
   output.write(float4(QuantizeR8(max(a, b)), 0.0f, 0.0f, 1.0f), gid);
 }
+
+// SM8.4: Feather and Expand of AI Mask coverage (SM8 section 5.1), the passes of
+// AiMaskEdgeDispatch. R8 textures are R8Unorm: a read gives u / 255, so each read converts back
+// to the integer u, and each R8 write stores v / 255 for an integer v. Every pass clamps
+// coordinates to the output (replicated border).
+
+/// Layout of AiMaskEdgeGrid in metal_ai_mask_coverage.mm. The input is placed at
+/// (source_x, source_y) with source_width x source_height texels; texels outside read 0.
+struct AiMaskEdgeGrid {
+  int width;
+  int height;
+  int source_x;
+  int source_y;
+  int source_width;
+  int source_height;
+};
+
+/// Layout of FeatherWeightsArgument in metal_ai_mask_coverage.mm (kAiMaskFeatherMaximumRadius).
+struct AiMaskFeatherWeights {
+  int   radius;
+  float values[201];
+};
+
+static inline uint AiMaskReadPlaced(texture2d<float, access::read> input, constant AiMaskEdgeGrid& grid,
+                                    int x, int y) {
+  const int source_x = clamp(x, 0, grid.width - 1) - grid.source_x;
+  const int source_y = clamp(y, 0, grid.height - 1) - grid.source_y;
+  if (source_x < 0 || source_y < 0 || source_x >= grid.source_width ||
+      source_y >= grid.source_height) {
+    return 0u;
+  }
+  const float value = input.read(uint2(uint(source_x), uint(source_y))).x;
+  return uint(clamp(rint(value * 255.0f), 0.0f, 255.0f));
+}
+
+/// One 3 x 3 dilate (dilate != 0) or erode step with the cross (square == 0) or square kernel.
+kernel void ai_mask_morphology(texture2d<float, access::read> input [[texture(0)]],
+                               texture2d<float, access::write> output [[texture(1)]],
+                               constant AiMaskEdgeGrid& grid [[buffer(0)]],
+                               constant int2& operation [[buffer(1)]],
+                               uint2 gid [[thread_position_in_grid]]) {
+  const int x = int(gid.x);
+  const int y = int(gid.y);
+  if (x >= grid.width || y >= grid.height) {
+    return;
+  }
+  const bool dilate = operation.x != 0;
+  const bool square = operation.y != 0;
+  uint       value  = AiMaskReadPlaced(input, grid, x, y);
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      if ((dx == 0 && dy == 0) || (!square && dx != 0 && dy != 0)) {
+        continue;
+      }
+      const uint neighbor = AiMaskReadPlaced(input, grid, x + dx, y + dy);
+      value               = dilate ? max(value, neighbor) : min(value, neighbor);
+    }
+  }
+  output.write(float4(float(value) / 255.0f, 0.0f, 0.0f, 1.0f), gid);
+}
+
+/// Horizontal Feather pass: float sum of the R8 values / 255 into an R32Float texture.
+kernel void ai_mask_feather_rows(texture2d<float, access::read> input [[texture(0)]],
+                                 texture2d<float, access::write> rows [[texture(1)]],
+                                 constant AiMaskEdgeGrid& grid [[buffer(0)]],
+                                 constant AiMaskFeatherWeights& weights [[buffer(1)]],
+                                 uint2 gid [[thread_position_in_grid]]) {
+  const int x = int(gid.x);
+  const int y = int(gid.y);
+  if (x >= grid.width || y >= grid.height) {
+    return;
+  }
+  // The host converts with `u * float(1 / 255.0)`; 1.0f / 255.0f is the same float.
+  const float scale = 1.0f / 255.0f;
+  float       sum   = weights.values[0] * (float(AiMaskReadPlaced(input, grid, x, y)) * scale);
+  for (int k = 1; k <= weights.radius; ++k) {
+    const float left  = float(AiMaskReadPlaced(input, grid, x - k, y)) * scale;
+    const float right = float(AiMaskReadPlaced(input, grid, x + k, y)) * scale;
+    sum += weights.values[k] * (left + right);
+  }
+  rows.write(float4(sum, 0.0f, 0.0f, 1.0f), gid);
+}
+
+/// Vertical Feather pass over the float rows; quantizes like cv::saturate_cast<uchar>.
+kernel void ai_mask_feather_columns(texture2d<float, access::read> rows [[texture(0)]],
+                                    texture2d<float, access::write> output [[texture(1)]],
+                                    constant AiMaskEdgeGrid& grid [[buffer(0)]],
+                                    constant AiMaskFeatherWeights& weights [[buffer(1)]],
+                                    uint2 gid [[thread_position_in_grid]]) {
+  const int x = int(gid.x);
+  const int y = int(gid.y);
+  if (x >= grid.width || y >= grid.height) {
+    return;
+  }
+  const int last = grid.height - 1;
+  float     sum  = weights.values[0] * rows.read(gid).x;
+  for (int k = 1; k <= weights.radius; ++k) {
+    const float above = rows.read(uint2(gid.x, uint(clamp(y - k, 0, last)))).x;
+    const float below = rows.read(uint2(gid.x, uint(clamp(y + k, 0, last)))).x;
+    sum += weights.values[k] * (above + below);
+  }
+  const float quantized = clamp(rint(sum * 255.0f), 0.0f, 255.0f);
+  output.write(float4(quantized / 255.0f, 0.0f, 0.0f, 1.0f), gid);
+}

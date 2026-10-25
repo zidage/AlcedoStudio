@@ -3,7 +3,8 @@
 Date: 2026-10-24. Status: SM8.1 complete on 2026-10-24 on Windows and macOS (section 7.1.1).
 SM8.2 complete on 2026-10-24 on Windows CUDA (section 7.2.1).
 SM8.3 complete on 2026-10-24 on Windows OpenCL (section 7.3.1).
-SM8.4 to SM8.8 are planned; no implementation evidence exists for them.
+SM8.4 complete on 2026-10-24 on macOS Metal (section 7.4.1).
+SM8.5 to SM8.8 are planned; no implementation evidence exists for them.
 
 Parent: [AI Segmentation Mask Master Plan](../ai_segmentation_mask_master_plan.md), sections 1.5 and 9.7.
 Prerequisites: [SM4](phase_sm4_analysis_render_plan.md), [SM5](phase_sm5_ai_mask_source_and_session_plan.md),
@@ -280,7 +281,7 @@ The transport/composite split separates resource lifetime evidence from pixel co
 | SM8.1 | Source lifetime and workspace operation boundary | SM5, SM6 | 900-1500 | complete 2026-10-24 (7.1.1) |
 | SM8.2 | CUDA edge computation and committed-render reuse | SM8.1 | 1200-1900 | complete 2026-10-24 (7.2.1) |
 | SM8.3 | OpenCL edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | complete 2026-10-24 (7.3.1) |
-| SM8.4 | Metal edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | planned |
+| SM8.4 | Metal edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | complete 2026-10-24 (7.4.1) |
 | SM8.5 | Dedicated GPU coverage presentation channel | SM8.1 | 1200-1900 | planned |
 | SM8.6 | One viewport composite for candidate and committed coverage | SM8.2-SM8.5 | 1000-1700 | planned |
 | SM8.7 | Session preview, replacement, Undo/Redo, Commit, and Cancel | SM8.6 | 1100-1800 | planned |
@@ -686,7 +687,102 @@ Keep the existing #496 and #497 failures separate.
 
 **Commands.** Group C and targeted Metal tests with `-j 1`.
 **Exit.** Native macOS results exist for pixels, upload lifetime, and repeated resource release.
-**Expected diff.** 1000-1800 lines. **Completion record.** Section 11; unfilled.
+**Expected diff.** 1000-1800 lines. **Completion record.** Section 7.4.1.
+
+#### 7.4.1 SM8.4 completion record
+
+```text
+Phase / date / status: SM8.4 / 2026-10-24 / complete on macOS (Metal, Apple M4); the shared
+  owner change is also verified on Windows (CUDA, OpenCL).
+Source revision and branch: base 8d106742 (SM8.3, pull request #506); branch
+  feature/ai-segmentation-sm8-4-metal-edge-coverage (fourth pull request of the SM8 stack).
+Actual changed modules and diff size: 13 files, +456 / -91 (547 changed lines; estimate
+  1000-1800, smaller for the reason given in 7.3.1). Metal kernels in mask.metal,
+  metal_ai_mask_coverage.mm, MetalBackend, the Mask warm-up list, MaskCoverageTextureCache (host
+  edge path removed), and tests. Largest files: metal_ai_mask_coverage.mm 163 lines, the mask.metal
+  addition 104 lines.
+Implemented behavior:
+  1. mask.metal gains ai_mask_morphology, ai_mask_feather_rows, and ai_mask_feather_columns (the
+     passes of AiMaskEdgeDispatch, in the existing Mask shader library). R8Unorm reads convert
+     back to the integer value; R8 writes store an integer / 255; morphology stays exact.
+  2. MetalBackend::RecordAiMaskEdge encodes the passes in the compute encoder of the current
+     command buffer with pipelines from ComputePipelineCache, setBytes for the grid and the
+     808-byte half kernel, and NoteComputeDispatch (a texture and buffer memory barrier) after
+     each dispatch. A source upload is a blit encoder that ends before the compute encoder starts,
+     so the order is source blit -> morphology -> Feather rows -> Feather columns -> raster
+     sampling. The three pipelines join AppendMetalMaskWarmup.
+  3. All three render backends now record the edge work on the device. MaskCoverageTextureCache
+     requires RecordsAiMaskEdgeOnDevice (static_assert) and has no host edge path; the host
+     function MakeAiMaskCoverageTexture is a test reference only. The kRecordsEdgeOnDevice
+     constant and the harness flag records_edge_on_device are removed.
+  4. Errors: missing or wrong textures, a missing pipeline or encoder, and a failed allocation
+     throw; the owner installs nothing. MetalBackend gains the test hook
+     FailTextureAllocationAfter.
+Primary success call chain:
+  EncodeRaster / AcquireAiMaskCandidateCoverage -> MaskCoverageTextureCache (resident original
+    upload; UploadTexture2D copies the bytes into command-buffer staging and encodes a blit)
+    -> RecordEdge -> MetalBackend::RecordAiMaskEdge -> EnsureComputeCommandEncoder
+    -> dispatches with barriers -> Submit (commit) -> Wait -> processed R8 sampled by mask_raster.
+Primary failure and restore call chain:
+  pipeline / encoder / allocation error -> exception before Install -> CancelRender or
+    CancelCoverageWork -> DiscardWritesOf retires the uploads and edge results of the discarded
+    command buffer (#503 rule) -> the published edge result stays current -> error to caller.
+Commands and exit codes:
+  macOS (yurunmac.local, build/macos-debug with ALCEDO_BUILD_TESTS=ON):
+    cmake --build build/macos-debug --target GpuDagMetalGradeTest (0)
+    ctest --test-dir build/macos-debug -j 1 --output-on-failure -R
+      '^GpuDagMetalGradeTest\.MetalMaskFixture\.' (8: the two #497 tests)
+  Windows: cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target
+    MaskCoverageTextureCacheTest GpuDagCudaMaskTest GpuDagOpenClGradeTest
+    AiMaskCoverageTextureTest GpuDagCudaWorkspaceTest AiMaskEditSessionTest alcedo_main (0);
+    ctest --test-dir build/debug -j 1 --output-on-failure -R
+      '^(MaskCoverageTextureCacheTest|AiMaskCoverageTextureTest|AiMaskEditSessionTest|GpuDagCudaMaskTest|GpuDagCudaWorkspaceTest)\.|^GpuDagOpenClGradeTest\.OpenClMaskFixture\.' (0)
+Discovered / passed / failed / skipped counts:
+  macOS MetalMaskFixture: 26 discovered, 24 passed, 2 failed. The failures are
+    MetalDisconnectedMaskUsesConstantOneCoverage and
+    MetalNormalMixMatchesCudaReferenceWithinTolerance of open issue #497 (unchanged since
+    SM8.1). Named SM8.4 behaviors: GpuExpandMatchesAlternatingMorphologyExactly,
+    GpuFeatherMatchesIndependentGaussianWithinOneCode, GpuCoverageIncludesFullMarginAtImageBorders,
+    EdgeChangeDoesNotUploadOriginalAgain, FailedEdgeWorkKeepsPublishedCoverage, and
+    MetalCoverageUploadOwnerSurvivesUntilBlitCompletes: all pass.
+    MetalMaskWarmupCachesFillZeroAndUnionMax passes with the three added pipelines.
+  Windows: 120 discovered, 120 passed (the 114 of 7.2.1 plus the six OpenCL tests of 7.3.1).
+Manual verification: none; SM8.4 has no user-visible change before SM8.6.
+Numeric differences, latency, and resource measurements:
+  Largest difference of the Metal result to the double-precision reference: 0 code; to the host
+    function: 0 code.
+  Coverage-only work wall time, Apple M4 (macOS 27.0.1, Metal 4), 4096 x 3072 candidate with a
+    resident original upload, one sample each, including the result allocation and a 12 MiB
+    readback, in a temporary test of the debug build (the Metal library is compiled the same way
+    in every build type): Feather sigma 50 145-175 ms, sigma 5 16 ms, Expand 50 80 ms, Feather 50
+    with Expand 50 236 ms. These are not the SM8.8 qualification, but they show that the SM8.8
+    target (resident edge work below 100 ms at p95) is not met on this device by the direct
+    401-tap passes; see "Remaining issues".
+  MetalCoverageUploadOwnerSurvivesUntilBlitCompletes: in each of two cycles (two uploads and one
+    edge result in one command buffer, then a session release) every created texture is destroyed;
+    cache entries, work textures, and bytes return to 0.
+Remaining issues or unavailable platforms: #497 (existing). The Metal Feather time at sigma 50 is
+  recorded on #494 for SM8.8; the planned response is the exact finite convolution with
+  threadgroup-memory row and column tiles (each texel read once per tile instead of once per
+  tap), with no change of kernel, support, or resolution (section 10, first risk).
+```
+
+Decisions made during SM8.4 (AGENTS.md "Make implementation decisions"):
+
+- "Keep CPU upload storage alive until its blit completes": on Metal the upload storage is the
+  command-buffer staging slice that `UploadTexture2D` fills when the upload is recorded; the
+  backend recycles it only after `Wait`, `SynchronizeRecordedWork`, or a download completes. The
+  session allocation is not read after the upload is recorded. The named test therefore records
+  two uploads and an edge result in one command buffer, drops the session allocations before the
+  commit, and checks each read's bytes after completion.
+- "Reuse work textures only after command completion": across submissions, the coverage owner
+  reuses a work texture only when it is idle (every `Begin*` waits for the previous submission).
+  Within one command buffer, a second edge work reuses the same work textures after the barrier of
+  `NoteComputeDispatch`, which orders the reads of the first work before the writes of the second.
+- The resource-release check counts textures (`TextureCreateCount` and `FreeCount`), because the
+  Metal backend counts a staging-page creation as an allocation but not its release.
+- The three kernels are in `mask.metal` (the existing Mask shader compilation unit), as the plan
+  states, so no new metallib or packaging rule is needed.
 
 ### 7.5 SM8.5 - Coverage presentation channel
 

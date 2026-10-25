@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "edit/geometry/texture_sampling_plan.hpp"
-#include "edit/mask/ai_mask_coverage_texture.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/runtime/ai_mask_coverage_work.hpp"
@@ -70,11 +69,8 @@ using MaskCoverageRead = std::shared_ptr<const MaskCoverageImage<Backend>>;
 
 /**
  * @brief True when @p Backend records the Feather and Expand of an AI Mask on its device
- *        (`RecordAiMaskEdge`, SM8.2 to SM8.4).
- *
- * The coverage owner selects the device operation at compile time. A backend without it uses the
- * host function @ref MakeAiMaskCoverageTexture and an upload of the result; there is no runtime
- * substitution after a device failure.
+ *        (`RecordAiMaskEdge`, SM8.2 to SM8.4). Every render backend must; the host function
+ *        @ref MakeAiMaskCoverageTexture is a test reference only.
  */
 template <class Backend>
 concept RecordsAiMaskEdgeOnDevice =
@@ -102,12 +98,10 @@ concept RecordsAiMaskEdgeOnDevice =
  *
  * Each acquisition separates the original-coverage (source) stage from the edge-result stage. With
  * no Feather and no Expand, the read is the source texture and no edge work runs. Otherwise the
- * edge result is a separate texture of @ref AiMaskCoverageWork::output_rect. On a backend that
- * satisfies @ref RecordsAiMaskEdgeOnDevice, the edge result is device work on the resident source
- * texture: an edge change uploads nothing. The morphology and Feather intermediates are work
- * textures of this owner. They are reused for the next edge work of the same output size and are
- * never retained as results. Another backend computes the edge result on the host
- * (@ref MakeAiMaskCoverageTexture) and uploads it.
+ * edge result is a separate texture of @ref AiMaskCoverageWork::output_rect, written by device
+ * work (@ref RecordsAiMaskEdgeOnDevice) from the resident source texture: an edge change uploads
+ * nothing. The morphology and Feather intermediates are work textures of this owner. They are
+ * reused for the next edge work of the same output size and are never retained as results.
  *
  * A failed acquisition throws and changes no current edge result; earlier reads stay valid.
  *
@@ -116,19 +110,19 @@ concept RecordsAiMaskEdgeOnDevice =
  * image change in the editor, the end of each batch task). The cache and its backend must outlive
  * every read. Work textures are reused on the same ordered device queue only.
  *
- * @tparam Backend Resource factory with CreateTexture2D, UploadTexture2D, and IsResourceBusy, and
- *         optionally RecordAiMaskEdge.
+ * @tparam Backend Resource factory with CreateTexture2D, UploadTexture2D, IsResourceBusy, and
+ *         RecordAiMaskEdge.
  */
 template <class Backend>
 class MaskCoverageTextureCache {
+  static_assert(RecordsAiMaskEdgeOnDevice<Backend>,
+                "the backend must record the AI Mask Feather and Expand on its device");
+
  public:
   using Texture2D      = typename Backend::Texture2D;
   using CommandContext = typename Backend::CommandContext;
   using Image                                               = MaskCoverageImage<Backend>;
   using Read                                                = MaskCoverageRead<Backend>;
-
-  /// True when the edge result is device work (@ref RecordsAiMaskEdgeOnDevice).
-  static constexpr bool kRecordsEdgeOnDevice                = RecordsAiMaskEdgeOnDevice<Backend>;
 
   MaskCoverageTextureCache()                                = default;
   MaskCoverageTextureCache(const MaskCoverageTextureCache&) = delete;
@@ -159,35 +153,22 @@ class MaskCoverageTextureCache {
       return hit->image;
     }
 
-    if constexpr (kRecordsEdgeOnDevice) {
-      Read original;
-      if (auto* hit = FindStored(source_key)) {
-        Touch(*hit, submission);
-        original = hit->image;
-      } else {
-        const auto asset = ReadAsset(source, reader);
-        EvictStoredFor(asset.pixels.size(), backend, submission);
-        original = InstallStored(Upload(work.source, asset.pixels, backend, command_context),
-                                 source_key, submission);
-      }
-      if (!work.HasEdgeAdjustment()) {
-        return original;
-      }
-      EvictStoredFor(OutputBytes(work), backend, submission);
-      return InstallStored(RecordEdge(work, *original, backend, command_context), result_key,
-                           submission);
+    Read original;
+    if (auto* hit = FindStored(source_key)) {
+      Touch(*hit, submission);
+      original = hit->image;
     } else {
       const auto asset = ReadAsset(source, reader);
-      EvictStoredFor(OutputBytes(work), backend, submission);
-      if (!work.HasEdgeAdjustment()) {
-        return InstallStored(Upload(work.source, asset.pixels, backend, command_context),
-                             source_key, submission);
-      }
-      const auto edge_result = MakeAiMaskCoverageTexture(work, asset.pixels);
-      return InstallStored(
-          Upload(edge_result.descriptor, edge_result.pixels, backend, command_context), result_key,
-          submission);
+      EvictStoredFor(asset.pixels.size(), backend, submission);
+      original = InstallStored(Upload(work.source, asset.pixels, backend, command_context),
+                               source_key, submission);
     }
+    if (!work.HasEdgeAdjustment()) {
+      return original;
+    }
+    EvictStoredFor(OutputBytes(work), backend, submission);
+    return InstallStored(RecordEdge(work, *original, backend, command_context), result_key,
+                         submission);
   }
 
   /**
@@ -226,13 +207,11 @@ class MaskCoverageTextureCache {
     const auto submission = command_context.SubmissionId();
     ++lru_clock_;
 
-    if (!work.HasEdgeAdjustment() || kRecordsEdgeOnDevice) {
-      if (!MatchesSource(candidate_source_, pixels, analysis_extent)) {
-        auto entry = Upload(work.source, *pixels, backend, command_context);
-        Install(candidate_source_, std::move(entry), pixels, analysis_extent, {}, pixels);
-      }
-      Touch(candidate_source_->entry, submission);
+    if (!MatchesSource(candidate_source_, pixels, analysis_extent)) {
+      auto entry = Upload(work.source, *pixels, backend, command_context);
+      Install(candidate_source_, std::move(entry), pixels, analysis_extent, {}, pixels);
     }
+    Touch(candidate_source_->entry, submission);
     if (!work.HasEdgeAdjustment()) {
       // The original coverage is the current result: an earlier edge result is not current.
       Retire(candidate_result_);
@@ -240,21 +219,8 @@ class MaskCoverageTextureCache {
     }
 
     if (!MatchesResult(candidate_result_, pixels, analysis_extent, edge)) {
-      Entry entry;
-      if constexpr (kRecordsEdgeOnDevice) {
-        entry = RecordEdge(work, *candidate_source_->entry.image, backend, command_context);
-      } else {
-        const auto edge_result = MakeAiMaskCoverageTexture(work, *pixels);
-        entry = Upload(edge_result.descriptor, edge_result.pixels, backend, command_context);
-      }
+      auto entry = RecordEdge(work, *candidate_source_->entry.image, backend, command_context);
       Install(candidate_result_, std::move(entry), pixels, analysis_extent, edge, nullptr);
-    }
-    if constexpr (!kRecordsEdgeOnDevice) {
-      // The host edge result reads the CPU pixels: an original upload of another allocation is
-      // no longer current.
-      if (candidate_source_.has_value() && !SameAllocation(candidate_source_->identity, pixels)) {
-        Retire(candidate_source_);
-      }
     }
     Touch(candidate_result_->entry, submission);
     return candidate_result_->entry.image;
@@ -330,8 +296,7 @@ class MaskCoverageTextureCache {
   [[nodiscard]] auto RetiredCount() const -> std::size_t { return retired_.size(); }
   /// Bytes of every live coverage texture; @ref kMaskCoverageTextureByteBudget applies to them.
   [[nodiscard]] auto UsedBytes() const -> std::size_t { return used_bytes_; }
-  /// Number of original-coverage and host edge-result uploads since construction; a hit does not
-  /// count.
+  /// Number of original-coverage uploads since construction; a hit does not count.
   [[nodiscard]] auto UploadCount() const -> std::uint64_t { return upload_count_; }
   /// Number of edge results recorded on the device since construction.
   [[nodiscard]] auto EdgeWorkCount() const -> std::uint64_t { return edge_work_count_; }
@@ -572,8 +537,7 @@ class MaskCoverageTextureCache {
     return indices;
   }
 
-  /// @p upload_owner is the read that the upload copied from, or null for device-written or
-  /// host-computed contents.
+  /// @p upload_owner is the read that the upload copied from, or null for an edge result.
   void Install(std::optional<CandidateEntry>& slot, Entry entry, const AiMaskCoveragePixels& pixels,
                Extent2D analysis_extent, const AiMaskEdgeAdjustment& edge,
                AiMaskCoveragePixels upload_owner) {

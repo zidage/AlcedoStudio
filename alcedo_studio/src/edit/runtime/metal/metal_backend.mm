@@ -557,6 +557,9 @@ auto MetalBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, Te
   if (bytes == 0) {
     return {};
   }
+  if (ConsumeInjectedFailure(allocations_before_failure_)) {
+    throw std::runtime_error("MetalBackend::CreateTexture2D: injected failure");
+  }
   MetalBackendImpl::AttachGpu(*gpu_);
   auto  descriptor = MakePrivateTextureDescriptor(width, height, format);
   auto* native     = MetalBackendImpl::AllocatePrivateTexture(*this, *gpu_, descriptor.get());

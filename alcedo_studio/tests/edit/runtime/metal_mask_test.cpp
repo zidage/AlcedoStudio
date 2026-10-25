@@ -19,6 +19,8 @@
 #include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "ai_mask_edge_reference.hpp"
+#include "ai_mask_gpu_coverage_test_support.hpp"
 #include "ai_mask_raster_test_support.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -253,7 +255,14 @@ class MetalMaskFixture : public ::testing::Test {
                                   AiMaskEdgeAdjustment edge) {
       return ai_mask_test::AcquireCandidateInCoverageWork(device_, pixels, analysis, edge);
     };
-    h.records_edge_on_device = MaskCoverageTextureCache<MetalBackend>::kRecordsEdgeOnDevice;
+    h.stored_coverage = [this](const AiSegmentationMaskSource& source) {
+      return ai_mask_test::AcquireStoredInCoverageWork(device_, source);
+    };
+    h.cache_edge_work  = [this] { return device_.Workspace().MaskCoverage().EdgeWorkCount(); };
+    h.cache_used_bytes = [this] { return device_.Workspace().MaskCoverage().UsedBytes(); };
+    h.fail_texture_allocation_after = [this](std::uint32_t allocations_to_pass) {
+      device_.Workspace().Device().FailTextureAllocationAfter(allocations_to_pass);
+    };
     return h;
   }
 
@@ -681,6 +690,99 @@ TEST_F(MetalMaskFixture, CoverageOnlyWorkKeepsPhotoResults) {
 TEST_F(MetalMaskFixture, AiMaskMissingAssetFailsRender) {
   auto h = AiMaskHarness();
   ai_mask_test::CheckAiMaskMissingAssetFailsRender(h);
+}
+
+TEST_F(MetalMaskFixture, GpuExpandMatchesAlternatingMorphologyExactly) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuExpandMatchesAlternatingMorphologyExactly(h);
+}
+
+TEST_F(MetalMaskFixture, GpuFeatherMatchesIndependentGaussianWithinOneCode) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuFeatherMatchesIndependentGaussianWithinOneCode(h);
+}
+
+TEST_F(MetalMaskFixture, GpuCoverageIncludesFullMarginAtImageBorders) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuCoverageIncludesFullMarginAtImageBorders(h);
+}
+
+TEST_F(MetalMaskFixture, EdgeChangeDoesNotUploadOriginalAgain) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckEdgeChangeDoesNotUploadOriginalAgain(h);
+}
+
+TEST_F(MetalMaskFixture, FailedEdgeWorkKeepsPublishedCoverage) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckFailedEdgeWorkKeepsPublishedCoverage(h);
+}
+
+/**
+ * SM8.4: a Metal upload copies the candidate bytes into command-buffer staging when it is
+ * recorded, and the blit runs only after the commit. Two candidate uploads and an edge result are
+ * recorded in one command buffer and the session drops both allocations before the commit, so the
+ * second staging write and the release precede the first blit. Each read must still hold its own
+ * bytes. In each of two cycles, the session release destroys every texture that the cycle created.
+ * (Staging pages are counted as allocations but their release is not, so the check counts
+ * textures.)
+ */
+TEST_F(MetalMaskFixture, MetalCoverageUploadOwnerSurvivesUntilBlitCompletes) {
+  auto                       h = AiMaskHarness();
+  const Extent2D             analysis{512, 384};
+  const AiMaskEdgeAdjustment edge{20.0f, 3};
+  auto&                      workspace = device_.Workspace();
+  auto&                      backend   = workspace.Device();
+  const auto&                cache     = workspace.MaskCoverage();
+
+  const auto                 run_cycle = [&] {
+    auto first = std::make_shared<const std::vector<std::uint8_t>>(
+        ai_mask_test::MakeEdgeTestImage(analysis));
+    std::vector<std::uint8_t> inverted(*first);
+    for (auto& value : inverted) {
+      value = static_cast<std::uint8_t>(255 - value);
+    }
+    auto       second = std::make_shared<const std::vector<std::uint8_t>>(std::move(inverted));
+    const auto first_bytes  = *first;
+    const auto second_bytes = *second;
+
+    device_.BeginCoverageWork();
+    auto&      context = device_.CommandContext();
+    const auto first_read = workspace.AcquireAiMaskCandidateCoverage(first, analysis, {}, context);
+    const auto first_edge =
+        workspace.AcquireAiMaskCandidateCoverage(first, analysis, edge, context);
+    const std::weak_ptr<const std::vector<std::uint8_t>> first_allocation = first;
+    first.reset();
+    EXPECT_FALSE(first_allocation.expired()) << "the current upload keeps the session read";
+    const auto second_read =
+        workspace.AcquireAiMaskCandidateCoverage(second, analysis, {}, context);
+    second.reset();
+    EXPECT_TRUE(cache.HoldsCandidateUploadPixels());
+    device_.EndCoverageWork();
+    EXPECT_TRUE(backend.HasInFlightSubmission());
+    device_.WaitIdle();
+
+    EXPECT_EQ(ai_mask_test::DownloadCoverageRead(device_, first_read).pixels, first_bytes);
+    EXPECT_EQ(ai_mask_test::DownloadCoverageRead(device_, second_read).pixels, second_bytes);
+    ai_mask_test::ExpectR8Within1(
+        ai_mask_test::DownloadCoverageRead(device_, first_edge).pixels,
+        ai_mask_test::ReferenceAiMaskEdgeOnImage(first_bytes, static_cast<int>(analysis.width),
+                                                                 static_cast<int>(analysis.height), edge),
+        "edge result of the first upload");
+  };
+
+  for (int cycle = 0; cycle < 2; ++cycle) {
+    const auto textures_before = backend.TextureCreateCount();
+    const auto frees_before    = backend.FreeCount();
+    run_cycle();
+    h.release_session();
+    EXPECT_EQ(cache.EntryCount(), 0U) << cycle;
+    EXPECT_EQ(cache.WorkTextureCount(), 0U) << cycle;
+    EXPECT_EQ(cache.UsedBytes(), 0U) << cycle;
+    EXPECT_FALSE(cache.HoldsCandidateUploadPixels()) << cycle;
+    EXPECT_GT(backend.TextureCreateCount(), textures_before) << cycle;
+    EXPECT_EQ(backend.FreeCount() - frees_before, backend.TextureCreateCount() - textures_before)
+        << "cycle " << cycle << " destroys every texture it created";
+  }
 }
 
 }  // namespace

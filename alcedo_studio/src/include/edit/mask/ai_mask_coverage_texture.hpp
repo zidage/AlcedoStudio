@@ -72,8 +72,8 @@ struct AiMaskCoverageTexture {
  * @brief Host Feather and Expand of @p work on the original coverage @p source_pixels (the texels
  *        of `work.source`), with the computation of the asset overload.
  *
- * The render workspace uses it for Mask candidates and committed AI Masks on a backend that does
- * not record the operation on the device yet (SM8.2 to SM8.4).
+ * The render workspace does not use it: each GPU backend records the operation on its device
+ * (SM8.2 to SM8.4). Tests compare the device results with this function.
  *
  * @throws std::invalid_argument when @p source_pixels does not have the size of `work.source`.
  */

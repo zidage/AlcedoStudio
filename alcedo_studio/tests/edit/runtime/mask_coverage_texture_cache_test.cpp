@@ -122,7 +122,6 @@ struct HostCoverageBackend {
 
 using Cache = MaskCoverageTextureCache<HostCoverageBackend>;
 using Read  = Cache::Read;
-static_assert(Cache::kRecordsEdgeOnDevice);
 
 constexpr Extent2D   kAnalysis{48, 32};
 

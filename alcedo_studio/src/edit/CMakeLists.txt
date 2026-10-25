@@ -254,6 +254,7 @@ endif()
 if(ALCEDO_METAL_ENABLED)
     def_library(EditRuntimeMetal
         SOURCES
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_ai_mask_coverage.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_diffusion_filter_pass.mm
@@ -285,6 +286,7 @@ if(ALCEDO_METAL_ENABLED)
         ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     set_source_files_properties(
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_ai_mask_coverage.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_diffusion_filter_pass.mm

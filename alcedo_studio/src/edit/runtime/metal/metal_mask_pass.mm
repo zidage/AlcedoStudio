@@ -192,6 +192,13 @@ void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
       MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_fill_zero", "Metal Mask fill zero"});
   pipelines.push_back(
       MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_union_max", "Metal Mask union max"});
+  // SM8.4: AI Mask Feather and Expand (metal_ai_mask_coverage.mm).
+  pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "ai_mask_morphology",
+                                          "Metal AI Mask morphology"});
+  pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "ai_mask_feather_rows",
+                                          "Metal AI Mask Feather rows"});
+  pipelines.push_back(MetalPipelineWarmup{
+      ALCEDO_METAL_MASK_METALLIB_PATH, "ai_mask_feather_columns", "Metal AI Mask Feather columns"});
 #else
   (void)pipelines;
 #endif
