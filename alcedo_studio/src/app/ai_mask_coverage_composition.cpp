@@ -5,10 +5,12 @@
 #include "app/ai_mask_coverage_composition.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
+#include <opencv2/core/utility.hpp>
 #include <opencv2/imgproc.hpp>
 #include <stdexcept>
 #include <string>
@@ -61,33 +63,174 @@ auto ConvertLogits(const AiMaskSamLogits& logits, Extent2D extent) -> std::vecto
   return coverage;
 }
 
-/// Standard deviation, in alpha grid cells, of the Gaussian that smooths an alpha grid before its
-/// upscale (#522). It removes the steps of the grid from a near-binary S3OD edge on diagonal and
-/// curved edges; a feature of one grid cell is dimmed, features of two cells and more stay.
-constexpr double kAlphaEdgeSigma = 0.8;
+// Joint bilateral upsampling of an alpha grid (#522, master plan D23). The S3OD alpha is almost
+// binary, so an interpolation of the grid alone keeps its steps. A session pixel near an edge
+// takes the mean of its 4 x 4 nearest grid cells, weighted by the distance to the cell and by the
+// color difference between the pixel and the cell in the guide image.
 
-auto ConvertAlpha(const AiMaskAlphaGrid& alpha, Extent2D extent) -> std::vector<std::uint8_t> {
+/// Half width of the cell window: the cells floor(u) - 1 to floor(u) + 2 on each axis.
+constexpr int    kAlphaWindowRadius  = 2;
+/// Standard deviation of the spatial weight, in grid cells.
+constexpr float  kAlphaSpatialSigma  = 1.0f;
+/// The range sigma is this factor times the color standard deviation of the window cells, so an
+/// edge of low contrast separates as well as an edge of high contrast.
+constexpr float  kAlphaRangeScale    = 0.7f;
+/// Lower limit of the range sigma (RGB in [0, 1]), against the noise of flat windows.
+constexpr float  kAlphaMinRangeSigma = 0.01f;
+/// A window whose alpha values differ by at most this value is flat: its pixels take the value.
+constexpr float  kAlphaFlatSpread    = 1e-3f;
+/// Standard deviation, in session pixels, of the smoothing of the guide image against its noise.
+constexpr double kGuideSigma         = 1.0;
+
+/// The guide as an 8-bit RGB matrix; it shares the memory.
+auto             GuideMat(const AiMaskCoverageGuide& guide) -> cv::Mat {
+  // cv::Mat does not change the guide here; the const_cast only adapts the constructor signature.
+  return cv::Mat(static_cast<int>(guide.extent.height), static_cast<int>(guide.extent.width),
+                             CV_8UC3, const_cast<std::uint8_t*>(guide.rgb8.data()));
+}
+
+/// The upsampled alpha of one pixel at grid position (@p u, @p v) with the guide color @p color
+/// (null without a guide). @p low holds the guide color of each cell (CV_32FC3).
+auto JointBilateralAlpha(const cv::Mat& grid, const cv::Mat& low, float u, float v,
+                         const float* color) -> float {
+  constexpr int          kTaps        = 2 * kAlphaWindowRadius;
+  const int              first_column = static_cast<int>(std::floor(u)) - kAlphaWindowRadius + 1;
+  const int              first_row    = static_cast<int>(std::floor(v)) - kAlphaWindowRadius + 1;
+  std::array<int, kTaps> columns{};
+  std::array<int, kTaps> rows{};
+  for (int tap = 0; tap < kTaps; ++tap) {
+    columns[tap] = std::clamp(first_column + tap, 0, grid.cols - 1);
+    rows[tap]    = std::clamp(first_row + tap, 0, grid.rows - 1);
+  }
+  float inverse_range = 0.0f;
+  if (color != nullptr) {
+    std::array<float, 3> sum{};
+    std::array<float, 3> square{};
+    for (const int row : rows) {
+      for (const int column : columns) {
+        const auto* cell = low.ptr<float>(row) + 3 * column;
+        for (int channel = 0; channel < 3; ++channel) {
+          sum[channel] += cell[channel];
+          square[channel] += cell[channel] * cell[channel];
+        }
+      }
+    }
+    constexpr float kCount   = static_cast<float>(kTaps * kTaps);
+    float           variance = 0.0f;
+    for (int channel = 0; channel < 3; ++channel) {
+      const float mean = sum[channel] / kCount;
+      variance += std::max(0.0f, square[channel] / kCount - mean * mean);
+    }
+    const float sigma_squared = std::max(kAlphaMinRangeSigma * kAlphaMinRangeSigma,
+                                         kAlphaRangeScale * kAlphaRangeScale * variance);
+    inverse_range             = 0.5f / sigma_squared;
+  }
+  constexpr float kInverseSpatial  = 0.5f / (kAlphaSpatialSigma * kAlphaSpatialSigma);
+  float           weighted         = 0.0f;
+  float           total            = 0.0f;
+  float           spatial_weighted = 0.0f;
+  float           spatial_total    = 0.0f;
+  for (const int row : rows) {
+    const float dv = static_cast<float>(row) - v;
+    for (const int column : columns) {
+      const float du      = static_cast<float>(column) - u;
+      const float spatial = std::exp(-(du * du + dv * dv) * kInverseSpatial);
+      const float value   = grid.at<float>(row, column);
+      spatial_weighted += spatial * value;
+      spatial_total += spatial;
+      if (color != nullptr) {
+        const auto* cell     = low.ptr<float>(row) + 3 * column;
+        float       distance = 0.0f;
+        for (int channel = 0; channel < 3; ++channel) {
+          const float difference = color[channel] - cell[channel];
+          distance += difference * difference;
+        }
+        const float weight = spatial * std::exp(-distance * inverse_range);
+        weighted += weight * value;
+        total += weight;
+      }
+    }
+  }
+  // A pixel whose color is far from every cell keeps the spatial mean.
+  if (color != nullptr && total > 1e-12f) {
+    return weighted / total;
+  }
+  return spatial_weighted / spatial_total;
+}
+
+auto ConvertAlpha(const AiMaskAlphaGrid& alpha, Extent2D extent, const AiMaskCoverageGuide* guide)
+    -> std::vector<std::uint8_t> {
   std::vector<std::uint8_t> coverage(PixelCount(extent), 0);
   const auto [left, right] = CenterSpan(alpha.box.x0, alpha.box.x1, extent.width);
   const auto [top, bottom] = CenterSpan(alpha.box.y0, alpha.box.y1, extent.height);
   if (left == right || top == bottom) {
     return coverage;
   }
+  const int     width  = right - left;
+  const int     height = bottom - top;
+  // cv::Mat does not change the values; the const_cast only adapts the constructor signature.
   const cv::Mat grid(static_cast<int>(alpha.height), static_cast<int>(alpha.width), CV_32F,
                      const_cast<float*>(alpha.values.data()));
-  cv::Mat       smoothed;
-  cv::GaussianBlur(grid, smoothed, cv::Size(), kAlphaEdgeSigma, kAlphaEdgeSigma,
-                   cv::BORDER_REPLICATE);
-  cv::Mat resized;
-  cv::resize(smoothed, resized, cv::Size(right - left, bottom - top), 0.0, 0.0, cv::INTER_LINEAR);
-  // The smoothed edge is about 2 cells wide; a gain of the upscale factor around 0.5 makes it about
-  // 2 session pixels wide at every scale. A grid at the session scale or finer keeps its values.
-  const double gain =
-      std::max({1.0, static_cast<double>(right - left) / static_cast<double>(alpha.width),
-                static_cast<double>(bottom - top) / static_cast<double>(alpha.height)});
-  // round(((alpha - 0.5) * gain + 0.5) * 255) saturated to [0, 255]: the clamp to [0, 1].
-  cv::Mat out = CoverageMat(coverage, extent)(cv::Rect(left, top, right - left, bottom - top));
-  resized.convertTo(out, CV_8U, 255.0 * gain, 127.5 * (1.0 - gain));
+  // The guide color of each cell: the area mean of the guide pixels that the cell covers.
+  cv::Mat       low;
+  if (guide != nullptr) {
+    cv::Mat low8;
+    cv::resize(GuideMat(*guide)(cv::Rect(left, top, width, height)), low8, grid.size(), 0.0, 0.0,
+               cv::INTER_AREA);
+    low8.convertTo(low, CV_32FC3, 1.0 / 255.0);
+  }
+  // The alpha spread of the 5 x 5 window around each cell: 0 in the flat inside and outside.
+  const cv::Mat window =
+      cv::Mat::ones(2 * kAlphaWindowRadius + 1, 2 * kAlphaWindowRadius + 1, CV_8U);
+  cv::Mat highest;
+  cv::Mat lowest;
+  cv::dilate(grid, highest, window, cv::Point(-1, -1), 1, cv::BORDER_REPLICATE);
+  cv::erode(grid, lowest, window, cv::Point(-1, -1), 1, cv::BORDER_REPLICATE);
+  const cv::Mat      spread       = highest - lowest;
+  // Where the guide has no edge, the spatial mean is about 2 cells wide; a gain of half the upscale
+  // factor around 0.5 makes it about 4 session pixels wide. A grid at the session scale or at twice
+  // the session scale keeps its values.
+  const float        gain         = std::max({1.0f, 0.5f * static_cast<float>(width) / grid.cols,
+                                              0.5f * static_cast<float>(height) / grid.rows});
+
+  // The grid position of each column with half-pixel centers, as cv::resize.
+  const float        column_scale = static_cast<float>(grid.cols) / static_cast<float>(width);
+  const float        row_scale    = static_cast<float>(grid.rows) / static_cast<float>(height);
+  std::vector<float> grid_u(static_cast<std::size_t>(width));
+  std::vector<int>   nearest_column(static_cast<std::size_t>(width));
+  for (int x = 0; x < width; ++x) {
+    grid_u[x]         = (static_cast<float>(x) + 0.5f) * column_scale - 0.5f;
+    nearest_column[x] = std::clamp(static_cast<int>(std::lround(grid_u[x])), 0, grid.cols - 1);
+  }
+  const cv::Mat guide_mat = guide != nullptr ? GuideMat(*guide) : cv::Mat();
+  cv::Mat       out       = CoverageMat(coverage, extent)(cv::Rect(left, top, width, height));
+  cv::parallel_for_(cv::Range(0, height), [&](const cv::Range& range) {
+    for (int y = range.start; y < range.end; ++y) {
+      const float v           = (static_cast<float>(y) + 0.5f) * row_scale - 0.5f;
+      const int   nearest_row = std::clamp(static_cast<int>(std::lround(v)), 0, grid.rows - 1);
+      const auto* row_spread  = spread.ptr<float>(nearest_row);
+      const auto* row_alpha   = grid.ptr<float>(nearest_row);
+      const auto* guide_row =
+          guide != nullptr ? guide_mat.ptr<std::uint8_t>(top + y) + 3 * left : nullptr;
+      auto* target = out.ptr<std::uint8_t>(y);
+      for (int x = 0; x < width; ++x) {
+        const int cell  = nearest_column[x];
+        float     value = row_alpha[cell];
+        if (row_spread[cell] > kAlphaFlatSpread) {
+          std::array<float, 3> color{};
+          if (guide_row != nullptr) {
+            for (int channel = 0; channel < 3; ++channel) {
+              color[channel] = static_cast<float>(guide_row[3 * x + channel]) / 255.0f;
+            }
+          }
+          value = JointBilateralAlpha(grid, low, grid_u[x], v,
+                                      guide_row != nullptr ? color.data() : nullptr);
+        }
+        // round(clamp((alpha - 0.5) * gain + 0.5) * 255) with ties to even.
+        target[x] = cv::saturate_cast<std::uint8_t>(((value - 0.5f) * gain + 0.5f) * 255.0f);
+      }
+    }
+  });
   return coverage;
 }
 
@@ -102,6 +245,22 @@ void RequireUnitBox(const AiMaskBox& box) {
 }
 
 }  // namespace
+
+auto MakeAiMaskCoverageGuide(Extent2D extent, std::span<const std::uint8_t> rgb8)
+    -> AiMaskCoverageGuide {
+  RequireExtent(extent);
+  if (rgb8.size() != PixelCount(extent) * 3) {
+    Fail("the guide image must hold width x height RGB8 pixels");
+  }
+  AiMaskCoverageGuide guide;
+  guide.extent = extent;
+  guide.rgb8.resize(rgb8.size());
+  const cv::Mat source(static_cast<int>(extent.height), static_cast<int>(extent.width), CV_8UC3,
+                       const_cast<std::uint8_t*>(rgb8.data()));
+  cv::Mat       target = GuideMat(guide);
+  cv::GaussianBlur(source, target, cv::Size(), kGuideSigma, kGuideSigma, cv::BORDER_REPLICATE);
+  return guide;
+}
 
 void ValidateAiMaskModelOutput(const AiMaskModelOutput& output, Extent2D extent) {
   RequireExtent(extent);
@@ -132,16 +291,19 @@ void ValidateAiMaskModelOutput(const AiMaskModelOutput& output, Extent2D extent)
       output);
 }
 
-auto ConvertModelOutputToCoverage(const AiMaskModelOutput& output, Extent2D extent)
-    -> std::vector<std::uint8_t> {
+auto ConvertModelOutputToCoverage(const AiMaskModelOutput& output, Extent2D extent,
+                                  const AiMaskCoverageGuide* guide) -> std::vector<std::uint8_t> {
   ValidateAiMaskModelOutput(output, extent);
+  if (guide != nullptr && guide->extent != extent) {
+    Fail("the guide image must have the session image size");
+  }
   return std::visit(
-      [extent](const auto& value) -> std::vector<std::uint8_t> {
+      [extent, guide](const auto& value) -> std::vector<std::uint8_t> {
         using Output = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<Output, AiMaskSamLogits>) {
           return ConvertLogits(value, extent);
         } else if constexpr (std::is_same_v<Output, AiMaskAlphaGrid>) {
-          return ConvertAlpha(value, extent);
+          return ConvertAlpha(value, extent, guide);
         } else {
           static_assert(std::is_same_v<Output, AiMaskBinaryR8>,
                         "ConvertModelOutputToCoverage misses a model output kind");

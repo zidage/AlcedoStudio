@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -49,8 +50,10 @@ struct AiMaskStepResult {
  */
 class AiMaskModelOutputStore {
  public:
-  /// @p runner must outlive the store. @p extent is the session image size.
-  AiMaskModelOutputStore(IAiMaskSegmentationRunner& runner, Extent2D extent);
+  /// @p runner must outlive the store. @p extent is the session image size. @p guide (null or of
+  /// size @p extent) guides the upscale of the alpha grids (master plan D23).
+  AiMaskModelOutputStore(IAiMaskSegmentationRunner& runner, Extent2D extent,
+                         std::shared_ptr<const AiMaskCoverageGuide> guide = nullptr);
 
   /**
    * @brief Make every output of @p component exist; call the runner for each missing output.
@@ -118,9 +121,10 @@ class AiMaskModelOutputStore {
 
   IAiMaskSegmentationRunner& runner_;
   Extent2D                   extent_;
-  std::map<std::string, AiMaskModelOutput> task_outputs_;
-  std::map<std::string, DecodeOutput>      decode_outputs_;
-  std::vector<SegmentationPerson>          people_;
+  std::shared_ptr<const AiMaskCoverageGuide> guide_;
+  std::map<std::string, AiMaskModelOutput>   task_outputs_;
+  std::map<std::string, DecodeOutput>        decode_outputs_;
+  std::vector<SegmentationPerson>            people_;
 };
 
 }  // namespace alcedo
