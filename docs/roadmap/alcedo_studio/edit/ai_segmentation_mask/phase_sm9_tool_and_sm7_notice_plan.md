@@ -268,3 +268,69 @@ Discovered / passed / failed / skipped counts:
 Manual product, focus, and accessibility checks:
 Remaining issues or unavailable platforms:
 ```
+
+### 7.1 SM9 MVP (issue #513), before SM9.1
+
+```text
+Phase / date / status: SM9 MVP / 2026-10-24 / implemented on Windows; not the SM9.1-SM9.3 product.
+Source revision and branch: 8e1d8058 (SM8.7, PR #512); branch feature/ai-segmentation-sm9-mvp.
+Actual changed modules and diff size: about 1300 lines.
+  - New UI-layer owner EditorAiMaskTool (album_backend/editor_ai_mask_tool.*), exposed as
+    appModules.aiMaskTool, destroyed and shut down by ApplicationModuleHost.
+  - New EditorAiMaskPanel.qml over the adjustment panel pages; AI Mask button in
+    EditorAdjustmentHeader; viewport routing and box rubber band in EditorWorkspace.
+  - AiMaskSegmentationService::Status() (focused read of the sidecar model set id).
+Implemented behavior:
+  - Open (new Mask on the selected Color Grade, or the selected AI Mask): OpenAiMaskEdit ->
+    RenderAiMaskAnalysisImage(KeyAndPixels) -> worker: sidecar lease and start, LoadModels from
+    <model download directory>/alcedo-ai-mask-v1, StartImage, AiMaskEditSession.
+  - Click prompt, box prompt (left drag), Add/Subtract, Prompt/Tasks mode, levels 0-2, Subject,
+    Background, Sky, People and person toggles, Feather/Expand (drag preview without a step,
+    release adds one step), session Undo/Redo, Retry preview, Commit, Cancel/Close.
+  - Every applied step presents AcquireCoveragePixels through UpdateAiMaskCandidateCoverage.
+  - Commit: PrepareCommit on the worker, CommitAiMaskEdit on the GUI thread; the result is
+    matched by operation id from SessionResultObserved. A failed commit keeps the session.
+  - The editor ending the edit (image change, close) closes the tool and unloads the models.
+Decisions made during the work:
+  - One UI-layer class instead of the app controller plus UI model of section 3: the MVP checks
+    the production owners together; SM9.1 still owns the split.
+  - The AiMaskEdit lease makes actions.canEdit false, which disabled the viewport pointer, wheel,
+    and pan handlers. EditorWorkspace.viewportInputEnabled keeps them on while the tool is active
+    (section 1: prompts and pan/zoom stay available).
+  - previewStatus/previewError notify through previewChanged, not toolChanged: a Feather drag
+    preview otherwise re-evaluated the slider value binding and reset the slider to the accepted
+    value on every move.
+  - The developer model set was copied to D:/Download/alcedo_models/alcedo-ai-mask-v1 (the
+    configured model download directory) from build/tmp/sm3c/models (D13 developer setup).
+Primary success call chain: header button -> EditorAiMaskTool::open -> OpenAiMaskEdit ->
+  RenderAiMaskAnalysisImage -> StartOnWorker -> AiMaskEditSession -> UpdateAiMaskCandidateCoverage
+  -> EditorMaskCoveragePreview -> EditorSessionRenderSchedulerPort -> viewport coverage channel.
+Primary failure and restore call chain: any Open/start failure -> Fail(real error), Close stays
+  available -> CancelAiMaskEdit + worker Close (unload, lease release).
+Commands and exit codes:
+  scripts\msvc_env.cmd --build --preset win_debug --target AiMaskSegmentationServiceTest alcedo_main: 0
+  ctest -R '^AiMaskSegmentationServiceTest\.': 14/14 passed.
+Manual product checks (real window, CUDA editor backend, DirectML sidecar, Sony ARW 2729x4096):
+  - Open: sidecar start 2.0-3.0 s, model load 3.1-4.9 s, first encoder 2.5-4.0 s, warm
+    re-open encoder 287 ms.
+  - Click prompt on a spruce: 166 ms end to end, coverage displayed at the right place.
+  - Sky task added to the tree: 212 ms; union displayed.
+  - Feather 29 px drag preview and accept: one step; Undo/Redo restore 0 / 29 px without a model.
+  - Closing the window during the edit ended the edit and unloaded the models.
+Remaining issues or unavailable platforms (tracking issue #520):
+  - #514: coverage disappears after the viewport releases its QRhi resources (window moved to
+    another display) while the preview state stays Current.
+  - #515: the accent-color tint at opacity 0.4 is often not visible; use a light red tint.
+  - #516: the coverage overlay stays in the viewport after Commit.
+  - #517: a click on an AI Mask in the Mask Group panel or node Mask drawer does not open the
+    AI Mask edit.
+  - #518: the sidecar start takes about 3 s; about 2.7 s is the CLIP profile preparation.
+  - #519: four tasks and three prompt input modes (Point +/-, Path, Box) instead of the
+    Prompt/Tasks switch; changes the section 1 control order.
+  - Commit, reopen of a stored AI Mask, and People were not run in the window: the display
+    layout changed during the run and the window input could no longer be mapped.
+  - Observation: the Sky union stops about 20 px short of thin branches and ridges (SAM region
+    decodes at 256 x 256 logits, SM3.C C5); visible as an untinted sky band.
+  - No stroke prompt, no input markers, no keyboard/Escape rules, no translations, no
+    thumbnails; SM9.1-SM9.3 own them. macOS not built.
+```
