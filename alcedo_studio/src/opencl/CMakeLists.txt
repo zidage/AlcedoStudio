@@ -18,6 +18,7 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/primary_grade_neighbor.cl")
     set(OPENCL_DAG_LOCAL_TONE_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/local_tone.cl")
     set(OPENCL_DAG_MASK_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/mask.cl")
+    set(OPENCL_DAG_AI_MASK_COVERAGE_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/ai_mask_coverage.cl")
     set(OPENCL_DAG_DRT_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/drt.cl")
     # DRT parameter struct, ACEScc helpers, and ACES 2.0 / OpenDRT math.
     set(OPENCL_DAG_DRT_PARAMS_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/drt_params.cl")
@@ -135,6 +136,7 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL="${OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL}"
         ALCEDO_OPENCL_DAG_LOCAL_TONE_CL="${OPENCL_DAG_LOCAL_TONE_CL}"
         ALCEDO_OPENCL_DAG_MASK_CL="${OPENCL_DAG_MASK_CL}"
+        ALCEDO_OPENCL_DAG_AI_MASK_COVERAGE_CL="${OPENCL_DAG_AI_MASK_COVERAGE_CL}"
         ALCEDO_OPENCL_DAG_DRT_CL="${OPENCL_DAG_DRT_CL}"
         ALCEDO_OPENCL_DAG_DRT_PARAMS_CL="${OPENCL_DAG_DRT_PARAMS_CL}"
         ALCEDO_OPENCL_DAG_COMMON_CL="${OPENCL_DAG_COMMON_CL}"

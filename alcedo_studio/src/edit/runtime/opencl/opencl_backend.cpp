@@ -493,6 +493,9 @@ auto OpenClBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, T
   if (bytes == 0) {
     return {};
   }
+  if (ConsumeInjectedFailure(allocations_before_failure_)) {
+    throw std::runtime_error("OpenClBackend::CreateTexture2D: injected failure");
+  }
   if (max_image_width_ > 0 && (width > max_image_width_ || height > max_image_height_)) {
     std::ostringstream message;
     message << "OpenClBackend::CreateTexture2D: " << width << "x" << height

@@ -2,7 +2,8 @@
 
 Date: 2026-10-24. Status: SM8.1 complete on 2026-10-24 on Windows and macOS (section 7.1.1).
 SM8.2 complete on 2026-10-24 on Windows CUDA (section 7.2.1).
-SM8.3 to SM8.8 are planned; no implementation evidence exists for them.
+SM8.3 complete on 2026-10-24 on Windows OpenCL (section 7.3.1).
+SM8.4 to SM8.8 are planned; no implementation evidence exists for them.
 
 Parent: [AI Segmentation Mask Master Plan](../ai_segmentation_mask_master_plan.md), sections 1.5 and 9.7.
 Prerequisites: [SM4](phase_sm4_analysis_render_plan.md), [SM5](phase_sm5_ai_mask_source_and_session_plan.md),
@@ -278,7 +279,7 @@ The transport/composite split separates resource lifetime evidence from pixel co
 | --- | --- | --- | ---: | --- |
 | SM8.1 | Source lifetime and workspace operation boundary | SM5, SM6 | 900-1500 | complete 2026-10-24 (7.1.1) |
 | SM8.2 | CUDA edge computation and committed-render reuse | SM8.1 | 1200-1900 | complete 2026-10-24 (7.2.1) |
-| SM8.3 | OpenCL edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | planned |
+| SM8.3 | OpenCL edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | complete 2026-10-24 (7.3.1) |
 | SM8.4 | Metal edge computation and committed-render reuse | SM8.2 equations and fixtures | 1000-1800 | planned |
 | SM8.5 | Dedicated GPU coverage presentation channel | SM8.1 | 1200-1900 | planned |
 | SM8.6 | One viewport composite for candidate and committed coverage | SM8.2-SM8.5 | 1000-1700 | planned |
@@ -576,7 +577,91 @@ Keep known unrelated failures #496 separate from these results.
 
 **Commands.** Groups A and B, target `GpuDagOpenClGradeTest`, named GPU tests with `-j 1`.
 **Exit.** Pixel and lifecycle evidence passes; no host processing or backend substitution occurs.
-**Expected diff.** 1000-1800 lines. **Completion record.** Section 11; unfilled.
+**Expected diff.** 1000-1800 lines. **Completion record.** Section 7.3.1.
+
+#### 7.3.1 SM8.3 completion record
+
+```text
+Phase / date / status: SM8.3 / 2026-10-24 / complete on Windows (OpenCL, NVIDIA driver).
+Source revision and branch: base e99b36de (SM8.2, pull request #505); branch
+  feature/ai-segmentation-sm8-3-opencl-edge-coverage (third pull request of the SM8 stack).
+Actual changed modules and diff size: 9 files, +379 / -6 (385 changed lines; estimate
+  1000-1800). The estimate assumed new fixtures and owner changes; SM8.2 already added the
+  backend-neutral dispatch, the coverage owner operation, and the shared checks, so SM8.3 adds
+  only the OpenCL program, its dispatch, the manifest entry, and the test wiring. Largest files:
+  opencl_ai_mask_coverage.cpp 158 lines, ai_mask_coverage.cl 101 lines.
+Implemented behavior:
+  1. shader/ai_mask_coverage.cl: ai_mask_morphology_r8, ai_mask_feather_rows_r32f, and
+     ai_mask_feather_columns_r8, the passes of AiMaskEdgeDispatch. R8 images are
+     CL_UNORM_INT8, so each read converts back to the integer value (convert_uint_sat_rte of
+     v * 255) and each R8 write stores an integer / 255; morphology stays exact.
+  2. The program opencl_dag_ai_mask_coverage is one descriptor of the gpu_dag manifest
+     (RegisterOpenClGpuDagPrograms, once per process), with its path constant in
+     src/opencl/CMakeLists.txt and its names in opencl_dag_programs.hpp. The shader directory is
+     installed whole, so packaging needs no new rule.
+  3. OpenClBackend::RecordAiMaskEdge gets the kernels from the per-thread OpenClKernelCache,
+     enqueues on the device queue, and tracks each event in the command context, like the raster
+     Mask pass. The half kernel is passed by value (808 bytes; with the grid and two images the
+     arguments stay below the 1024-byte minimum CL_DEVICE_MAX_PARAMETER_SIZE).
+  4. MaskCoverageTextureCache<OpenClBackend> now records the edge work on the device; OpenCL
+     MaskEvaluate (EncodeRaster) acquires through the same owner operation.
+  5. Errors: missing or wrong textures, kernel lookup, argument, and enqueue failures throw;
+     the owner installs nothing and the caller cancels. OpenClBackend gains the test hook
+     FailTextureAllocationAfter.
+Primary success call chain:
+  EncodeRaster / AcquireAiMaskCandidateCoverage -> MaskCoverageTextureCache (resident original
+    upload) -> RecordEdge -> OpenClBackend::RecordAiMaskEdge -> OpenClKernelCache::GetKernel
+    (program built once) -> clEnqueueNDRangeKernel x (steps + 2) on the device queue
+    -> TrackKernelEvent -> Submit marker -> Wait -> processed R8 sampled by mask_raster_r8.
+Primary failure and restore call chain:
+  program build / argument / enqueue / allocation error -> exception before Install
+    -> CancelRender or CancelCoverageWork -> DiscardWritesOf -> the next Begin waits on the
+    tracked events of the cancelled work (OpenClBackend::Wait drains live events) -> the
+    published edge result stays current -> error to caller.
+Commands and exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target
+    MaskCoverageTextureCacheTest GpuDagCudaMaskTest GpuDagOpenClGradeTest alcedo_main (0)
+  ctest --test-dir build/debug -j 1 --output-on-failure -R
+    '^(MaskCoverageTextureCacheTest|GpuDagCudaMaskTest)\.|^GpuDagOpenClGradeTest\.OpenClMaskFixture\.' (0)
+  ctest --test-dir build/debug -j 1 -R '^GpuDagOpenClGradeTest\.' (8: the six #496 tests)
+Discovered / passed / failed / skipped counts:
+  Targeted: 56 discovered, 56 passed (MaskCoverageTextureCacheTest 10/10, GpuDagCudaMaskTest
+    23/23, OpenClMaskFixture 23/23).
+  Whole GpuDagOpenClGradeTest: 86 discovered, 80 passed, 6 failed. The failures are exactly
+    the six OpenClMultiGradeFixture tests of open issue #496 (ThreeGradesComposeInEdgeOrder,
+    SameAdjustmentTypeUsesDistinctNodeSlots, EachGradeMixesAgainstItsOwnInput,
+    DisabledGradeAliasesInputUntilFinalReader, ZeroMixGradeAliasesInputUntilFinalReader,
+    TwoLutGradesKeepIndependentCubeState); no Mask test fails.
+  Named SM8.3 behaviors in OpenClMaskFixture: GpuExpandMatchesAlternatingMorphologyExactly,
+    GpuFeatherMatchesIndependentGaussianWithinOneCode, GpuCoverageIncludesFullMarginAtImageBorders,
+    EdgeChangeDoesNotUploadOriginalAgain, FailedEdgeWorkKeepsPublishedCoverage, and
+    OpenClCoverageProgramIsNotRegisteredPerUpdate (12 edge updates: program build count, kernel
+    create count, and registered program names unchanged; the program appears once): all pass.
+Manual verification: none; SM8.3 has no user-visible change before SM8.6.
+Numeric differences, latency, and resource measurements:
+  Largest difference of the OpenCL result to the double-precision reference: 0 code; to the
+    host function: 0 code.
+  Coverage-only work wall time, NVIDIA GeForce RTX 3080 Laptop GPU OpenCL (driver 610.62),
+    4096 x 3072 candidate with a resident original upload, one sample each, including the result
+    allocation and a 12 MiB readback in a temporary test (debug host build; the driver compiles
+    the kernels with optimization): Feather sigma 50 48-69 ms, sigma 5 16 ms, Expand 50 38 ms,
+    Feather 50 with Expand 50 96 ms. Not the SM8.8 qualification.
+Remaining issues or unavailable platforms: no other OpenCL device (AMD or Intel) was available.
+  #496 (existing, unrelated).
+```
+
+Decisions made during SM8.3 (AGENTS.md "Make implementation decisions"):
+
+- Coverage work does not bind the thread queue (`BindThreadQueue`). The SM8.1 note required it
+  when coverage work records kernels. `RecordAiMaskEdge` and the R8 upload enqueue directly on
+  the backend's own queue (`queue_`), like `ExecuteOpenClMask`, and resolve no queue through
+  `OpenClContext`, so the binding has no effect on this work. Kernels come from the per-thread
+  cache, so argument binding stays on the calling thread.
+- The Feather half kernel is a by-value kernel argument, not a buffer upload, so an edge update
+  allocates and uploads nothing besides its output texture.
+- `OpenClCoverageProgramIsNotRegisteredPerUpdate` reads `OpenClBackend::ProgramBuildCount`,
+  `KernelCreateCount`, and `OpenClProgramLibrary::RegisteredProgramNames`; the plan's
+  "registration counts" are these existing counters, so no new counter was added (plan step 4).
 
 ### 7.4 SM8.4 - Metal edge computation
 

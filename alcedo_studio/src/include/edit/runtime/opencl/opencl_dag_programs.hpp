@@ -16,6 +16,8 @@ inline constexpr const char* kLocalToneProgramName            = "opencl_dag_loca
 inline constexpr const char* kMaskProgramName                 = "opencl_dag_mask";
 inline constexpr const char* kDrtProgramName                  = "opencl_dag_drt";
 inline constexpr const char* kDisplayToAp1ProgramName         = "opencl_dag_display_to_ap1";
+/// SM8.3: Feather and Expand of AI Mask coverage (ai_mask_coverage.cl).
+inline constexpr const char* kAiMaskCoverageProgramName       = "opencl_dag_ai_mask_coverage";
 
 inline constexpr const char* kGeometryResampleKernelName      = "geometry_resample_rgba32f";
 inline constexpr const char* kCameraColorKernelName           = "camera_color_acescc";
@@ -48,6 +50,9 @@ inline constexpr const char* kMaskAnalyticKernelName              = "mask_analyt
 inline constexpr const char* kMaskRasterKernelName                = "mask_raster_r8";
 inline constexpr const char* kMaskFillZeroKernelName              = "mask_fill_zero_r8";
 inline constexpr const char* kMaskUnionMaxKernelName              = "mask_union_max_r8";
+inline constexpr const char* kAiMaskMorphologyKernelName          = "ai_mask_morphology_r8";
+inline constexpr const char* kAiMaskFeatherRowsKernelName         = "ai_mask_feather_rows_r32f";
+inline constexpr const char* kAiMaskFeatherColumnsKernelName      = "ai_mask_feather_columns_r8";
 inline constexpr const char* kDrtKernelName                       = "drt_display_rgba32f";
 inline constexpr const char* kDisplayToAp1KernelName              = "display_to_ap1_acescc";
 inline constexpr const char* kDisplayToAp0LinearKernelName        = "display_to_ap0_linear";

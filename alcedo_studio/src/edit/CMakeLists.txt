@@ -344,6 +344,7 @@ if(ALCEDO_OPENCL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_drt_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_frame_presenter.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_local_tone_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_ai_mask_coverage.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_mask_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_primary_grade_pass.cpp
         PUBLIC_DEPS EditRuntime EditInput RawProcessorOp OpenClDemosaicNet OpenClContext OpenClProgramLibrary OpenCL::OpenCL

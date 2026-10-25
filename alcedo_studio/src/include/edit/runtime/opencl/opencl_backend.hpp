@@ -22,6 +22,7 @@
 
 #include "edit/geometry/types.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/runtime/ai_mask_coverage_work.hpp"
 #include "edit/runtime/basic_render_device.hpp"
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/content_key.hpp"
@@ -304,6 +305,23 @@ class OpenClBackend {
   void UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
                           CommandContext& command_context);
   /**
+   * @brief Record the Feather and Expand passes of @p dispatch on this device's queue (SM8.3):
+   *        the morphology steps and the two Feather passes of @ref AiMaskEdgeDispatch, from
+   *        `textures.source` to `textures.output`. Defined in opencl_ai_mask_coverage.cpp.
+   *
+   * Uses the kernels of the registered program `opencl_dag_ai_mask_coverage` through the
+   * per-thread kernel cache; it registers and compiles nothing per call. Tracks each enqueue
+   * event in @p command_context. Does not wait. The caller keeps every texture alive until the
+   * submission completes.
+   *
+   * @throws std::runtime_error when a required texture is missing or has the wrong size or
+   *         format, or when a kernel lookup, argument, or enqueue fails. Recorded passes then
+   *         write only the output and work textures, which the caller discards.
+   */
+  void RecordAiMaskEdge(const AiMaskEdgeDispatch&            dispatch,
+                        const AiMaskEdgeTextures<Texture2D>& textures,
+                        CommandContext&                      command_context);
+  /**
    * @brief Upload prepared pixels without a CPU copy; retain their immutable owner until wait.
    * The caller must not write through another alias while the upload is pending.
    */
@@ -400,6 +418,13 @@ class OpenClBackend {
    *        with std::runtime_error. @ref FailNextUpload is `FailUploadAfter(0)`.
    */
   void FailUploadAfter(std::uint32_t uploads_to_pass) { uploads_before_failure_ = uploads_to_pass; }
+  /**
+   * @brief Test hook: let @p allocations_to_pass more CreateTexture2D calls run, then fail the
+   *        next one with std::runtime_error.
+   */
+  void FailTextureAllocationAfter(std::uint32_t allocations_to_pass) {
+    allocations_before_failure_ = allocations_to_pass;
+  }
   void               NoteHostToDeviceBegin() { last_h2d_ranges_.clear(); }
 
   [[nodiscard]] auto NativeDevice() const -> cl_device_id { return device_; }
@@ -433,17 +458,21 @@ class OpenClBackend {
   }
 
  private:
-  /// True when the armed test failure is due on this upload call; disarms it then.
-  [[nodiscard]] auto ConsumeInjectedUploadFailure() -> bool {
-    if (!uploads_before_failure_.has_value()) {
+  /// True when the armed test failure is due on this call; disarms it then.
+  [[nodiscard]] static auto ConsumeInjectedFailure(std::optional<std::uint32_t>& calls_to_pass)
+      -> bool {
+    if (!calls_to_pass.has_value()) {
       return false;
     }
-    if (*uploads_before_failure_ == 0) {
-      uploads_before_failure_.reset();
+    if (*calls_to_pass == 0) {
+      calls_to_pass.reset();
       return true;
     }
-    --*uploads_before_failure_;
+    --*calls_to_pass;
     return false;
+  }
+  [[nodiscard]] auto ConsumeInjectedUploadFailure() -> bool {
+    return ConsumeInjectedFailure(uploads_before_failure_);
   }
 
   friend class Buffer;
@@ -499,6 +528,7 @@ class OpenClBackend {
   std::uint64_t          kernel_hit_baseline_      = 0;
   std::uint64_t          program_build_baseline_   = 0;
   std::optional<std::uint32_t> uploads_before_failure_;
+  std::optional<std::uint32_t> allocations_before_failure_;
   std::vector<ByteRange> last_h2d_ranges_;
   std::vector<RectI>     last_texture_rectangles_;
   std::uint64_t          lut_upload_bytes_     = 0;

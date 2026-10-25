@@ -17,6 +17,7 @@
 #include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "ai_mask_gpu_coverage_test_support.hpp"
 #include "ai_mask_raster_test_support.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -24,6 +25,7 @@
 #include "edit/runtime/compiled_mask_stack.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
 #include "edit/runtime/opencl/opencl_mask_pass.hpp"
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
@@ -33,6 +35,7 @@
 #include "gpu/transient_allocation_policy.hpp"
 #include "multi_grade_runtime_test_support.hpp"
 #include "multi_mask_runtime_test_support.hpp"
+#include "opencl/opencl_program_library.hpp"
 #include "opencl/opencl_runtime.hpp"
 
 namespace alcedo {
@@ -228,6 +231,14 @@ class OpenClMaskFixture : public ::testing::Test {
     h.candidate_coverage  = [this](const AiMaskCoveragePixels& pixels, Extent2D analysis,
                                   AiMaskEdgeAdjustment edge) {
       return ai_mask_test::AcquireCandidateInCoverageWork(*device_, pixels, analysis, edge);
+    };
+    h.stored_coverage = [this](const AiSegmentationMaskSource& source) {
+      return ai_mask_test::AcquireStoredInCoverageWork(*device_, source);
+    };
+    h.cache_edge_work  = [this] { return device_->Workspace().MaskCoverage().EdgeWorkCount(); };
+    h.cache_used_bytes = [this] { return device_->Workspace().MaskCoverage().UsedBytes(); };
+    h.fail_texture_allocation_after = [this](std::uint32_t allocations_to_pass) {
+      device_->Workspace().Device().FailTextureAllocationAfter(allocations_to_pass);
     };
     h.records_edge_on_device = MaskCoverageTextureCache<OpenClBackend>::kRecordsEdgeOnDevice;
     return h;
@@ -573,6 +584,62 @@ TEST_F(OpenClMaskFixture, CoverageOnlyWorkKeepsPhotoResults) {
 TEST_F(OpenClMaskFixture, AiMaskMissingAssetFailsRender) {
   auto h = AiMaskHarness();
   ai_mask_test::CheckAiMaskMissingAssetFailsRender(h);
+}
+
+// SM8.3: OpenCL records Feather and Expand on the device; there is no host edge step.
+static_assert(MaskCoverageTextureCache<OpenClBackend>::kRecordsEdgeOnDevice);
+
+TEST_F(OpenClMaskFixture, GpuExpandMatchesAlternatingMorphologyExactly) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuExpandMatchesAlternatingMorphologyExactly(h);
+}
+
+TEST_F(OpenClMaskFixture, GpuFeatherMatchesIndependentGaussianWithinOneCode) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuFeatherMatchesIndependentGaussianWithinOneCode(h);
+}
+
+TEST_F(OpenClMaskFixture, GpuCoverageIncludesFullMarginAtImageBorders) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckGpuCoverageIncludesFullMarginAtImageBorders(h);
+}
+
+TEST_F(OpenClMaskFixture, EdgeChangeDoesNotUploadOriginalAgain) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckEdgeChangeDoesNotUploadOriginalAgain(h);
+}
+
+TEST_F(OpenClMaskFixture, FailedEdgeWorkKeepsPublishedCoverage) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckFailedEdgeWorkKeepsPublishedCoverage(h);
+}
+
+/// SM8.3: repeated edge updates build the coverage program once and register nothing.
+TEST_F(OpenClMaskFixture, OpenClCoverageProgramIsNotRegisteredPerUpdate) {
+  auto       h        = AiMaskHarness();
+  const auto analysis = ai_mask_test::kEdgeAnalysisExtent;
+  const auto pixels   = ai_mask_test::MakeEdgeTestCandidate(analysis);
+  // The first edge work with Expand and Feather builds the program and creates its kernels.
+  (void)h.candidate_coverage(pixels, analysis, AiMaskEdgeAdjustment{2.0f, 2});
+  auto& library = OpenClProgramLibrary::Instance();
+  ASSERT_TRUE(library.IsProgramBuilt(OpenCL::GpuDag::kAiMaskCoverageProgramName));
+  const auto names = library.RegisteredProgramNames();
+  EXPECT_EQ(std::count(names.begin(), names.end(),
+                       std::string{OpenCL::GpuDag::kAiMaskCoverageProgramName}),
+            1);
+  auto&      backend = device_->Workspace().Device();
+  const auto builds  = backend.ProgramBuildCount();
+  const auto kernels = backend.KernelCreateCount();
+  const auto work    = h.cache_edge_work();
+
+  for (int update = 1; update <= 12; ++update) {
+    const AiMaskEdgeAdjustment edge{0.5f * static_cast<float>(update), (update % 5) - 2};
+    (void)h.candidate_coverage(pixels, analysis, edge);
+  }
+  EXPECT_EQ(h.cache_edge_work(), work + 12);
+  EXPECT_EQ(backend.ProgramBuildCount(), builds);
+  EXPECT_EQ(backend.KernelCreateCount(), kernels);
+  EXPECT_EQ(library.RegisteredProgramNames().size(), names.size());
 }
 
 }  // namespace
