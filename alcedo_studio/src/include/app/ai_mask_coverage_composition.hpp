@@ -53,6 +53,24 @@ struct AiMaskBinaryR8 {
 using AiMaskModelOutput = std::variant<AiMaskSamLogits, AiMaskAlphaGrid, AiMaskBinaryR8>;
 
 /**
+ * @brief The analysis image that guides the upscale of an alpha grid (#522, master plan D23).
+ *
+ * RGB8 at the session image size, row-major, smoothed by a Gaussian of sigma 1 pixel against its
+ * noise. Make it with @ref MakeAiMaskCoverageGuide; it does not change after that.
+ */
+struct AiMaskCoverageGuide {
+  Extent2D                  extent;
+  std::vector<std::uint8_t> rgb8;
+};
+
+/**
+ * @brief Make the guide of @p rgb8, the session image (width x height x 3 bytes, row-major).
+ * @throws std::invalid_argument when @p extent is empty or the byte count differs.
+ */
+[[nodiscard]] auto MakeAiMaskCoverageGuide(Extent2D extent, std::span<const std::uint8_t> rgb8)
+    -> AiMaskCoverageGuide;
+
+/**
  * @brief Check that @p output has a consistent grid: a non-empty size and a value count equal to
  * the grid size; an alpha box with ordered corners in [0, 1]; an R8 mask of the size @p extent.
  *
@@ -64,15 +82,23 @@ void               ValidateAiMaskModelOutput(const AiMaskModelOutput& output, Ex
  * @brief Convert one model output to a component coverage of @p extent.
  *
  * Logits: `cv::resize` (bilinear, half-pixel centers) to @p extent; 255 where the value is > 0,
- * else 0. Alpha grid: the session pixels whose centers lie inside the box take the grid resized
- * (`cv::resize`, bilinear, half-pixel centers) to their rectangle, `round(clamp(alpha) * 255)`
- * with ties to even;
- * the other pixels are 0. R8 mask: the values as given.
+ * else 0. Alpha grid (master plan D23): the session pixels whose centers lie inside the box map
+ * to grid positions with half-pixel centers. A pixel whose 5 x 5 cell window around its nearest
+ * cell has one alpha value takes that value. Another pixel takes the joint bilateral mean of its
+ * 4 x 4 nearest cells: spatial sigma 1 cell; with @p guide, a range weight on the RGB difference
+ * between the pixel and the area mean of the cell, with a range sigma of 0.7 times the color
+ * standard deviation of the window (at least 0.01). The value is then
+ * `round(clamp((alpha - 0.5) * gain + 0.5) * 255)` with ties to even, where gain is half the
+ * larger upscale factor of the two axes and at least 1. The other pixels are 0. R8 mask: the
+ * values as given.
  *
+ * @param guide The session image for the alpha grid edges; null uses the spatial weight only.
  * @return @p extent.width * @p extent.height values, row-major.
- * @throws std::invalid_argument when @ref ValidateAiMaskModelOutput fails or @p extent is empty.
+ * @throws std::invalid_argument when @ref ValidateAiMaskModelOutput fails, @p extent is empty, or
+ *         @p guide does not have the size @p extent.
  */
-[[nodiscard]] auto ConvertModelOutputToCoverage(const AiMaskModelOutput& output, Extent2D extent)
+[[nodiscard]] auto ConvertModelOutputToCoverage(const AiMaskModelOutput& output, Extent2D extent,
+                                                const AiMaskCoverageGuide* guide = nullptr)
     -> std::vector<std::uint8_t>;
 
 /**

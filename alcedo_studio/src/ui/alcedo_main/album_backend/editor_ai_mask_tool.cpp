@@ -319,6 +319,12 @@ void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartR
   image.model_set_id         = models.model_set_id;
   image.geometry_fingerprint = request.geometry_fingerprint;
   try {
+    // The analysis image guides the upscale of the S3OD alpha grids (master plan D23).
+    if (analysis.image.width == started.image_width &&
+        analysis.image.height == started.image_height && !analysis.image.pixels.empty()) {
+      image.guide = std::make_shared<const AiMaskCoverageGuide>(
+          MakeAiMaskCoverageGuide(image.extent, analysis.image.pixels));
+    }
     if (request.stored_source.has_value() && request.stored_asset.has_value()) {
       worker_.session = std::make_unique<AiMaskEditSession>(*service, image, *request.stored_source,
                                                             std::move(*request.stored_asset));

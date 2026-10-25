@@ -92,8 +92,9 @@ auto DecoderPrompt(const AiMaskPromptGroup& prefix, std::vector<float> mask_inpu
 
 }  // namespace
 
-AiMaskModelOutputStore::AiMaskModelOutputStore(IAiMaskSegmentationRunner& runner, Extent2D extent)
-    : runner_(runner), extent_(extent) {}
+AiMaskModelOutputStore::AiMaskModelOutputStore(IAiMaskSegmentationRunner& runner, Extent2D extent,
+                                               std::shared_ptr<const AiMaskCoverageGuide> guide)
+    : runner_(runner), extent_(extent), guide_(std::move(guide)) {}
 
 auto AiMaskModelOutputStore::TaskKey(AiMaskTaskKind task) -> std::string {
   return nlohmann::json{{"task", TaskText(task)}}.dump();
@@ -316,13 +317,14 @@ auto AiMaskModelOutputStore::ComponentCoverage(const AiMaskComponent& component)
   if (found == task_outputs_.end()) {
     throw std::logic_error("AI Mask: a task output is missing");
   }
-  auto coverage = ConvertModelOutputToCoverage(found->second, extent_);
+  auto coverage = ConvertModelOutputToCoverage(found->second, extent_, guide_.get());
   for (const auto& toggle : task.person_toggles) {
     const auto person = task_outputs_.find(PersonKey(toggle.index));
     if (person == task_outputs_.end()) {
       throw std::logic_error("AI Mask: a person output is missing");
     }
-    FoldAiMaskCoverage(coverage, ConvertModelOutputToCoverage(person->second, extent_),
+    FoldAiMaskCoverage(coverage,
+                       ConvertModelOutputToCoverage(person->second, extent_, guide_.get()),
                        toggle.operation);
   }
   return coverage;

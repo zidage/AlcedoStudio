@@ -134,9 +134,9 @@ normalized clipped box, at least one pixel on each axis.
 ### 2.5 Host composition (owned by SM5.2)
 
 For information only: SM5.2 maps an alpha grid to the session image with `mask_box` by bilinear
-resampling with half-pixel centers. It adds a person with the maximum and subtracts a person with
-the minimum of the current coverage and (1 - person alpha), in click order. Pixels outside
-`mask_box` do not change.
+resampling with half-pixel centers (a joint bilateral upsampling guided by the analysis image since
+master plan D23). It adds a person with the maximum and subtracts a person with the minimum of the
+current coverage and (1 - person alpha), in click order. Pixels outside `mask_box` do not change.
 
 ### 2.6 Errors
 

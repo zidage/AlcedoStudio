@@ -262,10 +262,11 @@ TEST(AiMaskEditSessionTest, LogitsConvertToSessionSizeWithThresholdZero) {
 
 TEST(AiMaskEditSessionTest, AlphaGridPastesThroughMaskBox) {
   constexpr Extent2D kExtent{1024, 768};
-  AiMaskAlphaGrid    person{32, 32, std::vector<float>(32 * 32, 0.6f), {0.5f, 0.5f, 0.75f, 0.75f}};
-  const auto         coverage   = ConvertModelOutputToCoverage(person, kExtent);
-  const auto         expected   = static_cast<std::uint8_t>(std::lround(0.6f * 255.0f));
-  std::size_t        mismatches = 0;
+  // The 32 x 32 grid fills 256 x 192 pixels: gain 4 (half of 8), so 0.5625 gives 0.75.
+  AiMaskAlphaGrid person{32, 32, std::vector<float>(32 * 32, 0.5625f), {0.5f, 0.5f, 0.75f, 0.75f}};
+  const auto      coverage   = ConvertModelOutputToCoverage(person, kExtent);
+  const auto      expected   = std::uint8_t{191};  // round(0.75 * 255)
+  std::size_t     mismatches = 0;
   for (std::uint32_t y = 0; y < kExtent.height; ++y) {
     for (std::uint32_t x = 0; x < kExtent.width; ++x) {
       const bool inside = x >= 512 && x < 768 && y >= 384 && y < 576;
@@ -282,6 +283,108 @@ TEST(AiMaskEditSessionTest, AlphaGridPastesThroughMaskBox) {
   const auto      low  = ConvertModelOutputToCoverage(under, kSessionExtent);
   EXPECT_TRUE(std::all_of(high.begin(), high.end(), [](std::uint8_t v) { return v == 255; }));
   EXPECT_TRUE(std::all_of(low.begin(), low.end(), [](std::uint8_t v) { return v == 0; }));
+
+  // A grid at the session scale has gain 1: the values stay round(alpha * 255).
+  AiMaskAlphaGrid same{
+      kSessionExtent.width,
+      kSessionExtent.height,
+      std::vector<float>(static_cast<std::size_t>(kSessionExtent.width) * kSessionExtent.height,
+                         0.6f),
+      {0.0f, 0.0f, 1.0f, 1.0f}};
+  const auto kept = ConvertModelOutputToCoverage(same, kSessionExtent);
+  EXPECT_TRUE(std::all_of(kept.begin(), kept.end(), [](std::uint8_t v) { return v == 153; }));
+}
+
+// A straight edge between two dark colors of low contrast on a 256 x 256 session image, and the
+// binary 64 x 64 grid of the same edge (an S3OD alpha upscaled 4 times). The edge is the line
+// row = 32 + slope * (column + 0.5) in session pixels, or column = 32 + slope * (row + 0.5) when
+// @p vertical. Returns the largest distance of the coverage edge from the line and the largest
+// change of that distance between neighbor pixels.
+auto GuidedEdgeError(float slope, bool vertical, bool use_guide) -> std::pair<double, double> {
+  constexpr std::uint32_t kGrid  = 64;
+  constexpr std::uint32_t kScale = 4;
+  constexpr std::uint32_t kSize  = kGrid * kScale;
+  constexpr Extent2D      kExtent{kSize, kSize};
+  const auto              line         = [slope](double along) { return 32.0 + slope * along; };
+  // The share of session pixel (along, across) on the inside of the line.
+  const auto              inside_share = [&](std::uint32_t along, std::uint32_t across) {
+    return std::clamp(static_cast<double>(across) + 1.0 - line(along + 0.5), 0.0, 1.0);
+  };
+  const auto index = [vertical](std::uint32_t along, std::uint32_t across, std::uint32_t size) {
+    return vertical ? static_cast<std::size_t>(along) * size + across
+                    : static_cast<std::size_t>(across) * size + along;
+  };
+  std::vector<std::uint8_t> rgb8(static_cast<std::size_t>(kSize) * kSize * 3);
+  const std::uint8_t        outside[3] = {60, 52, 44};
+  const std::uint8_t        inside[3]  = {72, 66, 58};
+  for (std::uint32_t along = 0; along < kSize; ++along) {
+    for (std::uint32_t across = 0; across < kSize; ++across) {
+      const double share = inside_share(along, across);
+      for (int channel = 0; channel < 3; ++channel) {
+        rgb8[index(along, across, kSize) * 3 + channel] = static_cast<std::uint8_t>(
+            std::lround(outside[channel] + share * (inside[channel] - outside[channel])));
+      }
+    }
+  }
+  std::vector<float> values(static_cast<std::size_t>(kGrid) * kGrid);
+  for (std::uint32_t along = 0; along < kGrid; ++along) {
+    for (std::uint32_t across = 0; across < kGrid; ++across) {
+      const bool cell_inside              = kScale * (across + 0.5) > line(kScale * (along + 0.5));
+      values[index(along, across, kGrid)] = cell_inside ? 1.0f : 0.0f;
+    }
+  }
+  const auto guide = MakeAiMaskCoverageGuide(kExtent, rgb8);
+  const auto coverage =
+      ConvertModelOutputToCoverage(AiMaskAlphaGrid{kGrid, kGrid, values, {0.0f, 0.0f, 1.0f, 1.0f}},
+                                   kExtent, use_guide ? &guide : nullptr);
+  // The edge of each line across the edge from its covered area, away from the borders.
+  double                worst = 0.0;
+  double                jump  = 0.0;
+  std::optional<double> previous;
+  for (std::uint32_t along = 16; along + 16 < kSize; ++along) {
+    double covered = 0.0;
+    for (std::uint32_t across = 0; across < kSize; ++across) {
+      covered += coverage[index(along, across, kSize)] / 255.0;
+    }
+    const double error = static_cast<double>(kSize) - covered - line(along + 0.5);
+    worst              = std::max(worst, std::abs(error));
+    if (previous.has_value()) {
+      jump = std::max(jump, std::abs(error - *previous));
+    }
+    previous = error;
+  }
+  return {worst, jump};
+}
+
+TEST(AiMaskEditSessionTest, GuidedAlphaEdgeFollowsTheImageEdge) {
+  // The steps of the grid are 4 pixels deep. The bilinear upscale of the grid is up to 1.78 px off
+  // the line and jumps by 0.94 px between neighbor pixels at slope 1/16. With the analysis image
+  // as guide, the coverage edge follows the image edge without a jump (master plan D23, #522).
+  // Near-vertical and near-horizontal edges have the longest steps.
+  for (const bool vertical : {false, true}) {
+    for (const float slope : {1.0f / 16.0f, 0.5f}) {
+      const auto [worst, jump] = GuidedEdgeError(slope, vertical, true);
+      EXPECT_LT(worst, 0.75) << "slope " << slope << (vertical ? " vertical" : " horizontal");
+      EXPECT_LT(jump, 0.3) << "slope " << slope << (vertical ? " vertical" : " horizontal");
+    }
+  }
+  // Without the guide, the edge stays more than 1 px off the line.
+  EXPECT_GT(GuidedEdgeError(1.0f / 16.0f, true, false).first, 1.0);
+}
+
+TEST(AiMaskEditSessionTest, GuideMustHaveSessionSize) {
+  const std::vector<std::uint8_t> rgb8(static_cast<std::size_t>(32) * 24 * 3, 128);
+  EXPECT_THROW((void)MakeAiMaskCoverageGuide({32, 24}, std::span(rgb8).first(10)),
+               std::invalid_argument);
+  const auto guide =
+      std::make_shared<const AiMaskCoverageGuide>(MakeAiMaskCoverageGuide({32, 24}, rgb8));
+  const AiMaskAlphaGrid grid{4, 4, std::vector<float>(16, 1.0f), {0.0f, 0.0f, 1.0f, 1.0f}};
+  EXPECT_THROW((void)ConvertModelOutputToCoverage(grid, kSessionExtent, guide.get()),
+               std::invalid_argument);
+  FakeRunner runner;
+  auto       image = SessionImage();
+  image.guide      = guide;
+  EXPECT_THROW((void)AiMaskEditSession(runner, image), std::invalid_argument);
 }
 
 TEST(AiMaskEditSessionTest, FoldAddsWithMaximumAndSubtractsWithInverse) {
@@ -424,7 +527,7 @@ TEST(AiMaskEditSessionTest, NewStepAfterUndoDropsRedo) {
 
 TEST(AiMaskEditSessionTest, PeopleClickUsesInSubjectThenToggles) {
   FakeRunner runner;
-  auto       people                       = AlphaResult(16, 12, 0.8f);
+  auto       people                       = AlphaResult(16, 12, 0.5625f);
   people.people                           = {Person(0, {0.0f, 0.0f, 0.25f, 0.5f}, true),
                                              Person(1, {0.5f, 0.5f, 0.75f, 1.0f}, false)};
   runner.tasks[SegmentationTask::kPeople] = people;
@@ -435,7 +538,8 @@ TEST(AiMaskEditSessionTest, PeopleClickUsesInSubjectThenToggles) {
   ASSERT_EQ(session.People().size(), 2U);
   EXPECT_TRUE(session.PersonIncluded(0));
   EXPECT_FALSE(session.PersonIncluded(1));
-  EXPECT_EQ(At(session.Coverage(), 5, 5), 204);  // round(0.8 * 255)
+  // Gain 2 (half of 16 x 12 to 64 x 48): round(((0.5625 - 0.5) * 2 + 0.5) * 255) = 159.
+  EXPECT_EQ(At(session.Coverage(), 5, 5), 159);
 
   ASSERT_TRUE(Applied(session.TogglePerson(0)));
   const auto& first = std::get<AiMaskTaskComponent>(session.Recipe().components[0].content);
@@ -444,7 +548,7 @@ TEST(AiMaskEditSessionTest, PeopleClickUsesInSubjectThenToggles) {
   EXPECT_EQ(first.person_toggles[0].box, (AiMaskBox{0.0f, 0.0f, 0.25f, 0.5f}));
   EXPECT_FALSE(session.PersonIncluded(0));
   EXPECT_EQ(At(session.Coverage(), 5, 5), 0);      // inside the person crop
-  EXPECT_EQ(At(session.Coverage(), 40, 30), 204);  // outside it: unchanged
+  EXPECT_EQ(At(session.Coverage(), 40, 30), 159);  // outside it: unchanged
 
   ASSERT_TRUE(Applied(session.TogglePerson(0)));
   const auto& second = std::get<AiMaskTaskComponent>(session.Recipe().components[0].content);
@@ -667,7 +771,7 @@ TEST(AiMaskEditSessionTest, ReopenShowsStoredCoverageWithoutModelCall) {
 
 TEST(AiMaskEditSessionTest, QueuedCoverageReadSurvivesNextModelResult) {
   FakeRunner runner;
-  runner.tasks[SegmentationTask::kSubject] = AlphaResult(16, 12, 0.5f);
+  runner.tasks[SegmentationTask::kSubject] = AlphaResult(16, 12, 0.5625f);
   runner.tasks[SegmentationTask::kSky] =
       AlphaResult(16, 12, 1.0f, SegmentationBox{0.0f, 0.0f, 1.0f, 0.5f});
   AiMaskEditSession session(runner, SessionImage());
@@ -687,7 +791,7 @@ TEST(AiMaskEditSessionTest, QueuedCoverageReadSurvivesNextModelResult) {
   EXPECT_NE(*current, subject_bytes);
   EXPECT_EQ(At(*current, 5, 5), 255);
   EXPECT_EQ(*queued, subject_bytes);
-  EXPECT_EQ(At(*queued, 5, 5), 128);  // round(0.5 * 255)
+  EXPECT_EQ(At(*queued, 5, 5), 159);  // gain 2: round(((0.5625 - 0.5) * 2 + 0.5) * 255)
 
   // Undo composes the Subject coverage again; the queued read is still a separate allocation.
   ASSERT_TRUE(session.Undo());

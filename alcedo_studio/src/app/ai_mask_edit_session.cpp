@@ -26,6 +26,11 @@ auto SessionImage(AiMaskSessionImage image) -> AiMaskSessionImage {
     throw std::invalid_argument("AI Mask edit session: the session image size " +
                                 ExtentText(image.extent) + " is not in [1, 4096]");
   }
+  if (image.guide != nullptr && image.guide->extent != image.extent) {
+    throw std::invalid_argument("AI Mask edit session: the guide image size " +
+                                ExtentText(image.guide->extent) +
+                                " is not the session image size " + ExtentText(image.extent));
+  }
   return image;
 }
 
@@ -61,7 +66,7 @@ auto ToggleBox(const SegmentationBox& box) -> AiMaskBox {
 }  // namespace
 
 AiMaskEditSession::AiMaskEditSession(IAiMaskSegmentationRunner& runner, AiMaskSessionImage image)
-    : image_(SessionImage(std::move(image))), outputs_(runner, image_.extent) {
+    : image_(SessionImage(std::move(image))), outputs_(runner, image_.extent, image_.guide) {
   states_.push_back(SessionState{});
   coverage_ = std::make_shared<const std::vector<std::uint8_t>>(
       static_cast<std::size_t>(image_.extent.width) * image_.extent.height, std::uint8_t{0});

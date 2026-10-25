@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "app/ai_mask_coverage_composition.hpp"
 #include "app/ai_mask_model_output_store.hpp"
 #include "app/ai_mask_segmentation_service.hpp"
 #include "edit/geometry/types.hpp"
@@ -31,12 +32,15 @@ enum class AiMaskInputMode : std::uint8_t { Prompt, Task };
  *
  * @p extent is the size of the segmentation session image (SM5 decision M14, from the start
  * response). @p model_set_id and @p geometry_fingerprint identify the models and the Lens and RAW
- * decode settings of the analysis image; a commit stores them in the source.
+ * decode settings of the analysis image; a commit stores them in the source. @p guide is the
+ * analysis image that guides the upscale of the alpha grids (master plan D23); null upscales
+ * them without it.
  */
 struct AiMaskSessionImage {
-  Extent2D    extent;
-  std::string model_set_id;
-  std::string geometry_fingerprint;
+  Extent2D                                   extent;
+  std::string                                model_set_id;
+  std::string                                geometry_fingerprint;
+  std::shared_ptr<const AiMaskCoverageGuide> guide;
 };
 
 /**
