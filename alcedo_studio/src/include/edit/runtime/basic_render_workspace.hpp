@@ -18,6 +18,7 @@
 #include "edit/runtime/graph_image_cache.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
 #include "edit/runtime/mask_asset_reader.hpp"
+#include "edit/runtime/mask_coverage_display.hpp"
 #include "edit/runtime/mask_coverage_texture_cache.hpp"
 #include "edit/runtime/node_result_cache.hpp"
 #include "edit/runtime/parameter_arena.hpp"
@@ -151,6 +152,28 @@ class BasicRenderWorkspace {
     }
     return mask_coverage_.AcquireCandidate(pixels, analysis_extent, edge, backend_,
                                            command_context);
+  }
+
+  /// RGBA32F coverage display targets (SM8.5). Cleared by ReleaseSessionResources.
+  [[nodiscard]] auto MaskCoverageDisplay() const -> const MaskCoverageDisplayTargets<Backend>& {
+    return coverage_display_;
+  }
+
+  /**
+   * @brief An RGBA32F coverage display target of @p extent for the open coverage work. See
+   *        MaskCoverageDisplayTargets::Acquire.
+   *
+   * @pre Coverage-only work is open (@ref BeginCoverageWork): coverage display is presentation
+   *      output, never a photo result.
+   * @throws std::runtime_error without open coverage work, or when the allocation fails.
+   */
+  auto AcquireMaskCoverageDisplayTarget(Extent2D extent, CommandContext& command_context)
+      -> MaskCoverageDisplayTarget<Backend>& {
+    if (!coverage_work_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::AcquireMaskCoverageDisplayTarget: no coverage work is open");
+    }
+    return coverage_display_.Acquire(extent, backend_, command_context.SubmissionId());
   }
 
   /**
@@ -417,6 +440,7 @@ class BasicRenderWorkspace {
     images_.Clear();
     values_.Clear();
     mask_coverage_.Clear();
+    coverage_display_.Clear();
     invalidation_.Clear();
     validity_prepared_ = false;
     scene_work_.Release();
@@ -477,6 +501,7 @@ class BasicRenderWorkspace {
   std::shared_ptr<const LutResourceResolver> lut_resources_ = DefaultLutResourceResolver();
   std::shared_ptr<const MaskAssetReader>     mask_assets_   = DefaultMaskAssetReader();
   MaskCoverageTextureCache<Backend>          mask_coverage_{};
+  MaskCoverageDisplayTargets<Backend>        coverage_display_{};
   GraphValueId                   persist_sensor_{};
   std::uint64_t                  parameter_layout_hash_ = 0;
   ResultPersistenceScope         persistence_scope_     = ResultPersistenceScope::AllCurrentResults;

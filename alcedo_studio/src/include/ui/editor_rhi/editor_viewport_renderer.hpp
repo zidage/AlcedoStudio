@@ -19,6 +19,7 @@
 #include "ui/editor_rhi/direct_present_queue.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
+#include "ui/editor_rhi/viewport_mask_coverage_layer.hpp"
 #include "ui/viewer/viewer_view_state.hpp"
 
 namespace alcedo::editor_rhi {
@@ -112,6 +113,10 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
 
   EditorViewportItem*                  item_ = nullptr;
   std::shared_ptr<DirectPresentQueue>  present_queue_;
+  // Coverage presentation channel (SM8.5): the viewport coverage input. Not composited until
+  // SM8.6 binds it; its frames never enter the photo layers.
+  std::shared_ptr<DirectPresentQueue>                   coverage_queue_;
+  ViewportMaskCoverageLayer                             coverage_layer_;
   std::shared_ptr<std::atomic<EditorViewportRenderer*>> consume_arm_slot_;
   std::unique_ptr<ILeaseTargetAdapter> adapter_;
   // Maps adapter_cookie (native_handle) -> last WritableTargetLease for destroy.

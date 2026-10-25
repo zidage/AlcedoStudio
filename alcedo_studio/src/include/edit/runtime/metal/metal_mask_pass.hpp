@@ -11,6 +11,8 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/mask_coverage_display.hpp"
+#include "edit/runtime/mask_coverage_texture_cache.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 
 namespace alcedo {
@@ -56,6 +58,19 @@ struct MetalMaskResult {
  */
 [[nodiscard]] auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                                     const PipelineDocument& document) -> MetalMaskResult;
+
+/**
+ * @brief Record the coverage display write of @p coverage (SM8.5): the raster sampling of the
+ *        committed AI MaskEvaluate on the photo frame grid of @p request, with its invert and
+ *        opacity, into @p output (RGBA32F; red is the R8 value / 255, green and blue 0, alpha 1).
+ *
+ * Encodes in the compute encoder of the current command buffer.
+ * @throws std::runtime_error for a wrong output, a missing pipeline, or a missing encoder.
+ */
+void               RecordMaskCoverageDisplay(MetalRenderDevice&                     device,
+                                             const MaskCoverageImage<MetalBackend>& coverage,
+                                             const MaskCoverageDisplayRequest&      request,
+                                             MetalBackend::Texture2D&               output);
 
 void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines);
 

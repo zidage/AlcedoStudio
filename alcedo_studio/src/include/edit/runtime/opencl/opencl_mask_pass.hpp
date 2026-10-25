@@ -10,6 +10,8 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/mask_coverage_display.hpp"
+#include "edit/runtime/mask_coverage_texture_cache.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
 
 namespace alcedo {
@@ -58,6 +60,19 @@ struct OpenClMaskResult {
  */
 [[nodiscard]] auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                      const PipelineDocument& document) -> OpenClMaskResult;
+
+/**
+ * @brief Record the coverage display write of @p coverage (SM8.5): the raster sampling of the
+ *        committed AI MaskEvaluate on the photo frame grid of @p request, with its invert and
+ *        opacity, into @p output (RGBA32F; red is the R8 value / 255, green and blue 0, alpha 1).
+ *
+ * Enqueues on the device queue and tracks the event in the command context.
+ * @throws std::runtime_error for a wrong output, a kernel lookup, or an enqueue failure.
+ */
+void               RecordMaskCoverageDisplay(OpenClRenderDevice&                     device,
+                                             const MaskCoverageImage<OpenClBackend>& coverage,
+                                             const MaskCoverageDisplayRequest&       request,
+                                             OpenClBackend::Texture2D&               output);
 
 }  // namespace alcedo
 

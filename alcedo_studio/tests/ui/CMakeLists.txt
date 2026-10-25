@@ -1814,6 +1814,55 @@ alcedo_ui_gtest_discover_tests(EditorViewportSuspensionTest
     PROPERTIES LABELS "editor_rhi;presentation")
 alcedo_register_test_target(EditorViewportSuspensionTest ui)
 
+# SM8.5: the coverage presentation channel with real native targets, a real QRhi, and a real
+# render device. The backend comes from ALCEDO_TEST_EDITOR_BACKEND (one process per test).
+add_executable(MaskCoveragePresentationTest
+    ${ALCEDO_TEST_ROOT}/ui/mask_coverage_presentation_test.cpp
+)
+target_include_directories(MaskCoveragePresentationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(MaskCoveragePresentationTest
+    PRIVATE
+        EditorRhiViewport
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::GuiPrivate
+        Qt6::OpenGL
+)
+if(WIN32)
+    # editor_startup.hpp includes Windows.h; keep winsock.h out so winsock2.h users compile.
+    target_compile_definitions(MaskCoveragePresentationTest PRIVATE WIN32_LEAN_AND_MEAN)
+endif()
+if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(MaskCoveragePresentationTest PRIVATE EditRuntimeCuda)
+    alcedo_ui_gtest_discover_tests(MaskCoveragePresentationTest
+        TEST_PREFIX "MaskCoveragePresentationTest.Cuda."
+        TEST_LIST MaskCoveragePresentationCudaTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                   ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=cuda")
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(MaskCoveragePresentationTest PRIVATE EditRuntimeOpenCl)
+    if(NOT APPLE)
+        alcedo_ui_gtest_discover_tests(MaskCoveragePresentationTest
+            TEST_PREFIX "MaskCoveragePresentationTest.OpenCl."
+            TEST_LIST MaskCoveragePresentationOpenClTests
+            PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                       ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=opencl")
+    endif()
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(MaskCoveragePresentationTest PRIVATE EditRuntimeMetal)
+    alcedo_ui_gtest_discover_tests(MaskCoveragePresentationTest
+        TEST_PREFIX "MaskCoveragePresentationTest.Metal."
+        TEST_LIST MaskCoveragePresentationMetalTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu;metal")
+endif()
+alcedo_register_test_target(MaskCoveragePresentationTest ui)
+
 add_executable(AnalyticMaskCreationTest
     ${ALCEDO_TEST_ROOT}/ui/analytic_mask_creation_test.cpp
 )

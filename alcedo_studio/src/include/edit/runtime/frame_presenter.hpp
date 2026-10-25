@@ -9,6 +9,7 @@
 
 #include "edit/graph/graph_ids.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "ui/edit_viewer/mask_coverage_sink.hpp"
 
 namespace alcedo {
 
@@ -17,8 +18,9 @@ class ImageBuffer;
 /**
  * @brief Native present and host download for one render backend.
  *
- * Specializations own GPU copies, signaling, and sink mapping. The primary
- * template fails explicitly and does not substitute another backend.
+ * Specializations own GPU copies, signaling, and sink mapping: the photo frame (IFrameSink) and
+ * the AI Mask coverage display (IMaskCoverageSink, SM8.5). The primary template fails explicitly
+ * and does not substitute another backend.
  *
  * @tparam Backend Render backend.
  */
@@ -28,6 +30,13 @@ struct FramePresenter {
   static void Present(Device&, const GraphValueId&, IFrameSink&, const FrameCompletionSubmission&,
                       const ViewerDisplayConfig&) {
     throw std::runtime_error("FramePresenter: present is not implemented for this backend");
+  }
+
+  template <class Device, class Target>
+  static auto PresentMaskCoverage(Device&, const Target&, const MaskCoveragePresentation&,
+                                  IMaskCoverageSink&) -> MaskCoveragePublication {
+    throw std::runtime_error(
+        "FramePresenter: coverage presentation is not implemented for this backend");
   }
 
   template <class Device>

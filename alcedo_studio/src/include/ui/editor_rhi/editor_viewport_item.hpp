@@ -15,6 +15,7 @@
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
+#include "ui/editor_rhi/viewport_mask_coverage_sink.hpp"
 #include "ui/viewer/viewer_view_state.hpp"
 
 namespace alcedo::editor_rhi {
@@ -103,6 +104,29 @@ class EditorViewportItem : public QQuickRhiItem {
 
   // Production IFrameSink. Owned by the item; safe while the viewport exists.
   [[nodiscard]] auto frameSink() -> DirectFrameSink*;
+
+  /**
+   * @brief Producer sink of the coverage presentation channel (SM8.5). Owned by the item; safe
+   *        while the viewport exists.
+   *
+   * The channel has its own queue (@ref maskCoverageQueue) and native targets. It follows the
+   * image session, suspension, and teardown of the photo queue, but a coverage frame never
+   * changes a photo slot or a scope input.
+   */
+  [[nodiscard]] auto maskCoverageSink() -> ViewportMaskCoverageSink* {
+    return coverage_sink_.get();
+  }
+  [[nodiscard]] auto maskCoverageQueue() const -> const std::shared_ptr<DirectPresentQueue>& {
+    return coverage_queue_;
+  }
+  /// Shared owner of @ref maskCoverageSink for the render-thread coverage layer.
+  [[nodiscard]] auto maskCoverageSinkShared() const
+      -> const std::shared_ptr<ViewportMaskCoverageSink>& {
+    return coverage_sink_;
+  }
+  /// Stop displaying coverage. The render thread releases the displayed frame on its next pass;
+  /// a frame that waits for import is dropped. Idempotent; thread-safe.
+  void               clearMaskCoverage();
 
   Q_INVOKABLE void   requestRendererInvalidation();
   Q_INVOKABLE void   cancelPendingFrames();
@@ -194,6 +218,9 @@ class EditorViewportItem : public QQuickRhiItem {
   [[nodiscard]] auto takeAdjustmentFrameRequest() -> bool {
     return adjustment_frame_requested_.exchange(false, std::memory_order_acq_rel);
   }
+  [[nodiscard]] auto takeMaskCoverageClearRequest() -> bool {
+    return mask_coverage_clear_requested_.exchange(false, std::memory_order_acq_rel);
+  }
   void                                stopInteractivePresentLoop();
   void                                setBackendName(const QString& name);
   void                                setStatusText(const QString& text);
@@ -209,6 +236,10 @@ class EditorViewportItem : public QQuickRhiItem {
   // alive for the duration of one emission; `frameSink()` still returns the
   // raw pointer to pipeline code.
   std::shared_ptr<DirectFrameSink>    frame_sink_;
+  // Coverage presentation channel (SM8.5). The queue outlives the sink that writes into it.
+  std::shared_ptr<DirectPresentQueue>                   coverage_queue_;
+  std::shared_ptr<ViewportMaskCoverageSink>             coverage_sink_;
+  std::atomic<bool>                                     mask_coverage_clear_requested_{false};
   /// Render-thread handoff for prompt Ready-frame consumption. createRenderer
   /// publishes the active renderer; its destructor clears the slot with CAS so
   /// a stale arm never dereferences a dead renderer. Read on the render thread

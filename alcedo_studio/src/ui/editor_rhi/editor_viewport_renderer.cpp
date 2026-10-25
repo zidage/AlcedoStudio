@@ -106,8 +106,14 @@ EditorViewportRenderer::~EditorViewportRenderer() {
     // requests can be serviced.
     present_queue_->SetConsumerAvailable(false);
   }
+  if (coverage_queue_) {
+    coverage_queue_->SetConsumerAvailable(false);
+  }
   releaseResources();
   releaseQueuedNatives();
+  if (adapter_) {
+    coverage_layer_.DestroyNatives(*adapter_);
+  }
   adapter_.reset();
 }
 
@@ -221,6 +227,14 @@ void EditorViewportRenderer::releaseResources() {
     present_queue_->InvalidateTargetGeneration();
   }
   releaseQueuedNatives();
+  // Device recreation or teardown: the coverage input and its targets go with the QRhi.
+  coverage_layer_.Release();
+  if (coverage_queue_) {
+    coverage_queue_->InvalidateTargetGeneration();
+  }
+  if (adapter_) {
+    coverage_layer_.DestroyRetiredNatives(*adapter_);
+  }
   render_target_ = nullptr;
 }
 
@@ -287,6 +301,9 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   }
 
   present_queue_->SetConsumerAvailable(item_->presentationRequested());
+  coverage_queue_ = item_->maskCoverageQueue();
+  coverage_layer_.Attach(coverage_queue_, item_->maskCoverageSinkShared());
+  coverage_queue_->SetConsumerAvailable(item_->presentationRequested());
 
   const auto next_session_epoch  = item_->sessionEpoch();
   const auto next_image_identity = item_->imageIdentity();
@@ -298,9 +315,16 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     if (item_->frameSink()) {
       item_->frameSink()->ClearPendingImportedFrames();
     }
+    // Coverage of the previous image closes before the new image is displayed.
+    coverage_layer_.Release();
     session_epoch_  = next_session_epoch;
     image_identity_ = next_image_identity;
     content_dirty_  = true;
+  }
+
+  if (item_->takeMaskCoverageClearRequest()) {
+    coverage_layer_.Release();
+    content_dirty_ = true;
   }
 
   if (item_->takeAdjustmentFrameRequest()) {
@@ -979,6 +1003,12 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   fulfillTargetRequests();
   consumeDirectFrames();
   consumeImportedGpuFrames();
+  if (adapter_) {
+    coverage_layer_.FulfillTargetRequests(rhi_, *adapter_, session_epoch_, image_identity_);
+  }
+  if (coverage_layer_.ConsumeNewest(rhi_, session_epoch_, image_identity_)) {
+    content_dirty_ = true;
+  }
   ensureStaticResources(render_target, command_buffer);
   auto*        updates       = rhi_->nextResourceUpdateBatch();
 
@@ -1066,6 +1096,9 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   }
 
   releaseQueuedNatives();
+  if (adapter_) {
+    coverage_layer_.DestroyRetiredNatives(*adapter_);
+  }
 
   if (drew_primary) {
     item_->setStatusText(QStringLiteral("presented"));

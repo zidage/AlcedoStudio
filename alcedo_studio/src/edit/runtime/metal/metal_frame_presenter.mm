@@ -87,6 +87,35 @@ void FramePresenter<MetalBackend>::Present(BasicRenderDevice<MetalBackend>& devi
   sink.NotifyFrameReady(submission);
 }
 
+auto FramePresenter<MetalBackend>::PresentMaskCoverage(
+    BasicRenderDevice<MetalBackend>& device, const MaskCoverageDisplayTarget<MetalBackend>& target,
+    const MaskCoveragePresentation& presentation, IMaskCoverageSink& sink)
+    -> MaskCoveragePublication {
+  auto* native = static_cast<MTL::Texture*>(target.texture.Native());
+  auto* command_buffer =
+      static_cast<MTL::CommandBuffer*>(device.CommandContext().NativeCommandBuffer());
+  if (native == nullptr || command_buffer == nullptr) {
+    throw std::runtime_error(
+        "Mask coverage display: the Metal target or command buffer is missing");
+  }
+  // The viewport samples on the Qt Quick command queue, so the coverage work must be complete.
+  WaitForViewerTexture(command_buffer);
+
+  /// Keeps the MTLTexture and the reader identity of the target until the renderer releases it.
+  struct CoverageFrameOwner {
+    NS::SharedPtr<MTL::Texture> texture;
+    std::shared_ptr<const void> readers;
+  };
+  auto owner     = std::make_shared<CoverageFrameOwner>();
+  owner->texture = NS::RetainPtr(native);
+  owner->readers = target.readers;
+  return sink.SubmitMetalCoverage(
+      presentation,
+      MaskCoverageMetalFrame{static_cast<int>(target.texture.Width()),
+                             static_cast<int>(target.texture.Height()),
+                             reinterpret_cast<std::uintptr_t>(native), std::move(owner)});
+}
+
 auto FramePresenter<MetalBackend>::Download(BasicRenderDevice<MetalBackend>& device,
                                             const GraphValueId&              output_id)
     -> std::shared_ptr<ImageBuffer> {
