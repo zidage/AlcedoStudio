@@ -19,6 +19,8 @@ Item {
     property string shutterText: "\u2014"
     property string isoText: "\u2014"
     property var maskCreation: null
+    /// EditorAiMaskTool (SM9 MVP); opens a new AI Mask, or the selected AI Mask.
+    property var aiMaskTool: null
     property string selectedNodeKind: ""
     /// Primary selection is a deletion-protected Color Grade.
     property bool selectedNodeLocked: false
@@ -259,6 +261,35 @@ Item {
                         } else {
                             root.requestMaskTool("linear")
                         }
+                    }
+                }
+
+                IconActionButton {
+                    id: aiMaskButton
+                    objectName: "editorAdjustmentHeaderAiMaskButton"
+                    readonly property bool aiMaskSelected: !!(root.maskCreation
+                        && String(root.maskCreation.toolKind || "") === "aiSegmentation"
+                        && String(root.maskCreation.selectedMaskId || "").length > 0)
+                    compact: true
+                    enabled: root.controlsEnabled
+                             && !!root.aiMaskTool
+                             && (aiMaskSelected || root.selectedNodeKind === "colorGrade")
+                    selected: !!(root.aiMaskTool && root.aiMaskTool.active)
+                    iconSrc: "qrc:/panel_icons/mask.svg"
+                    actionName: aiMaskSelected ? qsTr("Edit AI Mask") : qsTr("Add AI Mask")
+                    iconColorDefault: root.colIcon
+                    iconColorMuted: root.colIconMuted
+                    fillIdle: appTheme.buttonIdleFillColor
+                    fillHover: appTheme.buttonHoveredFillColor
+                    fillPressed: appTheme.buttonPressedFillColor
+                    fillSelected: appTheme.buttonSelectedFillColor
+                    onClicked: {
+                        if (root.aiMaskTool.active)
+                            return
+                        if (aiMaskSelected)
+                            root.aiMaskTool.openSelectedMask()
+                        else
+                            root.aiMaskTool.open()
                     }
                 }
             }

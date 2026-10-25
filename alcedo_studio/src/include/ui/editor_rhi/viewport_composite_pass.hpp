@@ -28,10 +28,10 @@ namespace alcedo::editor_rhi {
  */
 struct MaskCoverageDisplayStyle {
   bool  visible                                                         = true;
-  float red                                                             = 0.0f;
-  float green                                                           = 0.0f;
-  float blue                                                            = 0.0f;
-  float opacity                                                         = 0.4f;
+  float red                                                             = 1.0f;
+  float green                                                           = 80.0f / 255.0f;
+  float blue                                                            = 80.0f / 255.0f;
+  float opacity                                                         = 0.5f;
 
   auto  operator==(const MaskCoverageDisplayStyle& other) const -> bool = default;
 };

@@ -52,8 +52,17 @@ Item {
     readonly property bool userCanChangeState: !interactionPolicy
                                                || interactionPolicy.canChangeStateAsUser
     readonly property bool editorEditControlsEnabled: editorControlsEnabled && userCanChangeState
+    // View navigation and the viewport pointer. The AI Mask edit lease blocks document edits
+    // (canEdit is false), but its prompts and pan/zoom stay available (SM9 section 1).
+    readonly property bool viewportInputEnabled: editorControlsEnabled
+                                                 || !!(root.hasImage && aiMaskTool
+                                                       && aiMaskTool.active)
     readonly property var maskCreation: editorSession ? editorSession.maskCreation : null
+    // The AI Mask tool (SM9 MVP) takes left clicks and drags as prompts while its edit is open.
+    readonly property var aiMaskTool: appModules ? appModules.aiMaskTool : null
+    readonly property bool aiMaskOwnsLeftButton: !!(aiMaskTool && aiMaskTool.ownsLeftButton)
     readonly property bool maskOwnsLeftButton: !!(maskCreation && maskCreation.ownsLeftButton)
+                                               || aiMaskOwnsLeftButton
     property var comparison: appModules.editorComparison
     readonly property bool comparisonActive: !!(comparison && comparison.active)
 
@@ -184,7 +193,7 @@ Item {
                     EditorInteractionController {
                         id: editorInteraction
                         objectName: "editorInteractionController"
-                        interactionEnabled: root.editorControlsEnabled
+                        interactionEnabled: root.viewportInputEnabled
                     }
 
                     EditorViewportItem {
@@ -206,8 +215,14 @@ Item {
                             if (root.editorSession) {
                                 root.editorSession.bindInteractionController(editorInteraction)
                             }
+                            if (root.aiMaskTool) {
+                                root.aiMaskTool.bindInteractionItem(editorInteraction)
+                            }
                         }
                         Component.onDestruction: {
+                            if (root.aiMaskTool) {
+                                root.aiMaskTool.bindInteractionItem(null)
+                            }
                             if (root.editorSession) {
                                 root.editorSession.bindInteractionController(null)
                                 root.editorSession.unbindPresentationViewport()
@@ -330,6 +345,21 @@ Item {
                     // source-image pixel per screen pixel), derived from the full
                     // image and viewport — independent of the 2K preview cap. At
                     // fit (zoom field 1.0) the readout shows "FIT" instead of a %.
+                    // AI Mask box prompt while the left button drags (item coordinates of the
+                    // pointer handlers). Clicks and released boxes run the model.
+                    Rectangle {
+                        objectName: "editorAiMaskBoxPrompt"
+                        visible: !!(root.aiMaskTool && root.aiMaskTool.boxVisible)
+                        x: root.aiMaskTool ? root.aiMaskTool.boxX : 0
+                        y: root.aiMaskTool ? root.aiMaskTool.boxY : 0
+                        width: root.aiMaskTool ? root.aiMaskTool.boxWidth : 0
+                        height: root.aiMaskTool ? root.aiMaskTool.boxHeight : 0
+                        color: "transparent"
+                        border.width: 1
+                        border.color: appTheme.accentColor
+                        z: 4
+                    }
+
                     Label {
                         objectName: "editorZoomReadout"
                         anchors.right: parent.right
@@ -349,7 +379,7 @@ Item {
                     // not own crop math or view transform state.
                     HoverHandler {
                         id: viewportHover
-                        enabled: root.editorControlsEnabled
+                        enabled: root.viewportInputEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
                         // HoverHandler owns the platform cursor (Item has no cursorShape).
                         // BitmapCursor marks the Crop rotate handle: EditorOverlayItem
@@ -377,12 +407,13 @@ Item {
                     PointHandler {
                         id: viewportPointer
                         objectName: "editorViewportPointer"
-                        enabled: root.editorControlsEnabled
+                        enabled: root.viewportInputEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         property int _activeButton: Qt.LeftButton
                         property bool _pressed: false
                         property bool _maskStream: false
+                        property bool _aiMaskStream: false
                         property bool _canceled: false
                         property real _lastX: 0
                         property real _lastY: 0
@@ -412,7 +443,14 @@ Item {
                             _activeButton = (point.pressedButtons & Qt.MiddleButton)
                                     ? Qt.MiddleButton : Qt.LeftButton
                             rememberItemPos(point.position.x, point.position.y)
+                            _aiMaskStream = false
                             if (_activeButton === Qt.LeftButton
+                                    && root.aiMaskOwnsLeftButton
+                                    && root.aiMaskTool.handlePress(
+                                           point.position.x, point.position.y, _activeButton)) {
+                                _aiMaskStream = true
+                                _maskStream = false
+                            } else if (_activeButton === Qt.LeftButton
                                     && root.maskOwnsLeftButton
                                     && root.maskCreation
                                     && root.maskCreation.handlePress(
@@ -428,7 +466,12 @@ Item {
                         function finishMaskOrPan() {
                             var x = finishX()
                             var y = finishY()
-                            if (_canceled && _maskStream && root.maskCreation
+                            if (_aiMaskStream && root.aiMaskTool) {
+                                if (_canceled)
+                                    root.aiMaskTool.cancelPointer()
+                                else
+                                    root.aiMaskTool.handleRelease(x, y, _activeButton)
+                            } else if (_canceled && _maskStream && root.maskCreation
                                     && typeof root.maskCreation.cancelOpenPointerInput === "function") {
                                 root.maskCreation.cancelOpenPointerInput()
                             } else if (_maskStream && root.maskCreation) {
@@ -438,6 +481,7 @@ Item {
                             }
                             _pressed = false
                             _maskStream = false
+                            _aiMaskStream = false
                             _canceled = false
                             _haveLastItemPos = false
                         }
@@ -468,7 +512,12 @@ Item {
                             if (point.pressedButtons !== 0) {
                                 rememberItemPos(point.position.x, point.position.y)
                             }
-                            if (_maskStream && root.maskCreation) {
+                            if (_aiMaskStream && root.aiMaskTool) {
+                                root.aiMaskTool.handleMove(
+                                            _haveLastItemPos ? _lastX : point.position.x,
+                                            _haveLastItemPos ? _lastY : point.position.y,
+                                            point.pressedButtons)
+                            } else if (_maskStream && root.maskCreation) {
                                 root.maskCreation.handleMove(
                                             _haveLastItemPos ? _lastX : point.position.x,
                                             _haveLastItemPos ? _lastY : point.position.y,
@@ -500,7 +549,7 @@ Item {
                     // a plain drag still pans.
                     DragHandler {
                         id: viewportPanDrag
-                        enabled: root.editorControlsEnabled
+                        enabled: root.viewportInputEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
                         acceptedButtons: root.maskOwnsLeftButton
                                          ? Qt.MiddleButton
@@ -542,7 +591,7 @@ Item {
 
                     WheelHandler {
                         id: viewportWheel
-                        enabled: root.editorControlsEnabled
+                        enabled: root.viewportInputEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                         onActiveChanged: {
                             if (active) {
@@ -565,7 +614,7 @@ Item {
 
                     PinchHandler {
                         id: viewportPinch
-                        enabled: root.editorControlsEnabled
+                        enabled: root.viewportInputEnabled
                         target: null
                         // Absolute mapping from pinch start. PinchHandler.scale is
                         // cumulative for the active pinch and resets to 1.0 when a
@@ -620,7 +669,7 @@ Item {
                     TapHandler {
                         id: viewportDoubleTap
                         objectName: "editorViewportDoubleTap"
-                        enabled: root.editorControlsEnabled && !root.maskOwnsLeftButton
+                        enabled: root.viewportInputEnabled && !root.maskOwnsLeftButton
                         acceptedButtons: Qt.LeftButton
                         gesturePolicy: TapHandler.DragThreshold
                         onDoubleTapped: function (eventPoint) {
@@ -700,7 +749,7 @@ Item {
                         z: 5
 
                         Keys.onPressed: function (event) {
-                            if (!root.editorControlsEnabled) {
+                            if (!root.viewportInputEnabled) {
                                 return
                             }
                             if (event.key === Qt.Key_0 || event.key === Qt.Key_Home) {

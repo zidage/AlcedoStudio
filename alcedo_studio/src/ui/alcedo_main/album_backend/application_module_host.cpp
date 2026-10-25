@@ -387,6 +387,24 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   editor_comparison_ = std::make_unique<EditorComparisonController>(
       editor_session_.get(), SharedComparisonImageStore(), this);
   RecordConstruction("EditorComparisonController", editor_comparison_.get());
+  EditorAiMaskTool::Services ai_mask_services;
+  ai_mask_services.runtime = [this]() -> std::shared_ptr<alcedo::AiSidecarRuntimeService> {
+    if (!project_ || !project_->handler().project()) {
+      return nullptr;
+    }
+    return project_->handler().project()->GetAiSidecarRuntimeService();
+  };
+  ai_mask_services.runtime_options = [this]() {
+    return semantic_generation_->RuntimeOptionsForCurrentSidecarSnapshot(false);
+  };
+  // SM3.A section 2.1: <model download directory>/alcedo-ai-mask-v1, the model set identity.
+  ai_mask_services.model_directory = [this]() {
+    return std::filesystem::path(model_download_->ModelDownloadDirectory().toStdU16String()) /
+           "alcedo-ai-mask-v1";
+  };
+  ai_mask_tool_ =
+      std::make_unique<EditorAiMaskTool>(editor_session_.get(), std::move(ai_mask_services), this);
+  RecordConstruction("EditorAiMaskTool", ai_mask_tool_.get());
   // A published inventory or root can change which LUT bytes the open image renders.
   QObject::connect(lut_library_.get(), &alcedo::LutLibraryService::InventoryChanged,
                    editor_session_.get(),
@@ -696,6 +714,10 @@ void ApplicationModuleHost::ShutdownModules() {
     if (library_) {
       library_->thumbs().ReleaseVisibleThumbnailPins();
     }
+    // The AI Mask tool cancels its edit and unloads the models before the editor finalizes.
+    if (ai_mask_tool_) {
+      ai_mask_tool_->Shutdown();
+    }
     if (editor_session_ && editor_session_->active()) {
       editor_session_->Finalize(true);
     }
@@ -769,6 +791,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(workspace_router_, "WorkspaceRouter");
   destroy(lut_target_, "LutLibraryController");
   destroy(lut_browser_, "LutLibraryModel");
+  destroy(ai_mask_tool_, "EditorAiMaskTool");
   destroy(editor_comparison_, "EditorComparisonController");
   destroy(editor_session_, "EditorSessionController");
   if (editor_session_runtime_) {

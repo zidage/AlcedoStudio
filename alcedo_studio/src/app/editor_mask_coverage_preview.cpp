@@ -53,9 +53,16 @@ void EditorMaskCoveragePreview::EndCandidate(const ImageTarget& target, std::uin
   Hide();
 }
 
-void EditorMaskCoveragePreview::ReplaceCandidateWithCommitted(const ImageTarget& target,
-                                                              CommittedMask      committed,
-                                                              std::uint64_t      request_id) {
+void EditorMaskCoveragePreview::EndCandidateAfterCommit(const ImageTarget& target,
+                                                        CommittedMask      committed,
+                                                        std::uint64_t      request_id) {
+  const bool selected = committed_.has_value() && committed_->grade_id == committed.grade_id &&
+                        committed_->mask_id == committed.mask_id;
+  if (!selected) {
+    EndCandidate(target, request_id);
+    return;
+  }
+  // The selected Mask changed: present its new state, also when no candidate was presented.
   candidate_active_ = false;
   committed_        = std::move(committed);
   Enqueue(MakeCommittedRequest(target, *committed_, request_id, {}));

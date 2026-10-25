@@ -102,6 +102,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_mask_creation_adapter.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_ai_mask_tool.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_panel_presentation.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_item.cpp"
@@ -281,6 +283,10 @@ target_link_libraries(AlbumBackendLib
         AdjustmentTransferService
         AdjustmentTransferCatalog
         AiMaskAnalysisImage
+        # The AI Mask tool runs the segmentation service and the edit session on its worker.
+        AiMaskSegmentationService
+        AiMaskEditSession
+        AiSidecarRuntimeService
         EditorComparisonInputs
         EditorSessionService
         EditorMaskCreationController
@@ -793,6 +799,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorInfoHint.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorPostProcessPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMasksContextPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAiMaskPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorScopePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorTonePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLookPanel.qml"

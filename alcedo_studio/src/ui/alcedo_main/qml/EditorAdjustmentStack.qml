@@ -40,6 +40,9 @@ Item {
     readonly property int controlRadius: theme ? theme.controlRadius : 10
 
     readonly property var maskCreation: editorSession ? editorSession.maskCreation : null
+    readonly property var aiMaskTool: typeof appModules !== "undefined" && appModules
+                                      ? appModules.aiMaskTool
+                                      : null
     readonly property bool maskPanelAvailable: root.maskCreation
                                                && root.maskCreation.maskControlsActive
     readonly property string activePanel: editorSession
@@ -250,6 +253,7 @@ Item {
                          ? String(root.editorSession.exifIsoText || "\u2014")
                          : "\u2014"
                 maskCreation: root.editorSession ? root.editorSession.maskCreation : null
+                aiMaskTool: root.aiMaskTool
                 selectedNodeKind: root.nodeController
                                   ? String(root.nodeController.selectedNodeKind || "")
                                   : ""
@@ -390,6 +394,14 @@ Item {
                         onRetryRequested: root.comparison.retry()
                         onCloseRequested: root.comparison.close()
                     }
+                }
+
+                // The AI Mask tool covers the panel pages while its edit is open (SM9 MVP).
+                EditorAiMaskPanel {
+                    anchors.fill: parent
+                    z: 10
+                    visible: !!(root.aiMaskTool && root.aiMaskTool.active)
+                    tool: root.aiMaskTool
                 }
             }
         }

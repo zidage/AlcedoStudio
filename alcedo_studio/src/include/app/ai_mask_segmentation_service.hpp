@@ -78,6 +78,9 @@ class AiMaskSegmentationService final : public IAiMaskSegmentationRunner {
   /// Loads the model set from @p model_directory on @p device ("" for the platform default).
   auto LoadModels(const std::filesystem::path& model_directory, const std::string& device = {})
       -> SegmentationCallStatus;
+  /// The load state of the sidecar: the model set identity, the directory, the device, and the
+  /// sessions. Fails without a sidecar call when the service is closed.
+  auto Status() -> SegmentationStatus;
   /// Ends the current session, then starts a session on @p image. A non-empty @p image_key
   /// names the image content (SM4 analysis render identity): the sidecar uses its cached
   /// embedding of that key, or caches the new one. When the end fails, no session starts and the

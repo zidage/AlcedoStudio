@@ -70,6 +70,13 @@ Close has the same result as Cancel.
 Commit stores original coverage and publishes one main history operation through SM5.
 Keep the session open if asset write or history publication fails.
 Cancel writes no asset or history and restores the previous committed preview selection.
+Commit and Cancel both end the candidate display. The viewport then shows the photo without the
+coverage, unless the user selected the coverage of a committed Mask before the edit
+(`SelectMaskCoveragePreview`, for example from a Mask list selection that requests it; SM9.3 owns
+that control). Commit does not select the committed Mask. When the selected Mask is the committed
+one, it shows its new coverage (#516).
+The coverage tint is the AppTheme role `maskCoverageTintColor`, a fixed light red in every theme
+(#515).
 An image switch ends the edit through the existing editor lifecycle.
 Unload models when returning to ordinary adjustment, under D15 and D22.
 Drain the serial session worker safely before destroying its model-output store.
@@ -267,4 +274,119 @@ Commands and exit codes:
 Discovered / passed / failed / skipped counts:
 Manual product, focus, and accessibility checks:
 Remaining issues or unavailable platforms:
+```
+
+### 7.1 SM9 MVP (issue #513), before SM9.1
+
+```text
+Phase / date / status: SM9 MVP / 2026-10-24 / implemented on Windows; not the SM9.1-SM9.3 product.
+Source revision and branch: 8e1d8058 (SM8.7, PR #512); branch feature/ai-segmentation-sm9-mvp.
+Actual changed modules and diff size: about 1300 lines.
+  - New UI-layer owner EditorAiMaskTool (album_backend/editor_ai_mask_tool.*), exposed as
+    appModules.aiMaskTool, destroyed and shut down by ApplicationModuleHost.
+  - New EditorAiMaskPanel.qml over the adjustment panel pages; AI Mask button in
+    EditorAdjustmentHeader; viewport routing and box rubber band in EditorWorkspace.
+  - AiMaskSegmentationService::Status() (focused read of the sidecar model set id).
+Implemented behavior:
+  - Open (new Mask on the selected Color Grade, or the selected AI Mask): OpenAiMaskEdit ->
+    RenderAiMaskAnalysisImage(KeyAndPixels) -> worker: sidecar lease and start, LoadModels from
+    <model download directory>/alcedo-ai-mask-v1, StartImage, AiMaskEditSession.
+  - Click prompt, box prompt (left drag), Add/Subtract, Prompt/Tasks mode, levels 0-2, Subject,
+    Background, Sky, People and person toggles, Feather/Expand (drag preview without a step,
+    release adds one step), session Undo/Redo, Retry preview, Commit, Cancel/Close.
+  - Every applied step presents AcquireCoveragePixels through UpdateAiMaskCandidateCoverage.
+  - Commit: PrepareCommit on the worker, CommitAiMaskEdit on the GUI thread; the result is
+    matched by operation id from SessionResultObserved. A failed commit keeps the session.
+  - The editor ending the edit (image change, close) closes the tool and unloads the models.
+Decisions made during the work:
+  - One UI-layer class instead of the app controller plus UI model of section 3: the MVP checks
+    the production owners together; SM9.1 still owns the split.
+  - The AiMaskEdit lease makes actions.canEdit false, which disabled the viewport pointer, wheel,
+    and pan handlers. EditorWorkspace.viewportInputEnabled keeps them on while the tool is active
+    (section 1: prompts and pan/zoom stay available).
+  - previewStatus/previewError notify through previewChanged, not toolChanged: a Feather drag
+    preview otherwise re-evaluated the slider value binding and reset the slider to the accepted
+    value on every move.
+  - The developer model set was copied to D:/Download/alcedo_models/alcedo-ai-mask-v1 (the
+    configured model download directory) from build/tmp/sm3c/models (D13 developer setup).
+Primary success call chain: header button -> EditorAiMaskTool::open -> OpenAiMaskEdit ->
+  RenderAiMaskAnalysisImage -> StartOnWorker -> AiMaskEditSession -> UpdateAiMaskCandidateCoverage
+  -> EditorMaskCoveragePreview -> EditorSessionRenderSchedulerPort -> viewport coverage channel.
+Primary failure and restore call chain: any Open/start failure -> Fail(real error), Close stays
+  available -> CancelAiMaskEdit + worker Close (unload, lease release).
+Commands and exit codes:
+  scripts\msvc_env.cmd --build --preset win_debug --target AiMaskSegmentationServiceTest alcedo_main: 0
+  ctest -R '^AiMaskSegmentationServiceTest\.': 14/14 passed.
+Manual product checks (real window, CUDA editor backend, DirectML sidecar, Sony ARW 2729x4096):
+  - Open: sidecar start 2.0-3.0 s, model load 3.1-4.9 s, first encoder 2.5-4.0 s, warm
+    re-open encoder 287 ms.
+  - Click prompt on a spruce: 166 ms end to end, coverage displayed at the right place.
+  - Sky task added to the tree: 212 ms; union displayed.
+  - Feather 29 px drag preview and accept: one step; Undo/Redo restore 0 / 29 px without a model.
+  - Closing the window during the edit ended the edit and unloaded the models.
+Remaining issues or unavailable platforms (tracking issue #520):
+  - #514: coverage disappears after the viewport releases its QRhi resources (window moved to
+    another display) while the preview state stays Current.
+  - #515: the accent-color tint at opacity 0.4 is often not visible; use a light red tint.
+  - #516: the coverage overlay stays in the viewport after Commit.
+  - #517: a click on an AI Mask in the Mask Group panel or node Mask drawer does not open the
+    AI Mask edit.
+  - #518: the sidecar start takes about 3 s; about 2.7 s is the CLIP profile preparation.
+  - #519: four tasks and three prompt input modes (Point +/-, Path, Box) instead of the
+    Prompt/Tasks switch; changes the section 1 control order.
+  - Commit, reopen of a stored AI Mask, and People were not run in the window: the display
+    layout changed during the run and the window input could no longer be mapped.
+  - Observation: the Sky union stops about 20 px short of thin branches and ridges (SAM region
+    decodes at 256 x 256 logits, SM3.C C5); visible as an untinted sky band.
+  - No stroke prompt, no input markers, no keyboard/Escape rules, no translations, no
+    thumbnails; SM9.1-SM9.3 own them. macOS not built.
+```
+
+### 7.2 MVP fixes #515 and #516
+
+```text
+Phase / date / status: SM9 MVP fixes / 2026-10-24 / implemented on Windows.
+Source revision and branch: 98039bdb; branch feature/ai-segmentation-sm9-mvp (PR #521).
+Actual changed modules and diff size: about 330 lines.
+  - AppTheme maskCoverageTintColor/maskCoverageTintOpacity, DESIGN.md, and the default
+    MaskCoverageDisplayStyle of the viewport (#515).
+  - EditorMaskCoveragePreview::EndCandidateAfterCommit replaces ReplaceCandidateWithCommitted;
+    EditorSessionService::CommitAiMaskEdit calls it (#516).
+Implemented behavior:
+  - #515: the coverage tint is #FF5050 at opacity 0.5 in every theme, not accentColor at 0.4.
+    The composite rule of SM8.6 and the uncovered pixels are unchanged.
+  - #516: Commit does not select the committed Mask. Commit and Cancel end the candidate with
+    the same rule: a committed selection made before the edit (SelectMaskCoveragePreview) is
+    shown again, with its new state when it is the committed Mask; without a selection the
+    coverage is hidden. Section 1 and SM8 section 4.3 state the rule.
+Decisions made during the work:
+  - The tint role is CONSTANT: it no longer depends on the theme.
+  - The selected Mask is presented again after its Commit also when no candidate was presented,
+    because the selection held the source from before the Commit.
+Primary success call chain: CommitAiMaskEdit -> PutMaskAsset -> publish -> ReadCommittedAiMask
+  -> EndCandidateAfterCommit -> EndCandidate -> Hide -> ClearMaskCoverage (no selection), or
+  -> committed-source job (selection).
+Primary failure and restore call chain: unchanged; a refused or failed Commit keeps the
+  candidate and the preview.
+Commands and exit codes:
+  scripts\msvc_env.cmd --build --preset win_debug --target EditorMaskCoveragePreviewTest
+    EditorComparisonServiceTest ViewportCoverageCompositeTest MaskCoveragePresentationTest
+    alcedo_main: 0
+  ctest -j 1 -R '^(EditorMaskCoveragePreviewTest|EditorComparisonServiceTest|
+    ViewportCoverageCompositeTest|MaskCoveragePresentationTest)\.': 64/64 passed, 0 skipped.
+  New or changed: CommitStoresOriginalCoverageAndPublishesOneHistoryOperation (Commit without a
+    selection: one clear, no job, Hidden), CommitOfSelectedMaskPresentsItsNewState,
+    CommitOfAnotherMaskRestoresTheSelection, ViewportCoverageCompositeTest
+    CommitWithoutSelectionShowsPhotoWithoutTint (CUDA and OpenCL: the tint of the default style
+    changes covered blue pixels by more than 0.2; after the Commit the composite equals the photo
+    bytes).
+Manual product checks (real window, debug build, CUDA editor backend, DirectML sidecar):
+  - DSC0027.ARW: Sky task, then point prompts on the pond and the forest: the tint is clearly
+    visible on pale sky, water, grass, and conifer forest. Commit: the panel closes and the
+    photo is shown without the tint; the Mask limits the Grade.
+  - om5ii.raw: point prompts on the ram face and the deep blue sky: the tint is clearly visible
+    on both. Close (Cancel): the photo is shown without the tint and unchanged.
+Remaining issues or unavailable platforms:
+  - No photo with skin was available in the test project; skin was not checked in the window.
+  - macOS not built.
 ```

@@ -165,7 +165,9 @@ The error must not be reported as a successful preview of the current parameters
 
 Commit uses `PrepareCommit()` for the original R8, then the existing asset-first history publication.
 Do not read adjusted GPU pixels back to create the project asset.
-Keep the candidate visible until the committed replacement frame is ready.
+Commit does not select the committed Mask. It ends the candidate display with the Cancel rule below
+(changed by SM9 issue #516). When the committed Mask is the selected committed preview, keep the
+candidate visible until the frame of its new state is ready.
 A failed asset write or history publication leaves the session open under the existing SM5 rule.
 Cancel retires candidate display and restores the selected committed preview, or the photo alone when none was selected.
 
@@ -1206,7 +1208,9 @@ Implemented behavior:
      Commit stores PrepareCommit's original R8 through the existing asset-first publication, then
      selects the committed Mask, whose frame replaces the candidate frame without a clear in
      between. Cancel restores the committed selection, or hides the coverage when none is
-     selected. Open, Switch, Close, and Shutdown clear the preview (EndAiMaskWorkForImageChange);
+     selected. Changed after SM8.7 by #516 (SM9 section 7.2): Commit no longer selects the
+     committed Mask; EndCandidateAfterCommit replaces ReplaceCandidateWithCommitted and applies
+     the Cancel rule, and presents the new state when the selected Mask is the committed one. Open, Switch, Close, and Shutdown clear the preview (EndAiMaskWorkForImageChange);
      a job of the previous image completes as Discarded.
   4. IEditorMaskCoveragePort (new app port) and its production implementation in
      EditorSessionRenderSchedulerPort: ScheduleMaskCoverage queues one work item on the editor
