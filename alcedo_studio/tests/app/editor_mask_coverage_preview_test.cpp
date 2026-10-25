@@ -607,7 +607,7 @@ TEST_F(EditorMaskCoveragePreviewTest, CancelRestoresCommittedPreview) {
   OpenInteractive();
   const auto mask_id = CommitNewAiMask({{0.1f, 0.6f}, {0.3f, 0.9f}});
   const auto source  = WorkingAiSource(mask_id);
-  // The commit selected the new Mask; start from an explicit selection.
+  // The commit hid the coverage; start from an explicit selection.
   for (std::size_t index = 0; index < coverage_->jobs.size(); ++index) {
     if (!coverage_->jobs[index].completed) {
       CompleteJob(index, EditorMaskCoverageJobStatus::Presented);
@@ -713,15 +713,81 @@ TEST_F(EditorMaskCoveragePreviewTest, CommitStoresOriginalCoverageAndPublishesOn
   EXPECT_EQ(source.edge, (AiMaskEdgeAdjustment{6.0f, 3}));
   EXPECT_FALSE(service_->ai_mask_edit_open());
 
-  // The committed Mask replaces the candidate as the preview, without a clear in between: the
-  // candidate frame stays until the committed frame replaces it.
+  // Without a committed selection, the Commit hides the coverage (#516): one clear, no job.
   ASSERT_EQ(coverage_->events.size(), events + 1);
-  EXPECT_EQ(coverage_->events.back(), "job 2");
-  const auto* selected = CommittedOf(coverage_->jobs.back().request);
-  ASSERT_NE(selected, nullptr);
-  EXPECT_EQ(*selected, source);
+  EXPECT_EQ(coverage_->events.back(), "clear");
+  EXPECT_EQ(coverage_->jobs.size(), 1u);
+  EXPECT_EQ(Preview().source, EditorMaskCoveragePreviewSource::None);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Hidden);
+}
+
+TEST_F(EditorMaskCoveragePreviewTest, CommitOfSelectedMaskPresentsItsNewState) {
+  OpenInteractive();
+  const auto mask_id = CommitNewAiMask({{0.1f, 0.6f}, {0.3f, 0.9f}});
+  const auto before  = WorkingAiSource(mask_id);
+  (void)service_->SelectMaskCoveragePreview(
+      GradeId(), mask_id,
+      [this](EditorMaskCoverageResult result) { outcomes_.push_back(std::move(result)); });
+  Drain();
+  CompleteJob(coverage_->jobs.size() - 1, EditorMaskCoverageJobStatus::Presented);
+  ASSERT_EQ(Preview().source, EditorMaskCoveragePreviewSource::CommittedMask);
+
+  const auto opened = OpenAiMaskEdit(mask_id);
+  ASSERT_EQ(opened.result.kind, EditorSessionResultKind::Accepted);
+  auto session = OpenedSession(opened);
+  ASSERT_FALSE(HasFatalFailure());
+  ASSERT_TRUE(Applied(
+      session->AddPromptStep(Stroke({{0.6f, 0.1f}, {0.9f, 0.3f}}), AiMaskComponentOperation::Add)));
+  Present(*session);
+  CompleteJob(coverage_->jobs.size() - 1, EditorMaskCoverageJobStatus::Presented);
+  const int  clears    = coverage_->clear_count;
+
+  const auto committed = Commit(*session, mask_id);
+  EXPECT_NE(committed.kind, EditorSessionResultKind::Rejected) << committed.message;
+  EXPECT_NE(committed.kind, EditorSessionResultKind::Failed) << committed.message;
+  // The selection stays and presents the new source of the Mask; the candidate frame stays until
+  // the committed frame replaces it, so no clear.
+  const auto after = WorkingAiSource(mask_id);
+  ASSERT_NE(after, before);
+  const auto* presented = CommittedOf(coverage_->jobs.back().request);
+  ASSERT_NE(presented, nullptr);
+  EXPECT_EQ(*presented, after);
+  EXPECT_EQ(coverage_->clear_count, clears);
   EXPECT_EQ(Preview().source, EditorMaskCoveragePreviewSource::CommittedMask);
-  CompleteJob(1, EditorMaskCoverageJobStatus::Presented);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Pending);
+  CompleteJob(coverage_->jobs.size() - 1, EditorMaskCoverageJobStatus::Presented);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Current);
+}
+
+TEST_F(EditorMaskCoveragePreviewTest, CommitOfAnotherMaskRestoresTheSelection) {
+  OpenInteractive();
+  const auto selected_id = CommitNewAiMask({{0.1f, 0.6f}, {0.3f, 0.9f}});
+  const auto selected    = WorkingAiSource(selected_id);
+  (void)service_->SelectMaskCoveragePreview(
+      GradeId(), selected_id,
+      [this](EditorMaskCoverageResult result) { outcomes_.push_back(std::move(result)); });
+  Drain();
+  CompleteJob(coverage_->jobs.size() - 1, EditorMaskCoverageJobStatus::Presented);
+
+  ASSERT_EQ(OpenAiMaskEdit(std::nullopt).result.kind, EditorSessionResultKind::Accepted);
+  auto session = NewSession();
+  ASSERT_TRUE(Applied(
+      session->AddPromptStep(Stroke({{0.5f, 0.2f}, {0.8f, 0.5f}}), AiMaskComponentOperation::Add)));
+  Present(*session);
+  CompleteJob(coverage_->jobs.size() - 1, EditorMaskCoverageJobStatus::Presented);
+  const int  clears    = coverage_->clear_count;
+
+  const auto committed = Commit(*session, std::nullopt);
+  EXPECT_NE(committed.kind, EditorSessionResultKind::Rejected) << committed.message;
+  EXPECT_NE(committed.kind, EditorSessionResultKind::Failed) << committed.message;
+  ASSERT_EQ(Working()->Document().PrimaryGrade()->Masks().size(), 2u);
+  // The new Mask is not selected; the earlier selection is presented again.
+  const auto* presented = CommittedOf(coverage_->jobs.back().request);
+  ASSERT_NE(presented, nullptr);
+  EXPECT_EQ(*presented, selected);
+  EXPECT_EQ(coverage_->clear_count, clears);
+  EXPECT_EQ(Preview().source, EditorMaskCoveragePreviewSource::CommittedMask);
+  CompleteJob(coverage_->jobs.size() - 1, EditorMaskCoverageJobStatus::Presented);
   EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Current);
 }
 

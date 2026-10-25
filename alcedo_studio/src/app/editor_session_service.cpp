@@ -3042,14 +3042,14 @@ auto EditorSessionService::CommitAiMaskEdit(EditorAiMaskCommit commit) -> Editor
     return fail(error.empty() ? "The AI Mask could not be published" : std::move(error));
   }
   (void)EndAiMaskEditOnOwner();
-  if (coverage_preview_.HasCandidate()) {
-    // The committed Mask becomes the preview; the candidate frame stays until its frame replaces
-    // it. Both present the same original R8 and edge values with the Mask fields.
+  {
+    // The Commit ends the candidate like Cancel: the photo is shown without coverage unless the
+    // user selected a committed Mask; a selected committed Mask shows its new state (#516).
     const auto  mask_id = commit.mask_id.value_or(published.mask_id);
     std::string read_error;
     if (auto committed = ReadCommittedAiMask(commit.grade_id, mask_id, &read_error)) {
-      coverage_preview_.ReplaceCandidateWithCommitted(CoveragePreviewTarget(),
-                                                      std::move(*committed), current_operation_id_);
+      coverage_preview_.EndCandidateAfterCommit(CoveragePreviewTarget(), std::move(*committed),
+                                                current_operation_id_);
     } else {
       coverage_preview_.Clear();
     }

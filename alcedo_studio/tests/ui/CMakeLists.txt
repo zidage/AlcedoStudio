@@ -1916,6 +1916,7 @@ target_include_directories(ViewportCoverageCompositeTest
 target_link_libraries(ViewportCoverageCompositeTest
     PRIVATE
         EditorRhiViewport
+        EditorMaskCoveragePreview
         EditInput
         GTest::gtest
         Qt6::Core

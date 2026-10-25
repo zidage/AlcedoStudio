@@ -122,7 +122,7 @@ class EditorMaskCoveragePreview {
   auto operator=(const EditorMaskCoveragePreview&) -> EditorMaskCoveragePreview& = delete;
 
   /// Show @p candidate of the open AI Mask edit with @p mask. The candidate stays the source until
-  /// @ref EndCandidate, @ref ReplaceCandidateWithCommitted, or @ref Clear.
+  /// @ref EndCandidate, @ref EndCandidateAfterCommit, or @ref Clear.
   void UpdateCandidate(const ImageTarget& target, MaskCoverageCandidateSelection candidate,
                        MaskCoverageInvertOpacity mask, std::uint64_t request_id,
                        EditorMaskCoverageCompletion on_complete);
@@ -141,11 +141,16 @@ class EditorMaskCoveragePreview {
   void EndCandidate(const ImageTarget& target, std::uint64_t request_id);
 
   /**
-   * @brief End the candidate after its Commit and select the committed Mask @p committed. The
-   *        candidate frame stays displayed until the committed frame replaces it.
+   * @brief End the candidate after its Commit (SM9 #516). @p committed is the state of the
+   *        committed Mask after the Commit.
+   *
+   * The Commit does not select the committed Mask: the coverage stays shown only when the user
+   * selected a committed Mask before the edit. When that selection is the committed Mask, its new
+   * state replaces the candidate frame after its GPU work completes; any other selection is
+   * restored as in @ref EndCandidate; without a selection the coverage is hidden.
    */
-  void ReplaceCandidateWithCommitted(const ImageTarget& target, CommittedMask committed,
-                                     std::uint64_t request_id);
+  void EndCandidateAfterCommit(const ImageTarget& target, CommittedMask committed,
+                               std::uint64_t request_id);
 
   /**
    * @brief Present the newest request again after a failure. Reuses its shared pixels and edge
