@@ -26,7 +26,9 @@
 #include "edit/mask/ai_mask_coverage_texture.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_model.hpp"
+#include "edit/runtime/ai_mask_coverage_work.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/mask_asset_reader.hpp"
 #include "multi_mask_runtime_test_support.hpp"
 
@@ -177,6 +179,62 @@ inline auto MakeAiMask(const MaskAsset& asset, Extent2D analysis, std::string id
   return mask;
 }
 
+/// Result of one candidate coverage acquisition in coverage-only work, downloaded after the wait.
+struct CandidateCoverageDownload {
+  MaskAssetDescriptor       descriptor{};
+  std::vector<std::uint8_t> pixels;
+};
+
+/**
+ * @brief Coverage-only work on @p device: BeginCoverageWork, the candidate acquisition,
+ *        EndCoverageWork, WaitIdle, then a download of the acquired texture. Cancels the work and
+ *        rethrows on an error.
+ */
+template <class Device>
+auto AcquireCandidateInCoverageWork(Device& device, const AiMaskCoveragePixels& pixels,
+                                    Extent2D analysis, AiMaskEdgeAdjustment edge)
+    -> CandidateCoverageDownload {
+  device.BeginCoverageWork();
+  const auto read = [&] {
+    try {
+      return device.Workspace().AcquireAiMaskCandidateCoverage(pixels, analysis, edge,
+                                                               device.CommandContext());
+    } catch (...) {
+      device.CancelCoverageWork();
+      throw;
+    }
+  }();
+  device.EndCoverageWork();
+  device.WaitIdle();
+  CandidateCoverageDownload download;
+  download.descriptor = read->descriptor;
+  download.pixels.resize(read->texture.Bytes());
+  device.Workspace().Device().DownloadTexture2D(
+      read->texture,
+      std::span<std::byte>(reinterpret_cast<std::byte*>(download.pixels.data()),
+                           download.pixels.size()),
+      device.CommandContext());
+  return download;
+}
+
+/// Resource id of each published photo result of @p plan, or 0 when the result is not published.
+template <class Device>
+auto PublishedPhotoResultIds(Device& device, const ExecutionPlan& plan)
+    -> std::vector<std::uint64_t> {
+  std::vector<GraphValueId> ids{plan.sensor_linear_output, plan.geometry_output,
+                                plan.display_output};
+  if (const auto* grade = plan.FirstGrade(); grade != nullptr) {
+    ids.push_back(grade->mask_output);
+    ids.push_back(grade->scene_output);
+  }
+  std::vector<std::uint64_t> result;
+  for (const auto& id : ids) {
+    const auto* lease = device.Workspace().Images().Find(id);
+    result.push_back(lease == nullptr ? 0 : lease->Texture().ResourceId());
+  }
+  return result;
+}
+
 /**
  * @brief The operations of one backend mask fixture that the shared AI Mask checks use.
  *
@@ -195,6 +253,18 @@ struct AiMaskBackendHarness {
   std::function<std::uint64_t()>                              cache_uploads;
   /// WaitIdle, then BasicRenderWorkspace::ReleaseSessionResources.
   std::function<void()>                                       release_session;
+  /// Execute the whole plan, publish its results, and WaitIdle.
+  std::function<void()>                                       execute_plan;
+  /// @ref PublishedPhotoResultIds of the current plan.
+  std::function<std::vector<std::uint64_t>()>                 photo_result_ids;
+  std::function<std::size_t()>                                published_count;
+  std::function<std::uint64_t()>                              texture_allocations;
+  std::function<GpuNodePassStats()>                           pass_stats;
+  std::function<void()>                                       reset_pass_stats;
+  /// @ref AcquireCandidateInCoverageWork on the fixture device.
+  std::function<CandidateCoverageDownload(const AiMaskCoveragePixels&, Extent2D,
+                                          AiMaskEdgeAdjustment)>
+      candidate_coverage;
 };
 
 /// Analysis image of the checks: the full reference of a 64 x 48 test source.
@@ -340,6 +410,78 @@ inline void CheckAiMaskCoverageTextureUploadsOncePerAssetAndEdge(AiMaskBackendHa
 
   h.release_session();
   EXPECT_EQ(h.cache_entries(), 0u);
+}
+
+/// Session-size candidate coverage: a rectangle of 200 with a ramp along its top row.
+inline auto MakeCandidatePixels(Extent2D analysis) -> AiMaskCoveragePixels {
+  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(analysis.width) * analysis.height, 0);
+  for (std::uint32_t y = 10; y < 30; ++y) {
+    for (std::uint32_t x = 12; x < 40; ++x) {
+      pixels[static_cast<std::size_t>(y) * analysis.width + x] =
+          y == 10 ? static_cast<std::uint8_t>(x * 6) : 200;
+    }
+  }
+  return std::make_shared<const std::vector<std::uint8_t>>(std::move(pixels));
+}
+
+/**
+ * SM8.1: coverage-only work uploads the candidate on the device submission path and leaves the
+ * published photo results, the texture pool, and the next render unchanged.
+ */
+inline void CheckCoverageOnlyWorkKeepsPhotoResults(AiMaskBackendHarness& h) {
+  const auto asset = MakeEllipseAsset(kAnalysisExtent, kAssetRect);
+  (void)AttachAiMask(h, asset);
+  h.compile({});
+  h.execute_plan();
+  // Control: the pass counters of a repeated render without coverage work.
+  h.reset_pass_stats();
+  h.execute_plan();
+  const auto control            = h.pass_stats();
+  const auto results_before     = h.photo_result_ids();
+  const auto published_before   = h.published_count();
+  const auto allocations_before = h.texture_allocations();
+  ASSERT_EQ(control.sensor_develop_skip, 1U);
+  // Order of PublishedPhotoResultIds: Develop, Geometry, display, Mask, Color Grade scene. The
+  // Color Grade scene result lives in the scene-work pair, not in the published images.
+  ASSERT_EQ(results_before.size(), 5U);
+  ASSERT_NE(results_before[2], 0U) << "the display result is not published";
+  ASSERT_NE(results_before[3], 0U) << "the Mask result is not published";
+
+  // The original candidate coverage: the read is the uploaded session pixels.
+  const auto candidate = MakeCandidatePixels(kAnalysisExtent);
+  const auto original  = h.candidate_coverage(candidate, kAnalysisExtent, {});
+  EXPECT_EQ(original.descriptor, AiMaskCandidateDescriptor(kAnalysisExtent));
+  EXPECT_EQ(original.pixels, *candidate);
+  // An edge result of the same allocation.
+  const AiMaskEdgeAdjustment edge{2.0f, 1};
+  const auto                 adjusted = h.candidate_coverage(candidate, kAnalysisExtent, edge);
+  MaskAsset                  whole_image;
+  whole_image.descriptor = AiMaskCandidateDescriptor(kAnalysisExtent);
+  whole_image.pixels     = *candidate;
+  const auto expected    = MakeAiMaskCoverageTexture(whole_image, kAnalysisExtent, edge);
+  EXPECT_EQ(adjusted.descriptor, expected.descriptor);
+  EXPECT_EQ(adjusted.pixels, expected.pixels);
+
+  EXPECT_EQ(h.photo_result_ids(), results_before);
+  EXPECT_EQ(h.published_count(), published_before);
+  EXPECT_EQ(h.texture_allocations(), allocations_before);
+
+  // The next render of the unchanged document runs exactly the passes of the control render.
+  h.reset_pass_stats();
+  h.execute_plan();
+  const auto stats = h.pass_stats();
+  EXPECT_EQ(stats.sensor_develop_execute, control.sensor_develop_execute);
+  EXPECT_EQ(stats.sensor_develop_skip, control.sensor_develop_skip);
+  EXPECT_EQ(stats.geometry_execute, control.geometry_execute);
+  EXPECT_EQ(stats.camera_color_execute, control.camera_color_execute);
+  EXPECT_EQ(stats.mask_execute, control.mask_execute);
+  EXPECT_EQ(stats.mask_skip, control.mask_skip);
+  EXPECT_EQ(stats.primary_grade_execute, control.primary_grade_execute);
+  EXPECT_EQ(stats.drt_execute, control.drt_execute);
+  EXPECT_EQ(stats.result_content_hits, control.result_content_hits);
+  EXPECT_EQ(stats.result_content_misses, control.result_content_misses);
+  EXPECT_EQ(h.photo_result_ids(), results_before);
+  EXPECT_EQ(h.texture_allocations(), allocations_before) << "the render reused its scratch";
 }
 
 inline void CheckAiMaskMissingAssetFailsRender(AiMaskBackendHarness& h) {

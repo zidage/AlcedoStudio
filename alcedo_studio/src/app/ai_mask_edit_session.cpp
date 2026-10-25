@@ -5,6 +5,7 @@
 #include "app/ai_mask_edit_session.hpp"
 
 #include <algorithm>
+#include <memory>
 #include <stdexcept>
 #include <variant>
 
@@ -62,7 +63,8 @@ auto ToggleBox(const SegmentationBox& box) -> AiMaskBox {
 AiMaskEditSession::AiMaskEditSession(IAiMaskSegmentationRunner& runner, AiMaskSessionImage image)
     : image_(SessionImage(std::move(image))), outputs_(runner, image_.extent) {
   states_.push_back(SessionState{});
-  coverage_.assign(static_cast<std::size_t>(image_.extent.width) * image_.extent.height, 0);
+  coverage_ = std::make_shared<const std::vector<std::uint8_t>>(
+      static_cast<std::size_t>(image_.extent.width) * image_.extent.height, std::uint8_t{0});
 }
 
 AiMaskEditSession::AiMaskEditSession(IAiMaskSegmentationRunner& runner, AiMaskSessionImage image,
@@ -82,7 +84,8 @@ AiMaskEditSession::AiMaskEditSession(IAiMaskSegmentationRunner& runner, AiMaskSe
     if (MakeMaskAssetKey(stored_asset.descriptor, stored_asset.pixels) != stored.asset_key) {
       throw std::invalid_argument("its pixels do not match its key");
     }
-    mask.coverage = PlaceAiMaskAssetInCoverage(stored_asset, image_.extent);
+    mask.coverage = std::make_shared<const std::vector<std::uint8_t>>(
+        PlaceAiMaskAssetInCoverage(stored_asset, image_.extent));
   } catch (const std::invalid_argument& error) {
     throw std::runtime_error(std::string{"AI Mask edit session: the stored asset is invalid: "} +
                              error.what());
@@ -213,7 +216,10 @@ auto AiMaskEditSession::Undo() -> bool {
   if (!CanUndo()) {
     return false;
   }
-  Compose(states_[current_ - 1].recipe);
+  // An edge or input-mode step keeps the recipe, so it keeps the shared coverage too.
+  if (states_[current_ - 1].recipe != Recipe()) {
+    Compose(states_[current_ - 1].recipe);
+  }
   --current_;
   return true;
 }
@@ -222,7 +228,9 @@ auto AiMaskEditSession::Redo() -> bool {
   if (!CanRedo()) {
     return false;
   }
-  Compose(states_[current_ + 1].recipe);
+  if (states_[current_ + 1].recipe != Recipe()) {
+    Compose(states_[current_ + 1].recipe);
+  }
   ++current_;
   return true;
 }
@@ -248,7 +256,7 @@ auto AiMaskEditSession::PersonIncluded(std::uint32_t person_index) const -> bool
 }
 
 auto AiMaskEditSession::PrepareCommit() const -> std::pair<MaskAsset, AiSegmentationMaskSource> {
-  auto asset = CropAiMaskCoverage(coverage_, image_.extent);
+  auto asset = CropAiMaskCoverage(*coverage_, image_.extent);
   if (!asset.has_value()) {
     throw std::runtime_error("The AI Mask has no coverage.");
   }
@@ -318,12 +326,13 @@ void AiMaskEditSession::Compose(const AiMaskRecipe& recipe) {
     component_coverages_.clear();
     throw;
   }
-  std::vector<std::uint8_t> total(coverage_.size(), 0);
+  std::vector<std::uint8_t> total(coverage_->size(), 0);
   for (std::size_t i = 0; i < next.size(); ++i) {
     FoldAiMaskCoverage(total, next[i].second, recipe.components[i].operation);
   }
   component_coverages_ = std::move(next);
-  coverage_            = std::move(total);
+  // A new allocation: a read of the previous coverage keeps its bytes.
+  coverage_            = std::make_shared<const std::vector<std::uint8_t>>(std::move(total));
 }
 
 auto AiMaskEditSession::UsesStoredCoverage(const AiMaskRecipe& recipe) const -> bool {

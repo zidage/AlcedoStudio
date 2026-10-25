@@ -179,6 +179,16 @@ class CudaMaskFixture : public ::testing::Test {
       device_.WaitIdle();
       device_.Workspace().ReleaseSessionResources();
     };
+    h.execute_plan     = [this] { ExecutePlan(); };
+    h.photo_result_ids = [this] { return ai_mask_test::PublishedPhotoResultIds(device_, plan_); };
+    h.published_count  = [this] { return device_.Workspace().Images().PublishedCount(); };
+    h.texture_allocations = [this] { return device_.Workspace().Textures().AllocationCount(); };
+    h.pass_stats          = [this] { return device_.PassStats(); };
+    h.reset_pass_stats    = [this] { device_.ResetPassStats(); };
+    h.candidate_coverage  = [this](const AiMaskCoveragePixels& pixels, Extent2D analysis,
+                                  AiMaskEdgeAdjustment edge) {
+      return ai_mask_test::AcquireCandidateInCoverageWork(device_, pixels, analysis, edge);
+    };
     return h;
   }
 
@@ -525,6 +535,11 @@ TEST_F(CudaMaskFixture, AiMaskFeatherAndExpandChangeCoverage) {
 TEST_F(CudaMaskFixture, AiMaskCoverageTextureUploadsOncePerAssetAndEdge) {
   auto h = AiMaskHarness();
   ai_mask_test::CheckAiMaskCoverageTextureUploadsOncePerAssetAndEdge(h);
+}
+
+TEST_F(CudaMaskFixture, CoverageOnlyWorkKeepsPhotoResults) {
+  auto h = AiMaskHarness();
+  ai_mask_test::CheckCoverageOnlyWorkKeepsPhotoResults(h);
 }
 
 TEST_F(CudaMaskFixture, AiMaskMissingAssetFailsRender) {

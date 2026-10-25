@@ -325,6 +325,17 @@ gtest_discover_tests(AiMaskCoverageTextureTest
   PROPERTIES LABELS "ci_core_flow;edit;mask;ai_mask")
 alcedo_register_test_target(AiMaskCoverageTextureTest edit)
 
+# SM8.1: AI Mask coverage owner of the render workspace (source and edge-result stages, candidate
+# replacement, read lifetime, errors) over a host resource factory.
+add_executable(MaskCoverageTextureCacheTest
+  ${ALCEDO_TEST_ROOT}/edit/runtime/mask_coverage_texture_cache_test.cpp)
+target_include_directories(MaskCoverageTextureCacheTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(MaskCoverageTextureCacheTest PRIVATE GTest::gtest_main EditMaskRaster)
+gtest_discover_tests(MaskCoverageTextureCacheTest
+  TEST_PREFIX "MaskCoverageTextureCacheTest."
+  PROPERTIES LABELS "ci_core_flow;edit;runtime;ai_mask")
+alcedo_register_test_target(MaskCoverageTextureCacheTest edit)
+
 # Host GraphImageCache retention: LRU budget vs live writes, injected allocation failure.
 add_executable(GraphImageCacheRetentionTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_retention_test.cpp)

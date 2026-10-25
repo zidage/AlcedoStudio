@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/imgproc.hpp>
 #include <optional>
@@ -658,6 +659,96 @@ TEST(AiMaskEditSessionTest, ReopenShowsStoredCoverageWithoutModelCall) {
   EXPECT_EQ(reopened_asset.pixels, asset.pixels);
   EXPECT_EQ(reopened_source, stored);
   EXPECT_EQ(runner.calls, 3);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shared coverage reads (SM8.1)
+// ---------------------------------------------------------------------------------------------
+
+TEST(AiMaskEditSessionTest, QueuedCoverageReadSurvivesNextModelResult) {
+  FakeRunner runner;
+  runner.tasks[SegmentationTask::kSubject] = AlphaResult(16, 12, 0.5f);
+  runner.tasks[SegmentationTask::kSky] =
+      AlphaResult(16, 12, 1.0f, SegmentationBox{0.0f, 0.0f, 1.0f, 0.5f});
+  AiMaskEditSession session(runner, SessionImage());
+  ASSERT_TRUE(Applied(session.AddTask(AiMaskTaskKind::Subject, AiMaskComponentOperation::Add)));
+
+  // A queued upload holds the read of the Subject coverage.
+  auto                                            queued = session.AcquireCoveragePixels();
+  const std::weak_ptr<const std::vector<uint8_t>> queued_allocation = queued;
+  const std::vector<std::uint8_t>                 subject_bytes     = *queued;
+  ASSERT_EQ(subject_bytes, CoverageCopy(session));
+  EXPECT_EQ(session.Coverage().data(), queued->data());
+
+  // The next model result composes a new allocation; the queued bytes do not change.
+  ASSERT_TRUE(Applied(session.AddTask(AiMaskTaskKind::Sky, AiMaskComponentOperation::Add)));
+  const auto current = session.AcquireCoveragePixels();
+  EXPECT_NE(current.get(), queued.get());
+  EXPECT_NE(*current, subject_bytes);
+  EXPECT_EQ(At(*current, 5, 5), 255);
+  EXPECT_EQ(*queued, subject_bytes);
+  EXPECT_EQ(At(*queued, 5, 5), 128);  // round(0.5 * 255)
+
+  // Undo composes the Subject coverage again; the queued read is still a separate allocation.
+  ASSERT_TRUE(session.Undo());
+  EXPECT_EQ(CoverageCopy(session), subject_bytes);
+  EXPECT_EQ(*queued, subject_bytes);
+  EXPECT_FALSE(queued_allocation.expired());
+
+  // The session holds no reference to the old allocation: the release of the read frees it.
+  queued.reset();
+  EXPECT_TRUE(queued_allocation.expired());
+  EXPECT_EQ(CoverageCopy(session), subject_bytes);
+}
+
+TEST(AiMaskEditSessionTest, EdgeChangeSharesOriginalPixels) {
+  FakeRunner runner;
+  runner.tasks[SegmentationTask::kSubject] = AlphaResult(16, 12, 0.5f);
+  AiMaskEditSession session(runner, SessionImage());
+  ASSERT_TRUE(Applied(session.AddTask(AiMaskTaskKind::Subject, AiMaskComponentOperation::Add)));
+  const auto original = session.AcquireCoveragePixels();
+  const auto calls    = runner.calls;
+
+  // Edge and input-mode steps keep the recipe, so they keep the allocation.
+  ASSERT_TRUE(Applied(session.SetEdgeAdjustment(AiMaskEdgeAdjustment{5.0f, 2})));
+  EXPECT_EQ(session.AcquireCoveragePixels().get(), original.get());
+  ASSERT_TRUE(Applied(session.SetEdgeAdjustment(AiMaskEdgeAdjustment{12.5f, -3})));
+  EXPECT_EQ(session.AcquireCoveragePixels().get(), original.get());
+  ASSERT_TRUE(Applied(session.SetInputMode(AiMaskInputMode::Task)));
+  EXPECT_EQ(session.AcquireCoveragePixels().get(), original.get());
+  ASSERT_EQ(session.StateCount(), 5U);
+
+  // Undo and Redo across these steps do not compose again.
+  for (int step = 0; step < 3; ++step) {
+    ASSERT_TRUE(session.Undo());
+    EXPECT_EQ(session.AcquireCoveragePixels().get(), original.get()) << "undo " << step;
+  }
+  EXPECT_EQ(session.Edge(), AiMaskEdgeAdjustment{});
+  for (int step = 0; step < 3; ++step) {
+    ASSERT_TRUE(session.Redo());
+    EXPECT_EQ(session.AcquireCoveragePixels().get(), original.get()) << "redo " << step;
+  }
+  EXPECT_EQ(session.Edge(), (AiMaskEdgeAdjustment{12.5f, -3}));
+  EXPECT_EQ(runner.calls, calls);
+  EXPECT_EQ(session.StateCount(), 5U);
+
+  // Undo to the empty first state changes the recipe and the coverage.
+  for (int step = 0; step < 4; ++step) {
+    ASSERT_TRUE(session.Undo());
+  }
+  EXPECT_NE(session.AcquireCoveragePixels().get(), original.get());
+  EXPECT_EQ(runner.calls, calls);
+
+  // An opened stored AI Mask shares its stored coverage across edge steps.
+  const auto [asset, stored] = CommittedSubjectAndStroke();
+  FakeRunner        stored_runner;
+  AiMaskEditSession reopened(stored_runner, SessionImage(), stored, asset);
+  const auto        stored_pixels = reopened.AcquireCoveragePixels();
+  ASSERT_TRUE(Applied(reopened.SetEdgeAdjustment(AiMaskEdgeAdjustment{4.0f, 1})));
+  EXPECT_EQ(reopened.AcquireCoveragePixels().get(), stored_pixels.get());
+  ASSERT_TRUE(reopened.Undo());
+  EXPECT_EQ(reopened.AcquireCoveragePixels().get(), stored_pixels.get());
+  EXPECT_EQ(stored_runner.calls, 0);
 }
 
 TEST(AiMaskEditSessionTest, ReopenRejectsAnotherAnalysisSize) {

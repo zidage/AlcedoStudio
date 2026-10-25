@@ -71,32 +71,31 @@ auto AiMaskEdgeMargin(const AiMaskEdgeAdjustment& edge) -> std::int32_t {
 auto MakeAiMaskCoverageTexture(const MaskAsset& asset, Extent2D analysis_extent,
                                const AiMaskEdgeAdjustment& edge) -> AiMaskCoverageTexture {
   ValidateMaskAssetPixels(asset.descriptor, asset.pixels);
-  const auto margin = AiMaskEdgeMargin(edge);
-  const auto rect   = AiMaskAssetPixelRect(asset.descriptor, analysis_extent);
-  if (!rect.has_value()) {
-    throw std::runtime_error(
-        "AI Mask asset " + std::string{asset.key.Value()} + " does not fit the analysis image " +
-        std::to_string(analysis_extent.width) + " x " + std::to_string(analysis_extent.height));
-  }
-  if (edge.expand_px == 0 && edge.feather_px == 0.0f) {
-    return AiMaskCoverageTexture{asset.descriptor, asset.pixels};
+  return MakeAiMaskCoverageTexture(MakeAiMaskCoverageWork(asset.descriptor, analysis_extent, edge),
+                                   asset.pixels);
+}
+
+auto MakeAiMaskCoverageTexture(const AiMaskCoverageWork&     work,
+                               std::span<const std::uint8_t> source_pixels)
+    -> AiMaskCoverageTexture {
+  ValidateMaskAssetPixels(work.source, source_pixels);
+  if (!work.HasEdgeAdjustment()) {
+    return AiMaskCoverageTexture{work.source, {source_pixels.begin(), source_pixels.end()}};
   }
 
-  const auto            image_width  = static_cast<std::int32_t>(analysis_extent.width);
-  const auto            image_height = static_cast<std::int32_t>(analysis_extent.height);
-  const auto            left         = std::max(rect->x - margin, 0);
-  const auto            top          = std::max(rect->y - margin, 0);
-  const auto            right        = std::min(rect->X1() + margin, image_width);
-  const auto            bottom       = std::min(rect->Y1() + margin, image_height);
-  const auto            width        = right - left;
-  const auto            height       = bottom - top;
+  const auto&           rect   = work.source_rect;
+  const auto            left   = work.output_rect.x;
+  const auto            top    = work.output_rect.y;
+  const auto            width  = work.output_rect.width;
+  const auto            height = work.output_rect.height;
+  const auto&           edge   = work.edge;
 
   AiMaskCoverageTexture texture;
   texture.pixels.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0);
   cv::Mat       coverage(height, width, CV_8U, texture.pixels.data());
-  const cv::Mat asset_r8(rect->height, rect->width, CV_8U,
-                         const_cast<std::uint8_t*>(asset.pixels.data()));
-  asset_r8.copyTo(coverage(cv::Rect(rect->x - left, rect->y - top, rect->width, rect->height)));
+  const cv::Mat asset_r8(rect.height, rect.width, CV_8U,
+                         const_cast<std::uint8_t*>(source_pixels.data()));
+  asset_r8.copyTo(coverage(cv::Rect(rect.x - left, rect.y - top, rect.width, rect.height)));
 
   // A maximum or minimum commutes with the monotone map v / 255, so Expand on the R8 values gives
   // the float result of F8 exactly.
@@ -135,13 +134,7 @@ auto MakeAiMaskCoverageTexture(const MaskAsset& asset, Extent2D analysis_extent,
     blurred.convertTo(coverage, CV_8U, 255.0);
   }
 
-  texture.descriptor.extent =
-      Extent2D{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
-  texture.descriptor.reference_bounds =
-      NormalizedRect{static_cast<float>(left) / static_cast<float>(image_width),
-                     static_cast<float>(top) / static_cast<float>(image_height),
-                     static_cast<float>(width) / static_cast<float>(image_width),
-                     static_cast<float>(height) / static_cast<float>(image_height)};
+  texture.descriptor = work.OutputDescriptor();
   return texture;
 }
 

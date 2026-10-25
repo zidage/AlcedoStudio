@@ -41,11 +41,12 @@ def_library(EditMaskCore
     PRIVATE_DEPS xxHash
 )
 
-# Host coverage texture of an AI Segmentation Mask (Feather and Expand) and the render port that
-# reads stored Mask assets. GPU-free.
+# Host coverage texture of an AI Segmentation Mask (Feather and Expand), the backend-neutral
+# coverage work rectangles, and the render port that reads stored Mask assets. GPU-free.
 def_library(EditMaskRaster
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/mask/ai_mask_coverage_texture.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/ai_mask_coverage_work.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/mask_asset_reader.cpp
     PUBLIC_DEPS EditMaskCore EditGeometry
     PRIVATE_DEPS opencv_core opencv_imgproc

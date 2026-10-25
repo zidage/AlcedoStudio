@@ -106,6 +106,16 @@ class BasicRenderDevice {
   }
 
   /**
+   * @brief Open coverage-only work (SM8 C4): a new submission that records only AI Mask coverage
+   *        work. Photo results stay unchanged. See BasicRenderWorkspace::BeginCoverageWork.
+   */
+  void BeginCoverageWork() { workspace_.BeginCoverageWork(command_context_); }
+  /** @brief Submit the coverage work. Does not wait; @ref WaitIdle waits. */
+  void EndCoverageWork() { workspace_.EndCoverageWork(command_context_); }
+  /** @brief Leave failed coverage work without submitting; its coverage uploads are discarded. */
+  void CancelCoverageWork() noexcept { workspace_.CancelCoverageWork(); }
+
+  /**
    * @brief Publish unpublished GPU image results for the submission ended by EndRender.
    *
    * Call after a successful present or host download. Kernel or frame-sink failure must

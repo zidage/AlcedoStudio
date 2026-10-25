@@ -149,22 +149,21 @@ void EncodeRaster(OpenClRenderDevice& device, OpenClBackend::Texture2D& output,
                   const AiSegmentationMaskSource& source, const MaskModel& mask,
                   const ExecutionPlan& plan) {
   auto&       workspace = device.Workspace();
-  const auto& coverage  = workspace.MaskCoverage().Acquire(
-      source, workspace.MaskAssets(), workspace.Device(), device.CommandContext());
-  const auto sampling = MakeRasterMaskSamplingPlan(
-      plan.geometry, coverage.descriptor.reference_bounds, coverage.descriptor.extent);
+  const auto  coverage  = workspace.AcquireAiMaskCoverage(source, device.CommandContext());
+  const auto  sampling  = MakeRasterMaskSamplingPlan(
+      plan.geometry, coverage->descriptor.reference_bounds, coverage->descriptor.extent);
   const auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskRasterKernelName);
   MaskRasterParams params;
   SetMatrix(params.render_to_texture_uv, sampling.render_to_texture_uv);
   params.width          = output.Width();
   params.height         = output.Height();
-  params.texture_width  = coverage.descriptor.extent.width;
-  params.texture_height = coverage.descriptor.extent.height;
+  params.texture_width  = coverage->descriptor.extent.width;
+  params.texture_height = coverage->descriptor.extent.height;
   params.samples        = RasterMaskSamplesPerAxis(sampling);
   params.invert         = mask.invert ? 1u : 0u;
   params.opacity        = mask.opacity;
-  SetMem(kernel, 0, coverage.texture.Native(), "raster mask texture");
+  SetMem(kernel, 0, coverage->texture.Native(), "raster mask texture");
   SetMem(kernel, 1, output.Native(), "raster mask output");
   SetParams(kernel, 2, params, "raster mask parameters");
   Dispatch2D(device, kernel, output.Width(), output.Height(), "raster mask");

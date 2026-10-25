@@ -11,6 +11,10 @@
 #include <span>
 #include <stdexcept>
 
+#include "edit/geometry/types.hpp"
+#include "edit/mask/ai_mask_recipe.hpp"
+#include "edit/mask/mask_model.hpp"
+#include "edit/runtime/ai_mask_coverage_work.hpp"
 #include "edit/runtime/graph_image_cache.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
 #include "edit/runtime/mask_asset_reader.hpp"
@@ -95,7 +99,7 @@ class BasicRenderWorkspace {
    * @pre Not rendering.
    */
   void               SetMaskAssets(std::shared_ptr<const MaskAssetReader> reader) {
-    if (rendering_) {
+    if (rendering_ || coverage_work_) {
       throw std::runtime_error(
           "BasicRenderWorkspace::SetMaskAssets: cannot change while rendering");
     }
@@ -103,10 +107,49 @@ class BasicRenderWorkspace {
   }
   [[nodiscard]] auto MaskAssets() const -> const MaskAssetReader& { return *mask_assets_; }
 
-  /// Device coverage textures of AI Masks (SM6 R6). Cleared by ReleaseSessionResources.
-  [[nodiscard]] auto MaskCoverage() -> MaskCoverageTextureCache<Backend>& { return mask_coverage_; }
+  /// Device coverage textures of AI Masks (SM6 R6, SM8.1). Cleared by ReleaseSessionResources.
   [[nodiscard]] auto MaskCoverage() const -> const MaskCoverageTextureCache<Backend>& {
     return mask_coverage_;
+  }
+
+  /**
+   * @brief Coverage of the committed AI Mask @p source after its Feather and Expand, read through
+   *        @ref MaskAssets. See MaskCoverageTextureCache::AcquireStored.
+   *
+   * @pre A render (@ref BeginRender) or coverage-only work (@ref BeginCoverageWork) is open; the
+   *      GPU use of the texture belongs to its submission.
+   * @throws std::runtime_error without an open submission, or from the acquisition.
+   */
+  auto AcquireAiMaskCoverage(const AiSegmentationMaskSource& source,
+                             CommandContext& command_context) -> MaskCoverageRead<Backend> {
+    if (!rendering_ && !coverage_work_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::AcquireAiMaskCoverage: no render or coverage work is open");
+    }
+    return mask_coverage_.AcquireStored(source, *mask_assets_, backend_, command_context);
+  }
+
+  /**
+   * @brief Coverage of the AI Mask candidate @p pixels after @p edge. See
+   *        MaskCoverageTextureCache::AcquireCandidate.
+   *
+   * The candidate is presentation input (SM8 C4 and C10), so only coverage-only work acquires it;
+   * a photo render never reads it.
+   *
+   * @pre Coverage-only work is open (@ref BeginCoverageWork).
+   * @throws std::runtime_error without open coverage work, or from the acquisition. A failure
+   *         keeps the current candidate entries and every photo result.
+   */
+  auto AcquireAiMaskCandidateCoverage(const AiMaskCoveragePixels& pixels, Extent2D analysis_extent,
+                                      const AiMaskEdgeAdjustment& edge,
+                                      CommandContext&             command_context)
+      -> MaskCoverageRead<Backend> {
+    if (!coverage_work_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::AcquireAiMaskCandidateCoverage: no coverage work is open");
+    }
+    return mask_coverage_.AcquireCandidate(pixels, analysis_extent, edge, backend_,
+                                           command_context);
   }
 
   /**
@@ -251,22 +294,28 @@ class BasicRenderWorkspace {
   void ReleaseConsumedImage(const GraphValueId& id) { images_.ReleaseWrite(id); }
 
   [[nodiscard]] auto IsRendering() const -> bool { return rendering_; }
+  [[nodiscard]] auto IsCoverageWorkOpen() const -> bool { return coverage_work_; }
 
   /**
    * @brief Wait the previous submission, drop leftover unpublished writes, start a new id.
-   * @throws std::runtime_error if called re-entrantly.
+   * @throws std::runtime_error if called re-entrantly or while coverage-only work is open.
    */
   void BeginRender(CommandContext& command_context) {
     if (rendering_) {
       throw std::runtime_error("BasicRenderWorkspace::BeginRender: already rendering");
     }
+    if (coverage_work_) {
+      throw std::runtime_error("BasicRenderWorkspace::BeginRender: coverage work is open");
+    }
     backend_.Wait(command_context);
+    mask_coverage_.ReleaseIdle(backend_);
     images_.DiscardUnpublished();
     ReleaseTexturesReplacedByDevelopRewrite();
     develop_rewrite_in_render_ = false;
     transients_.Reset();
     textures_.BeginFrame();
     command_context.SetSubmissionId(backend_.NextSubmissionId());
+    open_submission_   = command_context.SubmissionId();
     rendering_         = true;
     validity_prepared_ = false;
     persistence_scope_ = ResultPersistenceScope::AllCurrentResults;
@@ -301,11 +350,57 @@ class BasicRenderWorkspace {
   }
 
   /**
-   * @brief Leave a failed encode without submitting. Unpublished writes are discarded.
+   * @brief Leave a failed encode without submitting. Unpublished writes and the coverage uploads
+   *        of the encode are discarded.
    */
   void CancelRender() {
     images_.DiscardUnpublished();
+    mask_coverage_.DiscardUploadsOf(open_submission_);
     rendering_ = false;
+  }
+
+  /**
+   * @brief Start coverage-only GPU work (SM8 C4) on the device submission path.
+   *
+   * Waits for the previous submission, destroys idle replaced coverage textures, and starts a new
+   * submission id. Unlike @ref BeginRender, it does not change photo results, unpublished writes,
+   * parameters, transients, scene work, or the texture pool, and it compiles and executes no
+   * photo DAG. Only the AI Mask coverage acquisitions record work until @ref EndCoverageWork or
+   * @ref CancelCoverageWork.
+   *
+   * @throws std::runtime_error while a render or other coverage work is open.
+   */
+  void BeginCoverageWork(CommandContext& command_context) {
+    if (rendering_ || coverage_work_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::BeginCoverageWork: a render or coverage work is open");
+    }
+    backend_.Wait(command_context);
+    mask_coverage_.ReleaseIdle(backend_);
+    command_context.SetSubmissionId(backend_.NextSubmissionId());
+    open_submission_ = command_context.SubmissionId();
+    coverage_work_   = true;
+  }
+
+  /** @brief Submit the recorded coverage work. Does not wait. */
+  void EndCoverageWork(CommandContext& command_context) {
+    if (!coverage_work_) {
+      throw std::runtime_error("BasicRenderWorkspace::EndCoverageWork: no coverage work is open");
+    }
+    backend_.Submit(command_context);
+    coverage_work_ = false;
+  }
+
+  /**
+   * @brief Leave failed coverage work without submitting. Its coverage uploads are discarded;
+   *        earlier coverage reads and every photo result stay valid.
+   */
+  void CancelCoverageWork() {
+    if (!coverage_work_) {
+      return;
+    }
+    mask_coverage_.DiscardUploadsOf(open_submission_);
+    coverage_work_ = false;
   }
 
   /**
@@ -314,7 +409,7 @@ class BasicRenderWorkspace {
    * @pre Not rendering. Caller WaitIdle first so no texture is still busy.
    */
   void ReleaseSessionResources() {
-    if (rendering_) {
+    if (rendering_ || coverage_work_) {
       throw std::runtime_error(
           "BasicRenderWorkspace::ReleaseSessionResources: cannot release while rendering");
     }
@@ -384,7 +479,10 @@ class BasicRenderWorkspace {
   GraphValueId                   persist_sensor_{};
   std::uint64_t                  parameter_layout_hash_ = 0;
   ResultPersistenceScope         persistence_scope_     = ResultPersistenceScope::AllCurrentResults;
+  /// Submission id of the open render or coverage work.
+  std::uint64_t                  open_submission_       = 0;
   bool                           rendering_             = false;
+  bool                           coverage_work_         = false;
   bool                           validity_prepared_     = false;
   bool                           develop_rewrite_in_render_ = false;
   bool                           develop_rewrite_published_ = false;

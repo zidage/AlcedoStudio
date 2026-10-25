@@ -1,5 +1,12 @@
 # SM6 Raster Mask Evaluate on CUDA, OpenCL, and Metal — Phase Plan
 
+Replan note (2026-10-24): [SM8 GPU Coverage and One Display Composite](phase_sm8_gpu_coverage_and_display_plan.md)
+prospectively replaces host edge processing and edge-keyed interactive retention from R3/R6.
+It adds one viewport composite shared by candidate and committed coverage.
+SM6 completion evidence below still describes the implemented host path.
+The former statement that session edge changes do not render does not apply to the new SM8 preview design.
+Performance work remains tracked by #494. No SM8 implementation is claimed here.
+
 Date: 2026-10-24.
 
 Status: complete on Windows and macOS on 2026-10-24. SM6.1 section 14.1, SM6.2 section 14.2.

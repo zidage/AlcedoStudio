@@ -177,22 +177,21 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
         AnalyticKindFromMask(mask_model), RadialParamsFromMask(mask_model),
         LinearGradientParamsFromMask(mask_model));
   } else if (const auto* ai = std::get_if<AiSegmentationMaskSource>(&mask_model.source)) {
-    const auto& coverage =
-        workspace.MaskCoverage().Acquire(*ai, workspace.MaskAssets(), workspace.Device(), context);
+    const auto coverage = workspace.AcquireAiMaskCoverage(*ai, context);
     const auto sampling = MakeRasterMaskSamplingPlan(
-        plan.geometry, coverage.descriptor.reference_bounds, coverage.descriptor.extent);
+        plan.geometry, coverage->descriptor.reference_bounds, coverage->descriptor.extent);
     RasterMaskParams params{};
     for (int i = 0; i < 9; ++i) params.render_to_texture_uv[i] = sampling.render_to_texture_uv.m[i];
     params.width          = extent.width;
     params.height         = extent.height;
-    params.texture_width  = coverage.descriptor.extent.width;
-    params.texture_height = coverage.descriptor.extent.height;
+    params.texture_width  = coverage->descriptor.extent.width;
+    params.texture_height = coverage->descriptor.extent.height;
     params.samples        = RasterMaskSamplesPerAxis(sampling);
     params.invert         = mask_model.invert ? 1u : 0u;
     params.opacity        = mask_model.opacity;
     RasterMaskKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
         static_cast<std::uint8_t*>(output.Texture().DevicePointer()),
-        static_cast<const std::uint8_t*>(coverage.texture.DevicePointer()), params);
+        static_cast<const std::uint8_t*>(coverage->texture.DevicePointer()), params);
   } else {
     throw std::runtime_error("ExecuteCudaMask: compiled mask does not match document");
   }

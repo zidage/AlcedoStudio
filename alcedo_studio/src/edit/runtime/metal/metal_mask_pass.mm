@@ -137,23 +137,22 @@ void EncodeRaster(MetalRenderDevice& device, MetalBackend::Texture2D& output,
                   const ExecutionPlan& plan) {
   auto&       workspace = device.Workspace();
   // The upload records a blit before the compute encoder of the pass.
-  const auto& coverage  = workspace.MaskCoverage().Acquire(
-      source, workspace.MaskAssets(), workspace.Device(), device.CommandContext());
-  const auto sampling = MakeRasterMaskSamplingPlan(
-      plan.geometry, coverage.descriptor.reference_bounds, coverage.descriptor.extent);
+  const auto  coverage  = workspace.AcquireAiMaskCoverage(source, device.CommandContext());
+  const auto  sampling  = MakeRasterMaskSamplingPlan(
+      plan.geometry, coverage->descriptor.reference_bounds, coverage->descriptor.extent);
   auto*            encoder  = Encoder(device);
   auto             pipeline = Pipeline("mask_raster", "Metal Mask raster");
   MaskRasterParams params;
   CopyMatrix(params.render_to_texture_uv, sampling.render_to_texture_uv);
   params.width          = output.Width();
   params.height         = output.Height();
-  params.texture_width  = coverage.descriptor.extent.width;
-  params.texture_height = coverage.descriptor.extent.height;
+  params.texture_width  = coverage->descriptor.extent.width;
+  params.texture_height = coverage->descriptor.extent.height;
   params.samples        = RasterMaskSamplesPerAxis(sampling);
   params.invert         = mask.invert ? 1u : 0u;
   params.opacity        = mask.opacity;
   encoder->setComputePipelineState(pipeline.get());
-  encoder->setTexture(static_cast<MTL::Texture*>(coverage.texture.Native()), 0);
+  encoder->setTexture(static_cast<MTL::Texture*>(coverage->texture.Native()), 0);
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 1);
   encoder->setBytes(&params, sizeof(params), 0);
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());

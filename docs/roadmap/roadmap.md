@@ -57,6 +57,9 @@
       CUDA, OpenCL, and Metal; see the
       [Black Pro-Mist Diffusion Filter Simulation Plan](alcedo_studio/edit/black_pro_mist_diffusion_plan.md).
 - [ ] Extend HDR workflow and output.
+- [ ] Complete AI Mask GPU coverage and one shared viewport composite in SM8, then the SM9 tool,
+      then the SM7 misalignment notice; see the
+      [AI Segmentation Mask master plan](alcedo_studio/edit/ai_segmentation_mask_master_plan.md).
 - [ ] Continue semantic search and AI-assisted tagging work; see the
       [semantic generation plan](alcedo_studio/ai/semantic_generation_search_plan.md) and
       [AI sidecar backend plan](alcedo_studio/ai/ai_sidecar_backend_plan.md).

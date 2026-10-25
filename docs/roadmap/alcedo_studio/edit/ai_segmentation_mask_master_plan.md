@@ -1,6 +1,6 @@
 # AI Segmentation Mask Master Plan
 
-Date: 2026-10-19. Revised: 2026-10-22.
+Date: 2026-10-19. Revised: 2026-10-24.
 
 Status: SM1 complete on 2026-10-22. The EfficientSAM3 quality review failed (section 8.1). The
 re-evaluation in the `alcedo-ai-mask-lab` repository accepted the model set SAM 2.1 Hiera tiny, the
@@ -18,7 +18,12 @@ on 2026-10-23 ([phase plan](ai_segmentation_mask/phase_sm3d_people_masks_from_s3
 ([phase plan](ai_segmentation_mask/phase_sm5_ai_mask_source_and_session_plan.md)), SM5.1, SM5.2,
 and SM5.3 are complete on 2026-10-23. SM6 is complete on Windows and macOS on 2026-10-24
 ([phase plan](ai_segmentation_mask/phase_sm6_raster_mask_evaluate_plan.md)). SM2 runs
-after SM9 (section 7).
+after SM9 (section 7). On 2026-10-24 the user requested the new order SM8, SM9, then SM7.
+SM8 now includes GPU edge processing, retained candidate display, and one shared viewport composite
+([detailed plan](ai_segmentation_mask/phase_sm8_gpu_coverage_and_display_plan.md)).
+SM9 and the later SM7 have a [detailed follow-on plan](ai_segmentation_mask/phase_sm9_tool_and_sm7_notice_plan.md).
+SM8.1 is complete on 2026-10-24; the later SM8 phases, SM9, and SM7 are planned. The SM6 host
+implementation and its completion evidence remain historical facts.
 
 Target release: Alcedo Studio 0.3.4. The AI Segmentation Mask is the main feature of that release.
 
@@ -36,7 +41,8 @@ Parent context:
 Other affected areas: AI sidecar (`rust/puerh_mind`), model download (`app/model_*`), editor
 render requests, GPU mask passes on CUDA, OpenCL, and Metal, and the editor QML workspace.
 
-Source revision used for the audit: `e1effd87` on `fix/color-wheel-tonal-lgg`.
+Source revision used for the initial audit: `e1effd87` on `fix/color-wheel-tonal-lgg`.
+The SM8 replan audits `b3e1d479f60caa70b47205504348287b30114b47` on `main`.
 
 ---
 
@@ -89,11 +95,11 @@ must close it.
 | P1 | Closed by D12 (2026-10-22): the sidecar runs inference; the C++ process has no ONNX Runtime. | SM1, closed |
 | P2 | Approved 2026-10-23: store prompts and Mask coverage in normalized ReferenceSpace. | SM5, closed |
 | P3 | Approved 2026-10-23: store the R8 coverage only over the bounding rectangle of the Mask content, plus a margin. The maximum axis is `kMaximumRasterMaskAxis` (4096). | SM5, closed |
-| P4 | Closed by U3 (D15): no edge refinement. SM7 stores the model mask after the Feather and Edge adjustment (lab function F8). | SM1, closed |
-| P5 | Draw the temporary prompt result in the QSG layer. Show committed coverage through a pipeline coverage preview request. | SM8 and SM9 |
+| P4 | Closed by U3 (D15): no edge refinement. D17 and D20 place the stored model coverage before Feather and Expand. SM7 only shows the misalignment notice. | SM1 and SM5, closed |
+| P5 | Replaced by the 2026-10-24 design in section 1.5: candidate and committed coverage use one viewport composite. QSG keeps input controls only. | SM8, closed in design |
 | P6 | Approved 2026-10-23: store a geometry fingerprint with each AI Mask. Mark only the Masks whose fingerprint differs from the current Lens and RAW decode geometry. | SM5 (field), SM7 (notice), closed |
 | P7 | Use one persistent gRPC channel per segmentation session. SM3.A implements the channel (Ping evidence in section 8.1). The second part ("keep only the newest pending decode request while the pointer moves") is dropped: U7 removed decoding during pointer movement, and the tool decodes once per stroke, click, or box. | SM3.A |
-| P8 | Ship Luminance Range and Color Range Masks in 0.3.4, because the coverage preview of SM8 also serves them. | User decision before SM8 |
+| P8 | Separate scope proposal: Luminance Range and Color Range Masks remain excluded. They do not block SM8 and are not added by this replan. | Separate user request if scope changes |
 
 ### 1.4 Rejected options
 
@@ -104,6 +110,31 @@ must close it.
 - Do not export a full image and read one pixel from it to implement a future color picker. A
   future picker reads a small region through a pipeline readback request.
 - Do not bundle model weights in the installer (D4).
+
+### 1.5 GPU coverage and display replan (2026-10-24)
+
+The user requested an earlier SM8, a later SM7, shared composition, and preservation of old Masks
+during new model requests. The following implementation design serves those requirements.
+It does not change D16-D20 or the stored project format.
+
+| Item | Selected design and reason |
+| --- | --- |
+| Order | Complete SM8, then SM9, then SM7, then SM2 and SM10. Misalignment notices use the completed tool surface. |
+| History | Keep the existing session recipes, parameters, stored coverage, and native model-output cache. Undo/Redo reconstruct current coverage without inference. No GPU history is added. |
+| Source lifetime | Keep original R8 separate from adjusted GPU coverage. A shared immutable read of the current algorithm output stays alive until upload finishes. Do not retain a mutable span across a queue. |
+| GPU owner | Extend the existing workspace coverage owner. Use the current backend, render executor, submission tracking, and resource release. A coverage-only operation does not execute the photo DAG. |
+| New model request | Keep the previous displayed result and the opened stored Mask. Accept valid model output through the session owner. Publish its GPU replacement only after completion. Release old display resources after readers finish. |
+| GPU failure | Retain the desired session state and report the real error. Show the previous result as previous, with Commit disabled until Retry displays the desired state. Retry uses retained outputs. |
+| Processing | Use the same GPU Expand/Feather operation for candidates, committed Masks, thumbnails, and export. Preserve the full analysis grid and existing equations. The host function remains test evidence, not a runtime substitute. |
+| Composite | Add coverage to the existing viewport draw after photo base/detail selection. Candidate, committed single Mask, and Grade Union use this one composite. No second photo-DAG or candidate-only composite exists. |
+| Transport | Reuse current GPU presentation adapters and RGBA32F in a dedicated coverage channel. Store coverage in red. Do not overwrite a photo/detail slot or read coverage back through the CPU. |
+| Presentation state | Visibility, tint, and preview selection do not change document history, photo cache identity, export pixels, or scope inputs. |
+| Controls | QSG retains points, boxes, strokes, and existing controls above the coverage. SM9 adds the dialog actions without a second renderer or temporary stack. |
+
+See the SM8 plan for exact operations, error chains, resource lifetimes, and measurements.
+See the SM9/SM7 plan for control behavior and the later notice task.
+Tracking: [#499](https://github.com/zidage/AlcedoStudio/issues/499).
+GPU processing/performance: #494. Display transport: #500. Shared composite: #501. Session integration: #502.
 
 ---
 
@@ -117,7 +148,7 @@ must close it.
 | Prompt | One user input to the SAM 2.1 decoder: a click (one point), a stroke (points sampled along the pointer path), or a box. Each point adds (label 1) or subtracts (label 0). |
 | Task mask | A mask of a one-click task: Subject, Background, Sky, or People. |
 | Model set | The accepted models of section 8.2 in the platform form: ONNX files on Windows, compiled Core ML models on macOS. |
-| Candidate Mask | The low-resolution mask that the model returns for the current prompts. It is not part of the document. |
+| Candidate Mask | The current session coverage composed from retained model outputs, before Commit. It is not part of the document. Its original R8 and adjusted GPU display are separate resources. |
 | Committed Mask | A Mask that the document owns. It has a stored R8 coverage. |
 | Segmentation session | The sidecar state for one analysis render: the loaded models and one image embedding. |
 
@@ -144,6 +175,12 @@ refined.
    operation. Feather and Expand are fields of the Mask (D20). There is no edge refinement stage
    (D15, U3).
 7. The user can cancel. Cancel leaves the document unchanged.
+
+During each new model request, the previous candidate stays visible.
+Earlier model outputs and the opened Mask stay available to the temporary stack.
+Feather and Expand preview through SM8 without a photo render.
+An accepted slider edit creates one temporary step; intermediate drag values create display requests only.
+Candidate and committed coverage use the same display composite.
 
 ### 3.2 Coordinate behavior
 
@@ -186,8 +223,9 @@ refined.
 | `app/model_asset_catalog`, `app/model_download_service`, Rust `model_assets.rs` | Download and verify the segmentation model files. |
 | `edit/geometry`, `renderer/` | Make the analysis render in ReferenceSpace. |
 | `edit/mask` | Own the AI Mask source model, validation, serialization, and the R8 asset. |
-| `edit/runtime/{cuda,opencl,metal}` | Sample a raster Mask in `MaskEvaluate`. Compose the coverage preview. |
-| `app/editor_mask_creation_controller`, `ui/alcedo_main` | Own the AI Mask tool, prompts, and the viewport presentation. |
+| `edit/runtime/{cuda,opencl,metal}` | Process original R8 with GPU Expand/Feather, sample raster Masks, and prepare coverage display targets. |
+| `ui/editor_rhi` | Own one viewport coverage composite and existing native-resource display lifetimes. |
+| `app/ai_mask_edit_session`, app tool controller, `ui/alcedo_main` | Keep temporary history and model results; expose tool actions and existing viewport controls. |
 
 Related plans:
 
@@ -200,7 +238,11 @@ Related plans:
 
 ---
 
-## 5. Current source audit
+## 5. Initial source audit and current replan
+
+Sections 5.1-5.3 preserve the initial pre-SM5 audit. They are not a current implementation inventory.
+SM3-SM6 completion records describe the landed changes.
+The current SM8 audit is in [SM8 section 2](ai_segmentation_mask/phase_sm8_gpu_coverage_and_display_plan.md#2-current-source-audit).
 
 ### 5.1 Mask model and execution
 
@@ -300,13 +342,22 @@ The project storage owns the R8 bytes. No owner keeps a copy of another owner's 
 | SM5.2 | AI Mask edit session: session history stack, composition, People toggles, edit of a stored AI Mask, Commit payload | app layer, segmentation service, proto | SM5.1, SM3.D | 1,300-1,700 | complete (same plan) |
 | SM5.3 | Editor integration: Open, Commit, Cancel, asset write; Paste skip and notice | editor session, Mask controller, transfer, album backend | SM5.1, SM5.2 | 1,000-1,400 | complete (same plan) |
 | SM6 | Raster `MaskEvaluate` on CUDA, OpenCL, and Metal; Feather and Expand at texture creation (D20) | `edit/mask`, `edit/runtime`, three backends, app | SM5.1 | 2,000-2,900 in two parts SM6.1 and SM6.2 | complete 2026-10-24 on Windows and macOS ([phase plan](ai_segmentation_mask/phase_sm6_raster_mask_evaluate_plan.md)) |
-| SM7 | Misalignment notice from the geometry fingerprint (D9, P6) | app layer, `edit/mask` | SM5.1 | 300-600 | outline |
-| SM8 | Coverage preview request | render intent, compiler, three backends | SM6 | 1000-1800 | outline |
-| SM9 | AI Mask tool UI and interaction | QML, app controllers | SM3.A-C, SM4, SM7, SM8 | over 2000, split before start | outline |
-| SM2 | Segmentation model download from R2 or Hugging Face | model catalog, download service, settings | SM9 | 800-1400 | outline (moved after SM9, D13) |
+| SM8.1 | Stable coverage reads and workspace operation boundary | session, GPU workspace | SM5, SM6 | 900-1500 | complete 2026-10-24 on Windows and macOS ([SM8 plan](ai_segmentation_mask/phase_sm8_gpu_coverage_and_display_plan.md#711-sm81-completion-record)) |
+| SM8.2 | CUDA Expand/Feather and committed-render reuse | CUDA runtime | SM8.1 | 1200-1900 | planned |
+| SM8.3 | OpenCL Expand/Feather and committed-render reuse | OpenCL runtime and registry | SM8.2 equations | 1000-1800 | planned |
+| SM8.4 | Metal Expand/Feather and committed-render reuse | Metal runtime | SM8.2 equations | 1000-1800 | planned |
+| SM8.5 | Independent GPU coverage presentation channel | native adapters, presentation queue | SM8.1 | 1200-1900 | planned |
+| SM8.6 | One viewport composite for all coverage sources | viewport shader, theme | SM8.2-SM8.5 | 1000-1700 | planned |
+| SM8.7 | Candidate replacement and temporary history integration | app/session facade | SM8.6 | 1100-1800 | planned |
+| SM8.8 | Pixel, memory, and request-to-present evidence | targeted qualification | SM8.7 | 500-1000 | planned |
+| SM9.1 | AI tool controller, dialog model, and lifecycle | app, QML | SM8 | 1100-1800 | planned ([SM9/SM7 plan](ai_segmentation_mask/phase_sm9_tool_and_sm7_notice_plan.md)) |
+| SM9.2 | Prompt/task/People controls and input markers | controller, existing overlay | SM9.1 | 1200-1900 | planned |
+| SM9.3 | Edge editing, local history, Commit/Cancel, thumbnails | controller, QML, thumbnail owner | SM9.2 | 1100-1900 | planned |
+| SM7 | Per-Mask misalignment notice from the geometry fingerprint (D9, P6) | app, existing tool surface | SM9.3 | 400-800 | planned, after SM9 |
+| SM2 | Segmentation model download from R2 or Hugging Face | model catalog, download service, settings | SM9, SM7 in execution order | 800-1400 | outline (after the tool and notice) |
 | SM10 | Product qualification | all | SM1-SM9, SM2 | 300-800 | outline |
 
-Order of work: SM3.A, SM3.B, SM3.C, SM4, SM5.1, SM3.D, SM5.2, SM5.3, SM6, SM7, SM8, SM9, SM2, SM10. SM5.1
+Order of work: SM3.A, SM3.B, SM3.C, SM4, SM5.1, SM3.D, SM5.2, SM5.3, SM6, SM8, SM9, SM7, SM2, SM10. SM5.1
 does not depend on SM3 and can start before SM3.D. Until SM2, the developer fills the local model directory by
 hand (D13); the phase plans state the directory and the files.
 
@@ -597,6 +648,9 @@ Open decisions: none (closed by D16 to D20, P2, P3, and P6).
 
 ### 9.5 SM6 — Raster `MaskEvaluate` on three backends
 
+This section records the completed SM6 scope. SM8 prospectively replaces host edge processing
+with GPU processing through the same resource owner. Keep the SM6 evidence unchanged.
+
 Detailed plan: [SM6 Raster Mask Evaluate](ai_segmentation_mask/phase_sm6_raster_mask_evaluate_plan.md).
 SM6.1 makes the coverage texture (Feather and Expand on the host) and brings a mask asset reader
 from the project to each render workspace. SM6.2 adds the texture cache and the raster pass on the
@@ -615,39 +669,47 @@ Scope:
 
 ### 9.6 SM7 — Misalignment notice
 
-Scope:
-
-- Compare the geometry fingerprint of each AI Mask (P6, SM5.1) with the current Lens and RAW decode
-  values.
-- Show the misalignment notice of D9 for each Mask whose fingerprint differs.
-
-The composition of the Candidate Mask and the Commit moved to SM5.2 (D16, D17). Feather and Expand
-moved to SM6 (D20).
+Run SM7 after SM9.3, before SM2 and release qualification.
+The [detailed assignment](ai_segmentation_mask/phase_sm9_tool_and_sm7_notice_plan.md#44-sm7---misalignment-notice-after-the-tool)
+uses the completed tool surface and existing fingerprint.
+It compares each committed Mask with current Lens/RAW geometry and marks only mismatched Masks.
+It does not regenerate coverage, change stored pixels, or add persisted warning state.
 
 ### 9.7 SM8 — Coverage preview request
 
-Scope:
+Replanned as GPU coverage and one display composite. Run it immediately after SM6.
+The [detailed plan](ai_segmentation_mask/phase_sm8_gpu_coverage_and_display_plan.md) replaces the old outline.
 
-- Add a coverage preview flag to the editor render intent.
-- Add a composite pass after the display transform that shows Mask coverage on the photo.
-- Include the flag in the render cache key.
+- SM8.1 defines stable source reads and workspace-owned GPU coverage operations.
+- SM8.2-SM8.4 implement exact Expand/Feather on CUDA, OpenCL, and Metal for every production consumer.
+- SM8.5 adds a dedicated coverage channel through existing GPU presentation adapters.
+- SM8.6 adds the one viewport composite shared by candidate, committed Mask, and Grade Union.
+- SM8.7 connects candidate replacement, retained outputs, temporary Undo/Redo, Commit, and Cancel.
+- SM8.8 records full-path latency, numeric agreement, and resource release evidence for #494.
 
-Open decisions: P5 and P8, and the visual style of the coverage.
+The display composite runs in the existing viewport draw after photo base/detail selection.
+No duplicate composite runs in the photo DAG or candidate QSG layer.
+Coverage visibility and tint do not change photo cache identity.
+Old displayed coverage survives a new model request and retires only after safe replacement.
+Historical model outputs stay in the existing session store, not in a GPU history cache.
+P5 is replaced by this design. P8 remains excluded and does not block implementation.
 
 ### 9.8 SM9 — AI Mask tool UI and interaction
 
-Scope:
+Run after SM8 and before SM7. The
+[detailed plan](ai_segmentation_mask/phase_sm9_tool_and_sm7_notice_plan.md) splits this work:
 
-- The AI Mask tool: stroke, click, box, add and subtract, level change, the task masks of SM3.C,
-  Candidate Mask presentation, commit, and cancel.
-- Model load when the tool opens and unload when the user goes back to adjusting (U6).
-- The busy state and the error states of section 3.3. Until SM2, a missing model set shows the real
-  "model not installed" error with the expected local model directory; SM2 adds the download panel.
-- The Mask thumbnail from the R8 asset.
-- Use the lab MVP UI as a reference only (D15). Record each difference from it with its reason.
+- SM9.1 adds the app controller, dialog model, model lifecycle, and error/busy presentation.
+- SM9.2 adds stroke, click, box, Add/Subtract, tasks, People boxes, and valid level selection.
+- SM9.3 adds edge previews, local Undo/Redo, Commit/Cancel, and stored-source thumbnails.
 
-Open decisions: the exact interaction set of D3 and the tool behavior at the 64-point decoder
-limit. D22 closed the S3OD residency. Split this phase before it starts. The expected diff is more than 2000 lines.
+Use one dialog bound to the main viewport and the existing temporary session stack.
+Run inference after input release, never during pointer movement.
+Reject a prompt above 64 points and preserve the previous valid state.
+One accepted edge edit adds one local step; intermediate slider updates only request display.
+Models unload on return to adjustment (U6/D22).
+Until SM2, missing models report the expected local directory and the real error.
+The lab UI remains a reference, not another implementation to copy unchanged.
 
 ### 9.9 SM10 — Product qualification
 
@@ -671,6 +733,11 @@ Scope:
 | Export | The exported Mask coverage matches the preview coverage on the same image content. |
 | Undo and Redo of Mask creation | The Mask and its coverage appear and disappear with the history operation. |
 | Undo and Redo in an open AI Mask session | The Candidate Mask moves through the session steps. The main history does not change and no model runs. |
+| New model request during an open session | The prior coverage stays visible. Stored coverage and earlier model outputs remain available for Undo. |
+| Shared coverage display | Candidate, committed single Mask, and Grade Union use the same viewport composite. |
+| Feather and Expand preview | GPU processing uses the full analysis grid. Source upload count stays fixed for edge-only edits. |
+| GPU preview error | Real error; desired state retained; previous display identified; Commit disabled until Retry succeeds. |
+| Coverage visibility or tint | Viewport redraw only. No photo DAG work, history edit, scope tint, or exported overlay. |
 | Cancel of an AI Mask session | The document and the project mask asset table do not change. |
 | Paste to another image | The AI Masks are not pasted. The paste result names them. |
 | Reopen | A reopened project shows the same coverage. It does not run the model. |
@@ -701,7 +768,7 @@ Scope:
 | ONNX Runtime before 1.28 computes the SAM 2.1 tiny encoder wrongly. | A build with `ort` older than 2.0.0-rc.13, or a port check failure on Windows. | Keep ONNX Runtime 1.28 or later. Do not add a workaround in the graph or the session settings. |
 | The Core ML adapter cannot be built or run while the Mac is not available. | SM3.A completion record. | Report the macOS build and run as not done. Run them on the Mac before SM3.B is complete. |
 | DirectML runs operators on the CPU provider. | SM1 operator placement report; SM3.A sessions have no CPU entry, so a failed placement is a load error. | Report the error. The user decides. Do not change the device without a user decision. |
-| Whole-image input is too coarse for small subjects. | SM1 cases 5 and 6. | Report the IoU. D7 stays. Propose a refinement method in SM7. |
+| Whole-image input is too coarse for small subjects. | SM1 cases 5 and 6. | Report the IoU. D7 stays. A new refinement design needs a separate user decision; SM7 only shows misalignment. |
 | The edge quality is low at full resolution. | SM9 user check by eye. | Report it. U3 rejects edge post-processing; a change needs a new user decision. |
 | The project format change rejects older projects. | SM5 format analysis. | Stop SM5 until the user approves the format change and its result. |
 | The license terms change. | Meta SAM License page. | Report the change before SM2 publishes files. |

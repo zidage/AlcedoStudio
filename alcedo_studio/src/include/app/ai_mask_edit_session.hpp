@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -125,8 +126,24 @@ class AiMaskEditSession {
   [[nodiscard]] auto StateCount() const -> std::size_t { return states_.size(); }
 
   /// The composed coverage of the current state: R8 at the session size, before Feather and
-  /// Expand.
-  [[nodiscard]] auto Coverage() const -> std::span<const std::uint8_t> { return coverage_; }
+  /// Expand. The view is valid until the next call that changes the state.
+  [[nodiscard]] auto Coverage() const -> std::span<const std::uint8_t> { return *coverage_; }
+  /**
+   * @brief Shared read of the composed coverage of the current state (SM8 section 3).
+   *
+   * Returns the same allocation that @ref Coverage views; no pixel copy. The session never writes
+   * to an allocation after it shares it: a step that changes the recipe composes a new allocation,
+   * and a step that changes only the edge adjustment or the input mode keeps the current one. An
+   * upload on another executor holds the read until its GPU upload is complete. The allocation is
+   * released when the session and every read no longer refer to it.
+   *
+   * Thread: call on the session thread. The returned pointer may move to and be released on any
+   * thread.
+   */
+  [[nodiscard]] auto AcquireCoveragePixels() const
+      -> std::shared_ptr<const std::vector<std::uint8_t>> {
+    return coverage_;
+  }
   /// The People list of the People task; empty until the session ran it.
   [[nodiscard]] auto People() const -> std::span<const SegmentationPerson> {
     return outputs_.People();
@@ -160,8 +177,8 @@ class AiMaskEditSession {
 
   /// The stored AI Mask of an opened session and its coverage at the session size.
   struct StoredMask {
-    AiSegmentationMaskSource  source;
-    std::vector<std::uint8_t> coverage;
+    AiSegmentationMaskSource                         source;
+    std::shared_ptr<const std::vector<std::uint8_t>> coverage;
   };
 
   /// Computes the outputs of @p state, composes its coverage, and pushes it.
@@ -182,7 +199,8 @@ class AiMaskEditSession {
   std::size_t               current_ = 0;
   /// The coverage of each component of the current state, with the component that made it.
   std::vector<std::pair<AiMaskComponent, std::vector<std::uint8_t>>> component_coverages_;
-  std::vector<std::uint8_t>                                          coverage_;
+  /// Immutable after it is assigned; see @ref AcquireCoveragePixels.
+  std::shared_ptr<const std::vector<std::uint8_t>>                   coverage_;
 };
 
 }  // namespace alcedo

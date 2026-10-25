@@ -5,11 +5,13 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "edit/geometry/types.hpp"
 #include "edit/mask/ai_mask_recipe.hpp"
 #include "edit/mask/mask_asset.hpp"
+#include "edit/runtime/ai_mask_coverage_work.hpp"
 
 namespace alcedo {
 
@@ -52,6 +54,19 @@ struct AiMaskCoverageTexture {
  */
 [[nodiscard]] auto MakeAiMaskCoverageTexture(const MaskAsset& asset, Extent2D analysis_extent,
                                              const AiMaskEdgeAdjustment& edge)
+    -> AiMaskCoverageTexture;
+
+/**
+ * @brief Host Feather and Expand of @p work on the original coverage @p source_pixels (the texels
+ *        of `work.source`), with the computation of the asset overload.
+ *
+ * The render workspace uses it for Mask candidates and committed AI Masks until each GPU backend
+ * runs the operation itself (SM8.2 to SM8.4).
+ *
+ * @throws std::invalid_argument when @p source_pixels does not have the size of `work.source`.
+ */
+[[nodiscard]] auto MakeAiMaskCoverageTexture(const AiMaskCoverageWork&     work,
+                                             std::span<const std::uint8_t> source_pixels)
     -> AiMaskCoverageTexture;
 
 }  // namespace alcedo
