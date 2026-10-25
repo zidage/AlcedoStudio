@@ -23,7 +23,11 @@ fn main() -> anyhow::Result<()> {
 fn run_server() -> anyhow::Result<()> {
     logging::init_logging();
     let config = config::AppConfig::load()?;
-    let semantic_engine = service::inference::build_semantic_engine(&config);
+    // The CLIP profile is prepared on the first semantic request, not here: the AI Mask tool
+    // starts this process too and needs no CLIP model (#518).
+    let semantic_engine: Arc<dyn service::embedding::EmbeddingEngine> = Arc::new(
+        service::lazy_semantic_engine::LazySemanticEngine::new(&config.semantic, &config.residency),
+    );
     let credential_vault = Arc::new(service::credential_vault::CredentialVault::new(
         if config.credential_ttl_ms == 0 {
             None

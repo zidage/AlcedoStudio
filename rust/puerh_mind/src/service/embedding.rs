@@ -19,6 +19,12 @@ pub struct EngineModelInfo {
 }
 
 pub trait EmbeddingEngine: Send + Sync {
+    /// False while the engine has not prepared its model profile yet. Such an engine
+    /// (`LazySemanticEngine`) prepares it in `is_ready`, `unavailable_reason`, and the embed
+    /// methods; the other methods return without preparing it.
+    fn is_prepared(&self) -> bool {
+        true
+    }
     fn is_ready(&self) -> bool {
         true
     }

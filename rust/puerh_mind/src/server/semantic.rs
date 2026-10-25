@@ -581,15 +581,22 @@ impl SemanticService for SemanticServiceImpl {
         &self,
         _request: Request<GetModelInfoRequest>,
     ) -> Result<Response<GetModelInfoResponse>, Status> {
-        if !self.engine.is_ready() {
-            return Err(Status::failed_precondition(
-                self.engine
+        // The first call prepares the model profile (`LazySemanticEngine`), which reads the
+        // model files, so it runs on the blocking pool.
+        let engine = self.engine.clone();
+        let readiness = tokio::task::spawn_blocking(move || {
+            if engine.is_ready() {
+                Ok(engine.model_info())
+            } else {
+                Err(engine
                     .unavailable_reason()
                     .unwrap_or("semantic model is unavailable")
-                    .to_string(),
-            ));
-        }
-        let info = self.engine.model_info();
+                    .to_string())
+            }
+        })
+        .await
+        .map_err(|err| Status::internal(format!("model preparation task failed: {err}")))?;
+        let info = readiness.map_err(Status::failed_precondition)?;
         Ok(Response::new(GetModelInfoResponse {
             model_id: info.model_id,
             revision: info.revision,
@@ -612,7 +619,10 @@ impl SemanticService for SemanticServiceImpl {
     ) -> Result<Response<GetRuntimeStatusResponse>, Status> {
         let info = self.engine.model_info();
         Ok(Response::new(GetRuntimeStatusResponse {
-            state: if self.engine.is_ready() {
+            // A status read does not prepare the model profile.
+            state: if !self.engine.is_prepared() {
+                "model_not_prepared".to_string()
+            } else if self.engine.is_ready() {
                 "ready".to_string()
             } else {
                 "model_unavailable".to_string()
@@ -767,6 +777,7 @@ impl SemanticService for SemanticServiceImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use anyhow::Result as AnyResult;
@@ -776,6 +787,7 @@ mod tests {
     use crate::config::SemanticConfig;
     use crate::proto::semantic::{EmbedImageItemV2, EmbedTextItemV2};
     use crate::service::embedding::{EmbeddingEngine, EngineModelInfo, MockEmbeddingEngine};
+    use crate::service::lazy_semantic_engine::{LazySemanticEngine, NOT_PREPARED_PROVIDER};
     use crate::service::ort_clip::OrtClipEngine;
 
     fn test_model_root() -> String {
@@ -1149,6 +1161,50 @@ mod tests {
         assert_eq!(status.state, "ready");
         assert_eq!(status.image_batch_cap, 7);
         assert_eq!(status.image_batch_wait_ms, 11);
+    }
+
+    #[tokio::test]
+    async fn runtime_status_leaves_the_profile_unprepared_and_model_info_prepares_it() {
+        let builds = Arc::new(AtomicUsize::new(0));
+        let build_count = builds.clone();
+        let engine = LazySemanticEngine::with_builder(
+            EngineModelInfo {
+                provider: NOT_PREPARED_PROVIDER.to_string(),
+                ..MockEmbeddingEngine.model_info()
+            },
+            Box::new(move || {
+                build_count.fetch_add(1, Ordering::SeqCst);
+                Arc::new(MockEmbeddingEngine)
+            }),
+        );
+        let service = SemanticServiceImpl::new(Arc::new(engine), 7, Duration::from_millis(11));
+
+        let status = service
+            .get_runtime_status(Request::new(GetRuntimeStatusRequest {}))
+            .await
+            .expect("runtime status should return")
+            .into_inner();
+        assert_eq!(status.state, "model_not_prepared");
+        assert_eq!(status.provider, NOT_PREPARED_PROVIDER);
+        assert!(status.encoders.is_empty());
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+
+        let model_info = service
+            .get_model_info(Request::new(GetModelInfoRequest {}))
+            .await
+            .expect("model info should prepare the profile")
+            .into_inner();
+        assert_eq!(model_info.provider, "mock");
+        assert_eq!(model_info.profile_id, "mock-profile-v1");
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+
+        let status = service
+            .get_runtime_status(Request::new(GetRuntimeStatusRequest {}))
+            .await
+            .expect("runtime status should return")
+            .into_inner();
+        assert_eq!(status.state, "ready");
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
     }
 
     // ---- v2 embedding RPCs (Phase 4) ----

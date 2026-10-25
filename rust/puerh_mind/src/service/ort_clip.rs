@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::Mutex;
+use std::time::Instant;
 
 use anyhow::{Result, bail};
 use image::RgbImage;
@@ -836,6 +837,7 @@ impl OrtClipEngine {
         let text_idle_unload = IdleUnload::from_seconds(residency.text_idle_unload_seconds)?;
         let vision_idle_unload = IdleUnload::from_seconds(residency.vision_idle_unload_seconds)?;
 
+        let validation_start = Instant::now();
         // Model asset downloading is handled by the C++ application layer (via
         // aria2). The Rust runtime only validates that the requested profile is
         // present on disk before loading it for inference.
@@ -858,11 +860,17 @@ impl OrtClipEngine {
             );
         }
 
+        let validation_ms = validation_start.elapsed().as_millis();
+
+        let environment_start = Instant::now();
         crate::service::ort_runtime::initialize_ort_environment()?;
+        let environment_ms = environment_start.elapsed().as_millis();
 
         let text_device_description = Self::describe_device_request(text_device);
         let vision_device_description = Self::describe_device_request(vision_device);
+        let tokenizer_start = Instant::now();
         let tokenizer = Self::tokenizer_for_profile(profile, &config.model_root)?;
+        let tokenizer_ms = tokenizer_start.elapsed().as_millis();
         let image_size = manifest.image_size as usize;
         let native_embedding_dim = manifest.native_embedding_dimension as usize;
 
@@ -870,10 +878,13 @@ impl OrtClipEngine {
             let multimodal_model =
                 profile_asset_path(profile, &config.model_root, AssetRole::MultimodalModel)?;
             info!(
-                "prepared ORT clip profile {} ({}) from {}; the multimodal session loads on {} at first use",
+                "prepared ORT clip profile {} ({}) from {} (profile validation {} ms, ORT environment {} ms, tokenizer {} ms); the multimodal session loads on {} at first use",
                 profile.profile_id,
                 profile.engine_profile_id,
                 config.model_root,
+                validation_ms,
+                environment_ms,
+                tokenizer_ms,
                 vision_device_description,
             );
             let multimodal = EncoderResidency::new(
@@ -900,10 +911,13 @@ impl OrtClipEngine {
             let vision_model =
                 profile_asset_path(profile, &config.model_root, AssetRole::VisionModel)?;
             info!(
-                "prepared ORT clip profile {} ({}) from {}; the text encoder loads on {} and the image encoder on {} at first use",
+                "prepared ORT clip profile {} ({}) from {} (profile validation {} ms, ORT environment {} ms, tokenizer {} ms); the text encoder loads on {} and the image encoder on {} at first use",
                 profile.profile_id,
                 profile.engine_profile_id,
                 config.model_root,
+                validation_ms,
+                environment_ms,
+                tokenizer_ms,
                 text_device_description,
                 vision_device_description,
             );
