@@ -7,6 +7,13 @@
 //! CPU memory arena setting (`DisableCpuMemArena`) to the CPU execution provider that ONNX Runtime
 //! always keeps for node placement.
 //!
+//! The DirectML sessions of the encoder and S3OD also switch off the DirectML memory arena
+//! (issue #532). With the arena, DirectML rounds each work buffer of a run up to a power of two and
+//! keeps it until the session closes: about 1 GB for each of the two models. Without the arena,
+//! the work buffers are freed after each run, and the outputs are the same. A run takes about
+//! 30 - 60 ms more. The decoder and the head keep the arena: their work buffers are small, and
+//! without the arena a decoder run takes about 100 ms instead of 10 ms.
+//!
 //! The encoder keeps its three output values as [`OrtImageFeatures`] (SM3.B decision B4); the
 //! decoder ([`super::ort_decoder`]) binds them without a host copy, and the people and sky head
 //! reads `image_embed` from them (SM3.C). S3OD reads its own input image (SM3.C plan, section
@@ -103,9 +110,24 @@ pub struct OrtSegmentationBackend {
     device: OrtSegmentationDevice,
 }
 
-fn session_builder(device: OrtSegmentationDevice) -> Result<SessionBuilder> {
+/// Session configuration key that switches off the DirectML memory arena.
+const DIRECTML_DISABLE_MEMORY_ARENA: &str = "ep.dml.disable_memory_arena";
+
+/// Whether a DirectML session of @p role frees its work buffers after each run (see the module
+/// documentation).
+fn frees_work_buffers_after_run(role: SegmentationModelRole) -> bool {
+    matches!(
+        role,
+        SegmentationModelRole::Encoder | SegmentationModelRole::Subject
+    )
+}
+
+fn session_builder(
+    device: OrtSegmentationDevice,
+    role: SegmentationModelRole,
+) -> Result<SessionBuilder> {
     crate::service::ort_runtime::initialize_ort_environment()?;
-    let builder = Session::builder()
+    let mut builder = Session::builder()
         .map_err(|e| anyhow!("failed to create the ONNX Runtime session builder: {e}"))?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| anyhow!("failed to set the graph optimization level: {e}"))?
@@ -117,6 +139,11 @@ fn session_builder(device: OrtSegmentationDevice) -> Result<SessionBuilder> {
         .map_err(|e| anyhow!("failed to switch off memory patterns: {e}"))?
         .with_parallel_execution(false)
         .map_err(|e| anyhow!("failed to select sequential execution: {e}"))?;
+    if matches!(device, OrtSegmentationDevice::DirectMl(_)) && frees_work_buffers_after_run(role) {
+        builder = builder
+            .with_config_entry(DIRECTML_DISABLE_MEMORY_ARENA, "1")
+            .map_err(|e| anyhow!("failed to switch off the DirectML memory arena: {e}"))?;
+    }
     builder
         .with_execution_providers(execution_providers(device)?)
         .map_err(|e| {
@@ -177,7 +204,7 @@ pub(super) fn load_session(
             path.display()
         );
     }
-    let session = session_builder(device)?
+    let session = session_builder(device, spec.role)?
         .commit_from_file(&path)
         .map_err(|e| {
             anyhow!(
@@ -461,6 +488,16 @@ mod tests {
                 "{rejected} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn only_encoder_and_subject_free_work_buffers_after_run() {
+        assert!(frees_work_buffers_after_run(SegmentationModelRole::Encoder));
+        assert!(frees_work_buffers_after_run(SegmentationModelRole::Subject));
+        assert!(!frees_work_buffers_after_run(
+            SegmentationModelRole::Decoder
+        ));
+        assert!(!frees_work_buffers_after_run(SegmentationModelRole::Head));
     }
 
     #[test]
