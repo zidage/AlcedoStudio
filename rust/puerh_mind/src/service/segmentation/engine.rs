@@ -793,6 +793,10 @@ impl SegmentationEngine {
         };
         if computed {
             result.model_ms = elapsed_ms(started);
+            info!(
+                "ran segmentation task {:?} in {} ms",
+                request.task, result.model_ms
+            );
         }
         Ok(result)
     }
@@ -864,14 +868,24 @@ impl SegmentationEngine {
         loaded: &LoadedModelSet,
         input: &SubjectInputImage,
     ) -> Result<SubjectAlpha, SegmentationError> {
+        let started = Instant::now();
         let pixel_values = task_masks::subject_pixel_values(input).map_err(inference)?;
+        let run_started = Instant::now();
         let output = loaded
             .subject
             .lock()
             .map_err(|_| poisoned("subject model"))?
             .run(&pixel_values)
             .map_err(inference)?;
-        task_masks::select_subject_alpha(&output, input).map_err(inference)
+        let run_ms = elapsed_ms(run_started);
+        let alpha = task_masks::select_subject_alpha(&output, input).map_err(inference)?;
+        // A model run far above the measured 200 ms on DirectML shows that the GPU memory of the
+        // sidecar does not fit next to the other processes (issue #530).
+        info!(
+            "ran S3OD in {} ms (model run {run_ms} ms)",
+            elapsed_ms(started)
+        );
+        Ok(alpha)
     }
 
     /// The Subject alpha of @p entry, computed once (SM3.C plan, section 2.5). The flag is true when
