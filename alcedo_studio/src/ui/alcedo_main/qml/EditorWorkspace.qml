@@ -58,8 +58,10 @@ Item {
                                                  || !!(root.hasImage && aiMaskTool
                                                        && aiMaskTool.active)
     readonly property var maskCreation: editorSession ? editorSession.maskCreation : null
-    // The AI Mask tool (SM9 MVP) takes left clicks and drags as prompts while its edit is open.
+    // The AI Mask tool takes the left button for its Point, Box, or Path prompt tool while its
+    // edit is open; the middle button and the wheel keep pan and zoom.
     readonly property var aiMaskTool: appModules ? appModules.aiMaskTool : null
+    readonly property bool aiMaskToolActive: !!(aiMaskTool && aiMaskTool.active)
     readonly property bool aiMaskOwnsLeftButton: !!(aiMaskTool && aiMaskTool.ownsLeftButton)
     readonly property bool maskOwnsLeftButton: !!(maskCreation && maskCreation.ownsLeftButton)
                                                || aiMaskOwnsLeftButton
@@ -345,18 +347,31 @@ Item {
                     // source-image pixel per screen pixel), derived from the full
                     // image and viewport — independent of the 2K preview cap. At
                     // fit (zoom field 1.0) the readout shows "FIT" instead of a %.
-                    // AI Mask box prompt while the left button drags (item coordinates of the
-                    // pointer handlers). Clicks and released boxes run the model.
-                    Rectangle {
-                        objectName: "editorAiMaskBoxPrompt"
-                        visible: !!(root.aiMaskTool && root.aiMaskTool.boxVisible)
-                        x: root.aiMaskTool ? root.aiMaskTool.boxX : 0
-                        y: root.aiMaskTool ? root.aiMaskTool.boxY : 0
-                        width: root.aiMaskTool ? root.aiMaskTool.boxWidth : 0
-                        height: root.aiMaskTool ? root.aiMaskTool.boxHeight : 0
-                        color: "transparent"
-                        border.width: 1
-                        border.color: appTheme.accentColor
+                    // AI Mask input (QSG): the markers of the open prompt group, the stroke or
+                    // box that the left button draws, the outline of the selected people, and
+                    // the cursor of the selected prompt tool. Released input runs the model.
+                    AiMaskInputOverlayItem {
+                        id: aiMaskInputOverlay
+                        objectName: "editorAiMaskInputOverlay"
+                        anchors.fill: parent
+                        visible: root.hasImage && root.aiMaskToolActive
+                        interaction: editorInteraction
+                        promptSteps: root.aiMaskTool ? root.aiMaskTool.promptSteps : []
+                        liveInput: root.aiMaskTool ? root.aiMaskTool.liveInput : ({})
+                        personBoxes: root.aiMaskTool ? root.aiMaskTool.selectedPersonBoxes : []
+                        highlightedPersonBox: root.aiMaskTool
+                                              ? root.aiMaskTool.highlightedPersonBox
+                                              : Qt.rect(0, 0, 0, 0)
+                        cursorVisible: root.aiMaskOwnsLeftButton && viewportHover.hovered
+                        cursorKind: root.aiMaskTool ? root.aiMaskTool.promptTool : ""
+                        cursorPosition: viewportHover.point.position
+                        cursorAdd: !(root.aiMaskTool && root.aiMaskTool.subtract)
+                        cursorBusy: !!(root.aiMaskTool && root.aiMaskTool.busy)
+                        addColor: appTheme.aiMaskInputAddColor
+                        subtractColor: appTheme.aiMaskInputSubtractColor
+                        lineColor: appTheme.maskOverlayControlColor
+                        outlineColor: appTheme.maskOverlayControlOutlineColor
+                        inactiveColor: appTheme.maskOverlayInactiveColor
                         z: 4
                     }
 
@@ -384,10 +399,13 @@ Item {
                         // HoverHandler owns the platform cursor (Item has no cursorShape).
                         // BitmapCursor marks the Crop rotate handle: EditorOverlayItem
                         // shows that bitmap cursor, so it is not applied here.
-                        cursorShape: editorInteraction.hasCustomCursor
-                                     && editorInteraction.cursorShape !== Qt.BitmapCursor
-                                     ? editorInteraction.cursorShape
-                                     : Qt.ArrowCursor
+                        // The AI Mask tool draws its own cursor in aiMaskInputOverlay.
+                        cursorShape: root.aiMaskOwnsLeftButton
+                                     ? Qt.BlankCursor
+                                     : (editorInteraction.hasCustomCursor
+                                        && editorInteraction.cursorShape !== Qt.BitmapCursor
+                                        ? editorInteraction.cursorShape
+                                        : Qt.ArrowCursor)
                         onPointChanged: {
                             if (viewportHover.hovered) {
                                 editorInteraction.handleHoverMove(point.position.x, point.position.y)

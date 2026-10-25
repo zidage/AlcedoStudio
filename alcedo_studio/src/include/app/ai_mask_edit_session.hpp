@@ -28,6 +28,14 @@ namespace alcedo {
 enum class AiMaskInputMode : std::uint8_t { Prompt, Task };
 
 /**
+ * @brief Where a prompt step goes (SM9, issue #519).
+ *
+ * JoinOpenGroup adds the step to the open prompt group, or starts a group when none is open (M3).
+ * NewGroup always starts a group: the AI Mask tool selects a new object with a Box or a Path.
+ */
+enum class AiMaskPromptGroupStart : std::uint8_t { JoinOpenGroup, NewGroup };
+
+/**
  * @brief The image of one AI Mask edit session.
  *
  * @p extent is the size of the segmentation session image (SM5 decision M14, from the start
@@ -90,12 +98,15 @@ class AiMaskEditSession {
    *
    * In an open prompt group the step joins the group and @p mode is the label of its points. Else
    * the step starts a new group with operation @p mode and Add labels. The labels and the level
-   * of @p step are replaced; the level becomes the decoder `selected_index`.
+   * of @p step are replaced; the level becomes the decoder `selected_index`. With @p start
+   * NewGroup the step starts a new group also when a group is open.
    *
    * @return Applied; Failed with the sidecar message; Rejected for an invalid step or a group of
    *         more than 64 points.
    */
-  auto AddPromptStep(AiMaskPromptStep step, AiMaskComponentOperation mode) -> AiMaskStepResult;
+  auto AddPromptStep(AiMaskPromptStep step, AiMaskComponentOperation mode,
+                     AiMaskPromptGroupStart start = AiMaskPromptGroupStart::JoinOpenGroup)
+      -> AiMaskStepResult;
 
   /// Select @p level of the last step; valid only when the last component is a prompt group that
   /// is one point without a box. Needs no model call for a state with its outputs.
@@ -160,6 +171,8 @@ class AiMaskEditSession {
   [[nodiscard]] auto Recipe() const -> const AiMaskRecipe& { return states_[current_].recipe; }
   [[nodiscard]] auto Edge() const -> const AiMaskEdgeAdjustment& { return states_[current_].edge; }
   [[nodiscard]] auto InputMode() const -> AiMaskInputMode { return states_[current_].input_mode; }
+  /// Whether the last component is a prompt group that the next prompt step joins (M3).
+  [[nodiscard]] auto PromptGroupOpen() const -> bool { return states_[current_].open_prompt_group; }
   [[nodiscard]] auto Image() const -> const AiMaskSessionImage& { return image_; }
 
   /**

@@ -49,6 +49,7 @@ set(EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
     "${ALCEDO_EDITOR_RHI_ROOT}/editor_viewport_renderer.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/editor_interaction_controller.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/editor_overlay_item.cpp"
+    "${ALCEDO_EDITOR_RHI_ROOT}/ai_mask_input_overlay_item.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/direct_present_queue.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/direct_frame_sink.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/viewport_mask_coverage_sink.hpp"
@@ -61,6 +62,7 @@ set(EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_viewport_renderer.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_interaction_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_overlay_item.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/ai_mask_input_overlay_item.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/color_manager.hpp"
 )
 if(APPLE)

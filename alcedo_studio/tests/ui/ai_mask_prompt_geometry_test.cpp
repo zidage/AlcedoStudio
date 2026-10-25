@@ -12,8 +12,11 @@
 
 #include <QPointF>
 #include <QVector2D>
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <optional>
+#include <vector>
 
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/geometry/render_request.hpp"
@@ -236,6 +239,48 @@ TEST(MaskEditGeometryTest, AnalysisToItemTransformInvertsThePromptMapping) {
   }
   MaskEditViewMapping invalid;
   EXPECT_FALSE(AiMaskAnalysisToItemTransform(invalid).has_value());
+}
+
+TEST(MaskEditGeometryTest, PathStrokeSamplesEqualArcLengthUpToTheLimit) {
+  const auto mapping   = MakeCroppedRotatedMapping();
+  const auto transform = AiMaskAnalysisToItemTransform(mapping);
+  ASSERT_TRUE(transform.has_value());
+  // A straight stroke on the source from (0.30, 0.40) to (0.50, 0.40), with an extra pointer
+  // sample near the start: the samples must not follow the pointer sample spacing.
+  const std::vector<QPointF> path = {transform->map(QPointF(0.30, 0.40)),
+                                     transform->map(QPointF(0.31, 0.40)),
+                                     transform->map(QPointF(0.50, 0.40))};
+  const auto                 length =
+      std::hypot(path.back().x() - path.front().x(), path.back().y() - path.front().y());
+  const auto expected_count = std::min<std::size_t>(
+      static_cast<std::size_t>(std::lround(length / kAiMaskStrokePromptSpacingItemPx)) + 1,
+      kAiMaskMaximumStrokePromptPoints);
+  ASSERT_GE(expected_count, 3U);
+
+  const auto points =
+      MapItemStrokeToAiMaskPromptPoints(mapping, path, kAiMaskMaximumStrokePromptPoints);
+  ASSERT_EQ(points.size(), expected_count);
+  ExpectClose(points.front(), Vector2{0.30f, 0.40f}, "first sample");
+  ExpectClose(points.back(), Vector2{0.50f, 0.40f}, "last sample");
+  const float step = 0.20f / static_cast<float>(expected_count - 1);
+  for (std::size_t index = 0; index < points.size(); ++index) {
+    ExpectClose(points[index], Vector2{0.30f + step * static_cast<float>(index), 0.40f},
+                "equal arc length");
+  }
+
+  // The limit of a stroke caps the count; the samples still span the stroke.
+  const auto capped = MapItemStrokeToAiMaskPromptPoints(mapping, path, 2);
+  ASSERT_EQ(capped.size(), 2U);
+  ExpectClose(capped.back(), Vector2{0.50f, 0.40f}, "capped last sample");
+
+  // A stroke without length is one point; a stroke off the source has none.
+  const auto click = MapItemStrokeToAiMaskPromptPoints(mapping, {path.front(), path.front()},
+                                                       kAiMaskMaximumStrokePromptPoints);
+  ASSERT_EQ(click.size(), 1U);
+  ExpectClose(click.front(), Vector2{0.30f, 0.40f}, "click");
+  EXPECT_TRUE(MapItemStrokeToAiMaskPromptPoints(mapping, {QPointF(-500.0, -500.0)},
+                                                kAiMaskMaximumStrokePromptPoints)
+                  .empty());
 }
 
 }  // namespace alcedo

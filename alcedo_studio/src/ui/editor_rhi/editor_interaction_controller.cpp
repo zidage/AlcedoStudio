@@ -13,6 +13,7 @@
 #include <cmath>
 #include <mutex>
 
+#include "ui/editor_rhi/ai_mask_input_overlay_item.hpp"
 #include "ui/editor_rhi/editor_overlay_item.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
@@ -982,6 +983,7 @@ void RegisterEditorOverlayQmlTypes() {
     qmlRegisterType<EditorInteractionController>("Alcedo.Main", 1, 0,
                                                  "EditorInteractionController");
     qmlRegisterType<EditorOverlayItem>("Alcedo.Main", 1, 0, "EditorOverlayItem");
+    qmlRegisterType<AiMaskInputOverlayItem>("Alcedo.Main", 1, 0, "AiMaskInputOverlayItem");
   });
 }
 

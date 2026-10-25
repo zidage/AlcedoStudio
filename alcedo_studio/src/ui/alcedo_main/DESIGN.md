@@ -245,6 +245,10 @@ parallel palette to satisfy the policy.
 | **Button hovered fill** | **`buttonHoveredFillColor`** | **Opaque hover-state fill** (between panel and engaged) |
 | **Button pressed fill** | **`buttonPressedFillColor`** | **Opaque pressed-state fill** (= hover well) |
 | **Button selected fill** | **`buttonSelectedFillColor`** | **Opaque selected-state fill** (= pressed / hover well) |
+| **Control fill** | **`controlFillColor`** | **Raised control surface**: `DialogActionButton` "normal" (Browse LUTs), `AdjustmentCombo` / `SearchableAdjustmentCombo` fields, AI Mask tool actions. About 0x13 above the panel so the control reads apart from card and `bgBaseColor` surfaces |
+| **Control hovered fill** | **`controlHoveredFillColor`** | **Hover state of a raised control** |
+| **Control pressed fill** | **`controlPressedFillColor`** | **Pressed state of a raised control** |
+| **Control border** | **`controlBorderColor`** | **1 px edge of a raised control** (white at alpha 28) |
 | **Disabled surface** | **`disabledSurfaceColor`** | **Reserved muted shell token** (not used for editor side-panel shells) |
 | **List selected fill** | **`editorListSelectedFillColor`** | **Monochrome light well for dense catalog rows** (LUT browser, inverted selection) |
 | **List selected ink** | **`editorListSelectedInkColor`** | **Text / icon ink on the light selected well** (= `bgBaseColor`) |
@@ -576,10 +580,11 @@ Tabler `pipeline` paths:
 <path d="M12 9v6" />
 ```
 
-Use the existing `panel_icons/nodes.svg` Tabler `stack-2` layer icon for the
-Mask Groups rail toggle and Mask Group creation action. Do not use
-`panel_icons/masks.svg` as the Mask Groups rail icon; that asset represents an
-individual Mask or Mask preview.
+Use `panel_icons/box-multiple.svg` (user-provided Tabler `box-multiple`) for the
+Mask Groups rail toggle, so it does not repeat a Nodes-like layer icon. The
+Mask Group creation action keeps the Tabler `stack-2` layer icon
+`panel_icons/nodes.svg`. Do not use `panel_icons/masks.svg` as the Mask Groups
+rail icon; that asset represents an individual Mask or Mask preview.
 
 Both rail assets use the shared 24×24 viewBox, white source stroke, and their
 user-approved 2 px stroke width. Tint them with `ColorImage`. Do not add a
@@ -746,6 +751,86 @@ cream tones.
 | --- | --- | --- |
 | `maskCoverageTintColor` | `#FF5050` (light red, every theme) | Coverage tint of the viewport composite |
 | `maskCoverageTintOpacity` | 0.5 | Overlay opacity at full coverage |
+
+### AI Mask tool panel
+
+`EditorAiMaskPanel.qml` covers the adjustment pages while an AI Mask edit is
+open. Every control is an icon action with an accessible name and tooltip; the
+panel has no section captions and no busy text. From top to bottom:
+
+1. Header: `pencil-ai` icon, the title (`New AI Mask` / `Edit AI Mask`) in
+   `fontSizeSection` + `fontWeightHeading`, and a `close.svg` action (Cancel).
+2. Tasks, compact `IconActionButton`s: Subject `mask_icons/ai-subject.svg`
+   (Tabler `sparkles-2`, the AI feature mark), Background
+   `mask_icons/ai-background.svg` (Tabler `background`), Sky
+   `mask_icons/ai-sky.svg` (Tabler `cloud`), People `mask_icons/ai-people.svg`
+   (Tabler `users`). People shows the selected fill while People is the last
+   component.
+3. People list while People is the last component: one flat row per person
+   (`ai-people.svg` icon and `Person N`) in a sunken `bgBaseColor` well with a
+   `controlBorderColor` edge. A
+   selected (included) person uses `editorListSelectedFillColor` /
+   `editorListSelectedInkColor`. A click toggles the person; hover outlines that
+   person in the viewport with a dashed frame.
+4. Prompt tools in a `SlidingIconNav`: Point `mask_icons/ai-point.svg` (Tabler
+   `pencil`), Box `mask_icons/ai-box.svg` (Tabler `marquee-2`), Path
+   `mask_icons/ai-path.svg` (Tabler `scribble`). A second `SlidingIconNav`
+   holds Add `panel_icons/plus.svg` and Subtract `panel_icons/minus.svg`.
+5. Click level, only for a single click: `SlidingIconNav` with
+   `mask_icons/ai-level-1.svg` to `ai-level-3.svg` (a larger circle selects a
+   larger region).
+6. Feather and Expand: the shared `AdjustmentSlider`.
+7. Temporary Undo / Redo: `reset.svg` / `retry.svg`, like the History panel.
+8. Errors use `AlertBadge`; a failed coverage display adds a `retry.svg` Retry
+   action next to its badge. A notice (no object found, the 64-point limit)
+   is muted caption text.
+9. One full-width Confirm `DialogActionButton` ("normal", the Browse LUTs
+   style) stays below the scroll area. There is no Cancel button: Close in the
+   header cancels.
+10. While an operation runs (after `motionFadeMs`, so Undo does not flash), a
+    `RotatingTaskBorder` in `backgroundTaskWorkingColor` turns around the whole
+    panel and a `ThemedProgressBar` at the bottom shows the stage. The stage
+    label names the step (`Starting the AI runtime`, `Loading the models`,
+    `Running the model`, ...) with a separate `n/5` data label for the Open
+    stages. A model run without stages uses the indeterminate bar.
+
+The panel uses `cardSurfaceColor`. Icon actions use the raised control fills
+(`controlFillColor`, hovered, pressed); a selected action (People while People
+is active) uses `editorListSelectedFillColor` with `editorListSelectedInkColor`
+ink. The `SlidingIconNav` tracks use `controlFillColor` with a
+`controlBorderColor` edge and `iconColor` idle icons.
+
+The AI icons are normalized to the 24×24 viewBox and white source stroke with
+the user-approved 2 px stroke.
+
+### AI Mask viewport input
+
+`AiMaskInputOverlayItem` (QSG, above the photograph and below the viewport
+chrome) draws the input of the AI Mask tool. It never draws coverage; the
+coverage is the viewport composite above.
+
+- Point prompts of the open prompt group: discs with a dark rim, filled with
+  `aiMaskInputAddColor` (green, plus glyph) or `aiMaskInputSubtractColor` (red,
+  minus glyph). These signed markers were requested by the user for this tool;
+  they are not status dots.
+- Path prompts: the stroke in the mode color with a dark rim, 4 px core. The
+  stroke being drawn shows the same way and stays until its model step returns.
+- Box prompts: the frame in the mode color with a dark rim.
+- Selected people: the outline of the union of their boxes in
+  `maskOverlayControlColor` with a dark rim; one outline per connected group.
+- Cursor: the viewport hides the platform cursor and the overlay draws the
+  tool cursor. Point: a crosshair with a center dot. Box: a crosshair with
+  dashed guides across the photograph. Path: a ring with a center dot. A
+  green plus or red minus badge shows the mode. While a model request runs
+  the cursor uses `maskOverlayInactiveColor` and has no badge.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `aiMaskInputAddColor` | `#30A46C` (every theme) | Add markers, strokes, boxes, and cursor badge |
+| `aiMaskInputSubtractColor` | `#E5484D` (every theme) | Subtract markers, strokes, boxes, and cursor badge |
+
+Line, rim, and inactive colors reuse `maskOverlayControlColor`,
+`maskOverlayControlOutlineColor`, and `maskOverlayInactiveColor`.
 
 ### Color Grade node content
 
@@ -943,11 +1028,11 @@ The header is one vertical stack. Both rows fill the same header width:
      `fontWeightStrong`, `lineHeightTitle`. Vertically centered. Up to two lines,
      elided. Full name is the accessible name and tooltip. No node-kind subtitle.
      Do not use `monoFontFamily`.
-   - Right: Radial, then Gradient `IconActionButton` compact actions using
-     `qrc:/mask_icons/radial.svg` and
-     `qrc:/mask_icons/gradient.svg`. Idle fill is `buttonIdleFillColor`. Viewer
-     Mask authoring is NM7; the buttons currently have no product command.
-     Do not insert a vertical rule between the name and the tools.
+   - Right: Radial, Gradient, then AI Mask `IconActionButton` compact actions
+     using `qrc:/mask_icons/radial-add.svg`, `qrc:/mask_icons/gradient-add.svg`,
+     and `qrc:/panel_icons/pencil-ai.svg` (user-provided Tabler `pencil-ai`).
+     Idle fill is `buttonIdleFillColor`. Do not insert a vertical rule between
+     the name and the tools.
 
 Node switching does not reread EXIF. Image identity change updates the four EXIF
 cells.

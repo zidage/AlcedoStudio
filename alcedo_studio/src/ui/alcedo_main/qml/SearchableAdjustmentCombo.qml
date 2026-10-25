@@ -6,7 +6,7 @@ import QtQuick.Layouts
 // Enum adjustment combo with a search field, for long entry lists (issue #411:
 // the LUT input and output encodings). Binds to an EditorAdjustmentEnumModel
 // (entries: [{value, label, ...}, ...]) like AdjustmentCombo, with the same
-// label, sunken field and reset button.
+// label, raised field and reset button.
 //
 // The popup opens with an empty search field that has focus. Typing filters
 // the list with LensCatalogPicker's loose search: both sides are lower-cased
@@ -54,7 +54,8 @@ Item {
     readonly property color colText: appTheme.textColor
     readonly property color colMuted: appTheme.textMutedColor
     readonly property color colBorder: appTheme.cardBorderColor
-    readonly property color colField: appTheme.bgBaseColor
+    // Raised control fill: the field reads apart from card and panel surfaces.
+    readonly property color colField: appTheme.controlFillColor
     readonly property color colPopup: appTheme.bgBaseColor
     readonly property color colHover: appTheme.hoverColor
     readonly property color colSelectedFill: appTheme.editorListSelectedFillColor
@@ -215,7 +216,7 @@ Item {
                 border.width: 1
                 border.color: field.activeFocus || field.hovered || popup.visible
                               ? root.colMuted
-                              : root.colBorder
+                              : appTheme.controlBorderColor
             }
 
             contentItem: Text {

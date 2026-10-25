@@ -159,6 +159,13 @@ class AppTheme final : public QObject {
   // Opaque disabled surface: cardSurfaceColor blended with bgCanvasColor so a
   // disabled panel shell reads as a single concrete fill rather than 0.55 opacity.
   Q_PROPERTY(QColor disabledSurfaceColor READ disabledSurfaceColor NOTIFY ThemeChanged)
+  // Raised controls on card and panel surfaces: secondary action buttons (DialogActionButton
+  // "normal"), combo fields, and tool icon actions. Clearly lighter than cardSurfaceColor and
+  // bgBaseColor so the control reads apart from its surface.
+  Q_PROPERTY(QColor controlFillColor READ controlFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor controlHoveredFillColor READ controlHoveredFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor controlPressedFillColor READ controlPressedFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor controlBorderColor READ controlBorderColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderTrackColor READ editorSliderTrackColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderPositiveColor READ editorSliderPositiveColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderNegativeColor READ editorSliderNegativeColor NOTIFY ThemeChanged)
@@ -236,6 +243,9 @@ class AppTheme final : public QObject {
   // never reaches export, thumbnails, or scopes.
   Q_PROPERTY(QColor maskCoverageTintColor READ maskCoverageTintColor CONSTANT)
   Q_PROPERTY(qreal maskCoverageTintOpacity READ maskCoverageTintOpacity CONSTANT)
+  // AI Mask tool input markers on the photograph (SM9): fixed in every theme, like the tint.
+  Q_PROPERTY(QColor aiMaskInputAddColor READ aiMaskInputAddColor CONSTANT)
+  Q_PROPERTY(QColor aiMaskInputSubtractColor READ aiMaskInputSubtractColor CONSTANT)
   Q_PROPERTY(QColor dateGraphLevel0Color READ dateGraphLevel0Color NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dateGraphLevel1Color READ dateGraphLevel1Color NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dateGraphLevel2Color READ dateGraphLevel2Color NOTIFY ThemeChanged)
@@ -403,6 +413,10 @@ class AppTheme final : public QObject {
   auto        buttonPressedFillColor() const -> QColor;
   auto        buttonSelectedFillColor() const -> QColor;
   auto        disabledSurfaceColor() const -> QColor;
+  auto        controlFillColor() const -> QColor;
+  auto        controlHoveredFillColor() const -> QColor;
+  auto        controlPressedFillColor() const -> QColor;
+  auto        controlBorderColor() const -> QColor;
   auto        editorSliderTrackColor() const -> QColor { return EditorSliderTrackColor(); }
   auto        editorSliderPositiveColor() const -> QColor { return EditorSliderAccentColor(true); }
   auto        editorSliderNegativeColor() const -> QColor { return EditorSliderAccentColor(false); }
@@ -461,6 +475,8 @@ class AppTheme final : public QObject {
   auto maskOverlayGripSpanT1() const -> qreal;
   auto maskCoverageTintColor() const -> QColor;
   auto maskCoverageTintOpacity() const -> qreal;
+  auto aiMaskInputAddColor() const -> QColor;
+  auto aiMaskInputSubtractColor() const -> QColor;
   auto dateGraphLevel0Color() const -> QColor;
   auto dateGraphLevel1Color() const -> QColor;
   auto dateGraphLevel2Color() const -> QColor;

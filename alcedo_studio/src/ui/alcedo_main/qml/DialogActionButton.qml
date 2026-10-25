@@ -24,7 +24,7 @@ Button {
         if (kind === "warning") {
             return appTheme.dangerColor
         }
-        return appTheme.bgBaseColor
+        return appTheme.controlFillColor
     }
 
     implicitWidth: buttonWidth
@@ -59,14 +59,22 @@ Button {
             if (!control.enabled) {
                 return control.withAlpha(base, 0.38)
             }
+            if (control.kind === "normal") {
+                // Raised control fill: reads apart from card and panel surfaces.
+                if (control.down) {
+                    return appTheme.controlPressedFillColor
+                }
+                return control.hovered ? appTheme.controlHoveredFillColor : base
+            }
             if (control.down) {
                 return Qt.darker(base, 1.14)
             }
             if (control.hovered) {
-                return Qt.lighter(base, control.kind === "normal" ? 1.16 : 1.08)
+                return Qt.lighter(base, 1.08)
             }
             return base
         }
-        border.width: 0
+        border.width: control.kind === "normal" ? 1 : 0
+        border.color: appTheme.controlBorderColor
     }
 }

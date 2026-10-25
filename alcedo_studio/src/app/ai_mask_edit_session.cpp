@@ -105,10 +105,12 @@ AiMaskEditSession::AiMaskEditSession(IAiMaskSegmentationRunner& runner, AiMaskSe
   stored_          = std::move(mask);
 }
 
-auto AiMaskEditSession::AddPromptStep(AiMaskPromptStep step, AiMaskComponentOperation mode)
-    -> AiMaskStepResult {
+auto AiMaskEditSession::AddPromptStep(AiMaskPromptStep step, AiMaskComponentOperation mode,
+                                      AiMaskPromptGroupStart start) -> AiMaskStepResult {
   SessionState next  = Current();
-  auto*        group = next.open_prompt_group ? PromptGroupOf(next.recipe) : nullptr;
+  auto*        group = next.open_prompt_group && start == AiMaskPromptGroupStart::JoinOpenGroup
+                           ? PromptGroupOf(next.recipe)
+                           : nullptr;
   const auto   label = group != nullptr ? mode : AiMaskComponentOperation::Add;
   for (auto& point : step.points) {
     point.label = label;
