@@ -36,6 +36,12 @@ crop alpha, `subject_fraction`, and `in_subject`. The People list follows the SM
 boxes with a score of at least the list threshold, else the best box when the person presence
 passed (decision C2), sorted from left to right by the box center (C3). The Rust test makes the
 Sky union itself.
+
+Sky head (SM3.E), when --sky-head-onnx is also given: the script runs the sky head on ONNX Runtime
+CPU with the encoder outputs and the encoder input of the photo, and writes its 1024 x 1024 sky
+alpha (`<photo>_sky_alpha.f32`), its sky share (the share of the values >= 0.5), and whether the
+share reaches SKY_FOUND_SHARE (`tasks.sky_head`). The MVP Sky (`tasks.sky`) stays for the backends
+without a sky head (Core ML until AlcedoStudio issue #538).
 """
 
 from __future__ import annotations
@@ -60,6 +66,9 @@ STABILITY_DELTA = 0.05
 STABILITY_THRESHOLD = 0.98
 MEAN = (0.485, 0.456, 0.406)
 STD = (0.229, 0.224, 0.225)
+# The "sky found" share of the sky head (rust/puerh_mind task_masks::SKY_FOUND_SHARE).
+SKY_FOUND_SHARE = 5e-4
+SKY_HEAD_INPUTS = ["image_embed", "high_res_feats_0", "high_res_feats_1", "pixel_values"]
 
 
 def file_sha256(path: Path) -> str:
@@ -247,10 +256,13 @@ def main() -> None:
     parser.add_argument("--head-onnx", type=Path)
     parser.add_argument("--head-json", type=Path)
     parser.add_argument("--subject-onnx", type=Path)
+    parser.add_argument("--sky-head-onnx", type=Path, help="sky_head.onnx (SM3.E)")
     args = parser.parse_args()
     task_arguments = (args.lab_dir, args.head_onnx, args.head_json, args.subject_onnx)
     if any(task_arguments) and not all(task_arguments):
         parser.error("the task masks need --lab-dir, --head-onnx, --head-json, and --subject-onnx")
+    if args.sky_head_onnx is not None and not all(task_arguments):
+        parser.error("--sky-head-onnx needs the task mask arguments")
 
     encoder_path = args.onnx_dir / "point_encoder.onnx"
     decoder_path = args.onnx_dir / "point_decoder.onnx"
@@ -283,6 +295,12 @@ def main() -> None:
         manifest["task_thresholds"] = tasks.thresholds
         manifest["person_crop_margin"] = tasks.mask_pipeline.PERSON_CROP_MARGIN
         manifest["person_in_subject_fraction"] = tasks.mask_pipeline.PERSON_IN_SUBJECT_FRACTION
+    sky_head = None
+    if args.sky_head_onnx is not None:
+        sky_head = ort.InferenceSession(str(args.sky_head_onnx),
+                                        providers=["CPUExecutionProvider"])
+        manifest["sky_head_sha256"] = file_sha256(args.sky_head_onnx)
+        manifest["sky_found_share"] = SKY_FOUND_SHARE
     for photo_path in sorted(args.photos.iterdir()):
         entry = entries.get(photo_path.name)
         if entry is None:
@@ -291,7 +309,8 @@ def main() -> None:
         rgb8 = read_rgb8(photo_path)
         height, width = rgb8.shape[:2]
         (args.out / f"{stem}.rgb").write_bytes(rgb8.tobytes())
-        image_embed, feats_0, feats_1 = encoder.run(None, {"pixel_values": preprocess(rgb8)})
+        pixel_values = preprocess(rgb8)
+        image_embed, feats_0, feats_1 = encoder.run(None, {"pixel_values": pixel_values})
         features[:] = [image_embed, feats_0, feats_1]
         selected_by_name: dict[str, np.ndarray] = {}
         photo = {"name": stem, "width": int(width), "height": int(height),
@@ -322,6 +341,14 @@ def main() -> None:
             photo["prompts"].append(record)
         if tasks is not None:
             photo["tasks"] = tasks.run(rgb8, image_embed, args.out, stem)
+        if sky_head is not None:
+            feeds = dict(zip(SKY_HEAD_INPUTS, (image_embed, feats_0, feats_1, pixel_values)))
+            sky_alpha = np.ascontiguousarray(sky_head.run(None, feeds)[0][0, 0], np.float32)
+            share = float(np.count_nonzero(sky_alpha >= 0.5)) / sky_alpha.size
+            alpha_file = f"{stem}_sky_alpha.f32"
+            (args.out / alpha_file).write_bytes(sky_alpha.astype("<f4").tobytes())
+            photo["tasks"]["sky_head"] = {"alpha": alpha_file, "size": int(sky_alpha.shape[0]),
+                                          "share": share, "found": share >= SKY_FOUND_SHARE}
         manifest["photos"].append(photo)
         print(f"{stem}: {width}x{height}, {len(photo['prompts'])} prompts")
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=1))

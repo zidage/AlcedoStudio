@@ -48,6 +48,10 @@ pub const SUBJECT_MASKS_SHAPE: [usize; 4] = [
 ];
 pub const SUBJECT_SCORES_SHAPE: [usize; 2] = [1, SUBJECT_MASK_COUNT];
 
+/// Side of the square sky alpha of the sky head: the encoder input, stretched to 1024 x 1024.
+pub const SKY_ALPHA_SIZE: usize = IMAGE_SIZE;
+pub const SKY_ALPHA_SHAPE: [usize; 4] = [1, 1, SKY_ALPHA_SIZE, SKY_ALPHA_SIZE];
+
 /// File and tensor names of one model. ONNX and Core ML models have the same input names; the
 /// decoder output names differ.
 #[derive(Debug)]
@@ -118,11 +122,28 @@ pub const SUBJECT: ModelSpec = ModelSpec {
     coreml_outputs: &["masks", "iou_scores"],
 };
 
+/// Sky head (lab issue zidage/alcedo-ai-mask-lab#10): reads the three encoder outputs and the
+/// encoder input, and gives the sky alpha of the stretched 1024 x 1024 image (SM3.E plan).
+pub const SKY_HEAD: ModelSpec = ModelSpec {
+    role: SegmentationModelRole::SkyHead,
+    onnx_file: "sky_head.onnx",
+    coreml_directory: "sky_head.mlmodelc",
+    inputs: &[
+        "image_embed",
+        "high_res_feats_0",
+        "high_res_feats_1",
+        "pixel_values",
+    ],
+    onnx_outputs: &["sky_alpha"],
+    coreml_outputs: &["sky_alpha"],
+};
+
 pub fn spec(role: SegmentationModelRole) -> &'static ModelSpec {
     match role {
         SegmentationModelRole::Encoder => &ENCODER,
         SegmentationModelRole::Decoder => &DECODER,
         SegmentationModelRole::Head => &HEAD,
         SegmentationModelRole::Subject => &SUBJECT,
+        SegmentationModelRole::SkyHead => &SKY_HEAD,
     }
 }

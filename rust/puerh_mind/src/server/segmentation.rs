@@ -727,7 +727,7 @@ mod tests {
         let service = loaded_service().await;
         let session = start_with_key(&service, "", true).await;
 
-        // The fake head finds no sky: a successful result without a mask.
+        // The fake sky head finds no sky: a successful result without a mask.
         let sky = run_task(
             &service,
             &session.session_id,
@@ -743,7 +743,11 @@ mod tests {
         assert!(sky.message.starts_with("No sky found"), "{}", sky.message);
         assert!(sky.mask_r8.is_empty() && sky.alpha_values.is_empty());
         assert!(sky.mask_box.is_none());
-        assert!(sky.presence_threshold > 0.42 && sky.presence_threshold < 0.43);
+        assert_eq!(sky.presence, 0.0);
+        assert_eq!(
+            sky.presence_threshold,
+            crate::service::segmentation::task_masks::SKY_FOUND_SHARE
+        );
 
         let unspecified = run_task(
             &service,
@@ -764,6 +768,54 @@ mod tests {
             header_status(&missing.header).1,
             AiErrorCode::AiErrorSessionNotFound as i32
         );
+    }
+
+    #[tokio::test]
+    async fn server_maps_sky_head_alpha_with_whole_image_box() {
+        use crate::service::segmentation::model_set::SKY_ALPHA_SIZE;
+
+        let factory = FakeFactory::new();
+        let plane = SKY_ALPHA_SIZE * SKY_ALPHA_SIZE;
+        let mut alpha = vec![0.1f32; plane];
+        alpha[..3 * SKY_ALPHA_SIZE].fill(0.75);
+        *factory.calls.sky_alpha.lock().expect("sky alpha") = Some(alpha.clone());
+        let service =
+            SegmentationServiceImpl::new(Arc::new(SegmentationEngine::new(Arc::new(factory))));
+        service
+            .load_segmentation_models(Request::new(LoadSegmentationModelsRequest {
+                header: None,
+                model_directory: model_directory("server").display().to_string(),
+                device: "fake".to_string(),
+            }))
+            .await
+            .expect("transport ok");
+        let session = start_with_key(&service, "", true).await;
+        let sky = run_task(
+            &service,
+            &session.session_id,
+            ProtoSegmentationTask::Sky,
+            None,
+        )
+        .await;
+        assert_eq!(
+            header_status(&sky.header).0,
+            AiResponseStatus::AiStatusOk as i32
+        );
+        assert!(sky.found, "{}", sky.message);
+        assert_eq!(sky.mask_kind, SegmentationTaskMaskKind::Alpha as i32);
+        assert_eq!(
+            (sky.mask_width, sky.mask_height),
+            (SKY_ALPHA_SIZE as u32, SKY_ALPHA_SIZE as u32)
+        );
+        assert_eq!(sky.alpha_values, alpha);
+        assert!(sky.mask_r8.is_empty());
+        let mask_box = sky.mask_box.expect("mask box");
+        assert_eq!(
+            (mask_box.x0, mask_box.y0, mask_box.x1, mask_box.y1),
+            (0.0, 0.0, 1.0, 1.0)
+        );
+        assert_eq!(sky.mask_area, 3 * SKY_ALPHA_SIZE as u32);
+        assert_eq!(sky.region_count, 0);
     }
 
     /// A service whose fake head lists one person (a 4 x 8 cell box centered on the head grid cell

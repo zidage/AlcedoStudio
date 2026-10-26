@@ -23,7 +23,8 @@ use coreml::{ComputeUnits, DataType, FeatureProvider, Model, ModelConfiguration,
 use super::backend::{
     DecoderOutput, DecoderPrompt, HeadOutput, ImageFeatures, SegmentationBackend,
     SegmentationBackendFactory, SegmentationDecoder, SegmentationEncoder, SegmentationHead,
-    SegmentationModelRole, SubjectModel, SubjectOutput, UnsupportedDevice, features_of,
+    SegmentationModelRole, SkyHeadModel, SubjectModel, SubjectOutput, UnsupportedDevice,
+    features_of,
 };
 use super::model_set::{
     CENTER_LOGITS_SHAPE, CENTER_OFFSET_SHAPE, DECODER, ENCODER, HEAD, HIGH_RES_FEATS_0_SHAPE,
@@ -60,7 +61,8 @@ impl CoreMlSegmentationDevice {
                 Self::PerModel,
                 SegmentationModelRole::Encoder
                 | SegmentationModelRole::Head
-                | SegmentationModelRole::Subject,
+                | SegmentationModelRole::Subject
+                | SegmentationModelRole::SkyHead,
             ) => ComputeUnits::All,
             (Self::PerModel, SegmentationModelRole::Decoder) => ComputeUnits::CpuOnly,
             (Self::CpuOnly, _) => ComputeUnits::CpuOnly,
@@ -161,6 +163,12 @@ impl SegmentationBackend for CoreMlSegmentationBackend {
         Ok(Box::new(CoreMlSubjectModel {
             model: self.load_model(directory, SegmentationModelRole::Subject)?,
         }))
+    }
+
+    /// The model set has no Core ML sky head yet (issue #538): Sky uses the people and sky head
+    /// regions on macOS.
+    fn load_sky_head(&self, _directory: &Path) -> Result<Option<Box<dyn SkyHeadModel>>> {
+        Ok(None)
     }
 }
 

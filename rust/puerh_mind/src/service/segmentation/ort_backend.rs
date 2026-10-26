@@ -7,17 +7,18 @@
 //! CPU memory arena setting (`DisableCpuMemArena`) to the CPU execution provider that ONNX Runtime
 //! always keeps for node placement.
 //!
-//! The DirectML sessions of the encoder and S3OD also switch off the DirectML memory arena
-//! (issue #532). With the arena, DirectML rounds each work buffer of a run up to a power of two and
-//! keeps it until the session closes: about 1 GB for each of the two models. Without the arena,
-//! the work buffers are freed after each run, and the outputs are the same. A run takes about
-//! 30 - 60 ms more. The decoder and the head keep the arena: their work buffers are small, and
-//! without the arena a decoder run takes about 100 ms instead of 10 ms.
+//! The DirectML sessions of the encoder, S3OD, and the sky head also switch off the DirectML memory
+//! arena (issue #532). With the arena, DirectML rounds each work buffer of a run up to a power of
+//! two and keeps it until the session closes: about 1 GB for each of these models (the sky head:
+//! 1,150 MB against 122 MB after its first run, SM3.E plan decision S7). Without the arena, the
+//! work buffers are freed after each run, and the outputs are the same. A run takes about 20 - 60
+//! ms more. The decoder and the people and sky head keep the arena: their work buffers are small,
+//! and without the arena a decoder run takes about 100 ms instead of 10 ms.
 //!
 //! The encoder keeps its three output values as [`OrtImageFeatures`] (SM3.B decision B4); the
-//! decoder ([`super::ort_decoder`]) binds them without a host copy, and the people and sky head
-//! reads `image_embed` from them (SM3.C). S3OD reads its own input image (SM3.C plan, section
-//! 2.5).
+//! decoder ([`super::ort_decoder`]) binds them without a host copy, the people and sky head reads
+//! `image_embed` from them (SM3.C), and the sky head reads all three with the encoder input
+//! (SM3.E). S3OD reads its own input image (SM3.C plan, section 2.5).
 
 use std::any::Any;
 use std::path::{Path, PathBuf};
@@ -27,7 +28,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use ort::{
     ep,
     session::{
-        Session, SessionOutputs,
+        Session, SessionInputValue, SessionOutputs,
         builder::{GraphOptimizationLevel, SessionBuilder},
     },
     value::{DynValue, Tensor, TensorRef},
@@ -36,12 +37,13 @@ use ort::{
 use super::backend::{
     HeadOutput, ImageFeatures, SegmentationBackend, SegmentationBackendFactory,
     SegmentationDecoder, SegmentationEncoder, SegmentationHead, SegmentationModelRole,
-    SubjectModel, SubjectOutput, UnsupportedDevice, features_of,
+    SkyHeadModel, SubjectModel, SubjectOutput, UnsupportedDevice, features_of,
 };
 use super::model_set::{
     CENTER_LOGITS_SHAPE, CENTER_OFFSET_SHAPE, DECODER, ENCODER, HEAD, HIGH_RES_FEATS_0_SHAPE,
-    HIGH_RES_FEATS_1_SHAPE, IMAGE_EMBED_SHAPE, LOG_SIZE_SHAPE, ModelSpec, PRESENCE_LOGITS_SHAPE,
-    SKY_LOGITS_SHAPE, SUBJECT, SUBJECT_MASKS_SHAPE, SUBJECT_SCORES_SHAPE,
+    HIGH_RES_FEATS_1_SHAPE, IMAGE_EMBED_SHAPE, LOG_SIZE_SHAPE, ModelSpec, PIXEL_VALUES_SHAPE,
+    PRESENCE_LOGITS_SHAPE, SKY_ALPHA_SHAPE, SKY_HEAD, SKY_LOGITS_SHAPE, SUBJECT,
+    SUBJECT_MASKS_SHAPE, SUBJECT_SCORES_SHAPE,
 };
 use super::ort_decoder::OrtDecoder;
 use super::tensor::TensorF32;
@@ -118,7 +120,9 @@ const DIRECTML_DISABLE_MEMORY_ARENA: &str = "ep.dml.disable_memory_arena";
 fn frees_work_buffers_after_run(role: SegmentationModelRole) -> bool {
     matches!(
         role,
-        SegmentationModelRole::Encoder | SegmentationModelRole::Subject
+        SegmentationModelRole::Encoder
+            | SegmentationModelRole::Subject
+            | SegmentationModelRole::SkyHead
     )
 }
 
@@ -285,6 +289,20 @@ impl SegmentationBackend for OrtSegmentationBackend {
             session: load_session(directory, &SUBJECT, self.device)?,
         }))
     }
+
+    fn load_sky_head(&self, directory: &Path) -> Result<Option<Box<dyn SkyHeadModel>>> {
+        let mut head = OrtSkyHead {
+            session: load_session(directory, &SKY_HEAD, self.device)?,
+        };
+        // The warm-up run, as for the people and sky head (SM3.C plan, decision C10).
+        let zero_features: Arc<dyn ImageFeatures> = Arc::new(OrtImageFeatures::zeros()?);
+        head.run(
+            &zero_features,
+            &TensorF32::zeros(PIXEL_VALUES_SHAPE.to_vec()),
+        )
+        .context("failed to run the sky head at load")?;
+        Ok(Some(Box::new(head)))
+    }
 }
 
 /// Copies the float32 output @p name of @p outputs into a tensor and checks its shape against
@@ -421,6 +439,38 @@ impl SegmentationHead for OrtHead {
     }
 }
 
+struct OrtSkyHead {
+    session: Session,
+}
+
+impl SkyHeadModel for OrtSkyHead {
+    fn run(
+        &mut self,
+        features: &Arc<dyn ImageFeatures>,
+        pixel_values: &TensorF32,
+    ) -> Result<TensorF32> {
+        let features = features_of::<OrtImageFeatures>(features.as_ref())?;
+        let pixel_name = SKY_HEAD.inputs[3];
+        let pixels = TensorRef::from_array_view((pixel_values.shape(), pixel_values.data()))
+            .map_err(|e| anyhow!("failed to bind input {pixel_name}: {e}"))?;
+        let mut inputs: Vec<(&str, SessionInputValue<'_>)> = features
+            .named_values()
+            .map(|(name, value)| (name, value.into()))
+            .collect();
+        inputs.push((pixel_name, pixels.into()));
+        let outputs = self
+            .session
+            .run(inputs)
+            .map_err(|e| anyhow!("failed to run the sky head: {e}"))?;
+        read_output(
+            &outputs,
+            "sky head",
+            SKY_HEAD.onnx_outputs[0],
+            &SKY_ALPHA_SHAPE,
+        )
+    }
+}
+
 struct OrtSubjectModel {
     session: Session,
 }
@@ -491,9 +541,10 @@ mod tests {
     }
 
     #[test]
-    fn only_encoder_and_subject_free_work_buffers_after_run() {
+    fn only_encoder_subject_and_sky_head_free_work_buffers_after_run() {
         assert!(frees_work_buffers_after_run(SegmentationModelRole::Encoder));
         assert!(frees_work_buffers_after_run(SegmentationModelRole::Subject));
+        assert!(frees_work_buffers_after_run(SegmentationModelRole::SkyHead));
         assert!(!frees_work_buffers_after_run(
             SegmentationModelRole::Decoder
         ));
@@ -530,6 +581,11 @@ mod tests {
             .err()
             .expect("missing S3OD file");
         assert!(err.to_string().contains("subject_masks.onnx"), "{err}");
+        let err = backend
+            .load_sky_head(&directory)
+            .err()
+            .expect("missing sky head file");
+        assert!(err.to_string().contains("sky_head.onnx"), "{err}");
         std::fs::remove_dir_all(&directory).expect("remove directory");
     }
 }
