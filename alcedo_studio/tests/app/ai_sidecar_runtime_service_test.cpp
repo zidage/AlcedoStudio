@@ -34,6 +34,7 @@ struct FakeSidecarState {
   std::atomic<bool>              ready{true};
   std::atomic<bool>              model_info_ready{true};
   std::atomic<int>               ping_count{0};
+  std::atomic<int>               get_model_info_calls{0};
   // Ping blocks this long, like a gRPC call to a process that does not listen yet.
   std::atomic<int>               ping_delay_ms{0};
   std::atomic<int>               embed_text_calls{0};
@@ -231,6 +232,7 @@ class FakeSemanticEmbeddingClient final : public sidecar_client::SemanticEmbeddi
   auto GetModelInfo(std::chrono::milliseconds timeout, AiSidecarRuntimeModelInfo* info,
                     std::string* error) -> bool override {
     (void)timeout;
+    state_->get_model_info_calls.fetch_add(1);
     if (!state_->model_info_ready.load()) {
       if (error) *error = "fake semantic model is unavailable";
       return false;
@@ -439,6 +441,7 @@ class FakeSidecarClient final : public sidecar_client::Client {
     state_->list_models_canned = std::move(models);
   }
   auto PingCount() const -> int { return state_->ping_count.load(); }
+  auto GetModelInfoCalls() const -> int { return state_->get_model_info_calls.load(); }
   auto EmbedTextCalls() const -> int { return state_->embed_text_calls.load(); }
   auto EmbedImageBatchCalls() const -> int { return state_->embed_image_batch_calls.load(); }
   auto DescribeImageCalls() const -> int { return state_->describe_image_calls.load(); }
@@ -691,6 +694,31 @@ TEST(AiSidecarRuntimeServiceTest, ModelManagerRuntimeCanStartWithoutModelInfo) {
   EXPECT_EQ(status.issue, AiSidecarRuntimeIssue::kNone);
   EXPECT_FALSE(status.model_info.has_value());
   EXPECT_NE(status.message.find("model manager"), std::string::npos);
+  service.Stop();
+}
+
+// GetModelInfo makes the sidecar prepare the CLIP model profile (#518): a start without the
+// model information requirement (AI Mask) must not ask for it, and a later start that requires
+// it asks the running process.
+TEST(AiSidecarRuntimeServiceTest, StartWithoutModelInfoRequirementDoesNotRequestModelInfo) {
+  auto                    client = std::make_shared<FakeSidecarClient>();
+  AiSidecarRuntimeService service(FakeFactory(client));
+
+  auto                    options = BaseOptions();
+  options.extra_arguments         = {"--sleep-ms", "30000"};
+  options.require_model_info      = false;
+
+  ASSERT_TRUE(service.StartAndWait(options));
+  EXPECT_GT(client->PingCount(), 0);
+  EXPECT_EQ(client->GetModelInfoCalls(), 0);
+  EXPECT_FALSE(service.Status().model_info.has_value());
+
+  options.require_model_info = true;
+  ASSERT_TRUE(service.StartAndWait(options));
+  EXPECT_EQ(client->GetModelInfoCalls(), 1);
+  const auto status = service.Status();
+  ASSERT_TRUE(status.model_info.has_value());
+  EXPECT_EQ(status.model_info->profile_id, "mobileclip2-s2-en");
   service.Stop();
 }
 

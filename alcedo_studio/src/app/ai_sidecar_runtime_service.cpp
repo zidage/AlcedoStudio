@@ -225,7 +225,8 @@ auto AddWindowsUserProxyEnvironment(QProcessEnvironment env) -> QProcessEnvironm
 }
 #endif
 
-/// Result of one readiness poll: Ping, then GetModelInfo when Ping succeeds.
+/// Result of one readiness poll: Ping, then GetModelInfo when Ping succeeds and the start
+/// requires the semantic model information.
 struct ReadinessProbe {
   bool                      ping_ok_       = false;
   bool                      model_info_ok_ = false;
@@ -234,11 +235,14 @@ struct ReadinessProbe {
   std::string               model_info_error_;
 };
 
+/// GetModelInfo makes the sidecar prepare the CLIP model profile (about 2 s), so a start that
+/// does not need the semantic model (AI Mask, image analysis) does not ask for it.
 auto RunReadinessProbe(const std::shared_ptr<sidecar_client::Client>& client,
-                       std::chrono::milliseconds ping_timeout) -> ReadinessProbe {
+                       std::chrono::milliseconds ping_timeout, bool require_model_info)
+    -> ReadinessProbe {
   ReadinessProbe probe;
   probe.ping_ok_ = client->runtime().Ping(ping_timeout, &probe.ping_error_);
-  if (probe.ping_ok_) {
+  if (probe.ping_ok_ && require_model_info) {
     probe.model_info_ok_ = client->semantic().GetModelInfo(
         std::chrono::milliseconds(500), &probe.model_info_, &probe.model_info_error_);
   }
@@ -256,14 +260,16 @@ void PumpEventsFor(std::chrono::milliseconds duration) {
 /// so the blocking gRPC calls (up to ping_timeout + 500 ms while the process boots or loads the
 /// model) do not stop the UI. The helper holds its own reference to @p client.
 auto RunProbeWhilePumpingEvents(std::shared_ptr<sidecar_client::Client> client,
-                                std::chrono::milliseconds ping_timeout) -> ReadinessProbe {
+                                std::chrono::milliseconds ping_timeout, bool require_model_info)
+    -> ReadinessProbe {
   ReadinessProbe probe;
   QEventLoop     loop;
-  std::thread    helper([&probe, &loop, client = std::move(client), ping_timeout]() {
-    probe = RunReadinessProbe(client, ping_timeout);
-    // Queued: the quit runs inside loop.exec(), even when the probe ends before exec starts.
-    QMetaObject::invokeMethod(&loop, &QEventLoop::quit, Qt::QueuedConnection);
-  });
+  std::thread    helper(
+      [&probe, &loop, client = std::move(client), ping_timeout, require_model_info]() {
+        probe = RunReadinessProbe(client, ping_timeout, require_model_info);
+        // Queued: the quit runs inside loop.exec(), even when the probe ends before exec starts.
+        QMetaObject::invokeMethod(&loop, &QEventLoop::quit, Qt::QueuedConnection);
+      });
   loop.exec();
   helper.join();
   return probe;
@@ -863,8 +869,10 @@ auto AiSidecarRuntimeService::WaitForReadiness(bool terminate_on_timeout, bool i
     }
     ReadinessProbe probe;
     if (client_) {
-      probe = interactive ? RunProbeWhilePumpingEvents(client_, options_.health_poll_interval)
-                          : RunReadinessProbe(client_, options_.health_poll_interval);
+      probe = interactive ? RunProbeWhilePumpingEvents(client_, options_.health_poll_interval,
+                                                       options_.require_model_info)
+                          : RunReadinessProbe(client_, options_.health_poll_interval,
+                                              options_.require_model_info);
       if (interactive && process_.state() == QProcess::NotRunning) {
         return false;
       }
