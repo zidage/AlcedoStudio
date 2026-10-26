@@ -290,7 +290,7 @@ impl SegmentationBackend for OrtSegmentationBackend {
         }))
     }
 
-    fn load_sky_head(&self, directory: &Path) -> Result<Option<Box<dyn SkyHeadModel>>> {
+    fn load_sky_head(&self, directory: &Path) -> Result<Box<dyn SkyHeadModel>> {
         let mut head = OrtSkyHead {
             session: load_session(directory, &SKY_HEAD, self.device)?,
         };
@@ -301,7 +301,7 @@ impl SegmentationBackend for OrtSegmentationBackend {
             &TensorF32::zeros(PIXEL_VALUES_SHAPE.to_vec()),
         )
         .context("failed to run the sky head at load")?;
-        Ok(Some(Box::new(head)))
+        Ok(Box::new(head))
     }
 }
 

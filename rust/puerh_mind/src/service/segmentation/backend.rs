@@ -24,7 +24,8 @@ pub enum SegmentationModelRole {
     Encoder,
     /// SAM 2.1 tiny prompt encoder and mask decoder.
     Decoder,
-    /// People and sky head on `image_embed` (Sky and People localization).
+    /// People and sky head on `image_embed` (People localization; its sky outputs are not used
+    /// since the sky head, SM3.E).
     Head,
     /// S3OD `s3od-synth` (Subject and Background).
     Subject,
@@ -117,7 +118,8 @@ pub trait SegmentationDecoder: Send {
     ) -> Result<DecoderOutput>;
 }
 
-/// The outputs of one head run, in the shapes of the model specification.
+/// The outputs of one head run, in the shapes of the model specification. The People list reads
+/// the person outputs; the sky outputs are part of the model output and are not used.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeadOutput {
     /// [1, 1, 64, 64].
@@ -184,9 +186,8 @@ pub trait SegmentationBackend: Send + Sync {
     /// Loads S3OD from @p directory, with the same error rules as the encoder.
     fn load_subject_model(&self, directory: &Path) -> Result<Box<dyn SubjectModel>>;
     /// Loads the sky head from @p directory and runs it once, with the same error rules as the
-    /// encoder. `None`: the platform has no sky head model yet, and Sky uses the people and sky
-    /// head regions (Core ML until issue #538).
-    fn load_sky_head(&self, directory: &Path) -> Result<Option<Box<dyn SkyHeadModel>>>;
+    /// encoder.
+    fn load_sky_head(&self, directory: &Path) -> Result<Box<dyn SkyHeadModel>>;
 }
 
 /// A device value that the platform does not support.

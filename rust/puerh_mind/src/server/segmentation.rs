@@ -393,7 +393,6 @@ impl SegmentationService for SegmentationServiceImpl {
             response.message = result.message;
             response.presence = result.presence;
             response.presence_threshold = result.presence_threshold;
-            response.region_count = result.region_count;
             response.subject_score = result.subject_score;
             response.mask_area = result.mask_area;
             response.model_ms = result.model_ms as i64;
@@ -418,22 +417,15 @@ impl SegmentationService for SegmentationServiceImpl {
                 response.found = true;
                 response.mask_width = mask.width;
                 response.mask_height = mask.height;
-                match mask.values {
-                    TaskMaskValues::Binary(values) => {
-                        response.mask_kind = SegmentationTaskMaskKind::Binary as i32;
-                        response.mask_r8 = values;
-                    }
-                    TaskMaskValues::Alpha { values, mask_box } => {
-                        response.mask_kind = SegmentationTaskMaskKind::Alpha as i32;
-                        response.alpha_values = values;
-                        response.mask_box = Some(SegmentationBox {
-                            x0: mask_box.x0,
-                            y0: mask_box.y0,
-                            x1: mask_box.x1,
-                            y1: mask_box.y1,
-                        });
-                    }
-                }
+                let TaskMaskValues::Alpha { values, mask_box } = mask.values;
+                response.mask_kind = SegmentationTaskMaskKind::Alpha as i32;
+                response.alpha_values = values;
+                response.mask_box = Some(SegmentationBox {
+                    x0: mask_box.x0,
+                    y0: mask_box.y0,
+                    x1: mask_box.x1,
+                    y1: mask_box.y1,
+                });
             }
         }
         Ok(Response::new(response))
@@ -741,7 +733,7 @@ mod tests {
         );
         assert!(!sky.found);
         assert!(sky.message.starts_with("No sky found"), "{}", sky.message);
-        assert!(sky.mask_r8.is_empty() && sky.alpha_values.is_empty());
+        assert!(sky.alpha_values.is_empty());
         assert!(sky.mask_box.is_none());
         assert_eq!(sky.presence, 0.0);
         assert_eq!(
@@ -808,14 +800,12 @@ mod tests {
             (SKY_ALPHA_SIZE as u32, SKY_ALPHA_SIZE as u32)
         );
         assert_eq!(sky.alpha_values, alpha);
-        assert!(sky.mask_r8.is_empty());
         let mask_box = sky.mask_box.expect("mask box");
         assert_eq!(
             (mask_box.x0, mask_box.y0, mask_box.x1, mask_box.y1),
             (0.0, 0.0, 1.0, 1.0)
         );
         assert_eq!(sky.mask_area, 3 * SKY_ALPHA_SIZE as u32);
-        assert_eq!(sky.region_count, 0);
     }
 
     /// A service whose fake head lists one person (a 4 x 8 cell box centered on the head grid cell
@@ -888,7 +878,6 @@ mod tests {
         // The 640 x 480 image resized to a long edge of 1024.
         assert_eq!((people.mask_width, people.mask_height), (1024, 768));
         assert_eq!(people.alpha_values.len(), 1024 * 768);
-        assert!(people.mask_r8.is_empty());
         let mask_box = people.mask_box.expect("mask box");
         assert_eq!(
             (mask_box.x0, mask_box.y0, mask_box.x1, mask_box.y1),

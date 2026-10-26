@@ -96,8 +96,6 @@ pub fn empty_head_output() -> HeadOutput {
 pub struct FakeFactory {
     pub calls: Arc<FakeCalls>,
     pub failing_role: Option<SegmentationModelRole>,
-    /// False: the backend has no sky head, as the Core ML backend until issue #538.
-    pub has_sky_head: bool,
 }
 
 impl FakeFactory {
@@ -105,15 +103,6 @@ impl FakeFactory {
         Self {
             calls: Arc::new(FakeCalls::default()),
             failing_role: None,
-            has_sky_head: true,
-        }
-    }
-
-    /// A factory whose backend has no sky head (the Sky regions of the people and sky head).
-    pub fn without_sky_head() -> Self {
-        Self {
-            has_sky_head: false,
-            ..Self::new()
         }
     }
 }
@@ -129,7 +118,6 @@ impl SegmentationBackendFactory for FakeFactory {
             device: device.to_string(),
             calls: self.calls.clone(),
             failing_role: self.failing_role,
-            has_sky_head: self.has_sky_head,
         }))
     }
 }
@@ -138,7 +126,6 @@ struct FakeBackend {
     device: String,
     calls: Arc<FakeCalls>,
     failing_role: Option<SegmentationModelRole>,
-    has_sky_head: bool,
 }
 
 impl FakeBackend {
@@ -188,14 +175,11 @@ impl SegmentationBackend for FakeBackend {
         }))
     }
 
-    fn load_sky_head(&self, _directory: &Path) -> Result<Option<Box<dyn SkyHeadModel>>> {
-        if !self.has_sky_head {
-            return Ok(None);
-        }
+    fn load_sky_head(&self, _directory: &Path) -> Result<Box<dyn SkyHeadModel>> {
         self.count_load(SegmentationModelRole::SkyHead)?;
-        Ok(Some(Box::new(FakeSkyHead {
+        Ok(Box::new(FakeSkyHead {
             calls: self.calls.clone(),
-        })))
+        }))
     }
 }
 
@@ -337,7 +321,6 @@ impl SegmentationDecoder for FakeDecoder {
 
 /// The thresholds of the lab head (`people_sky_head.json`, the fields that the engine reads).
 pub const FAKE_HEAD_THRESHOLDS: &str = r#"{"validation": {
-    "presence_best_f1_sky": {"threshold": 0.4231989085674286},
     "presence_best_f1_person": {"threshold": 0.533202052116394},
     "person_list_best_f1_nms": {"threshold": 0.3132133185863495}}}"#;
 

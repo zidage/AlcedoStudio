@@ -55,15 +55,8 @@ struct AiMaskAlphaGrid {
   AiMaskAlphaGain    gain = AiMaskAlphaGain::kHalfUpscaleFactor;
 };
 
-/// An R8 mask at the session image size (Sky of a sidecar without the sky head).
-struct AiMaskBinaryR8 {
-  std::uint32_t             width  = 0;
-  std::uint32_t             height = 0;
-  std::vector<std::uint8_t> values;
-};
-
 /// One model output in its native grid.
-using AiMaskModelOutput = std::variant<AiMaskSamLogits, AiMaskAlphaGrid, AiMaskBinaryR8>;
+using AiMaskModelOutput = std::variant<AiMaskSamLogits, AiMaskAlphaGrid>;
 
 /**
  * @brief The analysis image that guides the upscale of an alpha grid (#522, master plan D23).
@@ -85,7 +78,7 @@ struct AiMaskCoverageGuide {
 
 /**
  * @brief Check that @p output has a consistent grid: a non-empty size and a value count equal to
- * the grid size; an alpha box with ordered corners in [0, 1]; an R8 mask of the size @p extent.
+ * the grid size; an alpha box with ordered corners in [0, 1].
  *
  * @throws std::invalid_argument naming the first rule that fails.
  */
@@ -103,8 +96,7 @@ void               ValidateAiMaskModelOutput(const AiMaskModelOutput& output, Ex
  * standard deviation of the window (at least 0.01). The value is then
  * `round(clamp((alpha - 0.5) * gain + 0.5) * 255)` with ties to even. With
  * AiMaskAlphaGain::kHalfUpscaleFactor, gain is half the larger upscale factor of the two axes and
- * at least 1; with AiMaskAlphaGain::kOne, gain is 1. The other pixels are 0. R8 mask: the values
- * as given.
+ * at least 1; with AiMaskAlphaGain::kOne, gain is 1. The other pixels are 0.
  *
  * @param guide The session image for the alpha grid edges; null uses the spatial weight only.
  * @return @p extent.width * @p extent.height values, row-major.

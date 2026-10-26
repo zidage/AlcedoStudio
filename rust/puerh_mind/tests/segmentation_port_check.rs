@@ -18,10 +18,8 @@
 //! - `ALCEDO_SEGMENTATION_PORT_CHECK_DEVICE`: optional device value (`""` is the platform default).
 //!
 //! Task masks (SM3.C and SM3.D): when the reference has task masks, every photo also runs Sky,
-//! People, Person (each listed person), Subject, and Background. The Sky region count, the People
-//! list length, and the list boxes (within 1e-3 cell) must match; the Sky union must have an IoU of
-//! at least 0.999 at the photo size against the union of the reference masks; the Subject and
-//! Background alpha >= 0.5 must have an IoU of at least 0.998 on the S3OD grid; the People alpha
+//! People, Person (each listed person), Subject, and Background. The People list length and the
+//! list boxes (within 1e-3 cell) must match; the Subject and Background alpha >= 0.5 must have an IoU of at least 0.998 on the S3OD grid; the People alpha
 //! must equal the Subject alpha. For each person, the crop rectangle must be equal in pixels, the
 //! crop alpha >= 0.5 must have an IoU of at least 0.998 on the crop grid, `subject_fraction` must
 //! be within 0.01, and `in_subject` must be equal when the reference fraction is more than 0.01
@@ -30,9 +28,8 @@
 //! its grid pixels different. A key-only start of a cached photo must read the stored
 //! Subject result and give the same person alphas.
 //!
-//! Sky head (SM3.E): when the engine has a sky head, Sky is compared with the sky head reference
-//! (`tasks.sky_head`) instead of the MVP Sky. "Found" must be equal unless the reference sky share
-//! is within `SKY_FOUND_SHARE_MARGIN` of `SKY_FOUND_SHARE`. A found sky alpha must have the
+//! Sky (SM3.E): Sky is compared with the sky head reference (`tasks.sky_head`). "Found" must be
+//! equal unless the reference sky share is within `SKY_FOUND_SHARE_MARGIN` of `SKY_FOUND_SHARE`. A found sky alpha must have the
 //! 1024 x 1024 grid and the whole-image box, an IoU of its values >= 0.5 of at least
 //! `MIN_SKY_IOU`, and a largest alpha difference of at most `MAX_SKY_ALPHA_DIFFERENCE`.
 //!
@@ -43,7 +40,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use alcedo_mind::service::segmentation::backend::SegmentationModelRole;
 use alcedo_mind::service::segmentation::engine::{
     IMAGE_EMBEDDING_CACHE_CAPACITY, MaskBox, RgbImageView, SegmentationEngine, SegmentationError,
     SegmentationTask, StartSessionRequest, TaskMaskValues, TaskRequest, TaskResult,
@@ -272,7 +268,7 @@ fn decode_and_compare(
 /// Times and sizes of the task requests of the whole check; times in milliseconds.
 #[derive(Default)]
 struct TaskTimes {
-    /// The first Sky request of each photo: the region decodes (the head output is stored).
+    /// The first Sky request of each photo: the sky head run.
     first_sky_ms: Vec<u64>,
     /// The first People request of each photo with people: S3OD on the photo with its pre- and
     /// postprocessing.
@@ -302,115 +298,15 @@ fn run_task(
 
 /// The alpha values and the mask box of an alpha task mask.
 fn alpha_values(result: &TaskResult, label: &str) -> (Vec<f32>, MaskBox) {
-    match &result.mask.as_ref().expect("mask").values {
-        TaskMaskValues::Alpha { values, mask_box } => (values.clone(), *mask_box),
-        TaskMaskValues::Binary(_) => panic!("{label}: the mask must be an alpha mask"),
-    }
+    let Some(mask) = &result.mask else {
+        panic!("{label}: no mask");
+    };
+    let TaskMaskValues::Alpha { values, mask_box } = &mask.values;
+    (values.clone(), *mask_box)
 }
 
 /// The alpha values of the Person result of each listed person of each photo (`None`: not found).
 type PersonAlphas = BTreeMap<String, Vec<Option<Vec<f32>>>>;
-
-/// Union at the photo size of the reference logits files @p files (the MVP union).
-fn reference_union(
-    files: &[&str],
-    reference_dir: &Path,
-    (width, height): (usize, usize),
-) -> Vec<bool> {
-    let mut union = vec![false; width * height];
-    for file in files {
-        let mask = mask_at_photo_size(&read_f32(&reference_dir.join(file)), width, height);
-        for (target, inside) in union.iter_mut().zip(mask) {
-            *target |= inside;
-        }
-    }
-    union
-}
-
-/// Compares an R8 union task mask with the union of the reference logits @p files at the photo
-/// size.
-fn compare_binary_union(
-    result: &TaskResult,
-    files: &[&str],
-    reference_dir: &Path,
-    size: (usize, usize),
-    label: &str,
-    comparison: &mut Comparison,
-) {
-    let Some(mask) = &result.mask else {
-        comparison
-            .failures
-            .push(format!("{label}: no mask, reference found"));
-        return;
-    };
-    let TaskMaskValues::Binary(values) = &mask.values else {
-        panic!("{label}: the mask must be an R8 mask");
-    };
-    assert_eq!(
-        (mask.width as usize, mask.height as usize),
-        size,
-        "{label}: the union mask has the photo size"
-    );
-    let inside: Vec<bool> = values.iter().map(|value| *value == 255).collect();
-    let photo_iou = iou(&inside, &reference_union(files, reference_dir, size));
-    comparison.compared += 1;
-    comparison.minimum_iou = comparison.minimum_iou.min(photo_iou);
-    println!("{label}: photo IoU {photo_iou:.6}");
-    if photo_iou < MIN_PHOTO_IOU {
-        comparison
-            .failures
-            .push(format!("{label}: photo IoU {photo_iou:.6}"));
-    }
-}
-
-/// Compares the MVP Sky result @p sky with the Sky regions of @p tasks (SM3.C plan, section 8).
-fn compare_sky_regions(
-    sky: &TaskResult,
-    tasks: &Value,
-    reference_dir: &Path,
-    size: (usize, usize),
-    name: &str,
-    comparison: &mut Comparison,
-) {
-    let reference_regions: Vec<&str> = tasks["sky"]["regions"]
-        .as_array()
-        .expect("sky regions")
-        .iter()
-        .map(|region| region["logits"].as_str().expect("logits"))
-        .collect();
-    println!(
-        "{name} sky: presence {:.4} (reference {:.4}), regions {} (reference {}), {} ms, {}",
-        sky.presence,
-        tasks["sky_presence"].as_f64().expect("sky presence"),
-        sky.region_count,
-        reference_regions.len(),
-        sky.model_ms,
-        sky.message
-    );
-    if sky.region_count as usize != reference_regions.len() {
-        comparison.failures.push(format!(
-            "{name} sky: {} regions, reference {}",
-            sky.region_count,
-            reference_regions.len()
-        ));
-    } else if reference_regions.is_empty() {
-        if sky.mask.is_some() {
-            comparison
-                .failures
-                .push(format!("{name} sky: a mask, reference not found"));
-        }
-    } else {
-        let label = format!("{name} sky union");
-        compare_binary_union(
-            sky,
-            &reference_regions,
-            reference_dir,
-            size,
-            &label,
-            comparison,
-        );
-    }
-}
 
 /// Compares the sky head result @p sky with the sky head reference @p reference (SM3.E plan).
 fn compare_sky_alpha(
@@ -482,8 +378,7 @@ fn compare_sky_alpha(
 }
 
 /// Runs the task masks on @p session_id and compares them with the task reference of @p photo
-/// (SM3.C plan, section 8; SM3.D plan, section 8.3; SM3.E plan). With @p has_sky_head, Sky is
-/// compared with the sky head reference.
+/// (SM3.C plan, section 8; SM3.D plan, section 8.3; SM3.E plan).
 #[allow(clippy::too_many_arguments)]
 fn compare_tasks(
     engine: &SegmentationEngine,
@@ -491,7 +386,6 @@ fn compare_tasks(
     photo: &Value,
     reference_dir: &Path,
     size: (usize, usize),
-    has_sky_head: bool,
     comparison: &mut Comparison,
     times: &mut TaskTimes,
     person_alphas: &mut PersonAlphas,
@@ -502,16 +396,12 @@ fn compare_tasks(
     // Sky.
     let sky = run_task(engine, session_id, SegmentationTask::Sky, None, name);
     times.first_sky_ms.push(sky.model_ms);
-    if has_sky_head {
-        let reference = &tasks["sky_head"];
-        assert!(
-            reference.is_object(),
-            "{name}: the engine has a sky head, but the reference has no sky head result"
-        );
-        compare_sky_alpha(&sky, reference, reference_dir, name, comparison);
-    } else {
-        compare_sky_regions(&sky, tasks, reference_dir, size, name, comparison);
-    }
+    let reference = &tasks["sky_head"];
+    assert!(
+        reference.is_object(),
+        "{name}: the reference has no sky head result"
+    );
+    compare_sky_alpha(&sky, reference, reference_dir, name, comparison);
 
     // People (SM3.D plan, section 8.3).
     let people = run_task(engine, session_id, SegmentationTask::People, None, name);
@@ -842,10 +732,6 @@ fn segmentation_port_check_matches_reference_masks() {
         maximum_sky_alpha_difference: 0.0,
         sky_alphas_compared: 0,
     };
-    let has_sky_head = status
-        .models
-        .iter()
-        .any(|model| model.role == SegmentationModelRole::SkyHead);
     println!(
         "S3OD device {subject_device}: minimum person crop IoU {}, or at most {} % different pixels",
         comparison.minimum_person_iou,
@@ -897,7 +783,6 @@ fn segmentation_port_check_matches_reference_masks() {
                 photo,
                 &reference_dir,
                 size,
-                has_sky_head,
                 &mut comparison,
                 &mut task_times,
                 &mut person_alphas,
@@ -1060,14 +945,12 @@ fn segmentation_port_check_matches_reference_masks() {
             );
         }
     }
-    if has_sky_head {
-        println!(
-            "sky head: {} alphas compared, minimum grid IoU {:.6}, max |alpha difference| {:.5}",
-            comparison.sky_alphas_compared,
-            comparison.minimum_sky_iou,
-            comparison.maximum_sky_alpha_difference
-        );
-    }
+    println!(
+        "sky head: {} alphas compared, minimum grid IoU {:.6}, max |alpha difference| {:.5}",
+        comparison.sky_alphas_compared,
+        comparison.minimum_sky_iou,
+        comparison.maximum_sky_alpha_difference
+    );
     engine.unload().expect("unload");
     assert!(
         comparison.failures.is_empty(),

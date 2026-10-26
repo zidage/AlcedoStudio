@@ -12,9 +12,8 @@
 //! The task masks (SM3.C, SM3.D, and SM3.E plans) run the people and sky head, the decoder, S3OD,
 //! and the sky head with the rules of [`super::task_masks`] and keep their results in the image
 //! entry. The people and sky head runs once at the session start; it makes the People list and the
-//! person crops (SM3.D decision E5). The sky head runs at the first Sky request of an image. A
-//! backend without a sky head (Core ML until issue #538) makes Sky from the people and sky head
-//! regions (SM3.C plan, section 2.3).
+//! person crops (SM3.D decision E5). The sky head runs at the first Sky request of an image, on
+//! every backend (SM3.E plan; Core ML since issue #538).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -29,7 +28,7 @@ use super::backend::{
     SegmentationEncoder, SegmentationHead, SegmentationModelRole, SkyHeadModel, SubjectModel,
 };
 use super::image_embedding_cache::ImageEmbeddingCache;
-use super::image_entry::{ImageEntry, PeopleList, PersonCrop, ResultSlot, SkyMask, SkyResult};
+use super::image_entry::{ImageEntry, PeopleList, PersonCrop, ResultSlot, SkyResult};
 use super::model_set::{
     HEAD_THRESHOLDS_FILE, MASK_INPUT_SHAPE, MAX_IMAGE_EDGE, MODEL_SET_ID, SKY_ALPHA_SIZE,
 };
@@ -174,13 +173,10 @@ impl MaskBox {
 /// The values of a task mask, row-major.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskMaskValues {
-    /// Sky without a sky head: the union mask at the session image size, R8, `MASK_INSIDE` (255)
-    /// inside and 0 outside (SM3.C plan, decision C5).
-    Binary(Vec<u8>),
     /// Subject, Background, People, and Person: S3OD alpha in [0, 1] on the unpadded S3OD grid;
     /// inside where >= 0.5. The grid covers `mask_box` of the session image (SM3.D decision E10):
-    /// the whole image, or the crop rectangle of a person. Sky with the sky head: the sky alpha on
-    /// the 1024 x 1024 grid of the stretched image; `mask_box` is the whole image (SM3.E plan).
+    /// the whole image, or the crop rectangle of a person. Sky: the sky head alpha on the
+    /// 1024 x 1024 grid of the stretched image; `mask_box` is the whole image (SM3.E plan).
     Alpha { values: Vec<f32>, mask_box: MaskBox },
 }
 
@@ -215,7 +211,6 @@ pub struct TaskResult {
     pub message: String,
     pub presence: f32,
     pub presence_threshold: f32,
-    pub region_count: u32,
     /// People and Person: the full People list.
     pub people: Vec<PersonListEntry>,
     /// Subject, Background, People: the S3OD IoU score of the photo run; Person: of the crop run.
@@ -235,8 +230,7 @@ struct LoadedModelSet {
     decoder: Mutex<Box<dyn SegmentationDecoder>>,
     head: Mutex<Box<dyn SegmentationHead>>,
     subject: Mutex<Box<dyn SubjectModel>>,
-    /// `None` when the backend has no sky head (Core ML until issue #538).
-    sky_head: Option<Mutex<Box<dyn SkyHeadModel>>>,
+    sky_head: Mutex<Box<dyn SkyHeadModel>>,
 }
 
 /// See the module documentation.
@@ -292,23 +286,6 @@ fn read_head_thresholds(directory: &Path) -> Result<HeadThresholds, Segmentation
         .map_err(|err| SegmentationError::ModelNotReady(format!("{}: {err:#}", path.display())))
 }
 
-/// The union of the SAM 2.1 masks @p members at the image size of @p entry, with its area (Sky).
-fn union_mask<'a>(
-    entry: &ImageEntry,
-    members: impl IntoIterator<Item = &'a [f32]>,
-) -> (TaskMask, u32) {
-    let union = task_masks::union_mask(members, entry.width, entry.height);
-    let area = task_masks::mask_area(&union);
-    (
-        TaskMask {
-            width: entry.width as u32,
-            height: entry.height as u32,
-            values: TaskMaskValues::Binary(union),
-        },
-        area,
-    )
-}
-
 fn alpha_mask(alpha: &SubjectAlpha, values: Vec<f32>, mask_box: MaskBox) -> TaskMask {
     TaskMask {
         width: alpha.width as u32,
@@ -328,7 +305,7 @@ fn people_list_of(
     width: usize,
     height: usize,
 ) -> anyhow::Result<PeopleList> {
-    let (_, presence) = task_masks::presences(head);
+    let presence = task_masks::person_presence(head);
     let threshold = thresholds.person_presence;
     let mut people = PeopleList {
         presence,
@@ -467,9 +444,8 @@ impl SegmentationEngine {
         Ok(())
     }
 
-    /// Loads the encoder, the decoder, the people and sky head, S3OD, the sky head (when the backend
-    /// has one), and the head thresholds from @p directory on @p device (SM3.C plan, decision C6;
-    /// SM3.E plan).
+    /// Loads the encoder, the decoder, the people and sky head, S3OD, the sky head, and the head
+    /// thresholds from @p directory on @p device (SM3.C plan, decision C6; SM3.E plan).
     ///
     /// The same directory and device again keep the loaded models, the sessions, and the cache.
     /// Another directory or device ends all sessions, clears the cache, and unloads the old models
@@ -527,26 +503,24 @@ impl SegmentationEngine {
         let subject_residency = residency(SegmentationModelRole::Subject, started);
         let started = Instant::now();
         let sky_head = backend.load_sky_head(directory).map_err(not_ready)?;
-        let mut residencies = vec![
-            encoder_residency,
-            decoder_residency,
-            head_residency,
-            subject_residency,
-        ];
-        if sky_head.is_some() {
-            residencies.push(residency(SegmentationModelRole::SkyHead, started));
-        }
+        let sky_head_residency = residency(SegmentationModelRole::SkyHead, started);
         *models = Some(LoadedModelSet {
             directory: directory.to_path_buf(),
             device: device_label,
             backend: backend.backend_name().to_string(),
-            models: residencies,
+            models: vec![
+                encoder_residency,
+                decoder_residency,
+                head_residency,
+                subject_residency,
+                sky_head_residency,
+            ],
             thresholds,
             encoder: Mutex::new(encoder),
             decoder: Mutex::new(decoder),
             head: Mutex::new(head),
             subject: Mutex::new(subject),
-            sky_head: sky_head.map(Mutex::new),
+            sky_head: Mutex::new(sky_head),
         });
         Ok(())
     }
@@ -628,7 +602,7 @@ impl SegmentationEngine {
     /// encoder. Otherwise the encoder runs once on the pixels, the S3OD input image is made from
     /// them (SM3.C plan, decision C8), the head runs on the encoder output, and the People list
     /// and the person crops are made from the head output and the pixels (SM3.D decisions E4 and
-    /// E5); with a sky head, the entry keeps the encoder input for it (SM3.E plan). A non-empty
+    /// E5); the entry keeps the encoder input for the sky head (SM3.E plan). A non-empty
     /// key stores the new image entry in the cache. A request without pixels and
     /// with an unknown key fails with `ImageNotCached`. A failure of a model run is an `Inference`
     /// error. No session and no cache entry is kept after a failure.
@@ -692,12 +666,11 @@ impl SegmentationEngine {
         )
         .map_err(inference)?;
         let encoder_ms = elapsed_ms(started);
-        let encoder_input = loaded.sky_head.is_some().then_some(pixels);
         let entry = Arc::new(ImageEntry::new(
             width as usize,
             height as usize,
             features,
-            encoder_input,
+            pixels,
             subject_input,
             head,
             people,
@@ -772,18 +745,6 @@ impl SegmentationEngine {
         sam2::select_masks(&output.mask_logits, &output.iou_scores, is_click).map_err(inference)
     }
 
-    /// Runs the decoder once with @p prompt (several points or a box) on @p features and returns
-    /// the logits of the selected mask.
-    fn decode_single_mask(
-        loaded: &LoadedModelSet,
-        features: &Arc<dyn ImageFeatures>,
-        prompt: SegmentationPrompt,
-    ) -> Result<Vec<f32>, SegmentationError> {
-        let mut masks = Self::decode_features(loaded, features, prompt)?;
-        let selected = masks.selected_index;
-        Ok(masks.masks.swap_remove(selected).logits)
-    }
-
     /// Runs the task mask @p request on the image of @p session_id (SM3.C plan, section 2; SM3.D
     /// plan, sections 2.1 to 2.4).
     ///
@@ -824,9 +785,8 @@ impl SegmentationEngine {
         loaded: &LoadedModelSet,
         entry: &ImageEntry,
     ) -> Result<(TaskResult, bool), SegmentationError> {
-        let (sky, computed) = result_of(&entry.sky, || match &loaded.sky_head {
-            Some(sky_head) => Self::compute_sky_alpha(sky_head, entry),
-            None => Self::compute_sky_regions(loaded, entry, &entry.head),
+        let (sky, computed) = result_of(&entry.sky, || {
+            Self::compute_sky_alpha(&loaded.sky_head, entry)
         })?;
         let mut result = TaskResult {
             presence: sky.presence,
@@ -834,25 +794,16 @@ impl SegmentationEngine {
             message: sky.message.clone(),
             ..Default::default()
         };
-        match &sky.mask {
-            None => {}
-            Some(SkyMask::Alpha(values)) => {
-                result.mask_area = task_masks::alpha_area(values);
-                result.mask = Some(TaskMask {
-                    width: SKY_ALPHA_SIZE as u32,
-                    height: SKY_ALPHA_SIZE as u32,
-                    values: TaskMaskValues::Alpha {
-                        values: values.clone(),
-                        mask_box: MaskBox::FULL_IMAGE,
-                    },
-                });
-            }
-            Some(SkyMask::RegionLogits(regions)) => {
-                let (mask, area) = union_mask(entry, regions.iter().map(Vec::as_slice));
-                result.region_count = regions.len() as u32;
-                result.mask_area = area;
-                result.mask = Some(mask);
-            }
+        if let Some(values) = &sky.alpha {
+            result.mask_area = task_masks::alpha_area(values);
+            result.mask = Some(TaskMask {
+                width: SKY_ALPHA_SIZE as u32,
+                height: SKY_ALPHA_SIZE as u32,
+                values: TaskMaskValues::Alpha {
+                    values: values.clone(),
+                    mask_box: MaskBox::FULL_IMAGE,
+                },
+            });
         }
         Ok((result, computed))
     }
@@ -863,16 +814,11 @@ impl SegmentationEngine {
         sky_head: &Mutex<Box<dyn SkyHeadModel>>,
         entry: &ImageEntry,
     ) -> Result<SkyResult, SegmentationError> {
-        let encoder_input = entry.encoder_input.as_ref().ok_or_else(|| {
-            SegmentationError::Inference(
-                "the image entry has no encoder input for the sky head".to_string(),
-            )
-        })?;
         let started = Instant::now();
         let alpha = sky_head
             .lock()
             .map_err(|_| poisoned("sky head"))?
-            .run(&entry.features, encoder_input)
+            .run(&entry.features, &entry.encoder_input)
             .map_err(inference)?
             .into_data();
         info!("ran the sky head in {} ms", elapsed_ms(started));
@@ -881,7 +827,7 @@ impl SegmentationEngine {
         let mut sky = SkyResult {
             presence: share,
             presence_threshold: threshold,
-            mask: None,
+            alpha: None,
             message: String::new(),
         };
         if share < threshold {
@@ -893,48 +839,7 @@ impl SegmentationEngine {
             );
             return Ok(sky);
         }
-        sky.mask = Some(SkyMask::Alpha(alpha));
-        Ok(sky)
-    }
-
-    /// Sky rule of the SM3.C plan, section 2.3, for a backend without a sky head.
-    fn compute_sky_regions(
-        loaded: &LoadedModelSet,
-        entry: &ImageEntry,
-        head: &HeadOutput,
-    ) -> Result<SkyResult, SegmentationError> {
-        let (presence, _) = task_masks::presences(head);
-        let threshold = loaded.thresholds.sky_presence;
-        let mut sky = SkyResult {
-            presence,
-            presence_threshold: threshold,
-            mask: None,
-            message: String::new(),
-        };
-        if presence < threshold {
-            sky.message =
-                format!("No sky found: sky presence {presence:.3} is below {threshold:.3}.");
-            return Ok(sky);
-        }
-        let probability = task_masks::sky_probability(head);
-        let regions = task_masks::sky_regions(&probability);
-        if regions.is_empty() {
-            sky.message = format!(
-                "No sky found: presence {presence:.3}, but no region of at least {} cells with sky probability >= {}.",
-                task_masks::SKY_POINTS_PER_REGION,
-                task_masks::SKY_CELL_PROBABILITY
-            );
-            return Ok(sky);
-        }
-        let mut region_logits = Vec::with_capacity(regions.len());
-        for region in &regions {
-            let prompt = SegmentationPrompt {
-                points: task_masks::region_points(&probability, region),
-                ..Default::default()
-            };
-            region_logits.push(Self::decode_single_mask(loaded, &entry.features, prompt)?);
-        }
-        sky.mask = Some(SkyMask::RegionLogits(region_logits));
+        sky.alpha = Some(alpha);
         Ok(sky)
     }
 
@@ -1660,14 +1565,13 @@ mod tests {
     }
 
     fn alpha_of(result: &TaskResult) -> (&[f32], MaskBox) {
-        match &result.mask.as_ref().expect("mask").values {
-            TaskMaskValues::Alpha { values, mask_box } => (values, *mask_box),
-            TaskMaskValues::Binary(_) => panic!("the mask must be an alpha mask"),
-        }
+        let TaskMaskValues::Alpha { values, mask_box } =
+            &result.mask.as_ref().expect("mask").values;
+        (values, *mask_box)
     }
 
     #[test]
-    fn load_reports_sky_head_only_when_backend_has_one_and_fails_without_thresholds() {
+    fn load_reports_all_five_models_and_fails_without_thresholds() {
         let (engine, _calls) = loaded_engine();
         let roles: Vec<SegmentationModelRole> = engine
             .status()
@@ -1677,16 +1581,6 @@ mod tests {
             .map(|model| model.role)
             .collect();
         assert_eq!(roles, SegmentationModelRole::ALL.to_vec());
-        let (without, _calls) = engine_with(FakeFactory::without_sky_head());
-        without.load(&model_directory("a"), "fake").expect("load");
-        let roles: Vec<SegmentationModelRole> = without
-            .status()
-            .expect("status")
-            .models
-            .iter()
-            .map(|model| model.role)
-            .collect();
-        assert_eq!(roles, SegmentationModelRole::ALL[..4].to_vec());
 
         let empty = std::env::temp_dir().join(format!(
             "alcedo-segmentation-no-thresholds-{}",
@@ -1781,68 +1675,6 @@ mod tests {
         ));
     }
 
-    /// A loaded engine whose backend has no sky head (Core ML until issue #538).
-    fn loaded_engine_without_sky_head() -> (SegmentationEngine, Arc<FakeCalls>) {
-        let (engine, calls) = engine_with(FakeFactory::without_sky_head());
-        engine.load(&model_directory("a"), "fake").expect("load");
-        (engine, calls)
-    }
-
-    #[test]
-    fn run_task_sky_without_sky_head_unions_regions_and_reports_not_found() {
-        let (engine, calls) = loaded_engine_without_sky_head();
-        let session = start(&engine).expect("start");
-        let result = engine
-            .run_task(&session.session_id, task(SegmentationTask::Sky))
-            .expect("sky without presence");
-        assert!(result.mask.is_none());
-        assert!(
-            result.message.starts_with("No sky found: sky presence"),
-            "{}",
-            result.message
-        );
-        assert_eq!(calls.decoder_calls.lock().expect("calls").len(), 0);
-
-        set_head(&calls, head_output([5.0, -5.0], &[]));
-        let session = start(&engine).expect("second image");
-        let result = engine
-            .run_task(&session.session_id, task(SegmentationTask::Sky))
-            .expect("sky");
-        let mask = result.mask.expect("sky mask");
-        // The union mask has the size of the 64 x 48 session image.
-        assert_eq!((mask.width, mask.height), (64, 48));
-        let TaskMaskValues::Binary(values) = &mask.values else {
-            panic!("the sky mask must be an R8 mask");
-        };
-        assert_eq!(values.len(), 64 * 48);
-        assert_eq!(result.region_count, 1);
-        assert_eq!(result.mask_area, task_masks::mask_area(values));
-        assert!(result.mask_area > 0);
-        assert!(result.model_ms <= 1000);
-        let decoder_calls = calls.decoder_calls.lock().expect("calls");
-        assert_eq!(decoder_calls.len(), 1);
-        assert_eq!(decoder_calls[0].prompt.point_count(), 3);
-        assert_eq!(decoder_calls[0].prompt.has_mask_input.data(), &[0.0]);
-    }
-
-    #[test]
-    fn run_task_sky_without_sky_head_reads_stored_head() {
-        let (engine, calls) = loaded_engine_without_sky_head();
-        set_head(&calls, head_output([5.0, 5.0], &[(10, 10, 3.0)]));
-        let session = start_keyed(&engine, "photo-a").expect("start");
-        engine
-            .run_task(&session.session_id, task(SegmentationTask::Sky))
-            .expect("sky");
-        engine.end_session(&session.session_id).expect("end");
-        let cached = start_key_only(&engine, "photo-a").expect("cached start");
-        let sky = engine
-            .run_task(&cached.session_id, task(SegmentationTask::Sky))
-            .expect("cached sky");
-        assert_eq!(sky.model_ms, 0);
-        assert_eq!(calls.head_runs.load(Ordering::SeqCst), 1);
-        assert_eq!(calls.decoder_calls.lock().expect("calls").len(), 1);
-    }
-
     /// A sky alpha of the fake sky head whose first @p inside values are 0.9; the others are 0.2.
     fn sky_alpha_with_inside(inside: usize) -> Vec<f32> {
         let mut alpha = vec![0.2f32; SKY_ALPHA_SIZE * SKY_ALPHA_SIZE];
@@ -1877,7 +1709,6 @@ mod tests {
         assert_eq!(values, sky_alpha_with_inside(2 * SKY_ALPHA_SIZE).as_slice());
         assert_eq!(mask_box, MaskBox::FULL_IMAGE);
         assert_eq!(result.mask_area, 2 * SKY_ALPHA_SIZE as u32);
-        assert_eq!(result.region_count, 0);
         assert_eq!(result.presence, 2.0 / SKY_ALPHA_SIZE as f32);
         assert_eq!(result.presence_threshold, task_masks::SKY_FOUND_SHARE);
         assert_eq!(calls.sky_head_runs.load(Ordering::SeqCst), 1);
@@ -1964,23 +1795,14 @@ mod tests {
     }
 
     #[test]
-    fn image_entry_keeps_encoder_input_only_with_sky_head() {
+    fn image_entry_keeps_encoder_input_for_sky_head() {
         let (engine, _calls) = loaded_engine();
         let session = start(&engine).expect("start");
         let entry = entry_of(&engine, &session.session_id);
-        let encoder_input = entry.encoder_input.as_ref().expect("encoder input");
         let pixels = gray_image(64, 48);
         assert_eq!(
-            encoder_input,
-            &sam2::preprocess_image(&pixels, 64, 48).expect("input")
-        );
-
-        let (without, _calls) = loaded_engine_without_sky_head();
-        let session = start(&without).expect("start");
-        assert!(
-            entry_of(&without, &session.session_id)
-                .encoder_input
-                .is_none()
+            entry.encoder_input,
+            sam2::preprocess_image(&pixels, 64, 48).expect("input")
         );
     }
 

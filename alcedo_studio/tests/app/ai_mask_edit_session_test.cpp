@@ -695,14 +695,9 @@ TEST(AiMaskEditSessionTest, FailedModelCallKeepsState) {
   EXPECT_EQ(sky.status, AiMaskStepStatus::Failed);
   EXPECT_EQ(sky.message, "task failed");
 
-  // A Sky mask of another size is an invalid output.
-  SegmentationTaskResult wrong_size;
-  wrong_size.status      = Ok();
-  wrong_size.found       = true;
-  wrong_size.mask_kind   = SegmentationTaskMaskKind::kBinary;
-  wrong_size.mask_width  = 32;
-  wrong_size.mask_height = 24;
-  wrong_size.mask_r8.assign(32 * 24, 255);
+  // A Sky alpha grid with fewer values than its size is an invalid output.
+  auto wrong_size = AlphaResult(32, 24, 1.0f);
+  wrong_size.alpha_values.resize(32 * 23);
   runner.tasks[SegmentationTask::kSky] = wrong_size;
   EXPECT_EQ(session.AddTask(AiMaskTaskKind::Sky, AiMaskComponentOperation::Add).status,
             AiMaskStepStatus::Failed);
@@ -1024,40 +1019,23 @@ TEST(AiMaskEditSessionTest, SkyAlphaOfStretchedImageConvertsWithGainOne) {
                                          kSessionExtent));
   EXPECT_EQ(At(subject_coverage, 8, 20), 0);
   EXPECT_EQ(At(subject_coverage, 56, 40), 255);
-
-  // The region union of a sidecar without the sky head stays an R8 mask of the session size.
-  SegmentationTaskResult union_mask;
-  union_mask.status      = Ok();
-  union_mask.found       = true;
-  union_mask.mask_kind   = SegmentationTaskMaskKind::kBinary;
-  union_mask.mask_width  = kSessionExtent.width;
-  union_mask.mask_height = kSessionExtent.height;
-  union_mask.mask_r8.assign(static_cast<std::size_t>(kSessionExtent.width) * kSessionExtent.height,
-                            0);
-  std::fill_n(union_mask.mask_r8.begin(), kSessionExtent.width * 10, std::uint8_t{255});
-  runner.tasks[SegmentationTask::kSky] = union_mask;
-  AiMaskEditSession union_session(runner, SessionImage());
-  ASSERT_TRUE(Applied(union_session.AddTask(AiMaskTaskKind::Sky, AiMaskComponentOperation::Add)));
-  EXPECT_EQ(CoverageCopy(union_session), union_mask.mask_r8);
 }
 
 TEST(AiMaskEditSessionTest, PrepareCommitCropsToCoverageWithBorder) {
-  FakeRunner             runner;
-  SegmentationTaskResult sky;
-  sky.status      = Ok();
-  sky.found       = true;
-  sky.mask_kind   = SegmentationTaskMaskKind::kBinary;
-  sky.mask_width  = kSessionExtent.width;
-  sky.mask_height = kSessionExtent.height;
-  sky.mask_r8.assign(static_cast<std::size_t>(kSessionExtent.width) * kSessionExtent.height, 0);
+  FakeRunner        runner;
+  AiMaskEditSession session(runner, SessionImage());
+  // The fake decoder gives +8 on the logit cells of columns 40 to 79 and rows 26 to 79 (the two
+  // points with a margin of 0.02). Bilinear to 64 x 48, this is the square x 10 to 19, y 5 to 14.
+  ASSERT_TRUE(Applied(session.AddPromptStep(Stroke({{0.177f, 0.1215f}, {0.2925f, 0.2925f}}),
+                                            AiMaskComponentOperation::Add)));
+  std::vector<std::uint8_t> square(
+      static_cast<std::size_t>(kSessionExtent.width) * kSessionExtent.height, 0);
   for (std::uint32_t y = 5; y < 15; ++y) {
     for (std::uint32_t x = 10; x < 20; ++x) {
-      sky.mask_r8[static_cast<std::size_t>(y) * kSessionExtent.width + x] = 255;
+      square[static_cast<std::size_t>(y) * kSessionExtent.width + x] = 255;
     }
   }
-  runner.tasks[SegmentationTask::kSky] = sky;
-  AiMaskEditSession session(runner, SessionImage());
-  ASSERT_TRUE(Applied(session.AddTask(AiMaskTaskKind::Sky, AiMaskComponentOperation::Add)));
+  ASSERT_EQ(CoverageCopy(session), square);
   ASSERT_TRUE(Applied(session.SetEdgeAdjustment(AiMaskEdgeAdjustment{1.5f, 3})));
 
   const auto [asset, source] = session.PrepareCommit();

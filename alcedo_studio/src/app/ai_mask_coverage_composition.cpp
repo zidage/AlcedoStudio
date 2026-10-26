@@ -274,20 +274,14 @@ void ValidateAiMaskModelOutput(const AiMaskModelOutput& output, Extent2D extent)
               value.logits.size() != static_cast<std::size_t>(value.size) * value.size) {
             Fail("decoder logits must hold size x size values");
           }
-        } else if constexpr (std::is_same_v<Output, AiMaskAlphaGrid>) {
+        } else {
+          static_assert(std::is_same_v<Output, AiMaskAlphaGrid>,
+                        "ValidateAiMaskModelOutput misses a model output kind");
           if (value.width == 0 || value.height == 0 ||
               value.values.size() != static_cast<std::size_t>(value.width) * value.height) {
             Fail("an alpha grid must hold width x height values");
           }
           RequireUnitBox(value.box);
-        } else {
-          static_assert(std::is_same_v<Output, AiMaskBinaryR8>,
-                        "ValidateAiMaskModelOutput misses a model output kind");
-          if (value.width != extent.width || value.height != extent.height ||
-              value.values.size() != PixelCount(extent)) {
-            Fail("an R8 mask must have the session image size " + std::to_string(extent.width) +
-                 " x " + std::to_string(extent.height));
-          }
         }
       },
       output);
@@ -304,12 +298,10 @@ auto ConvertModelOutputToCoverage(const AiMaskModelOutput& output, Extent2D exte
         using Output = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<Output, AiMaskSamLogits>) {
           return ConvertLogits(value, extent);
-        } else if constexpr (std::is_same_v<Output, AiMaskAlphaGrid>) {
-          return ConvertAlpha(value, extent, guide);
         } else {
-          static_assert(std::is_same_v<Output, AiMaskBinaryR8>,
+          static_assert(std::is_same_v<Output, AiMaskAlphaGrid>,
                         "ConvertModelOutputToCoverage misses a model output kind");
-          return value.values;
+          return ConvertAlpha(value, extent, guide);
         }
       },
       output);

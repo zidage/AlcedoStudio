@@ -2,33 +2,25 @@
 //! 2; SM3.D plan, sections 2.3 and 2.4; SM3.E plan, the "sky found" rule of the sky head). Pure
 //! functions; no model call.
 //!
-//! The rules follow the lab MVP (`mask_pipeline.py` of `alcedo-ai-mask-lab`): the Sky regions and
-//! points of `evaluate_quality_photos.py`, the person boxes of `head_model.decode_people` with an
-//! overlap limit of 0.5, the S3OD letterbox of `s3od_graphs.py`, and the person crops and
-//! `subject_fraction` of SM3.D. The People list threshold rescue (C2), the list order (C3), the Sky
-//! union (C4, C5), and the "not found" rules (C1, C9) are decisions of the SM3.C plan; the crop
+//! The rules follow the lab MVP (`mask_pipeline.py` of `alcedo-ai-mask-lab`): the person boxes of
+//! `head_model.decode_people` with an overlap limit of 0.5, the S3OD letterbox of `s3od_graphs.py`,
+//! and the person crops and `subject_fraction` of SM3.D. The People list threshold rescue (C2), the
+//! list order (C3), and the "not found" rules (C1, C9) are decisions of the SM3.C plan; the crop
 //! rectangle (E3), the stored crop (E4), and `subject_fraction` (E8) are decisions of the SM3.D
-//! plan.
-//!
-//! The union of SAM 2.1 masks is the MVP union: the OR of the member masks at the image size, each
-//! the bilinear upsampling of its 256 x 256 logits with threshold 0 (C5). It is returned as an R8
-//! mask (0 or 255).
+//! plan. The MVP Sky (the people and sky head regions and the union of their decoder masks, SM3.C
+//! C4 and C5) was removed when the sky head ran on every backend (issue #538).
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use super::backend::{HeadOutput, SubjectOutput};
 use super::model_set::{
-    HEAD_GRID, LOGIT_SIZE, SUBJECT_IMAGE_SIZE, SUBJECT_MASKS_SHAPE, SUBJECT_PIXEL_VALUES_SHAPE,
+    HEAD_GRID, SUBJECT_IMAGE_SIZE, SUBJECT_MASKS_SHAPE, SUBJECT_PIXEL_VALUES_SHAPE,
     SUBJECT_SCORES_SHAPE,
 };
-use super::sam2::{PIXEL_MEAN, PIXEL_STD, PromptBox, PromptPoint};
+use super::sam2::{PIXEL_MEAN, PIXEL_STD, PromptBox};
 use super::tensor::TensorF32;
 
-/// Cells with a sky probability of at least this value form the sky regions.
-pub const SKY_CELL_PROBABILITY: f32 = 0.5;
-/// Smallest sky region in cells, and the number of decoder points per region.
-pub const SKY_POINTS_PER_REGION: usize = 3;
 /// Number of center heatmap peaks that the person decoding reads.
 pub const PERSON_PEAK_COUNT: usize = 20;
 /// Smallest center heatmap value of a person box.
@@ -58,7 +50,6 @@ pub const PIXEL_EDGE_TOLERANCE: f64 = 1e-4;
 /// the COCO validation set).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HeadThresholds {
-    pub sky_presence: f32,
     pub person_presence: f32,
     pub people_list: f32,
 }
@@ -73,7 +64,6 @@ pub fn head_thresholds_from_json(text: &str) -> Result<HeadThresholds> {
             .with_context(|| format!("the head thresholds have no validation.{key}.threshold"))
     };
     Ok(HeadThresholds {
-        sky_presence: read("presence_best_f1_sky")?,
         person_presence: read("presence_best_f1_person")?,
         people_list: read("person_list_best_f1_nms")?,
     })
@@ -83,95 +73,9 @@ pub fn sigmoid(value: f32) -> f32 {
     1.0 / (1.0 + (-value).exp())
 }
 
-/// Sky presence and person presence of @p head (sigmoid of `presence_logits`).
-pub fn presences(head: &HeadOutput) -> (f32, f32) {
-    let logits = head.presence_logits.data();
-    (sigmoid(logits[0]), sigmoid(logits[1]))
-}
-
-/// The sky probability of every head grid cell, row-major.
-pub fn sky_probability(head: &HeadOutput) -> Vec<f32> {
-    head.sky_logits
-        .data()
-        .iter()
-        .copied()
-        .map(sigmoid)
-        .collect()
-}
-
-/// The 8-connected regions of the cells with @p probability >= 0.5 that have at least
-/// `SKY_POINTS_PER_REGION` cells, as cell indices; largest first, equal sizes in the raster order
-/// of their first cell (SciPy `ndimage.label` and a stable sort).
-pub fn sky_regions(probability: &[f32]) -> Vec<Vec<usize>> {
-    let selected: Vec<bool> = probability
-        .iter()
-        .map(|value| *value >= SKY_CELL_PROBABILITY)
-        .collect();
-    let mut labeled = vec![false; selected.len()];
-    let mut regions = Vec::new();
-    for start in 0..selected.len() {
-        if !selected[start] || labeled[start] {
-            continue;
-        }
-        labeled[start] = true;
-        let mut region = vec![start];
-        let mut next = 0;
-        while next < region.len() {
-            let cell = region[next];
-            next += 1;
-            let (row, column) = ((cell / HEAD_GRID) as isize, (cell % HEAD_GRID) as isize);
-            for (dy, dx) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dy, dx))) {
-                let (y, x) = (row + dy, column + dx);
-                if y < 0 || x < 0 || y >= HEAD_GRID as isize || x >= HEAD_GRID as isize {
-                    continue;
-                }
-                let neighbor = y as usize * HEAD_GRID + x as usize;
-                if selected[neighbor] && !labeled[neighbor] {
-                    labeled[neighbor] = true;
-                    region.push(neighbor);
-                }
-            }
-        }
-        if region.len() >= SKY_POINTS_PER_REGION {
-            region.sort_unstable();
-            regions.push(region);
-        }
-    }
-    regions.sort_by_key(|region| std::cmp::Reverse(region.len()));
-    regions
-}
-
-/// Center of a head grid cell in normalized image coordinates.
-fn cell_center(cell: usize) -> (f32, f32) {
-    let grid = HEAD_GRID as f32;
-    (
-        ((cell % HEAD_GRID) as f32 + 0.5) / grid,
-        ((cell / HEAD_GRID) as f32 + 0.5) / grid,
-    )
-}
-
-/// The decoder points of a sky region: the centers of the `SKY_POINTS_PER_REGION` cells with the
-/// highest probability, highest first; equal probabilities take the higher cell index first
-/// (`np.argsort(kind="stable")[::-1]`). Label add.
-pub fn region_points(probability: &[f32], region: &[usize]) -> Vec<PromptPoint> {
-    let mut cells = region.to_vec();
-    cells.sort_by(|a, b| {
-        probability[*b]
-            .total_cmp(&probability[*a])
-            .then_with(|| b.cmp(a))
-    });
-    cells
-        .into_iter()
-        .take(SKY_POINTS_PER_REGION)
-        .map(|cell| {
-            let (x, y) = cell_center(cell);
-            PromptPoint {
-                x,
-                y,
-                label: super::sam2::PointLabel::Add,
-            }
-        })
-        .collect()
+/// Person presence of @p head (sigmoid of the second `presence_logits` value).
+pub fn person_presence(head: &HeadOutput) -> f32 {
+    sigmoid(head.presence_logits.data()[1])
 }
 
 /// A person box in head grid cells (x0, y0, x1, y1) and its center heatmap score.
@@ -302,89 +206,6 @@ pub fn people_list(
             .then_with(|| b.score.total_cmp(&a.score))
     });
     listed
-}
-
-/// R8 value of a pixel inside a union mask.
-pub const MASK_INSIDE: u8 = 255;
-
-/// Taps of the bilinear upsampling of `LOGIT_SIZE` cells to @p output pixels with half-pixel
-/// centers (OpenCV `INTER_LINEAR`, PyTorch `align_corners=False`): for each pixel, the two cells
-/// and the weight of the second.
-fn upsample_taps(output: usize) -> Vec<(usize, usize, f32)> {
-    let scale = LOGIT_SIZE as f32 / output as f32;
-    (0..output)
-        .map(|index| {
-            let source = ((index as f32 + 0.5) * scale - 0.5).max(0.0);
-            let low = (source.floor() as usize).min(LOGIT_SIZE - 1);
-            let high = (low + 1).min(LOGIT_SIZE - 1);
-            (low, high, source - low as f32)
-        })
-        .collect()
-}
-
-/// The pixel range whose taps read a cell in `first..=last`.
-fn pixel_range(taps: &[(usize, usize, f32)], first: usize, last: usize) -> std::ops::Range<usize> {
-    let start = taps.partition_point(|(_, high, _)| *high < first);
-    let end = taps.partition_point(|(low, _, _)| *low <= last);
-    start..end.max(start)
-}
-
-/// The first row, last row, first column, and last column of the cells of @p logits that are
-/// > 0; `None` when no cell is > 0.
-fn positive_bounds(logits: &[f32]) -> Option<(usize, usize, usize, usize)> {
-    let mut bounds: Option<(usize, usize, usize, usize)> = None;
-    for (cell, _) in logits.iter().enumerate().filter(|(_, value)| **value > 0.0) {
-        let (row, column) = (cell / LOGIT_SIZE, cell % LOGIT_SIZE);
-        bounds = Some(match bounds {
-            None => (row, row, column, column),
-            Some((r0, r1, c0, c1)) => (r0.min(row), r1.max(row), c0.min(column), c1.max(column)),
-        });
-    }
-    bounds
-}
-
-/// The union of SAM 2.1 masks at @p width x @p height (C5): `MASK_INSIDE` where the bilinear
-/// upsampling of the logits of any member is > 0, else 0. Every member has `LOGIT_SIZE *
-/// LOGIT_SIZE` logits. A pixel can be inside a member only when one of its four cells is > 0, so
-/// each member is evaluated only on the pixels of the bounding box of its positive cells.
-pub fn union_mask<'a>(
-    members: impl IntoIterator<Item = &'a [f32]>,
-    width: usize,
-    height: usize,
-) -> Vec<u8> {
-    let columns = upsample_taps(width);
-    let rows = upsample_taps(height);
-    let mut union = vec![0u8; width * height];
-    let mut row_values = vec![0.0f32; LOGIT_SIZE];
-    for logits in members {
-        let Some((first_row, last_row, first_column, last_column)) = positive_bounds(logits) else {
-            continue;
-        };
-        let x_range = pixel_range(&columns, first_column, last_column);
-        let cell_range = first_column.saturating_sub(1)..(last_column + 2).min(LOGIT_SIZE);
-        for y in pixel_range(&rows, first_row, last_row) {
-            let (top, bottom, weight_y) = rows[y];
-            for x in cell_range.clone() {
-                let a = logits[top * LOGIT_SIZE + x];
-                let b = logits[bottom * LOGIT_SIZE + x];
-                row_values[x] = a + (b - a) * weight_y;
-            }
-            let target = &mut union[y * width..(y + 1) * width];
-            for x in x_range.clone() {
-                let (left, right, weight_x) = columns[x];
-                let (a, b) = (row_values[left], row_values[right]);
-                if a + (b - a) * weight_x > 0.0 {
-                    target[x] = MASK_INSIDE;
-                }
-            }
-        }
-    }
-    union
-}
-
-/// Number of union mask pixels that are inside.
-pub fn mask_area(mask: &[u8]) -> u32 {
-    mask.iter().filter(|value| **value == MASK_INSIDE).count() as u32
 }
 
 /// Number of alpha values >= `ALPHA_INSIDE`.
@@ -742,7 +563,6 @@ mod tests {
     #[test]
     fn head_thresholds_read_from_lab_json() {
         let thresholds = head_thresholds_from_json(LAB_THRESHOLDS).expect("thresholds");
-        assert!((thresholds.sky_presence - 0.4232).abs() < 1e-4);
         assert!((thresholds.person_presence - 0.5332).abs() < 1e-4);
         assert!((thresholds.people_list - 0.3132).abs() < 1e-4);
         let missing = r#"{"validation": {"presence_best_f1_sky": {"threshold": 0.4},
@@ -750,54 +570,6 @@ mod tests {
         let err = head_thresholds_from_json(missing).expect_err("missing list threshold");
         assert!(err.to_string().contains("person_list_best_f1_nms"), "{err}");
         assert!(head_thresholds_from_json("not json").is_err());
-    }
-
-    #[test]
-    fn sky_regions_use_eight_connectivity_and_minimum_size() {
-        let mut probability = vec![0.0f32; HEAD_GRID * HEAD_GRID];
-        // Region A: a diagonal chain of 3 cells (8-connected), first in raster order.
-        for (row, column) in [(0, 0), (1, 1), (2, 2)] {
-            probability[cell(row, column)] = 0.9;
-        }
-        // Region B: 4 cells in a row.
-        for column in 10..14 {
-            probability[cell(5, column)] = 0.6;
-        }
-        // Region C: 2 cells, below the minimum size.
-        probability[cell(20, 20)] = 0.9;
-        probability[cell(20, 21)] = 0.9;
-        // Region D: 3 cells, after A in raster order.
-        for row in 30..33 {
-            probability[cell(row, 40)] = 0.5;
-        }
-        let regions = sky_regions(&probability);
-        assert_eq!(regions.len(), 3);
-        assert_eq!(regions[0].len(), 4);
-        assert_eq!(regions[1], vec![cell(0, 0), cell(1, 1), cell(2, 2)]);
-        assert_eq!(regions[2], vec![cell(30, 40), cell(31, 40), cell(32, 40)]);
-    }
-
-    #[test]
-    fn region_points_take_three_most_probable_cells() {
-        let mut probability = vec![0.0f32; HEAD_GRID * HEAD_GRID];
-        let region = vec![cell(2, 3), cell(2, 4), cell(2, 5), cell(3, 3)];
-        probability[cell(2, 3)] = 0.7;
-        probability[cell(2, 4)] = 0.9;
-        probability[cell(2, 5)] = 0.7;
-        probability[cell(3, 3)] = 0.6;
-        let points = region_points(&probability, &region);
-        let centers: Vec<(f32, f32)> = points.iter().map(|point| (point.x, point.y)).collect();
-        // Highest first; the equal pair takes the higher cell index (2, 5) first.
-        assert_eq!(
-            centers,
-            vec![
-                (4.5 / 64.0, 2.5 / 64.0),
-                (5.5 / 64.0, 2.5 / 64.0),
-                (3.5 / 64.0, 2.5 / 64.0)
-            ]
-        );
-        // The decoder coordinates are the lab model pixels (cell center times 16).
-        assert_eq!(points[0].x * 1024.0, 4.5 * 16.0);
     }
 
     #[test]
@@ -875,52 +647,6 @@ mod tests {
             (prompt.x0, prompt.y0, prompt.x1, prompt.y1),
             (0.0, 0.125, 1.0, 0.625)
         );
-    }
-
-    /// The bilinear upsampling of @p logits at the pixel (x, y): along the height, then along the
-    /// width, without the bounding box of `union_mask`.
-    fn upsampled(
-        logits: &[f32],
-        (left, right, weight_x): (usize, usize, f32),
-        (top, bottom, weight_y): (usize, usize, f32),
-    ) -> f32 {
-        let at = |row: usize, column: usize| logits[row * LOGIT_SIZE + column];
-        let a = at(top, left) + (at(bottom, left) - at(top, left)) * weight_y;
-        let b = at(top, right) + (at(bottom, right) - at(top, right)) * weight_y;
-        a + (b - a) * weight_x
-    }
-
-    #[test]
-    fn union_mask_is_or_of_upsampled_members() {
-        let plane = LOGIT_SIZE * LOGIT_SIZE;
-        // Two members with positive cells that touch at a corner. Between the four cells each
-        // member alone stays at 0 (not inside); the maximum of the logits per cell would give 1
-        // there and so a larger mask.
-        let mut a = vec![-1.0f32; plane];
-        let mut b = vec![-1.0f32; plane];
-        a[100 * LOGIT_SIZE + 100] = 3.0;
-        b[101 * LOGIT_SIZE + 101] = 3.0;
-        b[255 * LOGIT_SIZE + 255] = 0.5;
-        let (width, height) = (1000, 700);
-        let union = union_mask([a.as_slice(), b.as_slice()], width, height);
-        let (columns, rows) = (upsample_taps(width), upsample_taps(height));
-        for y in 0..height {
-            for x in 0..width {
-                let (column, row) = (columns[x], rows[y]);
-                let expected = upsampled(&a, column, row) > 0.0 || upsampled(&b, column, row) > 0.0;
-                assert_eq!(
-                    union[y * width + x] == MASK_INSIDE,
-                    expected,
-                    "pixel ({x}, {y})"
-                );
-            }
-        }
-        let area = mask_area(&union);
-        assert!(area > 0);
-        let maximum: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x.max(*y)).collect();
-        let maximum_area = mask_area(&union_mask([maximum.as_slice()], width, height));
-        assert!(maximum_area > area, "{maximum_area} > {area}");
-        assert_eq!(mask_area(&union_mask(std::iter::empty(), width, height)), 0);
     }
 
     #[test]

@@ -77,8 +77,6 @@ auto ToProtoTask(SegmentationTask task) -> alcedo::ai::SegmentationTask {
 
 auto FromProtoMaskKind(int kind) -> SegmentationTaskMaskKind {
   switch (kind) {
-    case alcedo::ai::SEGMENTATION_TASK_MASK_KIND_BINARY:
-      return SegmentationTaskMaskKind::kBinary;
     case alcedo::ai::SEGMENTATION_TASK_MASK_KIND_ALPHA:
       return SegmentationTaskMaskKind::kAlpha;
     default:
@@ -251,7 +249,6 @@ class GrpcSegmentationClient final : public SegmentationClient {
     result.mask_kind          = FromProtoMaskKind(response.mask_kind());
     result.mask_width         = response.mask_width();
     result.mask_height        = response.mask_height();
-    result.mask_r8            = {response.mask_r8().begin(), response.mask_r8().end()};
     result.alpha_values       = {response.alpha_values().begin(), response.alpha_values().end()};
     result.mask_box           = {.x0 = response.mask_box().x0(),
                                  .y0 = response.mask_box().y0(),
@@ -259,7 +256,6 @@ class GrpcSegmentationClient final : public SegmentationClient {
                                  .y1 = response.mask_box().y1()};
     result.presence           = response.presence();
     result.presence_threshold = response.presence_threshold();
-    result.region_count       = response.region_count();
     result.subject_score      = response.subject_score();
     result.mask_area          = response.mask_area();
     result.model_ms           = response.model_ms();

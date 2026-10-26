@@ -3,7 +3,8 @@
 Date: 2026-10-26.
 
 Status: the Rust part (#536) and the host part (#537) are implemented and verified on Windows
-(sections 9 and 10). The Core ML part (#538) is open.
+(sections 9 and 10). The Core ML part (#538) is implemented and verified on macOS (section 11);
+since #538 every backend has the sky head, and the MVP Sky is removed.
 
 Parent plan: [AI Segmentation Mask Master Plan](../ai_segmentation_mask_master_plan.md), decision
 D24 and the SM3.E entry of the phase summary.
@@ -46,7 +47,8 @@ Source of the model: lab issue zidage/alcedo-ai-mask-lab#10, lab PR zidage/alced
 | S2 | The sky head runs at the first Sky request of an image, not at the session start. The image entry keeps the encoder input (`[1, 3, 1024, 1024]` float32, 12 MB) for it when the model set has a sky head. | The session start time does not change for the users who do not use Sky. The encoder input cannot be made again from the entry: the entry has no full photo (C8). |
 | S3 | Sky is found when at least `SKY_FOUND_SHARE` = 5e-4 (0.05 %) of the 1024 x 1024 alpha values are >= 0.5. `presence` is the share and `presence_threshold` is 5e-4. | The head has no presence output. On the 1,500 MaSS13K test photos the rule gives the most correct decisions of the measured shares (1,453): 906 of 938 photos with sky found (MVP 789), 15 of 562 photos without sky found (MVP 11). Lab report section 10. |
 | S4 | The Sky result is `ALPHA`: the 1024 x 1024 alpha of the stretched image, `mask_box` (0, 0, 1, 1), `region_count` 0, `mask_area` the count of values >= 0.5. | The head output is on the stretched encoder input. The host maps each axis with its own scale; the existing alpha grid path of the host accepts a grid of any size with a box (#537 checks the upscale rule). |
-| S5 | A backend without a sky head (Core ML, `load_sky_head` returns `None`) keeps the MVP Sky and the `BINARY` result until #538. | #536 scope: Windows MVP; the macOS build and tests stay green. |
+| S5 | A backend without a sky head (Core ML, `load_sky_head` returns `None`) keeps the MVP Sky and the `BINARY` result until #538. **Replaced by S11 (#538).** | #536 scope: Windows MVP; the macOS build and tests stay green. |
+| S11 | (#538) The Core ML backend loads `sky_head.mlmodelc` (float32, `ComputeUnits::All`; `CpuOnly` on the `cpu` device). `load_sky_head` returns the head on every backend, and the MVP Sky is removed: the engine region rule, the R8 union, the proto `BINARY` mask kind and the fields `mask_r8` and `region_count` (reserved), the client and host R8 output (`AiMaskBinaryR8`), and the MVP Sky port reference. | Section 11.2: float32 differs from ONNX Runtime CPU by at most 1.1e-3 on 54 photos, float16 by up to 0.24. A dead R8 path in the protocol and the host would be a second Sky rule that no backend makes. |
 | S6 | The model set id stays `alcedo-ai-mask-v1`. | The model set is not published yet (SM2, SM10). |
 | S7 | The DirectML session of the sky head switches off the memory arena (`ep.dml.disable_memory_arena`), as the encoder and S3OD do (#532). | With the arena, the session keeps 1,150 MB of dedicated GPU memory after its first run; without it, 122 MB. A run takes 50 ms instead of 30 ms, once per image (section 9.3). |
 | S8 | The license of the sky head is recorded in master plan D5 and section 8.2.1. The user-facing notice is part of #537. | U18. No model directory license file exists yet for any model; SM2 makes the published directory. |
@@ -379,3 +381,109 @@ lines (`DSC00602`), a bridge (`2088064441`), and two photos without sky (`DSC_11
 - #540: `library.import` with a folder imports nothing and reports success (found while preparing
   the GUI check).
 - #541: the sky head run in the editor takes about 220 ms against 54 ms in the port check.
+
+---
+
+## 11. Completion record of #538
+
+### 11.1 Summary (2026-10-26)
+
+**Status:** implemented. macOS: the Rust tests, the port check on Core ML `All`, and the C++
+tests pass; Sky passes on `CpuOnly` too. Windows: the Rust tests, the port check on DirectML and on
+the ONNX Runtime CPU device, and the C++ tests pass. The GUI on macOS was not run (section 11.4).
+
+**Source revision and branch:** `feature/ai-segmentation-sm3e-coreml-sky-head`, stacked on
+`feature/ai-segmentation-sm3e-sky-alpha-coverage` (#542) at `178ccab9`. Lab:
+`feature/sky-head-coreml` of `alcedo-ai-mask-lab`, stacked on `feature/sky-head-found-rule`
+(`279bcfd`): the Core ML conversion of the sky head and its measurement (lab report section 11).
+
+**Decisions made during the work:**
+
+| Item | Decision | Reason |
+| --- | --- | --- |
+| Precision | float32 (S11). | float16 differs from ONNX Runtime CPU by up to 0.13 (`All`) and 0.24 (`CpuOnly`), IoU down to 0.964, up to 27,042 values more than 1/255 apart (section 11.2). |
+| Compute units | `ComputeUnits::All`, as the other heads and S3OD (U15); `CpuOnly` on the `cpu` device. | float32 does not run on the Neural Engine: `All` and `CpuAndGpu` take 68 ms, `CpuOnly` and `CpuAndNeuralEngine` 171 to 173 ms. |
+| Encoder input | One copy of the stored 12 MB tensor into a Core ML array per sky head run; the three feature arrays are retained references (no copy). | The sky head runs once per image (S2). |
+| Remove the MVP Sky | Everywhere (S11), also in the protocol and the host. | The issue asks for the removal when both backends have the head. Without a producer, the R8 path would be dead code in the proto, the client, and the coverage conversion. |
+| Port check limits on Core ML | The same as on Windows (`MIN_SKY_IOU` 0.999, `MAX_SKY_ALPHA_DIFFERENCE` 1e-3). | The 14 lab photos differ by at most 4.4e-4 in the lab probe and 4.1e-4 in the port check. |
+| `CpuOnly` port check | Sky passes; the S3OD failures are the accepted deviation of #477 (closed as not planned: the `cpu` device is for development and tests). | The failure list is the same as in #477. |
+| Core ML model hash | The table of master plan section 8.2.1 records the directory SHA-256 of the compiled model and the SHA-256 of `model.mil` and `weights/weight.bin`. | `coremldata.bin` and `analytics/coremldata.bin` change at every compile (two conversions of the same checkpoint were compared); `model.mil` and the weights are equal. The directory SHA-256 identifies one compiled copy only. The models of the set were converted again on the Mac for this check (the earlier copies were deleted): the same sizes as in section 8.2.1, other directory SHA-256 values for the same reason. |
+
+**Actual changed lines:** Alcedo Studio 264 added and 939 removed in code, tests, and scripts (Rust
+service, server, and unit tests +168 / -601, port check and reference script +48 / -197, proto +10 /
+-13, host and C++ tests +38 / -128), plus the documents; lab about 300 lines (conversion, probe,
+README, report) plus the result JSON. No estimate in this plan.
+
+**Primary call chain (macOS):**
+
+```text
+LoadSegmentationModels -> SegmentationEngine::load -> CoreMlSegmentationBackend::load_sky_head
+  -> Model::load_from_url(sky_head.mlmodelc, ComputeUnits::All) -> CoreMlSkyHead::run(zero features) (warm-up)
+RunSegmentationTask(SKY) -> sky_task -> compute_sky_alpha -> CoreMlSkyHead::run
+  -> CoreMlImageFeatures::insert_into (3 retained arrays) + insert_tensor(pixel_values) -> Model::predict
+  -> read_output(sky_alpha, [1, 1, 1024, 1024]) -> sky_share -> ALPHA 1024 x 1024, box (0, 0, 1, 1)
+```
+
+Failure: a missing or damaged `sky_head.mlmodelc` or a failed warm-up run is `ModelNotReady` with
+the path, and no model is loaded; a failed run is `Inference`, and the Sky slot stays empty.
+
+### 11.2 Core ML conversion (lab)
+
+`convert_models.py --model sky_head` (coremltools 9.0, PyTorch 2.7.0, MLProgram, macOS 15 target)
+on the run 1 checkpoint (`best.pt`, epoch 15). `probe_sky_head.py` ran ONNX Runtime 1.31 CPU
+(`point_encoder.onnx`, `sky_head.onnx`) as the reference on 54 photos: the 14 lab quality photos
+and 40 MaSS13K test photos (32 with at least 2 % sky, 8 without sky; seed 538). "Head": the Core ML
+head on the ONNX Runtime encoder outputs; "pipeline": the Core ML encoder and the Core ML head.
+Apple M4.
+
+| Conversion, compute units | Head run, median (max) | Largest difference, head / pipeline | Smallest IoU (alpha >= 0.5) | Values > 1/255 apart, worst photo | "Found" differs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| float32, `ALL` (selected) | 68 ms (71) | 1.05e-3 / 1.11e-3 | 0.99969 | 0 | 0 |
+| float32, `CPU_AND_GPU` | 68 ms (71) | 1.05e-3 / 1.11e-3 | 0.99969 | 0 | 0 |
+| float32, `CPU_AND_NE` | 173 ms (230) | 9.5e-4 / 1.11e-3 | 0.99969 | 0 | 0 |
+| float32, `CPU_ONLY` | 171 ms (295) | 9.5e-4 / 1.11e-3 | 0.99969 | 0 | 0 |
+| float16, `ALL` | 29 ms (34) | 0.129 / 0.129 | 0.96867 | 27,042 | 0 |
+| float16, `CPU_AND_GPU` | 51 ms (53) | 0.029 / 0.027 | 0.98986 | 1,937 | 0 |
+| float16, `CPU_ONLY` | 83 ms (112) | 0.241 / 0.238 | 0.96401 | 9,671 | 0 |
+
+The largest float32 difference is on one MaSS13K photo (`05568`, 2.9 % sky); the lab photos differ
+by at most 4.4e-4 (`DSC00602`). The mean difference is 2.5e-7. Against PyTorch float32 on the
+random input of the conversion, float32 differs by 3.3e-5 (`CPU_ONLY`) and 2.7e-5 (`ALL`).
+
+### 11.3 Verification
+
+| Check | Result |
+| --- | --- |
+| Rust tests, Windows (`cargo test --release -- --skip live_`) | 373 + 4 + 5 + 1 passed, 0 failed (5 MVP Sky tests removed) |
+| `cargo clippy --release --all-targets`, Windows | 65 warnings, none in the segmentation code (SM3.E #536: 70) |
+| Rust tests, macOS (with the Core ML tests) | 376 + 4 + 5 + 1 passed, 0 failed, no warnings |
+| Port check, macOS, Core ML `All` (`coreml`) | passed: 190 prompt masks, minimum photo IoU 0.999964; 12 sky alphas, grid IoU 1.000000, max alpha difference 4.1e-4; `DSC_1188` and `DSC_1535` not found, as in the reference |
+| Port check, macOS, `cpu` (`CpuOnly`) | Sky passed (12 alphas, IoU 1.000000, max difference 3.5e-4); failed on the S3OD person crops and the Subject of `Nikon-D800e-raw-00007`, the same list as #477 |
+| Port check, Windows, DirectML and ONNX Runtime CPU | passed: 190 prompt masks, minimum photo IoU 0.999973 (DirectML) and 0.999964 (CPU); 12 sky alphas, IoU 1.000000, max difference 3.9e-4 (DirectML) and 3.1e-4 (CPU) |
+| Port reference | made again without the MVP Sky (`build/tmp/sm3e_coreml/port_reference`, 14 photos) |
+| C++ `ctest -R "AiMaskEditSessionTest|SegmentationClientTest|AiMaskCoverage|AiMaskModelOutput"`, Windows debug | 50 of 50 passed |
+| C++ `ctest -R "AiMaskEditSessionTest|SegmentationClientTest"`, macOS debug | 36 of 36 passed |
+| Full test suite | not run (AGENTS.md) |
+
+Changed tests: `engine::load_reports_all_five_models_and_fails_without_thresholds` and
+`engine::image_entry_keeps_encoder_input_for_sky_head` (no backend without a sky head),
+`coreml_backend::coreml_device_values_select_u15_compute_units` (the sky head on `All`),
+`AiMaskEditSessionTest.PrepareCommitCropsToCoverageWithBorder` (the square coverage comes from a
+fake decoder stroke instead of an R8 Sky), and the "not found" text of `SegmentationClientTest`.
+Removed tests: the two MVP Sky engine tests, `sky_regions_use_eight_connectivity_and_minimum_size`,
+`region_points_take_three_most_probable_cells`, `union_mask_is_or_of_upsampled_members`, and
+`SegmentationClientTest.RunTaskMapsSkyRegionUnionAsBinaryMask`.
+
+### 11.4 Measurements (macOS, Apple M4, release sidecar code in the port check)
+
+| Item | Value |
+| --- | ---: |
+| Sky head load with the warm-up run (compiled model in the Core ML cache) | 132 ms |
+| Sky head load at the first load after the conversion | 977 ms (S3OD 5,061 ms) |
+| All five models, warm | 352 ms |
+| First Sky request of a photo, port check p50 | 82 ms (`CpuOnly`: 168 ms) |
+| Encoder p50 | 239 ms |
+| Peak memory footprint of the port check process (`/usr/bin/time -l`) | 4,790 MB (largest resident set 3,065 MB) |
+
+The macOS GUI was not run: the Mac is driven over SSH without a display. The host code of Sky is
+the same on both platforms and is covered by the C++ tests; the sidecar is covered by the port check.

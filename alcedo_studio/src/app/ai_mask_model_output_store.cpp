@@ -209,9 +209,6 @@ auto AiMaskModelOutputStore::StoreTaskResult(const std::string&            key,
                                              AiMaskAlphaGain alpha_gain) -> AiMaskStepResult {
   AiMaskModelOutput output;
   switch (result.mask_kind) {
-    case SegmentationTaskMaskKind::kBinary:
-      output = AiMaskBinaryR8{result.mask_width, result.mask_height, result.mask_r8};
-      break;
     case SegmentationTaskMaskKind::kAlpha:
       output = AiMaskAlphaGrid{result.mask_width, result.mask_height, result.alpha_values,
                                OrderedBox(result.mask_box), alpha_gain};
