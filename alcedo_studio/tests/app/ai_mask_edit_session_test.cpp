@@ -387,6 +387,65 @@ TEST(AiMaskEditSessionTest, GuideMustHaveSessionSize) {
   EXPECT_THROW((void)AiMaskEditSession(runner, image), std::invalid_argument);
 }
 
+// A twig of one grid cell with the sky alpha 0.25 in a sky of alpha 1, on a 256 x 192 session
+// image: the 64 x 64 grid is upscaled 4 times on x and 3 times on y, so the D23 gain is 2. The
+// guide has a dark twig on a light sky. Returns the coverage of the inner twig pixels.
+auto ThinTwigCoverage(AiMaskAlphaGain gain) -> std::vector<std::uint8_t> {
+  constexpr std::uint32_t kGrid = 64;
+  constexpr Extent2D      kExtent{256, 192};
+  constexpr std::uint32_t kTwigCell  = 32;
+  constexpr std::uint32_t kTwigFirst = 4 * kTwigCell;
+  std::vector<float>      values(static_cast<std::size_t>(kGrid) * kGrid, 1.0f);
+  for (std::uint32_t row = 0; row < kGrid; ++row) {
+    values[static_cast<std::size_t>(row) * kGrid + kTwigCell] = 0.25f;
+  }
+  std::vector<std::uint8_t> rgb8(static_cast<std::size_t>(kExtent.width) * kExtent.height * 3);
+  for (std::uint32_t y = 0; y < kExtent.height; ++y) {
+    for (std::uint32_t x = 0; x < kExtent.width; ++x) {
+      const bool  twig  = x >= kTwigFirst && x < kTwigFirst + 4;
+      auto* const pixel = rgb8.data() + (static_cast<std::size_t>(y) * kExtent.width + x) * 3;
+      pixel[0]          = twig ? 40 : 200;
+      pixel[1]          = twig ? 40 : 210;
+      pixel[2]          = twig ? 40 : 230;
+    }
+  }
+  const auto guide    = MakeAiMaskCoverageGuide(kExtent, rgb8);
+  const auto coverage = ConvertModelOutputToCoverage(
+      AiMaskAlphaGrid{kGrid, kGrid, values, {0.0f, 0.0f, 1.0f, 1.0f}, gain}, kExtent, &guide);
+  std::vector<std::uint8_t> twig;
+  for (std::uint32_t y = 16; y + 16 < kExtent.height; ++y) {
+    for (const std::uint32_t x : {kTwigFirst + 1, kTwigFirst + 2}) {
+      twig.push_back(coverage[static_cast<std::size_t>(y) * kExtent.width + x]);
+    }
+  }
+  return twig;
+}
+
+TEST(AiMaskEditSessionTest, SkyAlphaGainOneKeepsPartialAlphaOfThinTwig) {
+  // SM3.E decision S9 (#537): the D23 gain of 2 moves the twig alpha 0.25 to about 0; gain 1 keeps
+  // about round(0.25 * 255) = 64.
+  const auto kept = ThinTwigCoverage(AiMaskAlphaGain::kOne);
+  const auto lost = ThinTwigCoverage(AiMaskAlphaGain::kHalfUpscaleFactor);
+  ASSERT_FALSE(kept.empty());
+  for (std::size_t index = 0; index < kept.size(); ++index) {
+    EXPECT_GE(kept[index], 60) << index;
+    EXPECT_LE(kept[index], 72) << index;
+    EXPECT_LE(lost[index], 12) << index;
+  }
+
+  // The gain applies only to an alpha grid: the same grid with gain 1 at the session scale and
+  // flat values keeps round(alpha * 255), as with the D23 gain.
+  AiMaskAlphaGrid same{
+      kSessionExtent.width,
+      kSessionExtent.height,
+      std::vector<float>(static_cast<std::size_t>(kSessionExtent.width) * kSessionExtent.height,
+                         0.6f),
+      {0.0f, 0.0f, 1.0f, 1.0f},
+      AiMaskAlphaGain::kOne};
+  const auto flat = ConvertModelOutputToCoverage(same, kSessionExtent);
+  EXPECT_TRUE(std::all_of(flat.begin(), flat.end(), [](std::uint8_t v) { return v == 153; }));
+}
+
 TEST(AiMaskEditSessionTest, FoldAddsWithMaximumAndSubtractsWithInverse) {
   const std::vector<std::uint8_t> start{0, 100, 200, 255};
   const std::vector<std::uint8_t> component{50, 50, 250, 0};
@@ -917,6 +976,69 @@ TEST(AiMaskEditSessionTest, ReopenRejectsAnotherAnalysisSize) {
                               stored, other_asset),
       std::runtime_error);
   EXPECT_EQ(runner.calls, 0);
+}
+
+// The sky head alpha of the stretched image: 16 x 16 on the 64 x 48 session image (4 times on x,
+// 3 times on y). Rows 0 to 3 are 0, the left half of the other rows is 0.25, the right half 1.
+auto StretchedSkyAlpha() -> SegmentationTaskResult {
+  auto result = AlphaResult(16, 16, 1.0f);
+  for (std::uint32_t row = 0; row < 16; ++row) {
+    for (std::uint32_t column = 0; column < 16; ++column) {
+      auto& value = result.alpha_values[static_cast<std::size_t>(row) * 16 + column];
+      value       = row < 4 ? 0.0f : (column < 8 ? 0.25f : 1.0f);
+    }
+  }
+  return result;
+}
+
+TEST(AiMaskEditSessionTest, SkyAlphaOfStretchedImageConvertsWithGainOne) {
+  FakeRunner runner;
+  const auto sky                           = StretchedSkyAlpha();
+  runner.tasks[SegmentationTask::kSky]     = sky;
+  runner.tasks[SegmentationTask::kSubject] = sky;
+  AiMaskEditSession sky_session(runner, SessionImage());
+  ASSERT_TRUE(Applied(sky_session.AddTask(AiMaskTaskKind::Sky, AiMaskComponentOperation::Add)));
+  const auto sky_coverage = CoverageCopy(sky_session);
+
+  // The stored output is the grid with its own x and y scales and gain 1.
+  EXPECT_EQ(sky_coverage,
+            ConvertModelOutputToCoverage(
+                AiMaskAlphaGrid{
+                    16, 16, sky.alpha_values, {0.0f, 0.0f, 1.0f, 1.0f}, AiMaskAlphaGain::kOne},
+                kSessionExtent));
+  EXPECT_EQ(At(sky_coverage, 8, 4), 0);      // grid row 1
+  EXPECT_EQ(At(sky_coverage, 8, 20), 64);    // grid row 6, column 2: round(0.25 * 255)
+  EXPECT_EQ(At(sky_coverage, 56, 40), 255);  // grid row 13, column 14
+
+  // The S3OD alpha of Subject keeps the D23 gain: 2 here, so 0.25 becomes 0.
+  AiMaskEditSession subject_session(runner, SessionImage());
+  ASSERT_TRUE(
+      Applied(subject_session.AddTask(AiMaskTaskKind::Subject, AiMaskComponentOperation::Add)));
+  const auto subject_coverage = CoverageCopy(subject_session);
+  EXPECT_EQ(subject_coverage,
+            ConvertModelOutputToCoverage(AiMaskAlphaGrid{16,
+                                                         16,
+                                                         sky.alpha_values,
+                                                         {0.0f, 0.0f, 1.0f, 1.0f},
+                                                         AiMaskAlphaGain::kHalfUpscaleFactor},
+                                         kSessionExtent));
+  EXPECT_EQ(At(subject_coverage, 8, 20), 0);
+  EXPECT_EQ(At(subject_coverage, 56, 40), 255);
+
+  // The region union of a sidecar without the sky head stays an R8 mask of the session size.
+  SegmentationTaskResult union_mask;
+  union_mask.status      = Ok();
+  union_mask.found       = true;
+  union_mask.mask_kind   = SegmentationTaskMaskKind::kBinary;
+  union_mask.mask_width  = kSessionExtent.width;
+  union_mask.mask_height = kSessionExtent.height;
+  union_mask.mask_r8.assign(static_cast<std::size_t>(kSessionExtent.width) * kSessionExtent.height,
+                            0);
+  std::fill_n(union_mask.mask_r8.begin(), kSessionExtent.width * 10, std::uint8_t{255});
+  runner.tasks[SegmentationTask::kSky] = union_mask;
+  AiMaskEditSession union_session(runner, SessionImage());
+  ASSERT_TRUE(Applied(union_session.AddTask(AiMaskTaskKind::Sky, AiMaskComponentOperation::Add)));
+  EXPECT_EQ(CoverageCopy(union_session), union_mask.mask_r8);
 }
 
 TEST(AiMaskEditSessionTest, PrepareCommitCropsToCoverageWithBorder) {

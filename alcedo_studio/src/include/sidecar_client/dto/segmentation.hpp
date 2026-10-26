@@ -108,12 +108,14 @@ enum class SegmentationTask : uint8_t {
 enum class SegmentationTaskMaskKind : uint8_t {
   /// No mask (the task found nothing or the call failed).
   kNone   = 0,
-  /// Sky: `mask_r8` at the session image size, 255 inside and 0 outside. It is the union of the
-  /// region masks, each the bilinear upsampling of its decoder logits with threshold 0.
+  /// Sky of a sidecar without the sky head (Core ML, until #538): `mask_r8` at the session image
+  /// size, 255 inside and 0 outside. It is the union of the region masks, each the bilinear
+  /// upsampling of its decoder logits with threshold 0.
   kBinary = 1,
-  /// Subject, Background, People, and Person: `alpha_values` in [0, 1]; inside where >= 0.5. The
-  /// grid covers `mask_box` of the session image: the image resized to a long edge of 1024, or
-  /// the person crop resized to a long edge of 1024 (Person).
+  /// Subject, Background, People, Person, and Sky of the sky head (ONNX Runtime): `alpha_values`
+  /// in [0, 1]; inside where >= 0.5. The grid covers `mask_box` of the session image: the image
+  /// resized to a long edge of 1024, the person crop resized to a long edge of 1024 (Person), or
+  /// the image stretched to 1024 x 1024 (Sky; each axis has its own scale).
   kAlpha  = 2,
 };
 
@@ -147,10 +149,12 @@ struct SegmentationTaskResult {
   /// kAlpha: the normalized rectangle of the session image that the alpha grid covers;
   /// (0, 0, 1, 1) except for kPerson, where it is the crop rectangle.
   SegmentationBox                 mask_box;
-  /// Sky, People, and Person: the presence of the head and its threshold.
+  /// People and Person: the presence of the people head and its threshold. Sky with the sky
+  /// head: the share of the alpha values >= 0.5 and the share that "found" needs; Sky without
+  /// the sky head: the sky presence of the people and sky head and its threshold.
   float                           presence           = 0.0F;
   float                           presence_threshold = 0.0F;
-  /// Sky: the number of sky regions in the union.
+  /// Sky without the sky head: the number of sky regions in the union; 0 with the sky head.
   uint32_t                        region_count       = 0;
   /// People and Person: the full People list.
   std::vector<SegmentationPerson> people;

@@ -107,9 +107,10 @@ class AiMaskModelOutputStore {
   auto EnsurePerson(std::uint32_t person_index) -> AiMaskStepResult;
   auto EnsurePromptGroup(const AiMaskPromptGroup& group) -> AiMaskStepResult;
   auto Decode(const AiMaskPromptGroup& prefix, std::vector<float> mask_input) -> AiMaskStepResult;
-  /// Converts an Applied task result to its model output; Failed on an invalid result.
-  auto StoreTaskResult(const std::string& key, const SegmentationTaskResult& result)
-      -> AiMaskStepResult;
+  /// Converts an Applied task result to its model output; Failed on an invalid result. An alpha
+  /// grid gets @p alpha_gain.
+  auto StoreTaskResult(const std::string& key, const SegmentationTaskResult& result,
+                       AiMaskAlphaGain alpha_gain) -> AiMaskStepResult;
 
   [[nodiscard]] auto FindDecode(const AiMaskPromptGroup& prefix) const -> const DecodeOutput*;
   [[nodiscard]] auto SelectedLogits(const AiMaskPromptGroup& prefix) const

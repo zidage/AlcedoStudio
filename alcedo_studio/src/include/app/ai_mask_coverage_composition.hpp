@@ -30,19 +30,32 @@ struct AiMaskSamLogits {
   std::vector<float> logits;
 };
 
+/// The gain rule of the upscale of an alpha grid (master plan D23; SM3.E decision S9, #537).
+enum class AiMaskAlphaGain : std::uint8_t {
+  /// The S3OD alpha of Subject, Background, People, and Person. It is almost binary; a gain of
+  /// half the larger upscale factor (at least 1) keeps its edge about 4 session pixels wide.
+  kHalfUpscaleFactor,
+  /// The alpha of the sky head. Its partial values at fine structures (sky between branches and
+  /// twigs) are the model output; a gain of 1 keeps them.
+  kOne,
+};
+
 /**
  * @brief An alpha grid in [0, 1] that covers @p box of the session image.
  *
- * Subject, Background, and People cover the full image; a Person grid covers its crop rectangle.
+ * Subject, Background, People, and Sky cover the full image; a Person grid covers its crop
+ * rectangle. The Sky grid of the sky head is the image stretched to 1024 x 1024: each axis has its
+ * own scale.
  */
 struct AiMaskAlphaGrid {
   std::uint32_t      width  = 0;
   std::uint32_t      height = 0;
   std::vector<float> values;
   AiMaskBox          box{0.0f, 0.0f, 1.0f, 1.0f};
+  AiMaskAlphaGain    gain = AiMaskAlphaGain::kHalfUpscaleFactor;
 };
 
-/// An R8 mask at the session image size (Sky).
+/// An R8 mask at the session image size (Sky of a sidecar without the sky head).
 struct AiMaskBinaryR8 {
   std::uint32_t             width  = 0;
   std::uint32_t             height = 0;
@@ -88,9 +101,10 @@ void               ValidateAiMaskModelOutput(const AiMaskModelOutput& output, Ex
  * 4 x 4 nearest cells: spatial sigma 1 cell; with @p guide, a range weight on the RGB difference
  * between the pixel and the area mean of the cell, with a range sigma of 0.7 times the color
  * standard deviation of the window (at least 0.01). The value is then
- * `round(clamp((alpha - 0.5) * gain + 0.5) * 255)` with ties to even, where gain is half the
- * larger upscale factor of the two axes and at least 1. The other pixels are 0. R8 mask: the
- * values as given.
+ * `round(clamp((alpha - 0.5) * gain + 0.5) * 255)` with ties to even. With
+ * AiMaskAlphaGain::kHalfUpscaleFactor, gain is half the larger upscale factor of the two axes and
+ * at least 1; with AiMaskAlphaGain::kOne, gain is 1. The other pixels are 0. R8 mask: the values
+ * as given.
  *
  * @param guide The session image for the alpha grid edges; null uses the spatial weight only.
  * @return @p extent.width * @p extent.height values, row-major.

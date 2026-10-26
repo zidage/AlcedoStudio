@@ -189,9 +189,11 @@ auto ConvertAlpha(const AiMaskAlphaGrid& alpha, Extent2D extent, const AiMaskCov
   const cv::Mat      spread       = highest - lowest;
   // Where the guide has no edge, the spatial mean is about 2 cells wide; a gain of half the upscale
   // factor around 0.5 makes it about 4 session pixels wide. A grid at the session scale or at twice
-  // the session scale keeps its values.
-  const float        gain         = std::max({1.0f, 0.5f * static_cast<float>(width) / grid.cols,
-                                              0.5f * static_cast<float>(height) / grid.rows});
+  // the session scale keeps its values. The sky head alpha keeps its values at every scale.
+  const float        gain         = alpha.gain == AiMaskAlphaGain::kOne
+                                        ? 1.0f
+                                        : std::max({1.0f, 0.5f * static_cast<float>(width) / grid.cols,
+                                                    0.5f * static_cast<float>(height) / grid.rows});
 
   // The grid position of each column with half-pixel centers, as cv::resize.
   const float        column_scale = static_cast<float>(grid.cols) / static_cast<float>(width);
