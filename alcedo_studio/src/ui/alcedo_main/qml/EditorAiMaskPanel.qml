@@ -248,6 +248,35 @@ Rectangle {
                     Item { Layout.fillWidth: true }
                 }
 
+                // Training data notice of the Sky model (lab decision U18, #537). It stays visible
+                // under the tasks, so the user reads it before the first Sky run.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: appTheme.spaceXs
+
+                    ColorImage {
+                        Layout.alignment: Qt.AlignTop
+                        Layout.preferredWidth: appTheme.iconOpticalSizeCompact
+                        Layout.preferredHeight: appTheme.iconOpticalSizeCompact
+                        source: "qrc:/panel_icons/info.svg"
+                        sourceSize.width: appTheme.iconSourceSizeCompact
+                        sourceSize.height: appTheme.iconSourceSizeCompact
+                        color: root.colMuted
+                        Accessible.ignored: true
+                    }
+                    Label {
+                        objectName: "editorAiMaskSkyNotice"
+                        Layout.fillWidth: true
+                        text: qsTr("Sky: the training data of the Sky model may not permit commercial use. Do not use Sky for commercial work.")
+                        color: root.colMuted
+                        wrapMode: Text.Wrap
+                        font.family: appTheme.uiFontFamily
+                        font.pixelSize: appTheme.fontSizeCaption
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: text
+                    }
+                }
+
                 // People list: a click adds or removes the person; the viewport outlines the
                 // union of the selected people.
                 ListView {

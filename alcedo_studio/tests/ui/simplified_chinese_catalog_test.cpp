@@ -311,5 +311,21 @@ TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesQmlAndCppContexts) {
             QStringLiteral("Mask Groups"));
 }
 
+TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheSkyTrainingDataNotice) {
+  const QString qm_path = QStringLiteral(ALCEDO_ZH_CN_QM_FILE);
+  QTranslator   translator;
+  ASSERT_TRUE(translator.load(qm_path)) << "QTranslator failed to load " << qm_path.toStdString();
+  ASSERT_TRUE(QCoreApplication::installTranslator(&translator));
+
+  // SM3.E (#537): the notice of the AI Mask panel (lab decision U18).
+  EXPECT_EQ(
+      QCoreApplication::translate("EditorAiMaskPanel",
+                                  "Sky: the training data of the Sky model may not permit "
+                                  "commercial use. Do not use Sky for commercial work."),
+      QStringLiteral("天空：天空模型的训练数据可能不允许商业使用。请勿将天空功能用于商业作品。"));
+
+  ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test

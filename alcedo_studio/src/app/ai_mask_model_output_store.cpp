@@ -174,7 +174,11 @@ auto AiMaskModelOutputStore::EnsureTask(AiMaskTaskKind task) -> AiMaskStepResult
     return {AiMaskStepStatus::NotFound,
             result.message.empty() ? "The task found nothing." : result.message};
   }
-  auto stored = StoreTaskResult(key, result);
+  // The Sky alpha of the sky head keeps its partial values (SM3.E decision S9); the S3OD alpha
+  // of the other tasks keeps the D23 gain.
+  auto stored = StoreTaskResult(
+      key, result,
+      task == AiMaskTaskKind::Sky ? AiMaskAlphaGain::kOne : AiMaskAlphaGain::kHalfUpscaleFactor);
   if (stored.status == AiMaskStepStatus::Applied && task == AiMaskTaskKind::People) {
     people_ = result.people;
   }
@@ -197,12 +201,12 @@ auto AiMaskModelOutputStore::EnsurePerson(std::uint32_t person_index) -> AiMaskS
   if (result.mask_kind != SegmentationTaskMaskKind::kAlpha) {
     return Failed("the segmentation person task returned no alpha grid");
   }
-  return StoreTaskResult(key, result);
+  return StoreTaskResult(key, result, AiMaskAlphaGain::kHalfUpscaleFactor);
 }
 
 auto AiMaskModelOutputStore::StoreTaskResult(const std::string&            key,
-                                             const SegmentationTaskResult& result)
-    -> AiMaskStepResult {
+                                             const SegmentationTaskResult& result,
+                                             AiMaskAlphaGain alpha_gain) -> AiMaskStepResult {
   AiMaskModelOutput output;
   switch (result.mask_kind) {
     case SegmentationTaskMaskKind::kBinary:
@@ -210,7 +214,7 @@ auto AiMaskModelOutputStore::StoreTaskResult(const std::string&            key,
       break;
     case SegmentationTaskMaskKind::kAlpha:
       output = AiMaskAlphaGrid{result.mask_width, result.mask_height, result.alpha_values,
-                               OrderedBox(result.mask_box)};
+                               OrderedBox(result.mask_box), alpha_gain};
       break;
     case SegmentationTaskMaskKind::kNone:
       return Failed("the segmentation task returned no mask");

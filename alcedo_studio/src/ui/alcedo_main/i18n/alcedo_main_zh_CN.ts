@@ -2262,6 +2262,14 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorAiMaskPanel</name>
+    <message>
+        <location filename="../qml/EditorAiMaskPanel.qml" line="+270"/>
+        <source>Sky: the training data of the Sky model may not permit commercial use. Do not use Sky for commercial work.</source>
+        <translation>天空：天空模型的训练数据可能不允许商业使用。请勿将天空功能用于商业作品。</translation>
+    </message>
+</context>
+<context>
     <name>EditorCloseConfirmDialog</name>
     <message>
         <location filename="../qml/EditorCloseConfirmDialog.qml" line="+86"/>
