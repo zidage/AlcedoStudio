@@ -40,7 +40,7 @@ enum class EditorMaskCreationState : std::uint8_t {
  *
  * Mapping is the UI/item boundary (@c MaskEditGeometry). This service does not
  * reapply crop, zoom, or DPR. Pointer samples have no extra half-pixel offset.
- * @p inside_photograph is the creation press gate; captured drags and presses
+ * @p inside_photograph is the creation press precondition; captured drags and presses
  * on existing handles may set it false.
  */
 struct MaskCreationSample {
@@ -97,6 +97,7 @@ enum class EditorMaskCreationCommandKind : std::uint8_t {
   RemoveMask,
   BeginMaskField,
   SetMaskField,
+  ToggleMaskInvert,
 };
 
 /// Mask value keys used by BeginMaskField / SetMaskField commands, committed
@@ -241,6 +242,14 @@ class EditorMaskCreationController {
   auto ApplyMaskFieldValue(const NodeId& grade_id, const MaskId& mask_id,
                            std::string field_key, nlohmann::json after_value)
       -> EditorMaskCreationResult;
+
+  /**
+   * @brief Set `invert` of (@p grade_id, @p mask_id) to the opposite of its stored value.
+   *
+   * Reads the value when the command runs, so each queued toggle changes the Mask once.
+   * Commits one SetMaskField through the explicit ApplyMaskFieldValue overload.
+   */
+  auto ToggleMaskInvert(const NodeId& grade_id, const MaskId& mask_id) -> EditorMaskCreationResult;
 
   /**
    * @brief Start a creation drag at @p sample.

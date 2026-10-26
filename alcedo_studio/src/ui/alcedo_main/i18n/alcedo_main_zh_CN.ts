@@ -3533,6 +3533,26 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <source>Delete %1</source>
         <translation>删除%1</translation>
     </message>
+    <message>
+        <location line="+1"/>
+        <source>inverted</source>
+        <translation>已反相</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Inverted</source>
+        <translation>已反相</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Turn off Invert for %1</source>
+        <translation>取消反相%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invert %1</source>
+        <translation>反相%1</translation>
+    </message>
 </context>
 <context>
     <name>EditorMaskGroupsPanel</name>

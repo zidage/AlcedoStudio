@@ -1390,7 +1390,8 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
                                   pending.kind == EditorMaskCreationCommandKind::Finish ||
                                   pending.kind == EditorMaskCreationCommandKind::Cancel ||
                                   pending.kind == EditorMaskCreationCommandKind::BeginMaskField ||
-                                  pending.kind == EditorMaskCreationCommandKind::SetMaskField;
+                                  pending.kind == EditorMaskCreationCommandKind::SetMaskField ||
+                                  pending.kind == EditorMaskCreationCommandKind::ToggleMaskInvert;
                          }),
           pending_mask_commands_.end());
     }
@@ -1407,7 +1408,8 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
                                   pending.kind == EditorMaskCreationCommandKind::FinishMode ||
                                   pending.kind == EditorMaskCreationCommandKind::BeginInput ||
                                   pending.kind == EditorMaskCreationCommandKind::BeginMaskField ||
-                                  pending.kind == EditorMaskCreationCommandKind::SetMaskField;
+                                  pending.kind == EditorMaskCreationCommandKind::SetMaskField ||
+                                  pending.kind == EditorMaskCreationCommandKind::ToggleMaskInvert;
                          }),
           pending_mask_commands_.end());
     }
@@ -1536,6 +1538,8 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
     case EditorMaskCreationCommandKind::SetMaskField:
       return mask_creation_.ApplyMaskFieldValue(command.node_id, command.mask_id,
                                               command.field_key, command.field_value);
+    case EditorMaskCreationCommandKind::ToggleMaskInvert:
+      return mask_creation_.ToggleMaskInvert(command.node_id, command.mask_id);
   }
   EditorMaskCreationResult rejected;
   rejected.error = "unknown Mask creation command";

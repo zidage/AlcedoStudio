@@ -81,7 +81,7 @@ Item {
             ? String(root.maskCreation.selectedMaskNodeId || "")
             : ""
 
-    // Rail contract: status text and scroll offset live outside the Loader so
+    // Rail rule: status text and scroll offset live outside the Loader so
     // page switches restore both.
     readonly property string statusMessage: root.nodeController
             ? String(root.nodeController.lastError || "")
@@ -300,6 +300,15 @@ Item {
         }
     }
 
+    // One click inverts the row's Mask without changing the selection; the
+    // owner toggles the stored value, so a second click returns it.
+    function toggleMaskInvert(nodeId, maskId) {
+        if (!root.maskCreation || String(maskId).length === 0) {
+            return
+        }
+        root.maskCreation.toggleMaskInvert(nodeId, maskId)
+    }
+
     function removeMaskFromGroup(nodeId, maskId) {
         if (!root.maskCreation || String(maskId).length === 0) {
             return
@@ -491,7 +500,7 @@ Item {
                 boundsBehavior: Flickable.StopAtBounds
                 reuseItems: true
 
-                // Same scroll-preservation contract as the history list: a
+                // Same scroll-preservation rule as the history list: a
                 // projection rebuild reassigns the model, which must not pin
                 // the viewport back to the top while the selection is visible.
                 property real preservedContentY: 0
@@ -666,6 +675,9 @@ Item {
                     }
                     onMaskClicked: function (maskIndex) {
                         root.selectMaskFromGroup(nodeId, root.maskIdAt(index, maskIndex))
+                    }
+                    onMaskInvertClicked: function (maskIndex) {
+                        root.toggleMaskInvert(nodeId, root.maskIdAt(index, maskIndex))
                     }
                     onMaskDeleteClicked: function (maskIndex) {
                         root.removeMaskFromGroup(nodeId, root.maskIdAt(index, maskIndex))

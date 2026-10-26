@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QMetaObject>
 #include <QPointF>
+#include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlProperty>
@@ -37,6 +38,7 @@ namespace alcedo::ui::test {
 namespace {
 
 using rail_harness::Click;
+using rail_harness::FindVisualItem;
 using rail_harness::ProcessEvents;
 using rail_harness::RailQmlFixture;
 
@@ -229,7 +231,7 @@ class EditorNodesPanelQmlTest : public RailQmlFixture {
   // Presses the group header's name area and drags it to `scene_target` in
   // small steps, then releases. The card travels with the pointer, so the
   // release position resolves to the insertion slot the panel computes.
-  // `card_follows_pointer` is the visual contract: a real reorder drag must
+  // `card_follows_pointer` is the expected visual result: a real reorder drag must
   // move editorMaskGroupDragBody.y; a locked structure must leave it at 0.
   void DragMaskGroupHeaderTo(const QString& node_id, const QPoint& scene_target,
                              bool card_follows_pointer = true) {
@@ -1948,6 +1950,125 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupsAccessiblePhrasesCoverRowsActionsAndRe
     EXPECT_NE(phrase, QStringLiteral("On"));
     EXPECT_NE(phrase, QStringLiteral("Off"));
   }
+}
+
+// Issue 544: the Mask panel Invert checkbox toggles the selected parametric Mask on every click
+// and always shows the stored `invert` value, also after an Undo-like document change.
+TEST_F(EditorNodesPanelQmlTest, MaskPanelInvertCheckboxTogglesAndFollowsTheMask) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  const NodeId grade_id{"grade.primary"};
+  const MaskId mask_id{"mask.radial"};
+  backend_.AddMaskToPrimaryGrade(MakeMask(mask_id, RadialMaskSource{}));
+  auto* adapter = MaskAdapter();
+  ASSERT_NE(adapter, nullptr);
+  adapter->selectMask(QStringLiteral("grade.primary"), QStringLiteral("mask.radial"));
+  backend_.CompleteMaskCommands();
+  ProcessEvents();
+  ASSERT_EQ(adapter->selected_mask_id(), QStringLiteral("mask.radial"));
+
+  QQmlComponent component(
+      &engine_, QUrl::fromLocalFile(rail_harness::QmlDirectory() + "/EditorMasksContextPanel.qml"));
+  std::unique_ptr<QObject> created(component.createWithInitialProperties(
+      {{QStringLiteral("maskCreation"), QVariant::fromValue<QObject*>(adapter)}}));
+  ASSERT_NE(created, nullptr) << component.errorString().toStdString();
+  auto* panel = qobject_cast<QQuickItem*>(created.get());
+  ASSERT_NE(panel, nullptr);
+  panel->setParentItem(window_->contentItem());
+  panel->setZ(1000.0);
+  panel->setSize(QSizeF(320.0, 600.0));
+  ProcessEvents();
+
+  const auto stored_invert = [&] {
+    const auto* grade =
+        dynamic_cast<const ColorGradeNodeModel*>(backend_.document()->Graph().FindNode(grade_id));
+    const auto* mask = grade == nullptr ? nullptr : grade->FindMask(mask_id);
+    return mask != nullptr && mask->invert;
+  };
+  const auto checkbox = [&] {
+    return FindVisualItem(panel, QStringLiteral("editorMasksInvertCheck"));
+  };
+  ASSERT_TRUE(WaitFor([&] {
+    return checkbox() != nullptr && checkbox()->isVisible() && checkbox()->width() > 0.0;
+  }));
+  EXPECT_FALSE(checkbox()->property("checked").toBool());
+
+  for (const bool expected : {true, false}) {
+    Click(window_, checkbox());
+    ASSERT_NE(LastMaskCommand(), nullptr)
+        << "window " << window_->width() << "x" << window_->height() << " checkbox at "
+        << checkbox()->mapToScene(QPointF(0, 0)).x() << ","
+        << checkbox()->mapToScene(QPointF(0, 0)).y() << " size " << checkbox()->width() << "x"
+        << checkbox()->height() << "\n"
+        << warnings_.join('\n').toStdString();
+    EXPECT_EQ(LastMaskCommand()->node_id, grade_id);
+    EXPECT_EQ(LastMaskCommand()->mask_id, mask_id);
+    backend_.CompleteMaskCommands();
+    ProcessEvents();
+    EXPECT_EQ(stored_invert(), expected);
+    EXPECT_EQ(adapter->mask_invert(), expected);
+    EXPECT_TRUE(WaitFor([&] { return checkbox()->property("checked").toBool() == expected; }))
+        << "the Invert checkbox does not show invert=" << expected;
+  }
+
+  // Undo/Redo change the stored value without a Mask command.
+  backend_.SetStoredMaskInvert(grade_id, mask_id, true);
+  ProcessEvents();
+  EXPECT_TRUE(WaitFor([&] { return checkbox()->property("checked").toBool(); }));
+  backend_.SetStoredMaskInvert(grade_id, mask_id, false);
+  ProcessEvents();
+  EXPECT_TRUE(WaitFor([&] { return !checkbox()->property("checked").toBool(); }));
+}
+
+// Issue 544: the Mask Groups row Invert button inverts that row's Mask with one click and a
+// second click returns it, without a change of selection. AI Masks have the same button.
+TEST_F(EditorNodesPanelQmlTest, MaskGroupRowInvertButtonTogglesItsMask) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  const NodeId grade_id{"grade.primary"};
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
+  backend_.AddMaskToPrimaryGrade(grade_mask_test::MakeAiSegmentationMask(MaskId{"mask.ai"}));
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return nodes->has_snapshot(); }));
+  const auto group_row = [this](const QString& mask_id) {
+    return VisualMaskRow(Find(QStringLiteral("editorMaskGroupsPageBody")),
+                         QStringLiteral("editorMaskGroupMaskRow"), mask_id);
+  };
+  const auto invert_button = [&](const QString& mask_id) {
+    return FindVisualItem(group_row(mask_id), QStringLiteral("editorMaskGroupMaskInvertButton"));
+  };
+  const auto stored_invert = [&](const MaskId& mask_id) {
+    const auto* grade =
+        dynamic_cast<const ColorGradeNodeModel*>(backend_.document()->Graph().FindNode(grade_id));
+    const auto* mask = grade == nullptr ? nullptr : grade->FindMask(mask_id);
+    return mask != nullptr && mask->invert;
+  };
+  ASSERT_TRUE(WaitFor([&] {
+    auto* button = invert_button(QStringLiteral("mask.ai"));
+    return button != nullptr && button->isVisible() &&
+           invert_button(QStringLiteral("mask.radial")) != nullptr;
+  })) << warnings_.join('\n').toStdString();
+
+  for (const auto& mask_text : {QStringLiteral("mask.ai"), QStringLiteral("mask.radial")}) {
+    const MaskId mask_id{mask_text.toStdString()};
+    for (const bool expected : {true, false}) {
+      Click(window_, invert_button(mask_text));
+      ASSERT_NE(LastMaskCommand(), nullptr);
+      EXPECT_EQ(LastMaskCommand()->kind, EditorMaskCreationCommandKind::ToggleMaskInvert);
+      EXPECT_EQ(LastMaskCommand()->node_id, grade_id);
+      EXPECT_EQ(LastMaskCommand()->mask_id, mask_id);
+      backend_.CompleteMaskCommands();
+      ProcessEvents();
+      EXPECT_EQ(stored_invert(mask_id), expected);
+      EXPECT_TRUE(WaitFor([&] {
+        auto* row = group_row(mask_text);
+        return row != nullptr && row->property("maskInverted").toBool() == expected;
+      })) << mask_text.toStdString()
+          << " row does not show invert=" << expected;
+    }
+  }
+  EXPECT_TRUE(backend_.ai_mask_edit_open_requests().empty());
+  EXPECT_TRUE(MaskAdapter()->selected_mask_id().isEmpty());
 }
 
 TEST_F(EditorNodesPanelQmlTest, MaskGroupsNarrowPanelKeepsActionsInsideRows) {

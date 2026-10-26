@@ -233,7 +233,7 @@ TEST(AnalyticMaskCreationTest, ExistingRadialMoveUpdatesInteractivePixelsBeforeR
 }
 
 // A center dragged past the photograph edge must stay grabbable: handle
-// presses are not gated on inside_photograph, only creation presses are.
+// presses do not require inside_photograph, only creation presses do.
 TEST(AnalyticMaskCreationTest, ExistingRadialCenterOutsidePhotographCanBeMovedBack) {
   AnalyticCreationHarness harness;
   RadialMaskSource        radial;
@@ -961,6 +961,74 @@ TEST(AnalyticMaskCreationTest, CancellingProvisionalCreationDoesNotPublishDeleti
   EXPECT_EQ(grade->FindMask(preview.mask_id), nullptr);
   EXPECT_EQ(harness.history.working_head(), head_before);
   EXPECT_TRUE(harness.controller.selected_mask_id().Empty());
+}
+
+// Issue 544: the one-click Invert toggles the stored value, so two clicks return the Mask to its
+// first coverage, and each click is one history step that Undo restores.
+TEST(AnalyticMaskCreationTest, ToggleMaskInvertTwiceRestoresCoverageAndUndoRestoresEachStep) {
+  AnalyticCreationHarness harness;
+  RadialMaskSource        radial;
+  radial.major_radius  = 0.22f;
+  radial.minor_radius  = 0.16f;
+  radial.outer_feather = 0.5f;
+  const MaskId mask_id{"mask.invert"};
+  grade_mask_test::AddRadialMask(harness.document, mask_id, radial);
+  auto*      grade    = harness.document.PrimaryGrade();
+  const auto grade_id = grade->Id();
+  const auto coverage = [&] {
+    harness.mix.EvaluateFull(grade->Masks());
+    return CopyMix(harness.mix);
+  };
+  const auto first = coverage();
+  ASSERT_EQ(MixAt(harness.mix, kRaster.width / 2, kRaster.height / 2), 255);
+
+  const auto head_before = harness.history.working_head();
+  const auto once        = harness.controller.ToggleMaskInvert(grade_id, mask_id);
+  ASSERT_TRUE(once.accepted) << once.error;
+  EXPECT_TRUE(once.committed);
+  EXPECT_TRUE(once.quality_requested);
+  ASSERT_TRUE(grade->FindMask(mask_id)->invert);
+  const auto inverted = coverage();
+  ExpectMixMatchesIndependent(harness.mix, *grade->FindMask(mask_id));
+  EXPECT_EQ(MixAt(harness.mix, kRaster.width / 2, kRaster.height / 2), 0);
+  EXPECT_EQ(MixAt(harness.mix, 0, 0), 255);
+  EXPECT_NE(harness.history.working_head(), head_before);
+
+  const auto twice = harness.controller.ToggleMaskInvert(grade_id, mask_id);
+  ASSERT_TRUE(twice.accepted) << twice.error;
+  EXPECT_TRUE(twice.committed);
+  EXPECT_FALSE(grade->FindMask(mask_id)->invert);
+  EXPECT_EQ(coverage(), first);
+
+  std::string error;
+  const auto  undo_second = harness.history.Undo();
+  ASSERT_TRUE(undo_second.moved) << undo_second.error;
+  ASSERT_TRUE(undo_second.selected_commit.has_value());
+  ASSERT_TRUE(ApplyPipelineEditBatch(harness.document,
+                                     BatchFromCommit(*undo_second.selected_commit),
+                                     PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_TRUE(grade->FindMask(mask_id)->invert);
+  EXPECT_EQ(coverage(), inverted);
+
+  const auto undo_first = harness.history.Undo();
+  ASSERT_TRUE(undo_first.moved) << undo_first.error;
+  ASSERT_TRUE(undo_first.selected_commit.has_value());
+  ASSERT_TRUE(ApplyPipelineEditBatch(harness.document, BatchFromCommit(*undo_first.selected_commit),
+                                     PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_FALSE(grade->FindMask(mask_id)->invert);
+  EXPECT_EQ(coverage(), first);
+}
+
+TEST(AnalyticMaskCreationTest, ToggleMaskInvertRejectsMissingMaskWithoutHistory) {
+  AnalyticCreationHarness harness;
+  const auto              head_before = harness.history.working_head();
+  const auto result = harness.controller.ToggleMaskInvert(harness.document.PrimaryGrade()->Id(),
+                                                          MaskId{"mask.missing"});
+  EXPECT_FALSE(result.accepted);
+  EXPECT_FALSE(result.committed);
+  EXPECT_EQ(harness.history.working_head(), head_before);
 }
 
 }  // namespace alcedo

@@ -156,10 +156,15 @@ Item {
                 visible: root.maskSelected
                 enabled: root.maskSelected
                 text: qsTr("Invert")
+                // The owner toggles the stored value, so a click before the
+                // previous one settles still changes the Mask once.
                 checked: root.maskCreation ? root.maskCreation.maskInvert : false
                 onToggled: function (checked) {
+                    void checked
                     if (root.maskCreation)
-                        root.maskCreation.setMaskInvert(checked)
+                        root.maskCreation.toggleMaskInvert(
+                                    String(root.maskCreation.selectedMaskNodeId || ""),
+                                    root.selectedMaskId)
                 }
             }
 

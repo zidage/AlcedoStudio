@@ -124,6 +124,7 @@ auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document
       row.source_kind        = GetMaskSourceKind(mask.source);
       row.display_name       = mask.display_name;
       row.enabled            = mask.enabled;
+      row.invert             = mask.invert;
       row.opacity            = mask.opacity;
       group.masks.push_back(std::move(row));
     }

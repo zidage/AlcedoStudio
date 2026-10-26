@@ -91,6 +91,7 @@ struct EditorMaskGroupMaskRow {
   MaskSourceKind source_kind = MaskSourceKind::Radial;
   std::string    display_name;
   bool           enabled                                                 = true;
+  bool           invert                                                  = false;
   float          opacity                                                 = 1.0F;
 
   auto           operator==(const EditorMaskGroupMaskRow&) const -> bool = default;

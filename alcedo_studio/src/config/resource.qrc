@@ -81,6 +81,7 @@
     <file>panel_icons/stop.svg</file>
     <file>panel_icons/archive.svg</file>
     <file>panel_icons/trash.svg</file>
+    <file>panel_icons/mask-invert.svg</file>
     <file>panel_icons/retry.svg</file>
     <file>panel_icons/github.svg</file>
     <file>panel_icons/transfer-out.svg</file>

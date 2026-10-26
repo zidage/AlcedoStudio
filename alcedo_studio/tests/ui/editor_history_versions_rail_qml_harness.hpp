@@ -538,6 +538,16 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     NotifyHistoryChange();
   }
 
+  /// Write `invert` the way a history Undo/Redo lands: document change, then one notification.
+  void SetStoredMaskInvert(const NodeId& node_id, const MaskId& mask_id, bool invert) {
+    auto* grade = dynamic_cast<ColorGradeNodeModel*>(document_->Graph().FindNode(node_id));
+    if (grade == nullptr || grade->FindMask(mask_id) == nullptr) {
+      return;
+    }
+    grade->SetMaskInvert(mask_id, invert);
+    NotifyHistoryChange();
+  }
+
   void AddMaskToGrade(const NodeId& node_id, MaskModel mask) {
     auto* node  = document_->Graph().FindNode(node_id);
     auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
@@ -597,6 +607,13 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
             grade->SetMaskDisplayName(command.mask_id, command.field_value.get<std::string>());
           }
         } catch (const std::exception&) {
+        }
+      } else if (command.kind == EditorMaskCreationCommandKind::ToggleMaskInvert) {
+        auto*       node  = document_->Graph().FindNode(command.node_id);
+        auto*       grade = dynamic_cast<ColorGradeNodeModel*>(node);
+        const auto* mask  = grade == nullptr ? nullptr : grade->FindMask(command.mask_id);
+        if (mask != nullptr) {
+          grade->SetMaskInvert(command.mask_id, !mask->invert);
         }
       } else if (command.kind == EditorMaskCreationCommandKind::FinishMode ||
                  command.kind == EditorMaskCreationCommandKind::CancelMode) {
