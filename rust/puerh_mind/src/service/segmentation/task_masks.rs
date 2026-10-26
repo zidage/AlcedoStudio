@@ -1,5 +1,6 @@
 //! Host rules of the task masks Subject, Background, Sky, People, and Person (SM3.C plan, section
-//! 2, and SM3.D plan, sections 2.3 and 2.4). Pure functions; no model call.
+//! 2; SM3.D plan, sections 2.3 and 2.4; SM3.E plan, the "sky found" rule of the sky head). Pure
+//! functions; no model call.
 //!
 //! The rules follow the lab MVP (`mask_pipeline.py` of `alcedo-ai-mask-lab`): the Sky regions and
 //! points of `evaluate_quality_photos.py`, the person boxes of `head_model.decode_people` with an
@@ -34,8 +35,13 @@ pub const PERSON_PEAK_COUNT: usize = 20;
 pub const PERSON_MIN_SCORE: f32 = 0.05;
 /// A person box is removed when its IoU with a box of higher score is at least this value.
 pub const PERSON_OVERLAP_LIMIT: f32 = 0.5;
-/// A Subject or Background alpha value of at least this value is inside the mask.
+/// A Subject, Background, or sky alpha value of at least this value is inside the mask.
 pub const ALPHA_INSIDE: f32 = 0.5;
+/// Sky is found when at least this share of the sky head alpha values is inside (SM3.E plan,
+/// decision S3): 0.05 % of the image. On the 1,500 MaSS13K test photos (lab
+/// `results/sky_head/sky_found_rule_test.json`), the rule finds 906 of 938 photos with sky and 15
+/// of 562 photos without sky, the most correct decisions of the measured shares.
+pub const SKY_FOUND_SHARE: f32 = 5e-4;
 /// The crop of a person is the clipped person box widened by this share of the box width on the
 /// left and on the right, and of the box height on the top and on the bottom (SM3.D decision E3).
 /// The value is float64, as in the lab rule, so that both give the same pixel edges.
@@ -384,6 +390,14 @@ pub fn mask_area(mask: &[u8]) -> u32 {
 /// Number of alpha values >= `ALPHA_INSIDE`.
 pub fn alpha_area(alpha: &[f32]) -> u32 {
     alpha.iter().filter(|value| **value >= ALPHA_INSIDE).count() as u32
+}
+
+/// The share of the values of the sky alpha @p alpha that are inside; 0 for an empty alpha.
+pub fn sky_share(alpha: &[f32]) -> f32 {
+    if alpha.is_empty() {
+        return 0.0;
+    }
+    alpha_area(alpha) as f32 / alpha.len() as f32
 }
 
 /// An RGB8 image with a long edge of at most 1024, row-major: the S3OD input image of a photo (C8,

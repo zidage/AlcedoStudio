@@ -4,20 +4,21 @@ package alcedo.ai;
 
 import "ai_common.proto";
 
-// Local AI Mask segmentation (master plan section 9.2, SM3.A, SM3.B, SM3.C, and SM3.D).
+// Local AI Mask segmentation (master plan section 9.2, SM3.A, SM3.B, SM3.C, SM3.D, and SM3.E).
 //
-// The sidecar loads the SAM 2.1 tiny encoder and decoder, the people and sky head, and S3OD from a
-// model directory that the host names in LoadSegmentationModels. Windows runs ONNX Runtime with DirectML; macOS runs compiled
-// Core ML models. A segmentation session holds the image embedding of one image. The host keeps
+// The sidecar loads the SAM 2.1 tiny encoder and decoder, the people and sky head, S3OD, and the
+// sky head from a model directory that the host names in LoadSegmentationModels. Windows runs
+// ONNX Runtime with DirectML; macOS runs compiled Core ML models and has no sky head yet (issue
+// #538). A segmentation session holds the image embedding of one image. The host keeps
 // the selection (points, box, previous logits) and sends all of it with each decode request.
 //
 // The sidecar caches the image embeddings of the 4 most recently used image keys (SM3.B). The
 // image key is an opaque host value that names the image content. Unload and a model change clear
 // the cache.
 //
-// The task masks Subject, Background, Sky, People, and Person (SM3.C, SM3.D) run on the image of
-// a session. The sidecar computes each model result once per image and keeps it with the cached
-// image. The session start runs the people and sky head and keeps one crop of each listed person
+// The task masks Subject, Background, Sky, People, and Person (SM3.C, SM3.D, SM3.E) run on the
+// image of a session. The sidecar computes each model result once per image and keeps it with the
+// cached image; the sky head runs at the first Sky request of an image. The session start runs the people and sky head and keeps one crop of each listed person
 // (the person box plus 10 % per side), so a Person request works also after a start without
 // pixels.
 //
@@ -27,7 +28,7 @@ import "ai_common.proto";
 // Coordinates are normalized to [0, 1] on each axis of the image of the session.
 
 service SegmentationService {
-  // Loads the four models now. A request with the loaded directory and device does
+  // Loads the models now (five with the sky head, four without it). A request with the loaded directory and device does
   // nothing. A request with another directory or device ends all sessions and loads again.
   rpc LoadSegmentationModels(LoadSegmentationModelsRequest) returns (LoadSegmentationModelsResponse);
   // Ends all sessions and unloads the models. Idempotent.
@@ -70,7 +71,7 @@ message GetSegmentationStatusRequest {
 }
 
 message SegmentationModelResidency {
-  string role = 1;    // "encoder", "decoder", "head", or "subject"
+  string role = 1;    // "encoder", "decoder", "head", "subject", or "sky_head"
   string device = 2;  // device label, for example "directml:0" or "coreml-native:cpuonly"
   int64 load_ms = 3;
 }
@@ -176,12 +177,14 @@ enum SegmentationTask {
 
 enum SegmentationTaskMaskKind {
   SEGMENTATION_TASK_MASK_KIND_UNSPECIFIED = 0;
-  // Sky: mask_r8 at the session image size, 255 inside and 0 outside. It is the union of the
-  // region masks, each the bilinear upsampling of its decoder logits with threshold 0.
+  // Sky without the sky head (macOS until issue #538): mask_r8 at the session image size, 255
+  // inside and 0 outside. It is the union of the region masks, each the bilinear upsampling of its
+  // decoder logits with threshold 0.
   SEGMENTATION_TASK_MASK_KIND_BINARY = 1;
-  // Subject, Background, People, and Person: alpha_values in [0, 1]; inside where >= 0.5. The
-  // grid covers mask_box of the session image: the image resized to a long edge of 1024
-  // (Subject, Background, People), or the person crop resized to a long edge of 1024 (Person).
+  // Subject, Background, People, Person, and Sky with the sky head: alpha_values in [0, 1];
+  // inside where >= 0.5. The grid covers mask_box of the session image: the image resized to a
+  // long edge of 1024 (Subject, Background, People), the person crop resized to a long edge of
+  // 1024 (Person), or the image stretched to 1024 x 1024 (Sky; the two axes have their own scale).
   SEGMENTATION_TASK_MASK_KIND_ALPHA = 2;
 }
 
@@ -222,10 +225,12 @@ message RunSegmentationTaskResponse {
   // ALPHA: the normalized rectangle of the session image that the alpha grid covers; (0, 0, 1, 1)
   // except for Person, where it is the crop rectangle.
   SegmentationBox mask_box = 16;
-  // Sky, People, and Person: the presence of the head and its threshold.
+  // Sky with the sky head: the share of the sky alpha values >= 0.5 and the "sky found" share.
+  // Sky without the sky head, People, and Person: the presence of the people and sky head and its
+  // threshold.
   float presence = 8;
   float presence_threshold = 9;
-  uint32 region_count = 10;  // Sky
+  uint32 region_count = 10;  // Sky without the sky head; 0 with it
   repeated SegmentationPerson people = 11;  // People and Person: the full list
   // Subject, Background, and People: the S3OD IoU score of the image; Person: of the crop.
   float subject_score = 12;

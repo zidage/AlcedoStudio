@@ -28,11 +28,18 @@ pub enum SegmentationModelRole {
     Head,
     /// S3OD `s3od-synth` (Subject and Background).
     Subject,
+    /// Sky head on the encoder outputs and the encoder input (the Sky alpha, SM3.E).
+    SkyHead,
 }
 
 impl SegmentationModelRole {
-    pub const ALL: [SegmentationModelRole; 4] =
-        [Self::Encoder, Self::Decoder, Self::Head, Self::Subject];
+    pub const ALL: [SegmentationModelRole; 5] = [
+        Self::Encoder,
+        Self::Decoder,
+        Self::Head,
+        Self::Subject,
+        Self::SkyHead,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -40,6 +47,7 @@ impl SegmentationModelRole {
             Self::Decoder => "decoder",
             Self::Head => "head",
             Self::Subject => "subject",
+            Self::SkyHead => "sky_head",
         }
     }
 }
@@ -147,6 +155,18 @@ pub trait SubjectModel: Send {
     fn run(&mut self, pixel_values: &TensorF32) -> Result<SubjectOutput>;
 }
 
+/// A loaded sky head.
+pub trait SkyHeadModel: Send {
+    /// Runs the sky head once on @p features (made by the encoder of the same backend) and on
+    /// @p pixel_values, the encoder input of the same image (shape [1, 3, 1024, 1024]). Returns the
+    /// sky alpha [1, 1, 1024, 1024] in [0, 1]. The adapter checks the output shape.
+    fn run(
+        &mut self,
+        features: &Arc<dyn ImageFeatures>,
+        pixel_values: &TensorF32,
+    ) -> Result<TensorF32>;
+}
+
 /// The models of one platform and one device.
 pub trait SegmentationBackend: Send + Sync {
     /// Short name of the runtime and device class, for example `onnxruntime-directml`.
@@ -163,6 +183,10 @@ pub trait SegmentationBackend: Send + Sync {
     fn load_head(&self, directory: &Path) -> Result<Box<dyn SegmentationHead>>;
     /// Loads S3OD from @p directory, with the same error rules as the encoder.
     fn load_subject_model(&self, directory: &Path) -> Result<Box<dyn SubjectModel>>;
+    /// Loads the sky head from @p directory and runs it once, with the same error rules as the
+    /// encoder. `None`: the platform has no sky head model yet, and Sky uses the people and sky
+    /// head regions (Core ML until issue #538).
+    fn load_sky_head(&self, directory: &Path) -> Result<Option<Box<dyn SkyHeadModel>>>;
 }
 
 /// A device value that the platform does not support.

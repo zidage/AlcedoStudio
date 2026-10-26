@@ -10,13 +10,14 @@ use anyhow::{Result, bail};
 use super::backend::{
     DecoderOutput, DecoderPrompt, HeadOutput, ImageFeatures, SegmentationBackend,
     SegmentationBackendFactory, SegmentationDecoder, SegmentationEncoder, SegmentationHead,
-    SegmentationModelRole, SubjectModel, SubjectOutput, UnsupportedDevice, features_of,
+    SegmentationModelRole, SkyHeadModel, SubjectModel, SubjectOutput, UnsupportedDevice,
+    features_of,
 };
 use super::model_set::{
     CENTER_LOGITS_SHAPE, CENTER_OFFSET_SHAPE, HEAD_THRESHOLDS_FILE, LOG_SIZE_SHAPE, LOGIT_SIZE,
     MASK_LOGITS_SHAPE, MASK_SCORES_SHAPE, PIXEL_VALUES_SHAPE, PRESENCE_LOGITS_SHAPE,
-    SKY_LOGITS_SHAPE, SUBJECT_IMAGE_SIZE, SUBJECT_MASKS_SHAPE, SUBJECT_PIXEL_VALUES_SHAPE,
-    SUBJECT_SCORES_SHAPE,
+    SKY_ALPHA_SHAPE, SKY_LOGITS_SHAPE, SUBJECT_IMAGE_SIZE, SUBJECT_MASKS_SHAPE,
+    SUBJECT_PIXEL_VALUES_SHAPE, SUBJECT_SCORES_SHAPE,
 };
 use super::tensor::TensorF32;
 
@@ -67,6 +68,15 @@ pub struct FakeCalls {
     /// When true, the fake decoder marks token 0 at the cell `plane - 1 - x`, where x is the first
     /// decoder coordinate, so masks of different prompts differ.
     pub mark_prompt_cell: std::sync::atomic::AtomicBool,
+    pub sky_head_runs: AtomicUsize,
+    /// Number of the next sky head runs that fail.
+    pub sky_head_failures: AtomicUsize,
+    /// The sky alpha of every fake sky head run after the warm-up (1024 x 1024 values); `None`:
+    /// all 0, no sky.
+    pub sky_alpha: Mutex<Option<Vec<f32>>>,
+    /// The first value of the encoder input of every sky head run after the warm-up, so a test
+    /// can check that the sky head reads the encoder input of its image.
+    pub sky_head_first_inputs: Mutex<Vec<f32>>,
 }
 
 /// A head output without sky and without people: all logits -10.
@@ -86,6 +96,8 @@ pub fn empty_head_output() -> HeadOutput {
 pub struct FakeFactory {
     pub calls: Arc<FakeCalls>,
     pub failing_role: Option<SegmentationModelRole>,
+    /// False: the backend has no sky head, as the Core ML backend until issue #538.
+    pub has_sky_head: bool,
 }
 
 impl FakeFactory {
@@ -93,6 +105,15 @@ impl FakeFactory {
         Self {
             calls: Arc::new(FakeCalls::default()),
             failing_role: None,
+            has_sky_head: true,
+        }
+    }
+
+    /// A factory whose backend has no sky head (the Sky regions of the people and sky head).
+    pub fn without_sky_head() -> Self {
+        Self {
+            has_sky_head: false,
+            ..Self::new()
         }
     }
 }
@@ -108,6 +129,7 @@ impl SegmentationBackendFactory for FakeFactory {
             device: device.to_string(),
             calls: self.calls.clone(),
             failing_role: self.failing_role,
+            has_sky_head: self.has_sky_head,
         }))
     }
 }
@@ -116,6 +138,7 @@ struct FakeBackend {
     device: String,
     calls: Arc<FakeCalls>,
     failing_role: Option<SegmentationModelRole>,
+    has_sky_head: bool,
 }
 
 impl FakeBackend {
@@ -163,6 +186,44 @@ impl SegmentationBackend for FakeBackend {
         Ok(Box::new(FakeSubjectModel {
             calls: self.calls.clone(),
         }))
+    }
+
+    fn load_sky_head(&self, _directory: &Path) -> Result<Option<Box<dyn SkyHeadModel>>> {
+        if !self.has_sky_head {
+            return Ok(None);
+        }
+        self.count_load(SegmentationModelRole::SkyHead)?;
+        Ok(Some(Box::new(FakeSkyHead {
+            calls: self.calls.clone(),
+        })))
+    }
+}
+
+struct FakeSkyHead {
+    calls: Arc<FakeCalls>,
+}
+
+impl SkyHeadModel for FakeSkyHead {
+    fn run(
+        &mut self,
+        features: &Arc<dyn ImageFeatures>,
+        pixel_values: &TensorF32,
+    ) -> Result<TensorF32> {
+        features_of::<FakeImageFeatures>(features.as_ref())?;
+        pixel_values.expect_shape("pixel_values", &PIXEL_VALUES_SHAPE)?;
+        self.calls.sky_head_runs.fetch_add(1, Ordering::SeqCst);
+        self.calls
+            .sky_head_first_inputs
+            .lock()
+            .expect("sky head inputs")
+            .push(pixel_values.data()[0]);
+        if take_failure(&self.calls.sky_head_failures) {
+            bail!("fake sky head run failed");
+        }
+        match self.calls.sky_alpha.lock().expect("sky alpha").clone() {
+            Some(alpha) => TensorF32::new(SKY_ALPHA_SHAPE.to_vec(), alpha),
+            None => Ok(TensorF32::zeros(SKY_ALPHA_SHAPE.to_vec())),
+        }
     }
 }
 
