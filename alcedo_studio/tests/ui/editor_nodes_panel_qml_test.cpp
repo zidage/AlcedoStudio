@@ -9,20 +9,25 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlProperty>
+#include <QQmlPropertyMap>
 #include <QQuickItem>
 #include <QSignalSpy>
 #include <QTranslator>
 #include <QuickQanava>
 #include <algorithm>
 #include <functional>
+#include <memory>
 
+#include "app/ai_sidecar_runtime_service.hpp"
 #include "app/editor_node_graph_projection.hpp"
+#include "edit/graph/grade_owned_mask_support.hpp"
 #include "editor_history_versions_rail_qml_harness.hpp"
 #include "qanConnector.h"
 #include "qanGraph.h"
 #include "qanNode.h"
 #include "qanNodeItem.h"
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
+#include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 
@@ -88,6 +93,23 @@ void CollectAccessiblePhrases(QObject* object, QStringList* phrases) {
   }
 }
 
+/// Row @p object_name with property maskId @p mask_id in the visual tree under @p root.
+auto VisualMaskRow(QQuickItem* root, const QString& object_name, const QString& mask_id)
+    -> QQuickItem* {
+  if (root == nullptr) {
+    return nullptr;
+  }
+  for (auto* child : root->childItems()) {
+    if (child->objectName() == object_name && child->property("maskId").toString() == mask_id) {
+      return child;
+    }
+    if (auto* nested = VisualMaskRow(child, object_name, mask_id)) {
+      return nested;
+    }
+  }
+  return nullptr;
+}
+
 class NodesPanelTextExpander final : public QTranslator {
  public:
   bool    isEmpty() const override { return false; }
@@ -119,7 +141,22 @@ class NodesPanelTextExpander final : public QTranslator {
 
 class EditorNodesPanelQmlTest : public RailQmlFixture {
  protected:
-  void SetUp() override { RailQmlFixture::SetUp(); }
+  void SetUp() override {
+    // The production AI Mask tool on the fake session; the panels read it as appModules.aiMaskTool.
+    app_modules_.insert(QStringLiteral("aiMaskTool"), QVariant::fromValue<QObject*>(&ai_mask_tool_));
+    engine_.rootContext()->setContextProperty(QStringLiteral("appModules"), &app_modules_);
+    RailQmlFixture::SetUp();
+  }
+
+  void TearDown() override {
+    engine_.rootContext()->setContextProperty(QStringLiteral("appModules"), QVariant{});
+    ProcessEvents();
+  }
+
+  std::shared_ptr<AiSidecarRuntimeService> ai_runtime_ = std::make_shared<AiSidecarRuntimeService>();
+  EditorAiMaskTool                         ai_mask_tool_{
+      &controller_, EditorAiMaskTool::Services{[this] { return ai_runtime_; }, {}, {}}};
+  QQmlPropertyMap app_modules_;
 
   auto Controller() -> EditorNodeController* {
     return window_ == nullptr ? nullptr : window_->findChild<EditorNodeController*>();
@@ -1497,6 +1534,83 @@ TEST_F(EditorNodesPanelQmlTest, MaskRowClickQueuesSelectMaskWithExplicitIdentity
   EXPECT_EQ(command->node_id, NodeId{"grade.primary"});
   EXPECT_EQ(command->mask_id, MaskId{"mask.one"});
   EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+}
+
+// Issue #517: a click on an AI Mask row opens the AI Mask edit of that stored Mask; a Radial row
+// only selects its Mask. ListView and Repeater rows are found in the visual tree.
+TEST_F(EditorNodesPanelQmlTest, MaskGroupAiMaskRowClickOpensStoredAiMaskEdit) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
+  backend_.AddMaskToPrimaryGrade(grade_mask_test::MakeAiSegmentationMask(MaskId{"mask.ai"}));
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return nodes->has_snapshot(); }));
+  const auto group_row = [this](const QString& mask_id) {
+    return VisualMaskRow(Find(QStringLiteral("editorMaskGroupsPageBody")),
+                         QStringLiteral("editorMaskGroupMaskRow"), mask_id);
+  };
+  ASSERT_TRUE(WaitFor([&] {
+    auto* row = group_row(QStringLiteral("mask.ai"));
+    return row != nullptr && row->isVisible() && group_row(QStringLiteral("mask.radial")) != nullptr;
+  })) << warnings_.join('\n').toStdString();
+
+  Click(window_, group_row(QStringLiteral("mask.radial")));
+  ASSERT_NE(LastMaskCommand(), nullptr);
+  EXPECT_EQ(LastMaskCommand()->kind, EditorMaskCreationCommandKind::SelectMask);
+  EXPECT_EQ(LastMaskCommand()->mask_id, MaskId{"mask.radial"});
+  EXPECT_TRUE(backend_.ai_mask_edit_open_requests().empty());
+  EXPECT_FALSE(ai_mask_tool_.active());
+
+  Click(window_, group_row(QStringLiteral("mask.ai")));
+  ASSERT_NE(LastMaskCommand(), nullptr);
+  EXPECT_EQ(LastMaskCommand()->kind, EditorMaskCreationCommandKind::SelectMask);
+  EXPECT_EQ(LastMaskCommand()->mask_id, MaskId{"mask.ai"});
+  ASSERT_EQ(backend_.ai_mask_edit_open_requests().size(), 1U);
+  EXPECT_EQ(backend_.ai_mask_edit_open_requests().front().grade_id, NodeId{"grade.primary"});
+  EXPECT_EQ(backend_.ai_mask_edit_open_requests().front().mask_id,
+            std::optional<MaskId>{MaskId{"mask.ai"}});
+  EXPECT_TRUE(ai_mask_tool_.active());
+  EXPECT_TRUE(ai_mask_tool_.editing_stored_mask());
+}
+
+TEST_F(EditorNodesPanelQmlTest, NodeDrawerAiMaskRowClickOpensStoredAiMaskEdit) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
+  backend_.AddMaskToPrimaryGrade(grade_mask_test::MakeAiSegmentationMask(MaskId{"mask.ai"}));
+  OpenNodesPage();
+  auto* adapter = Adapter();
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return adapter->NodeFor(NodeId{"grade.primary"}) != nullptr; }));
+  auto* grade_item = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(grade_item, nullptr);
+  const auto drawer_row = [grade_item](const QString& mask_id) {
+    return VisualMaskRow(grade_item, QStringLiteral("editorNodeMaskTypeRow"), mask_id);
+  };
+  ASSERT_TRUE(WaitFor([&] {
+    auto* row = drawer_row(QStringLiteral("mask.ai"));
+    return row != nullptr && row->isVisible() && drawer_row(QStringLiteral("mask.radial")) != nullptr;
+  })) << warnings_.join('\n').toStdString();
+
+  auto* radial_row = drawer_row(QStringLiteral("mask.radial"));
+  Click(window_, radial_row, QPointF(radial_row->width() / 4.0, radial_row->height() / 2.0));
+  ASSERT_NE(LastMaskCommand(), nullptr);
+  EXPECT_EQ(LastMaskCommand()->kind, EditorMaskCreationCommandKind::SelectMask);
+  EXPECT_EQ(LastMaskCommand()->mask_id, MaskId{"mask.radial"});
+  EXPECT_TRUE(backend_.ai_mask_edit_open_requests().empty());
+  EXPECT_FALSE(ai_mask_tool_.active());
+
+  auto* ai_row = drawer_row(QStringLiteral("mask.ai"));
+  Click(window_, ai_row, QPointF(ai_row->width() / 4.0, ai_row->height() / 2.0));
+  ASSERT_NE(LastMaskCommand(), nullptr);
+  EXPECT_EQ(LastMaskCommand()->kind, EditorMaskCreationCommandKind::SelectMask);
+  EXPECT_EQ(LastMaskCommand()->mask_id, MaskId{"mask.ai"});
+  ASSERT_EQ(backend_.ai_mask_edit_open_requests().size(), 1U);
+  EXPECT_EQ(backend_.ai_mask_edit_open_requests().front().grade_id, NodeId{"grade.primary"});
+  EXPECT_EQ(backend_.ai_mask_edit_open_requests().front().mask_id,
+            std::optional<MaskId>{MaskId{"mask.ai"}});
+  EXPECT_TRUE(ai_mask_tool_.active());
+  EXPECT_TRUE(ai_mask_tool_.editing_stored_mask());
 }
 
 // Mask ids are unique only within a grade: selecting a Mask must not also

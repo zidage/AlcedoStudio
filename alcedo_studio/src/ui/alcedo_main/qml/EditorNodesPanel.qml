@@ -18,6 +18,8 @@ Item {
     property var nodeLayoutStore: null
 
     readonly property var maskCreation: root.editorSession ? root.editorSession.maskCreation : null
+    readonly property var aiMaskTool: typeof appModules !== "undefined" && appModules
+                                      ? appModules.aiMaskTool : null
 
     property bool renameVisible: false
     property string renameNodeId: ""
@@ -168,6 +170,10 @@ Item {
         }
         root.selectDrawerOwner(nodeId)
         root.maskCreation.selectMask(nodeId, maskId)
+        // An AI Mask row opens its AI Mask edit (stored coverage, no model call).
+        if (root.aiMaskTool) {
+            root.aiMaskTool.openSelectedAiMask()
+        }
     }
 
     function removeMaskFromDrawer(nodeId, maskId) {

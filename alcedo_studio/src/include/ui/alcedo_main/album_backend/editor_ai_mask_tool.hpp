@@ -126,6 +126,10 @@ class EditorAiMaskTool final : public QObject {
   Q_INVOKABLE void   open();
   /// Opens the AI Mask that the Mask list selects (decision M15: stored coverage, no model call).
   Q_INVOKABLE void   openSelectedMask();
+  /// Opens the selected Mask like openSelectedMask() when it is an AI Mask; does nothing for a
+  /// Radial or Linear Gradient Mask. The Mask Group panel and the node Mask drawer call it after
+  /// a row click selects the Mask (issue #517).
+  Q_INVOKABLE void   openSelectedAiMask();
   Q_INVOKABLE void   bindInteractionItem(QObject* interaction);
   Q_INVOKABLE void   setSubtract(bool subtract);
   /// "point", "box", or "path".
@@ -296,6 +300,8 @@ class EditorAiMaskTool final : public QObject {
   void PostToWorker(std::function<void(Worker& worker)> task);
   [[nodiscard]] auto Backend() const -> IEditorSessionBackend*;
   [[nodiscard]] auto SelectedGradeId() const -> NodeId;
+  /// True when Color Grade @p grade_id of the published document has AI Mask @p mask_id.
+  [[nodiscard]] auto IsAiMask(const NodeId& grade_id, const MaskId& mask_id) const -> bool;
   [[nodiscard]] static auto         ReadView(const AiMaskEditSession& session) -> SessionView;
   [[nodiscard]] static auto         StepResultText(const AiMaskStepResult& result) -> QString;
 

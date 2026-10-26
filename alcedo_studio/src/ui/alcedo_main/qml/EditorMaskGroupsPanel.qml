@@ -23,6 +23,8 @@ Item {
     property var nodeLayoutStore: null
 
     readonly property var maskCreation: root.editorSession ? root.editorSession.maskCreation : null
+    readonly property var aiMaskTool: typeof appModules !== "undefined" && appModules
+                                      ? appModules.aiMaskTool : null
     readonly property var maskThumbnails: root.nodeController ? root.nodeController.maskThumbnails
                                                               : null
 
@@ -292,6 +294,10 @@ Item {
         // another group before the new selection lands on this Mask.
         root.selectGroup(nodeId)
         root.maskCreation.selectMask(nodeId, maskId)
+        // An AI Mask row opens its AI Mask edit (stored coverage, no model call).
+        if (root.aiMaskTool) {
+            root.aiMaskTool.openSelectedAiMask()
+        }
     }
 
     function removeMaskFromGroup(nodeId, maskId) {

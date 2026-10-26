@@ -45,6 +45,13 @@ Open stages are counted (1 to 5): open the edit, render the analysis image, star
 runtime, load the models, read the image. A model run, an update, and the commit have no
 count and use the indeterminate bar. `DESIGN.md` ("AI Mask tool panel") has the icons.
 
+Open entry points (issue #517). The AI Mask header button opens a new AI Mask on the selected
+Color Grade, or the selected AI Mask. A click on an AI Mask row in the Mask Group panel or in the
+node Mask drawer selects that Mask and opens its AI Mask edit
+(`EditorAiMaskTool::openSelectedAiMask` -> `OpenAiMaskEdit(grade, mask_id)`): the stored coverage
+shows without a model call (SM5 M15). A click on a Radial or Linear Gradient row only selects the
+Mask, as before. While the tool is open, a row click opens nothing.
+
 Prompt tools and groups (SM5 M3 without the input mode switch):
 
 - Point: a click adds one point. It joins the open prompt group; Add and Subtract are its
@@ -163,7 +170,9 @@ The controller owns one serial session worker. No blocking inference runs on the
 
 **Steps.**
 
-1. Open through the existing editor lease and analysis-image operations.
+1. Open through the existing editor lease and analysis-image operations. Open entry points:
+   the AI Mask header button, and a click on an AI Mask row in the Mask Group panel or the node
+   Mask drawer (section 1, issue #517).
 2. Construct or restore the existing session and display stored coverage through SM8.
 3. Expose loading, ready, previous-result/error, and closing states through focused model properties.
 4. Implement Cancel/Close and image-navigation cleanup with the existing lifecycle identities.
@@ -466,4 +475,47 @@ Manual product checks: alcedo_main started for 30 s without a new QML warning in
   panel, cursors, and markers were not checked in the window with a photo.
 Remaining issues or unavailable platforms: no keyboard rules or translations yet (SM9.3);
   macOS not built.
+```
+
+### 7.4 Mask list click opens the AI Mask edit (issue #517)
+
+```text
+Phase / date / status: SM9 MVP fix / 2026-10-25 / implemented on Windows.
+Source revision and branch: c86b1fbb (main); branch fix/ai-mask-list-click-opens-edit.
+Actual changed modules and diff size: about 200 lines.
+  - EditorAiMaskTool::openSelectedAiMask and IsAiMask (reads the published document).
+  - EditorMaskGroupsPanel.qml selectMaskFromGroup, EditorNodesPanel.qml selectMaskFromDrawer.
+  - Test harness: the fake backend records OpenAiMaskEdit; EditorNodesPanelQmlTest binds a real
+    EditorAiMaskTool as appModules.aiMaskTool.
+Implemented behavior: section 1 "Open entry points". A click on an AI Mask row selects the Mask
+  and opens its AI Mask edit (stored coverage, no model call). Radial and Linear Gradient rows
+  only select their Mask.
+Decisions made during the work:
+  - The Mask kind comes from the published document, not from the adapter tool kind: the
+    adapter sets the tool kind only after the owner applies the queued SelectMask.
+  - The open uses the adapter selection after the click, so a refused selection (another Mask
+    edit, comparison, locked structure) opens nothing new.
+  - Order is safe: OpenAiMaskEdit settles the pending Mask commands (SettleMaskInputForBoundary)
+    before it opens, so the queued SelectMask is applied first.
+Primary success call chain: row click -> selectMaskFromGroup / selectMaskFromDrawer ->
+  EditorMaskCreationAdapter::selectMask (queued SelectMask) ->
+  EditorAiMaskTool::openSelectedAiMask -> IsAiMask -> OpenFor(mask_id) ->
+  IEditorSessionBackend::OpenAiMaskEdit(grade, mask_id) -> stored source and asset (M15).
+Primary failure and restore call chain: unchanged from openSelectedMask; a refused open shows
+  the real error in the tool and Close ends it.
+Commands and exit codes:
+  scripts\msvc_env.cmd --build --preset win_debug --target EditorNodesPanelQmlTest
+    EditorVersionsPanelQmlTest EditorHistoryTransactionsPanelQmlTest
+    EditorHistoryVersionsRailLifecycleQmlTest alcedo_main: 0
+  EditorNodesPanelQmlTest.exe: 81/81 passed (1 disabled, existing).
+  EditorVersionsPanelQmlTest.exe 19/19, EditorHistoryTransactionsPanelQmlTest.exe 7/7,
+    EditorHistoryVersionsRailLifecycleQmlTest.exe 7/7 passed (shared harness changed).
+  New: MaskGroupAiMaskRowClickOpensStoredAiMaskEdit, NodeDrawerAiMaskRowClickOpensStoredAiMaskEdit.
+    Both fail without the QML change (0 OpenAiMaskEdit requests, expected 1).
+Manual product checks: not run in the window (no stored AI Mask was opened from the list by
+  hand).
+Remaining issues or unavailable platforms:
+  - #526: QTRY waits in the gtest QML panel tests return without a failure, and
+    MaskGroupDelegates() finds no ListView delegate; many existing panel tests check nothing.
+  - macOS not built.
 ```
