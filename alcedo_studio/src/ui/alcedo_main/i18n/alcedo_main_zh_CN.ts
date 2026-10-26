@@ -3748,6 +3748,11 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <source>Mask transition width</source>
         <translation>蒙版过渡宽度</translation>
     </message>
+    <message>
+        <location line="+1"/>
+        <source>Confirm</source>
+        <translation>确认</translation>
+    </message>
 </context>
 <context>
     <name>EditorNodeDelegate</name>

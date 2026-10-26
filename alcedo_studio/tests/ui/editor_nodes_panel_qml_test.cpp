@@ -205,6 +205,25 @@ class EditorNodesPanelQmlTest : public RailQmlFixture {
     return nullptr;
   }
 
+  /// The production Mask panel bound to the real adapter, on top of the rail in the test window.
+  auto CreateMasksContextPanel() -> std::unique_ptr<QObject> {
+    QQmlComponent            component(&engine_, QUrl::fromLocalFile(rail_harness::QmlDirectory() +
+                                                                     "/EditorMasksContextPanel.qml"));
+    std::unique_ptr<QObject> created(component.createWithInitialProperties(
+        {{QStringLiteral("maskCreation"), QVariant::fromValue<QObject*>(MaskAdapter())}}));
+    if (created == nullptr) {
+      warnings_.push_back(component.errorString());
+      return nullptr;
+    }
+    if (auto* panel = qobject_cast<QQuickItem*>(created.get())) {
+      panel->setParentItem(window_->contentItem());
+      panel->setZ(1000.0);
+      panel->setSize(QSizeF(320.0, 600.0));
+    }
+    ProcessEvents();
+    return created;
+  }
+
   auto LastMaskCommand() -> const EditorMaskCreationCommand* {
     const auto& commands = backend_.mask_commands();
     return commands.empty() ? nullptr : &commands.back();
@@ -1966,17 +1985,9 @@ TEST_F(EditorNodesPanelQmlTest, MaskPanelInvertCheckboxTogglesAndFollowsTheMask)
   ProcessEvents();
   ASSERT_EQ(adapter->selected_mask_id(), QStringLiteral("mask.radial"));
 
-  QQmlComponent component(
-      &engine_, QUrl::fromLocalFile(rail_harness::QmlDirectory() + "/EditorMasksContextPanel.qml"));
-  std::unique_ptr<QObject> created(component.createWithInitialProperties(
-      {{QStringLiteral("maskCreation"), QVariant::fromValue<QObject*>(adapter)}}));
-  ASSERT_NE(created, nullptr) << component.errorString().toStdString();
-  auto* panel = qobject_cast<QQuickItem*>(created.get());
-  ASSERT_NE(panel, nullptr);
-  panel->setParentItem(window_->contentItem());
-  panel->setZ(1000.0);
-  panel->setSize(QSizeF(320.0, 600.0));
-  ProcessEvents();
+  const auto created = CreateMasksContextPanel();
+  auto*      panel   = qobject_cast<QQuickItem*>(created.get());
+  ASSERT_NE(panel, nullptr) << warnings_.join('\n').toStdString();
 
   const auto stored_invert = [&] {
     const auto* grade =
@@ -2017,6 +2028,42 @@ TEST_F(EditorNodesPanelQmlTest, MaskPanelInvertCheckboxTogglesAndFollowsTheMask)
   backend_.SetStoredMaskInvert(grade_id, mask_id, false);
   ProcessEvents();
   EXPECT_TRUE(WaitFor([&] { return !checkbox()->property("checked").toBool(); }));
+}
+
+// The Mask panel Confirm button ends the parametric Mask edit the same way Escape does: one
+// FinishMode command, Mask controls inactive, and the previous adjustment panel restored.
+TEST_F(EditorNodesPanelQmlTest, MaskPanelConfirmFinishesMaskEditAndReturnsToPriorPanel) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
+  controller_.set_active_adjustment_panel(QStringLiteral("lut"));
+  auto* adapter = MaskAdapter();
+  ASSERT_NE(adapter, nullptr);
+  const auto created = CreateMasksContextPanel();
+  auto*      panel   = qobject_cast<QQuickItem*>(created.get());
+  ASSERT_NE(panel, nullptr) << warnings_.join('\n').toStdString();
+  const auto confirm = [&] { return FindVisualItem(panel, QStringLiteral("editorMasksConfirm")); };
+  ASSERT_NE(confirm(), nullptr);
+  EXPECT_FALSE(confirm()->isVisible()) << "Confirm shows with no Mask edit";
+
+  adapter->selectMask(QStringLiteral("grade.primary"), QStringLiteral("mask.radial"));
+  backend_.CompleteMaskCommands();
+  ProcessEvents();
+  ASSERT_TRUE(adapter->mask_controls_active());
+  ASSERT_EQ(controller_.active_adjustment_panel(), QStringLiteral("masks"));
+  ASSERT_TRUE(WaitFor([&] { return confirm()->isVisible() && confirm()->width() > 0.0; }));
+  const QPointF bottom_right =
+      panel->mapFromItem(confirm(), QPointF(confirm()->width(), confirm()->height()));
+  EXPECT_LE(bottom_right.x(), panel->width() + 0.5);
+  EXPECT_LE(bottom_right.y(), panel->height() + 0.5);
+
+  Click(window_, confirm());
+
+  ASSERT_TRUE(backend_.mask_creation_commands_pending());
+  ASSERT_FALSE(backend_.mask_commands().empty());
+  EXPECT_EQ(backend_.mask_commands().back().kind, EditorMaskCreationCommandKind::FinishMode);
+  EXPECT_FALSE(adapter->mask_controls_active());
+  EXPECT_TRUE(adapter->selected_mask_id().isEmpty());
+  EXPECT_EQ(controller_.active_adjustment_panel(), QStringLiteral("lut"));
 }
 
 // Issue 544: the Mask Groups row Invert button inverts that row's Mask with one click and a

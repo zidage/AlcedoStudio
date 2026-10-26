@@ -3207,6 +3207,11 @@ Original source files on disk will be kept.</source>
         <source>Mask transition width</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location line="+1"/>
+        <source>Confirm</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>EditorNodeDelegate</name>
