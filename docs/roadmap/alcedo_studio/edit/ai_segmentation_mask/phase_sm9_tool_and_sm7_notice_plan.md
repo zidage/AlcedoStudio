@@ -577,3 +577,58 @@ Remaining issues or unavailable platforms:
   - #528: the segmentation model load (4.4 s) is now most of the wait.
   - macOS not built (CoreML semantic engine construction is behind the same LazySemanticEngine).
 ```
+
+### 7.6 S3OD task step time in the app (issue #530)
+
+```text
+Phase / date / status: SM9 MVP investigation / 2026-10-25 / cause found on Windows; the fixes
+  are #531 and #532.
+Source revision and branch: 48f3a6f0 (PR #529); branch fix/ai-mask-s3od-task-step-time.
+Actual changed modules and diff size: about 20 lines.
+  - Rust sidecar: SegmentationEngine logs each computed task ("ran segmentation task Subject in
+    N ms") and each S3OD run ("ran S3OD in N ms (model run M ms)").
+Implemented behavior:
+  - The sidecar log shows the time of each task run and of each S3OD model run. Before, the
+    sidecar logged nothing for a task run, and the app log could not show where the time went.
+Measured split of one Subject step (release app and sidecar, DirectML, RTX 3080 Laptop GPU
+  8 GB, temporary log lines in the app and the sidecar, removed after the measurement):
+  - App: RunTask round trip 8989 ms, of which the sidecar reported model_ms 8981 ms; alpha
+    conversion with the guide 15 - 17 ms; compose 22 - 64 ms; ReadView 0 - 1 ms.
+  - Sidecar: pixel values 5 - 7 ms, subject model lock 0 ms, S3OD model run 8490 - 9711 ms,
+    alpha select 0 ms. The same time on every run: Subject on two photos, two person crops.
+    People after Subject reads the stored alpha (0 ms).
+Cause:
+  - The GPU memory does not fit. Without the app, one process with the four segmentation models
+    uses 838 MB dedicated after the load, 1,894 MB after the first encoder run, and 2,955 MB
+    after the first S3OD run (shared about 0.6 GB); S3OD runs in 196 - 288 ms, the encoder in
+    150 - 320 ms.
+  - The editor with one photo open (OpenCL backend) uses 2,707 MB dedicated GPU memory against
+    614 MB in the library. Other processes used 2.8 GB before the app started.
+  - With the editor open, the same process has 1,933 MB dedicated and 1,670 MB shared memory,
+    and S3OD takes 7.4 - 8.8 s per run; sometimes the encoder takes 1.5 - 1.9 s. In the app
+    during a Subject step, the GPU had 7,761 of 8,192 MiB in use and the sidecar had 1,422 MB
+    dedicated and 2,182 MB shared memory.
+  - Not the cause: the app-side steps, the gRPC transfer, a first-run cost of the DirectML
+    session (each run is slow), and the DLLs (the same DirectML.dll; ORT is linked statically).
+Decisions made during the work:
+  - The fixes need their own work: #532 reduces the GPU memory that the sidecar keeps (the
+    DirectML EP of this ORT version has no option to release or share its work buffers);
+    #531 reduces the GPU memory of the editor.
+  - The temporary app log lines are not kept: the tool already logs the step time, and the
+    new sidecar lines show the model time.
+Primary success call chain: EditorAiMaskTool step -> AiMaskEditSession::AddTask -> Apply ->
+  EnsureOutputs -> AiMaskModelOutputStore::EnsureTask -> AiMaskSegmentationService::RunTask ->
+  RunSegmentationTask (gRPC) -> SegmentationEngine::run_task -> subject_task ->
+  subject_alpha_of -> S3OD model run -> Compose -> ConvertModelOutputToCoverage.
+Commands and exit codes:
+  cargo test -- --skip live_ (rust/puerh_mind): 0; 371 + 10 passed, 0 failed.
+  cargo clippy --release --all-targets: 0; 70 warnings before and after the change.
+  Temporary engine timing test (4 rounds of start and Subject on a 4096 px JPEG), run without
+    the app and with the editor open; not committed.
+Manual product checks (real window, release app and sidecar, project sm9mvp, DSC00800.ARW and
+  020A0059.CR3): the new sidecar lines appear in the app log, for example
+  "ran S3OD in 8145 ms (model run 8138 ms)" and "ran segmentation task Subject in 8147 ms".
+Remaining issues or unavailable platforms:
+  - #532 (sidecar GPU memory) and #531 (editor GPU memory) fix the step time.
+  - macOS not measured (Core ML has a different memory model).
+```
