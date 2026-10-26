@@ -2,8 +2,8 @@
 
 Date: 2026-10-26.
 
-Status: the Rust part (#536) is implemented and verified on Windows (section 9). The host part
-(#537) and the Core ML part (#538) are open.
+Status: the Rust part (#536) and the host part (#537) are implemented and verified on Windows
+(sections 9 and 10). The Core ML part (#538) is open.
 
 Parent plan: [AI Segmentation Mask Master Plan](../ai_segmentation_mask_master_plan.md), decision
 D24 and the SM3.E entry of the phase summary.
@@ -50,6 +50,8 @@ Source of the model: lab issue zidage/alcedo-ai-mask-lab#10, lab PR zidage/alced
 | S6 | The model set id stays `alcedo-ai-mask-v1`. | The model set is not published yet (SM2, SM10). |
 | S7 | The DirectML session of the sky head switches off the memory arena (`ep.dml.disable_memory_arena`), as the encoder and S3OD do (#532). | With the arena, the session keeps 1,150 MB of dedicated GPU memory after its first run; without it, 122 MB. A run takes 50 ms instead of 30 ms, once per image (section 9.3). |
 | S8 | The license of the sky head is recorded in master plan D5 and section 8.2.1. The user-facing notice is part of #537. | U18. No model directory license file exists yet for any model; SM2 makes the published directory. |
+| S9 | The host upscales the Sky alpha of the sky head with the joint bilateral upsampling of D23 and a gain of 1 (`AiMaskAlphaGain::kOne`). Subject, Background, People, and Person keep the D23 gain of half the larger upscale factor. | The D23 gain was made for the almost binary S3OD alpha. At a 4096 x 3072 session image it is 2, so it moves the partial sky alpha at twigs to 0 or 1. Measured on 120 MaSS13K test photos (section 10.2): gain 1 has the lowest error on the partial alpha (0.200 against 0.258) and keeps 81 % of the partial target pixels partial (D23: 42 %); the total error and the edge error are equal within 1 %. |
+| S10 | The notice of U18 is a static caption with an info icon under the four task buttons of the AI Mask panel: "Sky: the training data of the Sky model may not permit commercial use. Do not use Sky for commercial work." It is always shown while the panel is open. The Chinese text is a manual entry in `alcedo_main_zh_CN.ts`. | The user must read it before the first Sky run (#537), not only in a tooltip. A static caption next to the Sky button needs no state. |
 
 ### 1.4 Rejected options
 
@@ -99,6 +101,12 @@ lab measurement of S3.
 
 Excluded: the host (#537), Core ML (#538), a presence output trained into the head, the COCO
 matting labels of U17.
+
+Included (#537): `sidecar_client/dto/segmentation.hpp` (comments), `ai_mask_coverage_composition`
+(`AiMaskAlphaGain`), `ai_mask_model_output_store` (the gain of each task), `EditorAiMaskPanel.qml`
+(notice), `alcedo_main_zh_CN.ts`, the tests of section 6.3, this plan, and the master plan.
+Excluded from #537: macOS, the other tasks, the prompt input modes, the SM7 misalignment notice, a
+saved format change (a committed Sky Mask stays a content-addressed R8 asset).
 
 ---
 
@@ -171,6 +179,18 @@ head reference of `make_segmentation_port_reference.py --sky-head-onnx` (ONNX Ru
 torchvision preprocessing): "found" equal (unless the reference share is within 1e-4 of 5e-4); IoU
 of the alpha >= 0.5 at least `MIN_SKY_IOU`; largest alpha difference at most
 `MAX_SKY_ALPHA_DIFFERENCE` (0.999 and 1e-3; reason in section 9.2).
+
+### 6.3 C++ and QML tests (#537)
+
+| Test | Assertion |
+| --- | --- |
+| `SegmentationClientTest.RunTaskMapsSkyHeadAlphaWithWholeImageBox` | A Sky response with `ALPHA` maps to `kAlpha` with 1024 x 1024 values, the box (0, 0, 1, 1), the share and its threshold, `region_count` 0. |
+| `SegmentationClientTest.RunTaskMapsSkyRegionUnionAsBinaryMask` | A Sky response with `BINARY` maps to `kBinary` with the R8 values and the region count, as before. |
+| `AiMaskEditSessionTest.SkyAlphaGainOneKeepsPartialAlphaOfThinTwig` | A twig of one grid cell with alpha 0.25, upscaled 4 x 3 with a guide: gain 1 keeps 60 to 72, the D23 gain gives at most 12. |
+| `AiMaskEditSessionTest.SkyAlphaOfStretchedImageConvertsWithGainOne` | A 16 x 16 Sky alpha on the 64 x 48 session image (independent x and y scales) is stored and converts with gain 1; the same grid as Subject keeps the D23 gain; a Sky `BINARY` result stays the R8 mask. |
+| Existing `AiMaskEditSessionTest` composition tests | The S3OD conversion does not change (gain 4 example, clamps, guided edge). |
+| `EditorAiMaskPanelQmlTest.SkyTrainingDataNoticeIsVisibleBeforeFirstSkyRun` | The production panel without a tool shows the notice under the Sky button, inside the panel. Fails without the notice (checked: "the Sky notice is missing or hidden"). |
+| `SimplifiedChineseCatalogTest.CompiledCatalogTranslatesTheSkyTrainingDataNotice` | The compiled catalog translates the notice. |
 
 ---
 
@@ -262,3 +282,100 @@ Reference: `build/tmp/sm3e/port_reference` (14 photos, ONNX Runtime 1.31 CPU).
 
 - #537: host coverage of the sky alpha and the training data notice (open).
 - #538: the sky head on Core ML (opened by this phase).
+
+---
+
+## 10. Completion record of #537
+
+### 10.1 Summary (2026-10-26)
+
+**Status:** implemented and verified on Windows. macOS: not built and not checked (#538).
+
+**Source revision and branch:** `feature/ai-segmentation-sm3e-sky-alpha-coverage`, stacked on
+`feature/ai-segmentation-sm3e-fine-sky-head` (#539) at `e364f190`.
+
+**Decisions made during the work:** S9 (the Sky upscale rule, section 10.2) and S10 (the notice).
+Other details:
+
+| Item | Decision | Reason |
+| --- | --- | --- |
+| Where the gain rule lives | A field `AiMaskAlphaGrid::gain` (`AiMaskAlphaGain`), set by `AiMaskModelOutputStore::StoreTaskResult` from the task: Sky `kOne`, the other tasks and Person `kHalfUpscaleFactor` (the default). | The model output store owns the outputs and knows the task; `ConvertModelOutputToCoverage` stays a pure function of its input. |
+| Client | No code change: `RunTask` maps `ALPHA` and `BINARY` for every task. Only the DTO comments change. | The mapping was already generic. |
+| Model directory check | No change. | The host does not check the files of the model set directory; the sidecar does (#536). |
+| Translation of the other AI Mask panel texts | Not part of #537. | The panel has no Chinese context yet; #537 asks only for the notice. |
+
+**Actual changed lines:** about 530 added and 29 removed in code and tests (product code 108, tests
+about 450), plus the documents. Estimate: no separate estimate in this plan.
+
+**Primary call chain:**
+
+```text
+EditorAiMaskTool -> AiMaskEditSession::AddTask(Sky) -> AiMaskModelOutputStore::EnsureTask(Sky)
+  -> runner.RunTask(kSky) -> GrpcSegmentationClient::RunTask -> SegmentationTaskResult{kAlpha, 1024 x 1024, box (0, 0, 1, 1)}
+  -> StoreTaskResult(key, result, AiMaskAlphaGain::kOne) -> ValidateAiMaskModelOutput
+  -> ComponentCoverage -> ConvertModelOutputToCoverage(AiMaskAlphaGrid{gain kOne}, session extent, guide)
+     (joint bilateral upsampling, x and y scales of the stretched grid, gain 1) -> R8 coverage
+```
+
+Failure: a grid with a wrong value count or box returns `Failed` from `StoreTaskResult`, and the
+session state does not change; "not found" returns `NotFound` with the sidecar message, as before.
+
+### 10.2 Sky upscale rule (S9)
+
+Method: the sky head (ONNX Runtime 1.24 CPU of the lab environment) on 120 MaSS13K test photos with
+a sky share of at least 2 %: the 24 random and 8 worst photos of the lab sheets (including `36388`
+with bare branches) and 88 random photos (seed 537). The photo (2048 x 1536) and its target alpha
+were resized to a 4096 x 3072 session image (Lanczos, bilinear), so the grid is upscaled 4 x 3 and
+the D23 gain is 2. The rules ran in a numpy port of `ConvertAlpha` with the guide of the session
+image. "Partial" pixels have a target alpha in (0.05, 0.95); the edge band is 9 pixels around the
+target boundary. Scripts and sheets: `build/tmp/sm3e/upscale/` (local; MaSS13K photos stay local).
+
+| Rule | Mean absolute error | Error on partial pixels | Partial pixels kept partial | Error in the edge band |
+| --- | ---: | ---: | ---: | ---: |
+| D23 (joint bilateral, gain 2) | 7.60e-3 | 0.258 | 42 % | 0.165 |
+| Joint bilateral, gain 1 (selected) | 7.65e-3 | 0.200 | 81 % | 0.164 |
+| Bilinear, gain 1 | 8.43e-3 | 0.216 | 82 % | 0.180 |
+
+Gain 1 has the lower partial-pixel error on 117 of 120 photos. On `36388` the partial-pixel error
+is 0.129 against 0.195 (D23). By eye: with D23, thin twigs become sky and the sky between close
+branches becomes branch; with gain 1 both stay. On hard roof lines (`18457`) D23 is a little
+sharper; gain 1 is about 2 session pixels softer and keeps the sky between the tubes of a solar
+water heater. Bilinear, without the guide, blurs the branches.
+
+### 10.3 Verification
+
+| Check | Result |
+| --- | --- |
+| Debug build of `AiMaskEditSessionTest`, `SegmentationClientTest`, `EditorAiMaskPanelQmlTest`, `SimplifiedChineseCatalogTest` | passed |
+| `ctest -R "AiMaskEditSessionTest|SegmentationClientTest|EditorAiMaskPanelQmlTest|SimplifiedChineseCatalogTest"` | 44 of 44 passed |
+| QML notice test with the panel of `HEAD` (no notice) | failed, as required |
+| Release build of `alcedo_main` | passed |
+| Full test suite | not run (AGENTS.md) |
+| macOS | not built, not checked (#538) |
+
+### 10.4 GUI check on Windows
+
+Release `alcedo_main` and the release sidecar of #536, DirectML on the RTX 3080 Laptop GPU (8 GB),
+UI language Chinese. Seven JPEG photos of the lab set (long edge 4096 px) and `36388` of MaSS13K (2048 x 1536): sky behind
+leaves (`5761824892`), trees (`DSC00527`, `P1024439`, `36388`), poles, overhead wires, and roof
+lines (`DSC00602`), a bridge (`2088064441`), and two photos without sky (`DSC_1188`, `DSC_1535`).
+
+- The notice shows in Chinese under the task buttons when the panel opens, before Sky runs.
+- Sky selects the sky between the leaves and branches; wires, poles, a mic stand, and roof lines
+  stay outside the coverage.
+- The photos without sky give "No sky found: the sky alpha reaches 0.5 on 0.000 % of the image,
+  less than 0.050 %." and no step.
+
+| Measurement | Value |
+| --- | ---: |
+| Sky step in the app (`[AI Mask] step Applied`) | 270 to 306 ms (6 photos with sky) |
+| Sidecar Sky task / sky head run | 207 to 251 ms / 207 to 249 ms (port check: 54 ms; #541) |
+| Model load at tool open (all five models) | 3.1 to 4.4 s; sky head 203 to 250 ms of it |
+| Peak dedicated GPU memory, editor / sidecar / sum | 3,198 MB / 1,473 MB / 4,590 MB |
+| Sidecar GPU memory between model runs | 923 MB |
+
+### 10.5 Issues
+
+- #540: `library.import` with a folder imports nothing and reports success (found while preparing
+  the GUI check).
+- #541: the sky head run in the editor takes about 220 ms against 54 ms in the port check.
