@@ -20,25 +20,15 @@ use super::backend::{HeadOutput, ImageFeatures};
 use super::task_masks::{PersonBox, PixelRect, SubjectAlpha, SubjectInputImage};
 use super::tensor::TensorF32;
 
-/// The Sky mask of one image.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SkyMask {
-    /// The sky head alpha in [0, 1] on the image stretched to 1024 x 1024, row-major (SM3.E plan).
-    Alpha(Vec<f32>),
-    /// A model set without a sky head (Core ML until issue #538): the selected decoder mask of each
-    /// people and sky head region, clipped logits (SM3.C plan, section 2.3).
-    RegionLogits(Vec<Vec<f32>>),
-}
-
-/// Sky result of one image (SM3.C plan, section 2.3; SM3.E plan).
+/// Sky result of one image (SM3.E plan).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkyResult {
-    /// With the sky head: the sky share of the alpha and the "sky found" share. Without it: the
-    /// sky presence of the people and sky head and its threshold.
+    /// The sky share of the alpha and the "sky found" share.
     pub presence: f32,
     pub presence_threshold: f32,
-    /// `None` when no sky is found.
-    pub mask: Option<SkyMask>,
+    /// The sky head alpha in [0, 1] on the image stretched to 1024 x 1024, row-major; `None` when
+    /// no sky is found.
+    pub alpha: Option<Vec<f32>>,
     /// The "not found" text; empty when the mask exists.
     pub message: String,
 }
@@ -70,14 +60,14 @@ pub type ResultSlot<T> = Mutex<Option<Arc<T>>>;
 
 /// See the module documentation.
 pub struct ImageEntry {
-    /// Size of the session image; the size of the Sky union mask, and the size that the person
-    /// crop rectangles and the mask boxes refer to.
+    /// Size of the session image: the size that the person crop rectangles and the mask boxes
+    /// refer to.
     pub width: usize,
     pub height: usize,
     pub features: Arc<dyn ImageFeatures>,
     /// The encoder input of the image ([1, 3, 1024, 1024], 12 MB), the second input of the sky
-    /// head; `None` when the model set has no sky head.
-    pub encoder_input: Option<TensorF32>,
+    /// head.
+    pub encoder_input: TensorF32,
     pub subject_input: SubjectInputImage,
     pub head: HeadOutput,
     pub people: PeopleList,
@@ -92,7 +82,7 @@ impl ImageEntry {
         width: usize,
         height: usize,
         features: Arc<dyn ImageFeatures>,
-        encoder_input: Option<TensorF32>,
+        encoder_input: TensorF32,
         subject_input: SubjectInputImage,
         head: HeadOutput,
         people: PeopleList,

@@ -39,7 +39,7 @@ void           SetOkHeader(alcedo::ai::AiResponseHeader* header) {
 /// Records what the client sends; answers with fixed values.
 /// The Sky answer of the fake service: not found, the sky head alpha (ONNX Runtime), or the
 /// region union (Core ML).
-enum class FakeSkyResponse { kNotFound, kSkyHeadAlpha, kRegionUnion };
+enum class FakeSkyResponse { kNotFound, kSkyHeadAlpha };
 
 /// Size of the sky head alpha grid: the encoder input, 1024 x 1024.
 constexpr uint32_t                 kSkyGridSide = 1024;
@@ -214,9 +214,10 @@ class RecordingSegmentationService final : public alcedo::ai::SegmentationServic
     }
     switch (sky_response) {
       case FakeSkyResponse::kNotFound:
-        response->set_message("No sky found: sky presence 0.312 is below 0.423.");
-        response->set_presence(0.312F);
-        response->set_presence_threshold(0.423F);
+        response->set_message(
+            "No sky found: the sky alpha reaches 0.5 on 0.012 % of the image, less than 0.050 %.");
+        response->set_presence(1.2e-4F);
+        response->set_presence_threshold(5e-4F);
         return;
       case FakeSkyResponse::kSkyHeadAlpha: {
         // The alpha of the stretched image: 0.25 everywhere, 1 in the top row, 0.5 at the last
@@ -240,22 +241,6 @@ class RecordingSegmentationService final : public alcedo::ai::SegmentationServic
         response->set_presence_threshold(5e-4F);
         response->set_mask_area(kSkyGridSide + 1);
         response->set_model_ms(54);
-        return;
-      }
-      case FakeSkyResponse::kRegionUnion: {
-        // A 6 x 4 session image: the top row is sky.
-        response->set_found(true);
-        response->set_mask_kind(alcedo::ai::SEGMENTATION_TASK_MASK_KIND_BINARY);
-        response->set_mask_width(6);
-        response->set_mask_height(4);
-        std::string mask(6 * 4, '\0');
-        std::fill_n(mask.begin(), 6, '\xff');
-        response->set_mask_r8(mask);
-        response->set_presence(0.8F);
-        response->set_presence_threshold(0.423F);
-        response->set_region_count(2);
-        response->set_mask_area(6);
-        response->set_model_ms(40);
         return;
       }
     }
@@ -461,7 +446,6 @@ TEST_F(SegmentationClientTest, RunTaskMapsAlphaMaskBoxAndSubjectFraction) {
   ASSERT_EQ(result.alpha_values.size(), 8U * 4U);
   EXPECT_FLOAT_EQ(result.alpha_values[9], 0.75F);
   EXPECT_FLOAT_EQ(result.alpha_values[8], 0.25F);
-  EXPECT_TRUE(result.mask_r8.empty());
   EXPECT_FLOAT_EQ(result.mask_box.x0, 0.25F);
   EXPECT_FLOAT_EQ(result.mask_box.y0, 0.1F);
   EXPECT_FLOAT_EQ(result.mask_box.x1, 0.75F);
@@ -493,11 +477,11 @@ TEST_F(SegmentationClientTest, RunTaskNotFoundIsSuccessWithMessage) {
   EXPECT_EQ(service_.TaskRequest().task(), alcedo::ai::SEGMENTATION_TASK_SKY);
   EXPECT_FALSE(service_.TaskRequest().has_person_index());
   EXPECT_FALSE(result.found);
-  EXPECT_EQ(result.message, "No sky found: sky presence 0.312 is below 0.423.");
+  EXPECT_EQ(result.message,
+            "No sky found: the sky alpha reaches 0.5 on 0.012 % of the image, less than 0.050 %.");
   EXPECT_EQ(result.mask_kind, SegmentationTaskMaskKind::kNone);
-  EXPECT_TRUE(result.mask_r8.empty());
   EXPECT_TRUE(result.alpha_values.empty());
-  EXPECT_FLOAT_EQ(result.presence_threshold, 0.423F);
+  EXPECT_FLOAT_EQ(result.presence_threshold, 5e-4F);
 }
 
 TEST_F(SegmentationClientTest, RunTaskMapsSkyHeadAlphaWithWholeImageBox) {
@@ -515,35 +499,14 @@ TEST_F(SegmentationClientTest, RunTaskMapsSkyHeadAlphaWithWholeImageBox) {
   EXPECT_FLOAT_EQ(result.alpha_values[kSkyGridSide - 1], 1.0F);
   EXPECT_FLOAT_EQ(result.alpha_values[kSkyGridSide], 0.25F);
   EXPECT_FLOAT_EQ(result.alpha_values.back(), 0.5F);
-  EXPECT_TRUE(result.mask_r8.empty());
   EXPECT_FLOAT_EQ(result.mask_box.x0, 0.0F);
   EXPECT_FLOAT_EQ(result.mask_box.y0, 0.0F);
   EXPECT_FLOAT_EQ(result.mask_box.x1, 1.0F);
   EXPECT_FLOAT_EQ(result.mask_box.y1, 1.0F);
   EXPECT_FLOAT_EQ(result.presence, 0.002F);
   EXPECT_FLOAT_EQ(result.presence_threshold, 5e-4F);
-  EXPECT_EQ(result.region_count, 0U);
   EXPECT_EQ(result.mask_area, kSkyGridSide + 1);
   EXPECT_EQ(result.model_ms, 54);
-}
-
-TEST_F(SegmentationClientTest, RunTaskMapsSkyRegionUnionAsBinaryMask) {
-  service_.SetSkyResponse(FakeSkyResponse::kRegionUnion);
-
-  const auto result = client_->RunTask("session-1", SegmentationTask::kSky, std::nullopt, kTimeout);
-
-  ASSERT_TRUE(result.status.ok) << result.status.error;
-  EXPECT_TRUE(result.found);
-  EXPECT_EQ(result.mask_kind, SegmentationTaskMaskKind::kBinary);
-  EXPECT_EQ(result.mask_width, 6U);
-  EXPECT_EQ(result.mask_height, 4U);
-  ASSERT_EQ(result.mask_r8.size(), 6U * 4U);
-  EXPECT_EQ(result.mask_r8[5], 255);
-  EXPECT_EQ(result.mask_r8[6], 0);
-  EXPECT_TRUE(result.alpha_values.empty());
-  EXPECT_EQ(result.region_count, 2U);
-  EXPECT_FLOAT_EQ(result.presence, 0.8F);
-  EXPECT_EQ(result.mask_area, 6U);
 }
 
 }  // namespace

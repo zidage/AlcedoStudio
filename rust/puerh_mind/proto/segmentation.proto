@@ -177,12 +177,10 @@ enum SegmentationTask {
 
 enum SegmentationTaskMaskKind {
   SEGMENTATION_TASK_MASK_KIND_UNSPECIFIED = 0;
-  // Sky without the sky head (macOS until issue #538): mask_r8 at the session image size, 255
-  // inside and 0 outside. It is the union of the region masks, each the bilinear upsampling of its
-  // decoder logits with threshold 0.
-  SEGMENTATION_TASK_MASK_KIND_BINARY = 1;
-  // Subject, Background, People, Person, and Sky with the sky head: alpha_values in [0, 1];
-  // inside where >= 0.5. The grid covers mask_box of the session image: the image resized to a
+  // The R8 union mask of the Sky without the sky head (removed with issue #538).
+  reserved 1;
+  reserved "SEGMENTATION_TASK_MASK_KIND_BINARY";
+  // Subject, Background, People, Person, and Sky: alpha_values in [0, 1]; inside where >= 0.5. The grid covers mask_box of the session image: the image resized to a
   // long edge of 1024 (Subject, Background, People), the person crop resized to a long edge of
   // 1024 (Person), or the image stretched to 1024 x 1024 (Sky; the two axes have their own scale).
   SEGMENTATION_TASK_MASK_KIND_ALPHA = 2;
@@ -218,19 +216,18 @@ message RunSegmentationTaskResponse {
   SegmentationTaskMaskKind mask_kind = 4;
   uint32 mask_width = 5;
   uint32 mask_height = 6;
-  // Row-major mask values: the field of mask_kind is set and the other is empty. Both are empty
-  // when found is false.
-  bytes mask_r8 = 7;
+  // The R8 mask and the region count of the Sky without the sky head (removed with issue #538).
+  reserved 7, 10;
+  reserved "mask_r8", "region_count";
+  // Row-major alpha values; empty when found is false.
   repeated float alpha_values = 15;
   // ALPHA: the normalized rectangle of the session image that the alpha grid covers; (0, 0, 1, 1)
   // except for Person, where it is the crop rectangle.
   SegmentationBox mask_box = 16;
-  // Sky with the sky head: the share of the sky alpha values >= 0.5 and the "sky found" share.
-  // Sky without the sky head, People, and Person: the presence of the people and sky head and its
-  // threshold.
+  // Sky: the share of the sky alpha values >= 0.5 and the "sky found" share. People and Person:
+  // the person presence of the people and sky head and its threshold.
   float presence = 8;
   float presence_threshold = 9;
-  uint32 region_count = 10;  // Sky without the sky head; 0 with it
   repeated SegmentationPerson people = 11;  // People and Person: the full list
   // Subject, Background, and People: the S3OD IoU score of the image; Person: of the crop.
   float subject_score = 12;

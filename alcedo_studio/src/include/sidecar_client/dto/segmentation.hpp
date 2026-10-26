@@ -107,16 +107,13 @@ enum class SegmentationTask : uint8_t {
 /// The value kind of a task mask.
 enum class SegmentationTaskMaskKind : uint8_t {
   /// No mask (the task found nothing or the call failed).
-  kNone   = 0,
-  /// Sky of a sidecar without the sky head (Core ML, until #538): `mask_r8` at the session image
-  /// size, 255 inside and 0 outside. It is the union of the region masks, each the bilinear
-  /// upsampling of its decoder logits with threshold 0.
-  kBinary = 1,
-  /// Subject, Background, People, Person, and Sky of the sky head (ONNX Runtime): `alpha_values`
-  /// in [0, 1]; inside where >= 0.5. The grid covers `mask_box` of the session image: the image
-  /// resized to a long edge of 1024, the person crop resized to a long edge of 1024 (Person), or
-  /// the image stretched to 1024 x 1024 (Sky; each axis has its own scale).
-  kAlpha  = 2,
+  kNone  = 0,
+  /// Subject, Background, People, Person, and Sky: `alpha_values` in [0, 1]; inside where >= 0.5.
+  /// The grid covers `mask_box` of the session image: the image resized to a long edge of 1024,
+  /// the person crop resized to a long edge of 1024 (Person), or the image stretched to
+  /// 1024 x 1024 (Sky; each axis has its own scale). The value 1 was the R8 Sky union of a sidecar
+  /// without the sky head (removed with #538).
+  kAlpha = 2,
 };
 
 /// One entry of the People list: the normalized box, clipped to the image, the score, and the
@@ -142,20 +139,15 @@ struct SegmentationTaskResult {
   SegmentationTaskMaskKind        mask_kind   = SegmentationTaskMaskKind::kNone;
   uint32_t                        mask_width  = 0;
   uint32_t                        mask_height = 0;
-  /// kBinary: mask_width x mask_height values, row-major.
-  std::vector<uint8_t>            mask_r8;
   /// kAlpha: mask_width x mask_height values, row-major.
   std::vector<float>              alpha_values;
   /// kAlpha: the normalized rectangle of the session image that the alpha grid covers;
   /// (0, 0, 1, 1) except for kPerson, where it is the crop rectangle.
   SegmentationBox                 mask_box;
-  /// People and Person: the presence of the people head and its threshold. Sky with the sky
-  /// head: the share of the alpha values >= 0.5 and the share that "found" needs; Sky without
-  /// the sky head: the sky presence of the people and sky head and its threshold.
+  /// People and Person: the presence of the people head and its threshold. Sky: the share of
+  /// the alpha values >= 0.5 and the share that "found" needs.
   float                           presence           = 0.0F;
   float                           presence_threshold = 0.0F;
-  /// Sky without the sky head: the number of sky regions in the union; 0 with the sky head.
-  uint32_t                        region_count       = 0;
   /// People and Person: the full People list.
   std::vector<SegmentationPerson> people;
   /// Subject, Background, and People: the S3OD IoU score of the image; Person: of the crop.

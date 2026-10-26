@@ -10,8 +10,10 @@
 //! The encoder keeps its output arrays as [`CoreMlImageFeatures`] (SM3.B decision B4). A Float16
 //! output is converted to Float32 once, at the encoder run. The decoder adds retained references
 //! to the same arrays to its input for each call, so a decode does not copy the features. The
-//! people and sky head adds the stored `image_embed` array to its input in the same way (SM3.C).
-//! The head and S3OD use `ComputeUnits::All` (lab U15; `CpuOnly` on the `cpu` device).
+//! people and sky head adds the stored `image_embed` array to its input in the same way (SM3.C),
+//! and the sky head adds the three stored arrays and a copy of the encoder input (SM3.E, issue
+//! #538). The head, S3OD, and the sky head use `ComputeUnits::All` (lab U15; `CpuOnly` on the `cpu`
+//! device).
 
 use std::any::Any;
 use std::path::{Path, PathBuf};
@@ -28,8 +30,9 @@ use super::backend::{
 };
 use super::model_set::{
     CENTER_LOGITS_SHAPE, CENTER_OFFSET_SHAPE, DECODER, ENCODER, HEAD, HIGH_RES_FEATS_0_SHAPE,
-    HIGH_RES_FEATS_1_SHAPE, IMAGE_EMBED_SHAPE, LOG_SIZE_SHAPE, ModelSpec, PRESENCE_LOGITS_SHAPE,
-    SKY_LOGITS_SHAPE, SUBJECT, SUBJECT_MASKS_SHAPE, SUBJECT_SCORES_SHAPE, spec,
+    HIGH_RES_FEATS_1_SHAPE, IMAGE_EMBED_SHAPE, LOG_SIZE_SHAPE, ModelSpec, PIXEL_VALUES_SHAPE,
+    PRESENCE_LOGITS_SHAPE, SKY_ALPHA_SHAPE, SKY_HEAD, SKY_LOGITS_SHAPE, SUBJECT,
+    SUBJECT_MASKS_SHAPE, SUBJECT_SCORES_SHAPE, spec,
 };
 use super::tensor::TensorF32;
 
@@ -165,10 +168,18 @@ impl SegmentationBackend for CoreMlSegmentationBackend {
         }))
     }
 
-    /// The model set has no Core ML sky head yet (issue #538): Sky uses the people and sky head
-    /// regions on macOS.
-    fn load_sky_head(&self, _directory: &Path) -> Result<Option<Box<dyn SkyHeadModel>>> {
-        Ok(None)
+    fn load_sky_head(&self, directory: &Path) -> Result<Box<dyn SkyHeadModel>> {
+        let mut head = CoreMlSkyHead {
+            model: self.load_model(directory, SegmentationModelRole::SkyHead)?,
+        };
+        // The warm-up run, as for the people and sky head (SM3.C plan, decision C10).
+        let zero_features: Arc<dyn ImageFeatures> = Arc::new(CoreMlImageFeatures::zeros()?);
+        head.run(
+            &zero_features,
+            &TensorF32::zeros(PIXEL_VALUES_SHAPE.to_vec()),
+        )
+        .map_err(|e| anyhow!("failed to run the sky head at load: {e:#}"))?;
+        Ok(Box::new(head))
     }
 }
 
@@ -189,6 +200,32 @@ pub struct CoreMlImageFeatures {
 // arrays are not changed after the encoder run; the decoder only reads them, under its mutex.
 unsafe impl Send for CoreMlImageFeatures {}
 unsafe impl Sync for CoreMlImageFeatures {}
+
+impl CoreMlImageFeatures {
+    /// Features with zero values, for the warm-up run of the sky head.
+    fn zeros() -> Result<Self> {
+        let mut arrays = FeatureProvider::new();
+        for (name, shape) in ENCODER.coreml_outputs.iter().zip(FEATURE_SHAPES) {
+            insert_tensor(&mut arrays, name, &TensorF32::zeros(shape.to_vec()))?;
+        }
+        Ok(Self { arrays })
+    }
+
+    /// Adds retained references to the stored arrays @p names to @p inputs: no copy of the
+    /// features.
+    fn insert_into(&self, inputs: &mut FeatureProvider, names: &[&str]) -> Result<()> {
+        for name in names {
+            let array = self
+                .arrays
+                .get_multi_array(name)
+                .ok_or_else(|| anyhow!("the Core ML image features have no array {name}"))?;
+            inputs
+                .try_insert_multi_array(name, array)
+                .map_err(|e| anyhow!("failed to add Core ML input {name}: {e}"))?;
+        }
+        Ok(())
+    }
+}
 
 impl ImageFeatures for CoreMlImageFeatures {
     fn as_any(&self) -> &dyn Any {
@@ -265,16 +302,7 @@ impl SegmentationDecoder for CoreMlDecoder {
     ) -> Result<DecoderOutput> {
         let features = features_of::<CoreMlImageFeatures>(features.as_ref())?;
         let mut inputs = FeatureProvider::new();
-        for name in ENCODER.coreml_outputs {
-            // A retained reference to the stored array: no copy of the features.
-            let array = features
-                .arrays
-                .get_multi_array(name)
-                .ok_or_else(|| anyhow!("the Core ML image features have no array {name}"))?;
-            inputs
-                .try_insert_multi_array(name, array)
-                .map_err(|e| anyhow!("failed to add Core ML input {name}: {e}"))?;
-        }
+        features.insert_into(&mut inputs, ENCODER.coreml_outputs)?;
         let prompt_inputs = [
             ("point_coords", &prompt.point_coords),
             ("point_labels", &prompt.point_labels),
@@ -352,17 +380,41 @@ impl CoreMlHead {
 impl SegmentationHead for CoreMlHead {
     fn run(&mut self, features: &Arc<dyn ImageFeatures>) -> Result<HeadOutput> {
         let features = features_of::<CoreMlImageFeatures>(features.as_ref())?;
-        let name = HEAD.inputs[0];
-        // A retained reference to the stored array: no copy of the features.
-        let array = features
-            .arrays
-            .get_multi_array(name)
-            .ok_or_else(|| anyhow!("the Core ML image features have no array {name}"))?;
         let mut inputs = FeatureProvider::new();
-        inputs
-            .try_insert_multi_array(name, array)
-            .map_err(|e| anyhow!("failed to add Core ML input {name}: {e}"))?;
+        features.insert_into(&mut inputs, HEAD.inputs)?;
         self.predict(&inputs)
+    }
+}
+
+struct CoreMlSkyHead {
+    model: Model,
+}
+
+// See `CoreMlEncoder`: the engine calls the sky head under its own mutex.
+unsafe impl Send for CoreMlSkyHead {}
+
+impl SkyHeadModel for CoreMlSkyHead {
+    fn run(
+        &mut self,
+        features: &Arc<dyn ImageFeatures>,
+        pixel_values: &TensorF32,
+    ) -> Result<TensorF32> {
+        let features = features_of::<CoreMlImageFeatures>(features.as_ref())?;
+        let (feature_names, pixel_names) = SKY_HEAD.inputs.split_at(ENCODER.coreml_outputs.len());
+        let mut inputs = FeatureProvider::new();
+        features.insert_into(&mut inputs, feature_names)?;
+        // The encoder input is stored as a tensor: one copy of 12 MB per sky head run.
+        insert_tensor(&mut inputs, pixel_names[0], pixel_values)?;
+        let outputs = self
+            .model
+            .predict(&inputs)
+            .map_err(|e| anyhow!("failed to run the sky head: {e}"))?;
+        read_output(
+            &outputs,
+            "sky head",
+            SKY_HEAD.coreml_outputs[0],
+            &SKY_ALPHA_SHAPE,
+        )
     }
 }
 
@@ -462,7 +514,11 @@ mod tests {
             device.compute_units_label(SegmentationModelRole::Decoder),
             "coreml-native:cpuonly"
         );
-        for role in [SegmentationModelRole::Head, SegmentationModelRole::Subject] {
+        for role in [
+            SegmentationModelRole::Head,
+            SegmentationModelRole::Subject,
+            SegmentationModelRole::SkyHead,
+        ] {
             assert_eq!(device.compute_units_label(role), "coreml-native:all");
         }
         let cpu = CoreMlSegmentationDevice::parse("cpu").expect("cpu device");
