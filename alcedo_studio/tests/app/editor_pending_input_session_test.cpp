@@ -502,5 +502,61 @@ TEST_F(EditorMaskInputSealTest, PersistCommitsAnOpenMaskDragBeforeTheSaveSealLik
   EXPECT_FALSE(mask_history_->input_open);
 }
 
+// Issue #545: a cancelled creation drag removes its provisional Mask from the live document.
+// The presented frame still shows that Mask, so the session renders the restored document.
+TEST_F(EditorMaskInputSealTest, CancelledCreationDragRendersTheRestoredDocument) {
+  OpenRadialCreationDrag();
+  ASSERT_EQ(mask_history_->document.PrimaryGrade()->MaskCount(), 1u);
+  runtime_->coordinator->NotifySchedulerCompleted(
+      runtime_->coordinator->last_scheduled_request_id(), true);
+  service_->DrainCommandQueueForTests();
+
+  const auto                results_before = service_->results().size();
+  EditorMaskCreationCommand cancel;
+  cancel.kind        = EditorMaskCreationCommandKind::Cancel;
+  cancel.source_kind = MaskSourceKind::Radial;
+  cancel.node_id     = mask_history_->document.DefaultGradeId();
+  ASSERT_EQ(service_->EnqueueMaskCreation(cancel).kind, EditorSessionResultKind::Accepted);
+  service_->DrainCommandQueueForTests();
+
+  EXPECT_EQ(mask_history_->document.PrimaryGrade()->MaskCount(), 0u);
+  EXPECT_TRUE(mask_history_->settled.empty());
+  const auto& results = service_->results();
+  bool        routed  = false;
+  for (std::size_t i = results_before; i < results.size(); ++i) {
+    routed = routed || results[i].kind == EditorSessionResultKind::RenderRouted;
+  }
+  EXPECT_TRUE(routed) << "the frame that shows the provisional Mask is never replaced";
+}
+
+// A rejected sample cancels the open drag the same way; the rejection must not leave the
+// provisional Mask on screen.
+TEST_F(EditorMaskInputSealTest, RejectedSampleRendersTheRestoredDocument) {
+  OpenRadialCreationDrag();
+  ASSERT_EQ(mask_history_->document.PrimaryGrade()->MaskCount(), 1u);
+  runtime_->coordinator->NotifySchedulerCompleted(
+      runtime_->coordinator->last_scheduled_request_id(), true);
+  service_->DrainCommandQueueForTests();
+
+  const auto                results_before = service_->results().size();
+  EditorMaskCreationCommand stray;
+  stray.kind     = EditorMaskCreationCommandKind::Append;
+  stray.sample   = Sample(0.70f, 0.65f);
+  stray.identity = MaskPointerIdentity{3, 1, 10};  // not the captured pointer sequence
+  ASSERT_EQ(service_->EnqueueMaskCreation(stray).kind, EditorSessionResultKind::Accepted);
+  service_->DrainCommandQueueForTests();
+
+  EXPECT_EQ(mask_history_->document.PrimaryGrade()->MaskCount(), 0u);
+  const auto& results  = service_->results();
+  bool        rejected = false;
+  bool        routed   = false;
+  for (std::size_t i = results_before; i < results.size(); ++i) {
+    rejected = rejected || results[i].kind == EditorSessionResultKind::Rejected;
+    routed   = routed || results[i].kind == EditorSessionResultKind::RenderRouted;
+  }
+  EXPECT_TRUE(rejected);
+  EXPECT_TRUE(routed) << "the frame that shows the provisional Mask is never replaced";
+}
+
 }  // namespace
 }  // namespace alcedo

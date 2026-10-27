@@ -31,6 +31,8 @@
 #include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
+#include "ui/edit_viewer/mask_edit_geometry.hpp"
+#include "ui/editor_rhi/editor_interaction_controller.hpp"
 
 Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
@@ -2116,6 +2118,60 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupRowInvertButtonTogglesItsMask) {
   }
   EXPECT_TRUE(backend_.ai_mask_edit_open_requests().empty());
   EXPECT_TRUE(MaskAdapter()->selected_mask_id().isEmpty());
+}
+
+// Issue #545: with the Layers panel closed the viewport is wide. On an 8183x5455 photograph the
+// first Interactive frame (2560x1707) replaces the Quality frame (4096x2730) during the drag; the
+// two frames round their aspect separately, and the drag was cancelled after the first samples.
+// The drag must keep its samples through the real interaction mapping until the release.
+TEST_F(EditorNodesPanelQmlTest, RadialDragWithLayersClosedSurvivesInteractiveFrame) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  ASSERT_TRUE(controller_.editor_tool_panel_page().isEmpty());
+  auto* adapter = MaskAdapter();
+  ASSERT_NE(adapter, nullptr);
+
+  const Extent2D full_reference{8183, 5455};
+  auto           geometry      = MaskEditGeometry::MakeIdentityPhotographGeometry(full_reference);
+  geometry.render_extent       = {4096, 2730};
+  geometry.edit_extent         = geometry.render_extent;
+  geometry.decoded_extent      = geometry.render_extent;
+  geometry.render_to_reference = Matrix3x3::Scale(8183.0f / 4096.0f, 5455.0f / 2730.0f);
+  geometry.reference_to_render = InvertAffine(geometry.render_to_reference);
+  editor_rhi::EditorInteractionController interaction;
+  interaction.setViewportMetrics(1497, 785, 2.0);
+  interaction.setDisplayedMaskGeometry(geometry);
+  interaction.setRenderReferenceSize(4096, 2730);
+  adapter->bindInteractionItem(&interaction);
+
+  adapter->beginRadial();
+  ASSERT_TRUE(adapter->creating());
+  const QPointF press(748.5, 392.5);
+  const QPointF release(1010.0, 560.0);
+  ASSERT_TRUE(adapter->handlePress(press.x(), press.y(), Qt::LeftButton));
+  ASSERT_TRUE(adapter->handleMove(press.x() + 6.0, press.y() + 4.0, Qt::LeftButton));
+  // The Interactive frame of the first sample is presented.
+  interaction.setRenderReferenceSize(2560, 1707);
+  for (int step = 1; step <= 8; ++step) {
+    const qreal t = step / 8.0;
+    ASSERT_TRUE(adapter->handleMove(press.x() + (release.x() - press.x()) * t,
+                                    press.y() + (release.y() - press.y()) * t, Qt::LeftButton));
+  }
+  ASSERT_TRUE(adapter->handleRelease(release.x(), release.y(), Qt::LeftButton));
+  const auto expected_end = interaction.MapItemToMaskReference(release.x(), release.y(), true);
+  adapter->bindInteractionItem(nullptr);
+  ASSERT_TRUE(expected_end.has_value());
+
+  const auto& commands = backend_.mask_commands();
+  for (const auto& command : commands) {
+    EXPECT_NE(command.kind, EditorMaskCreationCommandKind::Cancel)
+        << "the drag was cancelled before the release";
+  }
+  ASSERT_GE(commands.size(), 3u);
+  EXPECT_EQ(commands.back().kind, EditorMaskCreationCommandKind::Finish);
+  const auto& last_sample = commands[commands.size() - 2];
+  ASSERT_EQ(last_sample.kind, EditorMaskCreationCommandKind::Append);
+  EXPECT_NEAR(last_sample.sample.normalized.x, expected_end->normalized.x, 1.0e-4f);
+  EXPECT_NEAR(last_sample.sample.normalized.y, expected_end->normalized.y, 1.0e-4f);
 }
 
 TEST_F(EditorNodesPanelQmlTest, MaskGroupsNarrowPanelKeepsActionsInsideRows) {

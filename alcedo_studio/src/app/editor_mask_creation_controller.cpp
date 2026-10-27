@@ -1033,6 +1033,9 @@ auto EditorMaskCreationController::FinishMaskInput() -> EditorMaskCreationResult
 }
 
 auto EditorMaskCreationController::CancelMaskInput() -> EditorMaskCreationResult {
+  // An inserted provisional Mask, a moved source, or a live field value is in the presented
+  // frame; the restored document must be rendered again or that frame keeps showing it.
+  const bool restores_live = open_ && (inserted_ || !creating_);
   if (open_) {
     RestoreLive();
   }
@@ -1052,8 +1055,9 @@ auto EditorMaskCreationController::CancelMaskInput() -> EditorMaskCreationResult
       draft_source_  = Grade()->FindMask(id)->source;
     }
   }
-  auto result    = Ok();
-  result.mask_id = mask_id_;
+  auto result              = Ok();
+  result.mask_id           = mask_id_;
+  result.quality_requested = restores_live;
   return result;
 }
 

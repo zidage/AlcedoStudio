@@ -1617,7 +1617,17 @@ void EditorSessionService::ConsumePendingMaskCommands() {
   // publish the read state before GUI readers observe the result.
   RefreshMaskCreationReadState();
   if (!applied) {
-    serial_admission_.AbortCycle();
+    if (outcome.quality_requested || outcome.interactive_preview) {
+      // The rejected batch restored the live document; render it so the view matches.
+      const auto routed = RouteMaskCreationRender(outcome.interactive_preview,
+                                                  outcome.quality_requested, outcome.committed);
+      if (routed.kind == EditorSessionResultKind::Accepted) {
+        serial_admission_.AbortCycle();
+      }
+      (void)Emit(routed);
+    } else {
+      serial_admission_.AbortCycle();
+    }
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::Rejected;
     result.state    = lifecycle_.state();
@@ -1665,7 +1675,8 @@ auto EditorSessionService::ApplyMaskCommandsToLiveDocument(
                   result.error.empty() ? "Mask creation command was rejected" : result.error;
             }
             if (mask_creation_.HasOpenOperation()) {
-              (void)mask_creation_.CancelMaskInput();
+              // The cancel can remove a provisional Mask that the presented frame shows.
+              record(mask_creation_.CancelMaskInput());
             }
             return false;
           }

@@ -340,6 +340,56 @@ TEST(MaskEditGeometryTest, QualityToInteractiveEquivalentMappingKeepsEditSession
   EXPECT_TRUE(MaskEditGeometry::MappingChanged(before, MaskEditGeometry::Identity(panned)));
 }
 
+// Issue #545: an 8183x5455 photograph presents a 4096x2730 Quality frame and a 2560x1707
+// Interactive frame. Each frame rounds its width and height separately, so the two aspects
+// differ slightly and the letterbox moves by a fraction of a displayed frame pixel. In a wide
+// viewport (Layers panel closed) that moved the widget-corner probes by more than 0.25 logical
+// px and cancelled every radial drag on the first Interactive frame.
+TEST(MaskEditGeometryTest, QualityToInteractiveRoundedExtentsKeepEditSessionOpen) {
+  const Extent2D full_reference{8183, 5455};
+  const auto     geometry_for = [&](Extent2D render) {
+    auto geometry           = MaskEditGeometry::MakeIdentityPhotographGeometry(full_reference);
+    geometry.render_extent  = render;
+    geometry.edit_extent    = render;
+    geometry.decoded_extent = render;
+    geometry.render_to_reference =
+        Matrix3x3::Scale(static_cast<float>(full_reference.width) / render.width,
+                             static_cast<float>(full_reference.height) / render.height);
+    geometry.reference_to_render = InvertAffine(geometry.render_to_reference);
+    return geometry;
+  };
+
+  // Values from the failing session: viewport 1497x785 at DPR 2, view at Fit.
+  MaskEditViewMapping quality;
+  quality.widget     = {1497, 785, 2.0f};
+  quality.photograph = {4096, 2730};
+  quality.geometry   = geometry_for({4096, 2730});
+  ASSERT_TRUE(MaskEditGeometry::IsValid(quality));
+  const auto before            = MaskEditGeometry::Identity(quality);
+
+  // The Interactive frame arrives before its resolved geometry: only the presented size moves.
+  auto       interactive_frame = quality;
+  interactive_frame.photograph = {2560, 1707};
+  EXPECT_FALSE(
+      MaskEditGeometry::MappingChanged(before, MaskEditGeometry::Identity(interactive_frame)));
+
+  // The Interactive frame with its own resolved geometry.
+  auto interactive     = interactive_frame;
+  interactive.geometry = geometry_for({2560, 1707});
+  EXPECT_FALSE(MaskEditGeometry::MappingChanged(before, MaskEditGeometry::Identity(interactive)));
+
+  // A real aspect change of the presented photograph (a new crop) is still a new mapping.
+  auto recropped       = quality;
+  recropped.photograph = {4096, 2690};
+  recropped.geometry   = geometry_for({4096, 2690});
+  EXPECT_TRUE(MaskEditGeometry::MappingChanged(before, MaskEditGeometry::Identity(recropped)));
+
+  // A wheel zoom step at the press point is still a new mapping.
+  auto zoomed = interactive;
+  zoomed.zoom = 1.1f;
+  EXPECT_TRUE(MaskEditGeometry::MappingChanged(before, MaskEditGeometry::Identity(zoomed)));
+}
+
 TEST(MaskEditGeometryTest, SamePhotographInteractiveExtentKeepsItemToReference) {
   MaskEditViewMapping quality;
   quality.widget     = {960, 540, 1.25f};
