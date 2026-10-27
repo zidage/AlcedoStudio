@@ -29,12 +29,15 @@ namespace alcedo::editor_rhi {
 EditorViewportItem::EditorViewportItem(QQuickItem* parent)
     : QQuickRhiItem(parent),
       present_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())),
-      coverage_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())) {
+      coverage_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())),
+      detail_coverage_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())) {
   setColorBufferFormat(QQuickRhiItem::TextureFormat::RGBA32F);
   setMirrorVertically(false);
   setAlphaBlending(false);
   frame_sink_    = std::make_shared<DirectFrameSink>(this);
   coverage_sink_ = std::make_shared<ViewportMaskCoverageSink>(this, coverage_queue_);
+  detail_coverage_sink_ = std::make_shared<ViewportMaskCoverageSink>(
+      this, detail_coverage_queue_, LeaseFrameLayer::DetailMaskCoverage);
   consume_arm_ = std::make_shared<std::atomic<EditorViewportRenderer*>>(nullptr);
   connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow* window) {
     attachWindow(window);
@@ -68,6 +71,7 @@ EditorViewportItem::EditorViewportItem(QQuickItem* parent)
   // window that is exposed but has not created this item's renderer yet.
   present_queue_->SetConsumerAvailable(false);
   coverage_queue_->SetConsumerAvailable(false);
+  detail_coverage_queue_->SetConsumerAvailable(false);
 }
 
 EditorViewportItem::~EditorViewportItem() {
@@ -75,6 +79,7 @@ EditorViewportItem::~EditorViewportItem() {
   detachWindow();
   present_queue_->Shutdown();
   coverage_queue_->Shutdown();
+  detail_coverage_queue_->Shutdown();
   setStatusText(QStringLiteral("viewport shutting down"));
 }
 
@@ -188,6 +193,8 @@ void EditorViewportItem::setSessionEpoch(qulonglong epoch) {
   // Coverage belongs to one image session: its frames end with the session.
   coverage_queue_->InvalidateSessionEpoch(epoch, imageIdentity());
   coverage_sink_->ClearPendingMetalCoverage();
+  detail_coverage_queue_->InvalidateSessionEpoch(epoch, imageIdentity());
+  detail_coverage_sink_->ClearPendingMetalCoverage();
   stopInteractivePresentLoop();
   emit SessionEpochChanged();
   notifyDiagnosticsChanged();
@@ -201,6 +208,8 @@ void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   present_queue_->InvalidateSessionEpoch(next, imageIdentity);
   coverage_queue_->InvalidateSessionEpoch(next, imageIdentity);
   coverage_sink_->ClearPendingMetalCoverage();
+  detail_coverage_queue_->InvalidateSessionEpoch(next, imageIdentity);
+  detail_coverage_sink_->ClearPendingMetalCoverage();
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
   }
@@ -247,10 +256,14 @@ auto EditorViewportItem::frameSink() -> DirectFrameSink* { return frame_sink_.ge
 void EditorViewportItem::requestRendererInvalidation() {
   present_queue_->InvalidateTargetGeneration();
   coverage_queue_->InvalidateTargetGeneration();
+  detail_coverage_queue_->InvalidateTargetGeneration();
   requestPresentUpdate();
 }
 
-void EditorViewportItem::clearMaskCoverage() { coverage_sink_->ClearCoverage(); }
+void EditorViewportItem::clearMaskCoverage() {
+  coverage_sink_->ClearCoverage();
+  detail_coverage_sink_->ClearCoverage();
+}
 
 auto EditorViewportItem::maskCoverageColor() const -> QColor {
   return QColor::fromRgbF(mask_coverage_style_.red, mask_coverage_style_.green,
@@ -299,6 +312,8 @@ void EditorViewportItem::cancelPendingFrames() {
   present_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
   coverage_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
   coverage_sink_->ClearPendingMetalCoverage();
+  detail_coverage_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
+  detail_coverage_sink_->ClearPendingMetalCoverage();
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
   }
@@ -314,6 +329,8 @@ void EditorViewportItem::suspendPresentation() {
   present_queue_->SetConsumerAvailable(false);
   coverage_queue_->SetPresentationSuspended(true);
   coverage_queue_->SetConsumerAvailable(false);
+  detail_coverage_queue_->SetPresentationSuspended(true);
+  detail_coverage_queue_->SetConsumerAvailable(false);
   notifyDiagnosticsChanged();
   if (!presentation_suspended_.exchange(true, std::memory_order_acq_rel)) {
     emit PresentationSuspendedChanged();
@@ -325,6 +342,7 @@ void EditorViewportItem::resumePresentation() {
   // Producers wait for the next synchronize() again, as at startup.
   present_queue_->SetPresentationSuspended(false);
   coverage_queue_->SetPresentationSuspended(false);
+  detail_coverage_queue_->SetPresentationSuspended(false);
   requestPresentUpdate();
   if (presentation_suspended_.exchange(false, std::memory_order_acq_rel)) {
     emit PresentationSuspendedChanged();
@@ -438,9 +456,10 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
   // resources; the queue operation itself is thread-safe.
   scene_graph_invalidated_connection_ = connect(
       attached_window_, &QQuickWindow::sceneGraphInvalidated, this,
-      [queue = present_queue_, coverage = coverage_queue_] {
+      [queue = present_queue_, coverage = coverage_queue_, detail = detail_coverage_queue_] {
         queue->SetConsumerAvailable(false);
         coverage->SetConsumerAvailable(false);
+        detail->SetConsumerAvailable(false);
       },
       Qt::DirectConnection);
   scene_graph_initialized_connection_ = connect(
@@ -460,11 +479,14 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
   before_rendering_connection_ = connect(
       attached_window_, &QQuickWindow::beforeRendering, this,
       [queue = present_queue_, sink = frame_sink_, coverage_queue = coverage_queue_,
-       coverage_sink = coverage_sink_, arm = consume_arm_] {
+       coverage_sink = coverage_sink_, detail_queue = detail_coverage_queue_,
+       detail_sink = detail_coverage_sink_, arm = consume_arm_] {
         const bool ready = (queue && queue->HasReadyFrame()) ||
                            (sink && sink->HasPendingImportedFrame()) ||
                            (coverage_queue && coverage_queue->HasReadyFrame()) ||
-                           (coverage_sink && coverage_sink->HasPendingMetalCoverage());
+                           (coverage_sink && coverage_sink->HasPendingMetalCoverage()) ||
+                           (detail_queue && detail_queue->HasReadyFrame()) ||
+                           (detail_sink && detail_sink->HasPendingMetalCoverage());
         if (!ready) {
           return;
         }

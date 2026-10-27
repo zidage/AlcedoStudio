@@ -20,6 +20,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iterator>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -55,15 +56,19 @@ const NodeId kPrimaryGrade{"grade.primary"};
 
 class MaskRangeCoverageProbeTest : public ViewportCompositeFixture {
  protected:
-  /// Render @p document with @p probe and present it to the viewport photo and coverage channels.
+  /// Render @p document with @p probe and present it to the viewport photo channel and to
+  /// @p coverage_sink (the base coverage channel when null).
   auto RenderProbed(const PipelineDocument& document, const MaskCoverageProbe& probe,
-                    std::uint64_t request_id) -> ProbedPhotoRender {
+                    std::uint64_t request_id, const RenderRequest& request = {},
+                    std::optional<FrameCompletionSubmission> submission = std::nullopt,
+                    IMaskCoverageSink* coverage_sink = nullptr) -> ProbedPhotoRender {
     const auto input = MakePhotoInput();
+    auto*      sink  = coverage_sink != nullptr ? coverage_sink : viewport_->maskCoverageSink();
+    const auto frame = submission.value_or(PhotoSubmission(request_id));
     return RunOnRenderThread(
         [&] {
-          return producer_->RenderPhotoWithProbe(
-              document, input, RenderRequest{}, *viewport_->frameSink(),
-              PhotoSubmission(request_id), probe, *viewport_->maskCoverageSink());
+          return producer_->RenderPhotoWithProbe(document, input, request, *viewport_->frameSink(),
+                                                 frame, probe, *sink);
         },
         nullptr, [this] { ServicePhotoTargets(); });
   }
@@ -72,9 +77,11 @@ class MaskRangeCoverageProbeTest : public ViewportCompositeFixture {
    * The displayed coverage holds the codes of @p r8: red is the same code / 255 (within 1e-6; the
    * OpenCL division is not correctly rounded), green and blue 0, alpha 1.
    */
-  void ExpectDisplayedCodes(const std::vector<std::uint8_t>& r8, const std::string& label) {
-    ASSERT_NE(layer_.Texture(), nullptr) << label;
-    const auto texels = ReadBack(layer_.Texture());
+  void ExpectDisplayedCodes(const std::vector<std::uint8_t>& r8, const std::string& label,
+                            const ViewportMaskCoverageLayer* layer = nullptr) {
+    const auto& displayed = layer != nullptr ? *layer : layer_;
+    ASSERT_NE(displayed.Texture(), nullptr) << label;
+    const auto texels = ReadBack(displayed.Texture());
     ASSERT_EQ(texels.size(), r8.size() * 4) << label;
     int failures = 0;
     for (std::size_t i = 0; i < r8.size() && failures < 8; ++i) {
@@ -216,6 +223,34 @@ TEST_F(MaskRangeCoverageProbeTest, SecondGradeCoverageIsComputedFromFirstGradeOu
   EXPECT_GE(first_codes.size(), 3u) << "the Grade 1 coverage must follow the photo colors";
   EXPECT_LT(std::count(first.probed_r8.begin(), first.probed_r8.end(), std::uint8_t{255}),
             static_cast<std::ptrdiff_t>(first.probed_r8.size()));
+}
+
+TEST_F(MaskRangeCoverageProbeTest, DetailRoiRenderPublishesToTheDetailChannel) {
+  const auto         document = MakeRangedDocument();
+  const auto         probe    = MaskCoverageProbe{kPrimaryGrade, MaskId{"mask.ranged"}};
+  const FrameRoiRect roi{0.3f, 0.25f, 0.4f, 0.5f};
+  RenderRequest      request;
+  request.view = ViewRequest{NormalizedRect{roi.x, roi.y, roi.width, roi.height}, Extent2D{64, 48}};
+  auto submission                     = PhotoSubmission(61);
+  submission.metadata.frame_role      = FrameRole::DetailPatch;
+  submission.metadata.source_roi_norm = roi;
+  submission.mode                     = FramePresentationMode::RoiFrame;
+
+  const auto render =
+      RenderProbed(document, probe, 61, request, submission, viewport_->detailMaskCoverageSink());
+  ReleasePhoto(ImportPhoto(FrameRole::DetailPatch));
+  ASSERT_EQ(render.outcome, MaskCoverageProbeOutcome::Published);
+  ASSERT_TRUE(ConsumeDetail());
+  EXPECT_FALSE(Consume()) << "the base coverage channel must not receive the detail frame";
+  EXPECT_EQ(layer_.Texture(), nullptr);
+
+  // The detail frame has the grid of the ROI render, finer than the full frame of the same view.
+  const auto& presented = detail_layer_.Presentation();
+  EXPECT_EQ(presented.identity.request_id, 61u);
+  EXPECT_EQ(presented.geometry.render_extent, render.photo.geometry.render_extent);
+  EXPECT_NE(presented.geometry.render_to_reference.m[2], 0.0f) << "the ROI starts inside the image";
+  ExpectDisplayedCodes(render.probed_r8, "detail ROI Mask", &detail_layer_);
+  EXPECT_GE(mask_range_test::SpreadOf(render.probed_r8).partial, 20u);
 }
 
 TEST_F(MaskRangeCoverageProbeTest, ProbeOfAMaskThatTheRenderSkipsClearsTheCoverage) {

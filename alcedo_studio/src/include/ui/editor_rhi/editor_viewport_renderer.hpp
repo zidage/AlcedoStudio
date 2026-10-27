@@ -101,6 +101,9 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   // frames never enter the photo layers.
   std::shared_ptr<DirectPresentQueue>                   coverage_queue_;
   ViewportMaskCoverageLayer                             coverage_layer_;
+  // Coverage of the detail ROI render (Mask ranges D10), composited inside the DetailPatch ROI.
+  std::shared_ptr<DirectPresentQueue>                   detail_coverage_queue_;
+  ViewportMaskCoverageLayer                             detail_coverage_layer_;
   // The one display composite (SM8.6): photo base/detail selection and the coverage tint.
   ViewportCompositePass                                 composite_;
   // Copied from EditorViewportItem::maskCoverageStyle in synchronize().

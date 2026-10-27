@@ -48,12 +48,14 @@ enum class LeaseWritableResourceKind : std::uint8_t {
 
 // DirectPresentQueue keeps these layer identities independent from the edit-viewer
 // implementation so a future Metal adapter can use the same protocol. The three photo layers
-// share the photo queue; MaskCoverage targets belong to the separate coverage queue (SM8.5).
+// share the photo queue; MaskCoverage targets belong to the separate coverage queue (SM8.5), and
+// DetailMaskCoverage targets to the coverage queue of the detail ROI (Mask ranges D10).
 enum class LeaseFrameLayer : std::uint8_t {
   InteractivePrimary = 0,
   QualityBase,
   DetailPatch,
   MaskCoverage,
+  DetailMaskCoverage,
 };
 
 // Mirrors alcedo::FramePresentationMode without pulling edit-viewer headers into
@@ -257,6 +259,8 @@ struct MetalSharedTextureLeasePayload {
       return "detail_patch";
     case LeaseFrameLayer::MaskCoverage:
       return "mask_coverage";
+    case LeaseFrameLayer::DetailMaskCoverage:
+      return "detail_mask_coverage";
   }
   return "unknown";
 }

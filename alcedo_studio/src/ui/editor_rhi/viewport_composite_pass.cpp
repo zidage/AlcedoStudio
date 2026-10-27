@@ -124,18 +124,31 @@ auto BuildViewportCompositeUniforms(const ViewportCompositeLayout& layout)
     uniforms.detail_flags[0] = 1.0f;
   }
   const auto& style = layout.coverage_style;
-  if (layout.coverage_geometry == nullptr || !style.visible || !(style.opacity > 0.0f)) {
+  if (!style.visible || !(style.opacity > 0.0f)) {
     return uniforms;
   }
-  const auto map = MapPhotoUvToCoverageUv(primary.geometry, *layout.coverage_geometry);
-  if (!map.has_value()) {
+  const auto fill = [&](const ResolvedRenderGeometry* geometry, float* u, float* v) {
+    if (geometry == nullptr) {
+      return false;
+    }
+    const auto map = MapPhotoUvToCoverageUv(primary.geometry, *geometry);
+    if (!map.has_value()) {
+      return false;
+    }
+    for (int i = 0; i < 3; ++i) {
+      u[i] = map->u_row[i];
+      v[i] = map->v_row[i];
+    }
+    u[3] = 1.0f;
+    return true;
+  };
+  const bool base = fill(layout.coverage_geometry, uniforms.coverage_u, uniforms.coverage_v);
+  const bool detail =
+      layout.detail_roi.has_value() &&
+      fill(layout.detail_coverage_geometry, uniforms.detail_coverage_u, uniforms.detail_coverage_v);
+  if (!base && !detail) {
     return uniforms;
   }
-  for (int i = 0; i < 3; ++i) {
-    uniforms.coverage_u[i] = map->u_row[i];
-    uniforms.coverage_v[i] = map->v_row[i];
-  }
-  uniforms.coverage_u[3]    = 1.0f;
   uniforms.coverage_tint[0] = style.red;
   uniforms.coverage_tint[1] = style.green;
   uniforms.coverage_tint[2] = style.blue;
@@ -157,12 +170,14 @@ void ViewportCompositePass::ForgetTexture(const QRhiTexture* texture) {
   if (texture == nullptr) {
     return;
   }
-  if (texture == bound_primary_ || texture == bound_detail_ || texture == bound_coverage_) {
+  if (texture == bound_primary_ || texture == bound_detail_ || texture == bound_coverage_ ||
+      texture == bound_detail_coverage_) {
     // The bindings keep the texture pointer; a later texture may reuse the address.
     DestroyRhi(bindings_);
-    bound_primary_  = nullptr;
-    bound_detail_   = nullptr;
-    bound_coverage_ = nullptr;
+    bound_primary_         = nullptr;
+    bound_detail_          = nullptr;
+    bound_coverage_        = nullptr;
+    bound_detail_coverage_ = nullptr;
   }
 }
 
@@ -180,6 +195,7 @@ void ViewportCompositePass::Release() {
   bound_primary_    = nullptr;
   bound_detail_     = nullptr;
   bound_coverage_   = nullptr;
+  bound_detail_coverage_ = nullptr;
   static_upload_    = false;
   rhi_              = nullptr;
 }
@@ -265,15 +281,18 @@ auto ViewportCompositePass::EnsureResources(QRhi* rhi, QRhiResourceUpdateBatch* 
 auto ViewportCompositePass::EnsureBindings(QRhi* rhi, const Textures& textures) -> bool {
   auto* detail   = textures.detail != nullptr ? textures.detail : placeholder_texture_;
   auto* coverage = textures.coverage != nullptr ? textures.coverage : placeholder_texture_;
+  auto* detail_coverage =
+      textures.detail_coverage != nullptr ? textures.detail_coverage : placeholder_texture_;
   if (bindings_ != nullptr && bound_primary_ == textures.primary && bound_detail_ == detail &&
-      bound_coverage_ == coverage) {
+      bound_coverage_ == coverage && bound_detail_coverage_ == detail_coverage) {
     return true;
   }
   DestroyRhi(bindings_);
-  bound_primary_  = nullptr;
-  bound_detail_   = nullptr;
-  bound_coverage_ = nullptr;
-  bindings_       = rhi->newShaderResourceBindings();
+  bound_primary_         = nullptr;
+  bound_detail_          = nullptr;
+  bound_coverage_        = nullptr;
+  bound_detail_coverage_ = nullptr;
+  bindings_              = rhi->newShaderResourceBindings();
   bindings_->setBindings(
       {QRhiShaderResourceBinding::uniformBuffer(
            0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
@@ -283,7 +302,9 @@ auto ViewportCompositePass::EnsureBindings(QRhi* rhi, const Textures& textures) 
        QRhiShaderResourceBinding::sampledTexture(2, QRhiShaderResourceBinding::FragmentStage,
                                                  detail, nearest_sampler_),
        QRhiShaderResourceBinding::sampledTexture(3, QRhiShaderResourceBinding::FragmentStage,
-                                                 coverage, linear_sampler_)});
+                                                 coverage, linear_sampler_),
+       QRhiShaderResourceBinding::sampledTexture(4, QRhiShaderResourceBinding::FragmentStage,
+                                                 detail_coverage, linear_sampler_)});
   if (!bindings_->create()) {
     DestroyRhi(bindings_);
     last_error_ = "viewport composite: the shader resource bindings could not be created";
@@ -292,7 +313,8 @@ auto ViewportCompositePass::EnsureBindings(QRhi* rhi, const Textures& textures) 
   // Every draw uses the same binding layout, so the pipeline stays compatible with new bindings.
   bound_primary_  = textures.primary;
   bound_detail_   = detail;
-  bound_coverage_ = coverage;
+  bound_coverage_        = coverage;
+  bound_detail_coverage_ = detail_coverage;
   return true;
 }
 

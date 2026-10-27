@@ -68,8 +68,8 @@ void ViewportMaskCoverageLayer::FulfillTargetRequests(QRhi* rhi, ILeaseTargetAda
     }
     const TargetGeneration generation{queue_->CurrentTargetGeneration(), session_epoch,
                                       request.layer_generation, image_identity};
-    auto lease = adapter.CreateTarget(rhi, QSize(request.width, request.height), generation,
-                                      LeaseFrameLayer::MaskCoverage);
+    const auto layer = sink_ != nullptr ? sink_->LeaseLayer() : LeaseFrameLayer::MaskCoverage;
+    auto lease = adapter.CreateTarget(rhi, QSize(request.width, request.height), generation, layer);
     if (!lease.has_value()) {
       last_error_ = adapter.lastError();
       qCWarning(editorPresentLog, "[EditorPresent] coverage target allocation failed %dx%d: %s",

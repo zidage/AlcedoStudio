@@ -357,6 +357,114 @@ TEST_F(ViewportCoverageCompositeTest, CoverageFollowsCropRotationZoomAndDetailRo
   }
 }
 
+/// Mask ranges D10: inside a visible DetailPatch ROI the composite samples the detail coverage
+/// frame; elsewhere, and without a visible DetailPatch, the base coverage frame.
+TEST_F(ViewportCoverageCompositeTest, DetailCoverageIsSampledInsideTheDetailRoi) {
+  const FrameRoiRect roi{0.3f, 0.25f, 0.4f, 0.5f};
+  const auto         photo_geometry  = MakePhotoGeometry(1.0f);
+  const auto         detail_geometry = MakePhotoGeometry(
+      1.0f, ViewRequest{NormalizedRect{roi.x, roi.y, roi.width, roi.height}, Extent2D{64, 48}});
+  // Distinct coverage per channel: a disc on the left half in the base frame, a disc on the right
+  // half in the detail frame.
+  ASSERT_EQ(
+      Present(Candidate(MakeDiscPixels(24.0, 24.0)), {photo_geometry, false, 1.0f}, Identity(201)),
+      MaskCoveragePublication::Published);
+  ASSERT_EQ(Present(Candidate(MakeDiscPixels(40.0, 24.0)), {detail_geometry, false, 1.0f},
+                    Identity(202), viewport_->detailMaskCoverageSink()),
+            MaskCoveragePublication::Published);
+  ASSERT_TRUE(Consume());
+  ASSERT_TRUE(ConsumeDetail());
+  const auto                     base_texels   = ReadBack(layer_.Texture());
+  const auto                     detail_texels = ReadBack(detail_layer_.Texture());
+  const auto                     base_geometry = layer_.Presentation().geometry;
+  const auto                     detail_frame  = detail_layer_.Presentation().geometry;
+
+  constexpr std::array<float, 4> kPhoto        = {0.3f, 0.3f, 0.3f, 1.0f};
+  const auto                     extent        = photo_geometry.render_extent;
+  std::vector<float>             rgba(static_cast<std::size_t>(extent.width) * extent.height * 4);
+  for (std::size_t i = 0; i < rgba.size(); i += 4) {
+    std::copy(kPhoto.begin(), kPhoto.end(), rgba.begin() + static_cast<std::ptrdiff_t>(i));
+  }
+  auto* primary = Upload(static_cast<int>(extent.width), static_cast<int>(extent.height), rgba);
+  std::vector<float> detail_rgba(16 * 16 * 4);
+  for (std::size_t i = 0; i < detail_rgba.size(); i += 4) {
+    std::copy(kPhoto.begin(), kPhoto.end(), detail_rgba.begin() + static_cast<std::ptrdiff_t>(i));
+  }
+  auto*       detail = Upload(16, 16, detail_rgba);
+  const QSize target(static_cast<int>(extent.width), static_cast<int>(extent.height));
+
+  const auto coverage_at = [](const std::vector<float>& texels, const ResolvedRenderGeometry& frame,
+                              const ResolvedRenderGeometry& photo, double u, double v,
+                              bool* inside) {
+    const auto reference = TransformPoint(
+        photo.render_to_reference, Vector2{static_cast<float>(u * photo.render_extent.width),
+                                           static_cast<float>(v * photo.render_extent.height)});
+    const auto   at = TransformPoint(frame.reference_to_render, reference);
+    const double cu = at.x / frame.render_extent.width;
+    const double cv = at.y / frame.render_extent.height;
+    *inside         = cu > 1e-3 && cv > 1e-3 && cu < 1.0 - 1e-3 && cv < 1.0 - 1e-3;
+    return SampleCoverage(texels, frame.render_extent, cu, cv);
+  };
+
+  for (const bool detail_visible : {true, false}) {
+    SCOPED_TRACE(detail_visible ? "visible DetailPatch" : "no DetailPatch");
+    ViewportCompositeLayout layout;
+    layout.target_size       = target;
+    layout.primary           = {target.width(), target.height(), FramePresentationMode::FullFrame,
+                                photo_geometry};
+    layout.detail_roi        = detail_visible ? std::optional<FrameRoiRect>(roi) : std::nullopt;
+    layout.coverage_geometry = &base_geometry;
+    layout.detail_coverage_geometry = &detail_frame;
+    layout.coverage_style           = kTint;
+    const auto output               = Composite(
+        target,
+        {primary, detail_visible ? detail : nullptr, layer_.Texture(), detail_layer_.Texture()},
+        BuildViewportCompositeUniforms(layout));
+    ASSERT_EQ(output.size(), static_cast<std::size_t>(target.width()) * target.height() * 4);
+    int from_detail = 0, differs = 0, failures = 0;
+    for (int py = 0; py < target.height(); ++py) {
+      for (int px = 0; px < target.width(); ++px) {
+        const double u  = (px + 0.5) / target.width();
+        const double v  = (py + 0.5) / target.height();
+        const double du = u - roi.x, dv = v - roi.y;
+        if (std::abs(du) < 1e-2 || std::abs(dv) < 1e-2 || std::abs(du - roi.width) < 1e-2 ||
+            std::abs(dv - roi.height) < 1e-2) {
+          continue;  // On the ROI edge.
+        }
+        const bool   in_roi      = du > 0.0 && dv > 0.0 && du < roi.width && dv < roi.height;
+        bool         base_inside = false, detail_inside = false;
+        const double base_value =
+            coverage_at(base_texels, base_geometry, photo_geometry, u, v, &base_inside);
+        const double detail_value =
+            coverage_at(detail_texels, detail_frame, photo_geometry, u, v, &detail_inside);
+        if (!base_inside || (in_roi && !detail_inside)) {
+          continue;
+        }
+        const bool   use_detail = detail_visible && in_roi;
+        const double coverage   = use_detail ? detail_value : base_value;
+        from_detail += use_detail ? 1 : 0;
+        differs += use_detail && std::abs(detail_value - base_value) > 0.5 ? 1 : 0;
+        const auto expected = ExpectedComposite(kPhoto, coverage, kTint);
+        const auto index    = static_cast<std::size_t>(py) * target.width() + px;
+        for (int c = 0; c < 4 && failures < 10; ++c) {
+          if (std::abs(output[index * 4 + c] - expected[c]) > 0.01) {
+            ADD_FAILURE() << "pixel (" << px << ", " << py << ") channel " << c << " = "
+                          << output[index * 4 + c] << ", expected " << expected[c]
+                          << (use_detail ? " (detail coverage)" : " (base coverage)");
+            ++failures;
+          }
+        }
+      }
+    }
+    if (detail_visible) {
+      EXPECT_GT(from_detail, 200);
+      EXPECT_GT(differs, 50) << "the two coverage frames must differ inside the ROI";
+    } else {
+      EXPECT_EQ(from_detail, 0);
+    }
+  }
+}
+
 TEST_F(ViewportCoverageCompositeTest, CoverageTintNeverAppearsInExportOrScopes) {
   const auto pixels = MakeCandidatePixels(0);
   const auto asset  = WholeImageAsset(pixels);

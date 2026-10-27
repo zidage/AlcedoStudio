@@ -72,6 +72,10 @@ struct ViewportCompositeUniforms {
   float coverage_v[4]    = {0.0f, 1.0f, 0.0f, 0.0f};
   /// rgb: display-encoded tint; a: overlay opacity.
   float coverage_tint[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  /// xyz: CoverageUvTransform::u_row of the detail coverage frame; w: 1 when it is composited.
+  float detail_coverage_u[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+  /// xyz: CoverageUvTransform::v_row of the detail coverage frame.
+  float detail_coverage_v[4] = {0.0f, 1.0f, 0.0f, 0.0f};
 };
 
 /// The selected photo layer of one viewport draw.
@@ -95,16 +99,21 @@ struct ViewportCompositeLayout {
   std::optional<FrameRoiRect>   detail_roi{};
   /// Geometry of the displayed coverage frame, or null when no coverage is displayed.
   const ResolvedRenderGeometry* coverage_geometry = nullptr;
+  /// Geometry of the displayed detail coverage frame (the coverage of a detail ROI render, Mask
+  /// ranges D10), or null. Used only inside a visible DetailPatch ROI.
+  const ResolvedRenderGeometry* detail_coverage_geometry = nullptr;
   MaskCoverageDisplayStyle      coverage_style{};
 };
 
 /**
  * @brief Uniforms of one viewport draw: letterbox, zoom and pan of the photo quad, the DetailPatch
- *        ROI, and the coverage map and tint.
+ *        ROI, and the coverage maps and tint.
  *
  * A RoiFrame primary is drawn without zoom and pan; its own geometry maps it to the coverage.
- * Coverage is composited only when a coverage geometry is given, the style is visible with a
- * positive opacity, and @ref MapPhotoUvToCoverageUv has a map.
+ * A coverage frame is composited only when its geometry is given, the style is visible with a
+ * positive opacity, and @ref MapPhotoUvToCoverageUv has a map. The detail coverage frame needs a
+ * visible DetailPatch ROI as well: inside that ROI the shader samples it where it has texels, and
+ * the base coverage frame elsewhere.
  */
 [[nodiscard]] auto BuildViewportCompositeUniforms(const ViewportCompositeLayout& layout)
     -> ViewportCompositeUniforms;
@@ -148,9 +157,10 @@ class ViewportCompositePass {
 
   /// Input textures of one draw. Null detail or coverage textures bind a black placeholder.
   struct Textures {
-    QRhiTexture* primary  = nullptr;
-    QRhiTexture* detail   = nullptr;
-    QRhiTexture* coverage = nullptr;
+    QRhiTexture* primary         = nullptr;
+    QRhiTexture* detail          = nullptr;
+    QRhiTexture* coverage        = nullptr;
+    QRhiTexture* detail_coverage = nullptr;
   };
 
   /**
@@ -192,6 +202,7 @@ class ViewportCompositePass {
   QRhiTexture*                bound_primary_       = nullptr;
   QRhiTexture*                bound_detail_        = nullptr;
   QRhiTexture*                bound_coverage_      = nullptr;
+  QRhiTexture*                bound_detail_coverage_ = nullptr;
   bool                        static_upload_       = false;
   std::string                 last_error_;
 };

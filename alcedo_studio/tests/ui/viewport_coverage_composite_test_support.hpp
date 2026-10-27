@@ -314,15 +314,14 @@ class ViewportCompositeFixture : public CoverageChannelTest {
     }
   }
 
-  /// Import the newest InteractivePrimary photo frame with its geometry, as
+  /// Import the newest photo frame of @p role with its geometry, as
   /// EditorViewportRenderer::consumeDirectFrames / consumeImportedGpuFrames do.
-  auto ImportPhoto() -> ImportedPhoto& {
+  auto ImportPhoto(FrameRole role = FrameRole::InteractivePrimary) -> ImportedPhoto& {
     ImportedPhoto photo;
     const auto    epoch = viewport_->sessionEpoch();
     const auto    image = viewport_->imageIdentity();
     if (UsesQueuedTargets()) {
-      const auto frame = viewport_->present_queue()->ConsumeNewestReady(
-          FrameRole::InteractivePrimary, epoch, image);
+      const auto frame = viewport_->present_queue()->ConsumeNewestReady(role, epoch, image);
       if (frame.has_value()) {
         photo.texture =
             rhi_->newTexture(QRhiTexture::RGBA32F, QSize(frame->slot.width, frame->slot.height), 1);
@@ -337,7 +336,7 @@ class ViewportCompositeFixture : public CoverageChannelTest {
     } else {
       auto frames = viewport_->frameSink()->DrainPendingImportedFrames(epoch, image);
       for (auto& frame : frames) {
-        if (frame.preview_metadata.frame_role != FrameRole::InteractivePrimary) {
+        if (frame.preview_metadata.frame_role != role) {
           continue;
         }
         photo.texture = rhi_->newTexture(QRhiTexture::RGBA32F, QSize(frame.width, frame.height), 1);

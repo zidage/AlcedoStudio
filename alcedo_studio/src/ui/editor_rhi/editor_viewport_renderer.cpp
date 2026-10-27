@@ -87,6 +87,8 @@ EditorViewportRenderer::EditorViewportRenderer() {
   // The composite binds the displayed coverage texture; drop the bindings before it is destroyed.
   coverage_layer_.SetTextureReleaseObserver(
       [this](const QRhiTexture* texture) { composite_.ForgetTexture(texture); });
+  detail_coverage_layer_.SetTextureReleaseObserver(
+      [this](const QRhiTexture* texture) { composite_.ForgetTexture(texture); });
 }
 
 EditorViewportRenderer::~EditorViewportRenderer() {
@@ -105,12 +107,17 @@ EditorViewportRenderer::~EditorViewportRenderer() {
   if (coverage_queue_) {
     coverage_queue_->SetConsumerAvailable(false);
   }
+  if (detail_coverage_queue_) {
+    detail_coverage_queue_->SetConsumerAvailable(false);
+  }
   releaseResources();
   releaseQueuedNatives();
   if (adapter_) {
     coverage_layer_.DestroyNatives(*adapter_);
+    detail_coverage_layer_.DestroyNatives(*adapter_);
   }
   coverage_layer_.SetTextureReleaseObserver({});
+  detail_coverage_layer_.SetTextureReleaseObserver({});
   adapter_.reset();
 }
 
@@ -195,11 +202,16 @@ void EditorViewportRenderer::releaseResources() {
   releaseQueuedNatives();
   // Device recreation or teardown: the coverage input and its targets go with the QRhi.
   coverage_layer_.Release();
+  detail_coverage_layer_.Release();
   if (coverage_queue_) {
     coverage_queue_->InvalidateTargetGeneration();
   }
+  if (detail_coverage_queue_) {
+    detail_coverage_queue_->InvalidateTargetGeneration();
+  }
   if (adapter_) {
     coverage_layer_.DestroyRetiredNatives(*adapter_);
+    detail_coverage_layer_.DestroyRetiredNatives(*adapter_);
   }
   composite_.Release();
 }
@@ -270,6 +282,9 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   coverage_queue_ = item_->maskCoverageQueue();
   coverage_layer_.Attach(coverage_queue_, item_->maskCoverageSinkShared());
   coverage_queue_->SetConsumerAvailable(item_->presentationRequested());
+  detail_coverage_queue_ = item_->detailMaskCoverageQueue();
+  detail_coverage_layer_.Attach(detail_coverage_queue_, item_->detailMaskCoverageSinkShared());
+  detail_coverage_queue_->SetConsumerAvailable(item_->presentationRequested());
 
   const auto next_session_epoch  = item_->sessionEpoch();
   const auto next_image_identity = item_->imageIdentity();
@@ -283,12 +298,16 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     }
     // Coverage of the previous image closes before the new image is displayed.
     coverage_layer_.Release();
+    detail_coverage_layer_.Release();
     session_epoch_  = next_session_epoch;
     image_identity_ = next_image_identity;
     content_dirty_  = true;
   }
 
   if (coverage_layer_.ApplyClear()) {
+    content_dirty_ = true;
+  }
+  if (detail_coverage_layer_.ApplyClear()) {
     content_dirty_ = true;
   }
   coverage_style_ = item_->maskCoverageStyle();
@@ -883,14 +902,19 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   consumeImportedGpuFrames();
   if (adapter_) {
     coverage_layer_.FulfillTargetRequests(rhi_, *adapter_, session_epoch_, image_identity_);
+    detail_coverage_layer_.FulfillTargetRequests(rhi_, *adapter_, session_epoch_, image_identity_);
   }
   if (coverage_layer_.ConsumeNewest(rhi_, session_epoch_, image_identity_)) {
     content_dirty_ = true;
   }
+  if (detail_coverage_layer_.ConsumeNewest(rhi_, session_epoch_, image_identity_)) {
+    content_dirty_ = true;
+  }
 
-  const auto* primary_layer = selectedPrimaryLayer();
-  const auto* detail_layer  = selectedDetailLayer();
-  auto*       coverage      = coverage_layer_.Texture();
+  const auto* primary_layer   = selectedPrimaryLayer();
+  const auto* detail_layer    = selectedDetailLayer();
+  auto*       coverage        = coverage_layer_.Texture();
+  auto*       detail_coverage = detail_layer ? detail_coverage_layer_.Texture() : nullptr;
 
   ViewportCompositeLayout layout;
   layout.target_size = render_target->pixelSize();
@@ -907,13 +931,16 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   if (coverage != nullptr) {
     layout.coverage_geometry = &coverage_layer_.Presentation().geometry;
   }
+  if (detail_coverage != nullptr) {
+    layout.detail_coverage_geometry = &detail_coverage_layer_.Presentation().geometry;
+  }
   layout.coverage_style = coverage_style_;
 
-  const auto outcome = composite_.Record(
-      rhi_, command_buffer, render_target,
-      {primary_layer ? primary_layer->texture : nullptr,
-       detail_layer ? detail_layer->texture : nullptr, coverage},
-      BuildViewportCompositeUniforms(layout));
+  const auto outcome =
+      composite_.Record(rhi_, command_buffer, render_target,
+                        {primary_layer ? primary_layer->texture : nullptr,
+                         detail_layer ? detail_layer->texture : nullptr, coverage, detail_coverage},
+                        BuildViewportCompositeUniforms(layout));
   const bool drew_primary = outcome == ViewportCompositeOutcome::Drawn;
   if (outcome == ViewportCompositeOutcome::Failed) {
     qCWarning(editorPresentLog, "[EditorPresent] %s", composite_.LastError().c_str());
@@ -930,6 +957,7 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   releaseQueuedNatives();
   if (adapter_) {
     coverage_layer_.DestroyRetiredNatives(*adapter_);
+    detail_coverage_layer_.DestroyRetiredNatives(*adapter_);
   }
 
   if (drew_primary) {
