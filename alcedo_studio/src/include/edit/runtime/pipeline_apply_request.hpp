@@ -12,9 +12,11 @@
 
 #include "edit/geometry/render_request.hpp"
 #include "edit/runtime/executor_role.hpp"
+#include "edit/runtime/mask_coverage_probe.hpp"
 #include "io/image/export_color_profile_config.hpp"
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "ui/edit_viewer/mask_coverage_sink.hpp"
 
 namespace alcedo {
 
@@ -44,6 +46,11 @@ struct PipelineApplyRequest {
   /// Batch only: the source the owner already decoded at decode_res, off the render lock. The
   /// renderer uses it in place of the encoded bytes; null means the renderer decodes them.
   std::shared_ptr<const PreparedRawInput>     prepared_input;
+  /// Interactive only: also show the coverage of this Mask, from this render, in the viewport
+  /// (Mask ranges plan D8-D10). Not part of any key: the photo output does not change.
+  std::optional<MaskCoverageProbe>            mask_coverage_probe;
+  /// Coverage channel that receives the probed coverage; required with @ref mask_coverage_probe.
+  IMaskCoverageSink*                          mask_coverage_sink = nullptr;
 };
 
 /// Long-edge limit, in output pixels, of the editor's full-image Quality Base render.

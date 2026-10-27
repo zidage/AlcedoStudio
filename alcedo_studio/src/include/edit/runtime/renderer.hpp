@@ -135,10 +135,18 @@ class Renderer {
    * request with frame role QualityBase keeps only the sensor result and releases every
    * downstream result of this render after presentation and download.
    *
+   * With `request.mask_coverage_probe`, the render also writes the R8 coverage of the probed Mask
+   * into a coverage display target, and after the photo frame it publishes that coverage to
+   * `request.mask_coverage_sink` with the identity and geometry of the photo frame (or clears the
+   * channel when the render does not evaluate the Mask); `mask_coverage` of the result says
+   * which. The probe changes no photo pixel and no result key.
+   *
    * @pre No other render runs on this renderer.
-   * @throws std::invalid_argument when `request.role` differs from @ref Role.
-   * @throws std::runtime_error for invalid input, GPU execution, presentation, or download
-   *         failure. Nothing is returned for a failed render.
+   * @throws std::invalid_argument when `request.role` differs from @ref Role, or for a probe
+   *         without an interactive role, a frame sink, and a coverage sink.
+   * @throws std::runtime_error for invalid input, GPU execution, presentation, coverage
+   *         publication, or download failure. Nothing is returned for a failed render. A failed
+   *         coverage publication happens after the photo frame and its results are published.
    */
   [[nodiscard]] auto RenderImage(const PipelineGraphSnapshot&        snapshot,
                                  const std::shared_ptr<ImageBuffer>& input,

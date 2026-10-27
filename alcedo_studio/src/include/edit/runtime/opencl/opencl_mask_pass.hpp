@@ -83,6 +83,18 @@ void               RecordMaskCoverageDisplay(OpenClRenderDevice&                
                                              const MaskCoverageDisplayRequest&       request,
                                              OpenClBackend::Texture2D&               output);
 
+/**
+ * @brief Record the display write of a probed Mask (Mask ranges plan D8): the R8 coverage
+ *        @p mask, which MaskEvaluate wrote on the render grid, into @p output on the same grid
+ *        (RGBA32F; red is the R8 value / 255, green and blue 0, alpha 1). No resampling.
+ *
+ * Enqueues on the device queue and tracks the event in the command context.
+ * @throws std::runtime_error when @p mask is not R8, @p output is not RGBA32F of the same size,
+ *         or the kernel lookup or enqueue fails.
+ */
+void RecordMaskValueDisplay(OpenClRenderDevice& device, const OpenClBackend::Texture2D& mask,
+                            OpenClBackend::Texture2D& output);
+
 }  // namespace alcedo
 
 #endif  // HAVE_OPENCL

@@ -33,6 +33,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -49,6 +50,7 @@
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/mask_asset_reader.hpp"
 #include "edit/runtime/mask_coverage_presentation.hpp"
+#include "edit/runtime/mask_coverage_probe_record.hpp"
 #include "image/image_buffer.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/mask_coverage_sink.hpp"
@@ -195,6 +197,15 @@ struct PhotoRender {
   ResolvedRenderGeometry geometry{};
 };
 
+/// Result of one photo render with a MaskCoverageProbe.
+struct ProbedPhotoRender {
+  PhotoRender               photo;
+  MaskCoverageProbeOutcome  outcome = MaskCoverageProbeOutcome::NotRequested;
+  /// Device R8 `effective_output` of the probed Mask after the render; empty when the render did
+  /// not evaluate it.
+  std::vector<std::uint8_t> probed_r8;
+};
+
 /// The render device of one backend behind the production coverage and photo operations.
 class CoverageProducer {
  public:
@@ -214,6 +225,17 @@ class CoverageProducer {
   virtual auto RenderPhoto(const PipelineDocument& document, const PreparedRawInput& input,
                            const RenderRequest& request, IFrameSink& sink,
                            FrameCompletionSubmission submission) -> PhotoRender = 0;
+  /**
+   * @brief @ref RenderPhoto with @p probe, in the order of Renderer::RenderImage: execute with a
+   *        MaskCoverageProbeRecord, present the photo frame, download it, then
+   *        PublishMaskCoverageProbe to @p coverage_sink with the identity and geometry of the
+   *        photo frame. Also downloads the R8 of the probed Mask.
+   */
+  virtual auto RenderPhotoWithProbe(const PipelineDocument& document, const PreparedRawInput& input,
+                                    const RenderRequest& request, IFrameSink& sink,
+                                    FrameCompletionSubmission submission,
+                                    const MaskCoverageProbe&  probe,
+                                    IMaskCoverageSink& coverage_sink) -> ProbedPhotoRender = 0;
   virtual void SetMaskAssets(std::shared_ptr<const MaskAssetReader> reader)     = 0;
   /// Photo DAG pass counters of the device.
   virtual auto PassStats() -> GpuNodePassStats                                  = 0;
@@ -244,16 +266,31 @@ class DeviceCoverageProducer final : public CoverageProducer {
     const auto output   = device_.Execute(plan, input, document);
     submission.geometry = plan.geometry;
     FramePresenter<Backend>::Present(device_, output, sink, submission, ViewerDisplayConfig{});
-    const auto  host = FramePresenter<Backend>::Download(device_, output);
-    const auto& mat  = host->GetCPUData();
-    PhotoRender render;
-    render.extent =
-        Extent2D{static_cast<std::uint32_t>(mat.cols), static_cast<std::uint32_t>(mat.rows)};
-    render.geometry = plan.geometry;
-    render.rgba.resize(static_cast<std::size_t>(mat.cols) * mat.rows * 4);
-    for (int y = 0; y < mat.rows; ++y) {
-      std::memcpy(render.rgba.data() + static_cast<std::size_t>(y) * mat.cols * 4, mat.ptr(y),
-                  static_cast<std::size_t>(mat.cols) * 4 * sizeof(float));
+    return DownloadPhoto(output, plan.geometry);
+  }
+  auto RenderPhotoWithProbe(const PipelineDocument& document, const PreparedRawInput& input,
+                            const RenderRequest& request, IFrameSink& sink,
+                            FrameCompletionSubmission submission, const MaskCoverageProbe& probe,
+                            IMaskCoverageSink& coverage_sink) -> ProbedPhotoRender override {
+    const auto plan = GraphCompiler::Compile(document, input.CompileSource(), request);
+    MaskCoverageProbeRecord<Backend> record{probe};
+    const auto                       output =
+        device_.Execute(plan, input, document, true, TransientAllocationPolicy::SessionPacked,
+                        ResultPersistenceScope::AllCurrentResults, &record);
+    submission.geometry = plan.geometry;
+    FramePresenter<Backend>::Present(device_, output, sink, submission, ViewerDisplayConfig{});
+    ProbedPhotoRender render;
+    render.photo         = DownloadPhoto(output, plan.geometry);
+    const auto& metadata = submission.metadata;
+    render.outcome       = PublishMaskCoverageProbe<Backend>(
+        device_, record,
+        MaskCoveragePresentation{
+            MaskCoverageFrameIdentity{metadata.presentation_request_id, metadata.session_epoch,
+                                      metadata.image_identity},
+            plan.geometry},
+        coverage_sink);
+    if (record.target != nullptr) {
+      render.probed_r8 = DownloadProbedR8(plan, probe);
     }
     return render;
   }
@@ -263,6 +300,49 @@ class DeviceCoverageProducer final : public CoverageProducer {
   auto PassStats() -> GpuNodePassStats override { return device_.PassStats(); }
 
  private:
+  auto DownloadPhoto(const GraphValueId& output, const ResolvedRenderGeometry& geometry)
+      -> PhotoRender {
+    const auto  host = FramePresenter<Backend>::Download(device_, output);
+    const auto& mat  = host->GetCPUData();
+    PhotoRender render;
+    render.extent =
+        Extent2D{static_cast<std::uint32_t>(mat.cols), static_cast<std::uint32_t>(mat.rows)};
+    render.geometry = geometry;
+    render.rgba.resize(static_cast<std::size_t>(mat.cols) * mat.rows * 4);
+    for (int y = 0; y < mat.rows; ++y) {
+      std::memcpy(render.rgba.data() + static_cast<std::size_t>(y) * mat.cols * 4, mat.ptr(y),
+                  static_cast<std::size_t>(mat.cols) * 4 * sizeof(float));
+    }
+    return render;
+  }
+
+  auto DownloadProbedR8(const ExecutionPlan& plan, const MaskCoverageProbe& probe)
+      -> std::vector<std::uint8_t> {
+    for (const auto& grade : plan.grade_nodes) {
+      if (grade.node_id != probe.grade_id || !grade.mask_stack.has_value()) {
+        continue;
+      }
+      for (const auto& source : grade.mask_stack->sources) {
+        if (source.mask_id != probe.mask_id) {
+          continue;
+        }
+        auto* lease = device_.Workspace().Images().Find(source.effective_output);
+        if (lease == nullptr) {
+          ADD_FAILURE() << "the probed Mask has no R8 result";
+          return {};
+        }
+        std::vector<std::uint8_t> pixels(lease->Texture().Bytes());
+        device_.Workspace().Device().DownloadTexture2D(
+            lease->Texture(),
+            std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()), pixels.size()),
+            device_.CommandContext());
+        return pixels;
+      }
+    }
+    ADD_FAILURE() << "the plan has no probed Mask";
+    return {};
+  }
+
   Device device_{};
 };
 

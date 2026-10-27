@@ -273,6 +273,13 @@ kernel void mask_union_max(texture2d<float, access::read> lhs [[texture(0)]],
   output.write(float4(QuantizeR8(max(a, b)), 0.0f, 0.0f, 1.0f), gid);
 }
 
+// Probed Mask display (Mask ranges D8): the R8 value of each pixel in red, on the same grid.
+kernel void mask_value_display(texture2d<float, access::read> mask [[texture(0)]],
+                               texture2d<float, access::write> output [[texture(1)]],
+                               uint2 gid [[thread_position_in_grid]]) {
+  output.write(float4(QuantizeR8(mask.read(gid).x), 0.0f, 0.0f, 1.0f), gid);
+}
+
 // SM8.4: Feather and Expand of AI Mask coverage (SM8 section 5.1), the passes of
 // AiMaskEdgeDispatch. R8 textures are R8Unorm: a read gives u / 255, so each read converts back
 // to the integer u, and each R8 write stores v / 255 for an integer v. Every pass clamps

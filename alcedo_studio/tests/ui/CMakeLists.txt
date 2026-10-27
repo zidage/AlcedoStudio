@@ -1985,6 +1985,55 @@ if(ALCEDO_METAL_ENABLED)
 endif()
 alcedo_register_test_target(ViewportCoverageCompositeTest ui)
 
+# Mask ranges MR3: the coverage of one probed Mask from the photo render, in the viewport coverage
+# channel of each backend (one process per backend, as MaskCoveragePresentationTest).
+add_executable(MaskRangeCoverageProbeTest
+    ${ALCEDO_TEST_ROOT}/ui/mask_range_coverage_probe_test.cpp
+)
+target_include_directories(MaskRangeCoverageProbeTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(MaskRangeCoverageProbeTest
+    PRIVATE
+        EditorRhiViewport
+        EditInput
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::GuiPrivate
+        Qt6::OpenGL
+)
+if(WIN32)
+    target_compile_definitions(MaskRangeCoverageProbeTest PRIVATE WIN32_LEAN_AND_MEAN)
+endif()
+if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(MaskRangeCoverageProbeTest PRIVATE EditRuntimeCuda)
+    alcedo_ui_gtest_discover_tests(MaskRangeCoverageProbeTest
+        TEST_PREFIX "MaskRangeCoverageProbeTest.Cuda."
+        TEST_LIST MaskRangeCoverageProbeCudaTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                   ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=cuda")
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(MaskRangeCoverageProbeTest PRIVATE EditRuntimeOpenCl)
+    if(NOT APPLE)
+        alcedo_ui_gtest_discover_tests(MaskRangeCoverageProbeTest
+            TEST_PREFIX "MaskRangeCoverageProbeTest.OpenCl."
+            TEST_LIST MaskRangeCoverageProbeOpenClTests
+            PROPERTIES LABELS "editor_rhi;presentation;mask;gpu"
+                       ENVIRONMENT "ALCEDO_TEST_EDITOR_BACKEND=opencl")
+    endif()
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(MaskRangeCoverageProbeTest PRIVATE EditRuntimeMetal)
+    alcedo_ui_gtest_discover_tests(MaskRangeCoverageProbeTest
+        TEST_PREFIX "MaskRangeCoverageProbeTest.Metal."
+        TEST_LIST MaskRangeCoverageProbeMetalTests
+        PROPERTIES LABELS "editor_rhi;presentation;mask;gpu;metal")
+endif()
+alcedo_register_test_target(MaskRangeCoverageProbeTest ui)
+
 add_executable(AnalyticMaskCreationTest
     ${ALCEDO_TEST_ROOT}/ui/analytic_mask_creation_test.cpp
 )

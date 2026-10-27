@@ -144,16 +144,16 @@ class BasicRenderDevice {
    */
   [[nodiscard]] auto Execute(
       const ExecutionPlan& plan, const PreparedRawInput& input, const PipelineDocument& document,
-      bool                      publish_on_success = true,
-      TransientAllocationPolicy transient_policy   = TransientAllocationPolicy::SessionPacked,
-      ResultPersistenceScope    persistence        = ResultPersistenceScope::AllCurrentResults)
-      -> GraphValueId {
+      bool                              publish_on_success = true,
+      TransientAllocationPolicy         transient_policy = TransientAllocationPolicy::SessionPacked,
+      ResultPersistenceScope            persistence = ResultPersistenceScope::AllCurrentResults,
+      MaskCoverageProbeRecord<Backend>* probe       = nullptr) -> GraphValueId {
     // Backends with an isolated submission stream (OpenCL dedicated queue)
     // bind it to this thread for the encode so shared helpers that resolve a
     // queue through the global context land on the render-local stream.
     auto queue_scope = EnterThreadQueueScope();
     return PlanExecutor<Backend>::Execute(*this, plan, input, document, publish_on_success,
-                                          transient_policy, persistence);
+                                          transient_policy, persistence, probe);
   }
 
  private:

@@ -52,6 +52,7 @@ inline constexpr const char* kMaskAnalyticRangedKernelName        = "mask_analyt
 inline constexpr const char* kMaskRasterRangedKernelName          = "mask_raster_ranged_r8";
 inline constexpr const char* kMaskFillZeroKernelName              = "mask_fill_zero_r8";
 inline constexpr const char* kMaskUnionMaxKernelName              = "mask_union_max_r8";
+inline constexpr const char* kMaskValueDisplayKernelName          = "mask_value_display_rgba32f";
 inline constexpr const char* kAiMaskMorphologyKernelName          = "ai_mask_morphology_r8";
 inline constexpr const char* kAiMaskFeatherRowsKernelName         = "ai_mask_feather_rows_r32f";
 inline constexpr const char* kAiMaskFeatherColumnsKernelName      = "ai_mask_feather_columns_r8";
