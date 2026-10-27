@@ -291,7 +291,10 @@ Item {
                     id: panelStack
                     objectName: "editorAdjustmentPanelStack"
                     anchors.fill: parent
+                    // The AI Mask edit shows its panel in the lower part of the Mask page (#564).
                     currentIndex: {
+                        if (root.aiMaskTool && root.aiMaskTool.active)
+                            return 7
                         switch (root.activePanel) {
                         case "look": return 1
                         case "lut": return 2
@@ -372,6 +375,7 @@ Item {
                         editorSession: root.editorSession
                         nodeController: root.nodeController
                         maskCreation: root.maskCreation
+                        aiMaskTool: root.aiMaskTool
                         controlsEnabled: root.controlsEnabled && root.maskPanelAvailable
                     }
 
@@ -394,15 +398,6 @@ Item {
                         onRetryRequested: root.comparison.retry()
                         onCloseRequested: root.comparison.close()
                     }
-                }
-
-                // The AI Mask tool covers the panel pages while its edit is open (SM9 MVP).
-                EditorAiMaskPanel {
-                    anchors.fill: parent
-                    z: 10
-                    visible: !!(root.aiMaskTool && root.aiMaskTool.active)
-                    tool: root.aiMaskTool
-                    maskCreation: root.maskCreation
                 }
             }
         }

@@ -3,8 +3,8 @@ import QtQuick.Controls
 import QtQuick.Controls.impl
 import QtQuick.Layouts
 
-// AI Mask tool panel (SM9, issues #513 and #519). Covers the adjustment panel stack while the
-// AI Mask edit is open. Every value and action is EditorAiMaskTool's; the panel keeps no session
+// AI Mask tool panel (SM9, issues #513 and #519). Fills the lower part of the Mask panel while
+// the AI Mask edit is open; the Range section of the Mask panel stays above it (#564). Every value and action is EditorAiMaskTool's; the panel keeps no session
 // state. Controls are icon buttons with tooltips: the four tasks, the People list, the prompt
 // tools Point / Box / Path with Add / Subtract, the click level, Feather, Expand, and the
 // temporary Undo / Redo. A running operation shows the working border around the whole panel
@@ -14,7 +14,6 @@ Rectangle {
     objectName: "editorAiMaskPanel"
 
     property var tool: null
-    // EditorMaskCreationAdapter: owner of the range bars of the stored Mask (MR4).
     property var maskCreation: null
     readonly property bool toolReady: !!(tool && tool.ready)
     readonly property bool canStep: toolReady && !tool.busy
@@ -211,19 +210,6 @@ Rectangle {
             ColumnLayout {
                 width: scroll.availableWidth
                 spacing: appTheme.spaceSm
-
-                // Luminance Range and Hue Range of the stored Mask of the edit (Mask ranges MR4).
-                // A new candidate is not a Mask yet, so the bars are disabled for it (D11).
-                EditorMaskRangeSection {
-                    objectName: "editorAiMaskRangeSection"
-                    Layout.fillWidth: true
-                    maskCreation: root.maskCreation
-                    controlsEnabled: root.canStep
-                    newAiMaskCandidate: !!(root.tool && root.tool.ready
-                                           && !root.tool.editingStoredMask)
-                }
-
-                Divider {}
 
                 // Tasks: each runs once and adds a component with the Add / Subtract mode.
                 RowLayout {

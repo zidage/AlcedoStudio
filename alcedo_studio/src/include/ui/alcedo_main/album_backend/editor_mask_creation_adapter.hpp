@@ -11,6 +11,7 @@
 #include <QString>
 #include <QTimer>
 #include <QVariantList>
+#include <QVariantMap>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -77,6 +78,10 @@ class EditorMaskCreationAdapter : public QObject {
   /// L units and degrees. The bars draw the dimming over this width, as the kernels weight it.
   Q_PROPERTY(qreal maskLuminanceSoftness READ mask_luminance_softness NOTIFY maskRangeChanged)
   Q_PROPERTY(qreal maskHueSoftness READ mask_hue_softness NOTIFY maskRangeChanged)
+  /// Saturation threshold of the Hue Range (OkLCh chroma); the default for a full range.
+  Q_PROPERTY(qreal maskHueMinChroma READ mask_hue_min_chroma NOTIFY maskRangeChanged)
+  /// Bounds and defaults of the Softness and saturation threshold controls, in model units.
+  Q_PROPERTY(QVariantMap rangeParameterLimits READ range_parameter_limits CONSTANT)
   /// The "Show selection" toggle: the range coverage of the target Mask stays shown.
   Q_PROPERTY(bool maskRangeCoverageVisible READ mask_range_coverage_visible NOTIFY maskRangeChanged)
   /// Smallest handle distance of the bars, a little above the stored-range minimum widths.
@@ -133,12 +138,10 @@ class EditorMaskCreationAdapter : public QObject {
   [[nodiscard]] auto mask_range_coverage_visible() const -> bool {
     return range_coverage_requested_;
   }
-  [[nodiscard]] auto mask_luminance_softness() const -> qreal {
-    return static_cast<qreal>(range_view_.luminance_softness);
-  }
-  [[nodiscard]] auto mask_hue_softness() const -> qreal {
-    return static_cast<qreal>(range_view_.hue_softness);
-  }
+  [[nodiscard]] auto        mask_luminance_softness() const -> qreal;
+  [[nodiscard]] auto        mask_hue_softness() const -> qreal;
+  [[nodiscard]] auto        mask_hue_min_chroma() const -> qreal;
+  [[nodiscard]] static auto range_parameter_limits() -> QVariantMap;
   [[nodiscard]] static auto luminance_range_minimum_width() -> qreal;
   [[nodiscard]] static auto hue_range_minimum_width() -> qreal;
   [[nodiscard]] static auto hue_gradient_stops() -> QVariantList;
@@ -173,6 +176,22 @@ class EditorMaskCreationAdapter : public QObject {
    */
   Q_INVOKABLE bool          stepRangeHandle(const QString& kind, const QString& handle, int steps,
                                             bool coarse);
+  /**
+   * @brief Set one value of a range of the target Mask (value fields, Softness and threshold
+   *        sliders), in model units.
+   *
+   * @p field is "first" / "second" (Luminance low / high in OkLab L, Hue start / end in degrees;
+   * the value is clamped so the handles keep the minimum distance, and a Hue value wraps into
+   * the bar), "softness" (clamped to the slider bounds), or "minChroma" (Hue only, clamped to
+   * [0.015, 0.2]). Softness and threshold are refused while the range is full. The value is
+   * written into the open drag of the same range (a slider drag opened with @ref
+   * beginRangeEdit), else into a key-step burst that settles as one commit like @ref
+   * stepRangeHandle; @ref commitRangeEdits settles it at once. Returns false when nothing was
+   * written.
+   */
+  Q_INVOKABLE bool          editRangeValue(const QString& kind, const QString& field, qreal value);
+  /// Settle an open value or step burst now (a typed value: Enter or focus-out).
+  Q_INVOKABLE void          commitRangeEdits();
   /// Write the full range (`null`) of @p kind of the target Mask with one commit.
   Q_INVOKABLE void          resetRange(const QString& kind);
   /// The "Show selection" toggle. Shows or hides the range coverage of the target Mask.
@@ -300,6 +319,15 @@ class EditorMaskCreationAdapter : public QObject {
   void                      ResetRangeEdit();
   /// Finish an open key or wheel step burst with its one commit; no-op otherwise.
   void                      SettleRangeSteps();
+  /**
+   * Open the edit that a value input of @p kind writes into: a burst of steps (settled by the
+   * timer), or, with @p join_pointer_edit, also the open drag of the same kind. Settles a burst
+   * of another range or target first. False when a drag of another range is open or no edit
+   * can start.
+   */
+  auto                      OpenRangeInput(RangeKind kind, bool join_pointer_edit) -> bool;
+  /// Write the open range edit with handles @p first and @p second and the edit softness.
+  void                      WriteRangeEdit(RangeKind kind, float first, float second);
   void               BeginTool(MaskSourceKind kind, const QString& tool_kind);
   void               ResetLocal();
   void               PublishOverlay();
@@ -385,11 +413,14 @@ class EditorMaskCreationAdapter : public QObject {
   /// ai_mask_edit_open_.
   bool          ai_mask_edit_open_ = false;
   RangeTarget   ai_mask_edit_target_{};
-  /// The open range drag: its kind, target, and the handle values written last.
+  /// The open range drag: its kind, target, and the handle, softness, and saturation threshold
+  /// values written last.
   RangeKind     range_open_ = RangeKind::None;
   RangeTarget   range_edit_target_{};
   float         range_first_              = 0.0f;
   float         range_second_             = 0.0f;
+  float         range_softness_           = 0.0f;
+  float         range_min_chroma_         = kColorRangeDefaultMinChroma;
   /// The open range edit is a key or wheel step burst; range_step_timer_ settles it.
   bool          range_step_burst_         = false;
   QTimer*       range_step_timer_         = nullptr;

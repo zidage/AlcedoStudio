@@ -326,6 +326,132 @@ TEST_F(EditorMaskRangeAdapterTest, HueStepsKeepHandlesOnTheBarAndADragSettlesThe
   EXPECT_FALSE(LiveMask(mask_id)->color_range.has_value());
 }
 
+TEST_F(EditorMaskRangeAdapterTest, TypedRangeValuesAreClampedAndCommitOnce) {
+  OpenThroughController();
+  const auto mask_id = CreateRadialMask();
+  Select(mask_id);
+  const auto commits = Graph()->CommitCount();
+
+  // Luminance High typed as 60 (UI L x 100 = 0.6), then Low typed above it: clamped to the
+  // minimum handle distance below High. Each typed value is one commit.
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("second"), 0.6));
+  adapter_->commitRangeEdits();
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 1);
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("first"), 0.9));
+  adapter_->commitRangeEdits();
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 2);
+  ASSERT_TRUE(LiveMask(mask_id)->luminance_range.has_value());
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->luminance_range->high, 0.6f);
+  EXPECT_NEAR(LiveMask(mask_id)->luminance_range->low, 0.588f, 1e-5f);
+  EXPECT_FALSE(Preview().range_probe.has_value()) << "the typed value settled at once";
+
+  // Hue Start typed above End wraps through 0; Start 360 is 0.
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("second"), 40.0));
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("first"), 300.0));
+  adapter_->commitRangeEdits();
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 3) << "values typed before Enter share a commit";
+  ASSERT_TRUE(LiveMask(mask_id)->color_range.has_value());
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->hue_start, 300.0f);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->hue_end, 40.0f);
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("first"), 39.9));
+  adapter_->commitRangeEdits();
+  Settle();
+  EXPECT_GE(ColorRangeWidthDegrees(*LiveMask(mask_id)->color_range),
+            kColorRangeMinimumWidthDegrees);
+
+  // An unchanged value writes nothing.
+  EXPECT_FALSE(
+      adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("second"), 0.6));
+  adapter_->commitRangeEdits();
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 4);
+}
+
+TEST_F(EditorMaskRangeAdapterTest, SoftnessAndSaturationThresholdBelongToARestrictedRange) {
+  OpenThroughController();
+  const auto mask_id = CreateRadialMask();
+  Select(mask_id);
+  const auto commits = Graph()->CommitCount();
+
+  // A full range has no Softness or threshold to set.
+  EXPECT_FALSE(
+      adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("softness"), 0.1));
+  EXPECT_FALSE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("minChroma"), 0.1));
+  EXPECT_FALSE(
+      adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("minChroma"), 0.1));
+  EXPECT_DOUBLE_EQ(adapter_->mask_luminance_softness(), LuminanceRangeModel{}.softness);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_min_chroma(), kColorRangeDefaultMinChroma);
+
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("hue")));
+  adapter_->updateRangeEdit(QStringLiteral("hue"), 100.0, 200.0);
+  adapter_->finishRangeEdit(QStringLiteral("hue"));
+  Settle();
+  ASSERT_EQ(Graph()->CommitCount(), commits + 1);
+
+  // A Softness slider drag is one range edit: live values, one commit at release, handles kept.
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("hue")));
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("softness"), 30.0));
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("softness"), 45.0));
+  Settle();
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->softness, 45.0f);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), 45.0);
+  EXPECT_EQ(Preview().range_probe, Probe(mask_id)) << "the slider drag shows the coverage";
+  adapter_->finishRangeEdit(QStringLiteral("hue"));
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 2);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->hue_start, 100.0f);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->hue_end, 200.0f);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->softness, 45.0f);
+
+  // The saturation threshold: clamped to its bounds, stored, and kept by a later handle drag.
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("minChroma"), 0.5));
+  adapter_->commitRangeEdits();
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 3);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->min_chroma, kColorRangeMaximumMinChroma);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_min_chroma(), kColorRangeMaximumMinChroma);
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("minChroma"), 0.08));
+  adapter_->commitRangeEdits();
+  Settle();
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->min_chroma, 0.08f);
+  EXPECT_FLOAT_EQ(MaskModelToJson(*LiveMask(mask_id))["color_range"]["min_chroma"].get<float>(),
+                  0.08f);
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("hue")));
+  adapter_->updateRangeEdit(QStringLiteral("hue"), 120.0, 220.0);
+  adapter_->finishRangeEdit(QStringLiteral("hue"));
+  Settle();
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->min_chroma, 0.08f);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->softness, 45.0f);
+
+  // Reset to full writes null; the next restriction starts at the default values.
+  adapter_->resetRange(QStringLiteral("hue"));
+  Settle();
+  EXPECT_FALSE(LiveMask(mask_id)->color_range.has_value());
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), ColorRangeModel{}.softness);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_min_chroma(), kColorRangeDefaultMinChroma);
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("first"), 10.0));
+  adapter_->commitRangeEdits();
+  Settle();
+  ASSERT_TRUE(LiveMask(mask_id)->color_range.has_value());
+  EXPECT_EQ(*LiveMask(mask_id)->color_range, (ColorRangeModel{10.0f, 360.0f, 12.0f}));
+
+  // Luminance Softness slider bounds: 0.5 to 50 in L x 100.
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("second"), 0.8));
+  ASSERT_TRUE(
+      adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("softness"), 0.0));
+  adapter_->commitRangeEdits();
+  Settle();
+  ASSERT_TRUE(LiveMask(mask_id)->luminance_range.has_value());
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->luminance_range->softness, 0.005f);
+  const auto limits = EditorMaskCreationAdapter::range_parameter_limits();
+  EXPECT_FLOAT_EQ(limits.value(QStringLiteral("luminanceSoftnessMaximum")).toFloat(), 0.5f);
+  EXPECT_FLOAT_EQ(limits.value(QStringLiteral("hueSoftnessMinimum")).toFloat(), 0.5f);
+  EXPECT_FLOAT_EQ(limits.value(QStringLiteral("minChromaMinimum")).toFloat(), 0.015f);
+}
+
 TEST_F(EditorMaskRangeAdapterTest, ResetWritesNullWithOneCommit) {
   OpenThroughController();
   const auto mask_id = CreateRadialMask();

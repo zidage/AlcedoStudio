@@ -885,3 +885,77 @@ that ends on the stored value commits nothing.
 The QML harness tests support the adapter tests; they are not the evidence of the commits
 (AGENTS.md, #526). Suite totals: `EditorMaskRangeAdapterTest` 10/10, `RangeSelectorBarQmlTest`
 2/2. The softness ramp drawing is not checked by a test.
+
+### 10.3 RP3: shared Range section, value fields, Softness, saturation threshold
+
+##### RP3 completion record (2026-10-27)
+
+**Status:** complete. Branch `feature/mask-range-precision-rp3-range-section`, stacked on RP2.
+
+**Changes from the issue and details that it did not give:**
+
+- **Panel split.** `EditorMasksContextPanel` is a column: the "Mask" title, the empty-state text,
+  the Range section in a `CollapsibleSection` titled "Range" (范围; the shared fold component, so
+  the header behaves like the other panel groups), then the lower part (`editorMasksLowerPart`).
+  The lower part holds the Mask-field Flickable, or the `EditorAiMaskPanel` while the AI Mask
+  edit is open. The Range section is not inside the Flickable. The fold state is not persisted.
+- **AI Mask panel placement.** `EditorAdjustmentStack` no longer lays the AI Mask panel over the
+  whole stack. While the AI Mask edit is open the stack shows the Mask page (index 7), whose
+  lower part shows the AI Mask panel. The copy of `EditorMaskRangeSection` in `EditorAiMaskPanel`
+  is removed. During the edit the Range controls are enabled while the tool is ready and not
+  busy (the MR4 rule, `canStep`), and the D11 notice shows for a new candidate.
+- **Value fields (C).** `RangeValueField` (inline in the section): Luminance Low/High as L × 100
+  and Hue Start/End in degrees, one decimal, `DoubleValidator`. Enter or focus-out calls
+  `editRangeValue(kind, "first" | "second", value)` and `commitRangeEdits()`: one SetMaskField
+  commit. The adapter clamps a Luminance value to the minimum handle distance; a Hue value wraps
+  into the bar (Start 360 = 0, End 0 = 360), Start > End wraps, and a Hue value that breaks the
+  minimum distance is moved to it.
+- **Softness and threshold (D, G).** `AdjustmentSlider` with an inline `RangeParameterModel`:
+  Luminance Softness 0.5-50 (L × 100, default 5), Hue Softness 0.5-90 degrees (default 12),
+  Saturation Threshold (饱和度门槛) 1.5-20 (chroma × 100, default 3). A slider drag is one range
+  edit (`beginRangeEdit`, live `editRangeValue`, `finishRangeEdit`: coverage shown, one commit);
+  keys and typed values go into the step burst of RP2 (one commit; Enter settles at once);
+  double-click resets to the default with one commit. The three sliders are disabled while their
+  range is full, and the adapter refuses them too. A reset to full writes `null` and the adapter
+  view returns to the default softness and threshold, so the next restriction starts there.
+- **Adapter.** New `editRangeValue(kind, field, value)` (fields `first`, `second`, `softness`,
+  `minChroma`), `commitRangeEdits()`, properties `maskHueMinChroma` and `rangeParameterLimits`
+  (bounds and defaults from the model constants). The open edit carries its softness and
+  threshold (`range_softness_`, `range_min_chroma_`), so a handle drag keeps them and a slider
+  drag keeps the handles. `stepRangeHandle` and `editRangeValue` share `OpenRangeInput` (join
+  the open edit or open a burst) and `WriteRangeEdit`.
+- **Strings.** Added to `alcedo_main_zh_CN.ts` by hand (no `lupdate`): context
+  `EditorMaskRangeSection`: Softness 柔和度, Saturation Threshold 饱和度门槛, Luminance low 明度下限,
+  Luminance high 明度上限, Hue start 色相起点, Hue end 色相终点; context `EditorMasksContextPanel`:
+  Range 范围. `lrelease` compiles the file (1507 finished).
+
+**Primary call chains:**
+
+```text
+Typed value: RangeValueField editingFinished -> editRangeValue(kind, first|second, v)
+  -> OpenRangeInput (burst: BeginMaskField, coverage) -> clamp / wrap -> WriteRangeEdit
+  -> commitRangeEdits -> SettleRangeSteps -> finishRangeEdit -> one SetMaskField commit
+Softness / threshold drag: AdjustmentSlider beginDrag -> beginRangeEdit(kind)
+  updateDrag -> editRangeValue(kind, softness|minChroma, v / scale) -> joins the open edit
+  -> WriteRangeEdit (handles kept, Interactive render)
+  finishDrag -> finishRangeEdit -> one commit
+AI Mask edit open: EditorAdjustmentStack currentIndex 7 -> EditorMasksContextPanel
+  -> Range section (target = stored Mask of the edit) + EditorAiMaskPanel in the lower part
+```
+
+**Failure chains:** Softness or threshold of a full range, threshold of the Luminance Range, a
+non-finite value, or an unchanged value -> `editRangeValue` returns false and writes nothing
+new; a value of one range while a drag of the other range is open -> refused.
+
+**What was proven (executed tests, Windows `win_debug`):**
+
+| Criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Typed values clamp to the minimum distance, wrap, and commit once | `TypedRangeValuesAreClampedAndCommitOnce` | `EditorMaskRangeAdapterTest` | PASS |
+| Softness drag is one commit with handles kept; threshold clamped, stored, kept by a drag; refused while full; reset gives the defaults; slider bounds | `SoftnessAndSaturationThresholdBelongToARestrictedRange` | same | PASS |
+| One Range section, above and outside the scrolling lower part; the AI Mask panel only in the lower part; the D11 notice | `RangeSectionIsOneFixedUpperPartAndTheAiPanelReplacesTheLowerPart` | `EditorMasksPanelQmlTest` | PASS (fails on the RP2 panel) |
+
+Suite totals: `EditorMaskRangeAdapterTest` 12/12, `EditorMasksPanelQmlTest` 1/1,
+`EditorAiMaskPanelQmlTest` 1/1, `RangeSelectorBarQmlTest` 2/2. `alcedo_main` builds (QML
+compiled by qmlcachegen). The panel test uses fake owners and checks only the layout; it is not
+the evidence of the edits (#526).
