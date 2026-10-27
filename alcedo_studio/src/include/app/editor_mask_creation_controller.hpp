@@ -130,6 +130,18 @@ struct EditorMaskCreationCommand {
   nlohmann::json                field_value;
 };
 
+/// True for `luminance_range` and `color_range`.
+[[nodiscard]] auto IsMaskRangeFieldKey(std::string_view field_key) -> bool;
+
+/**
+ * @brief True for a command of a Mask range edit (Mask ranges MR4): BeginMaskField or
+ *        SetMaskField of a range key, and Finish.
+ *
+ * During the AI Mask edit of a stored Mask the session admits these (and Cancel) for that Mask
+ * only; the session owner checks the target.
+ */
+[[nodiscard]] auto IsMaskRangeEditCommand(const EditorMaskCreationCommand& command) -> bool;
+
 /**
  * @brief Application owner of Mask creation and existing-mask movement.
  *
@@ -225,6 +237,19 @@ class EditorMaskCreationController {
   auto BeginMaskFieldEdit(std::string field_key) -> EditorMaskCreationResult;
 
   /**
+   * @brief Open a range edit (`luminance_range` or `color_range`) of the Mask (@p grade_id,
+   *        @p mask_id), of any source kind (Mask ranges MR4).
+   *
+   * The edit does not change the selection or the mode: the controller can be Inactive (an AI
+   * Mask has no selection) or have another Mask selected. While it is open, the matching explicit
+   * @ref ApplyMaskFieldValue writes live values with Interactive, @ref FinishMaskInput publishes
+   * one SetMaskField commit, @ref CancelMaskInput restores the before value, and every other
+   * operation is refused. Requires no open operation.
+   */
+  auto BeginMaskRangeEdit(const NodeId& grade_id, const MaskId& mask_id, std::string field_key)
+      -> EditorMaskCreationResult;
+
+  /**
    * @brief Apply @p after_value for @p field_key.
    *
    * While a matching field edit is open this updates the live Grade and runs
@@ -315,7 +340,7 @@ class EditorMaskCreationController {
    *
    * Armed creation without a press is false.
    */
-  [[nodiscard]] auto HasOpenOperation() const -> bool { return open_; }
+  [[nodiscard]] auto HasOpenOperation() const -> bool { return open_ || range_edit_.has_value(); }
   [[nodiscard]] auto OverlayIsCreating() const -> bool;
   /**
    * @brief Live or draft source for overlay layout. Empty when Inactive/hidden.
@@ -345,6 +370,9 @@ class EditorMaskCreationController {
   auto UpdateCreation(const MaskCreationSample& sample) -> EditorMaskCreationResult;
   auto UpdateExisting(const MaskCreationSample& sample) -> EditorMaskCreationResult;
   auto PublishMaskFieldEdit() -> EditorMaskCreationResult;
+  auto               PublishMaskRangeEdit() -> EditorMaskCreationResult;
+  auto               CancelMaskRangeEdit() -> EditorMaskCreationResult;
+  [[nodiscard]] auto RangeEditGrade() -> ColorGradeNodeModel*;
   auto ApplyLiveMaskField(const std::string& field_key, const nlohmann::json& value) -> bool;
   auto ApplyLiveMaskField(ColorGradeNodeModel* grade, const MaskId& mask_id,
                           const std::string& field_key, const nlohmann::json& value) -> bool;
@@ -372,6 +400,16 @@ class EditorMaskCreationController {
   MaskId                    last_removed_mask_id_;
   std::string               field_edit_key_;
   nlohmann::json            before_field_value_;
+
+  /// The open range edit of @ref BeginMaskRangeEdit. It is separate from the selection and the
+  /// mode, so the edit can target any Mask kind (an AI Mask too) and leaves both unchanged.
+  struct OpenRangeEdit {
+    NodeId         grade_id;
+    MaskId         mask_id;
+    std::string    field_key;
+    nlohmann::json before_value;
+  };
+  std::optional<OpenRangeEdit> range_edit_;
 };
 
 }  // namespace alcedo

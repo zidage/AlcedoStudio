@@ -37,6 +37,7 @@ def_library(EditMaskCore
         ${ALCEDO_SRC_ROOT}/edit/mask/ai_mask_asset_references.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/analytic_mask_edit.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/grade_mask_coverage.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/mask_range_display.cpp
     PUBLIC_DEPS EditGeometry JSON
     PRIVATE_DEPS xxHash
 )

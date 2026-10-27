@@ -99,6 +99,16 @@ Item {
                     font.pixelSize: appTheme.fontSizeCaption
                 }
 
+                // Luminance Range and Hue Range of the selected Mask (Mask ranges MR4).
+                EditorMaskRangeSection {
+                    objectName: "editorMasksRangeSection"
+                    Layout.fillWidth: true
+                    visible: root.maskSelected
+                    maskCreation: root.maskCreation
+                    controlsEnabled: root.maskSelected
+                    flickable: maskScroll
+                }
+
                 // Mask fields for the selected Mask. Each edit settles as one
                 // typed SetMaskField; opacity drags stay Interactive until release.
                 ParameterLabel { visible: root.maskSelected; text: qsTr("Name") }

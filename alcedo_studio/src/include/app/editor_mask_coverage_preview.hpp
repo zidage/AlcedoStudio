@@ -168,14 +168,24 @@ class EditorMaskCoveragePreview {
    * coverage. The status is Current while the probe is shown: the coverage follows each frame, and
    * a failed coverage publication fails that frame.
    *
-   * @pre No candidate is the source (the session refuses a range probe during an AI Mask edit).
-   * @throws std::logic_error when a candidate is the source.
+   * With a candidate (the AI Mask edit of a stored Mask, MR4), the probe covers the candidate: the
+   * candidate jobs end as Discarded the same way, and the newest candidate request is kept for
+   * @ref HideRangeProbe. The candidate stays active, so a candidate update replaces the probe.
+   *
+   * @pre The candidate is not in the Previous status (the session refuses the probe then).
+   * @throws std::logic_error when the candidate is in the Previous status.
    */
   void ShowRangeProbe(MaskCoverageProbe probe);
 
-  /// Hide the range probe coverage: forget the probe and clear the coverage channel without a
-  /// photo render. No effect when the source is not RangeProbe.
-  void HideRangeProbe();
+  /**
+   * @brief Hide the range probe coverage without a photo render. No effect when the source is
+   *        not RangeProbe.
+   *
+   * Without a candidate the coverage channel is cleared. With a candidate, the newest candidate
+   * request is presented again as request @p request_id (its shared pixels and edge values; no
+   * model call), so the candidate frame replaces the probe coverage.
+   */
+  void HideRangeProbe(std::uint64_t request_id);
 
   /**
    * @brief Present the newest request again after a failure. Reuses its shared pixels and edge
@@ -230,6 +240,9 @@ class EditorMaskCoveragePreview {
   /// Discard the pending request and the job in flight, forget the newest request, and hide the
   /// coverage through the port.
   void Hide();
+  /// Discard the pending request and the job in flight, and clear the coverage channel after the
+  /// job in flight. Keeps the newest request.
+  void DiscardJobs();
   void Finish(Request& request, EditorMaskCoverageOutcome outcome, std::string message);
   void SetStatus(EditorMaskCoveragePreviewStatus status, std::string error = {});
   void Publish();
@@ -238,7 +251,9 @@ class EditorMaskCoveragePreview {
   OwnerPoster                              post_;
   bool                                     candidate_active_ = false;
   std::optional<CommittedMask>             committed_;
-  /// Set only while the source is RangeProbe (never with a candidate or a committed selection).
+  /// Set only while the source is RangeProbe. Without a candidate it replaces the committed
+  /// selection; with a candidate it covers the candidate (MR4), and the committed selection that
+  /// the candidate restores at its end stays.
   std::optional<MaskCoverageProbe>         range_probe_;
   /// The newest request without its completion; Retry presents it again.
   std::optional<Request>                   newest_;

@@ -3612,6 +3612,39 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
 </context>
 <context>
+    <name>EditorMaskRangeSection</name>
+    <message>
+        <location filename="../qml/EditorMaskRangeSection.qml" line="+32"/>
+        <source>Luminance Range</source>
+        <translation>明度范围</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Mask luminance range</source>
+        <translation>蒙版明度范围</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Hue Range</source>
+        <translation>色相范围</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Mask hue range</source>
+        <translation>蒙版色相范围</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Show selection</source>
+        <translation>显示选区</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Confirm the new AI Mask to set its ranges.</source>
+        <translation>确认新的 AI 蒙版后即可设置其范围。</translation>
+    </message>
+</context>
+<context>
     <name>EditorMasksContextPanel</name>
     <message>
         <location filename="../qml/EditorMasksContextPanel.qml" line="+79"/>

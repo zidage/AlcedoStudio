@@ -1372,9 +1372,12 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
       command.kind != EditorMaskCreationCommandKind::CancelMode) {
     return Reject("Close the comparison before editing Masks");
   }
+  // A range edit of the stored Mask that the AI Mask edit targets stays admissible (MR4); the
+  // owner rejects one that targets another Mask (ApplyMaskCreationCommand).
   if (ai_mask_edit_active_.load(std::memory_order_acquire) &&
       command.kind != EditorMaskCreationCommandKind::Cancel &&
-      command.kind != EditorMaskCreationCommandKind::CancelMode) {
+      command.kind != EditorMaskCreationCommandKind::CancelMode &&
+      !IsMaskRangeEditCommand(command)) {
     return Reject("Commit or cancel the AI Mask edit before editing Masks");
   }
   {
@@ -1512,6 +1515,24 @@ void EditorSessionService::AbortMaskCreation() {
 auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationCommand& command)
     -> EditorMaskCreationResult {
   const auto identity = lifecycle_.identity();
+  if (ai_mask_edit_.has_value() && command.kind != EditorMaskCreationCommandKind::Cancel &&
+      command.kind != EditorMaskCreationCommandKind::CancelMode) {
+    // During the AI Mask edit only the range edit of its stored Mask writes (MR4).
+    const bool targets_stored_mask = ai_mask_edit_->mask_id.has_value() &&
+                                     command.node_id == ai_mask_edit_->grade_id &&
+                                     command.mask_id == *ai_mask_edit_->mask_id;
+    if (!IsMaskRangeEditCommand(command) ||
+        (command.kind != EditorMaskCreationCommandKind::Finish && !targets_stored_mask)) {
+      EditorMaskCreationResult rejected;
+      rejected.error = "Commit or cancel the AI Mask edit before editing Masks";
+      return rejected;
+    }
+  }
+  if (command.kind == EditorMaskCreationCommandKind::BeginMaskField &&
+      IsMaskRangeFieldKey(command.field_key)) {
+    // A range edit targets the Mask of the command, of any kind; the selection does not change.
+    return mask_creation_.BeginMaskRangeEdit(command.node_id, command.mask_id, command.field_key);
+  }
   switch (command.kind) {
     case EditorMaskCreationCommandKind::BeginCreation:
       return mask_creation_.BeginCreation(command.source_kind, command.node_id, identity);
@@ -2982,7 +3003,7 @@ auto EditorSessionService::OpenAiMaskEdit(const NodeId& grade_id, std::optional<
   ai_mask_edit_ = AiMaskEditTarget{grade_id, std::move(mask_id)};
   ai_mask_edit_active_.store(true, std::memory_order_release);
   // The AI Mask edit shows its candidate; the range probe of a committed Mask ends (D11).
-  coverage_preview_.HideRangeProbe();
+  coverage_preview_.HideRangeProbe(current_operation_id_);
   return finish(EditorSessionResultKind::Accepted, "AI Mask edit opened", std::move(opened));
 }
 
@@ -3234,7 +3255,14 @@ auto EditorSessionService::ShowMaskRangeCoverage(const NodeId& grade_id, const M
     return Reject("The Mask range coverage requires an interactive session");
   }
   if (ai_mask_edit_.has_value()) {
-    return Reject("The AI Mask edit shows its candidate; commit or cancel it first");
+    // The AI Mask edit of a stored Mask can show the range coverage of that Mask over its
+    // candidate (MR4); a new candidate is not a Mask yet (D11).
+    if (ai_mask_edit_->grade_id != grade_id || ai_mask_edit_->mask_id != mask_id) {
+      return Reject("The AI Mask edit shows its candidate; commit or cancel it first");
+    }
+    if (coverage_preview_.CommitBlocked()) {
+      return Reject("The AI Mask candidate failed to present; retry its preview first");
+    }
   }
   const auto working =
       dependencies_.pipeline
@@ -3277,7 +3305,7 @@ auto EditorSessionService::HideMaskRangeCoverage() -> EditorSessionResult {
     return SubmitCommand(std::move(command),
                          [this](const EditorSessionCommand&) { return HideMaskRangeCoverage(); });
   }
-  coverage_preview_.HideRangeProbe();
+  coverage_preview_.HideRangeProbe(current_operation_id_);
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
   result.state    = lifecycle_.state();

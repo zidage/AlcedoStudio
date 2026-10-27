@@ -1786,6 +1786,10 @@ auto EditorSessionController::EnqueueAdjustmentPatch(
   if (alcedo::diag::PreviewPerformanceEnabled()) {
     patch->qml_write_ns = alcedo::diag::PreviewPerformance::NowNs();
   }
+  // An adjustment input hides the Mask range coverage (Mask ranges D12, master plan 10.4).
+  if (mask_creation_) {
+    mask_creation_->OnAdjustmentInputStarted();
+  }
   return session_backend_->EnqueueAdjustmentInput(std::move(*patch));
 }
 
@@ -1833,7 +1837,14 @@ void EditorSessionController::BindNodeSelectionSource(EditorNodeController* node
 
 auto EditorSessionController::EnqueueMaskCreation(alcedo::EditorMaskCreationCommand command)
     -> bool {
-  if (session_backend_ == nullptr || !can_edit() || !UserStateChangeRefusalText().isEmpty()) {
+  if (session_backend_ == nullptr || !UserStateChangeRefusalText().isEmpty()) {
+    return false;
+  }
+  // The AI Mask edit holds the document writes, so can_edit() is false during it. The range edit
+  // of its stored Mask still writes (Mask ranges MR4); the session checks the target.
+  const bool range_edit_during_ai_edit =
+      session_backend_->ai_mask_edit_open() && alcedo::IsMaskRangeEditCommand(command);
+  if (!can_edit() && !range_edit_during_ai_edit) {
     return false;
   }
   const auto result = session_backend_->EnqueueMaskCreation(std::move(command));
