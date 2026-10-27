@@ -131,6 +131,11 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     // Only interactive renders present. A batch render returns host pixels and never reads the
     // executor's frame sink, whatever executor it runs on.
     request.sink = role == ExecutorRole::Interactive ? pipeline_executor_->GetFrameSink() : nullptr;
+    if (role == ExecutorRole::Interactive && desc.mask_coverage_probe_.has_value() &&
+        desc.mask_coverage_sink_ != nullptr) {
+      request.mask_coverage_probe = desc.mask_coverage_probe_;
+      request.mask_coverage_sink  = desc.mask_coverage_sink_;
+    }
     request.decode_res          = decode;
     request.require_host_output = host_output;
     request.role                = role;

@@ -15,6 +15,7 @@
 #include "app/editor_session_request_ids.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/mask/mask_model.hpp"
+#include "edit/runtime/mask_coverage_probe.hpp"
 #include "edit/runtime/mask_coverage_selection.hpp"
 #include "type/type.hpp"
 
@@ -28,6 +29,9 @@ enum class EditorMaskCoveragePreviewSource : std::uint8_t {
   Candidate,
   /// One committed AI Mask of a Color Grade.
   CommittedMask,
+  /// The coverage of one Mask of a Color Grade, taken from each photo render (Mask ranges D8):
+  /// any Mask kind, with its Luminance Range and Hue Range on the Grade input.
+  RangeProbe,
 };
 
 /// Whether the displayed coverage is the coverage that the editor asked for last (section 4.3).
@@ -50,6 +54,8 @@ struct EditorMaskCoveragePreviewState {
   EditorMaskCoveragePreviewStatus status = EditorMaskCoveragePreviewStatus::Hidden;
   /// The real error of the failed presentation; set only in the Previous status.
   std::string                     error;
+  /// The probed Mask while the source is RangeProbe; every editor render request carries it.
+  std::optional<MaskCoverageProbe> range_probe;
 };
 
 /// Terminal outcome of one coverage preview request.
@@ -153,6 +159,25 @@ class EditorMaskCoveragePreview {
                                std::uint64_t request_id);
 
   /**
+   * @brief Show the coverage of Mask @p probe from the photo renders (Mask ranges D8, D11).
+   *
+   * Replaces a committed AI Mask selection: its pending and running jobs end as Discarded, and the
+   * coverage channel is cleared after them, so no AI coverage frame is displayed after the probe.
+   * The probe is not a coverage-only job: the session hands it to each render request
+   * (@ref EditorMaskCoveragePreviewState::range_probe), and each photo frame publishes its
+   * coverage. The status is Current while the probe is shown: the coverage follows each frame, and
+   * a failed coverage publication fails that frame.
+   *
+   * @pre No candidate is the source (the session refuses a range probe during an AI Mask edit).
+   * @throws std::logic_error when a candidate is the source.
+   */
+  void ShowRangeProbe(MaskCoverageProbe probe);
+
+  /// Hide the range probe coverage: forget the probe and clear the coverage channel without a
+  /// photo render. No effect when the source is not RangeProbe.
+  void HideRangeProbe();
+
+  /**
    * @brief Present the newest request again after a failure. Reuses its shared pixels and edge
    *        values; no model call.
    * @return False, with @p on_complete not called, when the status is not Previous.
@@ -174,6 +199,10 @@ class EditorMaskCoveragePreview {
   [[nodiscard]] auto CommitBlocked() const -> bool;
   [[nodiscard]] auto HasCandidate() const -> bool { return candidate_active_; }
   [[nodiscard]] auto Committed() const -> const std::optional<CommittedMask>& { return committed_; }
+  /// The probed Mask while the source is RangeProbe. Owner thread.
+  [[nodiscard]] auto RangeProbe() const -> const std::optional<MaskCoverageProbe>& {
+    return range_probe_;
+  }
   /// Published state. Any thread.
   [[nodiscard]] auto State() const -> EditorMaskCoveragePreviewState;
 
@@ -209,6 +238,8 @@ class EditorMaskCoveragePreview {
   OwnerPoster                              post_;
   bool                                     candidate_active_ = false;
   std::optional<CommittedMask>             committed_;
+  /// Set only while the source is RangeProbe (never with a candidate or a committed selection).
+  std::optional<MaskCoverageProbe>         range_probe_;
   /// The newest request without its completion; Retry presents it again.
   std::optional<Request>                   newest_;
   std::optional<Request>                   pending_;

@@ -474,6 +474,11 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     editor_session_scheduler_->SetMaskCoverageSinkResolver([this]() -> alcedo::IMaskCoverageSink* {
       return editor_session_ ? editor_session_->presentation_mask_coverage_sink() : nullptr;
     });
+    editor_session_scheduler_->SetDetailMaskCoverageSinkResolver(
+        [this]() -> alcedo::IMaskCoverageSink* {
+          return editor_session_ ? editor_session_->presentation_detail_mask_coverage_sink()
+                                 : nullptr;
+        });
   }
   // An export renders on its own executor. The editor releases its GPU resources before the
   // export allocates, and allocates them again on its next frame after the export ends.

@@ -85,12 +85,24 @@ auto EditorSessionRenderController::MakeRenderIntent(const EditorRenderCommand& 
   intent.requested_height      = presentation_height_;
   intent.presentation_sink_id  = presentation_sink_id_;
   intent.cancellation          = std::make_shared<EditorRenderCancellationToken>();
+  {
+    std::scoped_lock lock(probe_source_mutex_);
+    if (probe_source_) {
+      intent.mask_coverage_probe = probe_source_();
+    }
+  }
   FillRenderIntentDefaults(intent);
   return intent;
 }
 
 void EditorSessionRenderController::SetGeometryOverlayActive(bool active) {
   geometry_overlay_active_.store(active, std::memory_order_release);
+}
+
+void EditorSessionRenderController::SetMaskCoverageProbeSource(
+    std::function<std::optional<MaskCoverageProbe>()> source) {
+  std::scoped_lock lock(probe_source_mutex_);
+  probe_source_ = std::move(source);
 }
 
 void EditorSessionRenderController::SetPresentationSuspended(

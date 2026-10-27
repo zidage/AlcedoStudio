@@ -18,6 +18,8 @@ void EditorMaskCoveragePreview::UpdateCandidate(const ImageTarget&             t
                                                 MaskCoverageInvertOpacity      mask,
                                                 std::uint64_t                  request_id,
                                                 EditorMaskCoverageCompletion   on_complete) {
+  // The candidate replaces a range probe (D11); its frame replaces the probe coverage.
+  range_probe_.reset();
   candidate_active_ = true;
   Request request;
   request.port_request.element_id            = target.element_id;
@@ -37,6 +39,8 @@ void EditorMaskCoveragePreview::SelectCommitted(const ImageTarget& target, Commi
   if (candidate_active_) {
     throw std::logic_error("EditorMaskCoveragePreview: a committed selection needs no candidate");
   }
+  // The committed AI Mask replaces a range probe (D11); its frame replaces the probe coverage.
+  range_probe_.reset();
   committed_ = std::move(committed);
   Enqueue(MakeCommittedRequest(target, *committed_, request_id, std::move(on_complete)));
 }
@@ -80,9 +84,32 @@ auto EditorMaskCoveragePreview::Retry(std::uint64_t                request_id,
   return true;
 }
 
+void EditorMaskCoveragePreview::ShowRangeProbe(MaskCoverageProbe probe) {
+  if (candidate_active_) {
+    throw std::logic_error("EditorMaskCoveragePreview: a range probe needs no candidate");
+  }
+  if (committed_.has_value() || newest_.has_value() || pending_.has_value() ||
+      in_flight_.has_value()) {
+    // End the AI coverage work; the port clears the channel after the job in flight.
+    committed_.reset();
+    Hide();
+  }
+  range_probe_ = std::move(probe);
+  SetStatus(EditorMaskCoveragePreviewStatus::Current);
+}
+
+void EditorMaskCoveragePreview::HideRangeProbe() {
+  if (!range_probe_.has_value()) {
+    return;
+  }
+  range_probe_.reset();
+  Hide();
+}
+
 void EditorMaskCoveragePreview::Clear() {
   candidate_active_ = false;
   committed_.reset();
+  range_probe_.reset();
   Hide();
 }
 
@@ -236,11 +263,13 @@ void EditorMaskCoveragePreview::SetStatus(EditorMaskCoveragePreviewStatus status
 
 void EditorMaskCoveragePreview::Publish() {
   EditorMaskCoveragePreviewState state;
-  state.source = candidate_active_        ? EditorMaskCoveragePreviewSource::Candidate
-                 : committed_.has_value() ? EditorMaskCoveragePreviewSource::CommittedMask
-                                          : EditorMaskCoveragePreviewSource::None;
-  state.status = status_;
-  state.error  = error_;
+  state.source      = candidate_active_          ? EditorMaskCoveragePreviewSource::Candidate
+                      : committed_.has_value()   ? EditorMaskCoveragePreviewSource::CommittedMask
+                      : range_probe_.has_value() ? EditorMaskCoveragePreviewSource::RangeProbe
+                                                 : EditorMaskCoveragePreviewSource::None;
+  state.status      = status_;
+  state.error       = error_;
+  state.range_probe = range_probe_;
   std::scoped_lock lock(published_mutex_);
   published_ = std::move(state);
 }

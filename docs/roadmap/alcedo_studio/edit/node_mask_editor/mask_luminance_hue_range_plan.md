@@ -2,7 +2,8 @@
 
 Date: 2026-10-26. Status: MR1 complete (2026-10-26, PR #556, branch
 `feature/mask-ranges-mr1-model`); MR2 complete (2026-10-26, branch
-`feature/mask-ranges-mr2-gpu-eval`, stacked on MR1); MR3-MR4 planned.
+`feature/mask-ranges-mr2-gpu-eval`, stacked on MR1); MR3 complete (2026-10-27, three stacked
+branches `feature/mask-ranges-mr3-*` on MR2); MR4 planned.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation Master Plan](../node_mask_editor_master_plan.md),
 sections 8.3 (Color Range and Luminance Range), 8.4 (Union), and 10.3-10.4 (content-dependent
@@ -433,6 +434,153 @@ Tests: the presented coverage equals the probed Mask R8 for CUDA, OpenCL, and Me
 does not change the photo frame bytes or the DAG key; the coverage of Grade 2 is computed from
 Grade 1 output; detail ROI coverage samples the detail slot; AI preview and probe replace each
 other.
+
+
+##### MR3 completion record (2026-10-27)
+
+**Status:** complete. The viewport shows the coverage of one probed Mask of one Color Grade,
+taken from the photo render, on CUDA, OpenCL, and Metal. Issue
+[#550](https://github.com/zidage/AlcedoStudio/issues/550). Three stacked pull requests on MR2:
+runtime probe (branch `feature/mask-ranges-mr3-coverage-probe`), detail coverage channel
+(`feature/mask-ranges-mr3-detail-coverage`), session facade (`feature/mask-ranges-mr3-session-probe`).
+
+**Changes from the plan and details that the plan did not give:**
+
+- **Probe record, not workspace state.** `PlanExecutor::Execute` (and both device `Execute`
+  functions) take an optional `MaskCoverageProbeRecord<Backend>*`. The executor records
+  `RecordMaskValueDisplay` right after the probed Mask's `effective_output` is bound (executed or a
+  valid result) and sets `record.target`. The record lives for one render call; the probe is not
+  stored on the workspace or the renderer. `BasicRenderWorkspace::AcquireMaskCoverageDisplayTarget`
+  now also accepts an open render, not only coverage-only work.
+- **Header split.** `edit/runtime/mask_coverage_probe.hpp` holds only `MaskCoverageProbe` and
+  `MaskCoverageProbeOutcome` (the app layer and `PipelineApplyRequest` include it).
+  `mask_coverage_probe_record.hpp` holds the record and `PublishMaskCoverageProbe`.
+- **Publication order and failure.** `Renderer::RenderImage` publishes the probed coverage after
+  the photo frame, the host download, and the result publication, with the identity
+  (`presentation_request_id`, session epoch, image identity) and the geometry of the photo frame.
+  `RenderedPipelineImage::mask_coverage` reports `Published`, `NotEvaluated`, or
+  `DiscardedForImageChange`. A failed coverage publication fails the render with the real error;
+  the photo frame and its results are already published then.
+- **Mask not evaluated.** When the render does not evaluate the probed Mask (the Mask or its Grade
+  is disabled, the Mask is removed), the renderer calls `IMaskCoverageSink::ClearCoverage`, so no
+  older coverage stays displayed (`NotEvaluated`). The render does not fail.
+- **Value display kernels.** CUDA `MaskValueDisplayKernel`, OpenCL `mask_value_display_rgba32f`,
+  Metal `mask_value_display` (warmed with the mask kernels): red = R8 code / 255. OpenCL and Metal
+  quantize the read value again (`QuantizeR8`). The OpenCL division is not correctly rounded, so a
+  presented value can differ from `code / 255.0f` by 1 ulp; the tests compare R8 codes (same code,
+  within 1e-6).
+- **Detail slot = second coverage channel.** The detail slot is a second
+  `DirectPresentQueue` + `ViewportMaskCoverageSink` + `ViewportMaskCoverageLayer` of the viewport
+  (`detailMaskCoverageSink()`), with the lease layer label `LeaseFrameLayer::DetailMaskCoverage`.
+  It follows the same session, suspension, invalidation, and teardown rules as the base channel;
+  `EditorViewportItem::clearMaskCoverage` clears both.
+- **Composite rule inside the detail ROI.** `editor_viewport.frag` binding 4 samples the detail
+  coverage frame only inside a visible DetailPatch ROI and only where that frame has texels;
+  elsewhere it samples the base coverage frame. `ViewportCompositeUniforms` has
+  `detail_coverage_u/v` (photo UV to detail coverage UV through the reference space, as the base
+  map). Without a visible DetailPatch the detail frame is not used.
+- **Stale detail coverage.** A base (non-detail) frame with a probe clears the detail channel on
+  the render worker before it renders (port `prepare_`), so a detail coverage frame of an earlier
+  probe or document state is not composited with a newer base frame. Inside the ROI the base
+  coverage shows until the next detail frame. A coverage-only AI job also clears the detail
+  channel first (AI coverage has no detail frame). The port `ClearMaskCoverage` clears both
+  channels.
+- **Session probe source.** `EditorMaskCoveragePreview` has the source `RangeProbe` and publishes
+  the probe in `EditorMaskCoveragePreviewState::range_probe`. `EditorSessionRenderController`
+  reads it through `SetMaskCoverageProbeSource` each time it builds a render intent, so every
+  Interactive, Quality, and Detail request carries it (`EditorRenderIntent::mask_coverage_probe`).
+  The port copies it into `RenderDesc` with the coverage sink of the frame role
+  (`SetDetailMaskCoverageSinkResolver` for detail frames) and `PipelineTask::MakeApplyRequest`
+  into `PipelineApplyRequest` for interactive renders. Without a bound channel the frame renders
+  without the probe.
+- **Facade.** `ShowMaskRangeCoverage(grade_id, mask_id)` accepts any Mask kind of the working
+  document, refuses during an AI Mask edit and without an interactive session, and routes one
+  Quality render with the new reason `MaskCoverageProbeChanged` (no scope update) when the probe
+  changes. `HideMaskRangeCoverage()` clears the channels through the port without a render.
+  Status is `Current` while the probe is shown: each frame carries the probe, and a failed
+  coverage publication fails that frame.
+- **One source at a time (D11).** Showing the probe ends a committed AI preview (its jobs end as
+  Discarded; the clear runs after them on the worker). A committed AI preview or a candidate
+  replaces the probe. Opening an AI Mask edit ends the probe. An image change ends it
+  (`EditorMaskCoveragePreview::Clear`).
+- **Metal coverage publication after a completed render.**
+  `MetalFramePresenter::PresentMaskCoverage` required a recorded command buffer. After the photo
+  download (and the `WaitIdle` of a QualityBase frame) the command context has no buffer, so the
+  probe publication threw. The presenter now throws only for a missing target texture and waits for
+  the buffer only when one exists: no buffer means the recorded work is complete.
+- **Tests reuse.** The SM8.6 composite fixture moved to
+  `tests/ui/viewport_coverage_composite_test_support.hpp`; the coverage harness has a detail layer
+  and `RenderPhotoWithProbe` (the order of `Renderer::RenderImage`). The SM8.7 session fixture
+  moved to `tests/app/editor_mask_coverage_preview_test_support.hpp`.
+
+**Primary success call chain (range probe shown, one frame):**
+
+```text
+EditorSessionService::ShowMaskRangeCoverage           owner thread, validates Grade and Mask
+  -> EditorMaskCoveragePreview::ShowRangeProbe         source RangeProbe, state.range_probe
+  -> EditorSessionRenderController::RouteViewChange(MaskCoverageProbeChanged)
+     -> MakeRenderIntent: intent.mask_coverage_probe = probe source()
+EditorSessionRenderSchedulerPort::DispatchPipelineFrame
+  -> coverage sink of the frame role (base or detail resolver); RenderDesc probe + sink
+  -> prepare_ (worker): base frame clears the detail channel
+PipelineTask::MakeApplyRequest -> PipelineApplyRequest{mask_coverage_probe, mask_coverage_sink}
+Renderer<Backend>::RenderImage
+  -> device.Execute(..., &MaskCoverageProbeRecord)
+     -> PlanExecutor: probed Mask effective_output bound
+        -> AcquireMaskCoverageDisplayTarget(render extent) -> RecordMaskValueDisplay
+  -> FramePresenter::Present (photo) -> PublishResults
+  -> PublishMaskCoverageProbe -> FramePresenter::PresentMaskCoverage(target, identity, geometry)
+ViewportMaskCoverageLayer (base or detail) -> ViewportCompositePass (binding 3 or 4)
+```
+
+**Primary failure call chains:**
+
+```text
+Probed Mask not evaluated (disabled, removed, Grade disabled)
+  -> record.target == nullptr -> IMaskCoverageSink::ClearCoverage -> outcome NotEvaluated
+Coverage publication fails (no writable target, copy failure)
+  -> std::runtime_error from FramePresenter::PresentMaskCoverage -> RenderImage reports and
+     rethrows; photo frame and results already published; the frame job reports the error
+Show during an AI Mask edit / missing Grade or Mask / no interactive session
+  -> Reject with the reason; preview and render requests unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Presented coverage equals the probed Mask R8 | `PresentedCoverageEqualsTheProbedMaskR8` | `MaskRangeCoverageProbeTest` | CUDA, OpenCL: PASS; Metal: PASS |
+| Photo bytes and result keys unchanged by the probe | `ProbeChangesNoPhotoPixelAndNoResultKey` (byte-identical display output; the unprobed render after a probed one skips every Mask and DRT pass; a probe of valid results still publishes) | same | CUDA, OpenCL: PASS; Metal: PASS |
+| Grade 2 coverage computed from Grade 1 output | `SecondGradeCoverageIsComputedFromFirstGradeOutput` | same | CUDA, OpenCL: PASS; Metal: PASS |
+| Detail ROI render publishes to the detail slot | `DetailRoiRenderPublishesToTheDetailChannel` | same | CUDA, OpenCL: PASS; Metal: PASS |
+| Probe of a Mask that the render skips clears the coverage | `ProbeOfAMaskThatTheRenderSkipsClearsTheCoverage` | same | CUDA, OpenCL: PASS; Metal: PASS |
+| Detail ROI samples the detail slot | `DetailCoverageIsSampledInsideTheDetailRoi` | `ViewportCoverageCompositeTest` | CUDA, OpenCL: PASS; Metal: PASS |
+| Probe through the production port and renderer, base and detail channel | `FrameWithAMaskCoverageProbePresentsTheMaskToTheChannelOfItsRole` | `EditorSessionRenderSchedulerPortTest` | CUDA: PASS |
+| Every frame carries the probe; Hide clears without a render | `ProbeRidesOnEveryEditorFrameUntilHidden` | `EditorMaskCoveragePreviewTest` | PASS |
+| AI preview and probe replace each other | `ProbeAndAiCoveragePreviewReplaceEachOther` | same | PASS |
+| Missing Mask or Grade refused; image change ends the probe | `ProbeOfAMissingMaskOrGradeIsRefused`, `ImageChangeEndsTheProbe` | same | PASS |
+
+Regression suites (Windows, `win_debug`): `ViewportCoverageCompositeTest` 9/9 and
+`MaskCoveragePresentationTest` 7/7 on CUDA and OpenCL, `MaskRangeCoverageProbeTest` 5/5 on CUDA
+and OpenCL, `EditorMaskCoveragePreviewTest` 16/16, `EditorSessionRenderSchedulerPortTest` 44/44,
+`EditorRenderCoordinatorTest` 33/33, `EditorSessionRenderControllerTest` 21/21,
+`EditorSessionServiceFacadeTest` 4/4, `EditorComparisonServiceTest` 22/22,
+`EditorViewportSuspensionTest` 3/3. macOS (`macos-debug`, Apple M4): `MaskRangeCoverageProbeTest`
+5/5, `ViewportCoverageCompositeTest` 9/9, `MaskCoveragePresentationTest` 7/7, `GpuDagMetalGradeTest`
+71/82 (the 11 failures are pre-existing: #496, #497).
+
+Commands (Windows, `build/debug`): `cmd /c scripts\msvc_env.cmd --build --preset win_debug
+--parallel 6 --target MaskRangeCoverageProbeTest ViewportCoverageCompositeTest
+MaskCoveragePresentationTest EditorViewportSuspensionTest EditorMaskCoveragePreviewTest
+EditorSessionRenderSchedulerPortTest EditorRenderCoordinatorTest EditorSessionRenderControllerTest
+EditorSessionServiceFacadeTest EditorComparisonServiceTest alcedo_main`, then each binary from its
+`*_runtime` directory (`ALCEDO_TEST_EDITOR_BACKEND=cuda` or `opencl` for the coverage binaries).
+
+**Checklist / exit condition:** all section 6 items done.
+
+**Residual gaps:** no UI calls the facade yet (MR4). The detail channel shows the base coverage
+inside the ROI after a base frame until the next detail frame. On Windows, the OpenCL runs of the
+coverage harness binaries sometimes do not exit after all tests pass; this is pre-existing (#559).
 
 ## 7. UI (MR4)
 
