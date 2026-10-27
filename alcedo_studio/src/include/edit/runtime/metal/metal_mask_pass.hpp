@@ -83,6 +83,18 @@ void               RecordMaskCoverageDisplay(MetalRenderDevice&                 
                                              const MaskCoverageDisplayRequest&      request,
                                              MetalBackend::Texture2D&               output);
 
+/**
+ * @brief Record the display write of a probed Mask (Mask ranges plan D8): the R8 coverage
+ *        @p mask, which MaskEvaluate wrote on the render grid, into @p output on the same grid
+ *        (RGBA32F; red is the R8 value / 255, green and blue 0, alpha 1). No resampling.
+ *
+ * Encodes in the compute encoder of the current command buffer.
+ * @throws std::runtime_error when @p mask is not R8, @p output is not RGBA32F of the same size,
+ *         or the pipeline or encoder is missing.
+ */
+void RecordMaskValueDisplay(MetalRenderDevice& device, const MetalBackend::Texture2D& mask,
+                            MetalBackend::Texture2D& output);
+
 void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines);
 
 }  // namespace alcedo

@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "edit/geometry/resolved_render_geometry.hpp"
+#include "edit/runtime/mask_coverage_probe.hpp"
 #include "image/image_buffer.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
@@ -30,6 +31,8 @@ struct RenderedPipelineImage {
   ResolvedRenderGeometry       geometry{};
   /// Output encoding of @ref pixels: the document DRT, or the request's output color override.
   ViewerDisplayConfig          display{};
+  /// What the render did with the coverage channel for PipelineApplyRequest::mask_coverage_probe.
+  MaskCoverageProbeOutcome     mask_coverage = MaskCoverageProbeOutcome::NotRequested;
 };
 
 }  // namespace alcedo

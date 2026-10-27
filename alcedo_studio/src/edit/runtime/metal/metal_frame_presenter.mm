@@ -92,14 +92,17 @@ auto FramePresenter<MetalBackend>::PresentMaskCoverage(
     const MaskCoveragePresentation& presentation, IMaskCoverageSink& sink)
     -> MaskCoveragePublication {
   auto* native = static_cast<MTL::Texture*>(target.texture.Native());
-  auto* command_buffer =
-      static_cast<MTL::CommandBuffer*>(device.CommandContext().NativeCommandBuffer());
-  if (native == nullptr || command_buffer == nullptr) {
-    throw std::runtime_error(
-        "Mask coverage display: the Metal target or command buffer is missing");
+  if (native == nullptr) {
+    throw std::runtime_error("Mask coverage display: the Metal target is missing");
   }
   // The viewport samples on the Qt Quick command queue, so the coverage work must be complete.
-  WaitForViewerTexture(command_buffer);
+  // Without a command buffer the context has no recorded work left: a host download or WaitIdle
+  // after the render (a probed photo render) completed it and released the buffer.
+  if (auto* command_buffer =
+          static_cast<MTL::CommandBuffer*>(device.CommandContext().NativeCommandBuffer());
+      command_buffer != nullptr) {
+    WaitForViewerTexture(command_buffer);
+  }
 
   /// Keeps the MTLTexture and the reader identity of the target until the renderer releases it.
   struct CoverageFrameOwner {

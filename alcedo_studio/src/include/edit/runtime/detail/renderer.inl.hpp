@@ -14,11 +14,12 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
-#include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/frame_presenter.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/mask_coverage_probe_record.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/renderer.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "gpu/transient_allocation_policy.hpp"
@@ -113,6 +114,13 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     }
   } else if (!input || !input->buffer_valid_) {
     throw std::runtime_error("Renderer: product path requires encoded image bytes");
+  }
+  if (request.mask_coverage_probe.has_value()) {
+    if (!interactive || request.sink == nullptr || request.mask_coverage_sink == nullptr) {
+      throw std::invalid_argument(
+          "Renderer: a Mask coverage probe needs an interactive render with a frame sink and a "
+          "coverage sink");
+    }
   }
   if (interactive) {
     const auto key = RenderBindingKey::Of(snapshot);
@@ -235,13 +243,17 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     }
   };
 
+  std::optional<MaskCoverageProbeRecord<Backend>> probe;
+  if (request.mask_coverage_probe.has_value()) {
+    probe.emplace(MaskCoverageProbeRecord<Backend>{*request.mask_coverage_probe});
+  }
   GraphValueId output_id;
   try {
     diag::PreviewCpuInterval encode(diag::PreviewCpuStage::Encode);
     output_id = render_device->Execute(plan, prepared, document, false,
                                        interactive ? TransientAllocationPolicy::SessionPacked
                                                    : TransientAllocationPolicy::ExactRelease,
-                                       persistence);
+                                       persistence, probe.has_value() ? &*probe : nullptr);
   } catch (...) {
     // PlanExecutor has already cancelled the render and reported the error.
     release_batch_resources_after_failure();
@@ -280,6 +292,21 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     }
   };
 
+  // The probed coverage follows its photo frame: same identity, same geometry.
+  const auto publish_probe = [&]() -> MaskCoverageProbeOutcome {
+    if (!probe.has_value()) {
+      return MaskCoverageProbeOutcome::NotRequested;
+    }
+    const auto& metadata = request.submission.metadata;
+    return PublishMaskCoverageProbe<Backend>(
+        *render_device, *probe,
+        MaskCoveragePresentation{
+            MaskCoverageFrameIdentity{metadata.presentation_request_id, metadata.session_epoch,
+                                      metadata.image_identity},
+            plan.geometry},
+        *request.mask_coverage_sink);
+  };
+
   try {
     if (request.sink != nullptr) {
       // Attach the exact resolved geometry so viewer-side Mask mapping uses the
@@ -295,9 +322,18 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     if (request.require_host_output) {
       auto host = FramePresenter<Backend>::Download(*render_device, output_id);
       finish_successful_session();
-      return {.pixels = std::move(host), .geometry = plan.geometry, .display = display_config};
+      const auto coverage = publish_probe();
+      return {.pixels        = std::move(host),
+              .geometry      = plan.geometry,
+              .display       = display_config,
+              .mask_coverage = coverage};
     }
     finish_successful_session();
+    const auto coverage = publish_probe();
+    return {.pixels        = std::make_shared<ImageBuffer>(),
+            .geometry      = plan.geometry,
+            .display       = display_config,
+            .mask_coverage = coverage};
   } catch (const std::exception& ex) {
     try {
       if (render_device->Workspace().IsRendering()) {
@@ -314,9 +350,6 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     render_device->ReportError(ex.what());
     throw;
   }
-  return {.pixels   = std::make_shared<ImageBuffer>(),
-          .geometry = plan.geometry,
-          .display  = display_config};
 }
 
 }  // namespace alcedo

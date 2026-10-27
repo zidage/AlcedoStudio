@@ -244,6 +244,8 @@ void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
       MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_fill_zero", "Metal Mask fill zero"});
   pipelines.push_back(
       MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_union_max", "Metal Mask union max"});
+  pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_value_display",
+                                          "Metal Mask value display"});
   // SM8.4: AI Mask Feather and Expand (metal_ai_mask_coverage.mm).
   pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "ai_mask_morphology",
                                           "Metal AI Mask morphology"});
@@ -379,6 +381,25 @@ void RecordMaskCoverageDisplay(MetalRenderDevice&                     device,
         "RecordMaskCoverageDisplay: the output is not an RGBA32F texture of the photo frame size");
   }
   EncodeRasterSampling(device, coverage, request.geometry, request.invert, request.opacity, output);
+}
+
+void RecordMaskValueDisplay(MetalRenderDevice& device, const MetalBackend::Texture2D& mask,
+                            MetalBackend::Texture2D& output) {
+  if (mask.Native() == nullptr || mask.Format() != TextureFormat::R8) {
+    throw std::runtime_error("RecordMaskValueDisplay: the Mask coverage is not an R8 texture");
+  }
+  if (output.Native() == nullptr || output.Format() != TextureFormat::Rgba32f ||
+      output.Width() != mask.Width() || output.Height() != mask.Height()) {
+    throw std::runtime_error(
+        "RecordMaskValueDisplay: the output is not an RGBA32F texture of the Mask coverage size");
+  }
+  auto* encoder  = Encoder(device);
+  auto  pipeline = Pipeline("mask_value_display", "Metal Mask value display");
+  encoder->setComputePipelineState(pipeline.get());
+  encoder->setTexture(static_cast<MTL::Texture*>(mask.Native()), 0);
+  encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 1);
+  Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 }  // namespace alcedo

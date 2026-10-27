@@ -221,6 +221,15 @@ __global__ void RasterMaskDisplayKernel(float4* output, const std::uint8_t* text
   output[index]   = make_float4(static_cast<float>(code) / 255.0f, 0.0f, 0.0f, 1.0f);
 }
 
+/// Probed Mask display (Mask ranges D8): the R8 value of each pixel in red, on the same grid;
+/// green and blue 0, alpha 1.
+__global__ void MaskValueDisplayKernel(float4* output, const std::uint8_t* mask,
+                                       std::uint32_t pixel_count) {
+  const auto index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= pixel_count) return;
+  output[index] = make_float4(static_cast<float>(mask[index]) / 255.0f, 0.0f, 0.0f, 1.0f);
+}
+
 auto MakeRasterMaskParams(const ResolvedRenderGeometry&         geometry,
                           const MaskCoverageImage<CudaBackend>& coverage, bool invert,
                           float opacity) -> RasterMaskParams {
@@ -426,6 +435,27 @@ void RecordMaskCoverageDisplay(CudaRenderDevice&                     device,
       MakeRasterMaskParams(request.geometry, coverage, request.invert, request.opacity));
   if (::cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("RecordMaskCoverageDisplay: CUDA kernel launch failed");
+  }
+}
+
+void RecordMaskValueDisplay(CudaRenderDevice& device, const CudaBackend::Texture2D& mask,
+                            CudaBackend::Texture2D& output) {
+  if (mask.DevicePointer() == nullptr || mask.Format() != TextureFormat::R8) {
+    throw std::runtime_error("RecordMaskValueDisplay: the Mask coverage is not an R8 texture");
+  }
+  if (output.DevicePointer() == nullptr || output.Format() != TextureFormat::Rgba32f ||
+      output.Width() != mask.Width() || output.Height() != mask.Height()) {
+    throw std::runtime_error(
+        "RecordMaskValueDisplay: the output is not an RGBA32F texture of the Mask coverage size");
+  }
+  constexpr std::uint32_t block  = 256;
+  const auto              pixels = mask.Width() * mask.Height();
+  MaskValueDisplayKernel<<<(pixels + block - 1) / block, block, 0,
+                           device.CommandContext().Stream()>>>(
+      static_cast<float4*>(output.DevicePointer()),
+      static_cast<const std::uint8_t*>(mask.DevicePointer()), pixels);
+  if (::cudaGetLastError() != cudaSuccess) {
+    throw std::runtime_error("RecordMaskValueDisplay: CUDA kernel launch failed");
   }
 }
 

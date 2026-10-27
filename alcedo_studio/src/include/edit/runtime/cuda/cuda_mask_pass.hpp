@@ -80,4 +80,16 @@ void               RecordMaskCoverageDisplay(CudaRenderDevice&                  
                                              const MaskCoverageDisplayRequest&     request,
                                              CudaBackend::Texture2D&               output);
 
+/**
+ * @brief Record the display write of a probed Mask (Mask ranges plan D8): the R8 coverage
+ *        @p mask, which MaskEvaluate wrote on the render grid, into @p output on the same grid
+ *        (RGBA32F; red is the R8 value / 255, green and blue 0, alpha 1). No resampling.
+ *
+ * @pre The device stream orders the write of @p mask before this dispatch.
+ * @throws std::runtime_error when @p mask is not R8, @p output is not RGBA32F of the same size,
+ *         or the launch fails.
+ */
+void RecordMaskValueDisplay(CudaRenderDevice& device, const CudaBackend::Texture2D& mask,
+                            CudaBackend::Texture2D& output);
+
 }  // namespace alcedo

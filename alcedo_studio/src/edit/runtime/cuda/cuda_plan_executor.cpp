@@ -10,10 +10,11 @@ namespace alcedo {
 
 auto CudaRenderDevice::Execute(const ExecutionPlan& plan, const PreparedRawInput& input,
                                const PipelineDocument& document, bool publish_on_success,
-                               TransientAllocationPolicy transient_policy,
-                               ResultPersistenceScope    persistence) -> GraphValueId {
+                               TransientAllocationPolicy             transient_policy,
+                               ResultPersistenceScope                persistence,
+                               MaskCoverageProbeRecord<CudaBackend>* probe) -> GraphValueId {
   return PlanExecutor<CudaBackend>::Execute(*this, plan, input, document, publish_on_success,
-                                            transient_policy, persistence);
+                                            transient_policy, persistence, probe);
 }
 
 }  // namespace alcedo

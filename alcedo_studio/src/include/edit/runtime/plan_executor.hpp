@@ -12,19 +12,20 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/execution_plan.hpp"
-#include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
+#include "edit/runtime/gpu_node_pass_stats.hpp"
+#include "edit/runtime/gpu_work_sample.hpp"
+#include "edit/runtime/mask_coverage_probe_record.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 #include "edit/runtime/pass_kind.hpp"
-#include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/transient_allocation_policy.hpp"
-#include "edit/runtime/gpu_work_sample.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
@@ -49,6 +50,10 @@ class PlanExecutor {
    *        Product present paths pass false and publish after the sink succeeds.
    * @param persistence Which published results this task may look up or replace.
    *        QualityBase uses @ref ResultPersistenceScope::SensorDevelopOnly.
+   * @param probe Optional Mask coverage probe (Mask ranges plan D8). When the R8
+   *        `effective_output` of the probed Mask is bound (executed or a valid result), the
+   *        render also records RecordMaskValueDisplay into a coverage display target and sets
+   *        `probe->target`. The probe changes no result key and no photo pass.
    * @return Display GraphValueId of the compiled plan.
    * @throws std::exception from encode, upload, or submit after CancelRender.
    */
@@ -56,10 +61,13 @@ class PlanExecutor {
   static auto Execute(
       Device& device, const ExecutionPlan& plan, const PreparedRawInput& input,
       const PipelineDocument& document, bool publish_on_success,
-      TransientAllocationPolicy transient_policy = TransientAllocationPolicy::SessionPacked,
-      ResultPersistenceScope    persistence      = ResultPersistenceScope::AllCurrentResults)
-      -> GraphValueId {
+      TransientAllocationPolicy         transient_policy = TransientAllocationPolicy::SessionPacked,
+      ResultPersistenceScope            persistence = ResultPersistenceScope::AllCurrentResults,
+      MaskCoverageProbeRecord<Backend>* probe       = nullptr) -> GraphValueId {
     try {
+      if (probe != nullptr) {
+        probe->target = nullptr;
+      }
       auto& workspace = device.Workspace();
       workspace.TransientBuffers().SetAllocationPolicy(transient_policy);
       const bool exact_release =
@@ -224,6 +232,10 @@ class PlanExecutor {
                 ++stats.mask_execute;
               }
             }
+            if (probe != nullptr && compiled_grade.node_id == probe->probe.grade_id &&
+                source.mask_id == probe->probe.mask_id) {
+              RecordProbedMask(device, plan, source.effective_output, *probe);
+            }
           }
           {
             diag::PreviewPassInterval union_pass(compiled_grade.node_id.Value(),
@@ -351,6 +363,25 @@ class PlanExecutor {
     const auto required = invalidation.RequiredRevision(id);
     const auto needed   = invalidation.MakeImageRepresentation(id, extent, format);
     return images_owner.Images().BindValidResult(id, required, needed, completed) != nullptr;
+  }
+
+  /// Display write of the probed Mask: its bound R8 on the render grid into a coverage display
+  /// target of the render extent, in the same submission as the photo passes.
+  template <class Device>
+  static void RecordProbedMask(Device& device, const ExecutionPlan& plan,
+                               const GraphValueId&               effective_output,
+                               MaskCoverageProbeRecord<Backend>& probe) {
+    auto& workspace = device.Workspace();
+    auto* mask      = workspace.Images().Find(effective_output);
+    if (mask == nullptr || mask->Empty()) {
+      throw std::runtime_error("Mask coverage probe: Mask " +
+                               std::string{probe.probe.mask_id.Value()} +
+                               " has no bound coverage image");
+    }
+    auto& target = workspace.AcquireMaskCoverageDisplayTarget(plan.geometry.render_extent,
+                                                              device.CommandContext());
+    RecordMaskValueDisplay(device, mask->Texture(), target.texture);
+    probe.target = &target;
   }
 
   template <class Device>

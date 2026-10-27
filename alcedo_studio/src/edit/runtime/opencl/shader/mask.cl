@@ -269,6 +269,17 @@ __kernel void mask_fill_zero_r8(__write_only image2d_t output, uint width, uint 
   write_imagef(output, (int2)(gid.x, gid.y), (float4)(0.0f, 0.0f, 0.0f, 1.0f));
 }
 
+// Probed Mask display (Mask ranges D8): the R8 value of each pixel in red, on the same grid.
+__kernel void mask_value_display_rgba32f(__read_only image2d_t mask, __write_only image2d_t output,
+                                         uint width, uint height) {
+  const uint2 gid = (uint2)(get_global_id(0), get_global_id(1));
+  if (gid.x >= width || gid.y >= height) {
+    return;
+  }
+  const float value = read_imagef(mask, kNearestClamp, (int2)(gid.x, gid.y)).x;
+  write_imagef(output, (int2)(gid.x, gid.y), (float4)(QuantizeR8(value), 0.0f, 0.0f, 1.0f));
+}
+
 __kernel void mask_union_max_r8(__read_only image2d_t lhs, __read_only image2d_t rhs,
                                 __write_only image2d_t output, uint width, uint height) {
   const uint2 gid = (uint2)(get_global_id(0), get_global_id(1));

@@ -160,18 +160,21 @@ class BasicRenderWorkspace {
   }
 
   /**
-   * @brief An RGBA32F coverage display target of @p extent for the open coverage work. See
-   *        MaskCoverageDisplayTargets::Acquire.
+   * @brief An RGBA32F coverage display target of @p extent for the open coverage work or render.
+   *        See MaskCoverageDisplayTargets::Acquire.
    *
-   * @pre Coverage-only work is open (@ref BeginCoverageWork): coverage display is presentation
-   *      output, never a photo result.
-   * @throws std::runtime_error without open coverage work, or when the allocation fails.
+   * Coverage display is presentation output, never a photo result: coverage-only work writes AI
+   * Mask coverage into it, and a render with a MaskCoverageProbe writes the probed Mask R8.
+   *
+   * @pre Coverage-only work (@ref BeginCoverageWork) or a render (@ref BeginRender) is open.
+   * @throws std::runtime_error without an open submission, or when the allocation fails.
    */
   auto AcquireMaskCoverageDisplayTarget(Extent2D extent, CommandContext& command_context)
       -> MaskCoverageDisplayTarget<Backend>& {
-    if (!coverage_work_) {
+    if (!coverage_work_ && !rendering_) {
       throw std::runtime_error(
-          "BasicRenderWorkspace::AcquireMaskCoverageDisplayTarget: no coverage work is open");
+          "BasicRenderWorkspace::AcquireMaskCoverageDisplayTarget: no render or coverage work is "
+          "open");
     }
     return coverage_display_.Acquire(extent, backend_, command_context.SubmissionId());
   }

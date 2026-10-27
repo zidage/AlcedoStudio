@@ -387,6 +387,25 @@ void RecordMaskCoverageDisplay(OpenClRenderDevice&                     device,
   EncodeRasterSampling(device, coverage, request.geometry, request.invert, request.opacity, output);
 }
 
+void RecordMaskValueDisplay(OpenClRenderDevice& device, const OpenClBackend::Texture2D& mask,
+                            OpenClBackend::Texture2D& output) {
+  if (mask.Native() == nullptr || mask.Format() != TextureFormat::R8) {
+    throw std::runtime_error("RecordMaskValueDisplay: the Mask coverage is not an R8 image");
+  }
+  if (output.Native() == nullptr || output.Format() != TextureFormat::Rgba32f ||
+      output.Width() != mask.Width() || output.Height() != mask.Height()) {
+    throw std::runtime_error(
+        "RecordMaskValueDisplay: the output is not an RGBA32F image of the Mask coverage size");
+  }
+  const auto kernel = OpenClKernelCache::Instance().GetKernel(
+      OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskValueDisplayKernelName);
+  SetMem(kernel, 0, mask.Native(), "Mask value display input");
+  SetMem(kernel, 1, output.Native(), "Mask value display output");
+  SetUInt(kernel, 2, output.Width(), "Mask value display width");
+  SetUInt(kernel, 3, output.Height(), "Mask value display height");
+  Dispatch2D(device, kernel, output.Width(), output.Height(), "Mask value display");
+}
+
 }  // namespace alcedo
 
 #endif  // HAVE_OPENCL
