@@ -121,6 +121,10 @@ constexpr float    kPi = 3.14159265358979323846f;
 constexpr float    kLuminanceHandleMinimumWidth = kLuminanceRangeMinimumWidth * 1.2f;
 constexpr float    kHueHandleMinimumWidth       = kColorRangeMinimumWidthDegrees * 1.2f;
 constexpr int      kHueGradientSegments         = 36;
+/// Key and wheel step of the range handles (#564 B); ten times this with Shift.
+constexpr float    kLuminanceHandleStep         = 0.005f;
+constexpr float    kHueHandleStep               = 0.5f;
+constexpr int      kRangeStepSettleIntervalMs   = 180;
 constexpr int      kLuminanceGradientSegments   = 16;
 
 [[nodiscard]] auto GradientStop(double position, const std::array<float, 3>& rgb) -> QVariant {
@@ -152,7 +156,11 @@ constexpr int      kLuminanceGradientSegments   = 16;
 
 EditorMaskCreationAdapter::EditorMaskCreationAdapter(EditorSessionController* session,
                                                      QObject*                 parent)
-    : QObject(parent), session_(session) {}
+    : QObject(parent), session_(session), range_step_timer_(new QTimer(this)) {
+  range_step_timer_->setSingleShot(true);
+  range_step_timer_->setInterval(kRangeStepSettleIntervalMs);
+  connect(range_step_timer_, &QTimer::timeout, this, [this] { SettleRangeSteps(); });
+}
 
 EditorMaskCreationAdapter::~EditorMaskCreationAdapter() {
   if (view_change_connection_) {
@@ -679,6 +687,8 @@ void EditorMaskCreationAdapter::OnImageClosed() {
   range_coverage_requested_ = false;
   shown_range_coverage_     = {};
   range_open_               = RangeKind::None;
+  range_step_burst_         = false;
+  range_step_timer_->stop();
   ResetLocal();
   if (range_state) {
     emit maskRangeChanged();
@@ -1526,13 +1536,29 @@ void EditorMaskCreationAdapter::HideRangeCoverage() {
 }
 
 void EditorMaskCreationAdapter::ResetRangeEdit() {
-  range_open_ = RangeKind::None;
+  range_open_       = RangeKind::None;
+  range_step_burst_ = false;
+  range_step_timer_->stop();
   if (!range_coverage_requested_) {
     HideRangeCoverage();
   }
 }
 
+void EditorMaskCreationAdapter::SettleRangeSteps() {
+  if (!range_step_burst_ || range_open_ == RangeKind::None) {
+    return;
+  }
+  finishRangeEdit(range_open_ == RangeKind::Luminance ? QStringLiteral("luminance")
+                                                      : QStringLiteral("hue"));
+}
+
+void EditorMaskCreationAdapter::SetRangeStepSettleIntervalMs(int interval_ms) {
+  range_step_timer_->setInterval(interval_ms);
+}
+
 auto EditorMaskCreationAdapter::beginRangeEdit(const QString& kind) -> bool {
+  // A pointer drag supersedes a key or wheel step burst: the burst commits first.
+  SettleRangeSteps();
   const auto range_kind = RangeKindFromString(kind);
   if (range_kind == RangeKind::None || range_open_ != RangeKind::None || open_) {
     return false;
@@ -1603,7 +1629,71 @@ void EditorMaskCreationAdapter::finishRangeEdit(const QString& kind) {
   emit maskRangeChanged();
 }
 
+auto EditorMaskCreationAdapter::stepRangeHandle(const QString& kind, const QString& handle,
+                                                int steps, bool coarse) -> bool {
+  const auto range_kind = RangeKindFromString(kind);
+  const bool first      = handle == QLatin1String("first");
+  if (range_kind == RangeKind::None || (!first && handle != QLatin1String("second")) ||
+      steps == 0) {
+    return false;
+  }
+  if (range_step_burst_ && (range_open_ != range_kind || range_edit_target_ != RangeTargetNow())) {
+    SettleRangeSteps();
+  }
+  if (range_open_ != RangeKind::None && !range_step_burst_) {
+    // A pointer drag of a bar is open.
+    return false;
+  }
+  if (!range_step_burst_) {
+    if (!beginRangeEdit(kind)) {
+      return false;
+    }
+    range_step_burst_ = true;
+  }
+  range_step_timer_->start();
+
+  const float delta = static_cast<float>(steps) *
+                      (range_kind == RangeKind::Luminance ? kLuminanceHandleStep : kHueHandleStep) *
+                      (coarse ? 10.0f : 1.0f);
+  float a = range_first_;
+  float b = range_second_;
+  if (range_kind == RangeKind::Luminance) {
+    if (first) {
+      a = std::clamp(a + delta, 0.0f, b - kLuminanceHandleMinimumWidth);
+    } else {
+      b = std::clamp(b + delta, a + kLuminanceHandleMinimumWidth, 1.0f);
+    }
+  } else {
+    // Handles stay on the bar (a handle does not wrap across an end), as in a drag. The interval
+    // wraps when the start passes the end.
+    const auto width = [](float start, float end) {
+      return end > start ? end - start : end + 360.0f - start;
+    };
+    if (first) {
+      float value = std::clamp(a + delta, 0.0f, 360.0f);
+      value       = value >= 360.0f ? 0.0f : value;
+      if (width(value, b) < kHueHandleMinimumWidth && !(value <= 0.0f && b >= 360.0f)) {
+        return false;
+      }
+      a = value;
+    } else {
+      float value = std::clamp(b + delta, 0.0f, 360.0f);
+      value       = value <= 0.0f ? 360.0f : value;
+      if (width(a, value) < kHueHandleMinimumWidth && !(a <= 0.0f && value >= 360.0f)) {
+        return false;
+      }
+      b = value;
+    }
+  }
+  if (a == range_first_ && b == range_second_) {
+    return false;
+  }
+  updateRangeEdit(kind, a, b);
+  return true;
+}
+
 void EditorMaskCreationAdapter::resetRange(const QString& kind) {
+  SettleRangeSteps();
   const auto range_kind = RangeKindFromString(kind);
   if (range_kind == RangeKind::None || range_open_ != RangeKind::None || open_) {
     return;
@@ -1665,9 +1755,9 @@ void EditorMaskCreationAdapter::SetAiMaskEditRangeTarget(bool open, const NodeId
   ai_mask_edit_target_    = target;
   if (open_changed) {
     // The AI Mask edit starts and ends its own coverage (D11); the toggle does not carry over.
-    if (range_open_ != RangeKind::None) {
-      range_open_ = RangeKind::None;
-    }
+    range_open_       = RangeKind::None;
+    range_step_burst_ = false;
+    range_step_timer_->stop();
     range_coverage_requested_ = false;
     HideRangeCoverage();
   }

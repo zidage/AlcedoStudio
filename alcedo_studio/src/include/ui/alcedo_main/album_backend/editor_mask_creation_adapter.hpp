@@ -9,6 +9,7 @@
 #include <QPointer>
 #include <QRectF>
 #include <QString>
+#include <QTimer>
 #include <QVariantList>
 #include <cstdint>
 #include <memory>
@@ -72,6 +73,10 @@ class EditorMaskCreationAdapter : public QObject {
   Q_PROPERTY(qreal maskLuminanceHigh READ mask_luminance_high NOTIFY maskRangeChanged)
   Q_PROPERTY(qreal maskHueStart READ mask_hue_start NOTIFY maskRangeChanged)
   Q_PROPERTY(qreal maskHueEnd READ mask_hue_end NOTIFY maskRangeChanged)
+  /// Soft transition outside the handles (stored value, or the default for a full range): OkLab
+  /// L units and degrees. The bars draw the dimming over this width, as the kernels weight it.
+  Q_PROPERTY(qreal maskLuminanceSoftness READ mask_luminance_softness NOTIFY maskRangeChanged)
+  Q_PROPERTY(qreal maskHueSoftness READ mask_hue_softness NOTIFY maskRangeChanged)
   /// The "Show selection" toggle: the range coverage of the target Mask stays shown.
   Q_PROPERTY(bool maskRangeCoverageVisible READ mask_range_coverage_visible NOTIFY maskRangeChanged)
   /// Smallest handle distance of the bars, a little above the stored-range minimum widths.
@@ -128,6 +133,12 @@ class EditorMaskCreationAdapter : public QObject {
   [[nodiscard]] auto mask_range_coverage_visible() const -> bool {
     return range_coverage_requested_;
   }
+  [[nodiscard]] auto mask_luminance_softness() const -> qreal {
+    return static_cast<qreal>(range_view_.luminance_softness);
+  }
+  [[nodiscard]] auto mask_hue_softness() const -> qreal {
+    return static_cast<qreal>(range_view_.hue_softness);
+  }
   [[nodiscard]] static auto luminance_range_minimum_width() -> qreal;
   [[nodiscard]] static auto hue_range_minimum_width() -> qreal;
   [[nodiscard]] static auto hue_gradient_stops() -> QVariantList;
@@ -150,6 +161,18 @@ class EditorMaskCreationAdapter : public QObject {
   Q_INVOKABLE void          updateRangeEdit(const QString& kind, qreal first, qreal second);
   /// Settle the open range drag: one history commit when the value changed, Quality render.
   Q_INVOKABLE void          finishRangeEdit(const QString& kind);
+  /**
+   * @brief Move one handle of the target Mask by @p steps key or wheel steps.
+   *
+   * @p handle is "first" (Luminance low, Hue start) or "second" (Luminance high, Hue end). One
+   * step is 0.005 in OkLab L or 0.5 degrees, ten times that with @p coarse. A step that breaks
+   * the minimum handle distance does not move the handle. The first step opens a range edit
+   * (and shows the coverage like a drag); the steps of one burst settle as one history commit
+   * when no step follows for the settle interval (180 ms, as AdjustmentSlider key steps), or
+   * when another range input starts. Returns false when no step was applied.
+   */
+  Q_INVOKABLE bool          stepRangeHandle(const QString& kind, const QString& handle, int steps,
+                                            bool coarse);
   /// Write the full range (`null`) of @p kind of the target Mask with one commit.
   Q_INVOKABLE void          resetRange(const QString& kind);
   /// The "Show selection" toggle. Shows or hides the range coverage of the target Mask.
@@ -164,6 +187,8 @@ class EditorMaskCreationAdapter : public QObject {
    */
   void                      SetAiMaskEditRangeTarget(bool open, const NodeId& grade_id,
                                                      const std::optional<MaskId>& mask_id);
+  /// Settle interval of a key or wheel step burst (tests shorten or lengthen it).
+  void                      SetRangeStepSettleIntervalMs(int interval_ms);
   /// An adjustment input started: hide the range coverage and turn the toggle off (D12).
   void                      OnAdjustmentInputStarted();
   /// The AI Mask candidate replaced the range coverage in the session: turn the toggle off.
@@ -273,6 +298,8 @@ class EditorMaskCreationAdapter : public QObject {
   void                      ShowRangeCoverage(const RangeTarget& target);
   void                      HideRangeCoverage();
   void                      ResetRangeEdit();
+  /// Finish an open key or wheel step burst with its one commit; no-op otherwise.
+  void                      SettleRangeSteps();
   void               BeginTool(MaskSourceKind kind, const QString& tool_kind);
   void               ResetLocal();
   void               PublishOverlay();
@@ -363,6 +390,9 @@ class EditorMaskCreationAdapter : public QObject {
   RangeTarget   range_edit_target_{};
   float         range_first_              = 0.0f;
   float         range_second_             = 0.0f;
+  /// The open range edit is a key or wheel step burst; range_step_timer_ settles it.
+  bool          range_step_burst_         = false;
+  QTimer*       range_step_timer_         = nullptr;
   /// The "Show selection" toggle.
   bool          range_coverage_requested_ = false;
   /// The Mask whose range coverage the adapter asked the session to show; empty when hidden.

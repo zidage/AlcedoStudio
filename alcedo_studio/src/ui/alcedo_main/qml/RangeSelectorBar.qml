@@ -1,9 +1,13 @@
 import QtQuick
 import QtQuick.Layouts
 
-// Two-handle range selector on a filled track (Mask ranges MR4). The selected interval is framed
-// and the outside is dimmed. Drag a handle to move one end, drag the interval body to move both,
-// double-click to select everything (resetRequested). With wraps, the interval can cross the
+// Two-handle range selector on a filled track (Mask ranges MR4, #564). The selected interval is
+// framed. Outside it the bar is dimmed with the soft transition of the kernels: the dimming fades
+// in over `softness` (value units) beyond each handle. Drag a handle to move one end, drag the
+// interval body to move both, double-click to select everything (resetRequested). A drag moves
+// by the cursor delta from the press, so a press alone changes nothing; Shift drags at 1/10
+// speed. A focused handle steps with Left/Right, and the wheel over a handle steps it (`stepped`,
+// Shift = coarse); the owner sizes and settles the steps. With wraps, the interval can cross the
 // track end: first > second selects [first, to] and [from, second] and is drawn in two parts.
 // The bar keeps no model state: first/second come from the owner, and a drag reports
 // began / moved / finished. Optional flickable must expose beginInputLock / endInputLock.
@@ -22,11 +26,15 @@ Item {
     property string accessibleName: ""
     property int trackHeight: 14
     property int handleWidth: 6
+    // Soft transition outside the handles, in value units (0: hard edge).
+    property real softness: 0
 
     signal began()
     signal moved(real first, real second)
     signal finished()
     signal resetRequested()
+    // part: "first" or "second"; steps: signed count; coarse: Shift held.
+    signal stepped(string part, int steps, bool coarse)
 
     // Handle values while a drag is open; the owner values otherwise.
     property bool _dragging: false
@@ -37,6 +45,11 @@ Item {
     property real _pressX: 0
     property real _pressFirst: from
     property real _pressSecond: to
+    // Shift (1/10 speed) at the last anchor of the open drag, and the last cursor x.
+    property bool _fine: false
+    property real _lastX: 0
+    // Handle that keys step: "first" or "second".
+    property string focusedPart: "first"
     property bool _scrollLocked: false
     readonly property real shownFirst: _dragging ? _dragFirst : first
     readonly property real shownSecond: _dragging ? _dragSecond : second
@@ -52,8 +65,41 @@ Item {
     Layout.fillWidth: true
     Layout.preferredHeight: implicitHeight
     opacity: enabled ? 1.0 : 0.45
+    activeFocusOnTab: true
     Accessible.role: Accessible.Slider
     Accessible.name: bar.accessibleName
+
+    Keys.onLeftPressed: function (event) {
+        bar.stepped(bar.focusedPart, -1, (event.modifiers & Qt.ShiftModifier) !== 0)
+        event.accepted = true
+    }
+    Keys.onRightPressed: function (event) {
+        bar.stepped(bar.focusedPart, 1, (event.modifiers & Qt.ShiftModifier) !== 0)
+        event.accepted = true
+    }
+    // Tab moves from the first handle to the second, then out of the bar.
+    Keys.onTabPressed: function (event) {
+        if (bar.focusedPart === "first") {
+            bar.focusedPart = "second"
+            event.accepted = true
+        } else {
+            event.accepted = false
+        }
+    }
+    Keys.onBacktabPressed: function (event) {
+        if (bar.focusedPart === "second") {
+            bar.focusedPart = "first"
+            event.accepted = true
+        } else {
+            event.accepted = false
+        }
+    }
+    onActiveFocusChanged: {
+        if (activeFocus && !_dragging && !_focusFromPress)
+            focusedPart = "first"
+        _focusFromPress = false
+    }
+    property bool _focusFromPress: false
 
     function xOf(value) {
         return trackX + (value - from) / span * trackWidth
@@ -101,10 +147,50 @@ Item {
         }
         return insideBody(x) ? "body" : ""
     }
+    function smoothStep(e0, e1, v) {
+        if (e1 <= e0)
+            return v < e0 ? 0 : 1
+        var t = Math.max(0, Math.min(1, (v - e0) / (e1 - e0)))
+        return t * t * (3 - 2 * t)
+    }
+    // Weight of value v as the kernels compute it for the shown interval and softness.
+    function weightAt(v) {
+        if (fullRange)
+            return 1
+        var a = shownFirst
+        var b = shownSecond
+        if (!wraps)
+            return smoothStep(a - softness, a, v) * (1 - smoothStep(b, b + softness, v))
+        var offset = v - a
+        if (offset < 0)
+            offset += span
+        var w = circularWidth(a, b)
+        var d = offset <= w ? 0 : Math.min(offset - w, span - offset)
+        return 1 - smoothStep(0, softness, d)
+    }
+    // Cursor delta since the anchor, in value units (1/10 with Shift).
+    function deltaTo(x) {
+        return (x - _pressX) / trackWidth * span * (_fine ? 0.1 : 1)
+    }
+    // Shift changed during the drag: anchor at the values of the previous cursor position, so the
+    // handle does not jump and the move since then runs at the new speed.
+    function setFine(fine, x) {
+        if (fine === _fine)
+            return
+        _pressX = x
+        _pressFirst = _dragFirst
+        _pressSecond = _dragSecond
+        _fine = fine
+    }
     function dragTo(x) {
         var a = _pressFirst
         var b = _pressSecond
-        var v = valueAt(x)
+        var delta = deltaTo(x)
+        if (_dragPart === "first" || _dragPart === "second") {
+            // A handle moves by the delta from its press value, not to the cursor position.
+            var v = Math.max(from, Math.min(to, (_dragPart === "first" ? _pressFirst
+                                                                         : _pressSecond) + delta))
+        }
         if (_dragPart === "first") {
             if (wraps) {
                 if (circularWidth(v, b) >= minimumWidth || (v <= from && b >= to))
@@ -120,7 +206,6 @@ Item {
                 b = Math.max(v, a + minimumWidth)
             }
         } else if (_dragPart === "body") {
-            var delta = (x - _pressX) / trackWidth * span
             if (wraps) {
                 a = wrapValue(_pressFirst + delta)
                 b = wrapValue(_pressSecond + delta)
@@ -132,8 +217,12 @@ Item {
                 b = _pressSecond + delta
             }
         }
-        _dragFirst = Math.max(from, Math.min(to, a))
-        _dragSecond = Math.max(from, Math.min(to, b))
+        a = Math.max(from, Math.min(to, a))
+        b = Math.max(from, Math.min(to, b))
+        if (a === _dragFirst && b === _dragSecond)
+            return
+        _dragFirst = a
+        _dragSecond = b
         bar.moved(_dragFirst, _dragSecond)
     }
 
@@ -163,27 +252,32 @@ Item {
         }
     }
 
-    // Dimmed outside of the selected interval.
-    Item {
+    // Dimmed outside of the selected interval: each pixel column is dimmed by 1 - weight, so the
+    // soft transition beyond each handle is drawn as the kernels weight it.
+    Canvas {
+        id: dimming
         x: fill.x
         y: fill.y
         width: fill.width
         height: fill.height
         visible: !bar.fullRange
-
-        Rectangle {
-            // Non-wrapped: before first. Wrapped: between second and first.
-            x: bar.wrapped ? bar.secondX - bar.trackX : 0
-            width: Math.max(0, bar.wrapped ? bar.firstX - bar.secondX : bar.firstX - bar.trackX)
-            height: parent.height
-            color: appTheme.overlayColor
-        }
-        Rectangle {
-            visible: !bar.wrapped
-            x: bar.secondX - bar.trackX
-            width: Math.max(0, parent.width - x)
-            height: parent.height
-            color: appTheme.overlayColor
+        readonly property color dimColor: appTheme.overlayColor
+        readonly property var paintKey: [bar.shownFirst, bar.shownSecond, bar.softness,
+                                         bar.fullRange, width, height, dimColor]
+        onPaintKeyChanged: requestPaint()
+        onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            if (bar.fullRange)
+                return
+            var c = dimColor
+            for (var px = 0; px < Math.ceil(width); ++px) {
+                var dim = 1 - bar.weightAt(bar.valueAt(bar.trackX + px + 0.5))
+                if (dim <= 0.002)
+                    continue
+                ctx.fillStyle = Qt.rgba(c.r, c.g, c.b, c.a * dim)
+                ctx.fillRect(px, 0, 1, height)
+            }
         }
     }
 
@@ -224,14 +318,16 @@ Item {
         model: 2
         delegate: Rectangle {
             required property int index
+            readonly property bool keyFocus: bar.activeFocus
+                                             && bar.focusedPart === (index === 0 ? "first" : "second")
             x: (index === 0 ? bar.firstX : bar.secondX) - width / 2
             y: (bar.height - height) / 2
             width: bar.handleWidth
             height: bar.trackHeight + 8
             radius: 2
             color: appTheme.editorSliderHandleColor
-            border.width: 1
-            border.color: appTheme.editorSliderHandleBorderColor
+            border.width: keyFocus ? 2 : 1
+            border.color: keyFocus ? appTheme.textColor : appTheme.editorSliderHandleBorderColor
         }
     }
 
@@ -262,8 +358,16 @@ Item {
             var part = bar.partAt(mouse.x)
             if (part === "")
                 return
+            if (part === "first" || part === "second")
+                bar.focusedPart = part
+            if (!bar.activeFocus) {
+                bar._focusFromPress = true
+                bar.forceActiveFocus(Qt.MouseFocusReason)
+            }
             bar._dragPart = part
+            bar._fine = (mouse.modifiers & Qt.ShiftModifier) !== 0
             bar._pressX = mouse.x
+            bar._lastX = mouse.x
             bar._pressFirst = bar.first
             bar._pressSecond = bar.second
             bar._dragFirst = bar.first
@@ -273,9 +377,30 @@ Item {
             bar.began()
         }
         onPositionChanged: function (mouse) {
-            if (bar._dragging)
-                bar.dragTo(mouse.x)
+            if (!bar._dragging)
+                return
+            bar.setFine((mouse.modifiers & Qt.ShiftModifier) !== 0, bar._lastX)
+            bar.dragTo(mouse.x)
+            bar._lastX = mouse.x
         }
+        // The wheel over a handle steps it; elsewhere the wheel scrolls the panel.
+        onWheel: function (wheel) {
+            var part = bar._dragging ? "" : bar.partAt(wheel.x)
+            var delta = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y : wheel.angleDelta.x
+            if ((part !== "first" && part !== "second") || delta === 0) {
+                wheel.accepted = false
+                return
+            }
+            _wheelRest += delta
+            var steps = _wheelRest > 0 ? Math.floor(_wheelRest / 120) : Math.ceil(_wheelRest / 120)
+            if (steps !== 0) {
+                _wheelRest -= steps * 120
+                bar.focusedPart = part
+                bar.stepped(part, steps, (wheel.modifiers & Qt.ShiftModifier) !== 0)
+            }
+            wheel.accepted = true
+        }
+        property int _wheelRest: 0
         onReleased: endDrag()
         onCanceled: {
             resetOnRelease = false

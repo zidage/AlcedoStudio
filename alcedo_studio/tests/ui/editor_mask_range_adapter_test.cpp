@@ -16,6 +16,7 @@
 
 #include <QColor>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QSettings>
 #include <QString>
 #include <QVariantMap>
@@ -120,6 +121,16 @@ class EditorMaskRangeAdapterTest : public EditorMaskCoveragePreviewTest {
 
   auto Probe(const MaskId& mask_id) -> MaskCoverageProbe { return {GradeId(), mask_id}; }
 
+  /// Let the key or wheel step settle interval elapse (Qt timers run), then settle the owner.
+  void WaitForStepSettle(int interval_ms) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (elapsed.elapsed() < interval_ms * 3) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    }
+    Settle();
+  }
+
   std::unique_ptr<EditorSessionController>     controller_;
   EditorMaskCreationAdapter*                   adapter_ = nullptr;
   std::shared_ptr<const PipelineGraphSnapshot> working_;
@@ -200,6 +211,119 @@ TEST_F(EditorMaskRangeAdapterTest, HandlesKeepTheMinimumWidthAndBothEndsWriteThe
   Settle();
   EXPECT_FALSE(LiveMask(mask_id)->luminance_range.has_value());
   EXPECT_EQ(Graph()->CommitCount(), commits + 1);
+}
+
+TEST_F(EditorMaskRangeAdapterTest, PressAndMoveBackWithoutAChangeCommitsNothing) {
+  OpenThroughController();
+  const auto mask_id = CreateRadialMask();
+  Select(mask_id);
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("luminance")));
+  adapter_->updateRangeEdit(QStringLiteral("luminance"), 0.3, 0.6);
+  adapter_->finishRangeEdit(QStringLiteral("luminance"));
+  Settle();
+  const auto commits = Graph()->CommitCount();
+
+  // A press reports no value (the bar moves by the cursor delta), and a drag that ends on the
+  // press values writes the stored range again: no commit, no change.
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("luminance")));
+  adapter_->updateRangeEdit(QStringLiteral("luminance"), 0.35, 0.6);
+  adapter_->updateRangeEdit(QStringLiteral("luminance"), 0.3, 0.6);
+  adapter_->finishRangeEdit(QStringLiteral("luminance"));
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits);
+  ASSERT_TRUE(LiveMask(mask_id)->luminance_range.has_value());
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->luminance_range->low, 0.3f);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->luminance_range->high, 0.6f);
+}
+
+TEST_F(EditorMaskRangeAdapterTest, KeyStepBurstMovesOneHandleAndCommitsOnce) {
+  constexpr int kInterval = 60;
+  adapter_->SetRangeStepSettleIntervalMs(kInterval);
+  OpenThroughController();
+  const auto mask_id = CreateRadialMask();
+  Select(mask_id);
+  const auto commits = Graph()->CommitCount();
+
+  // Four fine steps of the low handle and one coarse step of the high handle: one burst.
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(
+        adapter_->stepRangeHandle(QStringLiteral("luminance"), QStringLiteral("first"), 1, false));
+  }
+  ASSERT_TRUE(
+      adapter_->stepRangeHandle(QStringLiteral("luminance"), QStringLiteral("second"), -1, true));
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits) << "steps of an open burst write no commit";
+  EXPECT_EQ(Preview().range_probe, Probe(mask_id)) << "the coverage is shown during the burst";
+  ASSERT_TRUE(LiveMask(mask_id)->luminance_range.has_value());
+  EXPECT_NEAR(LiveMask(mask_id)->luminance_range->low, 0.02f, 1e-6f);
+  EXPECT_NEAR(LiveMask(mask_id)->luminance_range->high, 0.95f, 1e-6f);
+
+  WaitForStepSettle(kInterval);
+  EXPECT_EQ(Graph()->CommitCount(), commits + 1) << "one burst, one commit";
+  EXPECT_FALSE(Preview().range_probe.has_value()) << "the burst coverage ends when it settles";
+  EXPECT_NEAR(adapter_->mask_luminance_low(), 0.02, 1e-6);
+  EXPECT_NEAR(adapter_->mask_luminance_high(), 0.95, 1e-6);
+
+  // A wheel step is the same operation. A step of the low handle into the high handle stops at
+  // the minimum handle distance; a step at the end of the bar does nothing.
+  ASSERT_TRUE(
+      adapter_->stepRangeHandle(QStringLiteral("luminance"), QStringLiteral("first"), 500, true));
+  EXPECT_FALSE(
+      adapter_->stepRangeHandle(QStringLiteral("luminance"), QStringLiteral("first"), 1, false));
+  WaitForStepSettle(kInterval);
+  EXPECT_EQ(Graph()->CommitCount(), commits + 2);
+  ASSERT_TRUE(LiveMask(mask_id)->luminance_range.has_value());
+  EXPECT_GE(LiveMask(mask_id)->luminance_range->high - LiveMask(mask_id)->luminance_range->low,
+            kLuminanceRangeMinimumWidth);
+
+  // One Undo removes the whole burst.
+  controller_->Undo();
+  Settle();
+  ASSERT_TRUE(LiveMask(mask_id)->luminance_range.has_value());
+  EXPECT_NEAR(LiveMask(mask_id)->luminance_range->low, 0.02f, 1e-6f);
+}
+
+TEST_F(EditorMaskRangeAdapterTest, HueStepsKeepHandlesOnTheBarAndADragSettlesTheBurstFirst) {
+  constexpr int kInterval = 60;
+  adapter_->SetRangeStepSettleIntervalMs(kInterval);
+  OpenThroughController();
+  const auto mask_id = CreateRadialMask();
+  Select(mask_id);
+  const auto commits = Graph()->CommitCount();
+
+  // The start handle at 0 does not wrap to the far end; the end handle steps down by 0.5 degree.
+  EXPECT_FALSE(
+      adapter_->stepRangeHandle(QStringLiteral("hue"), QStringLiteral("first"), -1, false));
+  ASSERT_TRUE(
+      adapter_->stepRangeHandle(QStringLiteral("hue"), QStringLiteral("second"), -1, false));
+  ASSERT_TRUE(adapter_->stepRangeHandle(QStringLiteral("hue"), QStringLiteral("first"), 2, true));
+  Settle();
+  ASSERT_TRUE(LiveMask(mask_id)->color_range.has_value());
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->hue_start, 10.0f);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->hue_end, 359.5f);
+  EXPECT_EQ(Graph()->CommitCount(), commits);
+
+  // A pointer drag during the burst: the burst commits first, then the drag commits.
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("hue")));
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 1);
+  adapter_->updateRangeEdit(QStringLiteral("hue"), 20.0, 300.0);
+  adapter_->finishRangeEdit(QStringLiteral("hue"));
+  WaitForStepSettle(kInterval);
+  EXPECT_EQ(Graph()->CommitCount(), commits + 2);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->hue_start, 20.0f);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->hue_end, 300.0f);
+
+  // A step of a pointer-dragged bar is refused; a reset during a burst settles the burst first.
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("hue")));
+  EXPECT_FALSE(adapter_->stepRangeHandle(QStringLiteral("hue"), QStringLiteral("first"), 1, false));
+  adapter_->finishRangeEdit(QStringLiteral("hue"));
+  Settle();
+  ASSERT_TRUE(adapter_->stepRangeHandle(QStringLiteral("hue"), QStringLiteral("second"), 1, false));
+  adapter_->resetRange(QStringLiteral("hue"));
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 4);
+  EXPECT_FALSE(LiveMask(mask_id)->color_range.has_value());
 }
 
 TEST_F(EditorMaskRangeAdapterTest, ResetWritesNullWithOneCommit) {
