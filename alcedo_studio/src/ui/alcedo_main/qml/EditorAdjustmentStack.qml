@@ -402,6 +402,7 @@ Item {
                     z: 10
                     visible: !!(root.aiMaskTool && root.aiMaskTool.active)
                     tool: root.aiMaskTool
+                    maskCreation: root.maskCreation
                 }
             }
         }

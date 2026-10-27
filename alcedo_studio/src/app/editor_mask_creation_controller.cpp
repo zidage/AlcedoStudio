@@ -83,6 +83,8 @@ constexpr std::string_view kAiMaskIdPrefix = "mask.ai.";
          field_key == kMaskFieldColorRange || field_key == kMaskFieldLuminanceRange;
 }
 
+constexpr const char* kRangeEditOpen = "finish or cancel the open Mask range edit first";
+
 [[nodiscard]] auto MaskFieldAffectsPixels(std::string_view field_key) -> bool {
   return field_key != kMaskFieldDisplayName;
 }
@@ -152,6 +154,22 @@ constexpr std::string_view kAiMaskIdPrefix = "mask.ai.";
 }
 
 }  // namespace
+
+auto IsMaskRangeFieldKey(std::string_view field_key) -> bool {
+  return field_key == kMaskFieldColorRange || field_key == kMaskFieldLuminanceRange;
+}
+
+auto IsMaskRangeEditCommand(const EditorMaskCreationCommand& command) -> bool {
+  switch (command.kind) {
+    case EditorMaskCreationCommandKind::BeginMaskField:
+    case EditorMaskCreationCommandKind::SetMaskField:
+      return IsMaskRangeFieldKey(command.field_key);
+    case EditorMaskCreationCommandKind::Finish:
+      return true;
+    default:
+      return false;
+  }
+}
 
 void EditorMaskCreationController::Bind(PipelineDocument&      document,
                                         MiniGitWorkingHistory& history) {
@@ -372,6 +390,9 @@ auto EditorMaskCreationController::CurrentSource() const -> std::optional<MaskSo
 auto EditorMaskCreationController::BeginCreation(MaskSourceKind kind, const NodeId& grade_id,
                                                  EditorSessionIdentity session)
     -> EditorMaskCreationResult {
+  if (range_edit_.has_value()) {
+    return Reject(kRangeEditOpen);
+  }
   if (open_) {
     return Reject("finish or cancel the open Mask operation before changing tools");
   }
@@ -403,6 +424,9 @@ auto EditorMaskCreationController::BeginCreation(MaskSourceKind kind, const Node
 auto EditorMaskCreationController::SelectMask(const NodeId& grade_id, const MaskId& mask_id,
                                               EditorSessionIdentity session)
     -> EditorMaskCreationResult {
+  if (range_edit_.has_value()) {
+    return Reject(kRangeEditOpen);
+  }
   if (open_) {
     return Reject("finish or cancel the open Mask operation before changing selection");
   }
@@ -445,6 +469,9 @@ auto EditorMaskCreationController::RemoveMask(const NodeId& grade_id, const Mask
   }
   if (grade_id.Empty() || mask_id.Empty()) {
     return Reject("RemoveMask requires a Color Grade and Mask identity");
+  }
+  if (range_edit_.has_value()) {
+    return Reject(kRangeEditOpen);
   }
   // Cancelling an uncommitted creation is rollback, not a user deletion.
   if (open_ && node_id_ == grade_id && mask_id_ == mask_id && inserted_ && creating_) {
@@ -525,6 +552,9 @@ auto EditorMaskCreationController::CommitAiMaskSource(const NodeId&             
                                                       const std::optional<MaskId>&    mask_id,
                                                       const AiSegmentationMaskSource& source)
     -> EditorMaskCreationResult {
+  if (range_edit_.has_value()) {
+    return Reject(kRangeEditOpen);
+  }
   if (open_) {
     return Reject("finish or cancel the open Mask operation before committing an AI Mask");
   }
@@ -570,6 +600,9 @@ auto EditorMaskCreationController::CommitAiMaskSource(const NodeId&             
 
 auto EditorMaskCreationController::BeginMaskFieldEdit(std::string field_key)
     -> EditorMaskCreationResult {
+  if (range_edit_.has_value()) {
+    return Reject(kRangeEditOpen);
+  }
   if (open_) {
     return Reject("finish or cancel the open Mask operation before editing Mask values");
   }
@@ -649,6 +682,22 @@ auto EditorMaskCreationController::ApplyMaskFieldValue(const NodeId&  grade_id,
                                                        std::string    field_key,
                                                        nlohmann::json after_value)
     -> EditorMaskCreationResult {
+  if (range_edit_.has_value()) {
+    if (range_edit_->field_key != field_key || range_edit_->grade_id != grade_id ||
+        range_edit_->mask_id != mask_id) {
+      return Reject("Mask value does not match the open Mask range edit");
+    }
+    if (!MaskFieldValueIsValid(field_key, after_value)) {
+      return Reject("Mask value is invalid for '" + field_key + "'");
+    }
+    if (!ApplyLiveMaskField(RangeEditGrade(), mask_id, field_key, after_value)) {
+      return Reject("Mask value apply was rejected");
+    }
+    auto result    = Ok();
+    result.mask_id = mask_id_;
+    RequestInteractive(result);
+    return result;
+  }
   if (open_) {
     if (field_edit_key_.empty() || field_edit_key_ != field_key || grade_id != node_id_ ||
         mask_id != mask_id_) {
@@ -739,6 +788,93 @@ auto EditorMaskCreationController::ToggleMaskInvert(const NodeId& grade_id, cons
   return ApplyMaskFieldValue(grade_id, mask_id, std::string{kMaskFieldInvert}, !mask->invert);
 }
 
+auto EditorMaskCreationController::BeginMaskRangeEdit(const NodeId& grade_id, const MaskId& mask_id,
+                                                      std::string field_key)
+    -> EditorMaskCreationResult {
+  if (range_edit_.has_value()) {
+    return Reject(kRangeEditOpen);
+  }
+  if (open_) {
+    return Reject("finish or cancel the open Mask operation before editing Mask ranges");
+  }
+  if (state_ == EditorMaskCreationState::Settling) {
+    return Reject("Mask tool is unavailable until settle is acknowledged");
+  }
+  if (!IsMaskRangeFieldKey(field_key)) {
+    return Reject("Mask range key is not a range: " + field_key);
+  }
+  if (document_ == nullptr || history_ == nullptr) {
+    return Reject("Mask creation controller is not bound to a document");
+  }
+  if (grade_id.Empty() || mask_id.Empty()) {
+    return Reject("Mask range edits require a Mask identity");
+  }
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(document_->Graph().FindNode(grade_id));
+  if (grade == nullptr) {
+    return Reject("Mask range target is not a Color Grade");
+  }
+  const auto* mask = grade->FindMask(mask_id);
+  if (mask == nullptr) {
+    return Reject("Mask is missing");
+  }
+  auto before    = MaskFieldValueJson(*mask, field_key);
+  range_edit_    = OpenRangeEdit{grade_id, mask_id, std::move(field_key), std::move(before)};
+  auto result    = Ok();
+  result.mask_id = mask_id_;
+  return result;
+}
+
+auto EditorMaskCreationController::RangeEditGrade() -> ColorGradeNodeModel* {
+  if (document_ == nullptr || !range_edit_.has_value()) {
+    return nullptr;
+  }
+  return dynamic_cast<ColorGradeNodeModel*>(document_->Graph().FindNode(range_edit_->grade_id));
+}
+
+auto EditorMaskCreationController::PublishMaskRangeEdit() -> EditorMaskCreationResult {
+  auto* grade = RangeEditGrade();
+  auto  edit  = std::move(*range_edit_);
+  range_edit_.reset();
+  const auto* mask = grade == nullptr ? nullptr : grade->FindMask(edit.mask_id);
+  if (mask == nullptr) {
+    return Reject("Mask is missing at range settle");
+  }
+  const auto after  = MaskFieldValueJson(*mask, edit.field_key);
+  // The selection does not change, so the result names the selected Mask (empty without one).
+  auto       result = Ok();
+  result.mask_id    = mask_id_;
+  if (after == edit.before_value) {
+    return result;
+  }
+  const auto batch =
+      MakeSetMaskFieldBatch(edit.grade_id, edit.mask_id, edit.field_key, edit.before_value, after);
+  std::string settle_error;
+  if (!PublishSettledBatch(batch, &settle_error)) {
+    (void)ApplyLiveMaskField(grade, edit.mask_id, edit.field_key, edit.before_value);
+    auto rejected = Reject(settle_error.empty() ? std::string{"Mask range history publish failed"}
+                                                : settle_error);
+    // The restored live value must be rendered again.
+    rejected.quality_requested = true;
+    return rejected;
+  }
+  result.committed         = true;
+  result.quality_requested = true;
+  return result;
+}
+
+auto EditorMaskCreationController::CancelMaskRangeEdit() -> EditorMaskCreationResult {
+  auto* grade = RangeEditGrade();
+  auto  edit  = std::move(*range_edit_);
+  range_edit_.reset();
+  (void)ApplyLiveMaskField(grade, edit.mask_id, edit.field_key, edit.before_value);
+  auto result              = Ok();
+  result.mask_id           = mask_id_;
+  // The presented frame can show a live range value; the restored value is rendered again.
+  result.quality_requested = true;
+  return result;
+}
+
 auto EditorMaskCreationController::PublishMaskFieldEdit() -> EditorMaskCreationResult {
   const auto field_key = field_edit_key_;
   auto*      grade     = Grade();
@@ -784,6 +920,9 @@ auto EditorMaskCreationController::BeginMaskInput(MaskCreationSample  sample,
                                                   MaskPointerIdentity identity,
                                                   MaskSourceKind      expected_source)
     -> EditorMaskCreationResult {
+  if (range_edit_.has_value()) {
+    return Reject(kRangeEditOpen);
+  }
   if (state_ == EditorMaskCreationState::Settling) {
     return Reject("Mask tool is unavailable until settle is acknowledged");
   }
@@ -817,6 +956,9 @@ auto EditorMaskCreationController::BeginMaskMove(AnalyticMaskHandle  handle,
                                                  MaskPointerIdentity identity,
                                                  MaskSourceKind      expected_source)
     -> EditorMaskCreationResult {
+  if (range_edit_.has_value()) {
+    return Reject(kRangeEditOpen);
+  }
   if (state_ == EditorMaskCreationState::Settling) {
     return Reject("Mask tool is unavailable until settle is acknowledged");
   }
@@ -1038,6 +1180,9 @@ auto EditorMaskCreationController::PublishReplaceSource() -> EditorMaskCreationR
 }
 
 auto EditorMaskCreationController::FinishMaskInput() -> EditorMaskCreationResult {
+  if (range_edit_.has_value()) {
+    return PublishMaskRangeEdit();
+  }
   if (!open_) {
     auto result    = Ok();
     result.mask_id = mask_id_;
@@ -1059,6 +1204,9 @@ auto EditorMaskCreationController::FinishMaskInput() -> EditorMaskCreationResult
 }
 
 auto EditorMaskCreationController::CancelMaskInput() -> EditorMaskCreationResult {
+  if (range_edit_.has_value()) {
+    return CancelMaskRangeEdit();
+  }
   // An inserted provisional Mask, a moved source, or a live field value is in the presented
   // frame; the restored document must be rendered again or that frame keeps showing it.
   const bool restores_live = open_ && (inserted_ || !creating_);
@@ -1088,8 +1236,8 @@ auto EditorMaskCreationController::CancelMaskInput() -> EditorMaskCreationResult
 }
 
 auto EditorMaskCreationController::FinishCreationMode() -> EditorMaskCreationResult {
-  auto result = open_ ? FinishMaskInput() : Ok();
-  if (!result.accepted && open_) {
+  auto result = HasOpenOperation() ? FinishMaskInput() : Ok();
+  if (!result.accepted && HasOpenOperation()) {
     return result;
   }
   const bool committed         = result.committed;

@@ -3071,6 +3071,39 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorMaskRangeSection</name>
+    <message>
+        <location filename="../qml/EditorMaskRangeSection.qml" line="+32"/>
+        <source>Luminance Range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Mask luminance range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Hue Range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Mask hue range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Show selection</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Confirm the new AI Mask to set its ranges.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>EditorMasksContextPanel</name>
     <message>
         <location filename="../qml/EditorMasksContextPanel.qml" line="+79"/>

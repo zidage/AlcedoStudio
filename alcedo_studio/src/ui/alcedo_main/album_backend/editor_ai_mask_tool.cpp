@@ -194,6 +194,9 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
     Fail(QStringLiteral("Select a Color Grade node first."));
     return;
   }
+  // The range bars target the stored Mask of the edit; a new candidate has none (D11). They stay
+  // disabled until the session opens the edit (OnOpened).
+  session_->mask_creation()->SetAiMaskEditRangeTarget(true, {}, std::nullopt);
   StartRequest request;
   request.serial  = serial_;
   request.runtime = services_.runtime ? services_.runtime() : nullptr;
@@ -264,6 +267,9 @@ void EditorAiMaskTool::OnOpened(std::uint64_t serial, EditorAiMaskEditOpenResult
     return;
   }
   lease_open_ = true;
+  if (session_ != nullptr) {
+    session_->mask_creation()->SetAiMaskEditRangeTarget(true, grade_id_, mask_id_);
+  }
   emit toolChanged();
 }
 
@@ -666,6 +672,9 @@ void EditorAiMaskTool::PresentCandidate(const MaskCoverageCandidateSelection& ca
   if (submitted.kind == EditorSessionResultKind::Rejected) {
     preview_.status = EditorMaskCoveragePreviewStatus::Previous;
     preview_.error  = submitted.message;
+  } else if (session_ != nullptr) {
+    // The candidate replaces the range coverage of the stored Mask (D11).
+    session_->mask_creation()->OnRangeCoverageReplaced();
   }
   emit previewChanged();
 }
@@ -827,6 +836,9 @@ void EditorAiMaskTool::Close(QString error) {
   pending_            = {};
   highlighted_person_ = -1;
   mask_id_.reset();
+  if (session_ != nullptr) {
+    session_->mask_creation()->SetAiMaskEditRangeTarget(false, {}, std::nullopt);
+  }
   emit toolChanged();
   emit highlightChanged();
   emit messageChanged();

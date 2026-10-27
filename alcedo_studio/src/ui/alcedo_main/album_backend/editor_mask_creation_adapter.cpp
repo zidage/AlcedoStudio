@@ -4,18 +4,24 @@
 
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
 
+#include <QColor>
 #include <QPointF>
+#include <QVariant>
+#include <QVariantMap>
 #include <Qt>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 #include <string_view>
 #include <variant>
 
+#include "app/editor_session_service.hpp"
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/mask/analytic_mask_edit.hpp"
+#include "edit/mask/mask_range_display.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
@@ -108,6 +114,38 @@ constexpr float    kPi = 3.14159265358979323846f;
 
 [[nodiscard]] auto IsAnalyticKind(MaskSourceKind kind) -> bool {
   return kind == MaskSourceKind::Radial || kind == MaskSourceKind::LinearGradient;
+}
+
+/// Handle distances of the range bars: a little above the stored minimum widths, so float
+/// rounding of a handle at the minimum distance never writes an invalid range (MR1 record).
+constexpr float    kLuminanceHandleMinimumWidth = kLuminanceRangeMinimumWidth * 1.2f;
+constexpr float    kHueHandleMinimumWidth       = kColorRangeMinimumWidthDegrees * 1.2f;
+constexpr int      kHueGradientSegments         = 36;
+constexpr int      kLuminanceGradientSegments   = 16;
+
+[[nodiscard]] auto GradientStop(double position, const std::array<float, 3>& rgb) -> QVariant {
+  QVariantMap stop;
+  stop.insert(QStringLiteral("position"), position);
+  stop.insert(QStringLiteral("color"), QColor::fromRgbF(rgb[0], rgb[1], rgb[2]));
+  return stop;
+}
+
+/// @p degrees in [0, 360).
+[[nodiscard]] auto WrapHueStart(float degrees) -> float {
+  float wrapped = std::fmod(degrees, 360.0f);
+  if (wrapped < 0.0f) {
+    wrapped += 360.0f;
+  }
+  return wrapped >= 360.0f ? 0.0f : wrapped;
+}
+
+/// @p degrees in (0, 360].
+[[nodiscard]] auto WrapHueEnd(float degrees) -> float {
+  float wrapped = std::fmod(degrees, 360.0f);
+  if (wrapped <= 0.0f) {
+    wrapped += 360.0f;
+  }
+  return wrapped;
 }
 
 }  // namespace
@@ -574,6 +612,9 @@ void EditorMaskCreationAdapter::selectMask(const QString& node_id, const QString
   open_             = false;
   open_via_panel_   = false;
   emit maskCreationChanged();
+  if (SyncRangeView()) {
+    emit maskRangeChanged();
+  }
 }
 
 void EditorMaskCreationAdapter::removeMask(const QString& node_id, const QString& mask_id) {
@@ -631,7 +672,18 @@ void EditorMaskCreationAdapter::deleteActiveMask() {
   removeMask(QString{}, selected_mask_id_);
 }
 
-void EditorMaskCreationAdapter::OnImageClosed() { ResetLocal(); }
+void EditorMaskCreationAdapter::OnImageClosed() {
+  // The session ends the range coverage with the image.
+  const bool range_state =
+      range_coverage_requested_ || !shown_range_coverage_.Empty() || range_open_ != RangeKind::None;
+  range_coverage_requested_ = false;
+  shown_range_coverage_     = {};
+  range_open_               = RangeKind::None;
+  ResetLocal();
+  if (range_state) {
+    emit maskRangeChanged();
+  }
+}
 
 void EditorMaskCreationAdapter::SyncFromSession() {
   if (session_ == nullptr) {
@@ -644,6 +696,9 @@ void EditorMaskCreationAdapter::SyncFromSession() {
   // An open edit keeps its GUI-predicted values until it settles.
   if (!open_ && UpdateMaskFieldView()) {
     emit maskCreationChanged();
+  }
+  if (SyncRangeView()) {
+    emit maskRangeChanged();
   }
 }
 
@@ -738,6 +793,13 @@ void EditorMaskCreationAdapter::ResetLocal() {
   HideOverlay();
   if (changed) {
     emit maskCreationChanged();
+  }
+  // The owner closed the Mask mode: an open range drag of the selection ended with it.
+  if (range_open_ != RangeKind::None && !ai_mask_edit_open_) {
+    ResetRangeEdit();
+  }
+  if (SyncRangeView()) {
+    emit maskRangeChanged();
   }
 }
 
@@ -1275,6 +1337,362 @@ auto EditorMaskCreationAdapter::handleRelease(qreal x, qreal y, int button) -> b
   PublishOverlay();
   emit maskCreationChanged();
   return true;
+}
+
+// ── Luminance Range and Hue Range (Mask ranges MR4) ────────────────────────
+
+auto EditorMaskCreationAdapter::luminance_range_minimum_width() -> qreal {
+  return static_cast<qreal>(kLuminanceHandleMinimumWidth);
+}
+
+auto EditorMaskCreationAdapter::hue_range_minimum_width() -> qreal {
+  return static_cast<qreal>(kHueHandleMinimumWidth);
+}
+
+auto EditorMaskCreationAdapter::hue_gradient_stops() -> QVariantList {
+  QVariantList stops;
+  for (int i = 0; i <= kHueGradientSegments; ++i) {
+    const double position = static_cast<double>(i) / kHueGradientSegments;
+    stops.push_back(GradientStop(position, MaskHueBarColor(static_cast<float>(position * 360.0))));
+  }
+  return stops;
+}
+
+auto EditorMaskCreationAdapter::luminance_gradient_stops() -> QVariantList {
+  QVariantList stops;
+  for (int i = 0; i <= kLuminanceGradientSegments; ++i) {
+    const double position = static_cast<double>(i) / kLuminanceGradientSegments;
+    const float  gray     = MaskLuminanceBarGray(static_cast<float>(position));
+    stops.push_back(GradientStop(position, {gray, gray, gray}));
+  }
+  return stops;
+}
+
+auto EditorMaskCreationAdapter::mask_range_available() const -> bool {
+  if (!range_view_.present || range_view_.target.Empty()) {
+    return false;
+  }
+  if (ai_mask_edit_open_) {
+    // The AI Mask edit holds the document writes; only the range edit of its stored Mask writes.
+    auto* backend = session_ != nullptr ? session_->session_backend() : nullptr;
+    return backend != nullptr && session_->has_image() && backend->ai_mask_edit_open();
+  }
+  return CanAuthorMasksFor(range_view_.target.grade_id);
+}
+
+auto EditorMaskCreationAdapter::mask_luminance_low() const -> qreal {
+  return static_cast<qreal>(range_open_ == RangeKind::Luminance ? range_first_
+                                                                : range_view_.luminance_low);
+}
+
+auto EditorMaskCreationAdapter::mask_luminance_high() const -> qreal {
+  return static_cast<qreal>(range_open_ == RangeKind::Luminance ? range_second_
+                                                                : range_view_.luminance_high);
+}
+
+auto EditorMaskCreationAdapter::mask_hue_start() const -> qreal {
+  return static_cast<qreal>(range_open_ == RangeKind::Hue ? range_first_ : range_view_.hue_start);
+}
+
+auto EditorMaskCreationAdapter::mask_hue_end() const -> qreal {
+  return static_cast<qreal>(range_open_ == RangeKind::Hue ? range_second_ : range_view_.hue_end);
+}
+
+auto EditorMaskCreationAdapter::RangeKindFromString(const QString& kind) -> RangeKind {
+  if (kind == QLatin1String("luminance")) {
+    return RangeKind::Luminance;
+  }
+  if (kind == QLatin1String("hue")) {
+    return RangeKind::Hue;
+  }
+  return RangeKind::None;
+}
+
+auto EditorMaskCreationAdapter::RangeFieldKey(RangeKind kind) -> std::string_view {
+  return kind == RangeKind::Luminance ? kMaskFieldLuminanceRange : kMaskFieldColorRange;
+}
+
+auto EditorMaskCreationAdapter::RangeTargetNow() const -> RangeTarget {
+  if (ai_mask_edit_open_) {
+    return ai_mask_edit_target_;
+  }
+  if (selected_mask_id_.isEmpty()) {
+    return {};
+  }
+  return RangeTarget{edit_node_id_, MaskIdFromQString(selected_mask_id_)};
+}
+
+auto EditorMaskCreationAdapter::SyncRangeView() -> bool {
+  // An open drag keeps its handle values until it settles.
+  if (range_open_ != RangeKind::None) {
+    return false;
+  }
+  RangeView view;
+  view.target = RangeTargetNow();
+  if (!view.target.Empty() && session_ != nullptr) {
+    if (const auto document = session_->pipeline_document()) {
+      const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
+          document->Graph().FindNode(view.target.grade_id));
+      if (const auto* mask = grade != nullptr ? grade->FindMask(view.target.mask_id) : nullptr) {
+        view.present = true;
+        if (mask->luminance_range.has_value()) {
+          view.luminance_low      = mask->luminance_range->low;
+          view.luminance_high     = mask->luminance_range->high;
+          view.luminance_softness = mask->luminance_range->softness;
+        }
+        if (mask->color_range.has_value()) {
+          view.hue_start    = mask->color_range->hue_start;
+          view.hue_end      = mask->color_range->hue_end;
+          view.hue_softness = mask->color_range->softness;
+        }
+      }
+    }
+  }
+  if (view == range_view_) {
+    return false;
+  }
+  const bool retarget = view.target != range_view_.target || view.present != range_view_.present;
+  range_view_         = view;
+  if (retarget && range_coverage_requested_) {
+    // The toggle follows the target Mask; without one it turns off.
+    if (range_view_.present && !range_view_.target.Empty()) {
+      ShowRangeCoverage(range_view_.target);
+    } else {
+      range_coverage_requested_ = false;
+      HideRangeCoverage();
+    }
+  }
+  return true;
+}
+
+auto EditorMaskCreationAdapter::RangeJson(RangeKind kind, float first, float second)
+    -> nlohmann::json {
+  if (kind == RangeKind::Luminance) {
+    float low  = std::clamp(std::min(first, second), 0.0f, 1.0f);
+    float high = std::clamp(std::max(first, second), 0.0f, 1.0f);
+    if (high - low < kLuminanceHandleMinimumWidth) {
+      if (low + kLuminanceHandleMinimumWidth <= 1.0f) {
+        high = low + kLuminanceHandleMinimumWidth;
+      } else {
+        high = 1.0f;
+        low  = 1.0f - kLuminanceHandleMinimumWidth;
+      }
+    }
+    range_first_  = low;
+    range_second_ = high;
+    if (low <= 0.0f && high >= 1.0f) {
+      return nullptr;
+    }
+    return LuminanceRangeToJson(LuminanceRangeModel{low, high, range_view_.luminance_softness});
+  }
+  if (first <= 0.0f && second >= 360.0f) {
+    range_first_  = 0.0f;
+    range_second_ = 360.0f;
+    return nullptr;
+  }
+  const float start = WrapHueStart(first);
+  float       end   = WrapHueEnd(second);
+  const float width = end > start ? end - start : end + 360.0f - start;
+  if (width < kHueHandleMinimumWidth) {
+    end = WrapHueEnd(start + kHueHandleMinimumWidth);
+  }
+  range_first_  = start;
+  range_second_ = end;
+  if (start <= 0.0f && end >= 360.0f) {
+    return nullptr;
+  }
+  return ColorRangeToJson(ColorRangeModel{start, end, range_view_.hue_softness});
+}
+
+void EditorMaskCreationAdapter::ShowRangeCoverage(const RangeTarget& target) {
+  auto* backend = session_ != nullptr ? session_->session_backend() : nullptr;
+  if (backend == nullptr || target.Empty()) {
+    return;
+  }
+  (void)backend->ShowMaskRangeCoverage(target.grade_id, target.mask_id);
+  shown_range_coverage_ = target;
+}
+
+void EditorMaskCreationAdapter::HideRangeCoverage() {
+  if (shown_range_coverage_.Empty()) {
+    return;
+  }
+  shown_range_coverage_ = {};
+  if (auto* backend = session_ != nullptr ? session_->session_backend() : nullptr) {
+    (void)backend->HideMaskRangeCoverage();
+  }
+}
+
+void EditorMaskCreationAdapter::ResetRangeEdit() {
+  range_open_ = RangeKind::None;
+  if (!range_coverage_requested_) {
+    HideRangeCoverage();
+  }
+}
+
+auto EditorMaskCreationAdapter::beginRangeEdit(const QString& kind) -> bool {
+  const auto range_kind = RangeKindFromString(kind);
+  if (range_kind == RangeKind::None || range_open_ != RangeKind::None || open_) {
+    return false;
+  }
+  (void)SyncRangeView();
+  const auto target = range_view_.target;
+  if (!mask_range_available()) {
+    return false;
+  }
+  EditorMaskCreationCommand command;
+  command.kind      = EditorMaskCreationCommandKind::BeginMaskField;
+  command.node_id   = target.grade_id;
+  command.mask_id   = target.mask_id;
+  command.field_key = std::string{RangeFieldKey(range_kind)};
+  if (!Enqueue(command)) {
+    return false;
+  }
+  range_open_        = range_kind;
+  range_edit_target_ = target;
+  range_first_ =
+      range_kind == RangeKind::Luminance ? range_view_.luminance_low : range_view_.hue_start;
+  range_second_ =
+      range_kind == RangeKind::Luminance ? range_view_.luminance_high : range_view_.hue_end;
+  // D12: the range coverage is shown while a handle is dragged.
+  if (!range_coverage_requested_) {
+    ShowRangeCoverage(target);
+  }
+  emit maskRangeChanged();
+  return true;
+}
+
+void EditorMaskCreationAdapter::updateRangeEdit(const QString& kind, qreal first, qreal second) {
+  const auto range_kind = RangeKindFromString(kind);
+  if (range_kind == RangeKind::None || range_kind != range_open_ || !std::isfinite(first) ||
+      !std::isfinite(second)) {
+    return;
+  }
+  EditorMaskCreationCommand command;
+  command.kind      = EditorMaskCreationCommandKind::SetMaskField;
+  command.node_id   = range_edit_target_.grade_id;
+  command.mask_id   = range_edit_target_.mask_id;
+  command.field_key = std::string{RangeFieldKey(range_kind)};
+  command.field_value =
+      RangeJson(range_kind, static_cast<float>(first), static_cast<float>(second));
+  (void)Enqueue(command);
+  emit maskRangeChanged();
+}
+
+void EditorMaskCreationAdapter::finishRangeEdit(const QString& kind) {
+  const auto range_kind = RangeKindFromString(kind);
+  if (range_kind == RangeKind::None || range_kind != range_open_) {
+    return;
+  }
+  EditorMaskCreationCommand command;
+  command.kind    = EditorMaskCreationCommandKind::Finish;
+  command.node_id = range_edit_target_.grade_id;
+  command.mask_id = range_edit_target_.mask_id;
+  (void)Enqueue(command);
+  // The settled value stays shown until the owner publishes it.
+  if (range_kind == RangeKind::Luminance) {
+    range_view_.luminance_low  = range_first_;
+    range_view_.luminance_high = range_second_;
+  } else {
+    range_view_.hue_start = range_first_;
+    range_view_.hue_end   = range_second_;
+  }
+  ResetRangeEdit();
+  emit maskRangeChanged();
+}
+
+void EditorMaskCreationAdapter::resetRange(const QString& kind) {
+  const auto range_kind = RangeKindFromString(kind);
+  if (range_kind == RangeKind::None || range_open_ != RangeKind::None || open_) {
+    return;
+  }
+  (void)SyncRangeView();
+  if (!mask_range_available()) {
+    return;
+  }
+  // One SetMaskField without an open edit commits once; an unchanged value commits nothing.
+  EditorMaskCreationCommand command;
+  command.kind        = EditorMaskCreationCommandKind::SetMaskField;
+  command.node_id     = range_view_.target.grade_id;
+  command.mask_id     = range_view_.target.mask_id;
+  command.field_key   = std::string{RangeFieldKey(range_kind)};
+  command.field_value = nullptr;
+  if (!Enqueue(command)) {
+    return;
+  }
+  if (range_kind == RangeKind::Luminance) {
+    range_view_.luminance_low  = 0.0f;
+    range_view_.luminance_high = 1.0f;
+  } else {
+    range_view_.hue_start = 0.0f;
+    range_view_.hue_end   = 360.0f;
+  }
+  emit maskRangeChanged();
+}
+
+void EditorMaskCreationAdapter::setRangeCoverageVisible(bool visible) {
+  if (visible == range_coverage_requested_) {
+    return;
+  }
+  (void)SyncRangeView();
+  if (visible) {
+    if (!mask_range_available()) {
+      return;
+    }
+    range_coverage_requested_ = true;
+    ShowRangeCoverage(range_view_.target);
+  } else {
+    range_coverage_requested_ = false;
+    // An open drag keeps its coverage until it settles.
+    if (range_open_ == RangeKind::None) {
+      HideRangeCoverage();
+    }
+  }
+  emit maskRangeChanged();
+}
+
+void EditorMaskCreationAdapter::SetAiMaskEditRangeTarget(bool open, const NodeId& grade_id,
+                                                         const std::optional<MaskId>& mask_id) {
+  const RangeTarget target =
+      open && mask_id.has_value() ? RangeTarget{grade_id, *mask_id} : RangeTarget{};
+  if (open == ai_mask_edit_open_ && target == ai_mask_edit_target_) {
+    return;
+  }
+  const bool open_changed = open != ai_mask_edit_open_;
+  ai_mask_edit_open_      = open;
+  ai_mask_edit_target_    = target;
+  if (open_changed) {
+    // The AI Mask edit starts and ends its own coverage (D11); the toggle does not carry over.
+    if (range_open_ != RangeKind::None) {
+      range_open_ = RangeKind::None;
+    }
+    range_coverage_requested_ = false;
+    HideRangeCoverage();
+  }
+  (void)SyncRangeView();
+  emit maskRangeChanged();
+}
+
+void EditorMaskCreationAdapter::OnAdjustmentInputStarted() {
+  if (!range_coverage_requested_ && shown_range_coverage_.Empty()) {
+    return;
+  }
+  // Master plan 10.4: an adjustment input hides the coverage, and it is not shown again by itself.
+  range_coverage_requested_ = false;
+  if (range_open_ == RangeKind::None) {
+    HideRangeCoverage();
+  }
+  emit maskRangeChanged();
+}
+
+void EditorMaskCreationAdapter::OnRangeCoverageReplaced() {
+  if (!range_coverage_requested_ && shown_range_coverage_.Empty()) {
+    return;
+  }
+  // The session already replaced the probe with the candidate; no Hide is sent.
+  range_coverage_requested_ = false;
+  shown_range_coverage_     = {};
+  emit maskRangeChanged();
 }
 
 }  // namespace alcedo::ui

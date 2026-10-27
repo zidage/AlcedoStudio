@@ -14,6 +14,8 @@ Rectangle {
     objectName: "editorAiMaskPanel"
 
     property var tool: null
+    // EditorMaskCreationAdapter: owner of the range bars of the stored Mask (MR4).
+    property var maskCreation: null
     readonly property bool toolReady: !!(tool && tool.ready)
     readonly property bool canStep: toolReady && !tool.busy
     readonly property bool busy: !!(tool && tool.busy)
@@ -209,6 +211,19 @@ Rectangle {
             ColumnLayout {
                 width: scroll.availableWidth
                 spacing: appTheme.spaceSm
+
+                // Luminance Range and Hue Range of the stored Mask of the edit (Mask ranges MR4).
+                // A new candidate is not a Mask yet, so the bars are disabled for it (D11).
+                EditorMaskRangeSection {
+                    objectName: "editorAiMaskRangeSection"
+                    Layout.fillWidth: true
+                    maskCreation: root.maskCreation
+                    controlsEnabled: root.canStep
+                    newAiMaskCandidate: !!(root.tool && root.tool.ready
+                                           && !root.tool.editingStoredMask)
+                }
+
+                Divider {}
 
                 // Tasks: each runs once and adds a component with the Add / Subtract mode.
                 RowLayout {

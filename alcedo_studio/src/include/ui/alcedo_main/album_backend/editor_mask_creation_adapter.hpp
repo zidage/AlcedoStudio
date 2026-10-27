@@ -9,15 +9,19 @@
 #include <QPointer>
 #include <QRectF>
 #include <QString>
+#include <QVariantList>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "app/editor_mask_creation_controller.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
+#include "json.hpp"
 #include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/mask_overlay_geometry.hpp"
 
@@ -61,6 +65,22 @@ class EditorMaskCreationAdapter : public QObject {
   Q_PROPERTY(qreal maskOpacityPercent READ mask_opacity_percent NOTIFY maskCreationChanged)
   Q_PROPERTY(QString maskName READ mask_name NOTIFY maskCreationChanged)
   Q_PROPERTY(bool maskNudgeAvailable READ mask_nudge_available NOTIFY maskCreationChanged)
+  // Luminance Range and Hue Range of the range target Mask (Mask ranges MR4): the Mask of the
+  // open AI Mask edit when one is open (none for a new candidate), else the selected Mask.
+  Q_PROPERTY(bool maskRangeAvailable READ mask_range_available NOTIFY maskRangeChanged)
+  Q_PROPERTY(qreal maskLuminanceLow READ mask_luminance_low NOTIFY maskRangeChanged)
+  Q_PROPERTY(qreal maskLuminanceHigh READ mask_luminance_high NOTIFY maskRangeChanged)
+  Q_PROPERTY(qreal maskHueStart READ mask_hue_start NOTIFY maskRangeChanged)
+  Q_PROPERTY(qreal maskHueEnd READ mask_hue_end NOTIFY maskRangeChanged)
+  /// The "Show selection" toggle: the range coverage of the target Mask stays shown.
+  Q_PROPERTY(bool maskRangeCoverageVisible READ mask_range_coverage_visible NOTIFY maskRangeChanged)
+  /// Smallest handle distance of the bars, a little above the stored-range minimum widths.
+  Q_PROPERTY(qreal luminanceRangeMinimumWidth READ luminance_range_minimum_width CONSTANT)
+  Q_PROPERTY(qreal hueRangeMinimumWidth READ hue_range_minimum_width CONSTANT)
+  /// Fill of the Hue bar: {position, color} maps, hue = position * 360 (MaskHueBarColor).
+  Q_PROPERTY(QVariantList hueGradientStops READ hue_gradient_stops CONSTANT)
+  /// Fill of the Luminance bar: {position, color} maps, OkLab L = position (MaskLuminanceBarGray).
+  Q_PROPERTY(QVariantList luminanceGradientStops READ luminance_gradient_stops CONSTANT)
 
  public:
   enum class EditMode : std::uint8_t {
@@ -100,6 +120,54 @@ class EditorMaskCreationAdapter : public QObject {
    * Radial center and Linear origin are movable while selected.
    */
   [[nodiscard]] auto mask_nudge_available() const -> bool;
+  [[nodiscard]] auto mask_range_available() const -> bool;
+  [[nodiscard]] auto mask_luminance_low() const -> qreal;
+  [[nodiscard]] auto mask_luminance_high() const -> qreal;
+  [[nodiscard]] auto mask_hue_start() const -> qreal;
+  [[nodiscard]] auto mask_hue_end() const -> qreal;
+  [[nodiscard]] auto mask_range_coverage_visible() const -> bool {
+    return range_coverage_requested_;
+  }
+  [[nodiscard]] static auto luminance_range_minimum_width() -> qreal;
+  [[nodiscard]] static auto hue_range_minimum_width() -> qreal;
+  [[nodiscard]] static auto hue_gradient_stops() -> QVariantList;
+  [[nodiscard]] static auto luminance_gradient_stops() -> QVariantList;
+
+  /**
+   * @brief Open a range drag of the target Mask: @p kind is "luminance" or "hue".
+   *
+   * Queues one BeginMaskField of the range key for the target Mask (any kind). Without the
+   * "Show selection" toggle the range coverage of the Mask is shown until @ref finishRangeEdit
+   * (D12). @return False when no target Mask can be edited or another edit is open.
+   */
+  Q_INVOKABLE bool          beginRangeEdit(const QString& kind);
+  /**
+   * @brief Write the handles of the open range drag: Luminance @p first = low, @p second = high
+   *        (OkLab L, [0, 1]); Hue @p first = start, @p second = end (degrees; start > end wraps
+   *        through 0). The values are clamped and widened to the minimum width; both handles at
+   *        the ends write the full range (`null`). Interactive render, no commit.
+   */
+  Q_INVOKABLE void          updateRangeEdit(const QString& kind, qreal first, qreal second);
+  /// Settle the open range drag: one history commit when the value changed, Quality render.
+  Q_INVOKABLE void          finishRangeEdit(const QString& kind);
+  /// Write the full range (`null`) of @p kind of the target Mask with one commit.
+  Q_INVOKABLE void          resetRange(const QString& kind);
+  /// The "Show selection" toggle. Shows or hides the range coverage of the target Mask.
+  Q_INVOKABLE void          setRangeCoverageVisible(bool visible);
+
+  /**
+   * @brief Set the range target of an AI Mask edit (EditorAiMaskTool, GUI thread).
+   *
+   * @p open true with @p mask: the stored Mask of the edit is the range target. @p open true
+   * without @p mask: a new candidate is edited, and no range target exists (D11). @p open false:
+   * the selected Mask is the target again.
+   */
+  void                      SetAiMaskEditRangeTarget(bool open, const NodeId& grade_id,
+                                                     const std::optional<MaskId>& mask_id);
+  /// An adjustment input started: hide the range coverage and turn the toggle off (D12).
+  void                      OnAdjustmentInputStarted();
+  /// The AI Mask candidate replaced the range coverage in the session: turn the toggle off.
+  void                      OnRangeCoverageReplaced();
 
   Q_INVOKABLE void   bindInteractionItem(QObject* interaction);
   Q_INVOKABLE void   bindOverlayItem(QObject* overlay);
@@ -163,8 +231,46 @@ class EditorMaskCreationAdapter : public QObject {
 
  signals:
   void maskCreationChanged();
+  void maskRangeChanged();
 
  private:
+  enum class RangeKind : std::uint8_t { None, Luminance, Hue };
+
+  /// One Mask of one Color Grade; empty when no Mask is the range target.
+  struct RangeTarget {
+    NodeId             grade_id;
+    MaskId             mask_id;
+
+    [[nodiscard]] auto Empty() const -> bool { return grade_id.Empty() || mask_id.Empty(); }
+    auto               operator==(const RangeTarget&) const -> bool = default;
+  };
+
+  /// Range values of the range target as last published to QML; full ranges are 0..1 and
+  /// 0..360. The softness values are kept for the next restricted write (D6).
+  struct RangeView {
+    RangeTarget target;
+    bool        present                                    = false;
+    float       luminance_low                              = 0.0f;
+    float       luminance_high                             = 1.0f;
+    float       luminance_softness                         = LuminanceRangeModel{}.softness;
+    float       hue_start                                  = 0.0f;
+    float       hue_end                                    = 360.0f;
+    float       hue_softness                               = ColorRangeModel{}.softness;
+
+    auto        operator==(const RangeView&) const -> bool = default;
+  };
+
+  [[nodiscard]] static auto RangeKindFromString(const QString& kind) -> RangeKind;
+  [[nodiscard]] static auto RangeFieldKey(RangeKind kind) -> std::string_view;
+  [[nodiscard]] auto        RangeTargetNow() const -> RangeTarget;
+  /// Read the range values of the target from the document. Retargets the toggle when the target
+  /// changed. True when the published values changed.
+  auto                      SyncRangeView() -> bool;
+  /// The range JSON of @p kind for the handle values @p first and @p second (`null` when full).
+  [[nodiscard]] auto        RangeJson(RangeKind kind, float first, float second) -> nlohmann::json;
+  void                      ShowRangeCoverage(const RangeTarget& target);
+  void                      HideRangeCoverage();
+  void                      ResetRangeEdit();
   void               BeginTool(MaskSourceKind kind, const QString& tool_kind);
   void               ResetLocal();
   void               PublishOverlay();
@@ -244,6 +350,21 @@ class EditorMaskCreationAdapter : public QObject {
     auto    operator==(const MaskFieldView&) const -> bool = default;
   };
   MaskFieldView published_mask_fields_{};
+
+  RangeView     range_view_{};
+  /// Range target of the open AI Mask edit (empty for a new candidate); used while
+  /// ai_mask_edit_open_.
+  bool          ai_mask_edit_open_ = false;
+  RangeTarget   ai_mask_edit_target_{};
+  /// The open range drag: its kind, target, and the handle values written last.
+  RangeKind     range_open_ = RangeKind::None;
+  RangeTarget   range_edit_target_{};
+  float         range_first_              = 0.0f;
+  float         range_second_             = 0.0f;
+  /// The "Show selection" toggle.
+  bool          range_coverage_requested_ = false;
+  /// The Mask whose range coverage the adapter asked the session to show; empty when hidden.
+  RangeTarget   shown_range_coverage_{};
 };
 
 }  // namespace alcedo::ui

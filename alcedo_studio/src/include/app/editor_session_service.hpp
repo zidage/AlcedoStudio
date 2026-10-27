@@ -439,6 +439,9 @@ class IEditorSessionBackend {
    *
    * Does not mutate the working Grade. Latest Append
    * samples with the same pointer identity coalesce. Default backends reject.
+   * A BeginMaskField of `luminance_range` or `color_range` opens a range edit of the command's
+   * Mask, of any kind, without a selection change. During an AI Mask edit only Cancel and the
+   * range edit of its stored Mask (BeginMaskField, SetMaskField, Finish) are admitted (MR4).
    */
   virtual auto EnqueueMaskCreation(EditorMaskCreationCommand /*command*/) -> EditorSessionResult {
     EditorSessionResult result;
@@ -716,9 +719,11 @@ class IEditorSessionBackend {
    * Any Mask kind. While shown, every Interactive, Quality, and Detail render request of the editor
    * carries the probe, so the coverage follows each frame (a range drag shows the selection
    * live); one Quality render presents it at once. It replaces a committed AI Mask preview, and a
-   * later AI preview replaces it. Refused during an AI Mask edit (the candidate is not a Mask
-   * yet), without an interactive session, and for a Grade or Mask that the working document does
-   * not have. Writes nothing.
+   * later AI preview replaces it. During the AI Mask edit of a stored Mask it covers the candidate
+   * for that Mask only (MR4): Hide or a candidate update shows the candidate again, and the end of
+   * the edit ends the probe. Refused during the AI Mask edit of a new candidate (not a Mask yet)
+   * or of another Mask, while the candidate failed to present, without an interactive session,
+   * and for a Grade or Mask that the working document does not have. Writes nothing.
    */
   virtual auto ShowMaskRangeCoverage(const NodeId& /*grade_id*/, const MaskId& /*mask_id*/)
       -> EditorSessionResult {

@@ -50,6 +50,8 @@ void EditorMaskCoveragePreview::EndCandidate(const ImageTarget& target, std::uin
     return;
   }
   candidate_active_ = false;
+  // A range probe that covers the candidate ends with the AI Mask edit.
+  range_probe_.reset();
   if (committed_.has_value()) {
     Enqueue(MakeCommittedRequest(target, *committed_, request_id, {}));
     return;
@@ -68,6 +70,7 @@ void EditorMaskCoveragePreview::EndCandidateAfterCommit(const ImageTarget& targe
   }
   // The selected Mask changed: present its new state, also when no candidate was presented.
   candidate_active_ = false;
+  range_probe_.reset();
   committed_        = std::move(committed);
   Enqueue(MakeCommittedRequest(target, *committed_, request_id, {}));
 }
@@ -85,11 +88,15 @@ auto EditorMaskCoveragePreview::Retry(std::uint64_t                request_id,
 }
 
 void EditorMaskCoveragePreview::ShowRangeProbe(MaskCoverageProbe probe) {
-  if (candidate_active_) {
-    throw std::logic_error("EditorMaskCoveragePreview: a range probe needs no candidate");
+  if (CommitBlocked()) {
+    throw std::logic_error(
+        "EditorMaskCoveragePreview: a range probe cannot cover a candidate that failed to present");
   }
-  if (committed_.has_value() || newest_.has_value() || pending_.has_value() ||
-      in_flight_.has_value()) {
+  if (candidate_active_) {
+    // The probe covers the candidate: its jobs end, and Hide presents the newest one again.
+    DiscardJobs();
+  } else if (committed_.has_value() || newest_.has_value() || pending_.has_value() ||
+             in_flight_.has_value()) {
     // End the AI coverage work; the port clears the channel after the job in flight.
     committed_.reset();
     Hide();
@@ -98,12 +105,35 @@ void EditorMaskCoveragePreview::ShowRangeProbe(MaskCoverageProbe probe) {
   SetStatus(EditorMaskCoveragePreviewStatus::Current);
 }
 
-void EditorMaskCoveragePreview::HideRangeProbe() {
+void EditorMaskCoveragePreview::HideRangeProbe(std::uint64_t request_id) {
   if (!range_probe_.has_value()) {
     return;
   }
   range_probe_.reset();
+  if (candidate_active_ && newest_.has_value()) {
+    Request request                 = *newest_;
+    request.port_request.request_id = request_id;
+    Enqueue(std::move(request));
+    return;
+  }
   Hide();
+}
+
+void EditorMaskCoveragePreview::DiscardJobs() {
+  const bool             had_work = pending_.has_value() || in_flight_.has_value();
+  std::optional<Request> pending  = std::move(pending_);
+  pending_.reset();
+  if (in_flight_.has_value()) {
+    in_flight_->discarded = true;
+  }
+  if (pending.has_value()) {
+    Finish(*pending, EditorMaskCoverageOutcome::Discarded,
+           "The range coverage replaced the coverage preview");
+  }
+  // The port orders the clear after the job in flight, so its frame is never displayed.
+  if (had_work && port_) {
+    port_->ClearMaskCoverage();
+  }
 }
 
 void EditorMaskCoveragePreview::Clear() {
@@ -263,10 +293,11 @@ void EditorMaskCoveragePreview::SetStatus(EditorMaskCoveragePreviewStatus status
 
 void EditorMaskCoveragePreview::Publish() {
   EditorMaskCoveragePreviewState state;
-  state.source      = candidate_active_          ? EditorMaskCoveragePreviewSource::Candidate
-                      : committed_.has_value()   ? EditorMaskCoveragePreviewSource::CommittedMask
-                      : range_probe_.has_value() ? EditorMaskCoveragePreviewSource::RangeProbe
-                                                 : EditorMaskCoveragePreviewSource::None;
+  // A probe can cover the candidate (MR4); it is then the displayed source.
+  state.source      = range_probe_.has_value() ? EditorMaskCoveragePreviewSource::RangeProbe
+                      : candidate_active_      ? EditorMaskCoveragePreviewSource::Candidate
+                      : committed_.has_value() ? EditorMaskCoveragePreviewSource::CommittedMask
+                                               : EditorMaskCoveragePreviewSource::None;
   state.status      = status_;
   state.error       = error_;
   state.range_probe = range_probe_;

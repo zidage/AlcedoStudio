@@ -1590,6 +1590,39 @@ alcedo_ui_gtest_discover_tests(EditorComparisonControllerTest
     PROPERTIES LABELS "editor_session;editor_comparison")
 alcedo_register_test_target(EditorComparisonControllerTest ui)
 
+# The Luminance Range and Hue Range bars of EditorMaskCreationAdapter (Mask ranges MR4) through
+# the production EditorSessionController and session facade over the real history port.
+add_executable(EditorMaskRangeAdapterTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_mask_range_adapter_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorMaskRangeAdapterTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph
+)
+target_link_libraries(EditorMaskRangeAdapterTest
+    PRIVATE
+        AlbumBackendLib
+        EditorSessionService
+        EditorMaskCoveragePreview
+        AiMaskEditSession
+        EditMaskCore
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+set_target_properties(EditorMaskRangeAdapterTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorMaskRangeAdapterTest
+    TEST_PREFIX "EditorMaskRangeAdapterTest."
+    PROPERTIES LABELS "editor_session;mask_ranges")
+alcedo_register_test_target(EditorMaskRangeAdapterTest ui)
+
 add_executable(EditorComparisonViewQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_comparison_view_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp

@@ -155,5 +155,147 @@ TEST_F(EditorMaskRangeCoverageTest, ImageChangeEndsTheProbe) {
   }
 }
 
+// MR4: during the AI Mask edit of a stored Mask, the range coverage of that Mask covers the
+// candidate. Hide presents the newest candidate again without a model call, a candidate update
+// replaces the probe, and the end of the edit ends it. Another Mask stays refused.
+TEST_F(EditorMaskRangeCoverageTest, ProbeOfTheStoredMaskCoversItsCandidateUntilHidden) {
+  OpenInteractive();
+  const auto mask_id = CommitNewAiMask({{0.2f, 0.2f}, {0.4f, 0.4f}});
+  const auto other   = CommitNewAiMask({{0.6f, 0.6f}, {0.8f, 0.8f}});
+  const auto opened  = OpenAiMaskEdit(mask_id);
+  ASSERT_EQ(opened.result.kind, EditorSessionResultKind::Accepted);
+  auto session = OpenedSession(opened);
+  Present(*session);
+  ASSERT_FALSE(coverage_->jobs.empty());
+  CompleteJob(coverage_->jobs.size() - 1, EditorMaskCoverageJobStatus::Presented);
+  ASSERT_EQ(Preview().source, EditorMaskCoveragePreviewSource::Candidate);
+  CompleteFrames();
+
+  const auto frames = scheduler_->scheduled.size();
+  Show(GradeId(), other);
+  EXPECT_FALSE(Preview().range_probe.has_value()) << "only the Mask of the edit has a probe";
+  EXPECT_EQ(scheduler_->scheduled.size(), frames);
+
+  const auto probe = MaskCoverageProbe{GradeId(), mask_id};
+  Show(probe.grade_id, probe.mask_id);
+  EXPECT_EQ(Preview().source, EditorMaskCoveragePreviewSource::RangeProbe);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Current);
+  EXPECT_EQ(Preview().range_probe, probe);
+  ASSERT_EQ(scheduler_->scheduled.size(), frames + 1);
+  EXPECT_EQ(scheduler_->scheduled.back().intent.mask_coverage_probe, probe);
+  CompleteFrames();
+  EXPECT_EQ(ProbeOfNextFrame(), probe);
+
+  // Hide presents the newest candidate again: same shared pixels, no model call.
+  const auto calls = runner_.calls;
+  const auto jobs  = coverage_->jobs.size();
+  Hide();
+  ASSERT_EQ(coverage_->jobs.size(), jobs + 1);
+  const auto* candidate = CandidateOf(coverage_->jobs.back().request);
+  ASSERT_NE(candidate, nullptr);
+  EXPECT_EQ(candidate->pixels, CandidateOf(coverage_->jobs[jobs - 1].request)->pixels);
+  EXPECT_EQ(runner_.calls, calls);
+  EXPECT_EQ(Preview().source, EditorMaskCoveragePreviewSource::Candidate);
+  EXPECT_FALSE(Preview().range_probe.has_value());
+  CompleteJob(coverage_->jobs.size() - 1, EditorMaskCoverageJobStatus::Presented);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Current);
+  EXPECT_EQ(ProbeOfNextFrame(), std::nullopt);
+
+  // A candidate update replaces the probe.
+  Show(probe.grade_id, probe.mask_id);
+  CompleteFrames();
+  ASSERT_EQ(Preview().source, EditorMaskCoveragePreviewSource::RangeProbe);
+  Present(*session);
+  EXPECT_EQ(Preview().source, EditorMaskCoveragePreviewSource::Candidate);
+  EXPECT_FALSE(Preview().range_probe.has_value());
+  CompleteJob(coverage_->jobs.size() - 1, EditorMaskCoverageJobStatus::Presented);
+  EXPECT_EQ(ProbeOfNextFrame(), std::nullopt);
+
+  // The end of the edit ends the probe.
+  Show(probe.grade_id, probe.mask_id);
+  CompleteFrames();
+  ASSERT_EQ(Preview().source, EditorMaskCoveragePreviewSource::RangeProbe);
+  (void)service_->CancelAiMaskEdit();
+  CompleteFrames();
+  EXPECT_FALSE(service_->ai_mask_edit_open());
+  EXPECT_FALSE(Preview().range_probe.has_value());
+  EXPECT_EQ(ProbeOfNextFrame(), std::nullopt);
+}
+
+// MR4: a range drag of the stored Mask of an open AI Mask edit writes live values without a commit
+// and settles as one SetMaskField commit. Other Masks and other fields stay refused, and the AI
+// Mask commit keeps the range.
+TEST_F(EditorMaskRangeCoverageTest, RangeDragOfTheStoredAiMaskCommitsOnceDuringItsAiMaskEdit) {
+  OpenInteractive();
+  const auto mask_id = CommitNewAiMask({{0.2f, 0.2f}, {0.4f, 0.4f}});
+  const auto other   = CommitNewAiMask({{0.6f, 0.6f}, {0.8f, 0.8f}});
+  const auto opened  = OpenAiMaskEdit(mask_id);
+  ASSERT_EQ(opened.result.kind, EditorSessionResultKind::Accepted);
+  auto       session       = OpenedSession(opened);
+
+  const auto range_command = [this](EditorMaskCreationCommandKind kind, const MaskId& target,
+                                    nlohmann::json value) {
+    EditorMaskCreationCommand command;
+    command.kind        = kind;
+    command.node_id     = GradeId();
+    command.mask_id     = target;
+    command.field_key   = std::string{kMaskFieldLuminanceRange};
+    command.field_value = std::move(value);
+    return command;
+  };
+  const auto enqueue = [this](const EditorMaskCreationCommand& command) {
+    return service_->EnqueueMaskCreation(command).kind;
+  };
+  const auto live_range = [this](const MaskId& target) {
+    return Working()->Document().PrimaryGrade()->FindMask(target)->luminance_range;
+  };
+  const LuminanceRangeModel first{0.2f, 0.6f, 0.05f};
+  const LuminanceRangeModel second{0.3f, 0.7f, 0.05f};
+  const auto                commits = Graph()->CommitCount();
+
+  ASSERT_EQ(enqueue(range_command(EditorMaskCreationCommandKind::BeginMaskField, mask_id, {})),
+            EditorSessionResultKind::Accepted);
+  ASSERT_EQ(enqueue(range_command(EditorMaskCreationCommandKind::SetMaskField, mask_id,
+                                  LuminanceRangeToJson(first))),
+            EditorSessionResultKind::Accepted);
+  ASSERT_EQ(enqueue(range_command(EditorMaskCreationCommandKind::SetMaskField, mask_id,
+                                  LuminanceRangeToJson(second))),
+            EditorSessionResultKind::Accepted);
+  CompleteFrames();
+  EXPECT_EQ(live_range(mask_id), second);
+  EXPECT_EQ(Graph()->CommitCount(), commits) << "a drag step writes no commit";
+
+  EditorMaskCreationCommand finish;
+  finish.kind    = EditorMaskCreationCommandKind::Finish;
+  finish.node_id = GradeId();
+  finish.mask_id = mask_id;
+  ASSERT_EQ(enqueue(finish), EditorSessionResultKind::Accepted);
+  CompleteFrames();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 1);
+  EXPECT_EQ(live_range(mask_id), second);
+  EXPECT_TRUE(service_->ai_mask_edit_open());
+
+  // Another Mask is refused by the owner; a field other than a range is refused at once.
+  (void)enqueue(range_command(EditorMaskCreationCommandKind::SetMaskField, other,
+                              LuminanceRangeToJson(first)));
+  CompleteFrames();
+  EXPECT_FALSE(live_range(other).has_value());
+  EditorMaskCreationCommand invert;
+  invert.kind    = EditorMaskCreationCommandKind::ToggleMaskInvert;
+  invert.node_id = GradeId();
+  invert.mask_id = mask_id;
+  EXPECT_EQ(enqueue(invert), EditorSessionResultKind::Rejected);
+  EXPECT_EQ(Graph()->CommitCount(), commits + 1);
+
+  // The AI Mask commit replaces the source and keeps the range.
+  ASSERT_TRUE(Applied(session->AddPromptStep(Stroke({{0.25f, 0.25f}, {0.45f, 0.45f}}),
+                                             AiMaskComponentOperation::Add)));
+  const auto committed = Commit(*session, mask_id);
+  EXPECT_NE(committed.kind, EditorSessionResultKind::Rejected) << committed.message;
+  EXPECT_NE(committed.kind, EditorSessionResultKind::Failed) << committed.message;
+  EXPECT_FALSE(service_->ai_mask_edit_open());
+  EXPECT_EQ(live_range(mask_id), second);
+}
+
 }  // namespace
 }  // namespace alcedo::ui
