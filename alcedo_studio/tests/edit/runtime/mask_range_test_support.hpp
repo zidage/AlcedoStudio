@@ -199,6 +199,80 @@ inline void CheckFullySelectingRangeMatchesTheMaskWithoutRangesByteForByte(
   EXPECT_GE(SpreadOf(without).partial, 100u);
 }
 
+/**
+ * The default saturation threshold keeps the fixed chroma gate of the kernels before the threshold
+ * was stored: smoothstep(0.015, 0.045, C), written here with literal edges and not through
+ * min_chroma. The hue wheel crosses that gate down its rows.
+ */
+inline void CheckDefaultMinChromaKeepsTheFixedChromaGate(MaskRangeBackendHarness& h) {
+  auto mask        = MakeFullCoverageMask("mask.hue");
+  mask.color_range = ColorRangeModel{20.0f, 200.0f, 12.0f};
+  ASSERT_EQ(mask.color_range->min_chroma, kColorRangeDefaultMinChroma);
+  AddPrimaryMask(h, mask);
+  h.compile();
+  const auto scene  = mask_range_reference::MakeHueWheelScene();
+  const auto actual = h.render_mask_with_scene(mask.id, scene);
+  ASSERT_EQ(actual.size(), scene.size());
+  const auto& range = *mask.color_range;
+  std::size_t gate  = 0;
+  for (std::size_t i = 0; i < scene.size(); ++i) {
+    const auto   lab    = mask_range_reference::SceneOkLab(scene[i]);
+    const double hue    = mask_range_reference::HueDegrees(lab);
+    double       offset = hue - range.hue_start;
+    if (offset < 0.0) offset += 360.0;
+    const double width    = range.hue_end - range.hue_start;
+    const double distance = offset <= width ? 0.0 : std::min(offset - width, 360.0 - offset);
+    const double chroma   = mask_range_reference::Chroma(lab);
+    const double weight = (1.0 - mask_range_reference::SmoothStep(0.0, range.softness, distance)) *
+                          mask_range_reference::SmoothStep(0.015, 0.045, chroma);
+    const auto expected = mask_range_reference::RangedCoverageR8(1.0, mask, weight);
+    EXPECT_NEAR(actual[i], expected, 1) << "index " << i << " chroma " << chroma;
+    if (distance == 0.0 && chroma > 0.02 && chroma < 0.04) ++gate;
+  }
+  EXPECT_GE(gate, 20u) << "the scene must cross the chroma gate inside the range";
+}
+
+/**
+ * A raised saturation threshold drops the pixels that the default threshold selects below it:
+ * the output matches the reference with the stored min_chroma, pixels well below the threshold
+ * are 0, and pixels well above it are selected as with the default threshold.
+ */
+inline void CheckRaisedMinChromaDropsLowChromaPixels(MaskRangeBackendHarness& h) {
+  auto standard        = MakeFullCoverageMask("mask.standard");
+  standard.color_range = ColorRangeModel{20.0f, 200.0f, 12.0f};
+  auto raised          = MakeFullCoverageMask("mask.raised");
+  raised.color_range   = ColorRangeModel{20.0f, 200.0f, 12.0f, 0.09f};
+  AddPrimaryMask(h, standard);
+  AddPrimaryMask(h, raised);
+  h.compile();
+  const auto scene         = mask_range_reference::MakeHueWheelScene();
+  const auto with_standard = h.render_mask_with_scene(standard.id, scene);
+  const auto with_raised   = h.render_mask_with_scene(raised.id, scene);
+  ai_mask_test::ExpectR8Within1(
+      with_raised, mask_range_reference::ExpectedAnalyticRangedR8(raised, h.plan().geometry, scene),
+      "raised saturation threshold");
+
+  std::size_t dropped = 0;
+  std::size_t kept    = 0;
+  for (std::size_t i = 0; i < scene.size(); ++i) {
+    const auto   lab    = mask_range_reference::SceneOkLab(scene[i]);
+    const double chroma = mask_range_reference::Chroma(lab);
+    const double hue    = mask_range_reference::HueDegrees(lab);
+    if (hue < 40.0 || hue > 180.0) continue;
+    if (chroma > 0.05 && chroma < 0.07) {
+      EXPECT_GE(with_standard[i], 254) << "index " << i;
+      EXPECT_EQ(with_raised[i], 0) << "index " << i;
+      ++dropped;
+    } else if (chroma > 0.11) {
+      EXPECT_GE(with_raised[i], 254) << "index " << i;
+      EXPECT_NEAR(with_raised[i], with_standard[i], 1) << "index " << i;
+      ++kept;
+    }
+  }
+  EXPECT_GE(dropped, 20u);
+  EXPECT_GE(kept, 20u);
+}
+
 /// A Mask without ranges does not read the Grade input; a Mask with a range fails without it.
 inline void CheckOnlyRangedMasksReadTheGradeInput(MaskRangeBackendHarness& h) {
   const auto plain = MakeSoftRadialMask("mask.plain");

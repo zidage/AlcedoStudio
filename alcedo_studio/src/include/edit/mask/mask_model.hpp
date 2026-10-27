@@ -136,6 +136,12 @@ inline constexpr float kLuminanceRangeMaximumSoftness    = 0.5f;
 inline constexpr float kColorRangeMinimumWidthDegrees    = 1.0f;
 /// Largest soft transition of a Hue Range, in degrees.
 inline constexpr float kColorRangeMaximumSoftnessDegrees = 90.0f;
+/// Saturation threshold of a Hue Range that the kernels used before it was stored (OkLCh chroma).
+inline constexpr float kColorRangeDefaultMinChroma       = 0.03f;
+/// Smallest saturation threshold; it keeps neutral pixels (C = 0, no hue) out of a Hue Range.
+inline constexpr float kColorRangeMinimumMinChroma       = 0.015f;
+/// Largest saturation threshold, in OkLCh chroma.
+inline constexpr float kColorRangeMaximumMinChroma       = 0.20f;
 
 /**
  * @brief Hue Range of a Mask (UI: "Hue Range"), in OkLCh hue degrees.
@@ -143,13 +149,16 @@ inline constexpr float kColorRangeMaximumSoftnessDegrees = 90.0f;
  * Selects hues from @p hue_start to @p hue_end, counterclockwise. `hue_start > hue_end` wraps
  * through 0. @p hue_start is in [0, 360), @p hue_end in (0, 360], and the circular width is at
  * least @ref kColorRangeMinimumWidthDegrees. @p softness is the transition width outside the
- * range, in (0, @ref kColorRangeMaximumSoftnessDegrees]. A Mask stores only a restricted range:
- * the full range [0, 360] is an empty `std::optional`.
+ * range, in (0, @ref kColorRangeMaximumSoftnessDegrees]. @p min_chroma is the saturation
+ * threshold (OkLCh chroma) in [@ref kColorRangeMinimumMinChroma, @ref
+ * kColorRangeMaximumMinChroma]: pixels below it are not selected (see MaskRangeParams). A Mask
+ * stores only a restricted range: the full range [0, 360] is an empty `std::optional`.
  */
 struct ColorRangeModel {
-  float hue_start = 0.0f;
-  float hue_end   = 360.0f;
-  float softness  = 12.0f;
+  float hue_start  = 0.0f;
+  float hue_end    = 360.0f;
+  float softness   = 12.0f;
+  float min_chroma = kColorRangeDefaultMinChroma;
 
   friend auto operator==(const ColorRangeModel&, const ColorRangeModel&) -> bool = default;
 };
@@ -190,7 +199,9 @@ void ValidateLuminanceRange(const LuminanceRangeModel& range);
 
 /**
  * @brief Serialize a Mask `color_range` field: `null` when empty, otherwise
- *        `{"hue_end", "hue_start", "softness"}`. Does not validate.
+ *        `{"hue_end", "hue_start", "softness"}`, plus `min_chroma` when it is not
+ *        @ref kColorRangeDefaultMinChroma (so a default range keeps its JSON bytes).
+ *        Does not validate.
  */
 [[nodiscard]] auto ColorRangeToJson(const std::optional<ColorRangeModel>& range) -> nlohmann::json;
 /**
@@ -204,8 +215,8 @@ void ValidateLuminanceRange(const LuminanceRangeModel& range);
  * @brief Read a Mask `color_range` field.
  *
  * `null` and the legacy placeholder `{"enabled": false}` read as empty. A range object needs
- * exactly `hue_start`, `hue_end`, and `softness`; a valid object that covers the full range
- * reads as empty.
+ * `hue_start`, `hue_end`, and `softness`, and can have `min_chroma` (absent: @ref
+ * kColorRangeDefaultMinChroma); a valid object that covers the full range reads as empty.
  * @throws std::runtime_error on other keys, `"enabled": true`, or invalid values.
  */
 [[nodiscard]] auto ColorRangeFromJson(const nlohmann::json& json) -> std::optional<ColorRangeModel>;
@@ -442,15 +453,18 @@ struct LinearGradientMaskParams {
  * @brief Packed Luminance Range and Hue Range of one Mask for the native MaskEvaluate kernels.
  *
  * CUDA takes this struct by value; `MaskRangeParams` in mask.cl and mask.metal has the same
- * layout (eight 4-byte fields). A zero `*_restricted` flag is the full range, and the kernel does
+ * layout (nine 4-byte fields). A zero `*_restricted` flag is the full range, and the kernel does
  * not read the other fields of that range. The kernels evaluate both ranges on the owning Grade's
  * input image:
  *
  * - Luminance: OkLab L clamped to [0, 1];
  *   `weight = smoothstep(low - softness, low, L) * (1 - smoothstep(high, high + softness, L))`.
  * - Hue: OkLCh hue in degrees. `d` is the circular distance outside `[hue_start, hue_end]`
- *   (0 inside); `weight = (1 - smoothstep(0, softness, d)) * smoothstep(0.015, 0.045, C)`, where
- *   C is OkLCh chroma, so near-neutral pixels are not selected.
+ *   (0 inside); `weight = (1 - smoothstep(0, softness, d)) * smoothstep(0.015 + t, 0.045 + t, C)`
+ *   with `t = hue_min_chroma - 0.03`, where C is OkLCh chroma, so pixels less saturated than the
+ *   threshold are not selected. The gate is centered on `hue_min_chroma` and 0.03 wide; the
+ *   kernels add the offset `t` to the fixed edges, so the default threshold (0.03) gives exactly
+ *   the float edges 0.015 and 0.045.
  *
  * Effective coverage is `clamp(invert(source) * hue_weight * luminance_weight * opacity, 0, 1)`.
  */
@@ -463,9 +477,10 @@ struct MaskRangeParams {
   float         hue_start            = 0.0f;
   float         hue_end              = 360.0f;
   float         hue_softness         = 12.0f;
+  float         hue_min_chroma       = kColorRangeDefaultMinChroma;
 };
 
-static_assert(sizeof(MaskRangeParams) == 32);
+static_assert(sizeof(MaskRangeParams) == 36);
 
 /// Whether @p mask stores a Luminance Range or a Hue Range, so its coverage reads the Grade input.
 [[nodiscard]] auto MaskHasRestrictedRange(const MaskModel& mask) -> bool;

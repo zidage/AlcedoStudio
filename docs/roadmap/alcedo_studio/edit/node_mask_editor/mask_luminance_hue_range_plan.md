@@ -4,7 +4,8 @@ Date: 2026-10-26. Status: MR1 complete (2026-10-26, PR #556, branch
 `feature/mask-ranges-mr1-model`); MR2 complete (2026-10-26, branch
 `feature/mask-ranges-mr2-gpu-eval`, stacked on MR1); MR3 complete (2026-10-27, three stacked
 branches `feature/mask-ranges-mr3-*` on MR2); MR4 complete (2026-10-27, branch
-`feature/mask-ranges-mr4-range-bars`, stacked on MR3).
+`feature/mask-ranges-mr4-range-bars`, stacked on MR3). Follow-up issue #564 (precise range
+controls, shared Range section, AI Mask edit on demand): section 10, phases RP1-RP4.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation Master Plan](../node_mask_editor_master_plan.md),
 sections 8.3 (Color Range and Luminance Range), 8.4 (Union), and 10.3-10.4 (content-dependent
@@ -745,3 +746,78 @@ Each phase writes its completion record and call chains into its section.
 - MR2: [#549](https://github.com/zidage/AlcedoStudio/issues/549)
 - MR3: [#550](https://github.com/zidage/AlcedoStudio/issues/550)
 - MR4: [#551](https://github.com/zidage/AlcedoStudio/issues/551)
+- RP1-RP4 (section 10): [#564](https://github.com/zidage/AlcedoStudio/issues/564)
+
+## 10. Precise range controls and AI Mask edit on demand (#564)
+
+Issue [#564](https://github.com/zidage/AlcedoStudio/issues/564) holds the approved scope
+(2026-10-27): A (handle drag = press value + cursor delta), B (Shift fine drag, key and wheel
+steps), C (value fields), D (Softness sliders and the softness ramp on the bar), G (saturation
+threshold `ColorRangeModel::min_chroma`), the shared Range section above the Mask-specific
+controls, and an AI Mask edit that starts only on a user action. Not in scope: sampler,
+histograms, hue bar offset.
+
+| Phase | Content | Depends on |
+| --- | --- | --- |
+| RP1 | `min_chroma` in the model, JSON, validation, `MaskRangeParams`, CUDA, OpenCL, Metal | - |
+| RP2 | Bar precision (A, B, softness ramp drawing) and adapter key and wheel steps | RP1 |
+| RP3 | Shared Range section, value fields (C), Softness sliders (D), threshold slider (G) | RP2 |
+| RP4 | AI Mask edit on demand: row selection selects only, "Edit AI Mask" button | RP3 |
+
+### 10.1 RP1: saturation threshold in the model and kernels
+
+##### RP1 completion record (2026-10-27)
+
+**Status:** complete. Branch `feature/mask-range-precision-rp1-min-chroma` (from `main`
+`68b77fdb`).
+
+**Changes from the issue and details that it did not give:**
+
+- **Gate formula.** The issue gives `smoothstep(min_chroma - 0.015, min_chroma + 0.015, C)`. In
+  float, `0.03f + 0.015f` is `0.044999998`, one ulp below the old edge `0.045f`. The kernels add
+  the offset `t = min_chroma - 0.03` to the fixed edges instead:
+  `smoothstep(0.015 + t, 0.045 + t, C)`. This is the same gate for every threshold, and at the
+  default `t` is exactly 0, so the edges are the old float constants. A one-time byte dump on CUDA
+  and OpenCL (three ranged Masks on the ramp scene and the hue wheel, `main` against this branch)
+  was identical; the dump test was not committed.
+- **Constants.** `kColorRangeDefaultMinChroma = 0.03`, `kColorRangeMinimumMinChroma = 0.015`,
+  `kColorRangeMaximumMinChroma = 0.20` (`mask_model.hpp`).
+- **JSON.** `ColorRangeToJson` writes `min_chroma` only when it is not the default. The reader
+  accepts the key as optional (absent = default). A full-range object with an out-of-bounds
+  threshold is rejected before it reads as empty, like `softness`. History canonical form follows
+  from the writer: a stored `"min_chroma": 0.03` is not canonical and the batch rejects it.
+- **Keys.** `MaskRangeParams` is 36 bytes (`hue_min_chroma` last); `static_assert`s in
+  `mask_model.hpp`, `opencl_mask_pass.cpp`, and `metal_mask_pass.mm`. The Mask result content key
+  mixes `min_chroma`. The plan topology hash keeps `has_value()` only (MR1 rule). No other key or
+  fingerprint hashes range values.
+- **Adapter.** `EditorMaskCreationAdapter::RangeView` keeps `hue_min_chroma`, so a Hue drag keeps
+  a stored threshold (before RP1 the adapter rebuilt the range from start, end, and softness).
+
+**Primary call chain:**
+
+```text
+MaskModel.color_range.min_chroma -> MaskRangeParamsFromMask -> hue_min_chroma
+  -> CUDA MaskRangeWeight / mask.cl MaskRangeWeight / mask.metal MaskRangeWeight
+     -> gate = smoothstep(0.015 + t, 0.045 + t, C), t = hue_min_chroma - 0.03
+JSON: ColorRangeFromJson (optional key, bounds) <-> ColorRangeToJson (omitted at the default)
+```
+
+**Failure chain:** `min_chroma` not finite, below 0.015, or above 0.2 -> `ValidateColorRange` /
+`ColorRangeFromJson` throw "color_range min_chroma must be in [0.015, 0.2]"; the document, the
+Mask setter, and the history batch are not changed.
+
+**What was proven (executed tests, Windows `win_debug`):**
+
+| Criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Default range writes the same bytes; non-default value round-trips (Mask JSON and document) | `HueRangeMinChromaIsOmittedAtTheDefaultAndRoundTripsOtherwise` | `GpuDagModelGraphTest` | PASS |
+| Bounds rejected (JSON, validation, setter; full-range object too) | `HueRangeMinChromaOutsideItsBoundsIsRejected` | same | PASS |
+| Packed for the kernels; default edges are the old float constants | `HueRangeMinChromaIsPackedForTheKernels` | same | PASS |
+| History accepts a non-default threshold and rejects a written default or out-of-bounds value | `MaskRangeFieldsAcceptOnlyCanonicalRangeValues` | `PipelineEditBatchTest` | PASS |
+| Default threshold gives the old fixed gate (reference with literal 0.015 / 0.045) | `DefaultSaturationThresholdKeepsTheFixedChromaGate` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| Raised threshold drops low-chroma pixels and keeps saturated ones | `RaisedSaturationThresholdDropsLowChromaPixels` | same | PASS |
+
+Suite totals: `GpuDagCudaMaskTest` 31/31, `GpuDagOpenClGradeTest` `*Mask*` 32/32,
+`GpuDagModelGraphTest` 150/150, `PipelineEditBatchTest` 22/22, `EditorMaskRangeAdapterTest` 7/7,
+`DocumentTransferTest` 34/35 (the failure, `TransferPackageCarriesOnlyOwnedDevelopKeysAndNoCaches`,
+is pre-existing: #554).

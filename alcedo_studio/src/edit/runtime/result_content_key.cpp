@@ -197,6 +197,7 @@ auto MixMaskSourceModel(ContentHash& hash, const MaskModel& model,
     hash.MixF32(model.color_range->hue_start);
     hash.MixF32(model.color_range->hue_end);
     hash.MixF32(model.color_range->softness);
+    hash.MixF32(model.color_range->min_chroma);
   }
   hash.MixBool(model.luminance_range.has_value());
   if (model.luminance_range.has_value()) {

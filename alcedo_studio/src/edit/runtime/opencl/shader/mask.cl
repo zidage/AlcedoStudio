@@ -64,6 +64,7 @@ typedef struct {
   float hue_start;
   float hue_end;
   float hue_softness;
+  float hue_min_chroma;
 } MaskRangeParams;
 
 static inline float SmoothStep(float edge0, float edge1, float x) {
@@ -91,8 +92,9 @@ static inline float MaskRangeWeight(__private const MaskRangeParams* range, floa
       offset += 360.0f;
     }
     const float distance = offset <= width ? 0.0f : min(offset - width, 360.0f - offset);
+    const float gate_offset = range->hue_min_chroma - 0.03f;
     weight *= (1.0f - SmoothStep(0.0f, range->hue_softness, distance)) *
-              SmoothStep(0.015f, 0.045f, chroma);
+              SmoothStep(0.015f + gate_offset, 0.045f + gate_offset, chroma);
   }
   if (range->luminance_restricted != 0u) {
     const float lightness = min(max(lab.x, 0.0f), 1.0f);

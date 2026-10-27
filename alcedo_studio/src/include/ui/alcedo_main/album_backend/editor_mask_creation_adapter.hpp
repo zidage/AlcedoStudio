@@ -246,7 +246,8 @@ class EditorMaskCreationAdapter : public QObject {
   };
 
   /// Range values of the range target as last published to QML; full ranges are 0..1 and
-  /// 0..360. The softness values are kept for the next restricted write (D6).
+  /// 0..360. The softness and saturation threshold values are kept for the next restricted write
+  /// (D6).
   struct RangeView {
     RangeTarget target;
     bool        present                                    = false;
@@ -256,6 +257,7 @@ class EditorMaskCreationAdapter : public QObject {
     float       hue_start                                  = 0.0f;
     float       hue_end                                    = 360.0f;
     float       hue_softness                               = ColorRangeModel{}.softness;
+    float       hue_min_chroma                             = ColorRangeModel{}.min_chroma;
 
     auto        operator==(const RangeView&) const -> bool = default;
   };
