@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -15,6 +16,8 @@
 #include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/compiled_mask_stack.hpp"
 #include "edit/runtime/mask_coverage_texture_cache.hpp"
+#include "edit/runtime/metal/metal_scene_work.hpp"
+#include "edit/runtime/texture_format.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 
 namespace alcedo {
@@ -58,6 +61,9 @@ struct MaskRasterParams {
 };
 
 static_assert(sizeof(MaskRasterParams) == 64);
+// MaskRangeParams (mask_model.hpp) is passed as is: mask.metal declares the same eight 4-byte
+// fields.
+static_assert(sizeof(MaskRangeParams) == 32);
 
 auto Pipeline(const char* function, const char* label) -> NS::SharedPtr<MTL::ComputePipelineState> {
 #ifndef ALCEDO_METAL_MASK_METALLIB_PATH
@@ -96,10 +102,30 @@ auto EnsureOutput(MetalRenderWorkspace& workspace, const GraphValueId& id, Exten
   return workspace.AcquireImageForWrite(id, {extent.width, extent.height, TextureFormat::R8});
 }
 
+/// Grade input of a Mask with a restricted range, or null when the Mask has no range.
+auto RangeSceneTexture(MetalRenderDevice& device, const MaskModel& mask,
+                       const FrameSceneBinding& range_scene, Extent2D extent)
+    -> const MetalBackend::Texture2D* {
+  if (!MaskHasRestrictedRange(mask)) {
+    return nullptr;
+  }
+  const auto& scene = MetalSceneTexture(device, range_scene);
+  if (scene.Native() == nullptr || scene.Format() != TextureFormat::Rgba32f ||
+      scene.Width() != extent.width || scene.Height() != extent.height) {
+    throw std::runtime_error(
+        "ExecuteMetalMask: the Grade input of a Mask range is not an RGBA32F texture of the "
+        "render extent");
+  }
+  return &scene;
+}
+
 void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
-                    const MaskModel& mask, const ExecutionPlan& plan) {
+                    const MaskModel& mask, const ExecutionPlan& plan,
+                    const MetalBackend::Texture2D* range_scene) {
   auto*              encoder  = Encoder(device);
-  auto               pipeline = Pipeline("mask_analytic", "Metal Mask analytic");
+  auto               pipeline = range_scene == nullptr
+                                    ? Pipeline("mask_analytic", "Metal Mask analytic")
+                                    : Pipeline("mask_analytic_ranged", "Metal Mask analytic ranged");
   MaskAnalyticParams params;
   CopyMatrix(params.render_to_reference, plan.geometry.render_to_reference);
   params.width               = output.Width();
@@ -128,21 +154,31 @@ void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
   encoder->setComputePipelineState(pipeline.get());
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 0);
   encoder->setBytes(&params, sizeof(params), 0);
+  if (range_scene != nullptr) {
+    const auto range = MaskRangeParamsFromMask(mask);
+    encoder->setTexture(static_cast<MTL::Texture*>(range_scene->Native()), 1);
+    encoder->setBytes(&range, sizeof(range), 1);
+  }
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 /// Raster sampling of @p coverage on the render grid of @p geometry into @p output: R8 for
 /// MaskEvaluate, RGBA32F for the coverage display. mask_raster writes (value, 0, 0, 1).
+/// @p range_scene and @p range_mask are set only for a MaskEvaluate with a restricted range.
 /// @pre A coverage upload, if any, was recorded before (its blit precedes the compute encoder).
 void EncodeRasterSampling(MetalRenderDevice&                     device,
                           const MaskCoverageImage<MetalBackend>& coverage,
                           const ResolvedRenderGeometry& geometry, bool invert, float opacity,
-                          MetalBackend::Texture2D& output) {
+                          MetalBackend::Texture2D&       output,
+                          const MetalBackend::Texture2D* range_scene = nullptr,
+                          const MaskModel*               range_mask  = nullptr) {
   const auto sampling = MakeRasterMaskSamplingPlan(geometry, coverage.descriptor.reference_bounds,
                                                    coverage.descriptor.extent);
   auto*            encoder  = Encoder(device);
-  auto             pipeline = Pipeline("mask_raster", "Metal Mask raster");
+  auto             pipeline = range_scene == nullptr
+                                  ? Pipeline("mask_raster", "Metal Mask raster")
+                                  : Pipeline("mask_raster_ranged", "Metal Mask raster ranged");
   MaskRasterParams params;
   CopyMatrix(params.render_to_texture_uv, sampling.render_to_texture_uv);
   params.width          = output.Width();
@@ -156,15 +192,21 @@ void EncodeRasterSampling(MetalRenderDevice&                     device,
   encoder->setTexture(static_cast<MTL::Texture*>(coverage.texture.Native()), 0);
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 1);
   encoder->setBytes(&params, sizeof(params), 0);
+  if (range_scene != nullptr) {
+    const auto range = MaskRangeParamsFromMask(*range_mask);
+    encoder->setTexture(static_cast<MTL::Texture*>(range_scene->Native()), 2);
+    encoder->setBytes(&range, sizeof(range), 1);
+  }
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 void EncodeRaster(MetalRenderDevice& device, MetalBackend::Texture2D& output,
                   const AiSegmentationMaskSource& source, const MaskModel& mask,
-                  const ExecutionPlan& plan) {
+                  const ExecutionPlan& plan, const MetalBackend::Texture2D* range_scene) {
   const auto coverage = device.Workspace().AcquireAiMaskCoverage(source, device.CommandContext());
-  EncodeRasterSampling(device, *coverage, plan.geometry, mask.invert, mask.opacity, output);
+  EncodeRasterSampling(device, *coverage, plan.geometry, mask.invert, mask.opacity, output,
+                       range_scene, &mask);
 }
 
 void EncodeFillZero(MetalRenderDevice& device, MetalBackend::Texture2D& output) {
@@ -196,6 +238,8 @@ void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
       MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_analytic", "Metal Mask analytic"});
   pipelines.push_back(
       MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_raster", "Metal Mask raster"});
+  pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_analytic_ranged",
+                                          "Metal Mask analytic ranged"});
   pipelines.push_back(
       MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_fill_zero", "Metal Mask fill zero"});
   pipelines.push_back(
@@ -214,7 +258,8 @@ void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 
 auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                       const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
-                      const CompiledMaskSource& compiled_source) -> MetalMaskResult {
+                      const CompiledMaskSource& compiled_source,
+                      const FrameSceneBinding&  range_scene) -> MetalMaskResult {
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteMetalMask: BeginRender has not been called");
   }
@@ -225,13 +270,14 @@ auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
 
   const auto& mask_model =
       RequireMaskModel(document, compiled_grade.node_id, compiled_source.mask_id);
+  const auto* scene = RangeSceneTexture(device, mask_model, range_scene, extent);
   if (std::holds_alternative<RadialMaskSource>(mask_model.source) ||
       std::holds_alternative<LinearGradientMaskSource>(mask_model.source)) {
-    EncodeAnalytic(device, output.Texture(), mask_model, plan);
+    EncodeAnalytic(device, output.Texture(), mask_model, plan, scene);
     return result;
   }
   if (const auto* ai = std::get_if<AiSegmentationMaskSource>(&mask_model.source)) {
-    EncodeRaster(device, output.Texture(), *ai, mask_model, plan);
+    EncodeRaster(device, output.Texture(), *ai, mask_model, plan, scene);
     return result;
   }
   throw std::runtime_error("ExecuteMetalMask: compiled mask does not match document");
@@ -296,7 +342,8 @@ auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
     if (!MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
       continue;
     }
-    (void)ExecuteMetalMask(device, plan, document, compiled_grade, source);
+    (void)ExecuteMetalMask(device, plan, document, compiled_grade, source,
+                           FrameSceneBinding::CachedImage(source.range_input));
   }
   return ExecuteMetalMaskUnion(device, plan, document, compiled_grade);
 }

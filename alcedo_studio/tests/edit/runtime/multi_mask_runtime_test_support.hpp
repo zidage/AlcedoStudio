@@ -32,7 +32,7 @@ inline auto QuantizeR8(float value) -> std::uint8_t {
 }
 
 /**
- * @brief Invert, then opacity, then clamp. Range fields are identity (1) in this runtime.
+ * @brief Invert, then opacity, then clamp: the coverage of a Mask without ranges.
  */
 inline auto ApplyInvertAndOpacity(float coverage, bool invert, float opacity) -> float {
   if (invert) {

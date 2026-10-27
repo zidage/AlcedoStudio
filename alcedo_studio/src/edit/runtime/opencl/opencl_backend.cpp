@@ -1074,6 +1074,7 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
   }
   if (plan.Contains(GpuPassKind::MaskEvaluate) || plan.Contains(GpuPassKind::MaskUnion)) {
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskAnalyticKernelName);
+    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskAnalyticRangedKernelName);
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskFillZeroKernelName);
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskUnionMaxKernelName);
   }

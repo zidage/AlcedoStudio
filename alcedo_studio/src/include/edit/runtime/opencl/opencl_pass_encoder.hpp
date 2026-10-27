@@ -80,8 +80,8 @@ template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
-                     const CompiledMaskSource& source) {
-    (void)ExecuteOpenClMask(device, plan, document, compiled_grade, source);
+                     const CompiledMaskSource& source, const FrameSceneBinding& scene) {
+    (void)ExecuteOpenClMask(device, plan, document, compiled_grade, source, scene);
   }
 };
 

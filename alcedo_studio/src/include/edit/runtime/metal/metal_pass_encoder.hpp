@@ -60,8 +60,8 @@ template <>
 struct PassEncoder<MetalBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
-                     const CompiledMaskSource& source) {
-    (void)ExecuteMetalMask(device, plan, document, compiled_grade, source);
+                     const CompiledMaskSource& source, const FrameSceneBinding& scene) {
+    (void)ExecuteMetalMask(device, plan, document, compiled_grade, source, scene);
   }
 };
 
