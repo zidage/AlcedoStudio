@@ -24,13 +24,17 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 
+#include "app/ai_sidecar_runtime_service.hpp"
 #include "app/editor_mask_coverage_preview_test_support.hpp"
 #include "app/editor_mask_creation_controller.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/mask/mask_range_display.hpp"
 #include "edit/runtime/oklab_contrast_reference.hpp"
+#include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
 namespace alcedo::ui {
@@ -120,6 +124,33 @@ class EditorMaskRangeAdapterTest : public EditorMaskCoveragePreviewTest {
   }
 
   auto Probe(const MaskId& mask_id) -> MaskCoverageProbe { return {GradeId(), mask_id}; }
+
+  /// The production AI Mask tool on this session. Each sidecar runtime request (the first step
+  /// of opening an AI Mask edit) is counted; the runtime is never started here.
+  auto MakeAiMaskTool() -> std::unique_ptr<EditorAiMaskTool> {
+    return std::make_unique<EditorAiMaskTool>(controller_.get(),
+                                              EditorAiMaskTool::Services{[this] {
+                                                                           ++runtime_requests_;
+                                                                           return ai_runtime_;
+                                                                         },
+                                                                         {},
+                                                                         {}});
+  }
+
+  /// End an AI Mask edit that @p tool opened (no candidate) and stop the tool.
+  void CloseAiMaskTool(EditorAiMaskTool& tool) {
+    QCoreApplication::processEvents();
+    tool.cancel();
+    if (service_->ai_mask_edit_open()) {
+      (void)service_->CancelAiMaskEdit();
+    }
+    Settle();
+    tool.Shutdown();
+  }
+
+  int                                      runtime_requests_ = 0;
+  std::shared_ptr<AiSidecarRuntimeService> ai_runtime_ =
+      std::make_shared<AiSidecarRuntimeService>();
 
   /// Let the key or wheel step settle interval elapse (Qt timers run), then settle the owner.
   void WaitForStepSettle(int interval_ms) {
@@ -561,6 +592,93 @@ TEST_F(EditorMaskRangeAdapterTest, AiMaskEditTargetsItsStoredMaskAndANewCandidat
   adapter_->SetAiMaskEditRangeTarget(false, {}, std::nullopt);
   Settle();
   EXPECT_FALSE(adapter_->mask_range_available());
+}
+
+TEST_F(EditorMaskRangeAdapterTest, SelectingAStoredAiMaskStartsNoAiMaskEditAndItsRangesCommit) {
+  OpenThroughController();
+  const auto mask_id = CommitNewAiMask({{0.2f, 0.2f}, {0.4f, 0.4f}});
+  Settle();
+  const auto tool = MakeAiMaskTool();
+
+  // A row selection (the Mask group panel and the Node drawer call selectMask only): the owner
+  // selects the AI Mask; no edit, no lease, no sidecar request.
+  Select(mask_id);
+  EXPECT_EQ(service_->mask_creation_state(), EditorMaskCreationState::Selected);
+  EXPECT_TRUE(adapter_->mask_controls_active()) << "the Mask panel opens for the AI Mask";
+  EXPECT_EQ(adapter_->tool_kind(), QStringLiteral("aiSegmentation"));
+  EXPECT_EQ(adapter_->selected_mask_id(), ToQString(mask_id));
+  EXPECT_FALSE(adapter_->owns_left_button()) << "an AI Mask has no handles on the photograph";
+  EXPECT_FALSE(service_->ai_mask_edit_open());
+  EXPECT_FALSE(tool->active());
+  EXPECT_TRUE(controller_->can_edit()) << "no AI Mask edit lease";
+  EXPECT_EQ(runtime_requests_, 0);
+
+  // Its range drag uses the normal range edit: one commit, the coverage of the stored Mask.
+  ASSERT_TRUE(adapter_->mask_range_available());
+  const auto commits = Graph()->CommitCount();
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("luminance")));
+  adapter_->updateRangeEdit(QStringLiteral("luminance"), 0.3, 0.7);
+  Settle();
+  EXPECT_EQ(Preview().source, EditorMaskCoveragePreviewSource::RangeProbe);
+  EXPECT_EQ(Preview().range_probe, Probe(mask_id));
+  adapter_->finishRangeEdit(QStringLiteral("luminance"));
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 1);
+  ASSERT_TRUE(LiveMask(mask_id)->luminance_range.has_value());
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->luminance_range->low, 0.3f);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->luminance_range->high, 0.7f);
+  EXPECT_TRUE(std::holds_alternative<AiSegmentationMaskSource>(LiveMask(mask_id)->source));
+
+  // "Show selection" probes the stored AI Mask: the frames carry the probe, rendered from the
+  // stored coverage asset by the MaskEvaluate of the photo render (MR3).
+  adapter_->setRangeCoverageVisible(true);
+  Drain();
+  ASSERT_FALSE(scheduler_->scheduled.empty());
+  EXPECT_EQ(scheduler_->scheduled.back().intent.mask_coverage_probe, Probe(mask_id));
+  Settle();
+  EXPECT_EQ(Preview().range_probe, Probe(mask_id));
+  adapter_->setRangeCoverageVisible(false);
+  Settle();
+  EXPECT_FALSE(Preview().range_probe.has_value());
+
+  // The Mask values of the AI Mask are edited through the same owner.
+  adapter_->setMaskName(QStringLiteral("Sky"));
+  Settle();
+  EXPECT_EQ(LiveMask(mask_id)->display_name, "Sky");
+  EXPECT_EQ(Graph()->CommitCount(), commits + 2);
+  EXPECT_EQ(runtime_requests_, 0) << "no edit of the selection asked for the AI runtime";
+  EXPECT_FALSE(service_->ai_mask_edit_open());
+
+  // "Edit AI Mask" (and the header AI Mask button while an AI Mask is selected) opens its edit.
+  tool->openSelectedMask();
+  EXPECT_TRUE(tool->active());
+  EXPECT_EQ(runtime_requests_, 1);
+  Drain();
+  EXPECT_TRUE(service_->ai_mask_edit_open());
+  CloseAiMaskTool(*tool);
+  EXPECT_FALSE(service_->ai_mask_edit_open());
+}
+
+TEST_F(EditorMaskRangeAdapterTest, NewAiMaskOpensItsEditAtOnce) {
+  OpenThroughController();
+  EditorNodeController nodes;
+  nodes.set_editor_session(controller_.get());
+  nodes.selectNode(ToQString(GradeId()));
+  Settle();
+  ASSERT_EQ(nodes.selected_node_kind(), QStringLiteral("colorGrade"));
+  const auto tool = MakeAiMaskTool();
+
+  // The header AI Mask button without a selected AI Mask creates a new AI Mask: the edit opens
+  // at once, with no range target (D11).
+  tool->open();
+  EXPECT_TRUE(tool->active());
+  EXPECT_EQ(runtime_requests_, 1);
+  Drain();
+  EXPECT_TRUE(service_->ai_mask_edit_open());
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(adapter_->mask_range_available());
+  CloseAiMaskTool(*tool);
+  controller_->BindNodeSelectionSource(nullptr);
 }
 
 // The Hue bar shows, at each position, the hue that the MaskEvaluate kernels compute for that

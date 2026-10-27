@@ -5,7 +5,8 @@ Date: 2026-10-26. Status: MR1 complete (2026-10-26, PR #556, branch
 `feature/mask-ranges-mr2-gpu-eval`, stacked on MR1); MR3 complete (2026-10-27, three stacked
 branches `feature/mask-ranges-mr3-*` on MR2); MR4 complete (2026-10-27, branch
 `feature/mask-ranges-mr4-range-bars`, stacked on MR3). Follow-up issue #564 (precise range
-controls, shared Range section, AI Mask edit on demand): section 10, phases RP1-RP4.
+controls, shared Range section, AI Mask edit on demand): section 10, phases RP1-RP4, complete
+(2026-10-27, four stacked branches `feature/mask-range-precision-rp*`).
 
 Parent: [Node-aware Pipeline Editing and Mask Creation Master Plan](../node_mask_editor_master_plan.md),
 sections 8.3 (Color Range and Luminance Range), 8.4 (Union), and 10.3-10.4 (content-dependent
@@ -959,3 +960,77 @@ Suite totals: `EditorMaskRangeAdapterTest` 12/12, `EditorMasksPanelQmlTest` 1/1,
 `EditorAiMaskPanelQmlTest` 1/1, `RangeSelectorBarQmlTest` 2/2. `alcedo_main` builds (QML
 compiled by qmlcachegen). The panel test uses fake owners and checks only the layout; it is not
 the evidence of the edits (#526).
+
+### 10.4 RP4: AI Mask edit on demand
+
+##### RP4 completion record (2026-10-27)
+
+**Status:** complete. Branch `feature/mask-range-precision-rp4-ai-edit-on-demand`, stacked on
+RP3.
+
+**Changes from the issue and details that it did not give:**
+
+- **The owner selects an AI Mask.** Before RP4 the session refused `SelectMask` for an AI Mask
+  ("Mask source kind is not selectable"), and a row click worked only because the QML then opened
+  the AI Mask edit. `EditorMaskCreationController::SelectMask` now accepts an AI Mask. Its
+  selection has no handles (`HandleMatchesKind` refuses every move, the adapter does not own the
+  left button, and `maskNudgeAvailable` is false), and only the AI Mask edit changes its source.
+  The Mask value edits (name, enabled, invert, opacity) and the range edits work through the
+  normal owner path. `OpenAiMaskEdit` already aborts the Mask selection (`AbortMaskCreation`), so
+  the AI Mask edit starts from the same state as before.
+- **Row selection only selects.** `EditorMaskGroupsPanel.selectMaskFromGroup` and
+  `EditorNodesPanel.selectMaskFromDrawer` no longer call the tool. `openSelectedAiMask` (and its
+  helper `IsAiMask`) is removed from `EditorAiMaskTool`; `openSelectedMask` is the only way to
+  open a stored AI Mask. The #517 QML tests that expected a row click to open the edit are
+  replaced by tests that expect only the selection.
+- **"Edit AI Mask" (编辑 AI 蒙版).** A full-width button at the top of the lower part, shown for a
+  selected AI Mask while no AI Mask edit is open; it calls `openSelectedMask()`. The header AI Mask
+  button already called `openSelectedMask()` for a selected AI Mask and `open()` otherwise, so it
+  needed no change. Below the button the lower part shows the Mask value fields (Name, Enabled,
+  Invert, Opacity) of the AI Mask; the analytic source fields stay hidden.
+- **Range edits and "Show selection" without the edit.** The selected AI Mask is the range target
+  (`RangeTargetNow`), so range edits use `BeginMaskRangeEdit` and one SetMaskField. The MR3 probe
+  takes any Mask kind; MR3's `ProbeRidesOnEveryEditorFrameUntilHidden` already uses a committed AI
+  Mask with no edit open, and the MR2 `AiMaskRangeMatchesReference` kernels evaluate the stored
+  asset with ranges. RP4 adds the same check through the adapter selection.
+- **Strings.** `alcedo_main_zh_CN.ts` context `EditorMasksContextPanel`: Edit AI Mask 编辑 AI 蒙版.
+  The audited count of that context in `SimplifiedChineseCatalogTest` is 29 (RP3 made it 28 for
+  Range).
+
+**Primary call chains:**
+
+```text
+AI Mask row click: EditorMaskGroupsPanel / EditorNodesPanel -> maskCreation.selectMask
+  -> SelectMask command -> EditorMaskCreationController::SelectMask (AI kind: Selected)
+  -> adapter SyncOwnerSelection -> ApplyOwnerSource (toolKind aiSegmentation, no handles)
+  -> EditorSessionController::SyncMaskAdjustmentPanel -> Mask page: Range section + lower part
+     ("Edit AI Mask", Mask value fields); no lease, no analysis render, no sidecar
+Range edit / Show selection of that AI Mask: the RP2/RP3 chains on the selected Mask
+"Edit AI Mask" or the header AI Mask button -> EditorAiMaskTool::openSelectedMask -> OpenFor
+  -> runtime request -> OpenAiMaskEdit (AbortMaskCreation, lease) -> analysis render -> sidecar
+New AI Mask (header button, no AI Mask selected) -> EditorAiMaskTool::open -> OpenFor(nullopt)
+```
+
+**Failure chains:** unchanged. `openSelectedMask` without a selection shows "Select an AI Mask in
+the Mask list first."; the session refuses a non-AI Mask ("The Mask is not an AI Mask").
+
+**What was proven (executed tests, Windows `win_debug`):**
+
+| Criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Selecting a stored AI Mask starts no sidecar request and no edit; a range edit commits once; the probe rides the frames; Mask values edit; the Edit action opens the edit | `SelectingAStoredAiMaskStartsNoAiMaskEditAndItsRangesCommit` | `EditorMaskRangeAdapterTest` | PASS (fails without the controller change) |
+| A new AI Mask opens its edit at once, with no range target | `NewAiMaskOpensItsEditAtOnce` | same | PASS |
+| A row click on an AI Mask only selects it (Mask group panel, Node drawer) | `MaskGroupAiMaskRowClickOnlySelectsTheMask`, `NodeDrawerAiMaskRowClickOnlySelectsTheMask` | `EditorNodesPanelQmlTest` | PASS |
+| The lower part shows "Edit AI Mask" for a selected AI Mask; only a click opens the edit | `SelectedAiMaskShowsTheEditAiMaskButtonThatOpensItsEdit` | `EditorMasksPanelQmlTest` | PASS |
+
+Suite totals (all four phases on this branch): `EditorMaskRangeAdapterTest` 14/14,
+`EditorMasksPanelQmlTest` 2/2, `RangeSelectorBarQmlTest` 2/2, `EditorAiMaskPanelQmlTest` 1/1,
+`EditorNodesPanelQmlTest` 85/85, `EditorAdjustmentHeaderQmlTest` 25/25,
+`EditorAdjustmentSnapshotQmlTest` 4/4, `SimplifiedChineseCatalogTest` 6/6,
+`AnalyticMaskCreationTest` 30/30, `EditorMaskCoveragePreviewTest` 18/18,
+`EditorComparisonServiceTest` 22/22, `EditorHistoryMoveDuringInputTest` 3/3,
+`EditorPendingInputSessionTest` 15/15, `EditorSessionServiceFacadeTest` 4/4,
+`EditorSessionHistoryPortTest` 115/116 (pre-existing #555), `GpuDagModelGraphTest` 150/150,
+`PipelineEditBatchTest` 22/22, `GpuDagCudaMaskTest` 31/31, `GpuDagOpenClGradeTest` 88/94
+(the six `OpenClMultiGradeFixture` failures are pre-existing: #496), `DocumentTransferTest`
+34/35 (pre-existing #554). `alcedo_main` builds.

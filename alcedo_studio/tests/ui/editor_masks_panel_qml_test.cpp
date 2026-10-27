@@ -113,15 +113,18 @@ QtObject {
     property bool maskEnabled: true
     property bool maskInvert: false
     property real maskOpacityPercent: 100
+    property bool maskNudgeAvailable: false
     signal maskCreationChanged()
 })";
 
-constexpr auto kFakeAiMaskTool = R"(import QtQuick
+constexpr auto kFakeAiMaskTool   = R"(import QtQuick
 QtObject {
     property bool active: false
     property bool ready: true
     property bool busy: false
     property bool editingStoredMask: false
+    property int openSelectedMaskCalls: 0
+    function openSelectedMask() { openSelectedMaskCalls += 1 }
 })";
 
 /// The production Mask panel with fake owners.
@@ -169,6 +172,7 @@ class MasksPanelHarness {
 
   [[nodiscard]] auto root() const -> QQuickItem* { return root_.get(); }
   [[nodiscard]] auto ai_mask_tool() const -> QObject* { return ai_mask_tool_.get(); }
+  [[nodiscard]] auto mask_creation() const -> QObject* { return mask_creation_.get(); }
   [[nodiscard]] auto warnings() const -> std::string {
     return warnings_.join('\n').toStdString();
   }
@@ -248,6 +252,40 @@ TEST(EditorMasksPanelQmlTest, RangeSectionIsOneFixedUpperPartAndTheAiPanelReplac
 
   EXPECT_FALSE(QString::fromStdString(harness.warnings()).contains(QStringLiteral("ReferenceError")))
       << harness.warnings();
+}
+
+// #564 (RP4): a selected stored AI Mask without an open edit shows the Range section and an
+// "Edit AI Mask" button in the lower part; only the button opens the edit.
+TEST(EditorMasksPanelQmlTest, SelectedAiMaskShowsTheEditAiMaskButtonThatOpensItsEdit) {
+  MasksPanelHarness harness;
+  ASSERT_NE(harness.root(), nullptr) << harness.warnings();
+  harness.mask_creation()->setProperty("selectedMaskId", QStringLiteral("mask.ai"));
+  harness.mask_creation()->setProperty("toolKind", QStringLiteral("aiSegmentation"));
+
+  QQuickItem* button = nullptr;
+  ASSERT_TRUE(WaitFor([&] {
+    button = FindVisualItem(harness.root(), QStringLiteral("editorMasksEditAiMask"));
+    return button != nullptr && button->isVisible() && button->height() > 0.0;
+  })) << "the Edit AI Mask button is missing or hidden";
+  auto* range_shell = FindVisualItem(harness.root(), QStringLiteral("editorMasksRangeShell"));
+  ASSERT_NE(range_shell, nullptr);
+  EXPECT_TRUE(range_shell->isVisible());
+  EXPECT_EQ(harness.ai_mask_tool()->property("openSelectedMaskCalls").toInt(), 0)
+      << "a selection alone does not open the AI Mask edit";
+  // The analytic source fields are not shown for an AI Mask.
+  for (const auto* name : {"editorMasksInnerFeatherSlider", "editorMasksMajorRadiusSlider",
+                           "editorMasksTransitionSlider", "editorMasksNudgeArea"}) {
+    auto* item = FindVisualItem(harness.root(), QString::fromLatin1(name));
+    EXPECT_TRUE(item == nullptr || !item->isVisible()) << name;
+  }
+
+  QMetaObject::invokeMethod(button, "clicked");
+  ProcessEvents(20);
+  EXPECT_EQ(harness.ai_mask_tool()->property("openSelectedMaskCalls").toInt(), 1);
+
+  // While the edit is open, the AI Mask panel replaces the button.
+  harness.ai_mask_tool()->setProperty("active", true);
+  EXPECT_TRUE(WaitFor([&] { return !button->isVisible(); }));
 }
 
 }  // namespace

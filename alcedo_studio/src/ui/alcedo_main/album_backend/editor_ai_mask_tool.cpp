@@ -132,22 +132,6 @@ void EditorAiMaskTool::openSelectedMask() {
   OpenFor(MaskId{adapter->selected_mask_id().toStdString()});
 }
 
-void EditorAiMaskTool::openSelectedAiMask() {
-  if (active_ || shut_down_ || session_ == nullptr) {
-    return;
-  }
-  auto* adapter = session_->mask_creation();
-  if (adapter == nullptr || adapter->selected_mask_id().isEmpty()) {
-    return;
-  }
-  // The selection is local before the owner applies it, so the Mask kind comes from the document.
-  const MaskId mask_id{adapter->selected_mask_id().toStdString()};
-  if (!IsAiMask(adapter->edit_node_id(), mask_id)) {
-    return;
-  }
-  OpenFor(mask_id);
-}
-
 void EditorAiMaskTool::ShowError(QString error) {
   if (active_ || shut_down_) {
     return;
@@ -1164,17 +1148,6 @@ auto EditorAiMaskTool::SelectedGradeId() const -> NodeId {
     return {};
   }
   return nodes->selected_node_id();
-}
-
-auto EditorAiMaskTool::IsAiMask(const NodeId& grade_id, const MaskId& mask_id) const -> bool {
-  const auto document = session_ != nullptr ? session_->pipeline_document() : nullptr;
-  if (!document || grade_id.Empty() || mask_id.Empty()) {
-    return false;
-  }
-  const auto* grade =
-      dynamic_cast<const ColorGradeNodeModel*>(document->Graph().FindNode(grade_id));
-  const auto* mask = grade != nullptr ? grade->FindMask(mask_id) : nullptr;
-  return mask != nullptr && std::holds_alternative<AiSegmentationMaskSource>(mask->source);
 }
 
 }  // namespace alcedo::ui

@@ -170,10 +170,7 @@ Item {
         }
         root.selectDrawerOwner(nodeId)
         root.maskCreation.selectMask(nodeId, maskId)
-        // An AI Mask row opens its AI Mask edit (stored coverage, no model call).
-        if (root.aiMaskTool) {
-            root.aiMaskTool.openSelectedAiMask()
-        }
+        // An AI Mask row only selects the Mask; "Edit AI Mask" opens its edit (#564).
     }
 
     function removeMaskFromDrawer(nodeId, maskId) {

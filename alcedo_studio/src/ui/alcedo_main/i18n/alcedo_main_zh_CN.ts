@@ -3671,6 +3671,10 @@ Refresh the library afterwards; they are listed under the User category. Import 
 <context>
     <name>EditorMasksContextPanel</name>
     <message>
+        <source>Edit AI Mask</source>
+        <translation>编辑 AI 蒙版</translation>
+    </message>
+    <message>
         <source>Range</source>
         <translation>范围</translation>
     </message>

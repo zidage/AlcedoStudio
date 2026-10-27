@@ -294,10 +294,7 @@ Item {
         // another group before the new selection lands on this Mask.
         root.selectGroup(nodeId)
         root.maskCreation.selectMask(nodeId, maskId)
-        // An AI Mask row opens its AI Mask edit (stored coverage, no model call).
-        if (root.aiMaskTool) {
-            root.aiMaskTool.openSelectedAiMask()
-        }
+        // An AI Mask row only selects the Mask; "Edit AI Mask" opens its edit (#564).
     }
 
     // One click inverts the row's Mask without changing the selection; the
