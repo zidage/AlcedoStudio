@@ -482,6 +482,8 @@ TEST(AnalyticMaskCreationTest, EscapeRestoresAnalyticSourceWithoutCommit) {
   const auto cancel = harness.controller.CancelMaskInput();
   ASSERT_TRUE(cancel.accepted);
   EXPECT_FALSE(cancel.committed);
+  // The presented frame shows the moved Mask; the restored source needs a render.
+  EXPECT_TRUE(cancel.quality_requested);
   EXPECT_EQ(harness.history.working_head(), head_before);
   const auto* restored = std::get_if<RadialMaskSource>(
       &harness.document.PrimaryGrade()->FindMask(MaskId{"mask.radial"})->source);
@@ -526,6 +528,51 @@ TEST(AnalyticMaskCreationTest, ValidRadialCreationCommitsOnceAndKeepsControlOnly
   EXPECT_TRUE(finish.quality_requested);
   EXPECT_NE(harness.history.working_head(), head_before);
   EXPECT_FALSE(harness.controller.FinishMaskInput().committed);
+}
+
+// Issue #545: a cancelled creation drag removes its provisional Mask from the live document.
+// The last presented frame still shows that Mask, so the cancel must request a render;
+// otherwise the Fit view keeps a Mask that the Mask list, the zoomed detail, and the saved file
+// do not have.
+TEST(AnalyticMaskCreationTest, CancelledCreationRemovesProvisionalMaskAndRequestsRender) {
+  AnalyticCreationHarness harness;
+  const auto              head_before = harness.history.working_head();
+  ASSERT_TRUE(harness.controller
+                  .BeginCreation(MaskSourceKind::Radial, harness.document.PrimaryGrade()->Id(),
+                                 harness.session)
+                  .accepted);
+  const auto press =
+      SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.45f, 0.40f}), false);
+  ASSERT_TRUE(
+      harness.controller.BeginMaskInput(press, harness.pointer, MaskSourceKind::Radial).accepted);
+  const auto drag = SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.50f, 0.44f}), true);
+  ASSERT_TRUE(harness.controller.AppendMaskInput(drag, harness.pointer).interactive_preview);
+  ASSERT_EQ(harness.document.PrimaryGrade()->MaskCount(), 1u);
+
+  const auto cancel = harness.controller.CancelMaskInput();
+  ASSERT_TRUE(cancel.accepted);
+  EXPECT_FALSE(cancel.committed);
+  EXPECT_TRUE(cancel.quality_requested);
+  EXPECT_EQ(harness.document.PrimaryGrade()->MaskCount(), 0u);
+  EXPECT_EQ(harness.history.working_head(), head_before);
+}
+
+// A creation press without a drag inserts nothing, so its cancel has nothing to render again.
+TEST(AnalyticMaskCreationTest, CancelledCreationPressWithoutDragRequestsNoRender) {
+  AnalyticCreationHarness harness;
+  ASSERT_TRUE(harness.controller
+                  .BeginCreation(MaskSourceKind::Radial, harness.document.PrimaryGrade()->Id(),
+                                 harness.session)
+                  .accepted);
+  const auto press =
+      SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.45f, 0.40f}), false);
+  ASSERT_TRUE(
+      harness.controller.BeginMaskInput(press, harness.pointer, MaskSourceKind::Radial).accepted);
+  const auto cancel = harness.controller.CancelMaskInput();
+  ASSERT_TRUE(cancel.accepted);
+  EXPECT_FALSE(cancel.quality_requested);
+  EXPECT_FALSE(cancel.interactive_preview);
+  EXPECT_EQ(harness.document.PrimaryGrade()->MaskCount(), 0u);
 }
 
 TEST(AnalyticMaskCreationTest, RadialFeatherControlsPreserveCenterRadiiAndRotation) {

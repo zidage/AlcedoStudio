@@ -233,6 +233,33 @@ namespace {
   return std::hypot(reference_a.x - reference_b.x, reference_a.y - reference_b.y);
 }
 
+/// Largest item shift (logical px) that integer rounding of two presented frames of one
+/// photograph can cause. Each frame rounds its width and height separately (an 8183x5455
+/// photograph presents 4096x2730 for Quality and 2560x1707 for Interactive), so its aspect is off
+/// by up to 0.5 * (1 + aspect) pixels in the dimension that the letterbox derives from the fitted
+/// one. A photograph edge then moves by at most a quarter of that, in displayed pixels of each
+/// frame. Zero when both frames have the same extent.
+[[nodiscard]] auto FrameRoundingShiftLogicalPx(const MaskEditViewMapping& before,
+                                               const MaskEditViewMapping& after) -> float {
+  if (before.photograph.image_width == after.photograph.image_width &&
+      before.photograph.image_height == after.photograph.image_height) {
+    return 0.0f;
+  }
+  const auto displayed_pixel = [](const MaskEditViewMapping& mapping) {
+    const auto  scale = ViewportMapper::ComputeLetterboxScale(mapping.widget, mapping.photograph);
+    const float zoom  = std::max(EffectiveZoomPan(mapping).first, 1.0e-4f);
+    const float width_px = scale.x * static_cast<float>(mapping.widget.widget_width) * zoom /
+                           static_cast<float>(std::max(1, mapping.photograph.image_width));
+    const float height_px = scale.y * static_cast<float>(mapping.widget.widget_height) * zoom /
+                            static_cast<float>(std::max(1, mapping.photograph.image_height));
+    return std::max(width_px, height_px);
+  };
+  const float width  = static_cast<float>(std::max(1, before.photograph.image_width));
+  const float height = static_cast<float>(std::max(1, before.photograph.image_height));
+  const float aspect = std::max(width / height, height / width);
+  return 0.25f * (1.0f + aspect) * (displayed_pixel(before) + displayed_pixel(after));
+}
+
 }  // namespace
 
 auto MaskEditGeometry::MappingChanged(const MaskEditMappingIdentity& before,
@@ -254,16 +281,23 @@ auto MaskEditGeometry::MappingChanged(const MaskEditMappingIdentity& before,
     return true;
   }
 
-  const qreal width  = static_cast<qreal>(std::max(1, before.widget_width));
-  const qreal height = static_cast<qreal>(std::max(1, before.widget_height));
-  const QPointF probes[] = {
-      QPointF(width * 0.5, height * 0.5),
-      QPointF(1.0, 1.0),
-      QPointF(width - 1.0, height - 1.0),
-      QPointF(width * 0.25, height * 0.75),
-      QPointF(width * 0.80, height * 0.20),
+  // Probe the presented photograph, not the widget corners: a letterbox change moves an item
+  // point in proportion to its distance from the photograph center, so points in the letterbox
+  // bars would magnify the frame rounding that FrameRoundingShiftLogicalPx bounds.
+  const auto [zoom, pan]    = EffectiveZoomPan(mapping_before);
+  const float   tolerance   = std::max(kMaskItemRoundTripLogicalPx,
+                                       FrameRoundingShiftLogicalPx(mapping_before, mapping_after));
+  const QPointF probe_uvs[] = {
+      QPointF(0.5, 0.5), QPointF(0.0, 0.0),   QPointF(1.0, 1.0),   QPointF(0.0, 1.0),
+      QPointF(1.0, 0.0), QPointF(0.25, 0.75), QPointF(0.80, 0.20),
   };
-  for (const auto& item : probes) {
+  for (const auto& uv : probe_uvs) {
+    const auto probe = ViewportMapper::ImageUvToWidgetPoint(
+        uv, mapping_before.widget, mapping_before.photograph, zoom, pan, false);
+    if (!probe.has_value()) {
+      return true;
+    }
+    const QPointF item          = *probe;
     const auto sample_before = MapItemToReference(mapping_before, item, true);
     const auto sample_after  = MapItemToReference(mapping_after, item, true);
     if (!sample_before.has_value() && !sample_after.has_value()) {
@@ -273,8 +307,7 @@ auto MaskEditGeometry::MappingChanged(const MaskEditMappingIdentity& before,
       return true;
     }
     if (ItemToReferenceShiftLogicalPx(mapping_before, sample_before->reference_pixels,
-                                      sample_after->reference_pixels) >
-        kMaskItemRoundTripLogicalPx) {
+                                      sample_after->reference_pixels) > tolerance) {
       return true;
     }
   }
