@@ -216,8 +216,9 @@ class PlanExecutor {
                 ++stats.mask_skip;
               } else {
                 GpuWorkSample<Device> gpu(device);
+                // `scene` is still this Grade's input: the ranges never read its output.
                 PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(
-                    device, plan, input, document, compiled_grade, source);
+                    device, plan, input, document, compiled_grade, source, scene);
                 Record(device, invalidation, source.effective_output, geometry_extent,
                        TextureFormat::R8);
                 ++stats.mask_execute;

@@ -306,6 +306,7 @@ if(ALCEDO_METAL_ENABLED)
         "Compiling Metal DAG primary grade shader"
         "Linking Metal DAG primary grade library"
         DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+                "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/oklab_math.h"
     )
 
     alcedo_add_metal_library(
@@ -325,6 +326,8 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_MASK_METALLIB}"
         "Compiling Metal DAG mask shader"
         "Linking Metal DAG mask library"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+                "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/oklab_math.h"
     )
 
     alcedo_add_metal_library(

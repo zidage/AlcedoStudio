@@ -25,7 +25,7 @@ namespace alcedo {
 }
 
 /**
- * @brief Per-Mask effective coverage after invert, range identity, and opacity.
+ * @brief Per-Mask effective coverage after invert, the range weights, and opacity.
  *
  * Fused with source evaluate until a later distinct effective pass exists.
  */

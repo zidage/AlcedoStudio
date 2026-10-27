@@ -1,7 +1,8 @@
 # Mask Luminance Range and Hue Range - Phase Plan
 
-Date: 2026-10-26. Status: MR1 complete (2026-10-26, uncommitted on branch
-`feature/mask-ranges-mr1-model`); MR2-MR4 planned.
+Date: 2026-10-26. Status: MR1 complete (2026-10-26, PR #556, branch
+`feature/mask-ranges-mr1-model`); MR2 complete (2026-10-26, branch
+`feature/mask-ranges-mr2-gpu-eval`, stacked on MR1); MR3-MR4 planned.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation Master Plan](../node_mask_editor_master_plan.md),
 sections 8.3 (Color Range and Luminance Range), 8.4 (Union), and 10.3-10.4 (content-dependent
@@ -288,6 +289,126 @@ and Metal R8 output equals the reference within 1 code value on a synthetic ACES
 wheel input; wrap-around hue range; full range output is byte-equal to the current kernel output;
 two Grades where Grade 1 shifts hue, and the Grade 2 hue range follows Grade 1 output, not the
 source.
+
+##### MR2 completion record (2026-10-26)
+
+**Status:** complete. `MaskEvaluate` multiplies the source coverage by the Luminance Range and Hue
+Range weights of the owning Grade's input on CUDA, OpenCL, and Metal. Branch
+`feature/mask-ranges-mr2-gpu-eval`, stacked on MR1 (PR #556). Issue
+[#549](https://github.com/zidage/AlcedoStudio/issues/549).
+
+**Changes from the plan and details that the plan did not give:**
+
+- **Separate ranged kernel entry points.** A Mask with a restricted range dispatches a ranged
+  kernel: CUDA `AnalyticMaskKernel<true>` / `RasterMaskKernel<true>`, OpenCL
+  `mask_analytic_ranged_r8` / `mask_raster_ranged_r8`, Metal `mask_analytic_ranged` /
+  `mask_raster_ranged`. Each computes the source coverage and the range weights in one dispatch
+  (the plan's "one kernel"). A Mask without ranges dispatches the existing kernel, so it binds and
+  reads no scene image, and its output stays byte-identical (checked by a byte dump, below).
+  The source coverage code is shared by both entry points (`AnalyticSourceCoverage`,
+  `RasterMaskMean`).
+- **Packed parameters.** `MaskRangeParams` (`include/edit/mask/mask_model.hpp`, next to
+  `RadialMaskParams`) holds both ranges in eight 4-byte fields with a `*_restricted` flag each.
+  CUDA takes it by value; `mask.cl` and `mask.metal` declare the same layout, and the hosts check
+  `sizeof == 32`. `MaskRangeParamsFromMask` and `MaskHasRestrictedRange` read the live
+  `MaskModel`. The equations are documented at `MaskRangeParams`.
+- **Weight details.** `weight = hue_weight * luminance_weight` (each 1 when its range is
+  empty), then `clamp(invert(source) * weight * opacity, 0, 1)`. The end-of-bar rule (no falloff
+  at `low = 0` or `high = 1`) follows from the clamp of L to [0, 1]; there is no special case.
+  Hue distance: `offset = (h - hue_start) mod 360`; inside when `offset <= width` (width as
+  `ColorRangeWidthDegrees`), else `d = min(offset - width, 360 - offset)`. Chroma is
+  `sqrt(a * a + b * b)` on every backend; Metal uses `precise::atan2` and `precise::sqrt`.
+- **Scene binding.** `PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode` and the per-source
+  `Execute*Mask` take the running `FrameSceneBinding` (cached image or scene-work member). The
+  backends resolve it with `CudaSceneTexture` / `OpenClBindScene` / `MetalSceneTexture` and throw
+  when a ranged Mask has no RGBA32F image of the render extent. The Grade-level and document-level
+  `Execute*Mask` overloads (tests only) read `CompiledMaskSource::range_input` as a cached image,
+  so a range on a later Grade needs the plan executor path.
+- **Shared OkLab code.** `LinearAp1ToOkLab`, `OkLabToLinearAp1`, `AcesccToLinearAp1`, and
+  `LinearAp1ToAcescc` moved to `edit/runtime/cuda/cuda_oklab_math.cuh`,
+  `edit/runtime/opencl/shader/oklab.cl` (listed in the primary-grade and mask program manifests
+  after `color_encoding_math.h`), and `edit/runtime/metal/shader/oklab_math.h`. Contrast and the
+  Mask ranges call the same functions. The whole HLS helper block of `common.cl` is deleted
+  (lines 192-285: also `opencl_fit_ap1_lower_gamut` and `opencl_hue2rgb`, which have no callers
+  either; only the deprecated legacy pipeline has its own copies).
+- **No implementation version change.** `kMaskImplementationVersion` stays 3: Masks without
+  ranges write the same bytes, and the range values are in the Mask result key since MR1. The
+  key already mixes the Grade input scene key, so an upstream Grade edit invalidates a ranged Mask.
+- **Warm-up.** OpenCL and Metal warm the analytic ranged kernel with the other mask kernels.
+- **Test input.** The colored ramp of the test scene has constant saturation (chroma
+  `min(0.1 L, 0.08)`). With fixed chroma 0.08 at L = 0.009, CUDA and OpenCL agreed with each other
+  but differed from the double reference by up to 123 codes: the hue of a dark, strongly
+  saturated color comes from the cube root of a near-zero LMS sum and is not stable in float. Such
+  pixels are below the chroma ramp in real images.
+- **Two-Grade test.** The test reads the Grade 1 output from a render of Grade 1 alone: in a
+  two-Grade render the DiffusionFilter writes into the free scene-work member, which is the
+  Grade 1 output (#496).
+
+**Primary success call chain (render of a Mask with a range):**
+
+```text
+PlanExecutor<Backend>::Execute                      plan_executor.hpp, per Grade in backbone order
+  -> scene = running FrameSceneBinding (Develop cached image, or the previous Grade's work member)
+  -> BindOrMiss(effective_output)                   Mask result key: Grade input key + range values
+  -> PassEncoder<Backend, MaskEvaluate>::Encode(..., source, scene)
+     -> Execute{Cuda,OpenCl,Metal}Mask(..., range_scene = scene)
+        -> RequireMaskModel -> MaskHasRestrictedRange
+        -> Range scene resolve (RGBA32F, render extent)
+        -> ranged kernel: source coverage -> ACEScc decode -> LinearAp1ToOkLab
+           -> MaskRangeWeight -> invert * weight * opacity -> clamp -> R8 effective_output
+  -> MaskUnion -> PrimaryColorGrade(scene)          the Grade mixes by the Union coverage
+```
+
+**Primary failure call chain:**
+
+```text
+Ranged Mask without a usable Grade input (missing binding, wrong format or extent)
+  -> Range scene resolve throws std::runtime_error naming the Mask range
+  -> no kernel dispatch; the render fails with that error (no unranged substitute)
+Mask without ranges
+  -> the existing kernel; the scene binding is not resolved, so a missing image does not fail
+```
+
+**What was proven (executed tests):**
+
+| Required criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| R8 equals the double reference within 1 code on an ACEScc ramp and hue wheel (Luminance only, Hue only, both on an inverted Radial with opacity) | `LuminanceAndHueRangesMatchTheDoublePrecisionReference` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest`, `GpuDagMetalGradeTest` | PASS (3 backends) |
+| Wrap-around hue range | `WrappingHueRangeSelectsHuesOnBothSidesOfZero` | same | PASS (3 backends) |
+| Full-range output byte-equal to the current kernel | `FullySelectingRangeMatchesTheMaskWithoutRangesByteForByte` (a range with weight exactly 1 writes the bytes of the Mask without ranges); byte dump below | same | PASS (3 backends) |
+| Masks without a restricted range do not read the scene image | `OnlyRangedMasksReadTheGradeInput` | same | PASS (3 backends) |
+| Raster (AI) Mask with ranges | `AiMaskRangeMatchesReference` | same | PASS (3 backends) |
+| Grade 2 hue range follows Grade 1 output, not the source | `SecondGradeHueRangeReadsFirstGradeOutput` (fails when the executor passes the Develop image: checked on CUDA) | same | PASS (3 backends) |
+| Contrast unchanged after the OkLab move | `MetalContrastMatchesOkLabLightnessReferenceForEveryPixel` and the CUDA/OpenCL Contrast tests | `GpuDagMetalGradeTest`, `GpuDagCudaPrimaryGradeTest`, `GpuDagOpenClGradeTest` | PASS |
+
+Byte dump (one-time, not committed): a Radial (inverted, opacity 0.8), a Linear Gradient
+(opacity 0.65), and an AI Mask (inverted, opacity 0.7), each at render scale 1 and 0.5, written by
+`ea55087e` and by MR2. CUDA and OpenCL: 12 of 12 files are byte-identical. Metal was not dumped.
+
+Commands (Windows, `win_debug`, `build/debug`):
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 6 --target GpuDagCudaMaskTest
+GpuDagOpenClGradeTest GpuDagCudaPrimaryGradeTest GpuDagModelGraphTest GpuDagRawInputTest
+OkLabContrastReferenceTest AlbumBackendLib`, then each binary from its `*_runtime` directory.
+macOS (Apple silicon, `build/macos-debug`): `cmake --build build/macos-debug --target
+GpuDagMetalGradeTest -j 8`, then the binary.
+
+Suite totals: `GpuDagCudaMaskTest` 29/29, `GpuDagOpenClGradeTest` 86/92,
+`GpuDagCudaPrimaryGradeTest` 75/85, `GpuDagModelGraphTest` 147/147, `GpuDagRawInputTest` 197/197,
+`OkLabContrastReferenceTest` 12/12, `GpuDagMetalGradeTest` 71/82. Every failure also fails without
+MR2: the six OpenCL, six CUDA, and six Metal multi-Grade tests, the two CUDA scene-work pair tests,
+and the CUDA two-LUT timing test are #496 (CUDA checked at `ea55087e` by stash and rebuild); the
+CUDA Neighbor Grade stored-pixel test is #557; the five Metal LLF and Mask Mix tests are #497.
+
+**Checklist / exit condition:** all section 5 items done.
+
+**LOC note:** the largest changed files are `metal_mask_test.cpp` 867, `mask_model.cpp` 777, and
+`opencl_mask_test.cpp` 734 lines; all are below 1000. The shared checks are in
+`tests/edit/runtime/mask_range_test_support.hpp` (303) and the reference in
+`mask_range_reference.hpp` (232).
+
+**Residual gaps:** Metal unranged output was not byte-dumped against the old kernel (the
+fully selecting range test is the Metal evidence). No UI exposes the ranges yet (MR4), and the
+viewport shows no range coverage (MR3).
 
 ## 6. Node-scoped coverage overlay (MR3)
 

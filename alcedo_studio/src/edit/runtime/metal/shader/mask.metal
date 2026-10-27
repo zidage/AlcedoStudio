@@ -5,6 +5,7 @@
 #include <metal_stdlib>
 
 using namespace metal;
+#include "oklab_math.h"
 
 struct MaskAnalyticParams {
   float render_to_reference[9];
@@ -42,22 +43,77 @@ static inline float FinishEffectiveCoverage(float value, uint invert, float opac
   return min(max(value * opacity, 0.0f), 1.0f);
 }
 
+// Invert, then the range weight, then opacity, then clamp (MaskRangeParams).
+static inline float FinishRangedCoverage(float value, uint invert, float range_weight,
+                                         float opacity) {
+  if (invert != 0u) {
+    value = 1.0f - value;
+  }
+  return min(max(value * range_weight * opacity, 0.0f), 1.0f);
+}
+
 static inline float QuantizeR8(float value) {
   return float(uint(min(max(value * 255.0f + 0.5f, 0.0f), 255.0f))) / 255.0f;
 }
 
-kernel void mask_analytic(texture2d<float, access::write> output [[texture(0)]],
-                          constant MaskAnalyticParams& params [[buffer(0)]],
-                          uint2 gid [[thread_position_in_grid]]) {
-  if (gid.x >= params.width || gid.y >= params.height) {
-    return;
+/// Layout of alcedo::MaskRangeParams (mask_model.hpp), which documents the equations.
+struct MaskRangeParams {
+  uint  luminance_restricted;
+  float luminance_low;
+  float luminance_high;
+  float luminance_softness;
+  uint  hue_restricted;
+  float hue_start;
+  float hue_end;
+  float hue_softness;
+};
+
+static inline float RangeSmoothStep(float edge0, float edge1, float x) {
+  const float t = min(max((x - edge0) / (edge1 - edge0), 0.0f), 1.0f);
+  return t * t * (3.0f - 2.0f * t);
+}
+
+/// Product of the Hue Range and Luminance Range weights of the Grade input pixel @p acescc.
+/// Same math as MaskRangeWeight in cuda_mask_pass.cu.
+static inline float MaskRangeWeight(constant MaskRangeParams& range, float4 acescc) {
+  constexpr float kDegreesPerRadian = 57.295779513082321f;
+  const float3    lab               = LinearAp1ToOkLab(AcesccToLinearAp1(acescc.xyz));
+  float           weight            = 1.0f;
+  if (range.hue_restricted != 0u) {
+    const float chroma = precise::sqrt(lab.y * lab.y + lab.z * lab.z);
+    float       hue    = precise::atan2(lab.z, lab.y) * kDegreesPerRadian;
+    if (hue < 0.0f) {
+      hue += 360.0f;
+    }
+    const float width  = range.hue_start <= range.hue_end
+                             ? range.hue_end - range.hue_start
+                             : 360.0f - range.hue_start + range.hue_end;
+    float       offset = hue - range.hue_start;
+    if (offset < 0.0f) {
+      offset += 360.0f;
+    }
+    const float distance = offset <= width ? 0.0f : min(offset - width, 360.0f - offset);
+    weight *= (1.0f - RangeSmoothStep(0.0f, range.hue_softness, distance)) *
+              RangeSmoothStep(0.015f, 0.045f, chroma);
   }
+  if (range.luminance_restricted != 0u) {
+    const float lightness = min(max(lab.x, 0.0f), 1.0f);
+    weight *= RangeSmoothStep(range.luminance_low - range.luminance_softness, range.luminance_low,
+                              lightness) *
+              (1.0f - RangeSmoothStep(range.luminance_high,
+                                      range.luminance_high + range.luminance_softness, lightness));
+  }
+  return weight;
+}
+
+/// Source coverage of an analytic Mask at render pixel @p gid; @p invert receives the invert flag.
+static inline float AnalyticSourceCoverage(constant MaskAnalyticParams& params, uint2 gid,
+                                           thread uint& invert) {
   const float2 reference =
       Transform(params.render_to_reference, float(gid.x) + 0.5f, float(gid.y) + 0.5f);
   const float nx    = reference.x / static_cast<float>(params.reference_width);
   const float ny    = reference.y / static_cast<float>(params.reference_height);
   float       value = 0.0f;
-  uint        invert = 0;
   if (params.kind == 0u) {
     const float c      = cos(params.rotation);
     const float s      = sin(params.rotation);
@@ -69,7 +125,6 @@ kernel void mask_analytic(texture2d<float, access::write> output [[texture(0)]],
     const float inner  = max(0.0f, 1.0f - params.inner_feather);
     const float outer  = 1.0f + params.outer_feather;
     value  = 1.0f - min(max((radius - inner) / max(outer - inner, 1.0e-6f), 0.0f), 1.0f);
-    invert = params.radial_invert;
   } else {
     const float normal_length = sqrt(params.normal_x * params.normal_x + params.normal_y * params.normal_y);
     const float normal_x      = params.normal_x / max(normal_length, 1.0e-6f);
@@ -79,11 +134,42 @@ kernel void mask_analytic(texture2d<float, access::write> output [[texture(0)]],
     const float t =
         min(max(distance / max(params.transition_distance, 1.0e-6f) + 0.5f, 0.0f), 1.0f);
     value  = params.start_value + (params.end_value - params.start_value) * t;
-    invert = params.radial_invert;
   }
+  invert = params.radial_invert;
+  return value;
+}
+
+kernel void mask_analytic(texture2d<float, access::write> output [[texture(0)]],
+                          constant MaskAnalyticParams& params [[buffer(0)]],
+                          uint2 gid [[thread_position_in_grid]]) {
+  if (gid.x >= params.width || gid.y >= params.height) {
+    return;
+  }
+  uint        invert = 0;
+  const float value  = AnalyticSourceCoverage(params, gid, invert);
   output.write(float4(QuantizeR8(FinishEffectiveCoverage(value, invert, params.opacity)), 0.0f,
                       0.0f, 1.0f),
                gid);
+}
+
+/// Analytic MaskEvaluate with a restricted range: the source coverage times the range weights of
+/// the Grade input pixel (@p scene, RGBA32F on the render grid). mask_analytic is the same
+/// evaluation without ranges.
+kernel void mask_analytic_ranged(texture2d<float, access::write> output [[texture(0)]],
+                                 texture2d<float, access::read> scene [[texture(1)]],
+                                 constant MaskAnalyticParams& params [[buffer(0)]],
+                                 constant MaskRangeParams& range [[buffer(1)]],
+                                 uint2 gid [[thread_position_in_grid]]) {
+  if (gid.x >= params.width || gid.y >= params.height) {
+    return;
+  }
+  uint        invert = 0;
+  const float value  = AnalyticSourceCoverage(params, gid, invert);
+  const float weight = MaskRangeWeight(range, scene.read(gid));
+  output.write(
+      float4(QuantizeR8(FinishRangedCoverage(value, invert, weight, params.opacity)), 0.0f, 0.0f,
+             1.0f),
+      gid);
 }
 
 // Raster MaskEvaluate (SM6 R7). The matrix maps render pixels to texture UV.
@@ -129,13 +215,9 @@ static inline float SampleRasterMask(texture2d<float, access::read> texture,
   return top + (bottom - top) * fy;
 }
 
-kernel void mask_raster(texture2d<float, access::read> texture [[texture(0)]],
-                        texture2d<float, access::write> output [[texture(1)]],
-                        constant MaskRasterParams& params [[buffer(0)]],
-                        uint2 gid [[thread_position_in_grid]]) {
-  if (gid.x >= params.width || gid.y >= params.height) {
-    return;
-  }
+/// Source coverage of render pixel @p gid: the mean of samples x samples bilinear reads.
+static inline float RasterMaskMean(texture2d<float, access::read> texture,
+                                   constant MaskRasterParams& params, uint2 gid) {
   const float samples = float(params.samples);
   float       sum     = 0.0f;
   for (uint j = 0; j < params.samples; ++j) {
@@ -144,8 +226,35 @@ kernel void mask_raster(texture2d<float, access::read> texture [[texture(0)]],
                               float(gid.y) + (float(j) + 0.5f) / samples);
     }
   }
-  output.write(float4(QuantizeR8(FinishEffectiveCoverage(sum / (samples * samples), params.invert,
-                                                          params.opacity)),
+  return sum / (samples * samples);
+}
+
+kernel void mask_raster(texture2d<float, access::read> texture [[texture(0)]],
+                        texture2d<float, access::write> output [[texture(1)]],
+                        constant MaskRasterParams& params [[buffer(0)]],
+                        uint2 gid [[thread_position_in_grid]]) {
+  if (gid.x >= params.width || gid.y >= params.height) {
+    return;
+  }
+  output.write(float4(QuantizeR8(FinishEffectiveCoverage(RasterMaskMean(texture, params, gid),
+                                                          params.invert, params.opacity)),
+                      0.0f, 0.0f, 1.0f),
+               gid);
+}
+
+/// Raster MaskEvaluate with a restricted range, as mask_analytic_ranged.
+kernel void mask_raster_ranged(texture2d<float, access::read> texture [[texture(0)]],
+                               texture2d<float, access::write> output [[texture(1)]],
+                               texture2d<float, access::read> scene [[texture(2)]],
+                               constant MaskRasterParams& params [[buffer(0)]],
+                               constant MaskRangeParams& range [[buffer(1)]],
+                               uint2 gid [[thread_position_in_grid]]) {
+  if (gid.x >= params.width || gid.y >= params.height) {
+    return;
+  }
+  const float weight = MaskRangeWeight(range, scene.read(gid));
+  output.write(float4(QuantizeR8(FinishRangedCoverage(RasterMaskMean(texture, params, gid),
+                                                       params.invert, weight, params.opacity)),
                       0.0f, 0.0f, 1.0f),
                gid);
 }

@@ -10,11 +10,14 @@
 #include <variant>
 #include <vector>
 
+#include "cuda_oklab_math.cuh"
 #include "edit/mask/mask_model.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/compiled_mask_stack.hpp"
 #include "edit/runtime/cuda/cuda_mask_pass.hpp"
+#include "edit/runtime/cuda/cuda_scene_work.hpp"
 #include "edit/runtime/mask_coverage_texture_cache.hpp"
+#include "edit/runtime/texture_format.hpp"
 
 namespace alcedo {
 namespace {
@@ -34,14 +37,58 @@ __device__ auto FinishEffectiveCoverage(float value, bool invert, float opacity)
   return fminf(fmaxf(value * opacity, 0.0f), 1.0f);
 }
 
+/// Invert, then the range weight, then opacity, then clamp (MaskRangeParams).
+__device__ auto FinishRangedCoverage(float value, bool invert, float range_weight, float opacity)
+    -> float {
+  if (invert) value = 1.0f - value;
+  return fminf(fmaxf(value * range_weight * opacity, 0.0f), 1.0f);
+}
+
 __device__ auto QuantizeR8(float value) -> std::uint8_t {
   return static_cast<std::uint8_t>(fminf(fmaxf(value * 255.0f + 0.5f, 0.0f), 255.0f));
 }
 
+__device__ auto SmoothStep(float edge0, float edge1, float x) -> float {
+  const float t = fminf(fmaxf((x - edge0) / (edge1 - edge0), 0.0f), 1.0f);
+  return t * t * (3.0f - 2.0f * t);
+}
+
+/// Product of the Hue Range and Luminance Range weights of the Grade input pixel @p acescc
+/// (ACEScc AP1). The equations are documented at MaskRangeParams.
+__device__ auto MaskRangeWeight(const MaskRangeParams& range, const float4& acescc) -> float {
+  constexpr float kDegreesPerRadian = 57.295779513082321f;
+  const float3 lab = LinearAp1ToOkLab(AcesccToLinearAp1(make_float3(acescc.x, acescc.y, acescc.z)));
+  float        weight = 1.0f;
+  if (range.hue_restricted != 0u) {
+    const float chroma = sqrtf(lab.y * lab.y + lab.z * lab.z);
+    float       hue    = atan2f(lab.z, lab.y) * kDegreesPerRadian;
+    if (hue < 0.0f) hue += 360.0f;
+    const float width  = range.hue_start <= range.hue_end ? range.hue_end - range.hue_start
+                                                          : 360.0f - range.hue_start + range.hue_end;
+    float       offset = hue - range.hue_start;
+    if (offset < 0.0f) offset += 360.0f;
+    const float distance = offset <= width ? 0.0f : fminf(offset - width, 360.0f - offset);
+    weight *= (1.0f - SmoothStep(0.0f, range.hue_softness, distance)) *
+              SmoothStep(0.015f, 0.045f, chroma);
+  }
+  if (range.luminance_restricted != 0u) {
+    const float lightness = fminf(fmaxf(lab.x, 0.0f), 1.0f);
+    weight *=
+        SmoothStep(range.luminance_low - range.luminance_softness, range.luminance_low, lightness) *
+        (1.0f - SmoothStep(range.luminance_high, range.luminance_high + range.luminance_softness,
+                           lightness));
+  }
+  return weight;
+}
+
+/// Analytic MaskEvaluate. kRanged multiplies the range weights of @p scene (the Grade input,
+/// RGBA32F on the render grid); without ranges the kernel does not read @p scene.
+template <bool kRanged>
 __global__ void AnalyticMaskKernel(std::uint8_t* output, std::uint32_t width, std::uint32_t height,
                                    Matrix3x3 render_to_reference, Extent2D reference_extent,
                                    AnalyticMaskKind kind, RadialMaskParams radial,
-                                   LinearGradientMaskParams linear_gradient) {
+                                   LinearGradientMaskParams linear_gradient, MaskRangeParams range,
+                                   const float4* scene) {
   const auto index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= width * height) return;
   const auto  x         = index % width;
@@ -77,7 +124,12 @@ __global__ void AnalyticMaskKernel(std::uint8_t* output, std::uint32_t width, st
     invert  = linear_gradient.invert;
     opacity = linear_gradient.opacity;
   }
-  output[index] = QuantizeR8(FinishEffectiveCoverage(value, invert, opacity));
+  if constexpr (kRanged) {
+    output[index] = QuantizeR8(
+        FinishRangedCoverage(value, invert, MaskRangeWeight(range, scene[index]), opacity));
+  } else {
+    output[index] = QuantizeR8(FinishEffectiveCoverage(value, invert, opacity));
+  }
 }
 
 /// Raster MaskEvaluate parameters (SM6 R7). The matrix maps render pixels to texture UV.
@@ -119,10 +171,9 @@ __device__ auto SampleRasterMask(const std::uint8_t* texture, const RasterMaskPa
   return top + (bottom - top) * fy;
 }
 
-/// Effective R8 coverage of render pixel (@p x, @p y): the mean of samples x samples bilinear
-/// reads, then invert and opacity (SM6 R7).
-__device__ auto RasterMaskCode(const std::uint8_t* texture, const RasterMaskParams& params,
-                               std::uint32_t x, std::uint32_t y) -> std::uint8_t {
+/// Source coverage of render pixel (@p x, @p y): the mean of samples x samples bilinear reads.
+__device__ auto RasterMaskMean(const std::uint8_t* texture, const RasterMaskParams& params,
+                               std::uint32_t x, std::uint32_t y) -> float {
   const float samples = static_cast<float>(params.samples);
   float       sum     = 0.0f;
   for (std::uint32_t j = 0; j < params.samples; ++j) {
@@ -131,15 +182,33 @@ __device__ auto RasterMaskCode(const std::uint8_t* texture, const RasterMaskPara
                               static_cast<float>(y) + (j + 0.5f) / samples);
     }
   }
-  return QuantizeR8(
-      FinishEffectiveCoverage(sum / (samples * samples), params.invert != 0u, params.opacity));
+  return sum / (samples * samples);
 }
 
+/// Effective R8 coverage of render pixel (@p x, @p y): RasterMaskMean, then invert and opacity
+/// (SM6 R7).
+__device__ auto RasterMaskCode(const std::uint8_t* texture, const RasterMaskParams& params,
+                               std::uint32_t x, std::uint32_t y) -> std::uint8_t {
+  return QuantizeR8(FinishEffectiveCoverage(RasterMaskMean(texture, params, x, y),
+                                            params.invert != 0u, params.opacity));
+}
+
+/// Raster MaskEvaluate. kRanged multiplies the range weights of @p scene, as AnalyticMaskKernel.
+template <bool kRanged>
 __global__ void RasterMaskKernel(std::uint8_t* output, const std::uint8_t* texture,
-                                 RasterMaskParams params) {
+                                 RasterMaskParams params, MaskRangeParams range,
+                                 const float4* scene) {
   const auto index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= params.width * params.height) return;
-  output[index] = RasterMaskCode(texture, params, index % params.width, index / params.width);
+  const auto x = index % params.width;
+  const auto y = index / params.width;
+  if constexpr (kRanged) {
+    output[index] =
+        QuantizeR8(FinishRangedCoverage(RasterMaskMean(texture, params, x, y), params.invert != 0u,
+                                        MaskRangeWeight(range, scene[index]), params.opacity));
+  } else {
+    output[index] = RasterMaskCode(texture, params, x, y);
+  }
 }
 
 /// Coverage display (SM8.5): the same R8 value as RasterMaskKernel in red; green and blue 0,
@@ -184,11 +253,28 @@ __global__ void MaskUnionMaxKernel(const std::uint8_t* lhs, const std::uint8_t* 
   output[index] = a > b ? a : b;
 }
 
+/// Grade input pixels for a Mask with a restricted range, or null when the Mask has no range.
+auto RangeScenePointer(CudaRenderDevice& device, const MaskModel& mask,
+                       const FrameSceneBinding& range_scene, Extent2D extent) -> const float4* {
+  if (!MaskHasRestrictedRange(mask)) {
+    return nullptr;
+  }
+  const auto& scene = CudaSceneTexture(device, range_scene);
+  if (scene.DevicePointer() == nullptr || scene.Format() != TextureFormat::Rgba32f ||
+      scene.Width() != extent.width || scene.Height() != extent.height) {
+    throw std::runtime_error(
+        "ExecuteCudaMask: the Grade input of a Mask range is not an RGBA32F image of the render "
+        "extent");
+  }
+  return static_cast<const float4*>(scene.DevicePointer());
+}
+
 }  // namespace
 
 auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
-                     const CompiledMaskSource& compiled_source) -> CudaMaskResult {
+                     const CompiledMaskSource& compiled_source,
+                     const FrameSceneBinding&  range_scene) -> CudaMaskResult {
   if (!device.Workspace().IsRendering())
     throw std::runtime_error("ExecuteCudaMask: BeginRender has not been called");
   auto&                   workspace     = device.Workspace();
@@ -201,20 +287,25 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
 
   const auto& mask_model =
       RequireMaskModel(document, compiled_grade.node_id, compiled_source.mask_id);
+  const float4* scene  = RangeScenePointer(device, mask_model, range_scene, extent);
+  const auto    range  = MaskRangeParamsFromMask(mask_model);
+  const auto    blocks = (render_pixels + block - 1) / block;
+  auto*         target = static_cast<std::uint8_t*>(output.Texture().DevicePointer());
   if (std::holds_alternative<RadialMaskSource>(mask_model.source) ||
       std::holds_alternative<LinearGradientMaskSource>(mask_model.source)) {
-    AnalyticMaskKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
-        static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width, extent.height,
-        plan.geometry.render_to_reference, plan.geometry.full_reference_extent,
-        AnalyticKindFromMask(mask_model), RadialParamsFromMask(mask_model),
-        LinearGradientParamsFromMask(mask_model));
+    const auto kernel = scene == nullptr ? AnalyticMaskKernel<false> : AnalyticMaskKernel<true>;
+    kernel<<<blocks, block, 0, context.Stream()>>>(
+        target, extent.width, extent.height, plan.geometry.render_to_reference,
+        plan.geometry.full_reference_extent, AnalyticKindFromMask(mask_model),
+        RadialParamsFromMask(mask_model), LinearGradientParamsFromMask(mask_model), range, scene);
   } else if (const auto* ai = std::get_if<AiSegmentationMaskSource>(&mask_model.source)) {
     const auto coverage = workspace.AcquireAiMaskCoverage(*ai, context);
     const auto params =
         MakeRasterMaskParams(plan.geometry, *coverage, mask_model.invert, mask_model.opacity);
-    RasterMaskKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
-        static_cast<std::uint8_t*>(output.Texture().DevicePointer()),
-        static_cast<const std::uint8_t*>(coverage->texture.DevicePointer()), params);
+    const auto kernel = scene == nullptr ? RasterMaskKernel<false> : RasterMaskKernel<true>;
+    kernel<<<blocks, block, 0, context.Stream()>>>(
+        target, static_cast<const std::uint8_t*>(coverage->texture.DevicePointer()), params, range,
+        scene);
   } else {
     throw std::runtime_error("ExecuteCudaMask: compiled mask does not match document");
   }
@@ -287,7 +378,8 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
     if (!MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
       continue;
     }
-    sources = ExecuteCudaMask(device, plan, document, compiled_grade, source);
+    sources = ExecuteCudaMask(device, plan, document, compiled_grade, source,
+                              FrameSceneBinding::CachedImage(source.range_input));
   }
   return ExecuteCudaMaskUnion(device, plan, document, compiled_grade);
 }

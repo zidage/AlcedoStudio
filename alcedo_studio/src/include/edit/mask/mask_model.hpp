@@ -438,6 +438,40 @@ struct LinearGradientMaskParams {
   float opacity             = 1.0f;
 };
 
+/**
+ * @brief Packed Luminance Range and Hue Range of one Mask for the native MaskEvaluate kernels.
+ *
+ * CUDA takes this struct by value; `MaskRangeParams` in mask.cl and mask.metal has the same
+ * layout (eight 4-byte fields). A zero `*_restricted` flag is the full range, and the kernel does
+ * not read the other fields of that range. The kernels evaluate both ranges on the owning Grade's
+ * input image:
+ *
+ * - Luminance: OkLab L clamped to [0, 1];
+ *   `weight = smoothstep(low - softness, low, L) * (1 - smoothstep(high, high + softness, L))`.
+ * - Hue: OkLCh hue in degrees. `d` is the circular distance outside `[hue_start, hue_end]`
+ *   (0 inside); `weight = (1 - smoothstep(0, softness, d)) * smoothstep(0.015, 0.045, C)`, where
+ *   C is OkLCh chroma, so near-neutral pixels are not selected.
+ *
+ * Effective coverage is `clamp(invert(source) * hue_weight * luminance_weight * opacity, 0, 1)`.
+ */
+struct MaskRangeParams {
+  std::uint32_t luminance_restricted = 0;
+  float         luminance_low        = 0.0f;
+  float         luminance_high       = 1.0f;
+  float         luminance_softness   = 0.05f;
+  std::uint32_t hue_restricted       = 0;
+  float         hue_start            = 0.0f;
+  float         hue_end              = 360.0f;
+  float         hue_softness         = 12.0f;
+};
+
+static_assert(sizeof(MaskRangeParams) == 32);
+
+/// Whether @p mask stores a Luminance Range or a Hue Range, so its coverage reads the Grade input.
+[[nodiscard]] auto MaskHasRestrictedRange(const MaskModel& mask) -> bool;
+/// Packed ranges of @p mask; an empty range has a zero `*_restricted` flag.
+[[nodiscard]] auto MaskRangeParamsFromMask(const MaskModel& mask) -> MaskRangeParams;
+
 enum class AnalyticMaskKind : std::uint8_t {
   Radial         = 0,
   LinearGradient = 1,

@@ -7,6 +7,7 @@
 #include "edit/runtime/opencl/opencl_mask_pass.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -17,6 +18,8 @@
 #include "edit/runtime/compiled_mask_stack.hpp"
 #include "edit/runtime/mask_coverage_texture_cache.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_scene_work.hpp"
+#include "edit/runtime/texture_format.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_check.hpp"
 #include "opencl/opencl_kernel_cache.hpp"
@@ -64,6 +67,8 @@ struct MaskRasterParams {
 };
 
 static_assert(sizeof(MaskRasterParams) == 64);
+// MaskRangeParams (mask_model.hpp) is passed as is: mask.cl declares the same eight 4-byte fields.
+static_assert(sizeof(MaskRangeParams) == 32);
 
 auto EnsureOutput(OpenClRenderWorkspace& workspace, const GraphValueId& id, Extent2D extent)
     -> ResourceLease<OpenClBackend>& {
@@ -108,10 +113,43 @@ void Dispatch2D(OpenClRenderDevice& device, cl_kernel kernel, std::uint32_t widt
   device.Workspace().Device().TrackKernelEvent(device.CommandContext(), event);
 }
 
+/// Grade input of a Mask with a restricted range, or empty when the Mask has no range.
+auto RangeSceneView(OpenClRenderDevice& device, const MaskModel& mask,
+                    const FrameSceneBinding& range_scene, Extent2D extent)
+    -> std::optional<OpenClSceneView> {
+  if (!MaskHasRestrictedRange(mask)) {
+    return std::nullopt;
+  }
+  const auto view = OpenClBindScene(device, range_scene);
+  if (view.native == nullptr || view.width != extent.width || view.height != extent.height) {
+    throw std::runtime_error(
+        "ExecuteOpenClMask: the Grade input of a Mask range is not an image of the render extent");
+  }
+  if (!view.is_buffer) {
+    const auto* lease = device.Workspace().Images().Find(range_scene.graph_id);
+    if (lease->Texture().Format() != TextureFormat::Rgba32f) {
+      throw std::runtime_error(
+          "ExecuteOpenClMask: the Grade input of a Mask range is not an RGBA32F image");
+    }
+  }
+  return view;
+}
+
+/// Bind the scene view and range parameters of a ranged mask kernel from argument @p start.
+void SetRangeArgs(OpenClRenderDevice& device, cl_kernel kernel, cl_uint start,
+                  const OpenClSceneView& scene, const MaskModel& mask) {
+  BindOpenClSceneView(kernel, start, scene, device.Workspace().Device(), "Mask range scene",
+                      OpenClSceneArgAccess::Read);
+  SetParams(kernel, start + 3, MaskRangeParamsFromMask(mask), "Mask range parameters");
+}
+
 void EncodeAnalytic(OpenClRenderDevice& device, OpenClBackend::Texture2D& output,
-                    const MaskModel& mask, const ExecutionPlan& plan) {
+                    const MaskModel& mask, const ExecutionPlan& plan,
+                    const std::optional<OpenClSceneView>& range_scene) {
   const auto kernel = OpenClKernelCache::Instance().GetKernel(
-      OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskAnalyticKernelName);
+      OpenCL::GpuDag::kMaskProgramName, range_scene.has_value()
+                                            ? OpenCL::GpuDag::kMaskAnalyticRangedKernelName
+                                            : OpenCL::GpuDag::kMaskAnalyticKernelName);
   MaskAnalyticParams params;
   SetMatrix(params.render_to_reference, plan.geometry.render_to_reference);
   params.width               = output.Width();
@@ -142,19 +180,32 @@ void EncodeAnalytic(OpenClRenderDevice& device, OpenClBackend::Texture2D& output
 
   SetMem(kernel, 0, output.Native(), "analytic mask output");
   SetParams(kernel, 1, params, "analytic mask parameters");
+  if (range_scene.has_value()) {
+    SetRangeArgs(device, kernel, 2, *range_scene, mask);
+  }
   Dispatch2D(device, kernel, output.Width(), output.Height(), "analytic mask");
 }
 
+/// Ranges of a raster MaskEvaluate: the Grade input and the Mask that stores the ranges.
+struct RasterMaskRange {
+  const OpenClSceneView& scene;
+  const MaskModel&       mask;
+};
+
 /// Raster sampling of @p coverage on the render grid of @p geometry into @p output: R8 for
 /// MaskEvaluate, RGBA32F for the coverage display. mask_raster_r8 writes (value, 0, 0, 1).
+/// @p range is set only for a MaskEvaluate with a restricted range.
 void EncodeRasterSampling(OpenClRenderDevice&                     device,
                           const MaskCoverageImage<OpenClBackend>& coverage,
                           const ResolvedRenderGeometry& geometry, bool invert, float opacity,
-                          OpenClBackend::Texture2D& output) {
+                          OpenClBackend::Texture2D&             output,
+                          const std::optional<RasterMaskRange>& range = std::nullopt) {
   const auto sampling = MakeRasterMaskSamplingPlan(geometry, coverage.descriptor.reference_bounds,
                                                    coverage.descriptor.extent);
-  const auto kernel = OpenClKernelCache::Instance().GetKernel(
-      OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskRasterKernelName);
+  const auto kernel   = OpenClKernelCache::Instance().GetKernel(
+      OpenCL::GpuDag::kMaskProgramName, range.has_value()
+                                              ? OpenCL::GpuDag::kMaskRasterRangedKernelName
+                                              : OpenCL::GpuDag::kMaskRasterKernelName);
   MaskRasterParams params;
   SetMatrix(params.render_to_texture_uv, sampling.render_to_texture_uv);
   params.width          = output.Width();
@@ -167,14 +218,21 @@ void EncodeRasterSampling(OpenClRenderDevice&                     device,
   SetMem(kernel, 0, coverage.texture.Native(), "raster mask texture");
   SetMem(kernel, 1, output.Native(), "raster mask output");
   SetParams(kernel, 2, params, "raster mask parameters");
+  if (range.has_value()) {
+    SetRangeArgs(device, kernel, 3, range->scene, range->mask);
+  }
   Dispatch2D(device, kernel, output.Width(), output.Height(), "raster mask");
 }
 
 void EncodeRaster(OpenClRenderDevice& device, OpenClBackend::Texture2D& output,
                   const AiSegmentationMaskSource& source, const MaskModel& mask,
-                  const ExecutionPlan& plan) {
+                  const ExecutionPlan& plan, const std::optional<OpenClSceneView>& range_scene) {
   const auto coverage = device.Workspace().AcquireAiMaskCoverage(source, device.CommandContext());
-  EncodeRasterSampling(device, *coverage, plan.geometry, mask.invert, mask.opacity, output);
+  std::optional<RasterMaskRange> range;
+  if (range_scene.has_value()) {
+    range.emplace(RasterMaskRange{*range_scene, mask});
+  }
+  EncodeRasterSampling(device, *coverage, plan.geometry, mask.invert, mask.opacity, output, range);
 }
 
 void EncodeFillZero(OpenClRenderDevice& device, OpenClBackend::Texture2D& output) {
@@ -202,7 +260,8 @@ void EncodeUnionMax(OpenClRenderDevice& device, const OpenClBackend::Texture2D& 
 
 auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                        const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
-                       const CompiledMaskSource& compiled_source) -> OpenClMaskResult {
+                       const CompiledMaskSource& compiled_source,
+                       const FrameSceneBinding&  range_scene) -> OpenClMaskResult {
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteOpenClMask: BeginRender has not been called");
   }
@@ -217,13 +276,14 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
 
   const auto& mask_model =
       RequireMaskModel(document, compiled_grade.node_id, compiled_source.mask_id);
+  const auto scene = RangeSceneView(device, mask_model, range_scene, extent);
   if (std::holds_alternative<RadialMaskSource>(mask_model.source) ||
       std::holds_alternative<LinearGradientMaskSource>(mask_model.source)) {
-    EncodeAnalytic(device, output.Texture(), mask_model, plan);
+    EncodeAnalytic(device, output.Texture(), mask_model, plan, scene);
     return result;
   }
   if (const auto* ai = std::get_if<AiSegmentationMaskSource>(&mask_model.source)) {
-    EncodeRaster(device, output.Texture(), *ai, mask_model, plan);
+    EncodeRaster(device, output.Texture(), *ai, mask_model, plan, scene);
     return result;
   }
   throw std::runtime_error("ExecuteOpenClMask: compiled mask does not match document");
@@ -288,7 +348,8 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
     if (!MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
       continue;
     }
-    (void)ExecuteOpenClMask(device, plan, document, compiled_grade, source);
+    (void)ExecuteOpenClMask(device, plan, document, compiled_grade, source,
+                            FrameSceneBinding::CachedImage(source.range_input));
   }
   return ExecuteOpenClMaskUnion(device, plan, document, compiled_grade);
 }

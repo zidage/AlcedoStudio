@@ -11,6 +11,7 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/mask_coverage_display.hpp"
 #include "edit/runtime/mask_coverage_texture_cache.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
@@ -24,13 +25,20 @@ struct MetalMaskResult {
 /**
  * @brief Evaluate @p compiled_source into its effective GraphValueId (RenderSpace R8).
  *
- * Analytic sources evaluate in the native kernel. Invert and opacity apply in
- * that order. Failures throw; there is no CPU substitute.
+ * Analytic sources evaluate in the native kernel. Invert, the Luminance Range and Hue Range
+ * weights (MaskRangeParams), and opacity apply in that order. Failures throw; there is no CPU
+ * substitute.
+ *
+ * @param range_scene The owning Grade's input image (ACEScc AP1, RGBA32F on the render grid),
+ *        never that Grade's output. Only a Mask with a restricted range reads it.
+ * @throws std::runtime_error when a Mask with a restricted range has no RGBA32F @p range_scene of
+ *         the render extent.
  */
 [[nodiscard]] auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
-                                    const PipelineDocument& document,
-                                    const CompiledGradeNode& compiled_grade,
-                                    const CompiledMaskSource& compiled_source) -> MetalMaskResult;
+                                    const PipelineDocument&   document,
+                                    const CompiledGradeNode&  compiled_grade,
+                                    const CompiledMaskSource& compiled_source,
+                                    const FrameSceneBinding&  range_scene) -> MetalMaskResult;
 
 /**
  * @brief Maximum-Union enabled Mask sources into the Grade Union output.
@@ -46,6 +54,9 @@ struct MetalMaskResult {
 
 /**
  * @brief Evaluate every enabled source on @p compiled_grade and Union into mask_output.
+ *
+ * A Mask range reads `CompiledMaskSource::range_input` as a cached image, so a range on a Grade
+ * after the first one needs the per-source overload with the running scene binding.
  */
 [[nodiscard]] auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                                     const PipelineDocument& document,

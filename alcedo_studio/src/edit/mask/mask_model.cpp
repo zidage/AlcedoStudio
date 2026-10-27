@@ -753,4 +753,25 @@ auto LinearGradientParamsFromMask(const MaskModel& mask) -> LinearGradientMaskPa
   return params;
 }
 
+auto MaskHasRestrictedRange(const MaskModel& mask) -> bool {
+  return mask.luminance_range.has_value() || mask.color_range.has_value();
+}
+
+auto MaskRangeParamsFromMask(const MaskModel& mask) -> MaskRangeParams {
+  MaskRangeParams params;
+  if (mask.luminance_range.has_value()) {
+    params.luminance_restricted = 1;
+    params.luminance_low        = mask.luminance_range->low;
+    params.luminance_high       = mask.luminance_range->high;
+    params.luminance_softness   = mask.luminance_range->softness;
+  }
+  if (mask.color_range.has_value()) {
+    params.hue_restricted = 1;
+    params.hue_start      = mask.color_range->hue_start;
+    params.hue_end        = mask.color_range->hue_end;
+    params.hue_softness   = mask.color_range->softness;
+  }
+  return params;
+}
+
 }  // namespace alcedo

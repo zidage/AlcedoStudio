@@ -36,6 +36,7 @@
 #include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/transient_allocation_policy.hpp"
+#include "mask_range_test_support.hpp"
 #include "multi_grade_runtime_test_support.hpp"
 #include "multi_mask_runtime_test_support.hpp"
 
@@ -263,6 +264,53 @@ class MetalMaskFixture : public ::testing::Test {
     h.fail_texture_allocation_after = [this](std::uint32_t allocations_to_pass) {
       device_.Workspace().Device().FailTextureAllocationAfter(allocations_to_pass);
     };
+    return h;
+  }
+
+  /// The shared Luminance Range and Hue Range checks over this fixture, at the 64 x 48 scene size.
+  auto MaskRangeHarness() -> mask_range_test::MaskRangeBackendHarness {
+    using mask_range_reference::ScenePixel;
+    SetExtent(mask_range_reference::kSceneExtent.width, mask_range_reference::kSceneExtent.height);
+    mask_range_test::MaskRangeBackendHarness h;
+    h.backend                = "metal";
+    h.document               = [this]() -> PipelineDocument& { return document_; };
+    h.compile                = [this] { Compile(); };
+    h.plan                   = [this]() -> const ExecutionPlan& { return plan_; };
+    h.render_mask_with_scene = [this](const MaskId& mask_id, std::span<const ScenePixel> scene) {
+      const auto& grade  = *plan_.FirstGrade();
+      const auto* source = grade.mask_stack->FindSource(mask_id);
+      EXPECT_NE(source, nullptr);
+      const auto binding = FrameSceneBinding::CachedImage(
+          GraphValueId{NodeId{"test.range_scene"}, PortId{scene.empty() ? "missing" : "image"}});
+      device_.BeginRender();
+      try {
+        if (!scene.empty()) {
+          auto& lease = device_.Workspace().AcquireImageForWrite(
+              binding.graph_id, {width_, height_, TextureFormat::Rgba32f});
+          device_.Workspace().Device().UploadTexture2D(lease.Texture(), std::as_bytes(scene),
+                                                       device_.CommandContext());
+        }
+        (void)ExecuteMetalMask(device_, plan_, document_, grade, *source, binding);
+      } catch (...) {
+        device_.CancelRender();
+        throw;
+      }
+      device_.EndRender();
+      device_.WaitIdle();
+      return DownloadR8(source->effective_output);
+    };
+    h.set_reader = [this](std::shared_ptr<const MaskAssetReader> reader) {
+      device_.Workspace().SetMaskAssets(std::move(reader));
+    };
+    h.execute_plan   = [this] { ExecutePlan(); };
+    h.download_scene = [this](const FrameSceneBinding& binding) {
+      auto&                   texture = MetalSceneTexture(device_, binding);
+      std::vector<ScenePixel> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
+      device_.Workspace().Device().DownloadTexture2D(
+          texture, std::as_writable_bytes(std::span(pixels)), device_.CommandContext());
+      return pixels;
+    };
+    h.download_r8 = [this](const GraphValueId& id) { return DownloadR8(id); };
     return h;
   }
 
@@ -783,6 +831,36 @@ TEST_F(MetalMaskFixture, MetalCoverageUploadOwnerSurvivesUntilBlitCompletes) {
     EXPECT_EQ(backend.FreeCount() - frees_before, backend.TextureCreateCount() - textures_before)
         << "cycle " << cycle << " destroys every texture it created";
   }
+}
+
+TEST_F(MetalMaskFixture, LuminanceAndHueRangesMatchTheDoublePrecisionReference) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckRangesMatchDoublePrecisionReference(h);
+}
+
+TEST_F(MetalMaskFixture, WrappingHueRangeSelectsHuesOnBothSidesOfZero) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckWrappingHueRangeSelectsHuesOnBothSidesOfZero(h);
+}
+
+TEST_F(MetalMaskFixture, FullySelectingRangeMatchesTheMaskWithoutRangesByteForByte) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckFullySelectingRangeMatchesTheMaskWithoutRangesByteForByte(h);
+}
+
+TEST_F(MetalMaskFixture, OnlyRangedMasksReadTheGradeInput) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckOnlyRangedMasksReadTheGradeInput(h);
+}
+
+TEST_F(MetalMaskFixture, AiMaskRangeMatchesReference) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckAiMaskRangeMatchesReference(h);
+}
+
+TEST_F(MetalMaskFixture, SecondGradeHueRangeReadsFirstGradeOutput) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckSecondGradeHueRangeReadsFirstGradeOutput(h);
 }
 
 }  // namespace
