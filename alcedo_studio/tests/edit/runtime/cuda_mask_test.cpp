@@ -649,6 +649,16 @@ TEST_F(CudaMaskFixture, OnlyRangedMasksReadTheGradeInput) {
   mask_range_test::CheckOnlyRangedMasksReadTheGradeInput(h);
 }
 
+TEST_F(CudaMaskFixture, DefaultSaturationThresholdKeepsTheFixedChromaGate) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckDefaultMinChromaKeepsTheFixedChromaGate(h);
+}
+
+TEST_F(CudaMaskFixture, RaisedSaturationThresholdDropsLowChromaPixels) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckRaisedMinChromaDropsLowChromaPixels(h);
+}
+
 TEST_F(CudaMaskFixture, AiMaskRangeMatchesReference) {
   auto h = MaskRangeHarness();
   mask_range_test::CheckAiMaskRangeMatchesReference(h);

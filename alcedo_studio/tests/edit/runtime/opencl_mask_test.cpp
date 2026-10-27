@@ -720,6 +720,16 @@ TEST_F(OpenClMaskFixture, OnlyRangedMasksReadTheGradeInput) {
   mask_range_test::CheckOnlyRangedMasksReadTheGradeInput(h);
 }
 
+TEST_F(OpenClMaskFixture, DefaultSaturationThresholdKeepsTheFixedChromaGate) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckDefaultMinChromaKeepsTheFixedChromaGate(h);
+}
+
+TEST_F(OpenClMaskFixture, RaisedSaturationThresholdDropsLowChromaPixels) {
+  auto h = MaskRangeHarness();
+  mask_range_test::CheckRaisedMinChromaDropsLowChromaPixels(h);
+}
+
 TEST_F(OpenClMaskFixture, AiMaskRangeMatchesReference) {
   auto h = MaskRangeHarness();
   mask_range_test::CheckAiMaskRangeMatchesReference(h);

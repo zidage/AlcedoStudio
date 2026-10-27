@@ -61,9 +61,9 @@ struct MaskRasterParams {
 };
 
 static_assert(sizeof(MaskRasterParams) == 64);
-// MaskRangeParams (mask_model.hpp) is passed as is: mask.metal declares the same eight 4-byte
+// MaskRangeParams (mask_model.hpp) is passed as is: mask.metal declares the same nine 4-byte
 // fields.
-static_assert(sizeof(MaskRangeParams) == 32);
+static_assert(sizeof(MaskRangeParams) == 36);
 
 auto Pipeline(const char* function, const char* label) -> NS::SharedPtr<MTL::ComputePipelineState> {
 #ifndef ALCEDO_METAL_MASK_METALLIB_PATH

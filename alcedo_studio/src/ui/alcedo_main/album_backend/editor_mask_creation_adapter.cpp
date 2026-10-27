@@ -1441,9 +1441,10 @@ auto EditorMaskCreationAdapter::SyncRangeView() -> bool {
           view.luminance_softness = mask->luminance_range->softness;
         }
         if (mask->color_range.has_value()) {
-          view.hue_start    = mask->color_range->hue_start;
-          view.hue_end      = mask->color_range->hue_end;
-          view.hue_softness = mask->color_range->softness;
+          view.hue_start      = mask->color_range->hue_start;
+          view.hue_end        = mask->color_range->hue_end;
+          view.hue_softness   = mask->color_range->softness;
+          view.hue_min_chroma = mask->color_range->min_chroma;
         }
       }
     }
@@ -1501,7 +1502,8 @@ auto EditorMaskCreationAdapter::RangeJson(RangeKind kind, float first, float sec
   if (start <= 0.0f && end >= 360.0f) {
     return nullptr;
   }
-  return ColorRangeToJson(ColorRangeModel{start, end, range_view_.hue_softness});
+  return ColorRangeToJson(
+      ColorRangeModel{start, end, range_view_.hue_softness, range_view_.hue_min_chroma});
 }
 
 void EditorMaskCreationAdapter::ShowRangeCoverage(const RangeTarget& target) {

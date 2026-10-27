@@ -67,8 +67,8 @@ struct MaskRasterParams {
 };
 
 static_assert(sizeof(MaskRasterParams) == 64);
-// MaskRangeParams (mask_model.hpp) is passed as is: mask.cl declares the same eight 4-byte fields.
-static_assert(sizeof(MaskRangeParams) == 32);
+// MaskRangeParams (mask_model.hpp) is passed as is: mask.cl declares the same nine 4-byte fields.
+static_assert(sizeof(MaskRangeParams) == 36);
 
 auto EnsureOutput(OpenClRenderWorkspace& workspace, const GraphValueId& id, Extent2D extent)
     -> ResourceLease<OpenClBackend>& {

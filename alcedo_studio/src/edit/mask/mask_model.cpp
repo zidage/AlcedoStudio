@@ -427,6 +427,13 @@ void RequireColorRangeSoftness(float softness) {
   }
 }
 
+void RequireColorRangeMinChroma(float min_chroma) {
+  RequireFinite(min_chroma, "color_range min_chroma");
+  if (min_chroma < kColorRangeMinimumMinChroma || min_chroma > kColorRangeMaximumMinChroma) {
+    Fail("color_range min_chroma must be in [0.015, 0.2]");
+  }
+}
+
 void RequireLuminanceRangeSoftness(float softness) {
   RequireFinite(softness, "luminance_range softness");
   if (!(softness > 0.0f) || softness > kLuminanceRangeMaximumSoftness) {
@@ -482,6 +489,7 @@ void ValidateColorRange(const ColorRangeModel& range) {
     Fail("color_range must select at least 1 degree");
   }
   RequireColorRangeSoftness(range.softness);
+  RequireColorRangeMinChroma(range.min_chroma);
   if (IsFullColorRange(range)) {
     Fail("color_range covers every hue; a full range is stored as null");
   }
@@ -503,8 +511,12 @@ auto ColorRangeToJson(const std::optional<ColorRangeModel>& range) -> nlohmann::
   if (!range.has_value()) {
     return nullptr;
   }
-  return {
+  nlohmann::json json = {
       {"hue_start", range->hue_start}, {"hue_end", range->hue_end}, {"softness", range->softness}};
+  if (range->min_chroma != kColorRangeDefaultMinChroma) {
+    json["min_chroma"] = range->min_chroma;
+  }
+  return json;
 }
 
 auto LuminanceRangeToJson(const std::optional<LuminanceRangeModel>& range) -> nlohmann::json {
@@ -523,13 +535,17 @@ auto ColorRangeFromJson(const nlohmann::json& json) -> std::optional<ColorRangeM
   if (IsLegacyRangePlaceholder(json, kName)) {
     return std::nullopt;
   }
-  RequireOnlyKeys(json, kName, {"hue_start", "hue_end", "softness"});
+  RequireOnlyKeys(json, kName, {"hue_start", "hue_end", "softness", "min_chroma"});
   ColorRangeModel range;
   range.hue_start = ReadRequiredFloat(json, "hue_start", kName);
   range.hue_end   = ReadRequiredFloat(json, "hue_end", kName);
   range.softness  = ReadRequiredFloat(json, "softness", kName);
+  if (json.contains("min_chroma")) {
+    range.min_chroma = ReadRequiredFloat(json, "min_chroma", kName);
+  }
   if (IsFullColorRange(range)) {
     RequireColorRangeSoftness(range.softness);
+    RequireColorRangeMinChroma(range.min_chroma);
     return std::nullopt;
   }
   ValidateColorRange(range);
@@ -770,6 +786,7 @@ auto MaskRangeParamsFromMask(const MaskModel& mask) -> MaskRangeParams {
     params.hue_start      = mask.color_range->hue_start;
     params.hue_end        = mask.color_range->hue_end;
     params.hue_softness   = mask.color_range->softness;
+    params.hue_min_chroma = mask.color_range->min_chroma;
   }
   return params;
 }

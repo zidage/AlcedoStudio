@@ -436,6 +436,88 @@ TEST(GpuDagModelGraph, RangeJsonReadsNullLegacyPlaceholderAndRangeObjects) {
   EXPECT_THROW((void)LuminanceRangeFromJson(nlohmann::json::array()), std::runtime_error);
 }
 
+TEST(GpuDagModelGraph, HueRangeMinChromaIsOmittedAtTheDefaultAndRoundTripsOtherwise) {
+  // A default threshold writes the bytes that builds before the threshold wrote.
+  const ColorRangeModel default_threshold{300.0f, 40.0f, 8.0f};
+  EXPECT_EQ(default_threshold.min_chroma, kColorRangeDefaultMinChroma);
+  EXPECT_EQ(ColorRangeToJson(default_threshold).dump(),
+            R"({"hue_end":40.0,"hue_start":300.0,"softness":8.0})");
+  EXPECT_EQ(ColorRangeFromJson(nlohmann::json::parse(R"({"hue_end":40.0,"hue_start":300.0,)"
+                                                     R"("softness":8.0})")),
+            default_threshold);
+  // A stored default value reads as the default and serializes without the key.
+  const auto explicit_default = ColorRangeFromJson(
+      {{"hue_start", 300.0}, {"hue_end", 40.0}, {"softness", 8.0}, {"min_chroma", 0.03f}});
+  ASSERT_TRUE(explicit_default.has_value());
+  EXPECT_EQ(*explicit_default, default_threshold);
+  EXPECT_FALSE(ColorRangeToJson(explicit_default).contains("min_chroma"));
+
+  const ColorRangeModel raised{300.0f, 40.0f, 8.0f, 0.12f};
+  const auto            json = ColorRangeToJson(raised);
+  ASSERT_TRUE(json.contains("min_chroma"));
+  EXPECT_EQ(json["min_chroma"].get<float>(), 0.12f);
+  EXPECT_EQ(ColorRangeFromJson(nlohmann::json::parse(json.dump())), raised);
+  for (const float bound : {kColorRangeMinimumMinChroma, kColorRangeMaximumMinChroma}) {
+    const ColorRangeModel at_bound{300.0f, 40.0f, 8.0f, bound};
+    EXPECT_EQ(ColorRangeFromJson(ColorRangeToJson(at_bound)), at_bound);
+  }
+
+  // The threshold is part of the Mask JSON and of the document round trip.
+  auto document    = CreateDefaultPipelineDocument();
+  auto mask        = grade_mask_test::MakeRadialMask(MaskId{"mask.threshold"});
+  mask.color_range = raised;
+  document.PrimaryGrade()->AddMask(mask, 0);
+  const auto restored = PipelineDocument::FromJson(document.ToJson());
+  EXPECT_EQ(restored.PrimaryGrade()->MaskAt(0).color_range, raised);
+  EXPECT_EQ(MaskModelToJson(mask)["color_range"]["min_chroma"].get<float>(), 0.12f);
+}
+
+TEST(GpuDagModelGraph, HueRangeMinChromaOutsideItsBoundsIsRejected) {
+  constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
+  for (const float value : {0.0f, 0.0149f, 0.2001f, 1.0f, -0.03f, kNaN}) {
+    SCOPED_TRACE(value);
+    EXPECT_THROW(ValidateColorRange(ColorRangeModel{300.0f, 40.0f, 8.0f, value}),
+                 std::runtime_error);
+    if (!std::isnan(value)) {
+      EXPECT_THROW(
+          (void)ColorRangeFromJson(
+              {{"hue_start", 300.0}, {"hue_end", 40.0}, {"softness", 8.0}, {"min_chroma", value}}),
+          std::runtime_error);
+      // A full range with an invalid threshold is rejected too, before it reads as empty.
+      EXPECT_THROW(
+          (void)ColorRangeFromJson(
+              {{"hue_start", 0.0}, {"hue_end", 360.0}, {"softness", 12.0}, {"min_chroma", value}}),
+          std::runtime_error);
+    }
+  }
+  EXPECT_THROW(
+      (void)ColorRangeFromJson(
+          {{"hue_start", 300.0}, {"hue_end", 40.0}, {"softness", 8.0}, {"min_chroma", "0.1"}}),
+      std::runtime_error);
+
+  auto         document = CreateDefaultPipelineDocument();
+  auto*        grade    = document.PrimaryGrade();
+  const MaskId mask_id{"mask.keep"};
+  grade->AddMask(grade_mask_test::MakeRadialMask(mask_id), 0);
+  EXPECT_THROW(grade->SetMaskColorRange(mask_id, ColorRangeModel{300.0f, 40.0f, 8.0f, 0.5f}),
+               std::runtime_error);
+  EXPECT_FALSE(grade->FindMask(mask_id)->color_range.has_value());
+}
+
+TEST(GpuDagModelGraph, HueRangeMinChromaIsPackedForTheKernels) {
+  auto mask = grade_mask_test::MakeRadialMask(MaskId{"mask.params"});
+  EXPECT_EQ(MaskRangeParamsFromMask(mask).hue_min_chroma, kColorRangeDefaultMinChroma);
+  mask.color_range  = ColorRangeModel{20.0f, 120.0f, 12.0f, 0.1f};
+  const auto params = MaskRangeParamsFromMask(mask);
+  EXPECT_EQ(params.hue_restricted, 1u);
+  EXPECT_EQ(params.hue_min_chroma, 0.1f);
+  // The kernels add (min_chroma - 0.03) to the fixed gate edges: at the default the edges are the
+  // exact float constants 0.015 and 0.045 of the gate before the threshold was stored.
+  const float offset = kColorRangeDefaultMinChroma - 0.03f;
+  EXPECT_EQ(0.015f + offset, 0.015f);
+  EXPECT_EQ(0.045f + offset, 0.045f);
+}
+
 TEST(GpuDagModelGraph, RangeSettersStoreRangeAndTakeNewContentRevision) {
   auto         document = CreateDefaultPipelineDocument();
   auto*        grade    = document.PrimaryGrade();

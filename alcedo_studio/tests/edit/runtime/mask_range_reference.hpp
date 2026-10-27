@@ -30,8 +30,8 @@
  *      operator (oklab_contrast_reference.hpp).
  *   2. L = clamp(OkLab L, 0, 1); C = hypot(a, b); h = atan2(b, a) in degrees [0, 360).
  *   3. luminance_weight = smoothstep(low - s, low, L) * (1 - smoothstep(high, high + s, L)).
- *   4. hue_weight = (1 - smoothstep(0, s, d)) * smoothstep(0.015, 0.045, C), d = circular distance
- *      of h outside [hue_start, hue_end].
+ *   4. hue_weight = (1 - smoothstep(0, s, d)) * smoothstep(m - 0.015, m + 0.015, C), d = circular
+ *      distance of h outside [hue_start, hue_end], m = min_chroma (default 0.03).
  *   5. coverage = clamp(invert(source) * hue_weight * luminance_weight * opacity, 0, 1).
  */
 namespace alcedo::mask_range_reference {
@@ -123,6 +123,11 @@ inline auto SmoothStep(double edge0, double edge1, double x) -> double {
   return t * t * (3.0 - 2.0 * t);
 }
 
+/// Saturation gate of a Hue Range with threshold @p min_chroma at chroma @p chroma.
+inline auto ChromaGate(double min_chroma, double chroma) -> double {
+  return SmoothStep(min_chroma - 0.015, min_chroma + 0.015, chroma);
+}
+
 /// Hue Range weight of @p lab, including the chroma ramp.
 inline auto HueWeight(const ColorRangeModel& range, const Lab& lab) -> double {
   const double start  = range.hue_start;
@@ -131,7 +136,8 @@ inline auto HueWeight(const ColorRangeModel& range, const Lab& lab) -> double {
   double       offset = HueDegrees(lab) - start;
   if (offset < 0.0) offset += 360.0;
   const double distance = offset <= width ? 0.0 : std::min(offset - width, 360.0 - offset);
-  return (1.0 - SmoothStep(0.0, range.softness, distance)) * SmoothStep(0.015, 0.045, Chroma(lab));
+  return (1.0 - SmoothStep(0.0, range.softness, distance)) *
+         ChromaGate(range.min_chroma, Chroma(lab));
 }
 
 /// Luminance Range weight of @p lab.

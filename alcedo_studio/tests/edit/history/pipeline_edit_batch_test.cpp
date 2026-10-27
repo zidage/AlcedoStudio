@@ -531,6 +531,8 @@ TEST(PipelineEditBatch, MaskRangeFieldsAcceptOnlyCanonicalRangeValues) {
   ExpectRoundTrip(make("luminance_range", luminance, nullptr));
   ExpectRoundTrip(make("color_range", nullptr, hue));
   ExpectRoundTrip(make("color_range", hue, nullptr));
+  const auto raised = ColorRangeToJson(ColorRangeModel{330.0f, 30.0f, 12.0f, 0.1f});
+  ExpectRoundTrip(make("color_range", hue, raised));
 
   const std::vector<nlohmann::json> invalid_luminance{
       // A full range is stored as null, the legacy placeholder is never written to history,
@@ -551,7 +553,10 @@ TEST(PipelineEditBatch, MaskRangeFieldsAcceptOnlyCanonicalRangeValues) {
       {{"hue_end", 360.0}, {"hue_start", 0.0}, {"softness", 12.0}},
       {{"hue_end", 30.5}, {"hue_start", 30.0}, {"softness", 12.0}},
       {{"hue_end", 30.0}, {"hue_start", 330.0}, {"softness", 0.0}},
-      {{"hue_end", 30.0}, {"hue_start", 330.0}, {"softness", 12.0}, {"chroma", 0.1}}};
+      {{"hue_end", 30.0}, {"hue_start", 330.0}, {"softness", 12.0}, {"chroma", 0.1}},
+      // The default threshold is written without the key; out-of-bounds values are rejected.
+      {{"hue_end", 30.0}, {"hue_start", 330.0}, {"softness", 12.0}, {"min_chroma", 0.03f}},
+      {{"hue_end", 30.0}, {"hue_start", 330.0}, {"softness", 12.0}, {"min_chroma", 0.5f}}};
   for (const auto& value : invalid_hue) {
     SCOPED_TRACE(value.dump());
     EXPECT_THROW((void)make("color_range", nullptr, value), std::runtime_error);
