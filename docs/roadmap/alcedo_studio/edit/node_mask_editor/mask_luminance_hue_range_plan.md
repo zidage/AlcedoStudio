@@ -821,3 +821,67 @@ Suite totals: `GpuDagCudaMaskTest` 31/31, `GpuDagOpenClGradeTest` `*Mask*` 32/32
 `GpuDagModelGraphTest` 150/150, `PipelineEditBatchTest` 22/22, `EditorMaskRangeAdapterTest` 7/7,
 `DocumentTransferTest` 34/35 (the failure, `TransferPackageCarriesOnlyOwnedDevelopKeysAndNoCaches`,
 is pre-existing: #554).
+
+### 10.2 RP2: bar precision
+
+##### RP2 completion record (2026-10-27)
+
+**Status:** complete. Branch `feature/mask-range-precision-rp2-bar-precision`, stacked on RP1.
+
+**Changes from the issue and details that it did not give:**
+
+- **A. Handle drag.** `RangeSelectorBar.dragTo` moves a handle to its press value plus the cursor
+  delta, clamped to the bar; the wrap and minimum-width rules of MR4 are unchanged. A move that
+  leaves both values unchanged reports nothing, so a press alone reports no value.
+- **B. Shift fine drag.** The delta is multiplied by 0.1 while Shift is held. When Shift changes
+  during a drag, the bar anchors at the values of the previous cursor position, so the handle does
+  not jump and the move since then runs at the new speed.
+- **B. Keys and wheel.** The bar takes focus on Tab or on a press (a press on a handle focuses that
+  handle; Tab moves from the first handle to the second, then out). Left/Right report
+  `stepped(part, ±1, shift)`; the wheel over a handle reports `stepped(part, n, shift)` per 120
+  angle units (horizontal delta used when Shift turns the wheel horizontal). The wheel elsewhere
+  is not accepted, so the panel still scrolls. The focused handle has a 2 px text-color border.
+- **Step owner.** New `EditorMaskCreationAdapter::stepRangeHandle(kind, handle, steps, coarse)`
+  sizes the steps (0.005 L, 0.5 degrees, ×10 coarse), keeps the minimum handle distance, and
+  keeps hue handles on the bar (a step does not wrap a handle across an end, as in a drag). The
+  first step opens a normal range edit (BeginMaskField, coverage shown as in a drag); each step
+  is one live SetMaskField; a single-shot timer (180 ms, the `AdjustmentSlider` key debounce)
+  sends Finish, so one burst is one history commit. A pointer drag (`beginRangeEdit`) or a reset
+  (`resetRange`) during a burst settles the burst first; a step during a pointer drag is refused.
+  The burst is dropped with the other range state on image close and on AI Mask edit open/close.
+- **D. Softness ramp.** The two dim rectangles are replaced by a Canvas that dims each pixel
+  column by `1 - weight`, with the kernel weight of the shown handles and softness (luminance
+  smoothsteps, hue circular distance). New adapter properties `maskLuminanceSoftness` and
+  `maskHueSoftness` give the stored softness (the default for a full range).
+
+**Primary call chains:**
+
+```text
+Handle drag: RangeSelectorBar press (no value) -> began -> beginRangeEdit
+  move -> dragTo: press value + delta (x 0.1 with Shift) -> moved -> updateRangeEdit
+  release -> finished -> finishRangeEdit -> one SetMaskField commit (MR4 chain)
+Key / wheel: RangeSelectorBar Keys / onWheel -> stepped(part, steps, coarse)
+  -> EditorMaskCreationAdapter::stepRangeHandle
+     -> (first step) beginRangeEdit -> BeginMaskField, coverage shown
+     -> updateRangeEdit -> live SetMaskField (Interactive)
+     -> range_step_timer_ (180 ms after the last step) -> SettleRangeSteps -> finishRangeEdit
+        -> one SetMaskField commit
+```
+
+**Failure chains:** a step during a pointer drag, a step with no range target, or a step that
+cannot move (bar end, minimum distance) returns false and writes nothing new. A burst of steps
+that ends on the stored value commits nothing.
+
+**What was proven (executed tests, Windows `win_debug`):**
+
+| Criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| No change without a value change; one commit per drag | `PressAndMoveBackWithoutAChangeCommitsNothing`, `RangeDragCommitsOnceAndShowsTheCoverageOnlyDuringTheDrag` | `EditorMaskRangeAdapterTest` | PASS |
+| One commit per key burst; one handle moves; coarse steps; minimum distance; one Undo | `KeyStepBurstMovesOneHandleAndCommitsOnce` | same | PASS |
+| Hue steps keep handles on the bar; a drag and a reset settle the burst first; a step during a drag is refused | `HueStepsKeepHandlesOnTheBarAndADragSettlesTheBurstFirst` | same | PASS |
+| Bar: handle moves by the delta from the press, a press reports nothing, Shift = 1/10 | `HandleDragMovesByTheCursorDeltaFromThePress` | `RangeSelectorBarQmlTest` | PASS (fails on the MR4 bar: 8 degree jump) |
+| Bar: keys step the focused handle, the wheel steps the handle under it only | `KeysStepTheFocusedHandleAndTheWheelStepsTheHandleUnderIt` | same | PASS (fails on the MR4 bar) |
+
+The QML harness tests support the adapter tests; they are not the evidence of the commits
+(AGENTS.md, #526). Suite totals: `EditorMaskRangeAdapterTest` 10/10, `RangeSelectorBarQmlTest`
+2/2. The softness ramp drawing is not checked by a test.

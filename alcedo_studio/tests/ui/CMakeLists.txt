@@ -1766,6 +1766,33 @@ alcedo_ui_gtest_discover_tests(EditorRawDecodePanelQmlTest
 alcedo_register_test_target(EditorRawDecodePanelQmlTest ui)
 
 # SM3.E (#537): the training data notice of the Sky model in the production AI Mask panel.
+add_executable(RangeSelectorBarQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/range_selector_bar_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(RangeSelectorBarQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(RangeSelectorBarQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
+)
+target_compile_definitions(RangeSelectorBarQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(RangeSelectorBarQmlTest
+    TEST_PREFIX "RangeSelectorBarQmlTest."
+    PROPERTIES LABELS "workspace_qml;mask")
+alcedo_register_test_target(RangeSelectorBarQmlTest ui)
+
 add_executable(EditorAiMaskPanelQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_ai_mask_panel_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp

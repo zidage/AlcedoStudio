@@ -45,6 +45,10 @@ ColumnLayout {
         onBegan: root.maskCreation.beginRangeEdit("luminance")
         onMoved: function (low, high) { root.maskCreation.updateRangeEdit("luminance", low, high) }
         onFinished: root.maskCreation.finishRangeEdit("luminance")
+        softness: root.maskCreation ? root.maskCreation.maskLuminanceSoftness : 0
+        onStepped: function (part, steps, coarse) {
+            root.maskCreation.stepRangeHandle("luminance", part, steps, coarse)
+        }
         onResetRequested: root.maskCreation.resetRange("luminance")
     }
 
@@ -65,6 +69,10 @@ ColumnLayout {
         onBegan: root.maskCreation.beginRangeEdit("hue")
         onMoved: function (start, end) { root.maskCreation.updateRangeEdit("hue", start, end) }
         onFinished: root.maskCreation.finishRangeEdit("hue")
+        softness: root.maskCreation ? root.maskCreation.maskHueSoftness : 0
+        onStepped: function (part, steps, coarse) {
+            root.maskCreation.stepRangeHandle("hue", part, steps, coarse)
+        }
         onResetRequested: root.maskCreation.resetRange("hue")
     }
 
