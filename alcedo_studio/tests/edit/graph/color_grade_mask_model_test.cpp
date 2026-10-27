@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -105,7 +106,7 @@ TEST(GpuDagModelGraph, MaskListRoundTripPreservesSourcesOrderAndRangeFields) {
   radial_source.outer_feather = 0.15f;
   radial.source             = radial_source;
   radial.color_range.reset();
-  radial.luminance_range = LuminanceRangeModel{false};
+  radial.luminance_range      = LuminanceRangeModel{0.25f, 0.75f, 0.05f};
 
   MaskModel linear = grade_mask_test::MakeLinearGradientMask(MaskId{"mask.linear"});
   linear.display_name = "Sky";
@@ -115,7 +116,7 @@ TEST(GpuDagModelGraph, MaskListRoundTripPreservesSourcesOrderAndRangeFields) {
   second.display_name         = "Second";
   second.opacity              = 0.25f;
   second.invert               = true;
-  second.color_range          = ColorRangeModel{false};
+  second.color_range          = ColorRangeModel{300.0f, 40.0f, 12.0f};
   second.luminance_range.reset();
 
   grade->AddMask(std::move(radial), 0);
@@ -146,6 +147,11 @@ TEST(GpuDagModelGraph, MaskListRoundTripPreservesSourcesOrderAndRangeFields) {
   EXPECT_EQ(grade_json["masks"][2]["source"]["kind"], "radial");
   EXPECT_TRUE(grade_json["masks"][1]["color_range"].is_null());
   EXPECT_TRUE(grade_json["masks"][2]["luminance_range"].is_null());
+  EXPECT_EQ(grade_json["masks"][0]["luminance_range"].dump(),
+            R"({"high":0.75,"low":0.25,"softness":0.05000000074505806})");
+  EXPECT_EQ(grade_json["masks"][2]["color_range"].dump(),
+            R"({"hue_end":40.0,"hue_start":300.0,"softness":12.0})");
+  EXPECT_EQ(restored.ToJson().dump(), json.dump());
 }
 
 TEST(GpuDagModelGraph, TopLevelMaskNodesAndEdgesAreRejected) {
@@ -179,17 +185,51 @@ TEST(GpuDagModelGraph, TopLevelMaskNodesAndEdgesAreRejected) {
   }
 }
 
-TEST(GpuDagModelGraph, EnabledRangeFailsBeforeGpuWork) {
+TEST(GpuDagModelGraph, InvalidRangeValuesFailBeforeDocumentMutation) {
   auto  document = CreateDefaultPipelineDocument();
   auto* grade    = document.PrimaryGrade();
-  MaskModel enabled_color = grade_mask_test::MakeRadialMask(MaskId{"mask.range"});
-  enabled_color.color_range = ColorRangeModel{true};
-  EXPECT_THROW(grade->AddMask(enabled_color, 0), std::runtime_error);
+  const auto add_with_color = [&](ColorRangeModel range) {
+    MaskModel mask   = grade_mask_test::MakeRadialMask(MaskId{"mask.range"});
+    mask.color_range = range;
+    grade->AddMask(mask, 0);
+  };
+  const auto add_with_luminance = [&](LuminanceRangeModel range) {
+    MaskModel mask       = grade_mask_test::MakeRadialMask(MaskId{"mask.luma"});
+    mask.luminance_range = range;
+    grade->AddMask(mask, 0);
+  };
+  constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
+  // A full range is stored as an empty optional, never as an object.
+  EXPECT_THROW(add_with_color({0.0f, 360.0f, 12.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_color({kNaN, 90.0f, 12.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_color({-1.0f, 90.0f, 12.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_color({360.0f, 90.0f, 12.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_color({10.0f, 0.0f, 12.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_color({10.0f, 361.0f, 12.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_color({10.0f, 10.5f, 12.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_color({359.75f, 0.25f, 12.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_color({10.0f, 90.0f, 0.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_color({10.0f, 90.0f, 91.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_luminance({0.0f, 1.0f, 0.05f}), std::runtime_error);
+  EXPECT_THROW(add_with_luminance({kNaN, 0.5f, 0.05f}), std::runtime_error);
+  EXPECT_THROW(add_with_luminance({-0.1f, 0.5f, 0.05f}), std::runtime_error);
+  EXPECT_THROW(add_with_luminance({0.2f, 1.1f, 0.05f}), std::runtime_error);
+  EXPECT_THROW(add_with_luminance({0.5f, 0.25f, 0.05f}), std::runtime_error);
+  EXPECT_THROW(add_with_luminance({0.5f, 0.505f, 0.05f}), std::runtime_error);
+  EXPECT_THROW(add_with_luminance({0.2f, 0.5f, 0.0f}), std::runtime_error);
+  EXPECT_THROW(add_with_luminance({0.2f, 0.5f, 0.6f}), std::runtime_error);
   EXPECT_EQ(grade->MaskCount(), 0u);
 
-  MaskModel enabled_luma = grade_mask_test::MakeRadialMask(MaskId{"mask.luma"});
-  enabled_luma.luminance_range = LuminanceRangeModel{true};
-  EXPECT_THROW(grade->AddMask(enabled_luma, 0), std::runtime_error);
+  grade->AddMask(grade_mask_test::MakeRadialMask(MaskId{"mask.keep"}), 0);
+  const auto before = std::vector<MaskModel>(grade->Masks().begin(), grade->Masks().end());
+  EXPECT_THROW(
+      grade->SetMaskLuminanceRange(MaskId{"mask.keep"}, LuminanceRangeModel{0.0f, 1.0f, 0.05f}),
+      std::runtime_error);
+  EXPECT_THROW(grade->SetMaskColorRange(MaskId{"mask.keep"}, ColorRangeModel{10.0f, 10.0f, 12.0f}),
+               std::runtime_error);
+  EXPECT_THROW(grade->SetMaskColorRange(MaskId{"mask.missing"}, std::nullopt), std::runtime_error);
+  const auto after = std::vector<MaskModel>(grade->Masks().begin(), grade->Masks().end());
+  EXPECT_EQ(after, before);
 
   auto json = CreateDefaultPipelineDocument().ToJson();
   for (auto& node : json["nodes"]) {
@@ -355,6 +395,70 @@ TEST(GpuDagModelGraph, AiSegmentationSourceRejectsInvalidFields) {
     test_case.change(json["source"]);
     EXPECT_THROW((void)MaskModelFromJson(json), std::runtime_error) << test_case.name;
   }
+}
+
+TEST(GpuDagModelGraph, RangeJsonReadsNullLegacyPlaceholderAndRangeObjects) {
+  EXPECT_FALSE(ColorRangeFromJson(nullptr).has_value());
+  EXPECT_FALSE(LuminanceRangeFromJson(nullptr).has_value());
+  // The placeholder that builds before the range fields could hold reads as the full range.
+  EXPECT_FALSE(ColorRangeFromJson({{"enabled", false}}).has_value());
+  EXPECT_FALSE(LuminanceRangeFromJson({{"enabled", false}}).has_value());
+  EXPECT_THROW((void)ColorRangeFromJson({{"enabled", true}}), std::runtime_error);
+  EXPECT_THROW((void)LuminanceRangeFromJson({{"enabled", true}}), std::runtime_error);
+  EXPECT_THROW((void)ColorRangeFromJson({{"enabled", false}, {"hue_start", 10.0}}),
+               std::runtime_error);
+  EXPECT_THROW((void)LuminanceRangeFromJson({{"enabled", 0}}), std::runtime_error);
+
+  const auto wrap =
+      ColorRangeFromJson({{"hue_start", 300.0}, {"hue_end", 40.0}, {"softness", 8.0}});
+  ASSERT_TRUE(wrap.has_value());
+  EXPECT_EQ(*wrap, (ColorRangeModel{300.0f, 40.0f, 8.0f}));
+  EXPECT_FLOAT_EQ(ColorRangeWidthDegrees(*wrap), 100.0f);
+  const auto luma = LuminanceRangeFromJson({{"low", 0.0}, {"high", 0.5}, {"softness", 0.1}});
+  ASSERT_TRUE(luma.has_value());
+  EXPECT_EQ(*luma, (LuminanceRangeModel{0.0f, 0.5f, 0.1f}));
+
+  // A valid object that covers the full range reads as empty, so it serializes as null.
+  EXPECT_FALSE(
+      ColorRangeFromJson({{"hue_start", 0.0}, {"hue_end", 360.0}, {"softness", 12.0}}).has_value());
+  EXPECT_FALSE(
+      LuminanceRangeFromJson({{"low", 0.0}, {"high", 1.0}, {"softness", 0.05}}).has_value());
+  EXPECT_THROW((void)LuminanceRangeFromJson({{"low", 0.0}, {"high", 1.0}, {"softness", 0.0}}),
+               std::runtime_error);
+
+  EXPECT_THROW((void)ColorRangeFromJson({{"hue_start", 10.0}, {"hue_end", 40.0}}),
+               std::runtime_error);
+  EXPECT_THROW((void)ColorRangeFromJson(
+                   {{"hue_start", 10.0}, {"hue_end", 40.0}, {"softness", 8.0}, {"chroma", 0.1}}),
+               std::runtime_error);
+  EXPECT_THROW((void)LuminanceRangeFromJson({{"low", "0.1"}, {"high", 0.5}, {"softness", 0.1}}),
+               std::runtime_error);
+  EXPECT_THROW((void)LuminanceRangeFromJson(nlohmann::json::array()), std::runtime_error);
+}
+
+TEST(GpuDagModelGraph, RangeSettersStoreRangeAndTakeNewContentRevision) {
+  auto         document = CreateDefaultPipelineDocument();
+  auto*        grade    = document.PrimaryGrade();
+  const MaskId mask_id{"mask.range"};
+  grade->AddMask(grade_mask_test::MakeRadialMask(mask_id), 0);
+  const auto initial = grade->MaskContentRevision(mask_id);
+
+  grade->SetMaskLuminanceRange(mask_id, LuminanceRangeModel{0.1f, 0.6f, 0.05f});
+  const auto after_luma = grade->MaskContentRevision(mask_id);
+  EXPECT_NE(after_luma, initial);
+  grade->SetMaskColorRange(mask_id, ColorRangeModel{200.0f, 260.0f, 12.0f});
+  const auto after_hue = grade->MaskContentRevision(mask_id);
+  EXPECT_NE(after_hue, after_luma);
+  // Writing the stored value again is not a content change.
+  grade->SetMaskColorRange(mask_id, ColorRangeModel{200.0f, 260.0f, 12.0f});
+  EXPECT_EQ(grade->MaskContentRevision(mask_id), after_hue);
+  EXPECT_EQ(grade->FindMask(mask_id)->luminance_range, (LuminanceRangeModel{0.1f, 0.6f, 0.05f}));
+  EXPECT_EQ(grade->FindMask(mask_id)->color_range, (ColorRangeModel{200.0f, 260.0f, 12.0f}));
+
+  grade->SetMaskLuminanceRange(mask_id, std::nullopt);
+  grade->SetMaskColorRange(mask_id, std::nullopt);
+  EXPECT_EQ(*grade->FindMask(mask_id), grade_mask_test::MakeRadialMask(mask_id));
+  EXPECT_NE(grade->MaskContentRevision(mask_id), after_hue);
 }
 
 TEST(GpuDagModelGraph, ExistingMaskJsonBytesAreUnchanged) {

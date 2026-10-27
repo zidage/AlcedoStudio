@@ -13,6 +13,9 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "app/editor_mask_creation_controller.hpp"
@@ -1066,6 +1069,128 @@ TEST(AnalyticMaskCreationTest, ToggleMaskInvertTwiceRestoresCoverageAndUndoResto
       << error;
   EXPECT_FALSE(grade->FindMask(mask_id)->invert);
   EXPECT_EQ(coverage(), first);
+}
+
+TEST(AnalyticMaskCreationTest, LuminanceRangeDragCommitsOnceAndUndoRedoRestoreTheRange) {
+  AnalyticCreationHarness harness;
+  const MaskId            mask_id{"mask.range"};
+  grade_mask_test::AddRadialMask(harness.document, mask_id);
+  auto*      grade    = harness.document.PrimaryGrade();
+  const auto grade_id = grade->Id();
+  ASSERT_TRUE(harness.controller.SelectMask(grade_id, mask_id, harness.session).accepted);
+  const auto head_before = harness.history.working_head();
+
+  ASSERT_TRUE(
+      harness.controller.BeginMaskFieldEdit(std::string{kMaskFieldLuminanceRange}).accepted);
+  const auto previews_before = harness.preview_count;
+  for (const double high : {0.9, 0.8, 0.7}) {
+    const auto step = harness.controller.ApplyMaskFieldValue(
+        std::string{kMaskFieldLuminanceRange}, {{"low", 0.2}, {"high", high}, {"softness", 0.05}});
+    ASSERT_TRUE(step.accepted) << step.error;
+    EXPECT_FALSE(step.committed);
+  }
+  // Each drag step renders Interactive; nothing reaches history before release.
+  EXPECT_EQ(harness.preview_count, previews_before + 3);
+  EXPECT_EQ(harness.history.working_head(), head_before);
+  const LuminanceRangeModel dragged{0.2f, 0.7f, 0.05f};
+  EXPECT_EQ(grade->FindMask(mask_id)->luminance_range, dragged);
+
+  const auto finish = harness.controller.FinishMaskInput();
+  ASSERT_TRUE(finish.accepted) << finish.error;
+  EXPECT_TRUE(finish.committed);
+  EXPECT_TRUE(finish.quality_requested);
+  ASSERT_TRUE(harness.history.working_head().has_value());
+  const auto& commit = harness.graph->GetCommit(*harness.history.working_head());
+  EXPECT_EQ(commit.GetFirstParentHash(), head_before);
+  const auto batch = BatchFromCommit(commit);
+  ASSERT_EQ(batch.changes.size(), 1u);
+  const auto& change = std::get<SetMaskFieldChange>(batch.changes.front());
+  EXPECT_EQ(change.field_key, kMaskFieldLuminanceRange);
+  EXPECT_TRUE(change.before_value.is_null());
+  EXPECT_EQ(change.after_value, LuminanceRangeToJson(dragged));
+
+  std::string error;
+  const auto  undo = harness.history.Undo();
+  ASSERT_TRUE(undo.moved) << undo.error;
+  ASSERT_TRUE(undo.selected_commit.has_value());
+  ASSERT_TRUE(ApplyPipelineEditBatch(harness.document, BatchFromCommit(*undo.selected_commit),
+                                     PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_FALSE(grade->FindMask(mask_id)->luminance_range.has_value());
+
+  const auto redo = harness.history.Redo();
+  ASSERT_TRUE(redo.moved) << redo.error;
+  ASSERT_TRUE(redo.selected_commit.has_value());
+  ASSERT_TRUE(ApplyPipelineEditBatch(harness.document, BatchFromCommit(*redo.selected_commit),
+                                     PipelineEditApplyDirection::Forward, &error))
+      << error;
+  EXPECT_EQ(grade->FindMask(mask_id)->luminance_range, dragged);
+}
+
+TEST(AnalyticMaskCreationTest, FullHueRangeEditStoresNullAndUndoRestoresTheRange) {
+  AnalyticCreationHarness harness;
+  const MaskId            mask_id{"mask.hue"};
+  grade_mask_test::AddRadialMask(harness.document, mask_id);
+  auto*      grade      = harness.document.PrimaryGrade();
+  const auto grade_id   = grade->Id();
+
+  // Wrapping range through 0 degrees.
+  const auto restricted = harness.controller.ApplyMaskFieldValue(
+      grade_id, mask_id, std::string{kMaskFieldColorRange},
+      {{"hue_start", 330.0}, {"hue_end", 30.0}, {"softness", 12.0}});
+  ASSERT_TRUE(restricted.accepted) << restricted.error;
+  EXPECT_TRUE(restricted.committed);
+  const ColorRangeModel wrap{330.0f, 30.0f, 12.0f};
+  EXPECT_EQ(grade->FindMask(mask_id)->color_range, wrap);
+
+  // Both handles at the ends of the bar: the full range is stored as null.
+  const auto full = harness.controller.ApplyMaskFieldValue(
+      grade_id, mask_id, std::string{kMaskFieldColorRange},
+      {{"hue_start", 0.0}, {"hue_end", 360.0}, {"softness", 12.0}});
+  ASSERT_TRUE(full.accepted) << full.error;
+  EXPECT_TRUE(full.committed);
+  EXPECT_FALSE(grade->FindMask(mask_id)->color_range.has_value());
+  EXPECT_TRUE(MaskModelToJson(*grade->FindMask(mask_id)).at("color_range").is_null());
+  ASSERT_TRUE(harness.history.working_head().has_value());
+  const auto  batch  = BatchFromCommit(harness.graph->GetCommit(*harness.history.working_head()));
+  const auto& change = std::get<SetMaskFieldChange>(batch.changes.front());
+  EXPECT_EQ(change.before_value, ColorRangeToJson(wrap));
+  EXPECT_TRUE(change.after_value.is_null());
+
+  std::string error;
+  const auto  undo = harness.history.Undo();
+  ASSERT_TRUE(undo.moved) << undo.error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(harness.document, BatchFromCommit(*undo.selected_commit),
+                                     PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_EQ(grade->FindMask(mask_id)->color_range, wrap);
+}
+
+TEST(AnalyticMaskCreationTest, InvalidRangeValueIsRejectedWithoutHistoryOrMaskChange) {
+  AnalyticCreationHarness harness;
+  const MaskId            mask_id{"mask.invalid"};
+  grade_mask_test::AddRadialMask(harness.document, mask_id);
+  auto*      grade       = harness.document.PrimaryGrade();
+  const auto before      = *grade->FindMask(mask_id);
+  const auto head_before = harness.history.working_head();
+  const std::vector<std::pair<std::string_view, nlohmann::json>> invalid{
+      {kMaskFieldLuminanceRange, {{"low", 0.6}, {"high", 0.4}, {"softness", 0.05}}},
+      {kMaskFieldLuminanceRange, {{"low", 0.2}, {"high", 0.6}}},
+      {kMaskFieldLuminanceRange, {{"enabled", true}}},
+      {kMaskFieldLuminanceRange, 0.5},
+      {kMaskFieldColorRange, {{"hue_start", 20.0}, {"hue_end", 20.5}, {"softness", 12.0}}},
+      {kMaskFieldColorRange, {{"hue_start", 20.0}, {"hue_end", 400.0}, {"softness", 12.0}}},
+      {kMaskFieldColorRange,
+       {{"hue_start", 20.0}, {"hue_end", 40.0}, {"softness", 12.0}, {"chroma", 1.0}}}};
+  for (const auto& [key, value] : invalid) {
+    SCOPED_TRACE(value.dump());
+    const auto result =
+        harness.controller.ApplyMaskFieldValue(grade->Id(), mask_id, std::string{key}, value);
+    EXPECT_FALSE(result.accepted);
+    EXPECT_FALSE(result.committed);
+  }
+  EXPECT_EQ(*grade->FindMask(mask_id), before);
+  EXPECT_EQ(harness.history.working_head(), head_before);
 }
 
 TEST(AnalyticMaskCreationTest, ToggleMaskInvertRejectsMissingMaskWithoutHistory) {

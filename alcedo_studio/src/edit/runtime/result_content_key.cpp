@@ -193,7 +193,17 @@ auto MixMaskSourceModel(ContentHash& hash, const MaskModel& model,
   hash.MixBool(model.invert);
   hash.MixU32(static_cast<std::uint32_t>(GetMaskSourceKind(model.source)));
   hash.MixBool(model.color_range.has_value());
+  if (model.color_range.has_value()) {
+    hash.MixF32(model.color_range->hue_start);
+    hash.MixF32(model.color_range->hue_end);
+    hash.MixF32(model.color_range->softness);
+  }
   hash.MixBool(model.luminance_range.has_value());
+  if (model.luminance_range.has_value()) {
+    hash.MixF32(model.luminance_range->low);
+    hash.MixF32(model.luminance_range->high);
+    hash.MixF32(model.luminance_range->softness);
+  }
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
   if (const auto* brush = std::get_if<BrushMaskSource>(&model.source)) {
     if (brush->asset_key.has_value()) {

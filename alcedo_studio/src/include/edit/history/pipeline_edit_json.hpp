@@ -70,6 +70,12 @@ void RequireEdgeEndpoints(const PipelineSceneEdge& edge, const NodeId& from, con
     -> nlohmann::json;
 [[nodiscard]] auto CanonicalMaskSourceJson(const nlohmann::json& source, std::string_view context)
     -> nlohmann::json;
+/// Canonical Mask `color_range` value: `null` or a restricted range object in serializer form.
+[[nodiscard]] auto CanonicalColorRangeJson(const nlohmann::json& range, std::string_view context)
+    -> nlohmann::json;
+/// Canonical Mask `luminance_range` value: `null` or a restricted range object in serializer form.
+[[nodiscard]] auto CanonicalLuminanceRangeJson(const nlohmann::json& range,
+                                               std::string_view      context) -> nlohmann::json;
 
 void               ValidateParameterTarget(const PipelineParameterTarget& target);
 [[nodiscard]] auto TargetToJson(const PipelineParameterTarget& target) -> nlohmann::json;

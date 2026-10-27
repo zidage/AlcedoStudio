@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <exception>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -17,6 +18,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/mask/mask_list_selection.hpp"
+#include "edit/mask/mask_model.hpp"
 
 namespace alcedo {
 namespace {
@@ -61,20 +63,6 @@ constexpr std::string_view kAiMaskIdPrefix = "mask.ai.";
   return "Mask";
 }
 
-[[nodiscard]] auto SourceFromJson(const nlohmann::json& source, const MaskId& mask_id)
-    -> MaskSource {
-  auto mask = MaskModelFromJson({{"id", std::string{mask_id.Value()}},
-                                 {"display_name", ""},
-                                 {"enabled", true},
-                                 {"opacity", 1.0},
-                                 {"deletion_protected", false},
-                                 {"invert", false},
-                                 {"source", source},
-                                 {"color_range", nullptr},
-                                 {"luminance_range", nullptr}});
-  return std::move(mask.source);
-}
-
 [[nodiscard]] auto CreationSourceValid(const MaskSource& source) -> bool {
   if (const auto* radial = std::get_if<RadialMaskSource>(&source)) {
     return RadialCreationIsValid(*radial);
@@ -91,7 +79,8 @@ constexpr std::string_view kAiMaskIdPrefix = "mask.ai.";
 [[nodiscard]] auto MaskFieldEditKeyIsValid(std::string_view field_key, MaskSourceKind /*kind*/)
     -> bool {
   return field_key == kMaskFieldEnabled || field_key == kMaskFieldInvert ||
-         field_key == kMaskFieldOpacity || field_key == kMaskFieldDisplayName;
+         field_key == kMaskFieldOpacity || field_key == kMaskFieldDisplayName ||
+         field_key == kMaskFieldColorRange || field_key == kMaskFieldLuminanceRange;
 }
 
 [[nodiscard]] auto MaskFieldAffectsPixels(std::string_view field_key) -> bool {
@@ -110,7 +99,33 @@ constexpr std::string_view kAiMaskIdPrefix = "mask.ai.";
   if (field_key == kMaskFieldDisplayName) {
     return value.is_string();
   }
+  try {
+    if (field_key == kMaskFieldColorRange) {
+      (void)ColorRangeFromJson(value);
+      return true;
+    }
+    if (field_key == kMaskFieldLuminanceRange) {
+      (void)LuminanceRangeFromJson(value);
+      return true;
+    }
+  } catch (const std::exception&) {
+  }
   return false;
+}
+
+/**
+ * Stored form of a valid @p value: a range is read and written back, so a full range becomes
+ * `null` and numbers take the stored float precision. Other keys are returned unchanged.
+ */
+[[nodiscard]] auto CanonicalMaskFieldValue(std::string_view field_key, nlohmann::json value)
+    -> nlohmann::json {
+  if (field_key == kMaskFieldColorRange) {
+    return ColorRangeToJson(ColorRangeFromJson(value));
+  }
+  if (field_key == kMaskFieldLuminanceRange) {
+    return LuminanceRangeToJson(LuminanceRangeFromJson(value));
+  }
+  return value;
 }
 
 [[nodiscard]] auto MaskFieldValueJson(const MaskModel& mask, std::string_view field_key)
@@ -126,6 +141,12 @@ constexpr std::string_view kAiMaskIdPrefix = "mask.ai.";
   }
   if (field_key == kMaskFieldDisplayName) {
     return mask.display_name;
+  }
+  if (field_key == kMaskFieldColorRange) {
+    return ColorRangeToJson(mask.color_range);
+  }
+  if (field_key == kMaskFieldLuminanceRange) {
+    return LuminanceRangeToJson(mask.luminance_range);
   }
   return nullptr;
 }
@@ -288,7 +309,7 @@ void EditorMaskCreationController::RestoreLive() {
       grade->RemoveMask(mask_id_);
     } else if (!creating_ && !mask_id_.Empty() && grade->FindMask(mask_id_) != nullptr) {
       if (!before_source_.is_null()) {
-        grade->ReplaceMaskSource(mask_id_, SourceFromJson(before_source_, mask_id_));
+        grade->ReplaceMaskSource(mask_id_, MaskSourceFromJson(before_source_));
       }
       if (!field_edit_key_.empty()) {
         (void)ApplyLiveMaskField(field_edit_key_, before_field_value_);
@@ -604,6 +625,10 @@ auto EditorMaskCreationController::ApplyLiveMaskField(ColorGradeNodeModel*  grad
       grade->SetMaskOpacity(mask_id, value.get<float>());
     } else if (field_key == kMaskFieldDisplayName) {
       grade->SetMaskDisplayName(mask_id, value.get<std::string>());
+    } else if (field_key == kMaskFieldColorRange) {
+      grade->SetMaskColorRange(mask_id, ColorRangeFromJson(value));
+    } else if (field_key == kMaskFieldLuminanceRange) {
+      grade->SetMaskLuminanceRange(mask_id, LuminanceRangeFromJson(value));
     } else {
       return false;
     }
@@ -658,6 +683,7 @@ auto EditorMaskCreationController::ApplyMaskFieldValue(const NodeId&  grade_id,
   if (!MaskFieldValueIsValid(field_key, after_value)) {
     return Reject("Mask value is invalid for '" + field_key + "'");
   }
+  after_value = CanonicalMaskFieldValue(field_key, std::move(after_value));
   if (document_ == nullptr) {
     return Reject("Mask creation controller is not bound to a document");
   }

@@ -189,6 +189,19 @@ class ColorGradeNodeModel final : public INodeModel {
    */
   void SetMaskInvert(const MaskId& mask_id, bool invert);
   /**
+   * @brief Set the Hue Range. An empty value selects every hue (@ref ColorRangeModel).
+   * @throws std::runtime_error when @p mask_id is missing or @p range fails
+   *         @ref ValidateColorRange. The Mask list is unchanged.
+   */
+  void SetMaskColorRange(const MaskId& mask_id, std::optional<ColorRangeModel> range);
+  /**
+   * @brief Set the Luminance Range. An empty value selects every luminance
+   *        (@ref LuminanceRangeModel).
+   * @throws std::runtime_error when @p mask_id is missing or @p range fails
+   *         @ref ValidateLuminanceRange. The Mask list is unchanged.
+   */
+  void SetMaskLuminanceRange(const MaskId& mask_id, std::optional<LuminanceRangeModel> range);
+  /**
    * @brief Move a Mask in display order. Does not change pixel identity.
    * @throws std::runtime_error when @p mask_id is missing. The Mask list is unchanged.
    */

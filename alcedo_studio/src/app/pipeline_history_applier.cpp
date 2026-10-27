@@ -405,16 +405,7 @@ auto ApplyReplaceMaskSource(PipelineDocument& document, const NodeId& node_id, c
   }
   const auto& next = direction == PipelineEditApplyDirection::Forward ? after_source : before_source;
   try {
-    auto parsed = MaskModelFromJson(nlohmann::json{{"id", std::string{mask_id.Value()}},
-                                                   {"display_name", ""},
-                                                   {"enabled", true},
-                                                   {"deletion_protected", false},
-                                                   {"opacity", 1.0},
-                                                   {"invert", false},
-                                                   {"source", next},
-                                                   {"color_range", nullptr},
-                                                   {"luminance_range", nullptr}});
-    grade->ReplaceMaskSource(mask_id, std::move(parsed.source));
+    grade->ReplaceMaskSource(mask_id, MaskSourceFromJson(next));
     return true;
   } catch (const std::exception& ex) {
     return SetError(error, ex.what());
@@ -431,6 +422,12 @@ auto CurrentMaskField(const MaskModel& mask, const std::string& field_key) -> nl
   }
   if (field_key == "opacity") {
     return mask.opacity;
+  }
+  if (field_key == "color_range") {
+    return ColorRangeToJson(mask.color_range);
+  }
+  if (field_key == "luminance_range") {
+    return LuminanceRangeToJson(mask.luminance_range);
   }
   return mask.display_name;
 }
@@ -463,6 +460,10 @@ auto ApplySetMaskField(PipelineDocument& document, const SetMaskFieldChange& cha
       grade->SetMaskInvert(change.mask_id, next.get<bool>());
     } else if (change.field_key == "opacity") {
       grade->SetMaskOpacity(change.mask_id, next.get<float>());
+    } else if (change.field_key == "color_range") {
+      grade->SetMaskColorRange(change.mask_id, ColorRangeFromJson(next));
+    } else if (change.field_key == "luminance_range") {
+      grade->SetMaskLuminanceRange(change.mask_id, LuminanceRangeFromJson(next));
     } else {
       grade->SetMaskDisplayName(change.mask_id, next.get<std::string>());
     }

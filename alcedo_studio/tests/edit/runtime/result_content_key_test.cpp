@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <optional>
 #include <variant>
 
 #include "../graph/grade_owned_mask_support.hpp"
@@ -16,6 +17,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 
@@ -232,6 +234,41 @@ TEST(GpuDagResultContentKey, MaskParamChangeInvalidatesMaskAndGradeNotSensor) {
   EXPECT_EQ(edited.develop_image, base.develop_image);
   EXPECT_NE(edited.mask, base.mask);
   EXPECT_NE(edited.primary_grade, base.primary_grade);
+}
+
+TEST(GpuDagResultContentKey, MaskRangeValuesInvalidateMaskKeyButKeepThePlan) {
+  auto         prepared = MakePrepared();
+  auto         document = CreateDefaultPipelineDocument();
+  const MaskId mask_id{"mask.radial"};
+  ConnectRadialMask(document);
+  auto* grade = document.PrimaryGrade();
+  grade->SetMaskLuminanceRange(mask_id, LuminanceRangeModel{0.2f, 0.8f, 0.05f});
+  grade->SetMaskColorRange(mask_id, ColorRangeModel{330.0f, 30.0f, 12.0f});
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+
+  // A range drag changes values only: same plan structure, new Mask and Grade results.
+  grade->SetMaskLuminanceRange(mask_id, LuminanceRangeModel{0.2f, 0.7f, 0.05f});
+  const auto luminance_plan =
+      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  EXPECT_EQ(luminance_plan.static_key.topology_hash, plan.static_key.topology_hash);
+  const auto luminance = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(luminance.develop_image, base.develop_image);
+  EXPECT_NE(luminance.mask, base.mask);
+  EXPECT_NE(luminance.primary_grade, base.primary_grade);
+
+  grade->SetMaskColorRange(mask_id, ColorRangeModel{330.0f, 40.0f, 12.0f});
+  const auto hue = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_NE(hue.mask, luminance.mask);
+
+  grade->SetMaskColorRange(mask_id, ColorRangeModel{330.0f, 40.0f, 20.0f});
+  EXPECT_NE(BuildFrameResultContentKeys(plan, prepared, document).mask, hue.mask);
+
+  // Adding or removing a range is a plan structure change.
+  grade->SetMaskColorRange(mask_id, std::nullopt);
+  EXPECT_NE(GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{})
+                .static_key.topology_hash,
+            plan.static_key.topology_hash);
 }
 
 TEST(GpuDagResultContentKey, AiSegmentationMaskContentKeyTracksAssetAndEdge) {

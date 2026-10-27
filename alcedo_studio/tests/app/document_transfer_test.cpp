@@ -354,6 +354,35 @@ TEST(DocumentTransferTest, PasteRemapsEveryNodeAdjustmentAndMaskId) {
   EXPECT_FLOAT_EQ(pasted_radial->minor_radius, 0.2f);
 }
 
+TEST(DocumentTransferTest, PasteCarriesMaskLuminanceAndHueRanges) {
+  auto source = CreateDefaultPipelineDocument();
+  grade_mask_test::AddRadialMask(source, MaskId{"mask.radial"});
+  const LuminanceRangeModel luminance{0.25f, 0.75f, 0.05f};
+  const ColorRangeModel     hue{330.0f, 30.0f, 12.0f};
+  source.PrimaryGrade()->SetMaskLuminanceRange(MaskId{"mask.radial"}, luminance);
+  source.PrimaryGrade()->SetMaskColorRange(MaskId{"mask.radial"}, hue);
+  const auto package =
+      ImportDocumentTransfer(ExportDocumentTransfer(CaptureDocumentTransfer(source)));
+
+  auto                           target = CreateDefaultPipelineDocument();
+  CountingTransferIdentitySource identity;
+  DocumentTransferPasteOptions   options;
+  options.identity_source = &identity;
+  const auto  prepared    = DocumentTransferPlanner::Plan(package, target, options);
+  auto        working     = ClonePipelineDocument(target);
+  std::string error;
+  ASSERT_TRUE(
+      ApplyPipelineEditBatch(working, prepared.batch, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(working.Graph().FindNode(NodeId{"grade.t1"}));
+  ASSERT_NE(grade, nullptr);
+  const auto* mask = grade->FindMask(MaskId{"mask.t1"});
+  ASSERT_NE(mask, nullptr);
+  EXPECT_EQ(mask->luminance_range, luminance);
+  EXPECT_EQ(mask->color_range, hue);
+}
+
 TEST(DocumentTransferTest, IdentityCollisionIsRejectedBeforeDocumentMutation) {
   auto                    source  = test::DocumentWithExposureEv(1.0);
   const auto              package = CaptureDocumentTransfer(source);
