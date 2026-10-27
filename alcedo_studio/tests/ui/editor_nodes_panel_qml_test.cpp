@@ -1559,9 +1559,10 @@ TEST_F(EditorNodesPanelQmlTest, MaskRowClickQueuesSelectMaskWithExplicitIdentity
   EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
 }
 
-// Issue #517: a click on an AI Mask row opens the AI Mask edit of that stored Mask; a Radial row
-// only selects its Mask. ListView and Repeater rows are found in the visual tree.
-TEST_F(EditorNodesPanelQmlTest, MaskGroupAiMaskRowClickOpensStoredAiMaskEdit) {
+// Issue #564 (replaces the #517 behavior): a click on an AI Mask row only selects that Mask, like
+// a Radial row; it opens no AI Mask edit, so no sidecar or model starts. "Edit AI Mask" in the
+// Mask panel opens the edit. ListView and Repeater rows are found in the visual tree.
+TEST_F(EditorNodesPanelQmlTest, MaskGroupAiMaskRowClickOnlySelectsTheMask) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
   backend_.AddMaskToPrimaryGrade(grade_mask_test::MakeAiSegmentationMask(MaskId{"mask.ai"}));
@@ -1589,15 +1590,12 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupAiMaskRowClickOpensStoredAiMaskEdit) {
   ASSERT_NE(LastMaskCommand(), nullptr);
   EXPECT_EQ(LastMaskCommand()->kind, EditorMaskCreationCommandKind::SelectMask);
   EXPECT_EQ(LastMaskCommand()->mask_id, MaskId{"mask.ai"});
-  ASSERT_EQ(backend_.ai_mask_edit_open_requests().size(), 1U);
-  EXPECT_EQ(backend_.ai_mask_edit_open_requests().front().grade_id, NodeId{"grade.primary"});
-  EXPECT_EQ(backend_.ai_mask_edit_open_requests().front().mask_id,
-            std::optional<MaskId>{MaskId{"mask.ai"}});
-  EXPECT_TRUE(ai_mask_tool_.active());
-  EXPECT_TRUE(ai_mask_tool_.editing_stored_mask());
+  ProcessEvents();
+  EXPECT_TRUE(backend_.ai_mask_edit_open_requests().empty());
+  EXPECT_FALSE(ai_mask_tool_.active());
 }
 
-TEST_F(EditorNodesPanelQmlTest, NodeDrawerAiMaskRowClickOpensStoredAiMaskEdit) {
+TEST_F(EditorNodesPanelQmlTest, NodeDrawerAiMaskRowClickOnlySelectsTheMask) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
   backend_.AddMaskToPrimaryGrade(grade_mask_test::MakeAiSegmentationMask(MaskId{"mask.ai"}));
@@ -1628,12 +1626,9 @@ TEST_F(EditorNodesPanelQmlTest, NodeDrawerAiMaskRowClickOpensStoredAiMaskEdit) {
   ASSERT_NE(LastMaskCommand(), nullptr);
   EXPECT_EQ(LastMaskCommand()->kind, EditorMaskCreationCommandKind::SelectMask);
   EXPECT_EQ(LastMaskCommand()->mask_id, MaskId{"mask.ai"});
-  ASSERT_EQ(backend_.ai_mask_edit_open_requests().size(), 1U);
-  EXPECT_EQ(backend_.ai_mask_edit_open_requests().front().grade_id, NodeId{"grade.primary"});
-  EXPECT_EQ(backend_.ai_mask_edit_open_requests().front().mask_id,
-            std::optional<MaskId>{MaskId{"mask.ai"}});
-  EXPECT_TRUE(ai_mask_tool_.active());
-  EXPECT_TRUE(ai_mask_tool_.editing_stored_mask());
+  ProcessEvents();
+  EXPECT_TRUE(backend_.ai_mask_edit_open_requests().empty());
+  EXPECT_FALSE(ai_mask_tool_.active());
 }
 
 // Mask ids are unique only within a grade: selecting a Mask must not also

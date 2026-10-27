@@ -443,8 +443,11 @@ auto EditorMaskCreationController::SelectMask(const NodeId& grade_id, const Mask
   if (mask == nullptr) {
     return Reject("Mask is missing");
   }
+  // An AI Mask is selected for its Mask values and ranges only (#564): its source has no
+  // handles here (HandleMatchesKind refuses every move), and only the AI Mask edit changes it.
   const auto kind = GetMaskSourceKind(mask->source);
-  if (kind != MaskSourceKind::Radial && kind != MaskSourceKind::LinearGradient) {
+  if (kind != MaskSourceKind::Radial && kind != MaskSourceKind::LinearGradient &&
+      kind != MaskSourceKind::AiSegmentation) {
     return Reject("Mask source kind is not selectable");
   }
   kind_          = kind;

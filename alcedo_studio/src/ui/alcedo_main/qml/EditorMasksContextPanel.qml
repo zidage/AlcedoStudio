@@ -35,6 +35,9 @@ Item {
                                               && root.selectedMaskId.length > 0
                                               && root.sourceKind === "linear"
     readonly property bool analyticSelected: root.radialSelected || root.gradientSelected
+    readonly property bool aiMaskSelected: root.controlsEnabled
+                                            && root.selectedMaskId.length > 0
+                                            && root.sourceKind === "aiSegmentation"
     readonly property bool maskSelected: root.controlsEnabled
                                           && root.selectedMaskId.length > 0
     readonly property bool aiMaskEditOpen: !!(root.aiMaskTool && root.aiMaskTool.active)
@@ -149,6 +152,19 @@ Item {
                     id: content
                     width: parent.width
                     spacing: appTheme.spaceSm
+
+                    // A selected AI Mask: its edit starts only here or from the header
+                    // AI Mask button, so a selection starts no AI runtime (#564).
+                    DialogActionButton {
+                        objectName: "editorMasksEditAiMask"
+                        Layout.fillWidth: true
+                        visible: root.aiMaskSelected && !root.aiMaskEditOpen
+                        enabled: !!root.aiMaskTool && !root.aiMaskTool.active
+                        buttonHeight: appTheme.iconButtonHitSizeCompact
+                        font.pixelSize: appTheme.fontSizeBody
+                        text: qsTr("Edit AI Mask")
+                        onClicked: root.aiMaskTool.openSelectedMask()
+                    }
 
                     // Mask fields for the selected Mask. Each edit settles as one
                     // typed SetMaskField; opacity drags stay Interactive until release.

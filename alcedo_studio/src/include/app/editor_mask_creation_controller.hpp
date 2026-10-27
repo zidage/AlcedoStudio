@@ -197,9 +197,10 @@ class EditorMaskCreationController {
       -> EditorMaskCreationResult;
 
   /**
-   * @brief Select an existing Radial or Linear Mask. Load-only; no Mix or commit.
+   * @brief Select an existing Radial, Linear, or AI Mask. Load-only; no Mix or commit.
    *
-   * Selection loads handles for later movement.
+   * Selection loads handles for later movement. An AI Mask has no handles: its selection allows
+   * the Mask value and range edits, and selecting it starts no AI Mask edit (#564).
    */
   auto SelectMask(const NodeId& grade_id, const MaskId& mask_id, EditorSessionIdentity session)
       -> EditorMaskCreationResult;
