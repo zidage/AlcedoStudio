@@ -336,6 +336,25 @@ void EditorMaskCreationAdapter::setMaskInvert(bool invert) {
   EnqueueMaskField(kMaskFieldInvert, invert);
 }
 
+void EditorMaskCreationAdapter::toggleMaskInvert(const QString& node_id, const QString& mask_id) {
+  const QString target_mask = mask_id.isEmpty() ? selected_mask_id_ : mask_id;
+  if (target_mask.isEmpty()) {
+    return;
+  }
+  NodeId grade{node_id.toStdString()};
+  if (grade.Empty()) {
+    grade = active() ? edit_node_id_ : CurrentGradeId();
+  }
+  if (!CanAuthorMasksFor(grade)) {
+    return;
+  }
+  EditorMaskCreationCommand command;
+  command.kind    = EditorMaskCreationCommandKind::ToggleMaskInvert;
+  command.node_id = grade;
+  command.mask_id = MaskIdFromQString(target_mask);
+  (void)Enqueue(command);
+}
+
 void EditorMaskCreationAdapter::setMaskName(const QString& name) {
   const QString trimmed = name.trimmed();
   if (trimmed.isEmpty() || trimmed == mask_name()) {
@@ -621,6 +640,31 @@ void EditorMaskCreationAdapter::SyncFromSession() {
   if (session_->mask_creation_commands_pending()) {
     return;
   }
+  SyncOwnerSelection();
+  // An open edit keeps its GUI-predicted values until it settles.
+  if (!open_ && UpdateMaskFieldView()) {
+    emit maskCreationChanged();
+  }
+}
+
+auto EditorMaskCreationAdapter::UpdateMaskFieldView() -> bool {
+  MaskFieldView view;
+  view.mask_id = selected_mask_id_;
+  if (const auto* mask = SelectedMask()) {
+    view.present      = true;
+    view.enabled      = mask->enabled;
+    view.invert       = mask->invert;
+    view.opacity      = mask->opacity;
+    view.display_name = QString::fromStdString(mask->display_name);
+  }
+  if (view == published_mask_fields_) {
+    return false;
+  }
+  published_mask_fields_ = std::move(view);
+  return true;
+}
+
+void EditorMaskCreationAdapter::SyncOwnerSelection() {
   const auto owner_node  = session_->mask_creation_node_id();
   const auto owner_id    = session_->mask_creation_mask_id();
   const auto owner_state = session_->mask_creation_state();

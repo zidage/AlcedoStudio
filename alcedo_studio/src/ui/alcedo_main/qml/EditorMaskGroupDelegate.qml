@@ -41,12 +41,12 @@ Item {
     property bool selected: false
     property bool ownerActive: false
     property bool expanded: true
-    // Structure gate shared by every action on this row (add/remove group,
+    // Structure admission rule shared by every action on this row (add/remove group,
     // lock, delete, move, Mask commands): editable session + no command in
     // flight + no incomplete draft.
     property bool actionsEnabled: true
     property string actionsDisabledReason: ""
-    // Drag reorder gate resolved by the panel: editable structure plus more
+    // Drag reorder admission rule resolved by the panel: editable structure plus more
     // than one group on the committed backbone.
     property bool reorderEnabled: false
     property string selectedMaskId: ""
@@ -118,6 +118,7 @@ Item {
     signal reorderCanceled()
     signal reorderStepRequested(int delta)
     signal maskClicked(int maskIndex)
+    signal maskInvertClicked(int maskIndex)
     signal maskDeleteClicked(int maskIndex)
     signal maskNavigateUp(int maskIndex)
     signal maskNavigateDown(int maskIndex)
@@ -598,6 +599,7 @@ Item {
                                          ? String(modelData.displayName) : ""
                             maskEnabled: modelData.enabled !== undefined ? modelData.enabled === true
                                                                          : true
+                            maskInverted: modelData.invert === true
                             opacityValue: modelData.opacity !== undefined
                                           ? Number(modelData.opacity) : 1.0
                             selected: root.selectedMaskId.length > 0
@@ -611,6 +613,7 @@ Item {
                             selectionOutlineWidth: root.selectionOutlineWidth
                             maskThumbnails: root.maskThumbnails
                             onClicked: root.maskClicked(index)
+                            onInvertClicked: root.maskInvertClicked(index)
                             onDeleteClicked: root.maskDeleteClicked(index)
                             onNavigateUp: root.maskNavigateUp(index)
                             onNavigateDown: root.maskNavigateDown(index)

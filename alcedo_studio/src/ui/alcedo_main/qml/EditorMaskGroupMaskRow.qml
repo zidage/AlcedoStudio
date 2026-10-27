@@ -4,8 +4,8 @@ import QtQuick.Controls.impl
 import QtQuick.Layouts
 
 // One Mask row inside an EditorMaskGroupDelegate body. The row carries its own
-// (NodeId, MaskId): selection and delete commands target this Mask even when
-// another Mask is currently selected for editing.
+// (NodeId, MaskId): selection, Invert, and delete commands target this Mask even
+// when another Mask is currently selected for editing.
 // Selection follows docs/VI/README.md: the row keeps its fill, text, and SVG
 // colors and changes only its neutral outer outline.
 Item {
@@ -17,9 +17,10 @@ Item {
     property string sourceKind: ""
     property string displayName: ""
     property bool maskEnabled: true
+    property bool maskInverted: false
     property real opacityValue: 1.0
     property bool selected: false
-    // Structure commands (delete) share the group action gate: the session
+    // Row commands (Invert, delete) share the group admission rule: the session
     // must be editable, no node command may be in flight, and no incomplete
     // draft may own the graph.
     property bool actionsEnabled: true
@@ -33,6 +34,7 @@ Item {
     property string maskThumbUrl: ""
 
     signal clicked()
+    signal invertClicked()
     signal deleteClicked()
     signal navigateUp()
     signal navigateDown()
@@ -78,6 +80,9 @@ Item {
         var parts = [name, qsTr("%1% opacity").arg(root.opacityPercent)]
         if (!root.maskEnabled) {
             parts.push(qsTr("disabled"))
+        }
+        if (root.maskInverted) {
+            parts.push(qsTr("inverted"))
         }
         if (root.selected) {
             parts.push(qsTr("selected"))
@@ -207,14 +212,45 @@ Item {
             Text {
                 objectName: "editorMaskGroupMaskSummary"
                 width: parent.width
-                text: root.maskEnabled
-                      ? qsTr("%1% opacity").arg(root.opacityPercent)
-                      : qsTr("Off") + "  " + qsTr("%1% opacity").arg(root.opacityPercent)
+                text: (root.maskEnabled ? "" : qsTr("Off") + "  ")
+                      + qsTr("%1% opacity").arg(root.opacityPercent)
+                      + (root.maskInverted ? "  " + qsTr("Inverted") : "")
                 color: root.mutedColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
                 wrapMode: Text.Wrap
                 Accessible.ignored: true
+            }
+        }
+
+        // One-click Invert: the Mask covers the area it did not cover; a second
+        // click returns it. Works for every Mask source kind, AI Masks included.
+        Item {
+            Layout.preferredWidth: appTheme.iconButtonHitSizeCompact
+            Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+            Layout.alignment: Qt.AlignVCenter
+
+            IconActionButton {
+                id: invertButton
+                objectName: "editorMaskGroupMaskInvertButton"
+                anchors.fill: parent
+                compact: true
+                stretchInLayout: true
+                enabled: root.actionsEnabled
+                selected: root.maskInverted
+                iconSrc: "qrc:/panel_icons/mask-invert.svg"
+                iconColorDefault: root.maskInverted ? root.textColor : root.mutedColor
+                iconColorMuted: root.mutedColor
+                fillIdle: "transparent"
+                fillHover: root.hoverColor
+                fillPressed: appTheme.buttonPressedFillColor
+                focusRingColor: root.inkColor
+                actionName: root.maskInverted
+                            ? qsTr("Turn off Invert for %1").arg(root.rowName)
+                            : qsTr("Invert %1").arg(root.rowName)
+                toolTipText: enabled ? actionName : root.actionsDisabledReason
+                focusOnPointerPress: false
+                onClicked: root.invertClicked()
             }
         }
 
@@ -248,10 +284,10 @@ Item {
     MouseArea {
         id: rowMouse
         anchors.fill: parent
-        // Keep the delete button's hit target exclusive: a press on it must
-        // not also select the row.
-        anchors.rightMargin: appTheme.iconButtonHitSizeCompact + appTheme.spaceXs
-                             + appTheme.spaceSm
+        // Keep the Invert and delete hit targets exclusive: a press on them
+        // must not also select the row.
+        anchors.rightMargin: appTheme.iconButtonHitSizeCompact * 2 + appTheme.spaceXs
+                             + appTheme.spaceSm * 2
         hoverEnabled: true
         preventStealing: true
         cursorShape: Qt.PointingHandCursor

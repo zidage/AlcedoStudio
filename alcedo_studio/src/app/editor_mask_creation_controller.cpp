@@ -699,6 +699,20 @@ auto EditorMaskCreationController::ApplyMaskFieldValue(const NodeId&  grade_id,
   return result;
 }
 
+auto EditorMaskCreationController::ToggleMaskInvert(const NodeId& grade_id, const MaskId& mask_id)
+    -> EditorMaskCreationResult {
+  if (document_ == nullptr) {
+    return Reject("Mask creation controller is not bound to a document");
+  }
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(document_->Graph().FindNode(grade_id));
+  const auto* mask = grade == nullptr ? nullptr : grade->FindMask(mask_id);
+  if (mask == nullptr) {
+    return Reject("Mask is missing");
+  }
+  return ApplyMaskFieldValue(grade_id, mask_id, std::string{kMaskFieldInvert}, !mask->invert);
+}
+
 auto EditorMaskCreationController::PublishMaskFieldEdit() -> EditorMaskCreationResult {
   const auto field_key = field_edit_key_;
   auto*      grade     = Grade();
@@ -790,7 +804,7 @@ auto EditorMaskCreationController::BeginMaskMove(AnalyticMaskHandle  handle,
     return Reject("handle does not match the selected Mask kind");
   }
   // Existing handles may lie outside the photograph; only creation presses
-  // are gated on inside_photograph.
+  // require inside_photograph.
   if (!FiniteSample(sample)) {
     return Reject("Mask press sample is not finite");
   }

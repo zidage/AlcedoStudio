@@ -107,6 +107,14 @@ class EditorMaskCreationAdapter : public QObject {
   Q_INVOKABLE void   beginLinear();
   Q_INVOKABLE void   setMaskEnabled(bool enabled);
   Q_INVOKABLE void   setMaskInvert(bool invert);
+  /**
+   * @brief Queue one Invert toggle of (@p node_id, @p mask_id).
+   *
+   * Empty ids target the selected Mask. The owner reads the stored `invert` value when it runs
+   * the command, so two clicks always return the Mask to its first coverage. Any Mask source
+   * kind is accepted, AI Masks included.
+   */
+  Q_INVOKABLE void   toggleMaskInvert(const QString& node_id, const QString& mask_id);
   Q_INVOKABLE void   setMaskName(const QString& name);
   Q_INVOKABLE void   beginMaskOpacity();
   Q_INVOKABLE void   updateMaskOpacity(qreal percent);
@@ -164,6 +172,9 @@ class EditorMaskCreationAdapter : public QObject {
   /// Cancel the open op when the press-time mapping no longer matches.
   auto               CancelIfMappingChanged() -> bool;
   void               ApplyOwnerSource(const MaskId& mask_id, const MaskSource& source);
+  void               SyncOwnerSelection();
+  /// Store the selected Mask's Enabled/Invert/Opacity/Name; true when they changed.
+  [[nodiscard]] auto UpdateMaskFieldView() -> bool;
   void               BeginAnalyticMove(AnalyticMaskHandle handle);
   void               UpdateFeatherPercent(AnalyticMaskHandle handle, qreal percent);
   void               UpdateRadialRadiusPercent(AnalyticMaskHandle handle, qreal percent);
@@ -219,6 +230,20 @@ class EditorMaskCreationAdapter : public QObject {
   Vector2                                           nudge_base_normalized_{};
   Vector2                                           nudge_base_reference_{};
   Vector2                                           nudge_offset_{};
+
+  /// Mask-level fields of the selected Mask as last published to QML. Field edits, Undo, and
+  /// Redo do not change the owner source, so SyncFromSession compares these values instead.
+  struct MaskFieldView {
+    QString mask_id;
+    bool    present = false;
+    bool    enabled = true;
+    bool    invert  = false;
+    float   opacity = 1.0f;
+    QString display_name;
+
+    auto    operator==(const MaskFieldView&) const -> bool = default;
+  };
+  MaskFieldView published_mask_fields_{};
 };
 
 }  // namespace alcedo::ui
