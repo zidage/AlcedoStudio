@@ -172,6 +172,8 @@ auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
       for (const auto* mask : masks) {
         hash = MixText(hash, mask->id.Value());
         hash = MixText(hash, MaskSourceKindText(GetMaskSourceKind(mask->source)));
+        // Range presence is plan structure; range values are parameters and enter the Mask
+        // result key (result_content_key.cpp), so a range drag keeps the plan.
         hash = MixU64(hash, mask->color_range.has_value() ? 1 : 0);
         hash = MixU64(hash, mask->luminance_range.has_value() ? 1 : 0);
       }

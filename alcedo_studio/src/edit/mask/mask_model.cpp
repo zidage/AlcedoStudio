@@ -99,21 +99,6 @@ auto ReadRequiredFloat(const nlohmann::json& json, const char* key, std::string_
   return value;
 }
 
-void ValidateRangeObject(const nlohmann::json& json, std::string_view name) {
-  RequireObject(json, name);
-  for (const auto& [key, value] : json.items()) {
-    if (key != "enabled") {
-      Fail(std::string{name} + " contains unsupported field " + key);
-    }
-  }
-  if (!json.contains("enabled") || !json["enabled"].is_boolean()) {
-    Fail(std::string{name} + " must contain boolean enabled");
-  }
-  if (json["enabled"].get<bool>()) {
-    Fail(std::string{name} + " cannot be enabled");
-  }
-}
-
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
 void ValidateBrush(const BrushMaskSource& brush) {
   RequireNonNegative(brush.feather_radius, "feather_radius");
@@ -209,24 +194,6 @@ void ValidateAiSegmentation(const AiSegmentationMaskSource& ai) {
   ValidateAiMaskRecipe(ai.recipe);
 }
 
-void ValidateRange(const std::optional<ColorRangeModel>& range, std::string_view name) {
-  if (!range.has_value()) {
-    return;
-  }
-  if (range->enabled) {
-    Fail(std::string{name} + " cannot be enabled");
-  }
-}
-
-void ValidateRange(const std::optional<LuminanceRangeModel>& range, std::string_view name) {
-  if (!range.has_value()) {
-    return;
-  }
-  if (range->enabled) {
-    Fail(std::string{name} + " cannot be enabled");
-  }
-}
-
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
 auto BrushToJson(const BrushMaskSource& brush) -> nlohmann::json {
   return {{"kind", "brush"},
@@ -276,20 +243,6 @@ auto AiSegmentationToJson(const AiSegmentationMaskSource& ai) -> nlohmann::json 
       {"model_set_id", ai.model_set_id},
       {"geometry_fingerprint", ai.geometry_fingerprint},
       {"components", AiMaskRecipeToJson(ai.recipe)}};
-}
-
-auto RangeToJson(const std::optional<ColorRangeModel>& range) -> nlohmann::json {
-  if (!range.has_value()) {
-    return nullptr;
-  }
-  return {{"enabled", range->enabled}};
-}
-
-auto RangeToJson(const std::optional<LuminanceRangeModel>& range) -> nlohmann::json {
-  if (!range.has_value()) {
-    return nullptr;
-  }
-  return {{"enabled", range->enabled}};
 }
 
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
@@ -405,20 +358,87 @@ auto AiSegmentationFromJson(const nlohmann::json& json) -> AiSegmentationMaskSou
   return ai;
 }
 
-auto ColorRangeFromJson(const nlohmann::json& json) -> std::optional<ColorRangeModel> {
-  if (json.is_null()) {
-    return std::nullopt;
-  }
-  ValidateRangeObject(json, "color_range");
-  return ColorRangeModel{false};
+auto SourceToJsonUnchecked(const MaskSource& mask_source) -> nlohmann::json {
+  nlohmann::json source;
+  std::visit(
+      [&source](const auto& value) {
+        using Source = std::decay_t<decltype(value)>;
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+        if constexpr (std::is_same_v<Source, BrushMaskSource>) {
+          source = BrushToJson(value);
+        } else
+#endif
+            if constexpr (std::is_same_v<Source, RadialMaskSource>) {
+          source = RadialToJson(value);
+        } else if constexpr (std::is_same_v<Source, LinearGradientMaskSource>) {
+          source = LinearGradientToJson(value);
+        } else {
+          static_assert(std::is_same_v<Source, AiSegmentationMaskSource>,
+                        "SourceToJsonUnchecked misses a Mask source kind");
+          source = AiSegmentationToJson(value);
+        }
+      },
+      mask_source);
+  return source;
 }
 
-auto LuminanceRangeFromJson(const nlohmann::json& json) -> std::optional<LuminanceRangeModel> {
-  if (json.is_null()) {
-    return std::nullopt;
+/// Read one source object by its `kind`. Does not run the value rules of @ref ValidateMaskSource.
+auto SourceFromJsonUnchecked(const nlohmann::json& source_json) -> MaskSource {
+  if (!source_json.contains("kind") || !source_json["kind"].is_string()) {
+    Fail("Mask source is missing kind");
   }
-  ValidateRangeObject(json, "luminance_range");
-  return LuminanceRangeModel{false};
+  const auto kind = source_json["kind"].get<std::string>();
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+  if (kind == "brush") {
+    return BrushFromJson(source_json);
+  }
+#endif
+  if (kind == "radial") {
+    return RadialFromJson(source_json);
+  }
+  if (kind == "linear_gradient") {
+    return LinearGradientFromJson(source_json);
+  }
+  if (kind == "ai_segmentation") {
+    return AiSegmentationFromJson(source_json);
+  }
+  Fail("Unknown Mask source kind: " + kind);
+}
+
+/// Whether @p json is the pre-range placeholder `{"enabled": false}`, which reads as empty.
+auto IsLegacyRangePlaceholder(const nlohmann::json& json, std::string_view name) -> bool {
+  if (!json.contains("enabled")) {
+    return false;
+  }
+  RequireOnlyKeys(json, name, {"enabled"});
+  if (!json["enabled"].is_boolean()) {
+    Fail(std::string{name} + " enabled must be boolean");
+  }
+  if (json["enabled"].get<bool>()) {
+    Fail(std::string{name} + " cannot be enabled");
+  }
+  return true;
+}
+
+void RequireColorRangeSoftness(float softness) {
+  RequireFinite(softness, "color_range softness");
+  if (!(softness > 0.0f) || softness > kColorRangeMaximumSoftnessDegrees) {
+    Fail("color_range softness must be in (0, 90]");
+  }
+}
+
+void RequireLuminanceRangeSoftness(float softness) {
+  RequireFinite(softness, "luminance_range softness");
+  if (!(softness > 0.0f) || softness > kLuminanceRangeMaximumSoftness) {
+    Fail("luminance_range softness must be in (0, 0.5]");
+  }
+}
+
+void RequireUnitInterval(float value, std::string_view name) {
+  RequireFinite(value, name);
+  if (value < 0.0f || value > 1.0f) {
+    Fail(std::string{name} + " must be in [0, 1]");
+  }
 }
 
 }  // namespace
@@ -432,6 +452,110 @@ auto BrushSourceHasParameterizedPayload(const BrushMaskSource& brush) -> bool {
 
 void ValidateAiSegmentationMaskSource(const AiSegmentationMaskSource& source) {
   ValidateAiSegmentation(source);
+}
+
+auto ColorRangeWidthDegrees(const ColorRangeModel& range) -> float {
+  if (range.hue_start <= range.hue_end) {
+    return range.hue_end - range.hue_start;
+  }
+  return 360.0f - range.hue_start + range.hue_end;
+}
+
+auto IsFullColorRange(const ColorRangeModel& range) -> bool {
+  return range.hue_start == 0.0f && range.hue_end == 360.0f;
+}
+
+auto IsFullLuminanceRange(const LuminanceRangeModel& range) -> bool {
+  return range.low == 0.0f && range.high == 1.0f;
+}
+
+void ValidateColorRange(const ColorRangeModel& range) {
+  RequireFinite(range.hue_start, "color_range hue_start");
+  RequireFinite(range.hue_end, "color_range hue_end");
+  if (range.hue_start < 0.0f || range.hue_start >= 360.0f) {
+    Fail("color_range hue_start must be in [0, 360)");
+  }
+  if (range.hue_end <= 0.0f || range.hue_end > 360.0f) {
+    Fail("color_range hue_end must be in (0, 360]");
+  }
+  if (ColorRangeWidthDegrees(range) < kColorRangeMinimumWidthDegrees) {
+    Fail("color_range must select at least 1 degree");
+  }
+  RequireColorRangeSoftness(range.softness);
+  if (IsFullColorRange(range)) {
+    Fail("color_range covers every hue; a full range is stored as null");
+  }
+}
+
+void ValidateLuminanceRange(const LuminanceRangeModel& range) {
+  RequireUnitInterval(range.low, "luminance_range low");
+  RequireUnitInterval(range.high, "luminance_range high");
+  if (range.high - range.low < kLuminanceRangeMinimumWidth) {
+    Fail("luminance_range high - low must be at least 0.01");
+  }
+  RequireLuminanceRangeSoftness(range.softness);
+  if (IsFullLuminanceRange(range)) {
+    Fail("luminance_range covers every luminance; a full range is stored as null");
+  }
+}
+
+auto ColorRangeToJson(const std::optional<ColorRangeModel>& range) -> nlohmann::json {
+  if (!range.has_value()) {
+    return nullptr;
+  }
+  return {
+      {"hue_start", range->hue_start}, {"hue_end", range->hue_end}, {"softness", range->softness}};
+}
+
+auto LuminanceRangeToJson(const std::optional<LuminanceRangeModel>& range) -> nlohmann::json {
+  if (!range.has_value()) {
+    return nullptr;
+  }
+  return {{"low", range->low}, {"high", range->high}, {"softness", range->softness}};
+}
+
+auto ColorRangeFromJson(const nlohmann::json& json) -> std::optional<ColorRangeModel> {
+  constexpr std::string_view kName = "color_range";
+  if (json.is_null()) {
+    return std::nullopt;
+  }
+  RequireObject(json, kName);
+  if (IsLegacyRangePlaceholder(json, kName)) {
+    return std::nullopt;
+  }
+  RequireOnlyKeys(json, kName, {"hue_start", "hue_end", "softness"});
+  ColorRangeModel range;
+  range.hue_start = ReadRequiredFloat(json, "hue_start", kName);
+  range.hue_end   = ReadRequiredFloat(json, "hue_end", kName);
+  range.softness  = ReadRequiredFloat(json, "softness", kName);
+  if (IsFullColorRange(range)) {
+    RequireColorRangeSoftness(range.softness);
+    return std::nullopt;
+  }
+  ValidateColorRange(range);
+  return range;
+}
+
+auto LuminanceRangeFromJson(const nlohmann::json& json) -> std::optional<LuminanceRangeModel> {
+  constexpr std::string_view kName = "luminance_range";
+  if (json.is_null()) {
+    return std::nullopt;
+  }
+  RequireObject(json, kName);
+  if (IsLegacyRangePlaceholder(json, kName)) {
+    return std::nullopt;
+  }
+  RequireOnlyKeys(json, kName, {"low", "high", "softness"});
+  LuminanceRangeModel range;
+  range.low      = ReadRequiredFloat(json, "low", kName);
+  range.high     = ReadRequiredFloat(json, "high", kName);
+  range.softness = ReadRequiredFloat(json, "softness", kName);
+  if (IsFullLuminanceRange(range)) {
+    RequireLuminanceRangeSoftness(range.softness);
+    return std::nullopt;
+  }
+  ValidateLuminanceRange(range);
+  return range;
 }
 
 auto GetMaskSourceKind(const MaskSource& source) -> MaskSourceKind {
@@ -468,6 +592,28 @@ auto MaskSourceKindText(MaskSourceKind kind) -> std::string_view {
   return "unknown";
 }
 
+void ValidateMaskSource(const MaskSource& source) {
+  std::visit(
+      [](const auto& value) {
+        using Source = std::decay_t<decltype(value)>;
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+        if constexpr (std::is_same_v<Source, BrushMaskSource>) {
+          ValidateBrush(value);
+        } else
+#endif
+            if constexpr (std::is_same_v<Source, RadialMaskSource>) {
+          ValidateRadial(value);
+        } else if constexpr (std::is_same_v<Source, LinearGradientMaskSource>) {
+          ValidateLinearGradient(value);
+        } else {
+          static_assert(std::is_same_v<Source, AiSegmentationMaskSource>,
+                        "ValidateMaskSource misses a Mask source kind");
+          ValidateAiSegmentation(value);
+        }
+      },
+      source);
+}
+
 void ValidateMaskModel(const MaskModel& mask) {
   if (mask.id.Empty()) {
     Fail("MaskId must not be empty");
@@ -476,60 +622,38 @@ void ValidateMaskModel(const MaskModel& mask) {
   if (mask.opacity < 0.0f || mask.opacity > 1.0f) {
     Fail("opacity must stay in [0, 1]");
   }
-  std::visit(
-      [](const auto& source) {
-        using Source = std::decay_t<decltype(source)>;
-#ifdef ALCEDO_ENABLE_BRUSH_MASK
-        if constexpr (std::is_same_v<Source, BrushMaskSource>) {
-          ValidateBrush(source);
-        } else
-#endif
-            if constexpr (std::is_same_v<Source, RadialMaskSource>) {
-          ValidateRadial(source);
-        } else if constexpr (std::is_same_v<Source, LinearGradientMaskSource>) {
-          ValidateLinearGradient(source);
-        } else {
-          static_assert(std::is_same_v<Source, AiSegmentationMaskSource>,
-                        "ValidateMaskModel misses a Mask source kind");
-          ValidateAiSegmentation(source);
-        }
-      },
-      mask.source);
-  ValidateRange(mask.color_range, "color_range");
-  ValidateRange(mask.luminance_range, "luminance_range");
+  ValidateMaskSource(mask.source);
+  if (mask.color_range.has_value()) {
+    ValidateColorRange(*mask.color_range);
+  }
+  if (mask.luminance_range.has_value()) {
+    ValidateLuminanceRange(*mask.luminance_range);
+  }
+}
+
+auto MaskSourceToJson(const MaskSource& source) -> nlohmann::json {
+  ValidateMaskSource(source);
+  return SourceToJsonUnchecked(source);
+}
+
+auto MaskSourceFromJson(const nlohmann::json& json) -> MaskSource {
+  RequireObject(json, "Mask source");
+  auto source = SourceFromJsonUnchecked(json);
+  ValidateMaskSource(source);
+  return source;
 }
 
 auto MaskModelToJson(const MaskModel& mask) -> nlohmann::json {
   ValidateMaskModel(mask);
-  nlohmann::json source;
-  std::visit(
-      [&source](const auto& value) {
-        using Source = std::decay_t<decltype(value)>;
-#ifdef ALCEDO_ENABLE_BRUSH_MASK
-        if constexpr (std::is_same_v<Source, BrushMaskSource>) {
-          source = BrushToJson(value);
-        } else
-#endif
-            if constexpr (std::is_same_v<Source, RadialMaskSource>) {
-          source = RadialToJson(value);
-        } else if constexpr (std::is_same_v<Source, LinearGradientMaskSource>) {
-          source = LinearGradientToJson(value);
-        } else {
-          static_assert(std::is_same_v<Source, AiSegmentationMaskSource>,
-                        "MaskModelToJson misses a Mask source kind");
-          source = AiSegmentationToJson(value);
-        }
-      },
-      mask.source);
   return {{"id", std::string{mask.id.Value()}},
           {"display_name", mask.display_name},
           {"enabled", mask.enabled},
           {"deletion_protected", mask.deletion_protected},
           {"opacity", mask.opacity},
           {"invert", mask.invert},
-          {"source", std::move(source)},
-          {"color_range", RangeToJson(mask.color_range)},
-          {"luminance_range", RangeToJson(mask.luminance_range)}};
+          {"source", SourceToJsonUnchecked(mask.source)},
+          {"color_range", ColorRangeToJson(mask.color_range)},
+          {"luminance_range", LuminanceRangeToJson(mask.luminance_range)}};
 }
 
 auto MaskModelFromJson(const nlohmann::json& json) -> MaskModel {
@@ -549,34 +673,16 @@ auto MaskModelFromJson(const nlohmann::json& json) -> MaskModel {
   if (!json.contains("deletion_protected") || !json.at("deletion_protected").is_boolean()) {
     Fail("Mask deletion_protected must be boolean");
   }
-  const auto& source_json = json["source"];
-  if (!source_json.contains("kind") || !source_json["kind"].is_string()) {
-    Fail("Mask source is missing kind");
-  }
-  const auto kind = source_json["kind"].get<std::string>();
-  MaskModel  mask;
-  mask.id           = MaskId{json["id"].get<std::string>()};
-  mask.display_name = json.value("display_name", std::string{});
-  mask.enabled      = json.value("enabled", true);
+  MaskModel mask;
+  mask.id                 = MaskId{json["id"].get<std::string>()};
+  mask.display_name       = json.value("display_name", std::string{});
+  mask.enabled            = json.value("enabled", true);
   mask.deletion_protected = json.at("deletion_protected").get<bool>();
-  mask.opacity      = json.value("opacity", 1.0f);
-  mask.invert       = json.value("invert", false);
-#ifdef ALCEDO_ENABLE_BRUSH_MASK
-  if (kind == "brush") {
-    mask.source = BrushFromJson(source_json);
-  } else
-#endif
-      if (kind == "radial") {
-    mask.source = RadialFromJson(source_json);
-  } else if (kind == "linear_gradient") {
-    mask.source = LinearGradientFromJson(source_json);
-  } else if (kind == "ai_segmentation") {
-    mask.source = AiSegmentationFromJson(source_json);
-  } else {
-    Fail("Unknown Mask source kind: " + kind);
-  }
-  mask.color_range      = ColorRangeFromJson(json["color_range"]);
-  mask.luminance_range  = LuminanceRangeFromJson(json["luminance_range"]);
+  mask.opacity            = json.value("opacity", 1.0f);
+  mask.invert             = json.value("invert", false);
+  mask.source             = SourceFromJsonUnchecked(json["source"]);
+  mask.color_range        = ColorRangeFromJson(json["color_range"]);
+  mask.luminance_range    = LuminanceRangeFromJson(json["luminance_range"]);
   ValidateMaskModel(mask);
   return mask;
 }

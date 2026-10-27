@@ -18,6 +18,8 @@ namespace alcedo {
 namespace {
 
 using pipeline_edit_json::CanonicalColorGradeNodeJson;
+using pipeline_edit_json::CanonicalColorRangeJson;
+using pipeline_edit_json::CanonicalLuminanceRangeJson;
 using pipeline_edit_json::CanonicalMaskJson;
 using pipeline_edit_json::CanonicalMaskSourceJson;
 using pipeline_edit_json::Fail;
@@ -249,6 +251,14 @@ void ValidateMaskFieldValue(const nlohmann::json& value, const std::string& fiel
     if (!value.is_string()) {
       Fail(std::string{context} + ": display_name must be a string");
     }
+    return;
+  }
+  if (field_key == "color_range") {
+    (void)CanonicalColorRangeJson(value, context);
+    return;
+  }
+  if (field_key == "luminance_range") {
+    (void)CanonicalLuminanceRangeJson(value, context);
     return;
   }
   Fail(std::string{context} + ": unsupported field_key '" + field_key + "'");

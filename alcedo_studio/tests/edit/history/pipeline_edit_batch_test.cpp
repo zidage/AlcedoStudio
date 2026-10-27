@@ -16,6 +16,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -511,6 +512,53 @@ TEST(PipelineEditBatch, RoundTripForEveryChangeVariant) {
   paste_mask.display_index = 0;
   ExpectRoundTrip(PipelineEditBatch::Make(PipelineEditOperationKind::Paste, {add, paste_mask},
                                           "history.operation.paste"));
+}
+
+TEST(PipelineEditBatch, MaskRangeFieldsAcceptOnlyCanonicalRangeValues) {
+  const auto make = [](std::string key, nlohmann::json before, nlohmann::json after) {
+    SetMaskFieldChange field;
+    field.node_id      = NodeId{"grade.look"};
+    field.mask_id      = MaskId{"mask.radial"};
+    field.field_key    = std::move(key);
+    field.before_value = std::move(before);
+    field.after_value  = std::move(after);
+    return PipelineEditBatch::Make(PipelineEditOperationKind::SetMaskField, {field},
+                                   "history.operation.set_mask_field");
+  };
+  const auto luminance = LuminanceRangeToJson(LuminanceRangeModel{0.25f, 0.75f, 0.05f});
+  const auto hue       = ColorRangeToJson(ColorRangeModel{330.0f, 30.0f, 12.0f});
+  ExpectRoundTrip(make("luminance_range", nullptr, luminance));
+  ExpectRoundTrip(make("luminance_range", luminance, nullptr));
+  ExpectRoundTrip(make("color_range", nullptr, hue));
+  ExpectRoundTrip(make("color_range", hue, nullptr));
+
+  const std::vector<nlohmann::json> invalid_luminance{
+      // A full range is stored as null, the legacy placeholder is never written to history,
+      // and numbers must have the stored float form.
+      {{"low", 0.0}, {"high", 1.0}, {"softness", 0.05000000074505806}},
+      {{"enabled", false}},
+      {{"low", 0.3}, {"high", 0.75}, {"softness", 0.05000000074505806}},
+      {{"low", 0.75}, {"high", 0.25}, {"softness", 0.05000000074505806}},
+      {{"low", 0.25}, {"high", 0.75}},
+      0.5,
+      "null"};
+  for (const auto& value : invalid_luminance) {
+    SCOPED_TRACE(value.dump());
+    EXPECT_THROW((void)make("luminance_range", nullptr, value), std::runtime_error);
+    EXPECT_THROW((void)make("luminance_range", value, nullptr), std::runtime_error);
+  }
+  const std::vector<nlohmann::json> invalid_hue{
+      {{"hue_end", 360.0}, {"hue_start", 0.0}, {"softness", 12.0}},
+      {{"hue_end", 30.5}, {"hue_start", 30.0}, {"softness", 12.0}},
+      {{"hue_end", 30.0}, {"hue_start", 330.0}, {"softness", 0.0}},
+      {{"hue_end", 30.0}, {"hue_start", 330.0}, {"softness", 12.0}, {"chroma", 0.1}}};
+  for (const auto& value : invalid_hue) {
+    SCOPED_TRACE(value.dump());
+    EXPECT_THROW((void)make("color_range", nullptr, value), std::runtime_error);
+  }
+  // A value of one range kind is not accepted for the other key.
+  EXPECT_THROW((void)make("color_range", nullptr, luminance), std::runtime_error);
+  EXPECT_THROW((void)make("luminance_range", nullptr, hue), std::runtime_error);
 }
 
 TEST(PipelineEditBatch, ChangingTypedChangeOrderChangesCommitIdentity) {

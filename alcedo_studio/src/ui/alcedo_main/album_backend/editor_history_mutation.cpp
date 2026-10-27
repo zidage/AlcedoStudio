@@ -5,6 +5,7 @@
 #include "ui/alcedo_main/album_backend/editor_history_mutation.hpp"
 
 #include <ctime>
+#include <exception>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -771,12 +772,31 @@ auto EditorHistoryMutation::SetMaskField(const alcedo::EditorHistoryGuardHandle&
     before = mask->opacity;
   } else if (field_key == "deletion_protected") {
     before = mask->deletion_protected;
+  } else if (field_key == "color_range") {
+    before = ColorRangeToJson(mask->color_range);
+  } else if (field_key == "luminance_range") {
+    before = LuminanceRangeToJson(mask->luminance_range);
   } else {
     before = mask->display_name;
   }
   if (field_key == "deletion_protected" && before == after_value) {
     state_.RecordPublishedRenderReason(std::nullopt);
     return true;
+  }
+  if (field_key == "color_range" || field_key == "luminance_range") {
+    // Store the serializer form: a full range becomes null and numbers take float precision.
+    try {
+      after_value = field_key == "color_range"
+                        ? ColorRangeToJson(ColorRangeFromJson(after_value))
+                        : LuminanceRangeToJson(LuminanceRangeFromJson(after_value));
+    } catch (const std::exception& ex) {
+      if (error) *error = "Mask " + field_key + " is invalid: " + ex.what();
+      return false;
+    }
+    if (before == after_value) {
+      state_.RecordPublishedRenderReason(std::nullopt);
+      return true;
+    }
   }
   auto batch = MakeSetMaskFieldBatch(node_id, mask_id, std::move(field_key), std::move(before),
                                      std::move(after_value));

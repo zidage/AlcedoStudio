@@ -106,6 +106,10 @@ inline constexpr std::string_view kMaskFieldEnabled      = "enabled";
 inline constexpr std::string_view kMaskFieldInvert       = "invert";
 inline constexpr std::string_view kMaskFieldOpacity      = "opacity";
 inline constexpr std::string_view kMaskFieldDisplayName  = "display_name";
+/// Hue Range: a @ref ColorRangeToJson value (`null` selects every hue).
+inline constexpr std::string_view kMaskFieldColorRange     = "color_range";
+/// Luminance Range: a @ref LuminanceRangeToJson value (`null` selects every luminance).
+inline constexpr std::string_view kMaskFieldLuminanceRange = "luminance_range";
 
 struct EditorMaskCreationCommand {
   EditorMaskCreationCommandKind kind        = EditorMaskCreationCommandKind::BeginCreation;
@@ -119,7 +123,8 @@ struct EditorMaskCreationCommand {
   /**
    * @brief Mask-level value edit target.
    *
-   * `enabled`, `invert`, `opacity`, and `display_name` settle as SetMaskField.
+   * `enabled`, `invert`, `opacity`, `display_name`, `color_range`, and `luminance_range`
+   * settle as SetMaskField.
    */
   std::string                   field_key;
   nlohmann::json                field_value;

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,6 +24,7 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_history_format.hpp"
 #include "edit/history/version_ref.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
@@ -250,6 +252,40 @@ TEST(PipelineDocumentCheckpointFormat, RoundTripPreservesDefaultIdentityAndIndep
       root_id, std::nullopt, ComputeRootChainHash(root_id), document));
   EXPECT_TRUE(without_default.document.DefaultGradeId().Empty());
   EXPECT_EQ(without_default.document.ToJson(), document.ToJson());
+}
+
+TEST(PipelineDocumentCheckpointFormat, RootAndCheckpointRoundTripRestoreMaskRanges) {
+  auto  document = MultiGradeDocument();
+  auto* grade    = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  const MaskId              mask_id{"mask.radial"};
+  const auto                unranged_root_id = ComputeRootId(7, document, std::nullopt);
+  const LuminanceRangeModel luminance{0.25f, 0.75f, 0.05f};
+  const ColorRangeModel     hue{330.0f, 30.0f, 12.0f};
+  grade->SetMaskLuminanceRange(mask_id, luminance);
+  grade->SetMaskColorRange(mask_id, hue);
+  const auto root_id = ComputeRootId(7, document, std::nullopt);
+  EXPECT_NE(root_id, unranged_root_id);
+
+  // Reopen: the root state decodes to the same document and the same root id.
+  const auto root = DecodePipelineRootState(EncodePipelineRootState(7, document, std::nullopt));
+  EXPECT_EQ(ComputeRootId(7, root.document, root.raw_color_context), root_id);
+  const auto* root_grade = root.document.PrimaryGrade();
+  ASSERT_NE(root_grade, nullptr);
+  ASSERT_NE(root_grade->FindMask(mask_id), nullptr);
+  EXPECT_EQ(root_grade->FindMask(mask_id)->luminance_range, luminance);
+  EXPECT_EQ(root_grade->FindMask(mask_id)->color_range, hue);
+
+  // Version checkpoint: the stored document restores both ranges byte-identically.
+  const auto checkpoint = DecodePipelineDocumentCheckpoint(EncodePipelineDocumentCheckpoint(
+      root_id, std::nullopt, ComputeRootChainHash(root_id), document));
+  EXPECT_EQ(checkpoint.document.ToJson().dump(), document.ToJson().dump());
+  ASSERT_NE(checkpoint.document.PrimaryGrade()->FindMask(mask_id), nullptr);
+  EXPECT_EQ(checkpoint.document.PrimaryGrade()->FindMask(mask_id)->color_range, hue);
+
+  grade->SetMaskLuminanceRange(mask_id, std::nullopt);
+  grade->SetMaskColorRange(mask_id, std::nullopt);
+  EXPECT_EQ(ComputeRootId(7, document, std::nullopt), unranged_root_id);
 }
 
 TEST(PipelineDocumentCheckpointFormat, RejectsMissingOrMalformedGradeAndMaskProtection) {

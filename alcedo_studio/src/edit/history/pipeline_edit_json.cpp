@@ -275,16 +275,34 @@ auto CanonicalMaskSourceJson(const nlohmann::json& source, std::string_view cont
     -> nlohmann::json {
   RequireObject(source, context);
   RejectNonFiniteNumbers(source, context);
-  nlohmann::json probe{{"id", "source.probe"},         {"display_name", ""},
-                       {"deletion_protected", false},  {"enabled", true},
-                       {"opacity", 1.0},               {"invert", false},
-                       {"source", source},
-                       {"color_range", nullptr},       {"luminance_range", nullptr}};
   try {
-    const auto parsed           = MaskModelFromJson(probe);
-    const auto canonical_source = MaskModelToJson(parsed).at("source");
+    const auto canonical_source = MaskSourceToJson(MaskSourceFromJson(source));
     RequireCanonicalDump(source, canonical_source, context);
     return canonical_source;
+  } catch (const std::exception& ex) {
+    Fail(std::string{context} + ": " + ex.what());
+  }
+}
+
+auto CanonicalColorRangeJson(const nlohmann::json& range, std::string_view context)
+    -> nlohmann::json {
+  RejectNonFiniteNumbers(range, context);
+  try {
+    const auto canonical = ColorRangeToJson(ColorRangeFromJson(range));
+    RequireCanonicalDump(range, canonical, context);
+    return canonical;
+  } catch (const std::exception& ex) {
+    Fail(std::string{context} + ": " + ex.what());
+  }
+}
+
+auto CanonicalLuminanceRangeJson(const nlohmann::json& range, std::string_view context)
+    -> nlohmann::json {
+  RejectNonFiniteNumbers(range, context);
+  try {
+    const auto canonical = LuminanceRangeToJson(LuminanceRangeFromJson(range));
+    RequireCanonicalDump(range, canonical, context);
+    return canonical;
   } catch (const std::exception& ex) {
     Fail(std::string{context} + ": " + ex.what());
   }

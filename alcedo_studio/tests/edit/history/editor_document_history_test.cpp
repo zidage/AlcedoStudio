@@ -903,6 +903,74 @@ TEST_F(EditorDocumentHistoryTest, MaskProtectionFlagRoundTripsAcrossUndoAndRedo)
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
 }
 
+TEST_F(EditorDocumentHistoryTest, MaskRangeFieldsCommitRenderAndRoundTripAcrossUndoAndRedo) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto grade_id = alcedo::NodeId{"grade.primary"};
+  const auto mask_id  = alcedo::MaskId{"mask.radial"};
+  ASSERT_TRUE(history_.AddMask(handle, grade_id, alcedo::grade_mask_test::MakeRadialMask(mask_id),
+                               0, &error))
+      << error;
+  const auto* grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
+  const auto                        revision = grade->MaskContentRevision(mask_id);
+  const auto                        count    = Graph()->CommitCount();
+
+  const alcedo::LuminanceRangeModel luminance{0.25f, 0.75f, 0.05f};
+  const alcedo::ColorRangeModel     hue{330.0f, 30.0f, 12.0f};
+  ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id, "luminance_range",
+                                    alcedo::LuminanceRangeToJson(luminance), &error))
+      << error;
+  EXPECT_EQ(history_.LastPublishedRenderReason(), alcedo::EditorRenderReason::SettledMaskEdit);
+  ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id, "color_range",
+                                    alcedo::ColorRangeToJson(hue), &error))
+      << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
+  EXPECT_EQ(grade->FindMask(mask_id)->luminance_range, luminance);
+  EXPECT_EQ(grade->FindMask(mask_id)->color_range, hue);
+  EXPECT_NE(grade->MaskContentRevision(mask_id), revision);
+  EXPECT_EQ(Graph()->CommitCount(), count + 2);
+
+  // An invalid range fails without a commit; writing the stored value again is a no-op.
+  const auto head = Head();
+  EXPECT_FALSE(history_.SetMaskField(handle, grade_id, mask_id, "luminance_range",
+                                     {{"low", 0.75}, {"high", 0.25}, {"softness", 0.05}}, &error));
+  ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id, "color_range",
+                                    alcedo::ColorRangeToJson(hue), &error))
+      << error;
+  EXPECT_EQ(Head(), head);
+  EXPECT_EQ(Graph()->CommitCount(), count + 2);
+
+  // Both hue handles at the ends: the full range is stored as null.
+  ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id, "color_range",
+                                    {{"hue_start", 0.0}, {"hue_end", 360.0}, {"softness", 12.0}},
+                                    &error))
+      << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
+  EXPECT_FALSE(grade->FindMask(mask_id)->color_range.has_value());
+  EXPECT_EQ(Graph()->CommitCount(), count + 3);
+
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
+  EXPECT_EQ(grade->FindMask(mask_id)->color_range, hue);
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
+  EXPECT_FALSE(grade->FindMask(mask_id)->luminance_range.has_value());
+  EXPECT_FALSE(grade->FindMask(mask_id)->color_range.has_value());
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
+  EXPECT_EQ(grade->FindMask(mask_id)->luminance_range, luminance);
+  EXPECT_EQ(grade->FindMask(mask_id)->color_range, hue);
+}
+
 TEST_F(EditorDocumentHistoryTest, AddRenameAndDeleteSnapshotsPresentTypedHistoryTitles) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);

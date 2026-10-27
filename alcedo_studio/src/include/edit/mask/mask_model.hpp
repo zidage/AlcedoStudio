@@ -128,27 +128,97 @@ using MaskSource = std::variant<
 #endif
     RadialMaskSource, LinearGradientMaskSource, AiSegmentationMaskSource>;
 
+/// Smallest selected width of a Luminance Range, in OkLab L units.
+inline constexpr float kLuminanceRangeMinimumWidth       = 0.01f;
+/// Largest soft transition of a Luminance Range, in OkLab L units.
+inline constexpr float kLuminanceRangeMaximumSoftness    = 0.5f;
+/// Smallest selected width of a Hue Range, in degrees.
+inline constexpr float kColorRangeMinimumWidthDegrees    = 1.0f;
+/// Largest soft transition of a Hue Range, in degrees.
+inline constexpr float kColorRangeMaximumSoftnessDegrees = 90.0f;
+
 /**
- * @brief Direct Color Range field. Only the disabled placeholder is supported.
+ * @brief Hue Range of a Mask (UI: "Hue Range"), in OkLCh hue degrees.
  *
- * @p enabled must be false. Extra serialized fields are rejected.
+ * Selects hues from @p hue_start to @p hue_end, counterclockwise. `hue_start > hue_end` wraps
+ * through 0. @p hue_start is in [0, 360), @p hue_end in (0, 360], and the circular width is at
+ * least @ref kColorRangeMinimumWidthDegrees. @p softness is the transition width outside the
+ * range, in (0, @ref kColorRangeMaximumSoftnessDegrees]. A Mask stores only a restricted range:
+ * the full range [0, 360] is an empty `std::optional`.
  */
 struct ColorRangeModel {
-  bool enabled = false;
+  float hue_start = 0.0f;
+  float hue_end   = 360.0f;
+  float softness  = 12.0f;
 
   friend auto operator==(const ColorRangeModel&, const ColorRangeModel&) -> bool = default;
 };
 
 /**
- * @brief Direct Luminance Range field. Only the disabled placeholder is supported.
+ * @brief Luminance Range of a Mask, in OkLab L.
  *
- * @p enabled must be false. Extra serialized fields are rejected.
+ * Selects L from @p low to @p high: `0 <= low`, `high <= 1`, and
+ * `high - low >= kLuminanceRangeMinimumWidth`. @p softness is the transition width outside the
+ * range, in (0, @ref kLuminanceRangeMaximumSoftness]. A Mask stores only a restricted range: the
+ * full range [0, 1] is an empty `std::optional`.
  */
 struct LuminanceRangeModel {
-  bool enabled = false;
+  float low      = 0.0f;
+  float high     = 1.0f;
+  float softness = 0.05f;
 
   friend auto operator==(const LuminanceRangeModel&, const LuminanceRangeModel&) -> bool = default;
 };
+
+/// Circular width of @p range in degrees, in [0, 360].
+[[nodiscard]] auto ColorRangeWidthDegrees(const ColorRangeModel& range) -> float;
+/// Whether @p range selects every hue (`hue_start == 0` and `hue_end == 360`).
+[[nodiscard]] auto IsFullColorRange(const ColorRangeModel& range) -> bool;
+/// Whether @p range selects every luminance (`low == 0` and `high == 1`).
+[[nodiscard]] auto IsFullLuminanceRange(const LuminanceRangeModel& range) -> bool;
+
+/**
+ * @brief Validate a stored Hue Range: finite values, bounds, minimum width, and not full.
+ * @throws std::runtime_error naming the first rule that fails.
+ */
+void ValidateColorRange(const ColorRangeModel& range);
+/**
+ * @brief Validate a stored Luminance Range: finite values, bounds, minimum width, and not full.
+ * @throws std::runtime_error naming the first rule that fails.
+ */
+void ValidateLuminanceRange(const LuminanceRangeModel& range);
+
+/**
+ * @brief Serialize a Mask `color_range` field: `null` when empty, otherwise
+ *        `{"hue_end", "hue_start", "softness"}`. Does not validate.
+ */
+[[nodiscard]] auto ColorRangeToJson(const std::optional<ColorRangeModel>& range) -> nlohmann::json;
+/**
+ * @brief Serialize a Mask `luminance_range` field: `null` when empty, otherwise
+ *        `{"high", "low", "softness"}`. Does not validate.
+ */
+[[nodiscard]] auto LuminanceRangeToJson(const std::optional<LuminanceRangeModel>& range)
+    -> nlohmann::json;
+
+/**
+ * @brief Read a Mask `color_range` field.
+ *
+ * `null` and the legacy placeholder `{"enabled": false}` read as empty. A range object needs
+ * exactly `hue_start`, `hue_end`, and `softness`; a valid object that covers the full range
+ * reads as empty.
+ * @throws std::runtime_error on other keys, `"enabled": true`, or invalid values.
+ */
+[[nodiscard]] auto ColorRangeFromJson(const nlohmann::json& json) -> std::optional<ColorRangeModel>;
+/**
+ * @brief Read a Mask `luminance_range` field.
+ *
+ * `null` and the legacy placeholder `{"enabled": false}` read as empty. A range object needs
+ * exactly `low`, `high`, and `softness`; a valid object that covers the full range reads as
+ * empty.
+ * @throws std::runtime_error on other keys, `"enabled": true`, or invalid values.
+ */
+[[nodiscard]] auto LuminanceRangeFromJson(const nlohmann::json& json)
+    -> std::optional<LuminanceRangeModel>;
 
 /**
  * @brief One Color Grade Mask: identity, display metadata, source, and range fields.
@@ -190,6 +260,13 @@ struct MaskModel {
 void ValidateMaskModel(const MaskModel& mask);
 
 /**
+ * @brief Validate one source value with the source rules of @ref ValidateMaskModel.
+ *
+ * @throws std::runtime_error naming the first rule that fails. Does not mutate @p source.
+ */
+void ValidateMaskSource(const MaskSource& source);
+
+/**
  * @brief Validate one AI Segmentation source with the source rules of @ref ValidateMaskModel.
  *
  * @throws std::runtime_error naming the first rule that fails. Does not mutate @p source.
@@ -202,10 +279,23 @@ void               ValidateAiSegmentationMaskSource(const AiSegmentationMaskSour
 [[nodiscard]] auto MaskModelToJson(const MaskModel& mask) -> nlohmann::json;
 
 /**
+ * @brief Serialize one source value with its explicit `kind`, as in @ref MaskModelToJson.
+ * @throws std::runtime_error when @p source fails @ref ValidateMaskSource.
+ */
+[[nodiscard]] auto MaskSourceToJson(const MaskSource& source) -> nlohmann::json;
+
+/**
+ * @brief Read one source object by its `kind`, as in @ref MaskModelFromJson.
+ * @throws std::runtime_error on a missing or unknown kind, missing fields, or invalid values.
+ */
+[[nodiscard]] auto MaskSourceFromJson(const nlohmann::json& json) -> MaskSource;
+
+/**
  * @brief Read one Mask object. Requires an explicit source kind and both range keys.
  *
  * @throws std::runtime_error on missing fields, unknown kinds, extra range keys,
- *         enabled ranges, or invalid values.
+ *         enabled legacy ranges, or invalid values (@ref ColorRangeFromJson,
+ *         @ref LuminanceRangeFromJson).
  */
 [[nodiscard]] auto MaskModelFromJson(const nlohmann::json& json) -> MaskModel;
 

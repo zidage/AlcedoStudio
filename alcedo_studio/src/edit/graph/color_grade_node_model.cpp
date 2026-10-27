@@ -431,6 +431,28 @@ void ColorGradeNodeModel::SetMaskInvert(const MaskId& mask_id, bool invert) {
   StoreMask(index, std::move(candidate), MaskWriteKind::Content);
 }
 
+void ColorGradeNodeModel::SetMaskColorRange(const MaskId&                  mask_id,
+                                            std::optional<ColorRangeModel> range) {
+  const auto index = RequireMaskIndex(mask_id);
+  if (MaskAt(index).color_range == range) {
+    return;
+  }
+  auto candidate        = MaskAt(index);
+  candidate.color_range = range;
+  StoreMask(index, std::move(candidate), MaskWriteKind::Content);
+}
+
+void ColorGradeNodeModel::SetMaskLuminanceRange(const MaskId&                      mask_id,
+                                                std::optional<LuminanceRangeModel> range) {
+  const auto index = RequireMaskIndex(mask_id);
+  if (MaskAt(index).luminance_range == range) {
+    return;
+  }
+  auto candidate            = MaskAt(index);
+  candidate.luminance_range = range;
+  StoreMask(index, std::move(candidate), MaskWriteKind::Content);
+}
+
 void ColorGradeNodeModel::MoveMaskForDisplay(const MaskId& mask_id, std::size_t index) {
   const auto from    = RequireMaskIndex(mask_id);
   auto&      entries = MutableMaskEntries();
