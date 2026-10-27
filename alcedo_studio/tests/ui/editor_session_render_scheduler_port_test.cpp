@@ -2111,6 +2111,23 @@ TEST_F(EditorSessionRenderSchedulerPortGpuTest,
   ASSERT_EQ(detail_coverage.published.size(), 1u);
   EXPECT_EQ(detail_coverage.published.front().identity.request_id, 952u);
   EXPECT_EQ(coverage_sink_.published.size(), 1u);
+
+  // A settled Quality Base frame presents the coverage too: "Show selection" routes one, and a
+  // committed range edit renders one, without an interactive frame.
+  auto quality                       = MakeRequest(954, kEpoch);
+  quality.intent.reason              = alcedo::EditorRenderReason::MaskCoverageProbeChanged;
+  quality.intent.quality             = alcedo::EditorRenderQuality::Quality;
+  quality.intent.frame_role          = alcedo::FrameRole::QualityBase;
+  quality.intent.mask_coverage_probe = alcedo::MaskCoverageProbe{grade_id, mask.id};
+  const auto quality_frame           = ScheduleAndWait(*scheduler_, quality);
+  ASSERT_TRUE(quality_frame.has_value() && quality_frame->success)
+      << (quality_frame ? quality_frame->message : "rejected");
+  ASSERT_EQ(coverage_sink_.published.size(), 2u);
+  EXPECT_EQ(coverage_sink_.published.back().identity.request_id, 954u);
+  const auto quality_texels = coverage_sink_.ReadTexels();
+  ASSERT_FALSE(quality_texels.empty());
+  EXPECT_EQ(quality_texels[0], 153.0f / 255.0f);
+  EXPECT_EQ(detail_coverage.events.back(), "clear");
   scheduler_->SetDetailMaskCoverageSinkResolver({});
 #endif
 }

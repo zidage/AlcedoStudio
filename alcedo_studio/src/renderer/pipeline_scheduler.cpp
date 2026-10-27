@@ -170,6 +170,12 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     quality.sink             = pipeline_executor_->GetFrameSink();
     quality.cancel_requested = request.cancel_requested;
     quality.prepared_input   = request.prepared_input;
+    // A settled frame carries the Mask coverage probe like an interactive frame does, so the
+    // coverage follows the committed document and "Show selection" presents without a drag.
+    if (desc.mask_coverage_probe_.has_value() && desc.mask_coverage_sink_ != nullptr) {
+      quality.mask_coverage_probe = desc.mask_coverage_probe_;
+      quality.mask_coverage_sink  = desc.mask_coverage_sink_;
+    }
     return quality;
   }
   if (requested_render_type == RenderType::DETAIL_ROI_PREVIEW) {
