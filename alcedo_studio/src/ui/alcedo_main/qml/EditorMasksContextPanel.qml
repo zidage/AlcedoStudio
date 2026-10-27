@@ -502,7 +502,9 @@ Item {
         DialogActionButton {
             objectName: "editorMasksConfirm"
             Layout.fillWidth: true
-            visible: root.maskCreation ? root.maskCreation.maskControlsActive : false
+            // The AI Mask panel has its own Confirm while its edit is open.
+            visible: !root.aiMaskEditOpen
+                     && (root.maskCreation ? root.maskCreation.maskControlsActive : false)
             enabled: root.controlsEnabled
             buttonHeight: appTheme.iconButtonHitSizeCompact
             font.pixelSize: appTheme.fontSizeBody

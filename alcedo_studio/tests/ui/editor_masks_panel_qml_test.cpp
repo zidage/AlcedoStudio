@@ -231,6 +231,9 @@ TEST(EditorMasksPanelQmlTest, RangeSectionIsOneFixedUpperPartAndTheAiPanelReplac
   EXPECT_FALSE(scroll->isVisible());
   EXPECT_TRUE(range_shell->isVisible());
   EXPECT_LE(SceneRect(range_shell).bottom(), SceneRect(ai_panel).top() + 0.5);
+  auto* confirm = FindVisualItem(harness.root(), QStringLiteral("editorMasksConfirm"));
+  ASSERT_NE(confirm, nullptr);
+  EXPECT_FALSE(confirm->isVisible()) << "only the AI Mask panel Confirm shows during its edit";
   QList<QQuickItem*> sections;
   CollectVisualItems(harness.root(), QStringLiteral("editorMasksRangeSection"), sections);
   CollectVisualItems(harness.root(), QStringLiteral("editorAiMaskRangeSection"), sections);
