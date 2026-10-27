@@ -3643,9 +3643,37 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <source>Confirm the new AI Mask to set its ranges.</source>
         <translation>确认新的 AI 蒙版后即可设置其范围。</translation>
     </message>
+    <message>
+        <source>Softness</source>
+        <translation>柔和度</translation>
+    </message>
+    <message>
+        <source>Saturation Threshold</source>
+        <translation>饱和度门槛</translation>
+    </message>
+    <message>
+        <source>Luminance low</source>
+        <translation>明度下限</translation>
+    </message>
+    <message>
+        <source>Luminance high</source>
+        <translation>明度上限</translation>
+    </message>
+    <message>
+        <source>Hue start</source>
+        <translation>色相起点</translation>
+    </message>
+    <message>
+        <source>Hue end</source>
+        <translation>色相终点</translation>
+    </message>
 </context>
 <context>
     <name>EditorMasksContextPanel</name>
+    <message>
+        <source>Range</source>
+        <translation>范围</translation>
+    </message>
     <message>
         <location filename="../qml/EditorMasksContextPanel.qml" line="+79"/>
         <source>Mask</source>

@@ -1793,6 +1793,35 @@ alcedo_ui_gtest_discover_tests(RangeSelectorBarQmlTest
     PROPERTIES LABELS "workspace_qml;mask")
 alcedo_register_test_target(RangeSelectorBarQmlTest ui)
 
+add_executable(EditorMasksPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_masks_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorMasksPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorMasksPanelQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorMasksPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(EditorMasksPanelQmlTest
+    TEST_PREFIX "EditorMasksPanelQmlTest."
+    PROPERTIES LABELS "workspace_qml;mask")
+alcedo_register_test_target(EditorMasksPanelQmlTest ui)
+
 add_executable(EditorAiMaskPanelQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_ai_mask_panel_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp

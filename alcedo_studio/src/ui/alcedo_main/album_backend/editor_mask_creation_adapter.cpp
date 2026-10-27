@@ -125,6 +125,19 @@ constexpr int      kHueGradientSegments         = 36;
 constexpr float    kLuminanceHandleStep         = 0.005f;
 constexpr float    kHueHandleStep               = 0.5f;
 constexpr int      kRangeStepSettleIntervalMs   = 180;
+/// Softness slider bounds (#564 D): above 0, because a stored softness must be > 0.
+constexpr float    kLuminanceSoftnessMinimum    = 0.005f;
+constexpr float    kHueSoftnessMinimumDegrees   = 0.5f;
+
+/// Whether handles @p first and @p second select the full range of @p luminance or Hue.
+[[nodiscard]] auto RangeHandlesAreFull(bool luminance, float first, float second) -> bool {
+  return first <= 0.0f && second >= (luminance ? 1.0f : 360.0f);
+}
+
+/// Circular Hue width from @p start to @p end, in (0, 360].
+[[nodiscard]] auto HueHandleWidth(float start, float end) -> float {
+  return end > start ? end - start : end + 360.0f - start;
+}
 constexpr int      kLuminanceGradientSegments   = 16;
 
 [[nodiscard]] auto GradientStop(double position, const std::array<float, 3>& rgb) -> QVariant {
@@ -1378,6 +1391,35 @@ auto EditorMaskCreationAdapter::luminance_gradient_stops() -> QVariantList {
   return stops;
 }
 
+auto EditorMaskCreationAdapter::mask_luminance_softness() const -> qreal {
+  return static_cast<qreal>(range_open_ == RangeKind::Luminance ? range_softness_
+                                                                : range_view_.luminance_softness);
+}
+
+auto EditorMaskCreationAdapter::mask_hue_softness() const -> qreal {
+  return static_cast<qreal>(range_open_ == RangeKind::Hue ? range_softness_
+                                                          : range_view_.hue_softness);
+}
+
+auto EditorMaskCreationAdapter::mask_hue_min_chroma() const -> qreal {
+  return static_cast<qreal>(range_open_ == RangeKind::Hue ? range_min_chroma_
+                                                          : range_view_.hue_min_chroma);
+}
+
+auto EditorMaskCreationAdapter::range_parameter_limits() -> QVariantMap {
+  QVariantMap limits;
+  limits.insert(QStringLiteral("luminanceSoftnessMinimum"), kLuminanceSoftnessMinimum);
+  limits.insert(QStringLiteral("luminanceSoftnessMaximum"), kLuminanceRangeMaximumSoftness);
+  limits.insert(QStringLiteral("luminanceSoftnessDefault"), LuminanceRangeModel{}.softness);
+  limits.insert(QStringLiteral("hueSoftnessMinimum"), kHueSoftnessMinimumDegrees);
+  limits.insert(QStringLiteral("hueSoftnessMaximum"), kColorRangeMaximumSoftnessDegrees);
+  limits.insert(QStringLiteral("hueSoftnessDefault"), ColorRangeModel{}.softness);
+  limits.insert(QStringLiteral("minChromaMinimum"), kColorRangeMinimumMinChroma);
+  limits.insert(QStringLiteral("minChromaMaximum"), kColorRangeMaximumMinChroma);
+  limits.insert(QStringLiteral("minChromaDefault"), kColorRangeDefaultMinChroma);
+  return limits;
+}
+
 auto EditorMaskCreationAdapter::mask_range_available() const -> bool {
   if (!range_view_.present || range_view_.target.Empty()) {
     return false;
@@ -1494,7 +1536,7 @@ auto EditorMaskCreationAdapter::RangeJson(RangeKind kind, float first, float sec
     if (low <= 0.0f && high >= 1.0f) {
       return nullptr;
     }
-    return LuminanceRangeToJson(LuminanceRangeModel{low, high, range_view_.luminance_softness});
+    return LuminanceRangeToJson(LuminanceRangeModel{low, high, range_softness_});
   }
   if (first <= 0.0f && second >= 360.0f) {
     range_first_  = 0.0f;
@@ -1512,8 +1554,7 @@ auto EditorMaskCreationAdapter::RangeJson(RangeKind kind, float first, float sec
   if (start <= 0.0f && end >= 360.0f) {
     return nullptr;
   }
-  return ColorRangeToJson(
-      ColorRangeModel{start, end, range_view_.hue_softness, range_view_.hue_min_chroma});
+  return ColorRangeToJson(ColorRangeModel{start, end, range_softness_, range_min_chroma_});
 }
 
 void EditorMaskCreationAdapter::ShowRangeCoverage(const RangeTarget& target) {
@@ -1582,6 +1623,9 @@ auto EditorMaskCreationAdapter::beginRangeEdit(const QString& kind) -> bool {
       range_kind == RangeKind::Luminance ? range_view_.luminance_low : range_view_.hue_start;
   range_second_ =
       range_kind == RangeKind::Luminance ? range_view_.luminance_high : range_view_.hue_end;
+  range_softness_   = range_kind == RangeKind::Luminance ? range_view_.luminance_softness
+                                                         : range_view_.hue_softness;
+  range_min_chroma_ = range_view_.hue_min_chroma;
   // D12: the range coverage is shown while a handle is dragged.
   if (!range_coverage_requested_) {
     ShowRangeCoverage(target);
@@ -1596,15 +1640,7 @@ void EditorMaskCreationAdapter::updateRangeEdit(const QString& kind, qreal first
       !std::isfinite(second)) {
     return;
   }
-  EditorMaskCreationCommand command;
-  command.kind      = EditorMaskCreationCommandKind::SetMaskField;
-  command.node_id   = range_edit_target_.grade_id;
-  command.mask_id   = range_edit_target_.mask_id;
-  command.field_key = std::string{RangeFieldKey(range_kind)};
-  command.field_value =
-      RangeJson(range_kind, static_cast<float>(first), static_cast<float>(second));
-  (void)Enqueue(command);
-  emit maskRangeChanged();
+  WriteRangeEdit(range_kind, static_cast<float>(first), static_cast<float>(second));
 }
 
 void EditorMaskCreationAdapter::finishRangeEdit(const QString& kind) {
@@ -1618,12 +1654,18 @@ void EditorMaskCreationAdapter::finishRangeEdit(const QString& kind) {
   command.mask_id = range_edit_target_.mask_id;
   (void)Enqueue(command);
   // The settled value stays shown until the owner publishes it.
+  // A full range is stored as null; the next restriction starts at the default values (#564 D).
+  const bool full =
+      RangeHandlesAreFull(range_kind == RangeKind::Luminance, range_first_, range_second_);
   if (range_kind == RangeKind::Luminance) {
-    range_view_.luminance_low  = range_first_;
-    range_view_.luminance_high = range_second_;
+    range_view_.luminance_low      = range_first_;
+    range_view_.luminance_high     = range_second_;
+    range_view_.luminance_softness = full ? LuminanceRangeModel{}.softness : range_softness_;
   } else {
-    range_view_.hue_start = range_first_;
-    range_view_.hue_end   = range_second_;
+    range_view_.hue_start      = range_first_;
+    range_view_.hue_end        = range_second_;
+    range_view_.hue_softness   = full ? ColorRangeModel{}.softness : range_softness_;
+    range_view_.hue_min_chroma = full ? ColorRangeModel{}.min_chroma : range_min_chroma_;
   }
   ResetRangeEdit();
   emit maskRangeChanged();
@@ -1637,20 +1679,10 @@ auto EditorMaskCreationAdapter::stepRangeHandle(const QString& kind, const QStri
       steps == 0) {
     return false;
   }
-  if (range_step_burst_ && (range_open_ != range_kind || range_edit_target_ != RangeTargetNow())) {
-    SettleRangeSteps();
-  }
-  if (range_open_ != RangeKind::None && !range_step_burst_) {
-    // A pointer drag of a bar is open.
+  // A step during a pointer drag of a bar is refused.
+  if (!OpenRangeInput(range_kind, false)) {
     return false;
   }
-  if (!range_step_burst_) {
-    if (!beginRangeEdit(kind)) {
-      return false;
-    }
-    range_step_burst_ = true;
-  }
-  range_step_timer_->start();
 
   const float delta = static_cast<float>(steps) *
                       (range_kind == RangeKind::Luminance ? kLuminanceHandleStep : kHueHandleStep) *
@@ -1666,20 +1698,17 @@ auto EditorMaskCreationAdapter::stepRangeHandle(const QString& kind, const QStri
   } else {
     // Handles stay on the bar (a handle does not wrap across an end), as in a drag. The interval
     // wraps when the start passes the end.
-    const auto width = [](float start, float end) {
-      return end > start ? end - start : end + 360.0f - start;
-    };
     if (first) {
       float value = std::clamp(a + delta, 0.0f, 360.0f);
       value       = value >= 360.0f ? 0.0f : value;
-      if (width(value, b) < kHueHandleMinimumWidth && !(value <= 0.0f && b >= 360.0f)) {
+      if (HueHandleWidth(value, b) < kHueHandleMinimumWidth && !(value <= 0.0f && b >= 360.0f)) {
         return false;
       }
       a = value;
     } else {
       float value = std::clamp(b + delta, 0.0f, 360.0f);
       value       = value <= 0.0f ? 360.0f : value;
-      if (width(a, value) < kHueHandleMinimumWidth && !(a <= 0.0f && value >= 360.0f)) {
+      if (HueHandleWidth(a, value) < kHueHandleMinimumWidth && !(a <= 0.0f && value >= 360.0f)) {
         return false;
       }
       b = value;
@@ -1688,9 +1717,105 @@ auto EditorMaskCreationAdapter::stepRangeHandle(const QString& kind, const QStri
   if (a == range_first_ && b == range_second_) {
     return false;
   }
-  updateRangeEdit(kind, a, b);
+  WriteRangeEdit(range_kind, a, b);
   return true;
 }
+
+auto EditorMaskCreationAdapter::OpenRangeInput(RangeKind kind, bool join_pointer_edit) -> bool {
+  if (range_step_burst_ && (range_open_ != kind || range_edit_target_ != RangeTargetNow())) {
+    SettleRangeSteps();
+  }
+  if (range_open_ != RangeKind::None && !range_step_burst_) {
+    // A pointer drag (a bar or a slider) is open: only a value of the same range joins it.
+    return join_pointer_edit && range_open_ == kind;
+  }
+  if (!range_step_burst_) {
+    if (!beginRangeEdit(kind == RangeKind::Luminance ? QStringLiteral("luminance")
+                                                     : QStringLiteral("hue"))) {
+      return false;
+    }
+    range_step_burst_ = true;
+  }
+  range_step_timer_->start();
+  return true;
+}
+
+void EditorMaskCreationAdapter::WriteRangeEdit(RangeKind kind, float first, float second) {
+  EditorMaskCreationCommand command;
+  command.kind        = EditorMaskCreationCommandKind::SetMaskField;
+  command.node_id     = range_edit_target_.grade_id;
+  command.mask_id     = range_edit_target_.mask_id;
+  command.field_key   = std::string{RangeFieldKey(kind)};
+  command.field_value = RangeJson(kind, first, second);
+  (void)Enqueue(command);
+  emit maskRangeChanged();
+}
+
+auto EditorMaskCreationAdapter::editRangeValue(const QString& kind, const QString& field,
+                                               qreal value) -> bool {
+  const auto range_kind = RangeKindFromString(kind);
+  const bool luminance  = range_kind == RangeKind::Luminance;
+  const bool handle     = field == QLatin1String("first") || field == QLatin1String("second");
+  const bool softness   = field == QLatin1String("softness");
+  const bool min_chroma = field == QLatin1String("minChroma") && range_kind == RangeKind::Hue;
+  if (range_kind == RangeKind::None || !(handle || softness || min_chroma) ||
+      !std::isfinite(value)) {
+    return false;
+  }
+  if (!handle) {
+    // Softness and the threshold belong to a restricted range (#564 D, G).
+    const bool full =
+        range_open_ == range_kind
+            ? RangeHandlesAreFull(luminance, range_first_, range_second_)
+            : (luminance ? RangeHandlesAreFull(true, range_view_.luminance_low,
+                                               range_view_.luminance_high)
+                         : RangeHandlesAreFull(false, range_view_.hue_start, range_view_.hue_end));
+    if (full) {
+      return false;
+    }
+  }
+  if (!OpenRangeInput(range_kind, true)) {
+    return false;
+  }
+  const auto v          = static_cast<float>(value);
+  float      a          = range_first_;
+  float      b          = range_second_;
+  const auto softness_0 = range_softness_;
+  const auto chroma_0   = range_min_chroma_;
+  if (field == QLatin1String("first")) {
+    if (luminance) {
+      a = std::clamp(v, 0.0f, b - kLuminanceHandleMinimumWidth);
+    } else {
+      a = WrapHueStart(v);
+      if (HueHandleWidth(a, b) < kHueHandleMinimumWidth && !RangeHandlesAreFull(false, a, b)) {
+        a = WrapHueStart(b - kHueHandleMinimumWidth);
+      }
+    }
+  } else if (field == QLatin1String("second")) {
+    if (luminance) {
+      b = std::clamp(v, a + kLuminanceHandleMinimumWidth, 1.0f);
+    } else {
+      b = WrapHueEnd(v);
+      if (HueHandleWidth(a, b) < kHueHandleMinimumWidth && !RangeHandlesAreFull(false, a, b)) {
+        b = WrapHueEnd(a + kHueHandleMinimumWidth);
+      }
+    }
+  } else if (softness) {
+    range_softness_ =
+        luminance ? std::clamp(v, kLuminanceSoftnessMinimum, kLuminanceRangeMaximumSoftness)
+                  : std::clamp(v, kHueSoftnessMinimumDegrees, kColorRangeMaximumSoftnessDegrees);
+  } else {
+    range_min_chroma_ = std::clamp(v, kColorRangeMinimumMinChroma, kColorRangeMaximumMinChroma);
+  }
+  if (a == range_first_ && b == range_second_ && range_softness_ == softness_0 &&
+      range_min_chroma_ == chroma_0) {
+    return false;
+  }
+  WriteRangeEdit(range_kind, a, b);
+  return true;
+}
+
+void EditorMaskCreationAdapter::commitRangeEdits() { SettleRangeSteps(); }
 
 void EditorMaskCreationAdapter::resetRange(const QString& kind) {
   SettleRangeSteps();
@@ -1712,12 +1837,16 @@ void EditorMaskCreationAdapter::resetRange(const QString& kind) {
   if (!Enqueue(command)) {
     return;
   }
+  // The next restriction starts at the default values (#564 D).
   if (range_kind == RangeKind::Luminance) {
-    range_view_.luminance_low  = 0.0f;
-    range_view_.luminance_high = 1.0f;
+    range_view_.luminance_low      = 0.0f;
+    range_view_.luminance_high     = 1.0f;
+    range_view_.luminance_softness = LuminanceRangeModel{}.softness;
   } else {
-    range_view_.hue_start = 0.0f;
-    range_view_.hue_end   = 360.0f;
+    range_view_.hue_start      = 0.0f;
+    range_view_.hue_end        = 360.0f;
+    range_view_.hue_softness   = ColorRangeModel{}.softness;
+    range_view_.hue_min_chroma = ColorRangeModel{}.min_chroma;
   }
   emit maskRangeChanged();
 }
