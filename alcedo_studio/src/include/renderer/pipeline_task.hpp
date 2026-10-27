@@ -50,6 +50,10 @@ struct RenderDesc {
   // RotatedUncroppedSource (Geometry panel open); thumbnail, export, and the remote image analysis
   // rendition keep the default. The AI Mask analysis render does not use a PipelineTask.
   DocumentGeometryUse  document_geometry_ = DocumentGeometryUse::ApplyCropAndRotation;
+  // Editor frames only: the Mask coverage probe of the frame and the coverage channel of its frame
+  // role (Mask ranges D9, D10). An interactive render copies both into PipelineApplyRequest.
+  std::optional<MaskCoverageProbe> mask_coverage_probe_;
+  IMaskCoverageSink*               mask_coverage_sink_ = nullptr;
 };
 
 struct TaskOptions {

@@ -315,6 +315,7 @@ alcedo_register_test_target(EditorComparisonServiceTest ui)
 # (SM8.7): a real AiMaskEditSession over a fake runner and a recording coverage port.
 add_executable(EditorMaskCoveragePreviewTest
     ${ALCEDO_TEST_ROOT}/app/editor_mask_coverage_preview_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/editor_mask_range_coverage_test.cpp
     ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
 target_include_directories(EditorMaskCoveragePreviewTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)

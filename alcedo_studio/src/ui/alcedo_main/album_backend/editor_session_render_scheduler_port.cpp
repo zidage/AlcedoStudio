@@ -135,8 +135,9 @@ void EditorSessionRenderSchedulerPort::Shutdown() {
       // A document that has not started is skipped; a running one finishes and is dropped.
       image_job_->cancelled = true;
     }
-    sink_resolver_               = {};
-    mask_coverage_sink_resolver_ = {};
+    sink_resolver_                      = {};
+    mask_coverage_sink_resolver_        = {};
+    detail_mask_coverage_sink_resolver_ = {};
   }
   if (running_cancellation) {
     running_cancellation->Cancel();
@@ -176,6 +177,12 @@ void EditorSessionRenderSchedulerPort::SetMaskCoverageSinkResolver(
     EditorSessionMaskCoverageSinkResolver resolver) {
   std::scoped_lock lock(mutex_);
   mask_coverage_sink_resolver_ = std::move(resolver);
+}
+
+void EditorSessionRenderSchedulerPort::SetDetailMaskCoverageSinkResolver(
+    EditorSessionMaskCoverageSinkResolver resolver) {
+  std::scoped_lock lock(mutex_);
+  detail_mask_coverage_sink_resolver_ = std::move(resolver);
 }
 
 void EditorSessionRenderSchedulerPort::SetPipelinePort(
@@ -583,10 +590,29 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
   // The latest preview the history published: the working document at dispatch. A frame that
   // starts after a later write renders that later preview, never a partly written document.
   std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
+  EditorSessionMaskCoverageSinkResolver      coverage_resolver;
+  EditorSessionMaskCoverageSinkResolver      detail_coverage_resolver;
   {
     std::scoped_lock lock(mutex_);
-    pipeline_port = pipeline_port_;
+    pipeline_port            = pipeline_port_;
+    coverage_resolver        = mask_coverage_sink_resolver_;
+    detail_coverage_resolver = detail_mask_coverage_sink_resolver_;
   }
+  // A frame with a Mask coverage probe presents its coverage to the channel of its frame role
+  // (Mask ranges D10). Without a bound channel the frame renders without the probe.
+  const auto& probe        = job.request.intent.mask_coverage_probe;
+  const bool  detail_frame = job.request.intent.frame_role == alcedo::FrameRole::DetailPatch;
+  alcedo::IMaskCoverageSink* coverage_sink        = nullptr;
+  alcedo::IMaskCoverageSink* detail_coverage_sink = nullptr;
+  if (probe.has_value()) {
+    detail_coverage_sink = detail_coverage_resolver ? detail_coverage_resolver() : nullptr;
+    coverage_sink =
+        detail_frame ? detail_coverage_sink : (coverage_resolver ? coverage_resolver() : nullptr);
+  }
+  // A base frame with a probe makes the detail coverage of an earlier frame stale: the detail
+  // channel is cleared before the base coverage is published, until the next detail frame.
+  alcedo::IMaskCoverageSink* stale_detail_coverage =
+      probe.has_value() && !detail_frame ? detail_coverage_sink : nullptr;
   auto snapshot =
       pipeline_port ? pipeline_port->CurrentPreview(job.request.intent.element_id) : nullptr;
   if (!snapshot) {
@@ -605,6 +631,10 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     task.pipeline_executor_          = EnsureExecutor();
     task.snapshot_                   = std::move(snapshot);
     task.options_.render_desc_       = MakeEditorRenderDesc(job.request);
+    if (coverage_sink != nullptr) {
+      task.options_.render_desc_.mask_coverage_probe_ = probe;
+      task.options_.render_desc_.mask_coverage_sink_  = coverage_sink;
+    }
     task.request_id_                 = job.request.request_id;
     task.options_.is_callback_       = false;
     task.options_.is_seq_callback_   = false;
@@ -612,7 +642,7 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     // The executor belongs to this port and every use of it runs on the single worker, which has
     // exclusive access, so the viewport sink is attached there before the frame. It changes only
     // when the viewport item is replaced.
-    task.prepare_                    = [this, sink](alcedo::PipelineTask& prepared_task) {
+    task.prepare_ = [this, sink, stale_detail_coverage](alcedo::PipelineTask& prepared_task) {
       // Read on the worker, which orders it against the release work item: a frame that runs
       // after ReleaseGpuResourcesForExport allocates nothing while the export renders.
       if (gpu_resources_released_for_export()) {
@@ -622,6 +652,9 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
       auto& executor = *prepared_task.pipeline_executor_;
       if (executor.GetFrameSink() != sink) {
         executor.AttachFrameSink(sink);
+      }
+      if (stale_detail_coverage != nullptr) {
+        stale_detail_coverage->ClearCoverage();
       }
       return true;
     };
@@ -853,6 +886,7 @@ auto EditorSessionRenderSchedulerPort::ScheduleMaskCoverage(
     return 0;
   };
   EditorSessionMaskCoverageSinkResolver     resolver;
+  EditorSessionMaskCoverageSinkResolver     detail_resolver;
   std::shared_ptr<alcedo::PipelineExecutor> executor;
   {
     std::scoped_lock lock(mutex_);
@@ -870,8 +904,9 @@ auto EditorSessionRenderSchedulerPort::ScheduleMaskCoverage(
                                              request.element_id, request.image_id)) {
       return reject("The requested image is not the bound editor image");
     }
-    resolver = mask_coverage_sink_resolver_;
-    executor = executor_;
+    resolver        = mask_coverage_sink_resolver_;
+    detail_resolver = detail_mask_coverage_sink_resolver_;
+    executor        = executor_;
   }
   // The coverage frame uses the grid and device of the photo frames: without a frame there is
   // neither.
@@ -882,6 +917,8 @@ auto EditorSessionRenderSchedulerPort::ScheduleMaskCoverage(
   if (sink == nullptr) {
     return reject("No viewport coverage channel is bound");
   }
+  // A coverage-only frame has no detail ROI frame: the detail coverage of a range probe goes.
+  auto*         detail_sink = detail_resolver ? detail_resolver() : nullptr;
   std::uint64_t job_id = 0;
   {
     std::scoped_lock lock(mutex_);
@@ -893,8 +930,11 @@ auto EditorSessionRenderSchedulerPort::ScheduleMaskCoverage(
     mask_coverage_job_ = true;
   }
   EnsurePipelineScheduler()->ScheduleWork([this, executor = std::move(executor),
-                                           request     = std::move(request), sink,
+                                           request     = std::move(request), sink, detail_sink,
                                            on_complete = std::move(on_complete)] {
+    if (detail_sink != nullptr) {
+      detail_sink->ClearCoverage();
+    }
     RunMaskCoverageJob(executor, request, *sink, on_complete);
   });
   return job_id;
@@ -947,24 +987,33 @@ void EditorSessionRenderSchedulerPort::RunMaskCoverageJob(
 
 void EditorSessionRenderSchedulerPort::ClearMaskCoverage() {
   EditorSessionMaskCoverageSinkResolver resolver;
+  EditorSessionMaskCoverageSinkResolver detail_resolver;
   {
     std::scoped_lock lock(mutex_);
     if (shutting_down_) {
       return;
     }
-    resolver = mask_coverage_sink_resolver_;
+    resolver        = mask_coverage_sink_resolver_;
+    detail_resolver = detail_mask_coverage_sink_resolver_;
   }
-  auto* sink = resolver ? resolver() : nullptr;
-  if (sink == nullptr) {
+  auto* sink        = resolver ? resolver() : nullptr;
+  auto* detail_sink = detail_resolver ? detail_resolver() : nullptr;
+  if (sink == nullptr && detail_sink == nullptr) {
     return;
   }
   {
     std::scoped_lock lock(mutex_);
     ++pending_mask_coverage_clears_;
   }
-  // The single worker runs it after the accepted coverage job, so that job's frame is cleared.
-  EnsurePipelineScheduler()->ScheduleWork([this, sink] {
-    sink->ClearCoverage();
+  // The single worker runs it after the accepted coverage job and the frames scheduled before
+  // it, so their coverage frames are cleared on both channels.
+  EnsurePipelineScheduler()->ScheduleWork([this, sink, detail_sink] {
+    if (sink != nullptr) {
+      sink->ClearCoverage();
+    }
+    if (detail_sink != nullptr) {
+      detail_sink->ClearCoverage();
+    }
     FinishMaskCoverageWork(false);
   });
 }

@@ -90,6 +90,8 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
   // Session mutations must run on the command-queue owner thread, not on the
   // thread that constructed the facade.
   lifecycle_.SetOwnerCheck([this] { return command_queue_.IsOwnerThread(); });
+  // Every render intent carries the range probe that the preview publishes (Mask ranges D9).
+  render_.SetMaskCoverageProbeSource([this] { return coverage_preview_.State().range_probe; });
   // Pacing deadlines are delivered by the session-owner executor itself; a
   // GUI timer is no longer part of the serial schedule.
   default_deadline_handler_ = [this](std::int64_t delay_ns) {
@@ -2979,6 +2981,8 @@ auto EditorSessionService::OpenAiMaskEdit(const NodeId& grade_id, std::optional<
                "Commit or cancel the AI Mask edit first");
   ai_mask_edit_ = AiMaskEditTarget{grade_id, std::move(mask_id)};
   ai_mask_edit_active_.store(true, std::memory_order_release);
+  // The AI Mask edit shows its candidate; the range probe of a committed Mask ends (D11).
+  coverage_preview_.HideRangeProbe();
   return finish(EditorSessionResultKind::Accepted, "AI Mask edit opened", std::move(opened));
 }
 
@@ -3213,6 +3217,72 @@ auto EditorSessionService::ClearMaskCoveragePreview() -> EditorSessionResult {
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = "Coverage preview cleared";
+  return result;
+}
+
+auto EditorSessionService::ShowMaskRangeCoverage(const NodeId& grade_id, const MaskId& mask_id)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind    = EditorSessionCommandKind::ShowMaskRangeCoverage;
+    command.node_id = grade_id;
+    return SubmitCommand(std::move(command), [this, mask_id](const EditorSessionCommand& queued) {
+      return ShowMaskRangeCoverage(queued.node_id, mask_id);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return Reject("The Mask range coverage requires an interactive session");
+  }
+  if (ai_mask_edit_.has_value()) {
+    return Reject("The AI Mask edit shows its candidate; commit or cancel it first");
+  }
+  const auto working =
+      dependencies_.pipeline
+          ? dependencies_.pipeline->CurrentPreview(lifecycle_.identity().element_id)
+          : nullptr;
+  if (!working) {
+    return Reject("The working state of the image is not available");
+  }
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(working->Document().Graph().FindNode(grade_id));
+  if (grade == nullptr) {
+    return Reject("The Mask range coverage target is not a Color Grade");
+  }
+  if (grade->FindMask(mask_id) == nullptr) {
+    return Reject("The Mask is missing");
+  }
+  const MaskCoverageProbe probe{grade_id, mask_id};
+  const bool              changed = coverage_preview_.RangeProbe() != probe;
+  coverage_preview_.ShowRangeProbe(probe);
+  if (changed) {
+    // One Quality render presents the coverage of the new probe; later frames carry it too.
+    EditorRenderCommand command;
+    command.operation_id = current_operation_id_;
+    command.reason       = EditorRenderReason::MaskCoverageProbeChanged;
+    (void)render_.RouteViewChange(command, lifecycle_.identity(),
+                                  lifecycle_.active_image_load_request(), lifecycle_.state());
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Mask range coverage shown";
+  return result;
+}
+
+auto EditorSessionService::HideMaskRangeCoverage() -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::HideMaskRangeCoverage;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return HideMaskRangeCoverage(); });
+  }
+  coverage_preview_.HideRangeProbe();
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Mask range coverage hidden";
   return result;
 }
 

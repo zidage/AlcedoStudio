@@ -65,6 +65,12 @@ class EditorSessionRenderController final {
   void                           SetPresentationSize(int width, int height);
   /// Select source-frame rendering while the geometry panel owns the overlay.
   void                           SetGeometryOverlayActive(bool active);
+  /**
+   * @brief Source of the Mask coverage probe that every new render intent carries (Mask ranges
+   *        D9). Called when an intent is built, on the thread that builds it; it must be
+   *        thread-safe. Empty source: no probe.
+   */
+  void SetMaskCoverageProbeSource(std::function<std::optional<MaskCoverageProbe>()> source);
   /// The viewport was minimized/hidden (true) or shown again (false). On resume,
   /// frames the sink refused while suspended are routed again for the current
   /// state: the first frame of a loading image, else a QualityBase refresh, and
@@ -195,6 +201,8 @@ class EditorSessionRenderController final {
   std::optional<std::chrono::steady_clock::time_point> first_frame_route_time_{};
   double                                               first_frame_time_ms_ = -1.0;
   std::atomic<bool>                                    geometry_overlay_active_{false};
+  mutable std::mutex                                   probe_source_mutex_;
+  std::function<std::optional<MaskCoverageProbe>()>    probe_source_;
   /// Set one suspension reason and route the refused frames when no reason is left.
   void SetSuspension(bool EditorSessionRenderController::* reason, bool suspended,
                      const EditorSessionIdentity& identity, ImageLoadRequestId image_load_request,

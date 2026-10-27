@@ -12,6 +12,7 @@
 
 #include "app/editor_session_request_ids.hpp"
 #include "edit/frame_presentation_types.hpp"
+#include "edit/runtime/mask_coverage_probe.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -50,6 +51,9 @@ enum class EditorRenderReason : std::uint8_t {
   // The editor comparison closed. One Quality render of the current document with the current
   // view reconciles the downstream runtime state; no history change.
   ComparisonClosed,
+  // The Mask coverage probe of the editor changed (Mask ranges D9): one Quality render presents
+  // the coverage of the newly probed Mask. The photo pixels do not change; no history change.
+  MaskCoverageProbeChanged,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -123,6 +127,9 @@ struct EditorRenderIntent {
   // overlay maps the crop frame through the presented frame's geometry. The
   // document is not changed.
   bool                                           geometry_overlay_only = false;
+  // The Mask whose coverage this frame also presents (Mask ranges D9). Presentation state: the
+  // port hands it to the renderer with the coverage channel of the frame role; it is in no key.
+  std::optional<MaskCoverageProbe>               mask_coverage_probe;
 };
 
 struct EditorRenderRequest {
@@ -171,6 +178,7 @@ struct EditorRenderResult {
     case EditorRenderReason::PastedPipelineDocument:
     case EditorRenderReason::ResourceChanged:
     case EditorRenderReason::ComparisonClosed:
+    case EditorRenderReason::MaskCoverageProbeChanged:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -189,6 +197,7 @@ struct EditorRenderResult {
     case EditorRenderReason::PastedPipelineDocument:
     case EditorRenderReason::ResourceChanged:
     case EditorRenderReason::ComparisonClosed:
+    case EditorRenderReason::MaskCoverageProbeChanged:
       return EditorRenderQuality::Quality;
     case EditorRenderReason::InitialFrame:
     case EditorRenderReason::InteractiveAdjustment:
@@ -215,7 +224,8 @@ struct EditorRenderResult {
 /// refreshes retain the last content frame instead of replacing the scope input.
 [[nodiscard]] inline auto ScopeUpdateAllowedForReason(EditorRenderReason reason) -> bool {
   return reason != EditorRenderReason::ZoomPan && reason != EditorRenderReason::Resize &&
-         reason != EditorRenderReason::DetailRefresh;
+         reason != EditorRenderReason::DetailRefresh &&
+         reason != EditorRenderReason::MaskCoverageProbeChanged;
 }
 
 /// Fill frame-role defaults derived from quality before Submit stores the

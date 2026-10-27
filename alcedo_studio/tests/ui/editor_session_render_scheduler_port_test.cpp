@@ -50,6 +50,7 @@
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
+#include "edit/runtime/mask_coverage_probe.hpp"
 #include "edit/runtime/mask_coverage_selection.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/rendered_pipeline_image.hpp"
@@ -2044,6 +2045,73 @@ TEST_F(EditorSessionRenderSchedulerPortGpuTest,
   EXPECT_EQ(presented->status, alcedo::EditorMaskCoverageJobStatus::Presented)
       << presented->message;
   EXPECT_EQ(coverage_sink_.published.size(), 1u);
+#endif
+}
+
+// Mask ranges D8-D10: a frame whose intent carries a Mask coverage probe also presents the R8 of
+// that Mask from the same render, through the production renderer, to the coverage channel of its
+// frame role. A base frame clears the detail channel first; a frame without the probe presents no
+// coverage.
+TEST_F(EditorSessionRenderSchedulerPortGpuTest,
+       FrameWithAMaskCoverageProbePresentsTheMaskToTheChannelOfItsRole) {
+#ifdef HAVE_CUDA
+  auto                             root = alcedo::ClonePipelineDocument(*root_document_);
+  alcedo::LinearGradientMaskSource source;
+  source.start_value = 1.0f;
+  source.end_value   = 1.0f;
+  alcedo::MaskModel mask;
+  mask.id      = alcedo::MaskId{"mask.probe"};
+  mask.source  = source;
+  mask.opacity = 0.6f;
+  auto* grade  = root.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  const auto grade_id = grade->Id();
+  grade->AddMask(mask, grade->MaskCount());
+  root.MarkTopologyChanged();
+  HoldRoot(std::move(root));
+  ASSERT_FALSE(HasFatalFailure());
+  CudaArrayCoverageSink detail_coverage;
+  scheduler_->SetDetailMaskCoverageSinkResolver(
+      [&detail_coverage] { return static_cast<alcedo::IMaskCoverageSink*>(&detail_coverage); });
+
+  auto request                       = MakeRequest(950, kEpoch);
+  request.intent.mask_coverage_probe = alcedo::MaskCoverageProbe{grade_id, mask.id};
+  const auto frame                   = ScheduleAndWait(*scheduler_, request);
+  ASSERT_TRUE(frame.has_value() && frame->success) << (frame ? frame->message : "rejected");
+  ASSERT_EQ(coverage_sink_.published.size(), 1u);
+  const auto& presentation = coverage_sink_.published.front();
+  EXPECT_EQ(presentation.identity.request_id, 950u);
+  EXPECT_EQ(presentation.identity.session_epoch, kEpoch);
+  EXPECT_EQ(presentation.identity.image_identity, 11u);
+  EXPECT_EQ(coverage_sink_.Width(), sink_.pixels.cols);
+  EXPECT_EQ(coverage_sink_.Height(), sink_.pixels.rows);
+  // A whole-image Mask of opacity 0.6: R8 code 153 at every pixel of the photo frame.
+  const auto texels = coverage_sink_.ReadTexels();
+  ASSERT_EQ(texels.size(), static_cast<std::size_t>(sink_.pixels.cols) * sink_.pixels.rows * 4);
+  for (std::size_t i = 0; i < texels.size(); i += 4) {
+    ASSERT_EQ(texels[i], 153.0f / 255.0f) << "texel " << i / 4;
+    ASSERT_EQ(texels[i + 1], 0.0f) << "texel " << i / 4;
+    ASSERT_EQ(texels[i + 3], 1.0f) << "texel " << i / 4;
+  }
+  EXPECT_EQ(detail_coverage.events, (std::vector<std::string>{"clear"}));
+
+  // Without the probe the frame presents no coverage.
+  ASSERT_FALSE(RenderFrame(951).empty());
+  EXPECT_EQ(coverage_sink_.published.size(), 1u);
+
+  // A detail frame presents to the detail channel only.
+  auto detail                       = MakeRequest(952, kEpoch);
+  detail.intent.reason              = alcedo::EditorRenderReason::DetailRefresh;
+  detail.intent.quality             = alcedo::EditorRenderQuality::Detail;
+  detail.intent.frame_role          = alcedo::FrameRole::DetailPatch;
+  detail.intent.mask_coverage_probe = alcedo::MaskCoverageProbe{grade_id, mask.id};
+  const auto detail_frame           = ScheduleAndWait(*scheduler_, detail);
+  ASSERT_TRUE(detail_frame.has_value() && detail_frame->success)
+      << (detail_frame ? detail_frame->message : "rejected");
+  ASSERT_EQ(detail_coverage.published.size(), 1u);
+  EXPECT_EQ(detail_coverage.published.front().identity.request_id, 952u);
+  EXPECT_EQ(coverage_sink_.published.size(), 1u);
+  scheduler_->SetDetailMaskCoverageSinkResolver({});
 #endif
 }
 

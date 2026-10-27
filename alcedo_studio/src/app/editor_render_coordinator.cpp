@@ -48,6 +48,8 @@ auto ReasonLabel(const EditorRenderReason reason) -> const char* {
       return "ResourceChanged";
     case EditorRenderReason::ComparisonClosed:
       return "ComparisonClosed";
+    case EditorRenderReason::MaskCoverageProbeChanged:
+      return "MaskCoverageProbeChanged";
   }
   return "?";
 }

@@ -132,6 +132,9 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   /// the caller thread of @ref ScheduleMaskCoverage and @ref ClearMaskCoverage; the sink must stay
   /// valid until @ref Shutdown returns, like the frame sink.
   void SetMaskCoverageSinkResolver(EditorSessionMaskCoverageSinkResolver resolver);
+  /// Resolver of the coverage channel of the detail ROI (Mask ranges D10): detail frames with a
+  /// Mask coverage probe present to it. Same thread and lifetime rules as the base resolver.
+  void SetDetailMaskCoverageSinkResolver(EditorSessionMaskCoverageSinkResolver resolver);
   void SetPipelinePort(std::shared_ptr<EditorSessionPipelinePort> pipeline_port);
   void SetServices(EditorSessionSchedulerServices services);
 
@@ -284,6 +287,7 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   std::shared_ptr<alcedo::PipelineExecutor>  executor_;
   EditorSessionFrameSinkResolver             sink_resolver_;
   EditorSessionMaskCoverageSinkResolver      mask_coverage_sink_resolver_;
+  EditorSessionMaskCoverageSinkResolver      detail_mask_coverage_sink_resolver_;
   std::shared_ptr<EditorSessionPipelinePort> pipeline_port_;
   EditorSessionSchedulerServices             services_{};
   mutable std::mutex                         mutex_;

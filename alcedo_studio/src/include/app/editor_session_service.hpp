@@ -709,6 +709,25 @@ class IEditorSessionBackend {
       -> EditorSessionResult {
     return RefuseMaskCoverage(std::move(on_complete));
   }
+  /**
+   * @brief Show the coverage of Mask @p mask_id of Color Grade @p grade_id in the viewport, from
+   *        the photo renders, evaluated on the image that enters that Grade (Mask ranges D8-D11).
+   *
+   * Any Mask kind. While shown, every Interactive, Quality, and Detail render request of the editor
+   * carries the probe, so the coverage follows each frame (a range drag shows the selection
+   * live); one Quality render presents it at once. It replaces a committed AI Mask preview, and a
+   * later AI preview replaces it. Refused during an AI Mask edit (the candidate is not a Mask
+   * yet), without an interactive session, and for a Grade or Mask that the working document does
+   * not have. Writes nothing.
+   */
+  virtual auto ShowMaskRangeCoverage(const NodeId& /*grade_id*/, const MaskId& /*mask_id*/)
+      -> EditorSessionResult {
+    return RejectComparison("Mask range coverage is not supported by this backend");
+  }
+  /// Hide the range probe coverage without a photo render. Idempotent.
+  virtual auto HideMaskRangeCoverage() -> EditorSessionResult {
+    return RejectComparison("Mask range coverage is not supported by this backend");
+  }
   /// Published state of the coverage preview. Any thread.
   [[nodiscard]] virtual auto mask_coverage_preview_state() const -> EditorMaskCoveragePreviewState {
     return {};
@@ -1013,6 +1032,9 @@ class EditorSessionService final : public IEditorSessionBackend {
                                  EditorMaskCoverageCompletion on_complete)
       -> EditorSessionResult override;
   auto ClearMaskCoveragePreview() -> EditorSessionResult override;
+  auto ShowMaskRangeCoverage(const NodeId& grade_id, const MaskId& mask_id)
+      -> EditorSessionResult override;
+  auto HideMaskRangeCoverage() -> EditorSessionResult override;
   auto RetryMaskCoveragePreview(EditorMaskCoverageCompletion on_complete)
       -> EditorSessionResult override;
   [[nodiscard]] auto mask_coverage_preview_state() const
