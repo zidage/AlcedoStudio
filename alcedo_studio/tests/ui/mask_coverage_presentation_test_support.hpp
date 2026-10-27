@@ -439,7 +439,10 @@ class CoverageChannelTest : public ::testing::Test {
     viewport_->resumePresentation();
     viewport_->present_queue()->SetConsumerAvailable(true);
     viewport_->maskCoverageQueue()->SetConsumerAvailable(true);
+    viewport_->detailMaskCoverageQueue()->SetConsumerAvailable(true);
     layer_.Attach(viewport_->maskCoverageQueue(), viewport_->maskCoverageSinkShared());
+    detail_layer_.Attach(viewport_->detailMaskCoverageQueue(),
+                         viewport_->detailMaskCoverageSinkShared());
   }
 
   void TearDown() override {
@@ -448,11 +451,15 @@ class CoverageChannelTest : public ::testing::Test {
     }
     ReleaseBeforeTeardown();
     layer_.Release();
+    detail_layer_.Release();
     if (viewport_) {
       viewport_->maskCoverageQueue()->InvalidateTargetGeneration();
+      viewport_->detailMaskCoverageQueue()->InvalidateTargetGeneration();
       layer_.DestroyRetiredNatives(*adapter_);
+      detail_layer_.DestroyRetiredNatives(*adapter_);
     }
     layer_.DestroyNatives(*adapter_);
+    detail_layer_.DestroyNatives(*adapter_);
     if (producer_) {
       render_thread_.Post([this] { producer_.reset(); }).get();
     }
@@ -474,6 +481,8 @@ class CoverageChannelTest : public ::testing::Test {
     while (done.wait_for(1ms) != std::future_status::ready) {
       layer_.FulfillTargetRequests(rhi_.get(), adapter != nullptr ? *adapter : *adapter_,
                                    viewport_->sessionEpoch(), viewport_->imageIdentity());
+      detail_layer_.FulfillTargetRequests(rhi_.get(), adapter != nullptr ? *adapter : *adapter_,
+                                          viewport_->sessionEpoch(), viewport_->imageIdentity());
       if (service) {
         service();
       }
@@ -481,6 +490,7 @@ class CoverageChannelTest : public ::testing::Test {
       if (std::chrono::steady_clock::now() > deadline) {
         // Release the producer to report the failure.
         viewport_->maskCoverageQueue()->Shutdown();
+        viewport_->detailMaskCoverageQueue()->Shutdown();
         viewport_->present_queue()->Shutdown();
         ADD_FAILURE() << "the render-thread job did not finish";
         break;
@@ -500,6 +510,12 @@ class CoverageChannelTest : public ::testing::Test {
 
   auto Consume() -> bool {
     return layer_.ConsumeNewest(rhi_.get(), viewport_->sessionEpoch(), viewport_->imageIdentity());
+  }
+
+  /// Import the newest frame of the detail ROI coverage channel (Mask ranges D10).
+  auto ConsumeDetail() -> bool {
+    return detail_layer_.ConsumeNewest(rhi_.get(), viewport_->sessionEpoch(),
+                                       viewport_->imageIdentity());
   }
 
   auto Counters() -> ProducerCounters {
@@ -562,6 +578,8 @@ class CoverageChannelTest : public ::testing::Test {
   std::unique_ptr<CoverageProducer>    producer_;
   std::unique_ptr<EditorViewportItem>  viewport_;
   ViewportMaskCoverageLayer            layer_;
+  /// Consumer of the detail ROI coverage channel of the viewport.
+  ViewportMaskCoverageLayer            detail_layer_;
 };
 
 /// Body of main() of a coverage presentation test binary.

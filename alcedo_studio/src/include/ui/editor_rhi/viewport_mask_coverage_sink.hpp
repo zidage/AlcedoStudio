@@ -12,6 +12,7 @@
 
 #include "ui/edit_viewer/mask_coverage_sink.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
+#include "ui/editor_rhi/frame_presentation_lease.hpp"
 
 namespace alcedo::editor_rhi {
 
@@ -45,7 +46,10 @@ class ViewportMaskCoverageSink final : public IMaskCoverageSink {
   };
 #endif
 
-  ViewportMaskCoverageSink(EditorViewportItem* item, std::shared_ptr<DirectPresentQueue> queue);
+  /// @p layer labels the native targets of @p queue: MaskCoverage for the base channel,
+  /// DetailMaskCoverage for the detail ROI channel.
+  ViewportMaskCoverageSink(EditorViewportItem* item, std::shared_ptr<DirectPresentQueue> queue,
+                           LeaseFrameLayer layer = LeaseFrameLayer::MaskCoverage);
   ~ViewportMaskCoverageSink() override;
 
   auto MapCoverageTarget(const MaskCoveragePresentation& presentation, int width, int height,
@@ -87,6 +91,8 @@ class ViewportMaskCoverageSink final : public IMaskCoverageSink {
   [[nodiscard]] auto PublishedCount() const -> std::uint64_t;
   /// Sequence of the last frame that @ref ClearCoverage hid; 0 before the first clear.
   [[nodiscard]] auto ClearedThrough() const -> std::uint64_t;
+  /// Lease layer of the native targets of this channel.
+  [[nodiscard]] auto LeaseLayer() const -> LeaseFrameLayer { return layer_; }
 
  private:
   [[nodiscard]] auto  MatchesViewportImage(const MaskCoverageFrameIdentity& identity) const -> bool;
@@ -96,6 +102,7 @@ class ViewportMaskCoverageSink final : public IMaskCoverageSink {
 
   EditorViewportItem* item_ = nullptr;
   std::shared_ptr<DirectPresentQueue>                                  queue_;
+  LeaseFrameLayer                                                      layer_;
   mutable std::mutex                                                   mutex_;
   int                                                                  mapped_slot_ = -1;
   bool                                                                 unmapped_    = false;

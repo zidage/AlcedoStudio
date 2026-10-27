@@ -134,9 +134,28 @@ class EditorViewportItem : public QQuickRhiItem {
       -> const std::shared_ptr<ViewportMaskCoverageSink>& {
     return coverage_sink_;
   }
-  /// Stop displaying coverage (ViewportMaskCoverageSink::ClearCoverage). The render thread
-  /// releases the displayed frame on its next pass; a frame published before the call is never
-  /// displayed. Idempotent; thread-safe.
+  /**
+   * @brief Producer sink of the coverage channel of the detail ROI (Mask ranges D10). Owned by
+   *        the item; safe while the viewport exists.
+   *
+   * A detail ROI render with a Mask coverage probe publishes here, so the zoomed overlay has the
+   * resolution of the detail photo. The viewport samples it only inside the visible DetailPatch
+   * ROI. Same queue rules as @ref maskCoverageSink, with its own queue and native targets.
+   */
+  [[nodiscard]] auto detailMaskCoverageSink() -> ViewportMaskCoverageSink* {
+    return detail_coverage_sink_.get();
+  }
+  [[nodiscard]] auto detailMaskCoverageQueue() const -> const std::shared_ptr<DirectPresentQueue>& {
+    return detail_coverage_queue_;
+  }
+  /// Shared owner of @ref detailMaskCoverageSink for the render-thread detail coverage layer.
+  [[nodiscard]] auto detailMaskCoverageSinkShared() const
+      -> const std::shared_ptr<ViewportMaskCoverageSink>& {
+    return detail_coverage_sink_;
+  }
+  /// Stop displaying coverage on both channels (ViewportMaskCoverageSink::ClearCoverage). The
+  /// render thread releases the displayed frames on its next pass; a frame published before the
+  /// call is never displayed. Idempotent; thread-safe.
   void               clearMaskCoverage();
 
   /**
@@ -269,6 +288,9 @@ class EditorViewportItem : public QQuickRhiItem {
   // Coverage presentation channel (SM8.5). The queue outlives the sink that writes into it.
   std::shared_ptr<DirectPresentQueue>                   coverage_queue_;
   std::shared_ptr<ViewportMaskCoverageSink>             coverage_sink_;
+  // Coverage channel of the detail ROI (Mask ranges D10); same lifecycle as the base channel.
+  std::shared_ptr<DirectPresentQueue>                   detail_coverage_queue_;
+  std::shared_ptr<ViewportMaskCoverageSink>             detail_coverage_sink_;
   // GUI thread only; read by the renderer in synchronize().
   MaskCoverageDisplayStyle                              mask_coverage_style_{};
   /// Render-thread handoff for prompt Ready-frame consumption. createRenderer

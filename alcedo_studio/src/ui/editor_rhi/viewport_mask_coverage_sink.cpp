@@ -34,12 +34,13 @@ auto ImageChangedMapping() -> FrameWriteMapping {
 }
 
 /// Producer lease of a queue slot for the shared acquire/release helpers.
-auto SlotLease(const DirectPresentQueue::SlotSnapshot& slot) -> WritableTargetLease {
+auto SlotLease(const DirectPresentQueue::SlotSnapshot& slot, LeaseFrameLayer layer)
+    -> WritableTargetLease {
   WritableTargetLease lease;
   lease.backend           = slot.native.backend;
   lease.handle_kind       = slot.native.handle_kind;
   lease.writable_kind     = slot.native.writable_kind;
-  lease.layer             = LeaseFrameLayer::MaskCoverage;
+  lease.layer             = layer;
   lease.dimensions        = {slot.width, slot.height};
   lease.native_handle     = slot.native.native_handle;
   lease.writable_resource = slot.native.writable_resource;
@@ -52,8 +53,9 @@ auto SlotLease(const DirectPresentQueue::SlotSnapshot& slot) -> WritableTargetLe
 }  // namespace
 
 ViewportMaskCoverageSink::ViewportMaskCoverageSink(EditorViewportItem*                 item,
-                                                   std::shared_ptr<DirectPresentQueue> queue)
-    : item_(item), queue_(std::move(queue)) {
+                                                   std::shared_ptr<DirectPresentQueue> queue,
+                                                   LeaseFrameLayer                     layer)
+    : item_(item), queue_(std::move(queue)), layer_(layer) {
   if (item_ == nullptr || queue_ == nullptr) {
     throw std::invalid_argument(
         "ViewportMaskCoverageSink: the viewport and its queue are required");
@@ -134,7 +136,7 @@ auto ViewportMaskCoverageSink::MapCoverageTarget(const MaskCoveragePresentation&
   if (!begun.has_value() || !begun->native.valid()) {
     return queue_->PresentationSuspended() ? SuspendedMapping() : FrameWriteMapping{};
   }
-  const auto lease = SlotLease(*begun);
+  const auto lease = SlotLease(*begun, layer_);
   if (!ProducerAcquireWritable(lease)) {
     queue_->AbandonWrite(*slot);
     return {};
@@ -180,7 +182,7 @@ void ViewportMaskCoverageSink::UnmapCoverageTarget() {
     slot_index = mapped_slot_;
   }
   if (const auto slot = queue_->SlotAt(slot_index); slot.has_value()) {
-    const auto lease = SlotLease(*slot);
+    const auto lease = SlotLease(*slot, layer_);
     (void)ProducerReleaseWritable(lease);
     // OpenCL releases the shared image asynchronously; finish it before OpenGL samples.
     if (lease.writable_kind == LeaseWritableResourceKind::OpenClImage) {
@@ -237,7 +239,7 @@ void ViewportMaskCoverageSink::AbandonCoverageTarget() {
   }
   if (!unmapped) {
     if (const auto slot = queue_->SlotAt(slot_index); slot.has_value()) {
-      (void)ProducerReleaseWritable(SlotLease(*slot));
+      (void)ProducerReleaseWritable(SlotLease(*slot, layer_));
     }
   }
   queue_->AbandonWrite(slot_index);
