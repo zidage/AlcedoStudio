@@ -8146,12 +8146,20 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>%1 KB</translation>
     </message>
     <message>
-        <source>Supports AI Mask models v%1 and later</source>
-        <translation>支持 v%1 及更高版本的 AI 蒙版模型</translation>
+        <source>SAM 2.1 tiny: selects the object that you click, box, or draw over.</source>
+        <translation>SAM 2.1 tiny：选择你点击、框选或涂抹经过的对象。</translation>
     </message>
     <message>
-        <source>Supports AI Mask models v%1 to v%2</source>
-        <translation>支持 v%1 至 v%2 版本的 AI 蒙版模型</translation>
+        <source>S3OD: selects the subject, the background, and each person.</source>
+        <translation>S3OD：选择主体、背景和每个人物。</translation>
+    </message>
+    <message>
+        <source>People and sky locator: finds the people and the sky in the photo.</source>
+        <translation>人物与天空定位模型：查找照片中的人物和天空。</translation>
+    </message>
+    <message>
+        <source>Sky model: selects the sky with fine edges.</source>
+        <translation>天空模型：以精细的边缘选择天空。</translation>
     </message>
     <message>
         <source>v%1 %2</source>
@@ -8222,16 +8230,20 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>重试</translation>
     </message>
     <message>
-        <source>English</source>
-        <translation>英文</translation>
+        <source>Recognizes the content of photos, so you can find them with a text search in English.</source>
+        <translation>识别照片内容，以便用英文文本搜索照片。</translation>
     </message>
     <message>
-        <source>Chinese</source>
-        <translation>中文</translation>
+        <source>Recognizes the content of photos, so you can find them with a text search in Chinese.</source>
+        <translation>识别照片内容，以便用中文文本搜索照片。</translation>
     </message>
     <message>
-        <source>Multilingual</source>
-        <translation>多语言</translation>
+        <source>Recognizes the content of photos, so you can find them with a text search in many languages.</source>
+        <translation>识别照片内容，以便用多种语言的文本搜索照片。</translation>
+    </message>
+    <message>
+        <source>Recognizes the content of photos, so you can find them with a text search.</source>
+        <translation>识别照片内容，以便用文本搜索照片。</translation>
     </message>
     <message>
         <source>ONNX Runtime</source>

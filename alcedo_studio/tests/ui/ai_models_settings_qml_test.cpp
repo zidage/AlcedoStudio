@@ -22,6 +22,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QFont>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
@@ -446,10 +447,17 @@ TEST(AiModelsSettingsQmlTest, PageOpenChecksTheFeedOnceAndStartupDoesNotCheck) {
   EXPECT_EQ(harness.feed_->manifest_requests, 2);
   EXPECT_TRUE(harness.downloads_->started_urls.empty());
 
-  // The AI Mask card shows the version range of this build and the license names.
-  const QString mask = QString::fromLatin1(kAiMaskId);
-  EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsMaskSubtitle:") + mask)),
-            PanelText("Supports AI Mask models v%1 and later").arg(1));
+  // The AI Mask card names the models of the set and what each one does (no version text;
+  // the revision Pill shows the version), and the license names.
+  const QString mask     = QString::fromLatin1(kAiMaskId);
+  const QString contents = Text(harness.item(QStringLiteral("aiModelsMaskSubtitle:") + mask));
+  for (const char* line : {"SAM 2.1 tiny: selects the object that you click, box, or draw over.",
+                           "S3OD: selects the subject, the background, and each person.",
+                           "People and sky locator: finds the people and the sky in the photo.",
+                           "Sky model: selects the sky with fine edges."}) {
+    EXPECT_TRUE(contents.contains(PanelText(line))) << contents.toStdString();
+  }
+  EXPECT_FALSE(contents.contains(QStringLiteral("v1"))) << contents.toStdString();
   EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsMaskLicense0:") + mask)),
             QStringLiteral("Apache-2.0"));
   EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsMaskLicense3:") + mask)),
@@ -472,6 +480,20 @@ TEST(AiModelsSettingsQmlTest, PageOpenChecksTheFeedOnceAndStartupDoesNotCheck) {
   EXPECT_GT(mask_width, 0.0);
   EXPECT_NEAR(mask_width, clip_card->property("width").toReal(), 1.0);
   EXPECT_GE(mask_card->property("height").toReal(), mask_width * 0.72 - 1.0);
+
+  // Card titles use the section size of the type scale, not a display size, so a model name
+  // stays on one line in a two-column page.
+  for (QObject* title : {harness.item(QStringLiteral("aiModelsMaskName:") + mask),
+                         harness.item(QStringLiteral("aiModelsClipName:") + first_profile)}) {
+    ASSERT_NE(title, nullptr);
+    EXPECT_EQ(title->property("font").value<QFont>().pixelSize(),
+              AppTheme::Instance().fontSizeSection());
+  }
+  // A CLIP card says what the model does and its search language.
+  const QString purpose =
+      Text(harness.item(QStringLiteral("aiModelsClipSubtitle:") + first_profile));
+  EXPECT_TRUE(purpose.startsWith(QStringLiteral("Recognizes the content of photos")))
+      << purpose.toStdString();
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
