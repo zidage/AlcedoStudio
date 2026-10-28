@@ -438,16 +438,55 @@ class FakeEditorBehavior final : public QObject {
   QString action_ = QStringLiteral("ask");
 };
 
+/// Stand-in for EditorAiMaskTool behind appModules.aiMaskTool. Records the
+/// selected node at each open so a test can see which grade receives the Mask.
+class FakeAiMaskTool final : public QObject {
+  Q_OBJECT
+  Q_PROPERTY(bool active READ active NOTIFY toolChanged)
+  Q_PROPERTY(bool busy READ busy CONSTANT)
+  Q_PROPERTY(bool ready READ ready CONSTANT)
+  Q_PROPERTY(bool editingStoredMask READ editingStoredMask CONSTANT)
+
+ public:
+  explicit FakeAiMaskTool(const FakeNodeController* nodes) : nodes_(nodes) {}
+  auto             active() const -> bool { return active_; }
+  auto             busy() const -> bool { return false; }
+  auto             ready() const -> bool { return false; }
+  auto             editingStoredMask() const -> bool { return false; }
+  auto             openedNodeIds() const -> const QStringList& { return opened_node_ids_; }
+  auto             openSelectedCount() const -> int { return open_selected_count_; }
+
+  Q_INVOKABLE void open() {
+    opened_node_ids_.push_back(nodes_->selectedNodeId());
+    active_ = true;
+    emit toolChanged();
+  }
+  Q_INVOKABLE void openSelectedMask() { ++open_selected_count_; }
+
+ signals:
+  void toolChanged();
+
+ private:
+  const FakeNodeController* nodes_;
+  QStringList               opened_node_ids_;
+  int                       open_selected_count_ = 0;
+  bool                      active_              = false;
+};
+
 class FakeAppModules final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QObject* editorBehavior READ editorBehavior CONSTANT)
+  Q_PROPERTY(QObject* aiMaskTool READ aiMaskTool CONSTANT)
 
  public:
+  explicit FakeAppModules(QObject* ai_mask_tool = nullptr) : ai_mask_tool_(ai_mask_tool) {}
   auto editorBehavior() -> QObject* { return &behavior_; }
+  auto aiMaskTool() const -> QObject* { return ai_mask_tool_; }
   auto behavior() -> FakeEditorBehavior& { return behavior_; }
 
  private:
   FakeEditorBehavior behavior_;
+  QObject*           ai_mask_tool_ = nullptr;
 };
 
 auto QmlDirectory() -> QString {
@@ -1304,6 +1343,104 @@ TEST(EditorAdjustmentHeaderQmlTest, LockedPromptCancelAndUncheckedChoiceDoNotPer
   EXPECT_EQ(mask_creation.toolKind(), QStringLiteral("radial"));
   EXPECT_EQ(nodes.insertCount(), 0);
   EXPECT_EQ(modules.behavior().lockedNodeMaskAction(), QStringLiteral("ask"));
+}
+
+void ClickAiMask(const StackHarness& harness) {
+  auto* ai_mask = harness.find(QStringLiteral("editorAdjustmentHeaderAiMaskButton"));
+  ASSERT_NE(ai_mask, nullptr);
+  ASSERT_TRUE(ai_mask->property("enabled").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(ai_mask, "clicked"));
+  ProcessEvents(30);
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, AddAiMaskOnUnlockedGradeOpensWithoutPrompt) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  FakeAiMaskTool     ai_mask_tool(&nodes);
+  FakeAppModules     modules(&ai_mask_tool);
+  StackHarness       harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* prompt = FindLockedNodeMaskPrompt(harness);
+  ASSERT_NE(prompt, nullptr);
+
+  ClickAiMask(harness);
+  EXPECT_FALSE(prompt->property("visible").toBool());
+  EXPECT_EQ(ai_mask_tool.openedNodeIds(), QStringList{QStringLiteral("grade.primary")});
+  EXPECT_EQ(nodes.insertCount(), 0);
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, AddAiMaskOnLockedGradeAsksAndNewLayerChoiceOpensOnNewLayer) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  nodes.setLocked(true);
+  nodes.setDeferInsertSelection(true);
+  FakeAiMaskTool ai_mask_tool(&nodes);
+  FakeAppModules modules(&ai_mask_tool);
+  StackHarness   harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* prompt = FindLockedNodeMaskPrompt(harness);
+  ASSERT_NE(prompt, nullptr);
+
+  ClickAiMask(harness);
+  EXPECT_TRUE(prompt->property("visible").toBool());
+  EXPECT_EQ(prompt->property("toolKind").toString(), QStringLiteral("aiSegmentation"));
+  EXPECT_TRUE(ai_mask_tool.openedNodeIds().isEmpty());
+
+  // The insert is queued: the AI Mask edit must wait for the new layer to be
+  // selected, or it would open on the locked grade.
+  ASSERT_TRUE(QMetaObject::invokeMethod(prompt, "resolve",
+                                        Q_ARG(QVariant, QVariant(QStringLiteral("newLayer")))));
+  ProcessEvents(30);
+  EXPECT_EQ(nodes.insertCount(), 1);
+  EXPECT_TRUE(ai_mask_tool.openedNodeIds().isEmpty());
+
+  nodes.commitDeferredInsert();
+  ProcessEvents(30);
+  EXPECT_EQ(ai_mask_tool.openedNodeIds(), QStringList{QStringLiteral("grade.inserted.1")});
+  EXPECT_TRUE(mask_creation.toolKind().isEmpty());
+  EXPECT_EQ(modules.behavior().lockedNodeMaskAction(), QStringLiteral("newLayer"));
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, StoredCurrentNodeActionOpensAiMaskOnLockedGradeWithoutPrompt) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  nodes.setLocked(true);
+  FakeAiMaskTool ai_mask_tool(&nodes);
+  FakeAppModules modules(&ai_mask_tool);
+  modules.behavior().setLockedNodeMaskAction(QStringLiteral("currentNode"));
+  StackHarness harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* prompt = FindLockedNodeMaskPrompt(harness);
+  ASSERT_NE(prompt, nullptr);
+
+  ClickAiMask(harness);
+  EXPECT_FALSE(prompt->property("visible").toBool());
+  EXPECT_EQ(nodes.insertCount(), 0);
+  EXPECT_EQ(ai_mask_tool.openedNodeIds(), QStringList{QStringLiteral("grade.primary")});
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, EditSelectedAiMaskOnLockedGradeOpensWithoutPrompt) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  nodes.setLocked(true);
+  FakeAiMaskTool ai_mask_tool(&nodes);
+  FakeAppModules modules(&ai_mask_tool);
+  StackHarness   harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* prompt = FindLockedNodeMaskPrompt(harness);
+  ASSERT_NE(prompt, nullptr);
+  mask_creation.SelectExisting(QStringLiteral("aiSegmentation"));
+  ProcessEvents(30);
+
+  ClickAiMask(harness);
+  EXPECT_FALSE(prompt->property("visible").toBool());
+  EXPECT_EQ(ai_mask_tool.openSelectedCount(), 1);
+  EXPECT_TRUE(ai_mask_tool.openedNodeIds().isEmpty());
+  EXPECT_EQ(nodes.insertCount(), 0);
 }
 
 }  // namespace
