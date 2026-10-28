@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 
 #include <QByteArray>
+#include <QDir>
+#include <QFile>
 #include <QString>
 #include <QStringList>
 #include <QUrl>
@@ -186,6 +188,62 @@ TEST(AiModelPackageManifestTest, SelectionPicksHighestSupportedVersionForPlatfor
   EXPECT_EQ(SelectAiModelPackage(manifest, QStringLiteral("other"), 1, 3, windows), nullptr);
   EXPECT_TRUE(ListsAiModelPackageAbove(manifest, id, 1, windows));
   EXPECT_FALSE(ListsAiModelPackageAbove(manifest, id, 2, windows));
+}
+
+auto ReadFixture(const char* name) -> QByteArray {
+  QFile file(QDir(QStringLiteral(ALCEDO_AI_MODEL_PACKAGE_FIXTURE_DIR)).filePath(name));
+  EXPECT_TRUE(file.open(QIODevice::ReadOnly)) << name;
+  return file.readAll();
+}
+
+// scripts/ai_models/tests/test_ai_model_packages.py writes and checks this feed
+// (AiModelPackageCppFixtureTest).
+TEST(AiModelPackageManifestTest, PythonPreparedFeedVerifiesInCpp) {
+  const QByteArray json      = ReadFixture("manifest.json");
+  const QByteArray signature = ReadFixture("manifest.json.sig");
+  const QByteArray public_key =
+      QByteArray::fromBase64(ReadFixture("test_public_key.txt").trimmed());
+  ASSERT_EQ(public_key.size(), 32);
+
+  const AiModelPackageManifestResult result =
+      VerifyAiModelPackageManifest(json, signature, public_key, kFeedUrl, 20261027120000ULL);
+  ASSERT_TRUE(result) << result.error.toStdString();
+  EXPECT_EQ(result.manifest->sequence, 20261027120000ULL);
+  ASSERT_EQ(result.manifest->packages.size(), 1);
+  const AiModelPackageDescriptor& entry = result.manifest->packages.front();
+  EXPECT_EQ(entry.id, QStringLiteral("alcedo-ai-mask"));
+  EXPECT_EQ(entry.name, QStringLiteral("AI Mask"));
+  EXPECT_EQ(entry.model_set_version, 1u);
+  EXPECT_EQ(entry.revision, QStringLiteral("r1"));
+  QStringList license_names;
+  QStringList license_files;
+  for (const AiModelPackageLicense& license : entry.licenses) {
+    license_names.push_back(license.name);
+    license_files.push_back(license.file);
+  }
+  EXPECT_EQ(license_names,
+            (QStringList{QStringLiteral("Apache-2.0"), QStringLiteral("MIT"),
+                         QStringLiteral("DINOv3 License"), QStringLiteral("GPL-3.0")}));
+  EXPECT_EQ(license_files.front(), QStringLiteral("licenses/SAM2-Apache-2.0.txt"));
+  for (const QString platform : {QStringLiteral("windows-x86_64"), QStringLiteral("macos-arm64")}) {
+    const AiModelPackageArtifact* artifact = entry.Artifact(platform);
+    ASSERT_NE(artifact, nullptr) << platform.toStdString();
+    EXPECT_EQ(artifact->url.toString(),
+              QStringLiteral("https://static.aoraw.org/ai-models/v1/packages/alcedo-ai-mask/v1/r1/"
+                             "alcedo-ai-mask-v1-r1-%1.7z")
+                  .arg(platform));
+    EXPECT_EQ(artifact->size, ReadFixture(qPrintable(artifact->url.fileName())).size());
+    EXPECT_GT(artifact->file_count, 10u);
+    EXPECT_EQ(artifact->inventory_sha256.size(), 32);
+  }
+  EXPECT_EQ(SelectAiModelPackage(*result.manifest, entry.id, 1, 1, QStringLiteral("macos-arm64")),
+            &entry);
+
+  // The Python feed is signed over its exact bytes.
+  QByteArray changed = json;
+  changed.replace("\"r1\"", "\"r2\"");
+  EXPECT_FALSE(
+      VerifyAiModelPackageManifest(changed, signature, public_key, kFeedUrl, 20261027120000ULL));
 }
 
 }  // namespace

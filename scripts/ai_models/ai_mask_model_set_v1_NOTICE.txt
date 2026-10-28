@@ -1,0 +1,118 @@
+Alcedo Studio AI Mask model set, version 1
+==========================================
+
+This package contains the AI Mask models of Alcedo Studio. The models are not part of the
+Alcedo Studio installer. Alcedo Studio downloads this package from the Alcedo download server
+(https://static.aoraw.org) when the user installs the AI Mask models on the AI Models settings
+page. package-inventory.json lists the size and SHA-256 of every file of the package.
+model_set.json names the model set version and the revision of the weights.
+
+The license texts are in the licenses/ folder:
+
+- licenses/SAM2-Apache-2.0.txt: Apache License 2.0 (SAM 2.1)
+- licenses/S3OD-MIT.txt: MIT License (S3OD)
+- licenses/DINOv3-License.md: DINOv3 License (the DINOv3 encoder in S3OD)
+- licenses/GPL-3.0.txt: GNU General Public License version 3 (the models trained by Alcedo Studio)
+
+
+1. SAM 2.1 Hiera tiny: image encoder, prompt encoder, and mask decoder
+----------------------------------------------------------------------
+
+Files: point_encoder.onnx and point_decoder.onnx (Windows); point_encoder.mlmodelc and
+point_decoder.mlmodelc (macOS).
+
+Source: Segment Anything Model 2 (SAM 2) by Meta Platforms, Inc.,
+https://github.com/facebookresearch/sam2, checkpoint sam2.1_hiera_tiny.pt (SHA-256
+7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69).
+License: Apache License 2.0 (licenses/SAM2-Apache-2.0.txt).
+Changes: Alcedo Studio converted the checkpoint to ONNX (float32) and to Core ML (float32). The
+weights are not changed.
+Training data: Meta trained SAM 2 on its SA-1B and SA-V datasets and on other video data (SAM 2
+paper, arXiv 2408.00714).
+
+
+2. S3OD (s3od-synth): Subject
+-----------------------------
+
+Files: subject_masks.onnx (Windows); s3od.mlmodelc (macOS).
+
+Source: S3OD by the S3OD Team, https://github.com/KupynOrest/s3od, weights okupyn/s3od-synth
+(https://huggingface.co/okupyn/s3od-synth).
+License: MIT License, Copyright (c) 2024 S3OD Team (licenses/S3OD-MIT.txt). The image encoder of
+S3OD is DINOv3 ViT-B/16 by Meta Platforms, Inc., fine-tuned by the S3OD Team. DINOv3 is licensed
+under the DINOv3 License (licenses/DINOv3-License.md, https://github.com/facebookresearch/dinov3).
+Changes: Alcedo Studio converted the weights to ONNX (float16; the first encoder layer attention in
+float32; the attention computed in 8 query chunks) and to Core ML (float16; the patch embedding
+and the encoder attention in float32). The weights are not trained again.
+
+Training data lineage (from the S3OD paper, arXiv 2510.21605, section 4.1, and the model card):
+
+- The s3od-synth model is trained only on synthetic images. The S3OD Team generated the images
+  with FLUX.1 Krea [dev] (Black Forest Labs), which is released under the FLUX.1 [dev]
+  Non-Commercial License. That license has terms for the output of the image generator.
+- The masks of the training images come from a teacher decoder that the S3OD Team supervised with
+  the DIS5K, HR-SOD, UHRSD, and DUTS datasets. These datasets have their own terms of use.
+
+Alcedo Studio does not state whether these terms apply to the S3OD weights or to their output.
+You decide whether the model and its output can be used for your purpose.
+
+
+3. People and sky locator (people and sky head)
+-----------------------------------------------
+
+Files: people_sky_head.onnx (Windows) or people_sky_head.mlmodelc (macOS), and its thresholds
+people_sky_head.json.
+
+Source: trained by Alcedo Studio (alcedo-ai-mask-lab, P1 run 2, epoch 15). The head reads the
+image_embed output of the SAM 2.1 tiny image encoder. It contains no SAM 2.1 weights.
+License: GNU General Public License version 3 (licenses/GPL-3.0.txt), the license of Alcedo Studio.
+Training data: COCO 2017 (train split) and Open Images V7 photos with their person and sky labels.
+The COCO annotations are licensed under CC BY 4.0, and the use of the COCO images is subject to the
+Flickr Terms of Use. The Open Images annotations are licensed under CC BY 4.0, and the images are listed
+as having a CC BY 2.0 license.
+
+
+4. Sky model (sky head)
+-----------------------
+
+Files: sky_head.onnx (Windows); sky_head.mlmodelc (macOS).
+
+Source: trained by Alcedo Studio (alcedo-ai-mask-lab, issue 10 run 1, epoch 15). The head reads
+the outputs of the SAM 2.1 tiny image encoder and the photo. It contains no SAM 2.1 weights.
+License: GNU General Public License version 3 (licenses/GPL-3.0.txt), the license of Alcedo Studio.
+Training data: the MaSS13K dataset (CVPR 2025, https://github.com/xiechenxi99/mass13k): 13,348
+smartphone photos at 4K with matting-level labels. The dataset repository does not state a clear
+license: its README says that the project is released under the Apache 2.0 license, but the
+repository has no LICENSE file, and the dataset has no separate license. For commercial use of the
+Sky model or its output, contact the authors of the dataset.
+
+Alcedo Studio does not guarantee that the models it trains can be used for commercial work.
+
+
+5. Download statement (version 1)
+---------------------------------
+
+Before you download
+
+The AI models on this page are not part of the Alcedo Studio installer. Alcedo Studio downloads
+them to this computer from third-party sites or from the Alcedo download server. Each model has
+its own license. The license names are on the model cards, and the AI Mask package contains the
+full license texts. You decide whether the models and their output can be used for your purpose,
+including commercial use.
+
+AI Mask. The Sky model and the people and sky locator are trained by Alcedo Studio. The Sky model
+is trained on the MaSS13K dataset (https://github.com/xiechenxi99/mass13k), which does not state a
+clear license. For commercial use of the Sky model or its output, contact the authors of the
+dataset. Alcedo Studio does not guarantee that the models it trains can be used for commercial
+work. The Subject model (S3OD) is trained on generated images and on labels from other datasets;
+see the NOTICE file of the package.
+
+Select "Accept and Download" to confirm that you have read this statement.
+
+下载前请阅读
+
+本页的 AI 模型不包含在 Alcedo Studio 安装包中，由 Alcedo Studio 从第三方网站或 Alcedo 下载服务器下载到本机。每个模型都受其自身许可证约束，许可证名称见各模型卡片，AI Mask 模型包内附有许可证全文。模型及其输出能否用于您的用途（包括商业用途），请您自行判断。
+
+AI Mask。天空模型与人物/天空定位模型由 Alcedo Studio 训练。天空模型使用 MaSS13K 数据集（https://github.com/xiechenxi99/mass13k）训练，该数据集未明确声明许可证。如需将天空模型或其输出用于商业用途，请联系数据集作者。Alcedo Studio 不保证其训练的模型可用于商业活动。主体模型（S3OD）使用生成图像和来自其他数据集的标签训练，详见模型包内的 NOTICE 文件。
+
+点击“同意并下载”即表示您已阅读本声明。

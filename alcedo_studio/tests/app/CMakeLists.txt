@@ -57,6 +57,8 @@ alcedo_register_test_target(LutPackageLiveFeedTest app)
 
 add_executable(AiModelPackageManifestTest ${ALCEDO_TEST_ROOT}/app/ai_model_package_manifest_test.cpp)
 target_include_directories(AiModelPackageManifestTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_compile_definitions(AiModelPackageManifestTest PRIVATE
+    ALCEDO_AI_MODEL_PACKAGE_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/ai_model_packages")
 target_link_libraries(AiModelPackageManifestTest PRIVATE AiModelPackageManifest
     unofficial::ed25519::ed25519 GTest::gtest_main)
 gtest_discover_tests(AiModelPackageManifestTest TEST_PREFIX "AiModelPackageManifestTest."
@@ -70,7 +72,8 @@ add_executable(AiModelPackageServiceTest
     ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
 target_include_directories(AiModelPackageServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_compile_definitions(AiModelPackageServiceTest PRIVATE
-    ALCEDO_FAKE_ARIA2_PATH="$<TARGET_FILE:DownloadServiceFakeAria2>")
+    ALCEDO_FAKE_ARIA2_PATH="$<TARGET_FILE:DownloadServiceFakeAria2>"
+    ALCEDO_AI_MODEL_PACKAGE_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/ai_model_packages")
 target_link_libraries(AiModelPackageServiceTest PRIVATE AiModelPackageService
     AiModelDownloadTaskPublisher PackageArchive LibArchive::LibArchive JSON
     unofficial::ed25519::ed25519 GTest::gtest Qt6::Test)
