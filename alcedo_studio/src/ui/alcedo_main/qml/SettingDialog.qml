@@ -45,7 +45,11 @@ Dialog {
     // Category indices used by callers outside this dialog.
     readonly property int updatesCategory: 6
     readonly property int lutCategory: 8
-    readonly property int aboutCategory: 9
+    readonly property int aiModelsCategory: 9
+    readonly property int aboutCategory: 10
+    // The AI Models page checks the signed AI model feed once per Settings opening, when it is
+    // first shown (AI Models plan, P6).
+    property bool aiModelFeedCheckedThisOpening: false
     readonly property bool canCompleteSettings: appModules.interactionPolicy.canRunSemanticGeneration
     readonly property bool acceleratorRestartHintVisible:
         pendingAcceleratorBackend.length > 0
@@ -57,15 +61,25 @@ Dialog {
     onVisibleChanged: {
         if (visible) {
             resetPendingValues()
+            aiModelFeedCheckedThisOpening = false
             currentCategory = requestedCategory
             // Each Settings opening checks the signed LUT package list once; the
             // application never checks it at startup (plan L6B).
             if (appModules.lutPackages)
                 appModules.lutPackages.checkPackages()
-            // The signed AI model package list is checked the same way (AI Models plan, AM1;
-            // AM4 moves the check to the opening of the AI Models page).
-            if (appModules.aiModelPackages)
-                appModules.aiModelPackages.checkPackages()
+            // Settings can open on the AI Models page; no category change follows then.
+            showAiModelsPage()
+        }
+    }
+
+    function showAiModelsPage() {
+        if (!visible || currentCategory !== aiModelsCategory)
+            return
+        if (appModules.modelDownload)
+            appModules.modelDownload.refreshModels()
+        if (!aiModelFeedCheckedThisOpening && appModules.aiModelPackages) {
+            aiModelFeedCheckedThisOpening = true
+            appModules.aiModelPackages.checkPackages()
         }
     }
 
@@ -79,6 +93,8 @@ Dialog {
             // Analysis page is shown, so the API-key label and model box reflect
             // any changes made since the last visit.
             appModules.imageAnalysis.RefreshCredentialState()
+        } else if (currentCategory === aiModelsCategory) {
+            showAiModelsPage()
         }
     }
 
@@ -157,6 +173,9 @@ Dialog {
         }
         if (currentCategory === lutCategory) {
             return qsTr("LUTs")
+        }
+        if (currentCategory === aiModelsCategory) {
+            return qsTr("AI Models")
         }
         return qsTr("About")
     }
@@ -369,7 +388,7 @@ Dialog {
                                 // delegate-model never completes under an
                                 // offscreen test window, so nav items would never
                                 // materialize for QML tests (and this list is
-                                // fixed at ten entries, so eager creation is
+                                // fixed at eleven entries, so eager creation is
                                 // equivalent in production).
                                 Instantiator {
                                     model: [
@@ -382,6 +401,7 @@ Dialog {
                                         { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
                                         { label: qsTr("Keyboard"), icon: "qrc:/panel_icons/keyboard.svg" },
                                         { label: qsTr("LUTs"), icon: "qrc:/panel_icons/lut-cube.svg" },
+                                        { label: qsTr("AI Models"), icon: "qrc:/panel_icons/sparkles.svg" },
                                         { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
                                     ]
 
@@ -708,7 +728,6 @@ Dialog {
                                     Layout.rightMargin: 34
                                     Layout.bottomMargin: 26
                                     semanticController: appModules.semanticGeneration
-                                    downloadController: appModules.modelDownload
                                     interactionPolicy: appModules.interactionPolicy
                                     importPreference: dialog.pendingSemanticImportPreference
                                     primaryAccent: dialog.primaryAccent
@@ -729,6 +748,7 @@ Dialog {
                                         dialog.semanticGenerationBackgroundRequested()
                                         dialog.close()
                                     }
+                                    onAiModelsPageRequested: dialog.currentCategory = dialog.aiModelsCategory
                                 }
                             }
                         }
@@ -880,6 +900,22 @@ Dialog {
                                 mutedTextColor: dialog.mutedTextColor
                                 dividerColor: dialog.dividerColor
                                 dangerColor: dialog.dangerColor
+                            }
+                        }
+
+                        ScrollView {
+                            id: aiModelsScroll
+                            objectName: "aiModelsSettingsScroll"
+                            contentWidth: availableWidth
+                            clip: true
+
+                            AiModelsSettingsPanel {
+                                width: aiModelsScroll.availableWidth
+                                packageService: appModules.aiModelPackages
+                                downloadController: appModules.modelDownload
+                                semanticController: appModules.semanticGeneration
+                                interactionPolicy: appModules.interactionPolicy
+                                projectOpen: appModules.project.serviceReady
                             }
                         }
 

@@ -1582,6 +1582,118 @@ Alcedo 将改用 %1。</translation>
         <source>AI Masks are not copied: %1</source>
         <translation>AI 蒙版不会被复制：%1</translation>
     </message>
+    <message>
+        <source>Accept the download statement before you download a model.</source>
+        <translation>请先同意下载声明，再下载模型。</translation>
+    </message>
+    <message>
+        <source>Unknown semantic model profile.</source>
+        <translation>未知的语义模型配置。</translation>
+    </message>
+    <message>
+        <source>Downloading model... %1%</source>
+        <translation>正在下载模型… %1%</translation>
+    </message>
+    <message>
+        <source>%1 (%2%)</source>
+        <translation>%1（%2%）</translation>
+    </message>
+    <message>
+        <source>Model download complete.</source>
+        <translation>模型下载完成。</translation>
+    </message>
+    <message>
+        <source>Model download canceled.</source>
+        <translation>模型下载已取消。</translation>
+    </message>
+    <message>
+        <source>Model download failed.</source>
+        <translation>模型下载失败。</translation>
+    </message>
+    <message>
+        <source>Model download failed: %1</source>
+        <translation>模型下载失败：%1</translation>
+    </message>
+    <message>
+        <source>Another download is running.</source>
+        <translation>另一项下载正在运行。</translation>
+    </message>
+    <message>
+        <source>Model download queued from %1</source>
+        <translation>已从 %1 排队下载模型</translation>
+    </message>
+    <message>
+        <source>Canceling model download...</source>
+        <translation>正在取消模型下载…</translation>
+    </message>
+    <message>
+        <source>Cancel the download before you remove the model.</source>
+        <translation>请先取消下载，再移除模型。</translation>
+    </message>
+    <message>
+        <source>Model removal failed: %1</source>
+        <translation>模型移除失败：%1</translation>
+    </message>
+    <message>
+        <source>Model files removed.</source>
+        <translation>模型文件已移除。</translation>
+    </message>
+    <message>
+        <source>Another model activation is running.</source>
+        <translation>另一项模型激活正在运行。</translation>
+    </message>
+    <message>
+        <source>Finish or cancel semantic generation before activating another model.</source>
+        <translation>请先完成或取消语义标签生成，再激活其他模型。</translation>
+    </message>
+    <message>
+        <source>Open a project before activating a semantic model.</source>
+        <translation>请先打开项目，再激活语义模型。</translation>
+    </message>
+    <message>
+        <source>Install the model before activating it.</source>
+        <translation>请先安装模型，再激活。</translation>
+    </message>
+    <message>
+        <source>Cannot activate model: %1</source>
+        <translation>无法激活模型：%1</translation>
+    </message>
+    <message>
+        <source>This model is already active for this project.</source>
+        <translation>此模型已在此项目中激活。</translation>
+    </message>
+    <message>
+        <source>Semantic runtime service is unavailable.</source>
+        <translation>语义运行时服务不可用。</translation>
+    </message>
+    <message>
+        <source>Activating model and preparing labels...</source>
+        <translation>正在激活模型并准备标签…</translation>
+    </message>
+    <message>
+        <source>%1 is active for this project. Label prompts are ready.</source>
+        <translation>%1 已在此项目中激活。标签提示已就绪。</translation>
+    </message>
+    <message>
+        <source>%1 is active for this project.</source>
+        <translation>%1 已在此项目中激活。</translation>
+    </message>
+    <message>
+        <source>Semantic model activation failed.</source>
+        <translation>语义模型激活失败。</translation>
+    </message>
+    <message>
+        <source>Semantic model activation failed: %1</source>
+        <translation>语义模型激活失败：%1</translation>
+    </message>
+    <message>
+        <source>The project still uses the removed model: %1</source>
+        <translation>项目仍在使用已移除的模型：%1</translation>
+    </message>
+    <message>
+        <source>Activate an AI model in Settings before generating labels.</source>
+        <translation>请先在设置中激活 AI 模型，再生成标签。</translation>
+    </message>
 </context>
 <context>
     <name>AgentSessionCard</name>
@@ -6637,6 +6749,14 @@ Create a new layer above it and draw the Mask there?</source>
         <source>↓ %1</source>
         <translation>↓ %1</translation>
     </message>
+    <message>
+        <source>Active model of this project</source>
+        <translation>此项目的激活模型</translation>
+    </message>
+    <message>
+        <source>Open AI Models</source>
+        <translation>打开 AI 模型</translation>
+    </message>
 </context>
 <context>
     <name>SettingDialog</name>
@@ -6815,6 +6935,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>The default adjustment node applies Alcedo&apos;s default adjustments, so it is locked. A Mask drawn on it also limits those defaults to the masked area. Layers you add yourself are not locked and are never affected by this setting.</source>
         <translation>默认调整节点会应用 Alcedo 的一些默认调整，因此该节点默认处于锁定状态。在该节点上绘制的蒙版也会把这些默认调整限制在蒙版区域内。你自行添加的图层不会被锁定，也不受此设置影响。</translation>
+    </message>
+    <message>
+        <source>AI Models</source>
+        <translation>AI 模型</translation>
     </message>
 </context>
 <context>
@@ -7932,6 +8056,354 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>Rating must be between 0 and 5.</source>
         <translation>评分必须介于 0 到 5 之间。</translation>
+    </message>
+</context>
+<context>
+    <name>PackageCard</name>
+    <message>
+        <source>Open the license</source>
+        <translation>打开许可证</translation>
+    </message>
+    <message>
+        <source>Keep</source>
+        <translation>保留</translation>
+    </message>
+    <message>
+        <source>Remove</source>
+        <translation>移除</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+</context>
+<context>
+    <name>AiModelDownloadStatementDialog</name>
+    <message>
+        <source>Before you download</source>
+        <translation>下载前请阅读</translation>
+    </message>
+    <message>
+        <source>The AI models on this page are not part of the Alcedo Studio installer. Alcedo Studio downloads them to this computer from third-party sites or from the Alcedo download server. Each model has its own license. The license names are on the model cards, and the AI Mask package contains the full license texts. You decide whether the models and their output can be used for your purpose, including commercial use.</source>
+        <translation>本页的 AI 模型不包含在 Alcedo Studio 安装包中，由 Alcedo Studio 从第三方网站或 Alcedo 下载服务器下载到本机。每个模型都受其自身许可证约束，许可证名称见各模型卡片，AI Mask 模型包内附有许可证全文。模型及其输出能否用于您的用途（包括商业用途），请您自行判断。</translation>
+    </message>
+    <message>
+        <source>AI Mask</source>
+        <translation>AI Mask</translation>
+    </message>
+    <message>
+        <source>The Sky model and the people and sky locator are trained by Alcedo Studio. The Sky model is trained on the MaSS13K dataset (%1), which does not state a clear license. For commercial use of the Sky model or its output, contact the authors of the dataset. Alcedo Studio does not guarantee that the models it trains can be used for commercial work. The Subject model (S3OD) is trained on generated images and on labels from other datasets; see the NOTICE file of the package.</source>
+        <translation>天空模型与人物/天空定位模型由 Alcedo Studio 训练。天空模型使用 MaSS13K 数据集（%1）训练，该数据集未明确声明许可证。如需将天空模型或其输出用于商业用途，请联系数据集作者。Alcedo Studio 不保证其训练的模型可用于商业活动。主体模型（S3OD）使用生成图像和来自其他数据集的标签训练，详见模型包内的 NOTICE 文件。</translation>
+    </message>
+    <message>
+        <source>Select &quot;Accept and Download&quot; to confirm that you have read this statement.</source>
+        <translation>点击“同意并下载”即表示您已阅读本声明。</translation>
+    </message>
+    <message>
+        <source>Accept and Download</source>
+        <translation>同意并下载</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+</context>
+<context>
+    <name>AiModelsSettingsPanel</name>
+    <message>
+        <source>%1 GB</source>
+        <translation>%1 GB</translation>
+    </message>
+    <message>
+        <source>%1 MB</source>
+        <translation>%1 MB</translation>
+    </message>
+    <message>
+        <source>%1 KB</source>
+        <translation>%1 KB</translation>
+    </message>
+    <message>
+        <source>Supports AI Mask models v%1 and later</source>
+        <translation>支持 v%1 及更高版本的 AI 蒙版模型</translation>
+    </message>
+    <message>
+        <source>Supports AI Mask models v%1 to v%2</source>
+        <translation>支持 v%1 至 v%2 版本的 AI 蒙版模型</translation>
+    </message>
+    <message>
+        <source>v%1 %2</source>
+        <translation>v%1 %2</translation>
+    </message>
+    <message>
+        <source>%1 → %2</source>
+        <translation>%1 → %2</translation>
+    </message>
+    <message>
+        <source>Not installed</source>
+        <translation>未安装</translation>
+    </message>
+    <message>
+        <source>Installed and current</source>
+        <translation>已安装，为最新版本</translation>
+    </message>
+    <message>
+        <source>Update available</source>
+        <translation>有可用更新</translation>
+    </message>
+    <message>
+        <source>Update required: this version of Alcedo Studio does not support the installed models</source>
+        <translation>需要更新：当前版本的 Alcedo Studio 不支持已安装的模型</translation>
+    </message>
+    <message>
+        <source>The available models need a newer version of Alcedo Studio</source>
+        <translation>可用的模型需要更新版本的 Alcedo Studio</translation>
+    </message>
+    <message>
+        <source>Repair required: installed files differ from the package</source>
+        <translation>需要修复：已安装的文件与包不一致</translation>
+    </message>
+    <message>
+        <source>Downloading… %1%</source>
+        <translation>正在下载… %1%</translation>
+    </message>
+    <message>
+        <source>Verifying…</source>
+        <translation>正在校验…</translation>
+    </message>
+    <message>
+        <source>Installing…</source>
+        <translation>正在安装…</translation>
+    </message>
+    <message>
+        <source>Removing…</source>
+        <translation>正在移除…</translation>
+    </message>
+    <message>
+        <source>Not completed</source>
+        <translation>未完成</translation>
+    </message>
+    <message>
+        <source>Download</source>
+        <translation>下载</translation>
+    </message>
+    <message>
+        <source>Update</source>
+        <translation>更新</translation>
+    </message>
+    <message>
+        <source>Repair</source>
+        <translation>修复</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>重试</translation>
+    </message>
+    <message>
+        <source>English</source>
+        <translation>英文</translation>
+    </message>
+    <message>
+        <source>Chinese</source>
+        <translation>中文</translation>
+    </message>
+    <message>
+        <source>Multilingual</source>
+        <translation>多语言</translation>
+    </message>
+    <message>
+        <source>ONNX Runtime</source>
+        <translation>ONNX Runtime</translation>
+    </message>
+    <message>
+        <source>Core ML</source>
+        <translation>Core ML</translation>
+    </message>
+    <message>
+        <source>Choose a folder for the AI models</source>
+        <translation>选择 AI 模型文件夹</translation>
+    </message>
+    <message>
+        <source>HF Mirror</source>
+        <translation>HF 镜像</translation>
+    </message>
+    <message>
+        <source>Hugging Face</source>
+        <translation>Hugging Face</translation>
+    </message>
+    <message>
+        <source>Sufy CDN</source>
+        <translation>Sufy CDN</translation>
+    </message>
+    <message>
+        <source>Custom</source>
+        <translation>自定义</translation>
+    </message>
+    <message>
+        <source>Alcedo Studio downloads these AI models to this computer. Each model has its own license.</source>
+        <translation>Alcedo Studio 会将这些 AI 模型下载到本机。每个模型都有其自身的许可证。</translation>
+    </message>
+    <message>
+        <source>Download statement</source>
+        <translation>下载声明</translation>
+    </message>
+    <message>
+        <source>Model folder</source>
+        <translation>模型文件夹</translation>
+    </message>
+    <message>
+        <source>The folder that holds the AI Mask models and the content recognition models. Changing it does not move the installed models.</source>
+        <translation>存放 AI 蒙版模型和内容识别模型的文件夹。更换文件夹不会移动已安装的模型。</translation>
+    </message>
+    <message>
+        <source>Change folder…</source>
+        <translation>更换文件夹…</translation>
+    </message>
+    <message>
+        <source>Open in Finder</source>
+        <translation>在访达中打开</translation>
+    </message>
+    <message>
+        <source>Open in File Explorer</source>
+        <translation>在文件资源管理器中打开</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>打开文件夹</translation>
+    </message>
+    <message>
+        <source>Read the installed models again</source>
+        <translation>重新读取已安装的模型</translation>
+    </message>
+    <message>
+        <source>AI Mask</source>
+        <translation>AI 蒙版</translation>
+    </message>
+    <message>
+        <source>The AI model check failed: %1</source>
+        <translation>AI 模型检查失败：%1</translation>
+    </message>
+    <message>
+        <source>AI Mask model downloads are not available in this build.</source>
+        <translation>此版本不提供 AI 蒙版模型下载。</translation>
+    </message>
+    <message>
+        <source>Check again</source>
+        <translation>重新检查</translation>
+    </message>
+    <message>
+        <source>Remove the AI Mask models</source>
+        <translation>移除 AI 蒙版模型</translation>
+    </message>
+    <message>
+        <source>Remove the AI Mask models?</source>
+        <translation>要移除 AI 蒙版模型吗？</translation>
+    </message>
+    <message>
+        <source>Without the models, the AI Mask tool cannot make AI Masks until you download them again.</source>
+        <translation>移除后，在重新下载模型之前，AI 蒙版工具无法创建 AI 蒙版。</translation>
+    </message>
+    <message>
+        <source>Content Recognition (CLIP)</source>
+        <translation>内容识别（CLIP）</translation>
+    </message>
+    <message>
+        <source>Activate a model to use it in the open project.</source>
+        <translation>激活模型后即可在当前项目中使用。</translation>
+    </message>
+    <message>
+        <source>Open a project to activate a model. Each project has its own active model.</source>
+        <translation>打开项目后才能激活模型。每个项目都有各自的激活模型。</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>下载源</translation>
+    </message>
+    <message>
+        <source>https://example.com</source>
+        <translation>https://example.com</translation>
+    </message>
+    <message>
+        <source>Activating…</source>
+        <translation>激活中…</translation>
+    </message>
+    <message>
+        <source>Canceling…</source>
+        <translation>正在取消…</translation>
+    </message>
+    <message>
+        <source>Active in this project</source>
+        <translation>已在此项目中激活</translation>
+    </message>
+    <message>
+        <source>Installed</source>
+        <translation>已安装</translation>
+    </message>
+    <message>
+        <source>Preparing the model…</source>
+        <translation>正在准备模型…</translation>
+    </message>
+    <message>
+        <source>Open a project to activate this model.</source>
+        <translation>打开项目后才能激活此模型。</translation>
+    </message>
+    <message>
+        <source>Activate</source>
+        <translation>激活</translation>
+    </message>
+    <message>
+        <source>Remove model</source>
+        <translation>移除模型</translation>
+    </message>
+    <message>
+        <source>Remove this model?</source>
+        <translation>要移除此模型吗？</translation>
+    </message>
+    <message>
+        <source>It is the active model of this project. After removal, the project has no active model.</source>
+        <translation>这是此项目的激活模型。移除后，此项目将没有激活模型。</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::AiModelPackageService</name>
+    <message>
+        <source>AI Mask</source>
+        <translation>AI 蒙版</translation>
+    </message>
+    <message>
+        <source>The AI model server URL is not allowed.</source>
+        <translation>不允许使用该 AI 模型服务器地址。</translation>
+    </message>
+    <message>
+        <source>The AI model server response is too large.</source>
+        <translation>AI 模型服务器的响应过大。</translation>
+    </message>
+    <message>
+        <source>The AI model server returned HTTP %1.</source>
+        <translation>AI 模型服务器返回了 HTTP %1。</translation>
+    </message>
+    <message>
+        <source>The AI model server redirected to an untrusted host.</source>
+        <translation>AI 模型服务器重定向到了不受信任的主机。</translation>
+    </message>
+    <message>
+        <source>Another AI model action is running.</source>
+        <translation>另一项 AI 模型操作正在运行。</translation>
+    </message>
+    <message>
+        <source>Another download is running. Try again after it finishes.</source>
+        <translation>另一项下载正在运行。请在其完成后重试。</translation>
+    </message>
+    <message>
+        <source>The installation was canceled.</source>
+        <translation>安装已取消。</translation>
+    </message>
+    <message>
+        <source>The download was canceled.</source>
+        <translation>下载已取消。</translation>
     </message>
 </context>
 </TS>

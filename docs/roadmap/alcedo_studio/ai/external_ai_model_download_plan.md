@@ -1,7 +1,7 @@
 # AI Models Page: One Download Place for CLIP and AI Mask Models - Phase Plan
 
 Date: 2026-10-27. Status: AM1 complete (2026-10-27); AM2 complete, v1 r1 published
-(2026-10-28); AM3 complete (2026-10-28); AM4-AM5 planned.
+(2026-10-28); AM3 complete (2026-10-28); AM4 complete (2026-10-28); AM5 planned.
 
 Source audit: `main` `56df8883`.
 Tracking: [#579](https://github.com/zidage/AlcedoStudio/issues/579).
@@ -690,6 +690,116 @@ the page open checks the AI model feed once; the first download opens the statem
 starts nothing; Accept starts only the chosen download; the active CLIP card has the active
 border; Activate is disabled without a project; Remove asks first; the compiled catalog
 translates the statement.
+
+#### AM4 completion record (2026-10-28)
+
+**Status:** complete. Settings has the AI Models page (index 9, `sparkles.svg`; About is index
+10) with the model directory tile, the AI Mask section, and the Content Recognition (CLIP)
+section. Every card is the shared near-square `PackageCard`, so the CLIP cards and the AI Mask
+card have the LUT card shape (issue [#584](https://github.com/zidage/AlcedoStudio/issues/584):
+the interim list rows of AM3 are removed). The download statement opens before the first
+download of any model. The Local Content Recognition page shows the active model of the project
+and "Open AI Models".
+
+Details the plan did not specify, chosen in AM4:
+
+- **Shared components.** `PackageCard.qml` holds no service calls: the page sets the texts and
+  the state, and the card reports Action, Cancel, Remove, Keep, and confirmed Remove through
+  signals. Object names are `<namePrefix>:<key>` and `<namePrefix><Part>:<key>`, so the LUT page
+  keeps its `lutSettingsPackage*` names and tests. The card adds a subtitle line, a license row
+  (one Pill per license; a license with a URL opens it), a muted message line, and the `active`
+  state (2 px `activeModelBorderColor` border). `BentoTile.qml` and `SystemActionButton.qml`
+  also moved out of `LutSettingsPanel.qml`, so the model directory tile is the LUT library tile.
+  The pill and license rows use `Instantiator`, not `Repeater` (offscreen test windows).
+- **Theme.** `AppTheme::activeModelBorderColor` returns `backgroundTaskFinishedColor` (P12),
+  recorded in `DESIGN.md`.
+- **Feed check (P6).** `SettingDialog.showAiModelsPage()` checks the AI model feed the first
+  time the page shows in each Settings opening (category change, or Settings opened on the page),
+  and reads the CLIP install state again. The Settings-open check of AM1 is removed; the LUT
+  check is unchanged.
+- **Statement (P8).** The page sends every download (AI Mask install, update, repair, retry, and
+  CLIP download) through `requestDownload`: before the acceptance, the statement opens and the
+  download waits. "Accept and Download" calls `acceptDownloadStatement` and starts only that
+  download; Cancel, Escape, or a click outside starts nothing. The owner also enforces the rule
+  for CLIP: `ModelDownloadController::SetDownloadStatementCheck` (set by the host from
+  `AiModelPackageService::download_statement_accepted`) makes `InstallModel` refuse with
+  "Accept the download statement before you download a model." The statement texts are one
+  `qsTr` per paragraph; the dataset URL is a link argument (`%1`). The AI Mask paragraph keeps
+  the approved Chinese text of section 4 ("AI Mask"), while the page says "AI 蒙版" as the rest of
+  the application does.
+- **AI Mask card.** Version line of P1, a revision Pill (`v1 r1`, or `v1 r1 → v1 r2`), the
+  archive size, the license names of the feed entry (a click opens the installed license file
+  when the set is installed), the P5 status texts, and Remove with confirmation.
+- **CLIP cards.** Subtitle = language; Pills = size and inference backend; one license Pill with
+  the catalog URL. The main action is Download (not installed) or Activate (installed, not
+  active); the active card has no action. Activate is enabled only with an open project
+  (`appModules.project.serviceReady`), no running activation, and the `canChangeSemanticModel`
+  policy; without a project the card shows "Open a project to activate this model." The active
+  border needs an open project. Remove asks first and warns when the model is active.
+- **Source.** The source combo box is in the CLIP section header; the custom URL field shows
+  below it for "Custom".
+- **Test factories.** `ApplicationModuleHost::LutServiceFactories` is now
+  `PackageServiceFactories` with an `ai_model_package_options` factory (the host adds the shared
+  downloader and the model directory when the options have none).
+- **Translations.** The page, the statement, the card, the AM1 service texts
+  (`alcedo::AiModelPackageService`), and the AM3 controller texts (`Alcedo` context) have Chinese
+  entries, added by hand.
+
+**Primary success call chain:**
+
+```text
+Settings > AI Models (category 9)
+  -> SettingDialog.onCurrentCategoryChanged / onVisibleChanged -> showAiModelsPage
+     -> modelDownload.refreshModels; aiModelPackages.checkPackages (once per opening)
+  -> AiModelsSettingsPanel: AI Mask PackageCard (packages row), one PackageCard per CLIP row
+Download / Update / Repair / Retry on a card
+  -> requestDownload(kind, id): statement not accepted -> AiModelDownloadStatementDialog
+  -> Accept and Download -> acceptDownloadStatement -> installPackage(id) or installModel(id)
+Activate on an installed CLIP card (open project)
+  -> semanticGeneration.activateModel(profileId) -> active border on that card
+Remove -> card confirmation -> removePackage(id) or removeModel(profileId)
+```
+
+**Primary failure call chains:**
+
+```text
+Statement not accepted -> Cancel / Escape -> pendingDownload cleared, nothing starts
+CLIP installModel without the statement (any caller) -> false, row error, no download
+No open project -> Activate disabled, card message "Open a project to activate this model."
+Feed check fails -> "The AI model check failed: %1" in the AI Mask header, Check again
+```
+
+**What was proven (executed tests):**
+
+| Required test | Test | Result |
+| --- | --- | --- |
+| The page open checks the AI model feed once | `AiModelsSettingsQmlTest.PageOpenChecksTheFeedOnceAndStartupDoesNotCheck` | PASS |
+| The first download opens the statement and Cancel starts nothing (AI Mask and CLIP) | `AiModelsSettingsQmlTest.FirstDownloadOpensTheStatementAndCancelStartsNothing` | PASS |
+| Accept starts only the chosen download | `AiModelsSettingsQmlTest.AcceptStartsOnlyTheChosenDownloadAndTheStatementStaysAccepted` | PASS |
+| A CLIP download needs the statement in the owner | `ClipModelInstallActivationTest.ClipModelDownloadControllerTest.DownloadBeforeStatementAcceptedStartsNothing` | PASS |
+| The active CLIP card has the active border | `AiModelsSettingsQmlTest.ActiveClipCardHasTheActiveBorderAndActivateStartsActivation` | PASS |
+| The AI Mask card has the CLIP card shape | `AiModelsSettingsQmlTest.PageOpenChecksTheFeedOnceAndStartupDoesNotCheck` (width and height checks) | PASS |
+| Activate is disabled without a project | `AiModelsSettingsQmlTest.ActivateIsDisabledWithoutAnOpenProject` | PASS |
+| Remove asks first | `AiModelsSettingsQmlTest.RemoveAsksBeforeTheModelIsRemoved` | PASS |
+| The compiled catalog translates the statement | `SimplifiedChineseCatalogTest.CompiledCatalogTranslatesTheAiModelDownloadStatement` | PASS |
+| The shared `PackageCard` keeps the LUT page | `LutSettingsQmlTest` (5 tests) | PASS |
+| Regression | `ClipModelInstallActivationTest`, `SimplifiedChineseCatalogTest`, `AutomationLutCommandsTest`, `AutomationProjectCommandsTest`, `ApplicationModuleHostLifecycleTest`, `ShortcutSettingsQmlTest` (About at index 10) | PASS, except below |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main
+AiModelsSettingsQmlTest LutSettingsQmlTest ClipModelInstallActivationTest
+SimplifiedChineseCatalogTest AutomationLutCommandsTest AutomationProjectCommandsTest
+ApplicationModuleHostLifecycleTest ShortcutSettingsQmlTest`; `ctest --test-dir build/debug -j 1 -R
+"^(AiModelsSettingsQmlTest|LutSettingsQmlTest|ClipModelInstallActivationTest|SimplifiedChineseCatalogTest|ShortcutSettingsQmlTest|AutomationLutCommandsTest|AutomationProjectCommandsTest|ApplicationModuleHostLifecycleTest|AiModelPackageServiceTest)\."`
+(76 tests). The page was also checked in offscreen screenshots of the Settings dialog (cards,
+statement dialog); the screenshots are not kept.
+
+**Residual gaps and problems found:** `ShortcutSettingsQmlTest.RegistryRowsAppearInStableGroups`
+fails because of the Comparison shortcut group, before and after this change (issue
+[#585](https://github.com/zidage/AlcedoStudio/issues/585)). `AiModelPackageServiceTest` fails
+intermittently at the AM1 commit move with "Access is denied" (issue
+[#586](https://github.com/zidage/AlcedoStudio/issues/586)). A CLIP download after the acceptance
+was not started in a QML test (it would run aria2c); the owner test covers it. The page was not
+checked in the running application or on macOS.
 
 ### 5.5 AM5: AI Mask tool integration
 

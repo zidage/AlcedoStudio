@@ -235,6 +235,7 @@ parallel palette to satisfy the policy.
 | Background task finished | `backgroundTaskFinishedColor` | Green status lamp for completed/canceled work |
 | Background task working | `backgroundTaskWorkingColor` | Yellow status lamp for queued/running/canceling work |
 | Background task failed | `backgroundTaskFailedColor` | Red status lamp for failed work |
+| Active model border | `activeModelBorderColor` (`backgroundTaskFinishedColor`) | 2 px border of the AI model card that is active in the open project (Settings > AI Models) |
 | Selected tint | `selectedTintColor` | Legacy Library card wash; new or changed selection follows the monochrome rules above |
 | Hover | `hoverColor` | Quiet hover wash |
 | Divider | `dividerColor` | Hairlines, card borders |

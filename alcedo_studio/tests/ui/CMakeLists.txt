@@ -979,6 +979,40 @@ alcedo_ui_gtest_discover_tests(LutSettingsQmlTest
 )
 alcedo_register_test_target(LutSettingsQmlTest ui)
 
+# AI Models plan AM4: Settings > AI Models on the production SettingDialog and module host with
+# the signed AI model test feed and a held downloader (feed check per page opening, download
+# statement), and the page alone with CLIP stand-ins (active border, Activate, Remove).
+add_executable(AiModelsSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/ai_models_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(AiModelsSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(AiModelsSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(AiModelsSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+    PRIVATE ALCEDO_AI_MODEL_PACKAGE_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/ai_model_packages"
+)
+alcedo_ui_gtest_discover_tests(AiModelsSettingsQmlTest
+    TEST_PREFIX "AiModelsSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;ai_models_settings"
+)
+alcedo_register_test_target(AiModelsSettingsQmlTest ui)
+
 # Phase 6A: typed adjustment models (no GPU/QML rendering; QSignalSpy drives the
 # debounce timer deterministically via the event loop).
 add_executable(EditorAdjustmentModelTest

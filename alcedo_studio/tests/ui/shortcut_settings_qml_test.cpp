@@ -372,13 +372,13 @@ TEST(ShortcutSettingsQmlTest, KeyboardCategoryIsReachableAndAboutStillOpens) {
   EXPECT_FALSE(about_scroll->property("visible").toBool());
   EXPECT_NE(FieldForCommand(settings, QStringLiteral("library.selectAll")), nullptr);
 
-  // About moved to index 9 (after LUTs) and still opens.
-  auto* nav_about = FindItem(settings, QStringLiteral("settingsNavItem:9"));
+  // About moved to index 10 (after LUTs and AI Models) and still opens.
+  auto* nav_about = FindItem(settings, QStringLiteral("settingsNavItem:10"));
   ASSERT_NE(nav_about, nullptr);
   // The category nav scrolls; About can sit below the fold.
   ScrollItemIntoView(harness.window_, QStringLiteral("settingsNavScroll"), nav_about);
   ClickItem(harness.window_, nav_about);
-  EXPECT_EQ(settings->property("currentCategory").toInt(), 9);
+  EXPECT_EQ(settings->property("currentCategory").toInt(), 10);
   EXPECT_EQ(page_title->property("text").toString(), DialogText("About"));
   EXPECT_TRUE(about_scroll->property("visible").toBool());
   EXPECT_FALSE(keyboard_scroll->property("visible").toBool());

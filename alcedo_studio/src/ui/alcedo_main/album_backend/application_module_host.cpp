@@ -181,7 +181,7 @@ void ReportUnremovableWorkspaceFiles(const std::filesystem::path& root) {
 // ── ApplicationModuleHost ───────────────────────────────────────────────────
 
 ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer,
-                                             LutServiceFactories lut_services)
+                                             PackageServiceFactories package_services)
     : QObject(parent), lifecycle_observer_(std::move(observer)) {
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
   alcedo::ui::RegisterEditorAdjustmentQmlTypes();
@@ -203,16 +203,17 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("UpdateService", updates_.get());
   // Loads the persisted LUT inventory without network access (plan 4.3).
   lut_library_ = std::make_unique<alcedo::LutLibraryService>(
-      lut_services.library_options ? lut_services.library_options()
-                                   : alcedo::LutLibraryServiceOptions{});
+      package_services.library_options ? package_services.library_options()
+                                       : alcedo::LutLibraryServiceOptions{});
   RecordConstruction("LutLibraryService", lut_library_.get());
   lut_library_->Start();
   // Constructing the package service makes no network request; Settings starts
   // the signed feed check (plan L3). Archives use the shared download admission.
   {
     alcedo::LutPackageServiceOptions lut_package_options =
-        lut_services.package_options ? lut_services.package_options()
-                                     : alcedo::LutPackageServiceOptions::FromBuildConfiguration();
+        package_services.package_options
+            ? package_services.package_options()
+            : alcedo::LutPackageServiceOptions::FromBuildConfiguration();
     if (!lut_package_options.downloader) {
       lut_package_options.downloader =
           std::make_unique<alcedo::DownloadServicePackageArchiveDownloader>(*download_service_);
@@ -246,16 +247,25 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   // the signed feed check (AI Models plan, P6). Archives use the shared download admission.
   {
     alcedo::AiModelPackageServiceOptions ai_model_options =
-        alcedo::AiModelPackageServiceOptions::FromBuildConfiguration();
-    ai_model_options.downloader =
-        std::make_unique<alcedo::DownloadServicePackageArchiveDownloader>(*download_service_);
-    ai_model_options.model_directory = [this] {
-      return std::filesystem::path(model_download_->ModelDownloadDirectory().toStdU16String());
-    };
+        package_services.ai_model_package_options
+            ? package_services.ai_model_package_options()
+            : alcedo::AiModelPackageServiceOptions::FromBuildConfiguration();
+    if (!ai_model_options.downloader) {
+      ai_model_options.downloader =
+          std::make_unique<alcedo::DownloadServicePackageArchiveDownloader>(*download_service_);
+    }
+    if (!ai_model_options.model_directory) {
+      ai_model_options.model_directory = [this] {
+        return std::filesystem::path(model_download_->ModelDownloadDirectory().toStdU16String());
+      };
+    }
     ai_model_packages_ =
         std::make_unique<alcedo::AiModelPackageService>(std::move(ai_model_options));
   }
   RecordConstruction("AiModelPackageService", ai_model_packages_.get());
+  // One download statement covers the CLIP models and the AI Mask model set (plan P8).
+  model_download_->SetDownloadStatementCheck(
+      [packages = ai_model_packages_.get()] { return packages->download_statement_accepted(); });
   ai_model_download_tasks_ =
       std::make_unique<AiModelDownloadTaskPublisher>(*ai_model_packages_, *background_tasks_);
   RecordConstruction("AiModelDownloadTaskPublisher", ai_model_download_tasks_.get());

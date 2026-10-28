@@ -214,7 +214,7 @@ class LutSettingsHarness {
     key_  = MakeKey();
     Sign(*feed_, key_);
 
-    ApplicationModuleHost::LutServiceFactories factories;
+    ApplicationModuleHost::PackageServiceFactories factories;
     factories.library_options = [this, open_url_result] {
       alcedo::LutLibraryServiceOptions options;
       options.preferences       = std::make_unique<MemoryLibraryPreferences>(root_);

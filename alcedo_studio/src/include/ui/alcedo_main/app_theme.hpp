@@ -45,6 +45,8 @@ class AppTheme final : public QObject {
       QColor backgroundTaskFinishedColor READ backgroundTaskFinishedColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor backgroundTaskWorkingColor READ backgroundTaskWorkingColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor backgroundTaskFailedColor READ backgroundTaskFailedColor NOTIFY ThemeChanged)
+  /// Border of the AI model card that is active in the open project (Settings > AI Models).
+  Q_PROPERTY(QColor activeModelBorderColor READ activeModelBorderColor NOTIFY ThemeChanged)
   /// Import progress rings: RAW files and the other image files.
   Q_PROPERTY(QColor importRawRingColor READ importRawRingColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor importOtherRingColor READ importOtherRingColor NOTIFY ThemeChanged)
@@ -332,6 +334,7 @@ class AppTheme final : public QObject {
   auto        backgroundTaskFinishedColor() const -> QColor;
   auto        backgroundTaskWorkingColor() const -> QColor;
   auto        backgroundTaskFailedColor() const -> QColor;
+  auto        activeModelBorderColor() const -> QColor;
   auto        importRawRingColor() const -> QColor;
   auto        importOtherRingColor() const -> QColor;
   auto        selectedTintColor() const -> QColor;

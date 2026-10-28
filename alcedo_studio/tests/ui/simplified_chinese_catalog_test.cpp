@@ -327,5 +327,39 @@ TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheSkyTrainingDataNo
   ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
 }
 
+TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheAiModelDownloadStatement) {
+  const QString qm_path = QStringLiteral(ALCEDO_ZH_CN_QM_FILE);
+  QTranslator   translator;
+  ASSERT_TRUE(translator.load(qm_path)) << "QTranslator failed to load " << qm_path.toStdString();
+  ASSERT_TRUE(QCoreApplication::installTranslator(&translator));
+
+  // AI Models plan, section 4: the download statement (version 1) and the Settings page.
+  EXPECT_EQ(QCoreApplication::translate("AiModelDownloadStatementDialog", "Before you download"),
+            QStringLiteral("下载前请阅读"));
+  EXPECT_EQ(
+      QCoreApplication::translate(
+          "AiModelDownloadStatementDialog",
+          "The Sky model and the people and sky locator are trained by Alcedo Studio. The Sky "
+          "model is trained on the MaSS13K dataset (%1), which does not state a clear license. "
+          "For commercial use of the Sky model or its output, contact the authors of the dataset. "
+          "Alcedo Studio does not guarantee that the models it trains can be used for commercial "
+          "work. The Subject model (S3OD) is trained on generated images and on labels from other "
+          "datasets; see the NOTICE file of the package."),
+      QStringLiteral(
+          "天空模型与人物/天空定位模型由 Alcedo Studio 训练。天空模型使用 MaSS13K "
+          "数据集（%1）训练，该数据集未明确声明许可证。如需将天空模型或其输出用于商业用途"
+          "，请联系数据集作者。Alcedo Studio 不保证其训练的模型可用于商业活动。主体模型（S3OD"
+          "）使用生成图像和来自其他数据集的标签训练，详见模型包内的 NOTICE 文件。"));
+  EXPECT_EQ(QCoreApplication::translate(
+                "AiModelDownloadStatementDialog",
+                "Select \"Accept and Download\" to confirm that you have read this statement."),
+            QStringLiteral("点击“同意并下载”即表示您已阅读本声明。"));
+  EXPECT_EQ(QCoreApplication::translate("AiModelDownloadStatementDialog", "Accept and Download"),
+            QStringLiteral("同意并下载"));
+  EXPECT_EQ(QCoreApplication::translate("SettingDialog", "AI Models"), QStringLiteral("AI 模型"));
+
+  ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test

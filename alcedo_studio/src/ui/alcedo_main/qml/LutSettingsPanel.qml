@@ -600,98 +600,48 @@ ColumnLayout {
                 object.parent = packageGrid
             }
             delegate: PackageCard {
+                id: lutCard
                 required property int index
-                panel: page
-                row: page.packageRows[index] || ({})
+                readonly property var row: page.packageRows[index] || ({})
+                readonly property string packageId: row.id || ""
+                readonly property string upstream: page.packageUpstream(packageId)
+
+                namePrefix: "lutSettingsPackage"
+                cardKey: packageId
+                title: row.name || packageId
+                subtitle: upstream.length > 0 ? qsTr("Based on %1").arg(upstream) : ""
+                upstreamUrl: upstream.length > 0 ? "https://github.com/" + upstream : ""
+                upstreamToolTip: qsTr("View the original project on GitHub")
+                pills: [qsTr("%n LUT(s)", "", Number(row.fileCount || 0)),
+                        page.packageRevisionText(row), page.formatBytes(row.archiveBytes)]
+                statusText: page.packageStatusText(row)
+                statusColor: page.packageStatusColor(row)
+                busy: !!row.busy
+                progressIndeterminate: row.status !== "downloading"
+                progressPercent: (row.progress || 0) * 100
+                errorText: row.error || ""
+                actionText: page.packageActionText(row.action || "")
+                actionKind: row.action === "retry" ? "normal" : "accent"
+                cancelVisible: !!row.cancelable
+                removable: !!row.removable
+                removeEnabled: !page.libraryBusy
+                removeToolTip: qsTr("Remove package")
+                // Removal confirmation: the package's LUTs leave the library.
+                confirmingRemoval: page.pendingRemovalId === packageId
+                removeQuestion: qsTr("Remove this package?")
+                removeWarning: qsTr("After removal, photos that use LUTs from this package lose that look.")
+                removeConfirmEnabled: !page.libraryBusy && !!row.removable
+                onActionRequested: page.packageService.installPackage(lutCard.packageId)
+                onCancelRequested: page.packageService.cancelInstall(lutCard.packageId)
+                onRemoveRequested: page.pendingRemovalId = lutCard.packageId
+                onRemoveKept: page.pendingRemovalId = ""
+                onRemoveConfirmed: page.confirmPackageRemoval()
             }
         }
     }
 
     Item {
         Layout.fillHeight: true
-    }
-
-    component BentoTile: Rectangle {
-        // Children are placed in `content`, inset by the tile padding.
-        default property alias content: tileContent.data
-        property real contentHeight: 0
-
-        implicitHeight: contentHeight + 22 * 2
-        radius: 14
-        color: appTheme.cardSurfaceColor
-        border.width: 1
-        border.color: appTheme.cardBorderColor
-
-        Item {
-            id: tileContent
-            anchors.fill: parent
-            anchors.margins: 22
-        }
-    }
-
-    // A wide button that hands the folder to the system: the file manager's own
-    // icon (image://alcedo-system-icon) with a bundled folder icon as fallback.
-    component SystemActionButton: Rectangle {
-        id: systemButton
-
-        property string text: ""
-
-        signal clicked()
-
-        implicitHeight: 44
-        Layout.preferredHeight: 44
-        radius: 10
-        opacity: enabled ? 1.0 : 0.45
-        color: systemMouse.pressed
-               ? Qt.rgba(1, 1, 1, 0.06)
-               : (systemMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.12) : Qt.rgba(1, 1, 1, 0.07))
-        border.width: 1
-        border.color: Qt.rgba(appTheme.textColor.r, appTheme.textColor.g, appTheme.textColor.b, 0.14)
-
-        Row {
-            anchors.centerIn: parent
-            spacing: 10
-
-            Item {
-                anchors.verticalCenter: parent.verticalCenter
-                width: 20
-                height: 20
-
-                Image {
-                    id: systemIcon
-                    anchors.fill: parent
-                    source: "image://alcedo-system-icon/file-manager"
-                    sourceSize.width: 40
-                    sourceSize.height: 40
-                    smooth: true
-                    mipmap: true
-                }
-                Image {
-                    anchors.fill: parent
-                    // The provider answers 1x1 when the system has no icon.
-                    visible: systemIcon.status !== Image.Ready || systemIcon.implicitWidth <= 1
-                    source: "qrc:/panel_icons/folder-open.svg"
-                    sourceSize.width: 20
-                    sourceSize.height: 20
-                }
-            }
-            Label {
-                anchors.verticalCenter: parent.verticalCenter
-                text: systemButton.text
-                color: appTheme.textColor
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeSection
-                font.weight: appTheme.fontWeightStrong
-            }
-        }
-
-        MouseArea {
-            id: systemMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: systemButton.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: systemButton.clicked()
-        }
     }
 
     component LegendItem: RowLayout {
@@ -722,245 +672,6 @@ ColumnLayout {
             font.family: appTheme.headlineFontFamily
             font.pixelSize: appTheme.fontSizeSection
             font.weight: Font.DemiBold
-        }
-    }
-
-    component Pill: Rectangle {
-        id: pill
-
-        property string text: ""
-
-        visible: text.length > 0
-        implicitWidth: pillLabel.implicitWidth + appTheme.spaceMd * 2
-        implicitHeight: pillLabel.implicitHeight + appTheme.spaceXs * 2 + 2
-        radius: height / 2
-        color: appTheme.bgBaseColor
-        border.width: 1
-        border.color: appTheme.cardBorderColor
-
-        Label {
-            id: pillLabel
-            anchors.centerIn: parent
-            text: pill.text
-            color: appTheme.textColor
-            font.family: appTheme.headlineFontFamily
-            font.pixelSize: appTheme.fontSizeBody
-            font.weight: Font.Medium
-        }
-    }
-
-    component PackageCard: Rectangle {
-        id: packageCard
-
-        // Inline components do not see the enclosing ids; the delegate passes the page.
-        required property var panel
-        property var row: ({})
-        readonly property string packageId: row.id || ""
-        readonly property string action: row.action || ""
-        readonly property bool busy: !!row.busy
-        readonly property bool confirmingRemoval: panel.pendingRemovalId === packageId
-        readonly property string upstream: panel.packageUpstream(packageId)
-
-        objectName: "lutSettingsPackage:" + packageId
-        Layout.fillWidth: true
-        // Equal preferred widths split the columns evenly.
-        Layout.preferredWidth: 1
-        // Near-square store card; grows when the content needs more room.
-        Layout.preferredHeight: Math.max(cardColumn.implicitHeight + 22 * 2, width * 0.72)
-        radius: 14
-        color: appTheme.cardSurfaceColor
-        border.width: 1
-        border.color: packageCard.busy ? appTheme.accentColor : appTheme.cardBorderColor
-
-        ColumnLayout {
-            id: cardColumn
-            anchors.fill: parent
-            anchors.margins: 22
-            spacing: appTheme.spaceMd
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: appTheme.spaceMd
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignTop
-                    spacing: appTheme.spaceXs
-
-                    Label {
-                        objectName: "lutSettingsPackageName:" + packageCard.packageId
-                        Layout.fillWidth: true
-                        text: packageCard.row.name || packageCard.packageId
-                        color: appTheme.textColor
-                        font.family: appTheme.headlineFontFamily
-                        font.pixelSize: 28
-                        font.weight: Font.DemiBold
-                        lineHeight: 1.1
-                        wrapMode: Text.Wrap
-                        maximumLineCount: 3
-                        elide: Text.ElideRight
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        visible: packageCard.upstream.length > 0
-                        text: qsTr("Based on %1").arg(packageCard.upstream)
-                        color: appTheme.textMutedColor
-                        font.family: appTheme.headlineFontFamily
-                        font.pixelSize: appTheme.fontSizeBody
-                        elide: Text.ElideRight
-                    }
-                }
-
-                IconButton {
-                    objectName: "lutSettingsPackageUpstream:" + packageCard.packageId
-                    Layout.alignment: Qt.AlignTop
-                    visible: packageCard.upstream.length > 0
-                    buttonSize: 36
-                    buttonRadius: 10
-                    iconSize: 18
-                    iconSrc: "qrc:/panel_icons/github.svg"
-                    normalColor: Qt.rgba(1, 1, 1, 0.07)
-                    borderColor: Qt.rgba(appTheme.textColor.r, appTheme.textColor.g, appTheme.textColor.b, 0.14)
-                    tooltipText: qsTr("View the original project on GitHub")
-                    onClicked: Qt.openUrlExternally("https://github.com/" + packageCard.upstream)
-                }
-            }
-
-            Flow {
-                Layout.fillWidth: true
-                spacing: appTheme.spaceSm
-
-                Pill {
-                    text: qsTr("%n LUT(s)", "", Number(packageCard.row.fileCount || 0))
-                }
-                Pill {
-                    text: packageCard.panel.packageRevisionText(packageCard.row)
-                }
-                Pill {
-                    text: packageCard.panel.formatBytes(packageCard.row.archiveBytes)
-                }
-            }
-
-            Item {
-                Layout.fillHeight: true
-            }
-
-            AlertBadge {
-                objectName: "lutSettingsPackageError:" + packageCard.packageId
-                Layout.fillWidth: true
-                text: packageCard.row.error || ""
-            }
-
-            // Removal confirmation: the package's LUTs leave the library.
-            ColumnLayout {
-                objectName: "lutSettingsPackageRemoveConfirm:" + packageCard.packageId
-                Layout.fillWidth: true
-                visible: packageCard.confirmingRemoval
-                spacing: appTheme.spaceSm
-
-                Label {
-                    Layout.fillWidth: true
-                    text: qsTr("Remove this package?")
-                    color: appTheme.textColor
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                    wrapMode: Text.Wrap
-                }
-                AlertBadge {
-                    objectName: "lutSettingsPackageRemoveWarning:" + packageCard.packageId
-                    text: qsTr("After removal, photos that use LUTs from this package lose that look.")
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: appTheme.spaceSm
-
-                    Item {
-                        Layout.fillWidth: true
-                    }
-                    DialogActionButton {
-                        objectName: "lutSettingsPackageRemoveKeep:" + packageCard.packageId
-                        buttonWidth: 100
-                        buttonHeight: 34
-                        text: qsTr("Keep")
-                        onClicked: packageCard.panel.pendingRemovalId = ""
-                    }
-                    DialogActionButton {
-                        objectName: "lutSettingsPackageRemoveConfirmButton:" + packageCard.packageId
-                        kind: "danger"
-                        buttonWidth: 100
-                        buttonHeight: 34
-                        enabled: !packageCard.panel.libraryBusy && !!packageCard.row.removable
-                        text: qsTr("Remove")
-                        onClicked: packageCard.panel.confirmPackageRemoval()
-                    }
-                }
-            }
-
-            ThemedProgressBar {
-                Layout.fillWidth: true
-                visible: packageCard.busy
-                active: packageCard.busy
-                indeterminate: packageCard.row.status !== "downloading"
-                progressValue: (packageCard.row.progress || 0) * 100
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                visible: !packageCard.confirmingRemoval
-                spacing: appTheme.spaceSm
-
-                Rectangle {
-                    Layout.alignment: Qt.AlignVCenter
-                    visible: !packageCard.busy
-                    implicitWidth: 8
-                    implicitHeight: 8
-                    radius: 4
-                    color: packageCard.panel.packageStatusColor(packageCard.row)
-                }
-                Label {
-                    objectName: "lutSettingsPackageStatus:" + packageCard.packageId
-                    Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignVCenter
-                    text: packageCard.panel.packageStatusText(packageCard.row)
-                    color: appTheme.textColor
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeBody
-                    wrapMode: Text.Wrap
-                }
-                DialogActionButton {
-                    objectName: "lutSettingsPackageAction:" + packageCard.packageId
-                    visible: packageCard.action.length > 0
-                    kind: packageCard.action === "retry" ? "normal" : "accent"
-                    buttonWidth: 116
-                    buttonHeight: 34
-                    text: packageCard.panel.packageActionText(packageCard.action)
-                    onClicked: packageCard.panel.packageService.installPackage(packageCard.packageId)
-                }
-                // The shared trash glyph, in the same chrome as the card's GitHub action.
-                IconButton {
-                    objectName: "lutSettingsPackageRemove:" + packageCard.packageId
-                    Layout.alignment: Qt.AlignVCenter
-                    visible: !!packageCard.row.removable && !packageCard.busy
-                    enabled: !packageCard.panel.libraryBusy
-                    buttonSize: 34
-                    buttonRadius: 10
-                    iconSize: 18
-                    iconSrc: "qrc:/panel_icons/trash.svg"
-                    normalColor: Qt.rgba(1, 1, 1, 0.07)
-                    borderColor: Qt.rgba(appTheme.textColor.r, appTheme.textColor.g,
-                                         appTheme.textColor.b, 0.14)
-                    tooltipText: qsTr("Remove package")
-                    onClicked: packageCard.panel.pendingRemovalId = packageCard.packageId
-                }
-                DialogActionButton {
-                    objectName: "lutSettingsPackageCancel:" + packageCard.packageId
-                    visible: !!packageCard.row.cancelable
-                    buttonWidth: 100
-                    buttonHeight: 34
-                    text: qsTr("Cancel")
-                    onClicked: packageCard.panel.packageService.cancelInstall(packageCard.packageId)
-                }
-            }
         }
     }
 }
