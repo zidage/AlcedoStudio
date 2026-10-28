@@ -1665,6 +1665,39 @@ alcedo_ui_gtest_discover_tests(EditorMaskRangeAdapterTest
     PROPERTIES LABELS "editor_session;mask_ranges")
 alcedo_register_test_target(EditorMaskRangeAdapterTest ui)
 
+# AI Models plan, AM5: the AI Mask tool reads the installed AI Mask model set before it starts
+# the sidecar, through the production EditorSessionController and session facade.
+add_executable(EditorAiMaskModelSetTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_ai_mask_model_set_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorAiMaskModelSetTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph
+)
+target_link_libraries(EditorAiMaskModelSetTest
+    PRIVATE
+        AlbumBackendLib
+        EditorSessionService
+        EditorMaskCoveragePreview
+        AiMaskEditSession
+        EditMaskCore
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+set_target_properties(EditorAiMaskModelSetTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorAiMaskModelSetTest
+    TEST_PREFIX "EditorAiMaskModelSetTest."
+    PROPERTIES LABELS "editor_session;ai_mask")
+alcedo_register_test_target(EditorAiMaskModelSetTest ui)
+
 add_executable(EditorComparisonViewQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_comparison_view_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp

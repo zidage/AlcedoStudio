@@ -957,6 +957,7 @@ Item {
                 interaction: editorInteraction
                 nodeController: historyVersionsRail.nodeController
                 comparison: root.comparison
+                host: root.host
                 controlsEnabled: root.editorEditControlsEnabled
                 expanded: !root.host || root.host.editorAdjustmentStackExpanded !== false
             }

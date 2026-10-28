@@ -15,9 +15,9 @@ use super::backend::{
 };
 use super::model_set::{
     CENTER_LOGITS_SHAPE, CENTER_OFFSET_SHAPE, HEAD_THRESHOLDS_FILE, LOG_SIZE_SHAPE, LOGIT_SIZE,
-    MASK_LOGITS_SHAPE, MASK_SCORES_SHAPE, PIXEL_VALUES_SHAPE, PRESENCE_LOGITS_SHAPE,
-    SKY_ALPHA_SHAPE, SKY_LOGITS_SHAPE, SUBJECT_IMAGE_SIZE, SUBJECT_MASKS_SHAPE,
-    SUBJECT_PIXEL_VALUES_SHAPE, SUBJECT_SCORES_SHAPE,
+    MASK_LOGITS_SHAPE, MASK_SCORES_SHAPE, MODEL_SET_FILE, PIXEL_VALUES_SHAPE,
+    PRESENCE_LOGITS_SHAPE, SKY_ALPHA_SHAPE, SKY_LOGITS_SHAPE, SUBJECT_IMAGE_SIZE,
+    SUBJECT_MASKS_SHAPE, SUBJECT_PIXEL_VALUES_SHAPE, SUBJECT_SCORES_SHAPE,
 };
 use super::tensor::TensorF32;
 
@@ -324,15 +324,24 @@ pub const FAKE_HEAD_THRESHOLDS: &str = r#"{"validation": {
     "presence_best_f1_person": {"threshold": 0.533202052116394},
     "person_list_best_f1_nms": {"threshold": 0.3132133185863495}}}"#;
 
-/// A fake model directory with the head thresholds file. The file is written once per process
-/// and directory: the tests run in parallel, and a second write would truncate the file while
-/// another test reads it.
+/// `model_set.json` of an installed AI Mask model set of @p version (AI Models plan, AM1).
+pub fn model_set_json(version: u64) -> String {
+    format!(
+        r#"{{"schema": 1, "kind": "alcedo-ai-model-set", "id": "alcedo-ai-mask", "model_set_version": {version}, "revision": "r1"}}"#
+    )
+}
+
+/// A fake model directory with the model set file (version 1) and the head thresholds file. The
+/// files are written once per process and directory: the tests run in parallel, and a second
+/// write would truncate a file while another test reads it.
 pub fn model_directory(name: &str) -> PathBuf {
     static WRITTEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
     let directory = std::env::temp_dir().join(format!("alcedo-segmentation-fake-{name}"));
     let mut written = WRITTEN.lock().expect("written directories");
     if !written.iter().any(|entry| entry == name) {
         std::fs::create_dir_all(&directory).expect("create fake model directory");
+        std::fs::write(directory.join(MODEL_SET_FILE), model_set_json(1))
+            .expect("write fake model set file");
         std::fs::write(directory.join(HEAD_THRESHOLDS_FILE), FAKE_HEAD_THRESHOLDS)
             .expect("write fake head thresholds");
         written.push(name.to_string());

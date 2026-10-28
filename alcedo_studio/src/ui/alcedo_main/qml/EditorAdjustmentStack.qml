@@ -27,6 +27,8 @@ Item {
     property var nodeController: null
     // EditorComparisonController; its Compare page is in the nav only while a comparison is open.
     property var comparison: null
+    // The application host (Main.qml): panels open dialogs through it.
+    property var host: null
     property bool controlsEnabled: true
 
     // ── Opaque semantic colors (no alpha derivations) ─────────────────────
@@ -376,6 +378,7 @@ Item {
                         nodeController: root.nodeController
                         maskCreation: root.maskCreation
                         aiMaskTool: root.aiMaskTool
+                        host: root.host
                         controlsEnabled: root.controlsEnabled && root.maskPanelAvailable
                     }
 

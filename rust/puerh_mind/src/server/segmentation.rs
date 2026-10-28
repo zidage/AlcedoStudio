@@ -495,6 +495,50 @@ mod tests {
         service
     }
 
+    /// AI Models plan, AM5: a model directory without `model_set.json`, or with a version that
+    /// this sidecar does not run, is not ready, and the header gives the reason.
+    #[tokio::test]
+    async fn server_rejects_missing_or_unsupported_model_set_as_model_not_ready() {
+        use crate::service::segmentation::model_set::{HEAD_THRESHOLDS_FILE, MODEL_SET_FILE};
+        use crate::service::segmentation::test_support::{FAKE_HEAD_THRESHOLDS, model_set_json};
+
+        for (model_set, reason) in [(None, "cannot be read"), (Some(2), "version 2")] {
+            let directory = std::env::temp_dir().join(format!(
+                "alcedo-segmentation-server-model-set-{}",
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&directory).expect("create directory");
+            std::fs::write(directory.join(HEAD_THRESHOLDS_FILE), FAKE_HEAD_THRESHOLDS)
+                .expect("write thresholds");
+            if let Some(version) = model_set {
+                std::fs::write(directory.join(MODEL_SET_FILE), model_set_json(version))
+                    .expect("write model set");
+            }
+            let response = service()
+                .load_segmentation_models(Request::new(LoadSegmentationModelsRequest {
+                    header: None,
+                    model_directory: directory.display().to_string(),
+                    device: "fake".to_string(),
+                }))
+                .await
+                .expect("transport ok")
+                .into_inner();
+            assert_eq!(
+                header_status(&response.header),
+                (
+                    AiResponseStatus::AiStatusProviderUnavailable as i32,
+                    AiErrorCode::AiErrorModelNotReady as i32
+                )
+            );
+            let message = &response.header.as_ref().expect("header").error_message;
+            assert!(
+                message.contains(MODEL_SET_FILE) && message.contains(reason),
+                "{message}"
+            );
+            std::fs::remove_dir_all(&directory).expect("remove directory");
+        }
+    }
+
     #[tokio::test]
     async fn server_maps_invalid_image_to_invalid_argument() {
         let service = loaded_service().await;

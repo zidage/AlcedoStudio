@@ -405,6 +405,10 @@ Item {
         openSettingsDialog(settingsDialogObj.lutCategory)
     }
 
+    function openAiModelSettings() {
+        openSettingsDialog(settingsDialogObj.aiModelsCategory)
+    }
+
     function openAdvancedAnalysisDialog() {
         const targets = root.selectionState.currentSelectedItems()
         advancedContentAnalysisDialogObj.openWithTargets(targets)

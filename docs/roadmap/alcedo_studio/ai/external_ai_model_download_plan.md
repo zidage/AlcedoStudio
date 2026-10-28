@@ -1,7 +1,7 @@
 # AI Models Page: One Download Place for CLIP and AI Mask Models - Phase Plan
 
 Date: 2026-10-27. Status: AM1 complete (2026-10-27); AM2 complete, v1 r1 published
-(2026-10-28); AM3 complete (2026-10-28); AM4 complete (2026-10-28); AM5 planned.
+(2026-10-28); AM3 complete (2026-10-28); AM4 complete (2026-10-28); AM5 complete (2026-10-28).
 
 Source audit: `main` `56df8883`.
 Tracking: [#579](https://github.com/zidage/AlcedoStudio/issues/579).
@@ -819,6 +819,104 @@ Required tests: the tool with no installed set shows the not-installed state and
 sidecar; a set below the minimum shows Update required; the sidecar rejects `model_set.json`
 version 2 and a missing `model_set.json`; the Sky notice test and the catalog test check the new
 text.
+
+#### AM5 completion record (2026-10-28)
+
+**Status:** complete. Before the sidecar starts, the AI Mask tool reads the installed AI Mask
+model set. Without a complete set of a supported version, the panel shows the state and "Open AI
+Models"; no sidecar starts and no AI Mask edit opens. The sidecar loads only a directory whose
+`model_set.json` has a version in its range. The Sky notice has the wording of section 4. The
+master plan sections 3.1, 3.3, D5, and the acceptance matrix row "Missing model" are updated.
+
+Details the plan did not specify, chosen in AM5:
+
+- **Owner of the readiness read.** `AiModelPackageService::ReadAiMaskModelSet()` reads the local
+  installations again (`RefreshInstallations`, file metadata only, no network request) and maps
+  them with the pure function `AiMaskModelSetReadinessFor(installation, compared status)` to
+  `AiMaskModelSetReadiness` (`kReady` with the installation directory, `kNotInstalled`,
+  `kUpdateRequired`, `kNeedsNewerApplication`, `kRepairRequired`). The tool receives it through
+  `EditorAiMaskTool::Services::model_set`, which replaces `model_directory`; the fixed
+  `alcedo-ai-mask-v1` path of the host is removed. Each Open reads the set again, so an install
+  on the AI Models page is used at the next Open without a restart.
+- **Repair also stops the Open.** An incomplete set of a supported version (P5 Repair) cannot
+  load, so the tool shows "repair" with the same button instead of a load error.
+- **Needs a newer Alcedo Studio** comes from the installation too: a set installed only above
+  this build's maximum (by a newer build) gives that state without a feed check. Without any
+  installed set, the state comes from the last feed comparison of the service (P5).
+- **Place of the check.** `EditorAiMaskTool::OpenFor`, after the image and the Color Grade checks
+  and before the runtime request and the AI Mask edit lease. The state is the property
+  `modelSetState` (`notInstalled`, `updateRequired`, `needsNewerApplication`,
+  `repairRequired`, or empty); the tool stays active, so the panel shows it, and Close clears it.
+- **"Open AI Models".** The panel calls `host.openAiModelSettings()` (Main.qml ->
+  `AppDialogs.openAiModelSettings()` -> Settings at `aiModelsCategory`) and closes the tool. The
+  host reaches the panel through `EditorWorkspace` -> `EditorAdjustmentStack` ->
+  `EditorMasksContextPanel` -> `EditorAiMaskPanel` (`host` property). While the state shows, the
+  tasks, the prompt tools, and Confirm are hidden.
+- **Sidecar check.** `model_set.rs` declares `MODEL_SET_PACKAGE_ID` (`alcedo-ai-mask`),
+  `MODEL_SET_FILE`, `MODEL_SET_MINIMUM_VERSION = MODEL_SET_MAXIMUM_VERSION = 1`, and
+  `model_set_version_from_json` (`schema` 1, `kind` `alcedo-ai-model-set`, `id`, positive
+  `model_set_version`). `SegmentationEngine::load` runs `check_model_set_version` before the head
+  thresholds and before any model file opens; every failure is `ModelNotReady`, which the server
+  sends as `AI_ERROR_MODEL_NOT_READY` with the reason. `MODEL_SET_ID` (`alcedo-ai-mask-v1`, the
+  identity stored in each AI Mask) is unchanged. The live port check
+  (`tests/segmentation_port_check.rs`) now needs an installed set in
+  `ALCEDO_SEGMENTATION_MODEL_DIR`.
+- **Texts.** The four state texts, "Open AI Models", and the new Sky notice have Chinese entries
+  in the `EditorAiMaskPanel` context, added by hand.
+
+**Primary success call chain:**
+
+```text
+Header AI Mask button -> EditorAiMaskTool::open -> OpenFor
+  -> image and Color Grade checks
+  -> Services::model_set -> AiModelPackageService::ReadAiMaskModelSet
+     -> RefreshInstallations (ReadAiModelInstallation) -> AiMaskModelSetReadinessFor -> kReady
+  -> runtime -> OpenAiMaskEdit -> analysis render -> StartOnWorker
+     -> LoadModels(<model directory>/alcedo-ai-mask-v1)
+        -> sidecar SegmentationEngine::load -> check_model_set_version (v1 in [1, 1]) -> models
+```
+
+**Primary failure call chains:**
+
+```text
+No set / below minimum / only above maximum / incomplete
+  -> OpenFor stops: modelSetState set, no runtime request, no edit lease
+  -> EditorAiMaskPanel shows the state text and "Open AI Models"
+     -> host.openAiModelSettings -> Settings > AI Models; tool.cancel
+model_set.json missing, invalid, or version outside [1, 1] (a directory filled by hand)
+  -> SegmentationEngine::load -> ModelNotReady(reason) -> AI_ERROR_MODEL_NOT_READY
+  -> tool error "The AI Mask models could not be loaded from <dir>: <reason>"
+```
+
+**What was proven (executed tests):**
+
+| Required test | Test | Result |
+| --- | --- | --- |
+| No installed set: not-installed state, no sidecar start | `EditorAiMaskModelSetTest.NoInstalledSetShowsNotInstalledAndStartsNoSidecar` (real `AiModelPackageService` over an empty model directory) | PASS |
+| A set below the minimum: Update required | `EditorAiMaskModelSetTest.SetBelowTheMinimumShowsUpdateRequiredAndStartsNoSidecar` | PASS |
+| An incomplete set: Repair; each Open reads the set again; a ready set opens the edit | `EditorAiMaskModelSetTest.IncompleteSetShowsRepairAndEachOpenReadsTheSetAgain` | PASS |
+| The three tool tests fail without the check | same tests with the check bypassed: 3 FAILED ("no sidecar runtime was requested") | proven |
+| Readiness from the owner (ready directory, repair, removed, no network request) | `AiModelPackageServiceTest.AiMaskToolReadsTheInstalledSetAgainAndItsDirectory` | PASS |
+| Readiness for every range case | `AiModelPackageServiceTest.AiMaskToolReadinessFollowsTheSupportedRange`, `...FeedWithOnlyHigherVersionsNeedsNewerApplication` | PASS |
+| The sidecar rejects `model_set.json` version 2 and a missing `model_set.json` | `engine::tests::load_rejects_missing_model_set_file_and_loads_no_model`, `engine::tests::load_rejects_model_set_version_outside_the_supported_range`, `server::segmentation::tests::server_rejects_missing_or_unsupported_model_set_as_model_not_ready` | PASS |
+| The panel shows the state and "Open AI Models" opens Settings and closes the tool | `EditorAiMaskPanelQmlTest.MissingModelSetShowsItsStateAndOpenAiModelsOpensSettings` (fails on the AM4 panel) | PASS |
+| The Sky notice test checks the new text | `EditorAiMaskPanelQmlTest.SkyTrainingDataNoticeIsVisibleBeforeFirstSkyRun` (fails on the AM4 panel) | PASS |
+| The catalog test checks the new texts | `SimplifiedChineseCatalogTest.CompiledCatalogTranslatesTheSkyTrainingDataNotice`, `...CompiledCatalogTranslatesTheAiMaskModelSetStates` | PASS |
+| Regression | `EditorMaskRangeAdapterTest` (the tool with an installed set still opens its edit), `EditorNodesPanelQmlTest`, `AiModelPackageServiceTest`, `SimplifiedChineseCatalogTest`, Rust `cargo test --lib segmentation` | PASS, except below |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main
+AiModelPackageServiceTest EditorAiMaskModelSetTest EditorMaskRangeAdapterTest
+EditorAiMaskPanelQmlTest SimplifiedChineseCatalogTest EditorNodesPanelQmlTest`; `ctest
+--test-dir build/debug -j 1 -R
+"^(AiModelPackageServiceTest|EditorAiMaskModelSetTest|EditorMaskRangeAdapterTest|EditorAiMaskPanelQmlTest|SimplifiedChineseCatalogTest|EditorNodesPanelQmlTest)\."`
+(134 tests); `cargo test --lib segmentation` in `rust/puerh_mind` (87 tests) and
+`cargo test --lib -- --skip live_` (380 tests, no warnings).
+
+**Residual gaps and problems found:** `AiModelPackageServiceTest` failed intermittently at the
+install commit move with "Access is denied" (`InstallReportsDownloadVerifyAndInstallStages`,
+`MissingOrResizedFileIsRepairWithoutHashing`; each passed when it ran again), the known issue
+[#586](https://github.com/zidage/AlcedoStudio/issues/586) (comment added). The tool was not
+driven in the running application, and macOS was not built or run.
 
 ## 6. Tracking
 

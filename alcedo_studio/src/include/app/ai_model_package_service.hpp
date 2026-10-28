@@ -11,6 +11,7 @@
 #include <QUrl>
 #include <QVariantList>
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -115,6 +116,33 @@ struct AiModelPackageComparison {
 [[nodiscard]] auto AiModelPackageActionFor(AiModelPackageStatus status, bool offered)
     -> AiModelPackageAction;
 
+/// Whether the AI Mask tool can load the installed AI Mask model set (AI Models plan, AM5).
+enum class AiMaskModelSetAvailability : std::uint8_t {
+  /// A complete set of a supported version is installed.
+  kReady,
+  kNotInstalled,
+  /// Only a version below this build's minimum is installed.
+  kUpdateRequired,
+  /// Only a version above this build's maximum is installed, or the checked feed lists only
+  /// such versions.
+  kNeedsNewerApplication,
+  /// The installed set of a supported version does not agree with its inventory.
+  kRepairRequired,
+};
+
+struct AiMaskModelSetReadiness {
+  AiMaskModelSetAvailability availability = AiMaskModelSetAvailability::kNotInstalled;
+  /// The installation directory of the complete supported set; empty unless kReady.
+  std::filesystem::path      directory;
+};
+
+/// Readiness of the AI Mask tool from @p installation (the AI Mask range of this build) and the
+/// comparison status @p compared with the last checked feed (kNeedsNewerApplication is known
+/// only from the feed). Pure function; reads no file.
+[[nodiscard]] auto AiMaskModelSetReadinessFor(const AiModelInstallation& installation,
+                                              AiModelPackageStatus       compared)
+    -> AiMaskModelSetReadiness;
+
 /// Owner of the signed AI model package feed state, the local installations of the AI model
 /// packages that this build knows (the AI Mask model set), and their download, install,
 /// update, repair, and removal (docs/roadmap/alcedo_studio/ai/external_ai_model_download_plan.md,
@@ -172,6 +200,11 @@ class AiModelPackageService final : public QObject {
   /// Read the local installations again (for example after the model directory changed).
   /// Ignored while a package action runs.
   void                   RefreshInstallations();
+  /// Read the local installations again, then the readiness of the AI Mask model set for the AI
+  /// Mask tool (AM5). Reads file metadata only; makes no network request. While a package
+  /// action runs, the installation read when the action started is used: the installed set
+  /// changes only at the commit point, after which the service reads it again.
+  [[nodiscard]] auto     ReadAiMaskModelSet() -> AiMaskModelSetReadiness;
   /// Recover an interrupted install or removal, then fetch and verify the signed feed and
   /// compare every known package. Never downloads an archive. Returns false when disabled,
   /// already checking, or while a package action runs.

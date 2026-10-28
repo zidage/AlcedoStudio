@@ -446,6 +446,10 @@ ApplicationWindow {
         appDialogs.openLutSettings()
     }
 
+    function openAiModelSettings() {
+        appDialogs.openAiModelSettings()
+    }
+
 
     function revealLibraryAfterProjectLoad() {
         const library = workspaceHost.libraryItem

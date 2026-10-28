@@ -2376,9 +2376,28 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorAiMaskPanel</name>
     <message>
-        <location filename="../qml/EditorAiMaskPanel.qml" line="+270"/>
-        <source>Sky: the training data of the Sky model may not permit commercial use. Do not use Sky for commercial work.</source>
-        <translation>天空：天空模型的训练数据可能不允许商业使用。请勿将天空功能用于商业作品。</translation>
+        <source>The AI Mask models are not installed. Download them on the AI Models page in Settings.</source>
+        <translation>AI 蒙版模型尚未安装。请在“设置 > AI 模型”页面下载。</translation>
+    </message>
+    <message>
+        <source>The installed AI Mask models are too old for this version of Alcedo Studio. Update them on the AI Models page in Settings.</source>
+        <translation>已安装的 AI 蒙版模型版本过旧，此版本的 Alcedo Studio 无法使用。请在“设置 > AI 模型”页面更新。</translation>
+    </message>
+    <message>
+        <source>The AI Mask models need a newer version of Alcedo Studio. Update Alcedo Studio to use AI Mask.</source>
+        <translation>AI 蒙版模型需要更新版本的 Alcedo Studio。请更新 Alcedo Studio 后使用 AI 蒙版。</translation>
+    </message>
+    <message>
+        <source>The installed AI Mask models are incomplete. Repair them on the AI Models page in Settings.</source>
+        <translation>已安装的 AI 蒙版模型不完整。请在“设置 > AI 模型”页面修复。</translation>
+    </message>
+    <message>
+        <source>Open AI Models</source>
+        <translation>打开 AI 模型</translation>
+    </message>
+    <message>
+        <source>Sky: the license of the Sky model&apos;s training data is not clear. Decide yourself before commercial use; see Settings &gt; AI Models.</source>
+        <translation>天空：天空模型训练数据的许可证不明确，商业使用前请自行判断，详见“设置 &gt; AI 模型”。</translation>
     </message>
 </context>
 <context>

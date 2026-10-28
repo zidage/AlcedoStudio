@@ -18,6 +18,8 @@ Item {
     property var maskCreation: null
     // EditorAiMaskTool: its panel fills the lower part while its edit is open.
     property var aiMaskTool: null
+    // The application host: the AI Mask panel opens Settings through it.
+    property var host: null
     property bool controlsEnabled: true
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
@@ -128,6 +130,7 @@ Item {
                 visible: root.aiMaskEditOpen
                 tool: root.aiMaskTool
                 maskCreation: root.maskCreation
+                host: root.host
             }
 
             Flickable {

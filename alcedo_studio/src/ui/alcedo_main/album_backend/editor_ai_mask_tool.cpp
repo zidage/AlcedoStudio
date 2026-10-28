@@ -77,6 +77,22 @@ constexpr int      kOpenStageCount        = 5;
   return QRectF(QPointF(box.x0, box.y0), QPointF(box.x1, box.y1)).normalized();
 }
 
+[[nodiscard]] auto ModelSetStateName(AiMaskModelSetAvailability availability) -> QString {
+  switch (availability) {
+    case AiMaskModelSetAvailability::kReady:
+      return {};
+    case AiMaskModelSetAvailability::kNotInstalled:
+      return QStringLiteral("notInstalled");
+    case AiMaskModelSetAvailability::kUpdateRequired:
+      return QStringLiteral("updateRequired");
+    case AiMaskModelSetAvailability::kNeedsNewerApplication:
+      return QStringLiteral("needsNewerApplication");
+    case AiMaskModelSetAvailability::kRepairRequired:
+      return QStringLiteral("repairRequired");
+  }
+  return {};
+}
+
 }  // namespace
 
 EditorAiMaskTool::EditorAiMaskTool(EditorSessionController* session, Services services,
@@ -132,6 +148,10 @@ void EditorAiMaskTool::openSelectedMask() {
   OpenFor(MaskId{adapter->selected_mask_id().toStdString()});
 }
 
+auto EditorAiMaskTool::model_set_state() const -> QString {
+  return ModelSetStateName(model_set_availability_);
+}
+
 void EditorAiMaskTool::ShowError(QString error) {
   if (active_ || shut_down_) {
     return;
@@ -147,11 +167,12 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
     return;
   }
   ++serial_;
-  active_              = true;
-  ready_               = false;
-  lease_open_          = false;
-  commit_operation_id_ = 0;
-  stage_               = AiMaskToolStage::None;
+  active_                 = true;
+  ready_                  = false;
+  lease_open_             = false;
+  commit_operation_id_    = 0;
+  stage_                  = AiMaskToolStage::None;
+  model_set_availability_ = AiMaskModelSetAvailability::kReady;
   error_text_.clear();
   notice_text_.clear();
   view_     = {};
@@ -178,6 +199,16 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
     Fail(QStringLiteral("Select a Color Grade node first."));
     return;
   }
+  // AI Models plan, AM5: only a complete installed set of a supported version loads. Otherwise
+  // the panel shows the state and opens the AI Models page; no sidecar starts, no edit opens.
+  const AiMaskModelSetReadiness model_set =
+      services_.model_set ? services_.model_set() : AiMaskModelSetReadiness{};
+  if (model_set.availability != AiMaskModelSetAvailability::kReady) {
+    model_set_availability_ = model_set.availability;
+    qInfo().noquote() << "[AI Mask] no usable model set:" << model_set_state();
+    emit toolChanged();
+    return;
+  }
   // The range bars target the stored Mask of the edit; a new candidate has none (D11). They stay
   // disabled until the session opens the edit (OnOpened).
   session_->mask_creation()->SetAiMaskEditRangeTarget(true, {}, std::nullopt);
@@ -191,9 +222,7 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
   if (services_.runtime_options) {
     request.runtime_options = services_.runtime_options();
   }
-  if (services_.model_directory) {
-    request.model_directory = services_.model_directory();
-  }
+  request.model_directory = model_set.directory;
 
   SetStage(AiMaskToolStage::OpeningEdit);
   const auto                 serial = serial_;
@@ -807,12 +836,13 @@ void EditorAiMaskTool::Close(QString error) {
       worker.service.reset();
     }
   });
-  active_              = false;
-  ready_               = false;
-  lease_open_          = false;
-  commit_operation_id_ = 0;
-  stage_               = AiMaskToolStage::None;
-  error_text_          = std::move(error);
+  active_                 = false;
+  ready_                  = false;
+  lease_open_             = false;
+  commit_operation_id_    = 0;
+  stage_                  = AiMaskToolStage::None;
+  model_set_availability_ = AiMaskModelSetAvailability::kReady;
+  error_text_             = std::move(error);
   notice_text_.clear();
   view_               = {};
   preview_            = {};

@@ -30,7 +30,9 @@ use super::backend::{
 use super::image_embedding_cache::ImageEmbeddingCache;
 use super::image_entry::{ImageEntry, PeopleList, PersonCrop, ResultSlot, SkyResult};
 use super::model_set::{
-    HEAD_THRESHOLDS_FILE, MASK_INPUT_SHAPE, MAX_IMAGE_EDGE, MODEL_SET_ID, SKY_ALPHA_SIZE,
+    HEAD_THRESHOLDS_FILE, MASK_INPUT_SHAPE, MAX_IMAGE_EDGE, MODEL_SET_FILE, MODEL_SET_ID,
+    MODEL_SET_MAXIMUM_VERSION, MODEL_SET_MINIMUM_VERSION, SKY_ALPHA_SIZE,
+    model_set_version_from_json,
 };
 use super::sam2::{self, DecodedMasks, SegmentationPrompt};
 use super::task_masks::{self, HeadThresholds, SubjectAlpha, SubjectInputImage};
@@ -273,6 +275,34 @@ fn result_of<T>(
     Ok((value, true))
 }
 
+/// Reads `model_set.json` of the model directory and checks that this sidecar supports its
+/// version (AI Models plan, AM5). A missing or invalid file, or a version outside
+/// [`MODEL_SET_MINIMUM_VERSION`, `MODEL_SET_MAXIMUM_VERSION`], is not ready; a directory that a
+/// developer filled without the file is not accepted.
+fn check_model_set_version(directory: &Path) -> Result<u64, SegmentationError> {
+    let path = directory.join(MODEL_SET_FILE);
+    let text = std::fs::read_to_string(&path).map_err(|err| {
+        SegmentationError::ModelNotReady(format!(
+            "the AI Mask model set file {} cannot be read: {err}",
+            path.display()
+        ))
+    })?;
+    let version = model_set_version_from_json(&text).map_err(|err| {
+        SegmentationError::ModelNotReady(format!(
+            "the AI Mask model set file {} is not valid: {err:#}",
+            path.display()
+        ))
+    })?;
+    if !(MODEL_SET_MINIMUM_VERSION..=MODEL_SET_MAXIMUM_VERSION).contains(&version) {
+        return Err(SegmentationError::ModelNotReady(format!(
+            "AI Mask model set version {version} in {} is not supported: this sidecar runs \
+             versions {MODEL_SET_MINIMUM_VERSION} to {MODEL_SET_MAXIMUM_VERSION}",
+            path.display()
+        )));
+    }
+    Ok(version)
+}
+
 /// Reads the head thresholds of the model directory (SM3.C plan, decision C6).
 fn read_head_thresholds(directory: &Path) -> Result<HeadThresholds, SegmentationError> {
     let path = directory.join(HEAD_THRESHOLDS_FILE);
@@ -445,7 +475,8 @@ impl SegmentationEngine {
     }
 
     /// Loads the encoder, the decoder, the people and sky head, S3OD, the sky head, and the head
-    /// thresholds from @p directory on @p device (SM3.C plan, decision C6; SM3.E plan).
+    /// thresholds from @p directory on @p device (SM3.C plan, decision C6; SM3.E plan). The
+    /// directory must hold a `model_set.json` of a supported version (AI Models plan, AM5).
     ///
     /// The same directory and device again keep the loaded models, the sessions, and the cache.
     /// Another directory or device ends all sessions, clears the cache, and unloads the old models
@@ -488,6 +519,7 @@ impl SegmentationEngine {
             );
             residency
         };
+        check_model_set_version(directory)?;
         let thresholds = read_head_thresholds(directory)?;
         let started = Instant::now();
         let encoder = backend.load_encoder(directory).map_err(not_ready)?;
@@ -1025,7 +1057,8 @@ mod tests {
     use super::super::sam2::{PointLabel, PromptBox, PromptPoint};
     use super::super::task_masks::PixelRect;
     use super::super::test_support::{
-        FAKE_TOKEN_AREAS, FakeCalls, FakeFactory, empty_head_output, model_directory,
+        FAKE_HEAD_THRESHOLDS, FAKE_TOKEN_AREAS, FakeCalls, FakeFactory, empty_head_output,
+        model_directory, model_set_json,
     };
     use super::*;
 
@@ -1570,6 +1603,86 @@ mod tests {
         (values, *mask_box)
     }
 
+    /// A model directory with the head thresholds and, when @p model_set is set, that
+    /// `model_set.json` text.
+    fn directory_with_model_set(model_set: Option<&str>) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "alcedo-segmentation-model-set-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).expect("create directory");
+        std::fs::write(directory.join(HEAD_THRESHOLDS_FILE), FAKE_HEAD_THRESHOLDS)
+            .expect("write thresholds");
+        if let Some(text) = model_set {
+            std::fs::write(directory.join(MODEL_SET_FILE), text).expect("write model set");
+        }
+        directory
+    }
+
+    #[test]
+    fn load_rejects_missing_model_set_file_and_loads_no_model() {
+        let (engine, calls) = engine_with(FakeFactory::new());
+        let directory = directory_with_model_set(None);
+        let err = engine
+            .load(&directory, "fake")
+            .expect_err("no model_set.json");
+        assert!(
+            matches!(&err, SegmentationError::ModelNotReady(message) if message.contains(MODEL_SET_FILE) && message.contains("cannot be read")),
+            "{err}"
+        );
+        assert!(!engine.status().expect("status").loaded);
+        assert_eq!(
+            calls.loads.load(Ordering::SeqCst),
+            0,
+            "no model file was opened"
+        );
+        std::fs::remove_dir_all(&directory).expect("remove directory");
+    }
+
+    #[test]
+    fn load_rejects_model_set_version_outside_the_supported_range() {
+        assert_eq!(
+            (MODEL_SET_MINIMUM_VERSION, MODEL_SET_MAXIMUM_VERSION),
+            (1, 1)
+        );
+        let (engine, calls) = engine_with(FakeFactory::new());
+        let directory = directory_with_model_set(Some(&model_set_json(2)));
+        let err = engine.load(&directory, "fake").expect_err("version 2");
+        assert!(
+            matches!(&err, SegmentationError::ModelNotReady(message) if message.contains("version 2") && message.contains("versions 1 to 1")),
+            "{err}"
+        );
+        assert!(!engine.status().expect("status").loaded);
+        assert_eq!(
+            calls.loads.load(Ordering::SeqCst),
+            0,
+            "no model file was opened"
+        );
+        std::fs::remove_dir_all(&directory).expect("remove directory");
+
+        // Another package, another kind, and a version that is not a positive integer.
+        for text in [
+            r#"{"schema": 1, "kind": "alcedo-ai-model-set", "id": "other", "model_set_version": 1}"#,
+            r#"{"schema": 1, "kind": "other", "id": "alcedo-ai-mask", "model_set_version": 1}"#,
+            r#"{"schema": 1, "kind": "alcedo-ai-model-set", "id": "alcedo-ai-mask", "model_set_version": 0}"#,
+            "not json",
+        ] {
+            let directory = directory_with_model_set(Some(text));
+            assert!(
+                matches!(engine.load(&directory, "fake"), Err(SegmentationError::ModelNotReady(message)) if message.contains("is not valid")),
+                "{text}"
+            );
+            std::fs::remove_dir_all(&directory).expect("remove directory");
+        }
+
+        // A supported version loads.
+        let directory = directory_with_model_set(Some(&model_set_json(1)));
+        engine.load(&directory, "fake").expect("version 1 loads");
+        assert!(engine.status().expect("status").loaded);
+        engine.unload().expect("unload");
+        std::fs::remove_dir_all(&directory).expect("remove directory");
+    }
+
     #[test]
     fn load_reports_all_five_models_and_fails_without_thresholds() {
         let (engine, _calls) = loaded_engine();
@@ -1587,6 +1700,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&empty).expect("create directory");
+        std::fs::write(empty.join(MODEL_SET_FILE), model_set_json(1)).expect("write model set");
         let err = engine.load(&empty, "fake").expect_err("no thresholds");
         assert!(
             matches!(&err, SegmentationError::ModelNotReady(message) if message.contains(HEAD_THRESHOLDS_FILE)),

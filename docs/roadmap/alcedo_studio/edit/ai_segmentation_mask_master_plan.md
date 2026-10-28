@@ -66,7 +66,7 @@ decision.
 | D2 | Changed on 2026-10-22 by the user. The model set is SAM 2.1 Hiera tiny (stroke, click, box, add and subtract, and the final masks of Sky and People), the people and sky head on the SAM 2.1 image embedding (Sky and People localization), and S3OD `s3od-synth` (Subject; Background is the inverted Subject). EfficientSAM3 and SAM3 are not used. No model of the set takes text, so text prompts are not part of this plan. Evidence: section 8.2. Changed on 2026-10-26 by D24: Sky uses the fine sky head on the ONNX Runtime backend. |
 | D3 | The interaction is visually rich. The exact interaction set is decided in the UI phase. The Python MVP of `alcedo-ai-mask-lab` is a reference for SM9, not a specification: SM9 decides each change to it (D15). |
 | D4 | The installer does not contain model weights. Alcedo Studio supplies a built-in downloader and the inference runtime. The weights come from the user-owned Cloudflare R2 bucket or from a Hugging Face repository. |
-| D5 | Changed on 2026-10-22 with D2. Each published model directory contains the license text of its models: Apache-2.0 for SAM 2.1, MIT and the DINOv3 License for S3OD. The people and sky head is an own model (training data COCO 2017 and Open Images V7). Model licenses must permit commercial use (lab decision U2). Exception (lab decision U18, 2026-10-25): the sky head is an own model trained on MaSS13K, whose license is not certain; its model directory entry says so, and the Sky function tells the user that the training data may not permit commercial use (#537). |
+| D5 | Changed on 2026-10-22 with D2. Each published model directory contains the license text of its models: Apache-2.0 for SAM 2.1, MIT and the DINOv3 License for S3OD. The people and sky head is an own model (training data COCO 2017 and Open Images V7). Model licenses must permit commercial use (lab decision U2). Exception (lab decision U18, 2026-10-25; wording replaced by [AI Models plan](../ai/external_ai_model_download_plan.md) decision A7, 2026-10-27): the sky head is an own model trained on MaSS13K, whose license is not clear. The download statement of the AI Models page says so, and the Sky notice of the AI Mask tool says that the license of the training data is not clear, that the user decides before commercial use, and points to Settings > AI Models (#537, #578). Neither forbids commercial use. |
 | D6 | The AI Segmentation Mask reuses the current R8 Mask logic: one R8 coverage per Mask, Union by per-pixel maximum, and Grade Mix. |
 | D7 | The model always reads the whole source image. It does not read the image after the document crop and rotation. A later crop or rotation change must not make an existing AI Mask incomplete. |
 | D8 | The analysis render disables the document crop in the same way that the Geometry panel does. See the source finding in section 5.3: the current Geometry panel mode keeps the rotation. |
@@ -165,8 +165,11 @@ refined.
 
 1. The user selects a Color Grade node.
 2. The user selects the AI Mask tool.
-3. If the model is not installed, the tool shows a download panel. The panel shows the model name,
-   the download size, and the license name. The user starts the download from that panel.
+3. Before the sidecar starts, the tool reads the installed AI Mask model set. When no complete set
+   of a supported version is installed (not installed, update required, needs a newer Alcedo
+   Studio, or repair), the tool shows that state and an "Open AI Models" button that opens Settings
+   at the AI Models page. The tool does not download; the AI Models page installs the set
+   ([AI Models plan](../ai/external_ai_model_download_plan.md), decision A8 and AM5).
 4. When the model is installed, Alcedo Studio starts a segmentation session for the current image.
    The viewport shows a busy state until the image embedding exists.
 5. The user adds prompts and task masks. Each change is one step of the AI Mask edit session (D16)
@@ -196,8 +199,9 @@ Candidate and committed coverage use the same display composite.
 
 | Failure | Required result |
 | --- | --- |
-| The model is not installed. | The tool shows the download panel. It does not start a session. |
-| The download fails or a file checksum is wrong. | The download panel shows the real error. The installed model state does not change. |
+| No complete AI Mask model set of a supported version is installed. | The tool shows the state (not installed, update required, needs a newer Alcedo Studio, or repair) and "Open AI Models". It does not start the sidecar or a session. |
+| The download fails or a file checksum is wrong. | The AI Models page shows the real error. The installed model set does not change (AI Models plan, AM1). |
+| The model directory has no `model_set.json`, or its version is outside the range of the sidecar. | The sidecar rejects the load with `AI_ERROR_MODEL_NOT_READY` and the reason. The tool shows that error. |
 | The sidecar does not start. | The tool shows the start error. The document does not change. |
 | The model load or inference fails. | The tool shows the runtime error. It keeps the current prompts. It does not select another model, device, or resolution. |
 | The user leaves the image during a session. | The session ends. The document does not change. |
@@ -742,7 +746,7 @@ Scope:
 | Cancel of an AI Mask session | The document and the project mask asset table do not change. |
 | Paste to another image | The AI Masks are not pasted. The paste result names them. |
 | Reopen | A reopened project shows the same coverage. It does not run the model. |
-| Missing model | The tool shows the download panel. The document does not change. |
+| Missing model | The tool shows the model set state and "Open AI Models" (AI Models plan, AM5). No sidecar starts; the document does not change. |
 | Sidecar failure | The tool shows the real error. The document does not change. |
 | Corrupt R8 asset | Rendering reports the real error. It does not render an empty Mask. |
 | Lens or RAW decode change | The Mask stays as stored. The UI shows the notice of D9. |

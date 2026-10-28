@@ -1,9 +1,20 @@
 //! Files, tensor names, and tensor shapes of the AI Mask model set (master plan section 8.2.1).
 
+use anyhow::{Result, anyhow, bail};
+use serde_json::Value;
+
 use super::backend::SegmentationModelRole;
 
 /// Identity of the model set and the directory name that SM9 and SM2 use.
 pub const MODEL_SET_ID: &str = "alcedo-ai-mask-v1";
+/// Package ID of the AI Mask model set in `model_set.json` (AI Models plan, decisions P1 and P3).
+pub const MODEL_SET_PACKAGE_ID: &str = "alcedo-ai-mask";
+/// The file that identifies an installed model set and its version (AI Models plan, AM1).
+pub const MODEL_SET_FILE: &str = "model_set.json";
+/// AI Mask model set versions that this sidecar can run (AI Models plan, decision P1). The host
+/// declares the same range (`kAiMaskModelSetMinimumVersion`, `kAiMaskModelSetMaximumVersion`).
+pub const MODEL_SET_MINIMUM_VERSION: u64 = 1;
+pub const MODEL_SET_MAXIMUM_VERSION: u64 = 1;
 /// Side of the square encoder input. Prompt coordinates are normalized coordinates times this.
 pub const IMAGE_SIZE: usize = 1024;
 /// Side of the square decoder logits and of the mask input.
@@ -137,6 +148,29 @@ pub const SKY_HEAD: ModelSpec = ModelSpec {
     onnx_outputs: &["sky_alpha"],
     coreml_outputs: &["sky_alpha"],
 };
+
+/// The model set version of the `model_set.json` text @p text (AI Models plan, AM1 completion
+/// record): `schema` 1, `kind` `alcedo-ai-model-set`, `id` [`MODEL_SET_PACKAGE_ID`], and a
+/// positive integer `model_set_version`. Other fields are allowed. The caller checks the range.
+pub fn model_set_version_from_json(text: &str) -> Result<u64> {
+    let value: Value = serde_json::from_str(text).map_err(|err| anyhow!("not JSON: {err}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("not a JSON object"))?;
+    if object.get("schema").and_then(Value::as_u64) != Some(1) {
+        bail!("schema is not 1");
+    }
+    if object.get("kind").and_then(Value::as_str) != Some("alcedo-ai-model-set") {
+        bail!("kind is not alcedo-ai-model-set");
+    }
+    if object.get("id").and_then(Value::as_str) != Some(MODEL_SET_PACKAGE_ID) {
+        bail!("id is not {MODEL_SET_PACKAGE_ID}");
+    }
+    match object.get("model_set_version").and_then(Value::as_u64) {
+        Some(version) if version > 0 => Ok(version),
+        _ => bail!("model_set_version is not a positive integer"),
+    }
+}
 
 pub fn spec(role: SegmentationModelRole) -> &'static ModelSpec {
     match role {
