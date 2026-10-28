@@ -20,8 +20,8 @@ of the LUTs page (`LutSettingsPanel.qml`).
   and decoder, people and sky head, S3OD, sky head) in one download. There is no download per
   function (Subject, Sky, People). The files come from the Alcedo Cloudflare R2 bucket through a
   signed feed, as LUT packages and application updates do.
-- The card names the models of the set and what each one does; a Pill shows the version (now
-  v1). A model set version change means that the inference code must change too; the app installs
+- The card says in one sentence what the set does and links its GitHub project; a Pill shows the
+  version (now v1). A model set version change means that the inference code must change too; the app installs
   only a version that it supports.
 - **CLIP** (Local Content Recognition) has one card per model profile of the platform. Install and
   activation are separate: a card downloads or removes its model; an installed model is activated
@@ -129,7 +129,7 @@ Implementation decisions (this plan):
 
 | ID | Decision |
 | --- | --- |
-| P1 | **Model set version and revision.** `model_set_version` (integer, now 1) changes only when the inference code must change (inputs, outputs, files, thresholds format). `revision` (`r1`, `r2`, ...) changes the weights in one version. The build declares `kAiMaskModelSetMinimumVersion = 1` and `kAiMaskModelSetMaximumVersion = 1` (C++), and Rust declares the same range. The card shows the version in its revision Pill. Its text names the models of the set and what each one does, not the supported range (user change, 2026-10-28; it replaces the "Supports AI Mask models v1 and later" line). |
+| P1 | **Model set version and revision.** `model_set_version` (integer, now 1) changes only when the inference code must change (inputs, outputs, files, thresholds format). `revision` (`r1`, `r2`, ...) changes the weights in one version. The build declares `kAiMaskModelSetMinimumVersion = 1` and `kAiMaskModelSetMaximumVersion = 1` (C++), and Rust declares the same range. The card shows the version in its revision Pill. Its text is one sentence that says what the set does, not the supported range (user change, 2026-10-28; it replaces the "Supports AI Mask models v1 and later" line). |
 | P2 | **Feed.** `https://static.aoraw.org/ai-models/v1/manifest.json` + `.sig`, CMake `ALCEDO_AI_MODEL_FEED_URL`, signed with the update key. `schema: 1`, `kind: "alcedo-ai-model-packages"`, `sequence` with QSettings `aiModels/packages/highestTrustedSequence` (only raised). A feed can list one entry per (`id`, `model_set_version`), so an old build still finds its version after a v2 is published. The app picks the highest listed version in its range. |
 | P3 | **Package.** One `.7z` per platform (`windows-x86_64`, `macos-arm64`) per (`version`, `revision`). Root: `model_set.json`, `package-inventory.json` (path, size, SHA-256 of each file), the model files, `licenses/`, `NOTICE.txt`. Core ML `.mlmodelc` directories are inside the archive as directories; the inventory pins every file of them. |
 | P4 | **Install location.** `<model directory>/alcedo-ai-mask-v<version>/`, the directory that the sidecar reads today. Staging in `<model directory>/.alcedo-ai-mask-v<version>.download/`, verified against the inventory, then promoted by rename; `installed.json` (revision, inventory SHA-256, artifact SHA-256) is the commit point. A failed or cancelled install leaves the installed set unchanged. |
@@ -671,14 +671,14 @@ Work:
   P12) and a license Pill row.
 - `AiModelsSettingsPanel.qml`, category P12:
   - Top row: model directory tile (`FolderPathField`, open folder, refresh) as the LUT library tile.
-  - "AI Mask" section: one `PackageCard` (status, the models and their use, licenses, size, progress,
+  - "AI Mask" section: one `PackageCard` (status, a one-sentence description, licenses, size, progress,
     Download / Update / Repair / Retry / Cancel / Remove with confirmation).
   - "Content Recognition (CLIP)" section: source combo box (and the custom URL field) in the
     section header; one card per profile with Download / Cancel / Remove (confirmation) and
     Activate. Activate is enabled only for an installed, not active model with an open project;
     without a project the card says "Open a project to activate". The card shows the activation
     progress.
-  - "Download statement" text button in the page header that opens the statement read-only.
+  - The About page (not this page) opens the statement read-only (user change, 2026-10-28).
   - The statement dialog (section 4) with "Accept and Download" and "Cancel" opens on the first
     download request when the statement is not accepted.
 - `SemanticGenerationSettingsPanel.qml`: remove the Model section; show the active model name of
@@ -727,12 +727,14 @@ Details the plan did not specify, chosen in AM4:
   `qsTr` per paragraph; the dataset URL is a link argument (`%1`). The AI Mask paragraph keeps
   the approved Chinese text of section 4 ("AI Mask"), while the page says "AI 蒙版" as the rest of
   the application does.
-- **AI Mask card.** One line per model of the set with what it does (SAM 2.1 tiny, S3OD, the
-  people and sky locator, the Sky model), a revision Pill (`v1 r1`, or `v1 r1 → v1 r2`), the
+- **AI Mask card.** One sentence that says what the set does, a GitHub button that opens
+  `zidage/alcedo-ai-mask-lab` (the project that trains and prepares the models), a revision Pill (`v1 r1`, or `v1 r1 → v1 r2`), the
   archive size, the license names of the feed entry (a click opens the installed license file
   when the set is installed), the P5 status texts, and Remove with confirmation.
-- **CLIP cards.** Subtitle = what the model does and its search language; Pills = size and
-  inference backend; one license Pill with
+- **CLIP cards.** Subtitle = one sentence shortened from the description of the publisher
+  (`apple/ml-mobileclip` README, `jinaai/jina-clip-v2` model card, the SigLIP 2 README of
+  `google-research/big_vision`); a GitHub button for MobileCLIP2 and SigLIP2 (Jina publishes no
+  GitHub project for jina-clip-v2); Pills = size and inference backend; one license Pill with
   the catalog URL. The main action is Download (not installed) or Activate (installed, not
   active); the active card has no action. Activate is enabled only with an open project
   (`appModules.project.serviceReady`), no running activation, and the `canChangeSemanticModel`
@@ -743,7 +745,12 @@ Details the plan did not specify, chosen in AM4:
 - **Card type size (user change, 2026-10-28).** The card titles and the folder tile titles of the
   AI Models and LUTs pages use `fontSizeSection` (14), not 28 px and `fontSizeHeadline`: the
   display size wrapped a model name over two lines and was larger than the section headers.
-  Recorded in `DESIGN.md` (Typography, "Settings card title").
+  Recorded in `DESIGN.md` (Typography, "Settings card title"). The title and the description
+  have a `spaceSm` gap.
+- **Statement on the About page (user change, 2026-10-28).** The AI Models page has no description
+  row and no "Download statement" button. Settings > About has an "AI models" section with a
+  link row that opens the statement read-only. The statement still opens on the AI Models page
+  before the first download (P8).
 - **Test factories.** `ApplicationModuleHost::LutServiceFactories` is now
   `PackageServiceFactories` with an `ai_model_package_options` factory (the host adds the shared
   downloader and the model directory when the options have none).

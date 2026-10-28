@@ -393,14 +393,17 @@ TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheAiModelDownloadSt
             QStringLiteral("同意并下载"));
   EXPECT_EQ(QCoreApplication::translate("SettingDialog", "AI Models"), QStringLiteral("AI 模型"));
   // The cards say what the models do.
-  EXPECT_EQ(QCoreApplication::translate(
-                "AiModelsSettingsPanel",
-                "SAM 2.1 tiny: selects the object that you click, box, or draw over."),
-            QStringLiteral("SAM 2.1 tiny：选择你点击、框选或涂抹经过的对象。"));
   EXPECT_EQ(QCoreApplication::translate("AiModelsSettingsPanel",
-                                        "Recognizes the content of photos, so you can find them "
-                                        "with a text search in many languages."),
-            QStringLiteral("识别照片内容，以便用多种语言的文本搜索照片。"));
+                                        "Selects the subject, people, sky, and the objects that "
+                                        "you click, box, or draw over."),
+            QStringLiteral("选择主体、人物、天空，以及你点击、框选或涂抹经过的对象。"));
+  EXPECT_EQ(QCoreApplication::translate("AiModelsSettingsPanel",
+                                        "Multilingual embedding model for text and images from "
+                                        "Jina AI, for 89 languages."),
+            QStringLiteral("Jina AI 推出的多语言图文嵌入模型，支持 89 种语言。"));
+  // The About page opens the statement read-only.
+  EXPECT_EQ(QCoreApplication::translate("AboutPage", "AI model download statement"),
+            QStringLiteral("AI 模型下载声明"));
 
   ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
 }

@@ -20,7 +20,7 @@ Rectangle {
     property string cardKey: ""
 
     property string title: ""
-    // Text below the title: what the package contains and what it does. Can have several lines.
+    // One sentence below the title: what the package or model does.
     property string subtitle: ""
     // Optional link button beside the title (for example the upstream GitHub project).
     property string upstreamUrl: ""
@@ -76,6 +76,8 @@ Rectangle {
     Layout.preferredWidth: 1
     // Near-square store card; grows when the content needs more room.
     Layout.preferredHeight: Math.max(cardColumn.implicitHeight + 22 * 2, width * 0.72)
+    // The cards of one grid row have the height of the tallest one.
+    Layout.fillHeight: true
     radius: 14
     color: appTheme.cardSurfaceColor
     border.width: card.active ? 2 : 1
@@ -95,7 +97,8 @@ Rectangle {
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignTop
-                spacing: appTheme.spaceXs
+                // The title and its description read as two parts.
+                spacing: appTheme.spaceSm
 
                 Label {
                     objectName: card.namePrefix + "Name:" + card.cardKey
