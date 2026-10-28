@@ -490,10 +490,11 @@ labels.
 
 - Shared by the Library cards and the filmstrip tiles (DESIGN.md "Library
   thumbnail cards").
-- The edit mark is `panel_icons/adjustments.svg` in `textMutedColor` at
-  `iconSourceSizeCompact`, with no container. It shows only for an edited photo.
-  Its tooltip has two lines: the relative edit time and the active Version
-  name.
+- The edit mark is a small chip on the top-right corner of the painted photo:
+  `panel_icons/adjustments.svg` in `textColor` on a
+  `thumbnailEditMarkFillColor` fill (12 px icon, 18 px chip; 10 px and 14 px
+  when `compact`). It shows only for an edited photo, at every zoom level. Its
+  tooltip has two lines: the relative edit time and the active Version name.
 - The stars are `★`/`☆` in `dataFontFamily`: filled `textColor`, empty
   `ratingStarEmptyColor`, hover preview `textMutedColor`. As a control, the
   empty stars of an unrated photo fade in on card hover, and the filled stars
@@ -504,14 +505,19 @@ labels.
 
 - Selected card: the normal card fill and a 2 px `textColor` outline, the same
   as `AlbumSectionView`. No `selectedTintColor` wash and no accent border.
-- 2 to 6 columns: the file name with the edit mark; the camera line; the date
+- The edit mark chip is on the top-right corner of the photo at every zoom
+  level, left of the problem dot when the source is missing.
+- 2 to 6 columns: the file name; the camera line; the date
   line with the capture date and labels on the left, the HDR chip, and the
   five-star control on the right. The input overlay hit-tests the stars: hover
   previews, a click rates that photo only, and a click on the current star
   clears it.
-- 8 and 11 columns: one line with the file name, the edit mark, and the filled
-  stars; the file name elides first. A click on the stars selects the card.
+- 8 and 11 columns: one line with the file name and the filled stars; the file
+  name elides first. A click on the stars selects the card.
 - 14 columns: no caption.
+- A rating change updates the card in place: no model reset, so the cards and
+  the scroll position stay (unless the rating sort, the rating group, or a
+  rating filter is active).
 - The HDR chip is neutral: `bgBaseColor` fill, 1 px `textMutedColor` border,
   `textColor` icon.
 
@@ -526,10 +532,10 @@ labels.
 - Photo cells use `cardSurfaceColor`, `hoverColor` on hover, and a neutral
   selection outline (2 px `textColor`); keyboard focus without selection is a
   1 px `textMutedColor` outline. No blue frame or tint.
-- Photo cell caption: at 2 to 6 columns the file name with the edit mark, and
-  the capture date with the five-star control; at 8 and 11 columns one line
-  with the file name, the edit mark, and the filled stars (display only); at
-  14 columns no caption.
+- Photo cell: the edit mark chip on the top-right corner of the photo. Caption:
+  at 2 to 6 columns the file name, and the capture date with the five-star
+  control; at 8 and 11 columns one line with the file name and the filled stars
+  (display only); at 14 columns no caption.
 - Expand all and Collapse all are muted caption text actions above the list.
 
 ### `LibraryWorkspace.qml`
@@ -548,9 +554,10 @@ labels.
 
 ### `EditorFilmstripThumbnailCard.qml`
 
-- One caption line: the file name (middle elision) and the edit mark at the
-  end. On the editing tile the caption sits on the `editorListSelectedFillColor`
-  well and uses `editorListSelectedInkColor`.
+- One caption line: the file name (middle elision). On the editing tile the
+  caption sits on the `editorListSelectedFillColor` well and uses
+  `editorListSelectedInkColor`.
+- Edit mark: the chip on the top-right corner of the photo.
 - Rating overlay: only the filled stars, white, at the bottom-right corner of
   the photo, on a short `bgDeepColor` shade over the bottom part of the image.
   No overlay and no shade for an unrated photo. Display only.
@@ -562,7 +569,8 @@ Review in Alcedo and Classic themes, at a narrow Inspector width, with the
 Inspector closed, with collapsed groups, with a failed query, and with an empty
 filtered result. No accent color is visible in the Library workspace except the
 wordmark and the import progress ring. Check the cards at 4, 8, and 14 columns
-in the flat and the grouped view (edit mark, stars, hover preview, star click),
+in the flat and the grouped view (edit mark chip, stars, hover preview, star
+click, no scroll jump after a rating),
 and the filmstrip tiles (edit mark after a commit and after an undo to the
 image root, star overlay, editing tile ink).
 

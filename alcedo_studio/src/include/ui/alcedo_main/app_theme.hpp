@@ -195,6 +195,8 @@ class AppTheme final : public QObject {
   // Empty star of a Library card rating and of the Inspector rating filter: a dim neutral ink
   // below textMutedColor, so filled stars (textColor) read at a glance.
   Q_PROPERTY(QColor ratingStarEmptyColor READ ratingStarEmptyColor NOTIFY ThemeChanged)
+  // Fill of the edit mark chip on the top-right corner of a thumbnail photo.
+  Q_PROPERTY(QColor thumbnailEditMarkFillColor READ thumbnailEditMarkFillColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeGridColor READ scopeGridColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopePlotBorderColor READ scopePlotBorderColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramRedColor READ scopeHistogramRedColor NOTIFY ThemeChanged)
@@ -437,6 +439,7 @@ class AppTheme final : public QObject {
   auto filmstripSelectedFillColor() const -> QColor;
   auto thumbnailCaptionBarColor() const -> QColor;
   auto ratingStarEmptyColor() const -> QColor;
+  auto thumbnailEditMarkFillColor() const -> QColor;
   auto scopeGridColor() const -> QColor;
   auto scopePlotBorderColor() const -> QColor;
   auto scopeHistogramRedColor() const -> QColor;

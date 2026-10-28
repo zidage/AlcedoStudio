@@ -995,6 +995,11 @@ auto AppTheme::ratingStarEmptyColor() const -> QColor {
   return Blend(cardSurfaceColor(), textMutedColor(), 0.6);
 }
 
+auto AppTheme::thumbnailEditMarkFillColor() const -> QColor {
+  // Deep base under the light icon, so the mark reads on bright and dark photos alike.
+  return WithAlpha(bgDeepColor(), 200);
+}
+
 auto AppTheme::scopeGridColor() const -> QColor {
   return Blend(bgDeepColor(), textMutedColor(), 0.32);
 }

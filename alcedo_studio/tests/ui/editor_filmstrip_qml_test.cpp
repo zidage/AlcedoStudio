@@ -714,11 +714,6 @@ TEST(EditorFilmstripQmlTest, OneLineCaptionBelowImageAndFilledStarsOverlayThePho
       2000));
   EXPECT_EQ(bar->property("color").value<QColor>(), theme.editorListSelectedFillColor());
   EXPECT_EQ(name->property("color").value<QColor>(), theme.editorListSelectedInkColor());
-  EXPECT_EQ(edit_mark->property("inkColor").value<QColor>(), theme.editorListSelectedInkColor());
-  EXPECT_EQ(FindItem(unrated_tile, QStringLiteral("editorFilmstripEditMark"))
-                ->property("inkColor")
-                .value<QColor>(),
-            theme.textMutedColor());
 }
 
 // A rating change shows on the tile at once (model dataChanged on the rating role, the same
@@ -772,6 +767,21 @@ TEST(EditorFilmstripQmlTest, EditMarkFollowsTheOpenPhotoEditStateWithoutReload) 
                                                        QStringLiteral("Base Look")));
   EXPECT_TRUE(edit_mark->isVisible());
   EXPECT_TRUE(tile->property("isEdited").toBool());
+  // A chip with a fill on the top-right corner of the photo, not in the caption.
+  auto* image = FindItem(tile, QStringLiteral("editorFilmstripThumbnailImage"));
+  auto* bar   = FindItem(tile, QStringLiteral("editorFilmstripCaptionBar"));
+  ASSERT_NE(image, nullptr);
+  ASSERT_NE(bar, nullptr);
+  EXPECT_EQ(edit_mark->parentItem(), image->parentItem());
+  EXPECT_EQ(edit_mark->property("color").value<QColor>(),
+            AppTheme::Instance().thumbnailEditMarkFillColor());
+  const QRectF image_rect = image->mapRectToScene(QRectF(0, 0, image->width(), image->height()));
+  const QRectF mark_rect =
+      edit_mark->mapRectToScene(QRectF(0, 0, edit_mark->width(), edit_mark->height()));
+  EXPECT_TRUE(image_rect.contains(mark_rect)) << "mark outside the photo";
+  EXPECT_LT(image_rect.right() - mark_rect.right(), 8.0);
+  EXPECT_LT(mark_rect.top() - image_rect.top(), 8.0);
+  EXPECT_LT(mark_rect.width(), 24.0);
   EXPECT_TRUE(edit_mark->property("tooltipText").toString().endsWith(QStringLiteral("\nBase Look")))
       << edit_mark->property("tooltipText").toString().toStdString();
 

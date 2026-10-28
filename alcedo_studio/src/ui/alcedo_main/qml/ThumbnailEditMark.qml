@@ -2,14 +2,18 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.impl
 
-// Edit mark of a Library card and a filmstrip tile (DESIGN.md "Library thumbnail cards"): the
-// adjustments icon at the end of the file-name line, with no container. It shows only for an
-// edited photo, that is, when the active Version has a head commit. The tooltip has two lines:
-// the relative edit time and the name of the active Version.
+// Edit mark of a Library card and a filmstrip tile (DESIGN.md "Library thumbnail cards"): a
+// small chip on the top-right corner of the photo, the adjustments icon on a
+// thumbnailEditMarkFillColor fill. It shows only for an edited photo, that is, when the
+// active Version has a head commit. The tooltip has two lines: the relative edit time and the
+// name of the active Version.
+//
+// The owner sets image: the chip sits on the top-right corner of the painted image of a
+// PreserveAspectFit Image, or of the image item while nothing is painted yet.
 //
 // The tooltip opens on hover of the mark (an internal HoverHandler), or when the owner view
 // sets pointerOver (ThumbnailGridView hit-tests through its input overlay).
-Item {
+Rectangle {
     id: root
     objectName: "thumbnailEditMark"
 
@@ -17,14 +21,28 @@ Item {
     // Local time of the head commit (a Date), or undefined.
     property var editedAt: undefined
     property string versionName: ""
-    property color inkColor: appTheme.textMutedColor
+    property bool compact: false
     property bool pointerOver: false
-    readonly property int iconSize: appTheme.iconSourceSizeCompact
+    // Image whose painted top-right corner holds the chip, and the insets from that corner.
+    property Image image: null
+    property real inset: compact ? 3 : appTheme.spaceXs
+    property real rightInset: inset
+    readonly property int iconSize: compact ? 10 : 12
     readonly property bool hovered: markHover.hovered || pointerOver
 
+    readonly property real paintedWidth: image && image.paintedWidth > 0 ? image.paintedWidth
+                                                                          : (image ? image.width : 0)
+    readonly property real paintedHeight: image && image.paintedHeight > 0
+                                          ? image.paintedHeight : (image ? image.height : 0)
+
     visible: edited
-    implicitWidth: iconSize
-    implicitHeight: iconSize
+    width: iconSize + (compact ? 4 : 6)
+    height: width
+    radius: compact ? 3 : 4
+    color: appTheme.thumbnailEditMarkFillColor
+    x: image ? image.x + (image.width + paintedWidth) / 2 - width - rightInset : 0
+    y: image ? image.y + (image.height - paintedHeight) / 2 + inset : 0
+    z: 4
 
     Accessible.role: Accessible.Graphic
     Accessible.name: qsTr("Edited")
@@ -80,7 +98,7 @@ Item {
         sourceSize.width: root.iconSize
         sourceSize.height: root.iconSize
         source: "qrc:/panel_icons/adjustments.svg"
-        color: root.inkColor
+        color: appTheme.textColor
     }
 
     HoverHandler {

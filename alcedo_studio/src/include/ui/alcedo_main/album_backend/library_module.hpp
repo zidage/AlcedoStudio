@@ -257,6 +257,16 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   /// Refresh once when an edit was written while the library was hidden (see above).
   void                   RefreshStaleEditOrder();
 
+  /**
+   * @brief The rating of loaded photos changed in storage, and their rows already show it
+   *        (AlbumThumbnailModel::updateRating). When the shown order or the shown photos read
+   *        the rating (rating sort, rating group, or a rating condition in the Inspector filter
+   *        or the search), refresh the library. Otherwise read only the statistics of the
+   *        accepted query, so the photo rows, their delegates, and the scroll position stay.
+   *        UI thread only.
+   */
+  void                   NoteRatingsChanged();
+
   /// Request one refresh of the accepted library query. Requests of one event loop turn are
   /// combined: the refresh reads the filters, the search, and the presentation options when it
   /// is submitted to the worker. UI thread only.
@@ -319,6 +329,11 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   void               PublishRefresh(const LibraryQueryInput& input, LibraryQueryOutput output);
   void               PublishPage(const LibraryQueryInput& input, LibraryQueryOutput output);
   void               SubmitPage(int64_t offset);
+  /// True when the accepted or the requested presentation reads the rating (see
+  /// NoteRatingsChanged).
+  auto               PresentationReadsRating() const -> bool;
+  /// Read the statistics of the accepted query on the worker and publish them (no photo rows).
+  void               SubmitStatisticsRead();
   /// Load the next missing page of the requested section rows or flat range, if any.
   void               ContinuePaging();
   /// Album item of one query row: SQL display values and edit state, plus the image pool

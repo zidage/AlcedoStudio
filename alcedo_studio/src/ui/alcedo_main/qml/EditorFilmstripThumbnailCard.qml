@@ -4,9 +4,9 @@ import QtQuick.Controls
 // One filmstrip tile. Two independent states:
 // - editing: the editor shows this image (bone well + ink frame, the strongest state);
 // - selected: the image is in the shared Library selection (light gray well).
-// The file name and the edit mark sit in a fixed one-line caption below the image. The
-// rating is display only: the filled stars on the photo, bottom right, over a short
-// bottom shade. An unrated image has no stars and no shade.
+// The file name sits in a fixed one-line caption below the image. The edit mark is a chip
+// on the top-right corner of the photo. The rating is display only: the filled stars on the
+// photo, bottom right, over a short bottom shade. An unrated image has no stars and no shade.
 Item {
     id: root
     objectName: "editorFilmstripTileCard"
@@ -121,6 +121,16 @@ Item {
                 }
             }
 
+            // Edit mark: a chip on the top-right corner of the photo.
+            ThumbnailEditMark {
+                id: editMark
+                objectName: "editorFilmstripEditMark"
+                image: thumbnailImage
+                edited: root.edited
+                editedAt: root.editedAt
+                versionName: root.editVersionName
+            }
+
             BusyIndicator {
                 anchors.centerIn: thumbnailImage
                 width: appTheme.iconOpticalSize
@@ -187,9 +197,8 @@ Item {
             }
 
             // Fixed one-line caption on the bottom edge of the frame, below the
-            // image: the file name (middle elision) and the edit mark at the end of
-            // the line. Every image in the strip has the same size. On the editing
-            // tile the caption uses the ink of the light well.
+            // image: the file name (middle elision). Every image in the strip has the
+            // same size. On the editing tile the caption uses the ink of the light well.
             Rectangle {
                 id: captionBar
                 objectName: "editorFilmstripCaptionBar"
@@ -206,11 +215,10 @@ Item {
                     id: fileNameLabel
                     objectName: "editorFilmstripFileNameLabel"
                     anchors.left: parent.left
+                    anchors.right: parent.right
                     anchors.leftMargin: appTheme.spaceSm
+                    anchors.rightMargin: appTheme.spaceSm
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.min(implicitWidth,
-                                    parent.width - appTheme.spaceSm * 2
-                                    - (editMark.visible ? editMark.width + appTheme.spaceXs : 0))
                     height: appTheme.lineHeightCaption
                     text: root.fileName.length > 0
                           ? root.fileName : qsTr("Image %1").arg(root.imageIndex + 1)
@@ -220,19 +228,6 @@ Item {
                                  ? appTheme.fontWeightStrong : appTheme.fontWeightRegular
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideMiddle
-                }
-
-                ThumbnailEditMark {
-                    id: editMark
-                    objectName: "editorFilmstripEditMark"
-                    anchors.left: fileNameLabel.right
-                    anchors.leftMargin: appTheme.spaceXs
-                    anchors.verticalCenter: parent.verticalCenter
-                    edited: root.edited
-                    editedAt: root.editedAt
-                    versionName: root.editVersionName
-                    inkColor: root.editing ? appTheme.editorListSelectedInkColor
-                                           : appTheme.textMutedColor
                 }
             }
         }

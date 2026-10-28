@@ -262,7 +262,8 @@ parallel palette to satisfy the policy.
 | **List favorite active on selected** | **`editorListFavoriteActiveOnSelectedColor`** | **Starred glyph inverted on the light well** (full ink) |
 | Rating star empty | `ratingStarEmptyColor` | Empty star of Library card ratings, the Inspector rating filter, and the photo Inspector rating; filled stars use `textColor`, the hover preview `textMutedColor` |
 | Filmstrip selected fill | `filmstripSelectedFillColor` | Light gray well of a filmstrip tile that is in the Library selection but not open in the editor (`cardSurfaceColor` blended 50% to `textMutedColor`) |
-| Thumbnail caption bar | `thumbnailCaptionBarColor` | `bgDeepColor` (alpha 200) caption under the file name and edit mark, below a filmstrip thumbnail image |
+| Thumbnail caption bar | `thumbnailCaptionBarColor` | `bgDeepColor` (alpha 200) caption under the file name, below a filmstrip thumbnail image |
+| Thumbnail edit mark fill | `thumbnailEditMarkFillColor` | `bgDeepColor` (alpha 200) fill of the edit mark chip on the top-right corner of a Library card or filmstrip photo |
 
 **Monochrome inverted list selection:** dense catalogs (the LUT browser first) keep a
 black-and-white row language — sunken `bgBaseColor` track, light
@@ -311,10 +312,10 @@ strip (click, Left/Right) also makes it the only selected image, so keyboard
 navigation leaves one highlighted tile. The thumbnail fills the tile with a
 `spaceXs` inset. The frame holds the image and, below it, a fixed two-line
 `thumbnailCaptionBarColor` caption with one line, so the caption never covers
-the photo: the file name (`textColor`, caption size, middle elision) and the
-edit mark at the end of the line (see "Library thumbnail cards"). On the
-editing tile the caption sits on the `editorListSelectedFillColor` well, and
-the file name and the edit mark use `editorListSelectedInkColor`. The caption
+the photo: the file name (`textColor`, caption size, middle elision). The edit
+mark is the chip on the top-right corner of the photo (see "Library thumbnail
+cards"). On the editing tile the caption sits on the `editorListSelectedFillColor`
+well, and the file name uses `editorListSelectedInkColor`. The caption
 does not show the rating, the date, or the camera. The rating is an overlay on
 the photo: only the filled stars (`★`, white, `dataFontFamily`) at the
 bottom-right corner, on a short shade over the bottom part of the image only
@@ -427,10 +428,16 @@ edit state and the rating. The shared parts are `ThumbnailEditMark.qml` and
 - **Selection:** the normal card fill and a 2 px `textColor` outline in both
   views. Hover is the `hoverColor` wash. There is no accent wash or frame.
 - **Edit mark:** an edited photo (its active Version has a head commit, the
-  same rule as the edit groups and the edit-time sort) shows
-  `panel_icons/adjustments.svg` at the end of the file-name line, in
-  `textMutedColor`, at `iconSourceSizeCompact`. There is no container: no pill,
-  badge, or dot. An unedited photo shows no mark and no "Unedited" text. The
+  same rule as the edit groups and the edit-time sort) shows a small chip on
+  the top-right corner of the painted photo: `panel_icons/adjustments.svg` in
+  `textColor` on a `thumbnailEditMarkFillColor` fill. The icon is 12 px on an
+  18 px chip with a 4 px radius, inset `spaceXs` from the corner; at 8 columns
+  and more it is 10 px on a 14 px chip with a 3 px radius, inset 3 px. The
+  chip shows at every zoom level and is not part of the caption. On a card
+  with a missing source it sits left of the problem dot. (User decision
+  2026-10-28: the caption mark was too large; a filled chip on the photo
+  replaces the earlier "no container" rule.) An unedited photo shows no mark
+  and no "Unedited" text. The
   tooltip has two lines: the relative edit time ("Edited 2 hours ago",
   "Edited yesterday", then the date) and the name of the active Version. The
   mark of the photo open in the editor follows its history at once (commit,
@@ -448,11 +455,18 @@ edit state and the rating. The shared parts are `ThumbnailEditMark.qml` and
   another, 30 ms apart, with a short scale settle in `motionFadeMs`;
   `reduceMotion` makes it a cut. A multi-selection keeps the context menu and
   keyboard paths.
-- **8 and 11 columns:** one caption line with the file name, the edit mark, and
-  only the filled stars; the file name elides first. The stars are display
+- **8 and 11 columns:** one caption line with the file name and only the
+  filled stars; the file name elides first. The stars are display
   only: no hover preview, no stars for an unrated photo, and a click on them is
   a normal card click (selection).
-- **14 columns:** no caption, so no edit mark and no stars.
+- **14 columns:** no caption, so no stars. The edit mark chip still shows.
+- **Rating change:** the photo row shows the new rating at once
+  (`AlbumThumbnailModel::updateRating`), and the Library reads only the
+  statistics of the current query again (`LibraryModule::NoteRatingsChanged`).
+  The photo rows are not reloaded: the cards, the scroll position, and the
+  selection stay. Only when the shown order or the shown photos depend on the
+  rating (rating sort, rating group, or a rating condition in the Inspector
+  filter or the search) does the Library refresh.
 - **HDR mark (flat grid):** a neutral chip (`bgBaseColor` fill, 1 px
   `textMutedColor` border, `textColor` icon), not gold.
 - The accessible name of a card includes the rating ("3 stars", "Unrated") and

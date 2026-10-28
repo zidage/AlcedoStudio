@@ -514,6 +514,24 @@ auto GroupKeyFromTitle(AlbumGroupField field, const QString& title, bool unknown
   return AlbumGroupKey{title.toStdString()};
 }
 
+/// True when @p node has a condition on the rating (typed, or raw SQL on `i.rating`).
+auto FilterReadsRating(const FilterNode& node) -> bool {
+  if (node.condition_.has_value() && (node.condition_->field_ == FilterField::Rating ||
+                                      node.condition_->field_ == FilterField::RatingLabel)) {
+    return true;
+  }
+  if (node.raw_sql_.has_value() && node.raw_sql_->find(L"rating") != std::wstring::npos) {
+    return true;
+  }
+  return std::any_of(node.children_.begin(), node.children_.end(),
+                     [](const FilterNode& child) { return FilterReadsRating(child); });
+}
+
+auto OptionsReadRating(const AlbumQueryOptions& options) -> bool {
+  return options.sort_field_ == AlbumSortField::kRating ||
+         options.group_field_ == AlbumGroupField::kRating;
+}
+
 auto SamePresentation(const AlbumQueryOptions& left, const AlbumQueryOptions& right) -> bool {
   return left.sort_field_ == right.sort_field_ && left.sort_direction_ == right.sort_direction_ &&
          left.group_field_ == right.group_field_;
@@ -587,6 +605,56 @@ void LibraryModule::RequestLibraryRefresh() {
   QMetaObject::invokeMethod(this, [this]() { SubmitPendingRefresh(); }, Qt::QueuedConnection);
 }
 
+void LibraryModule::NoteRatingsChanged() {
+  if (refresh_in_flight_ || refresh_scheduled_ || !accepted_input_ || PresentationReadsRating()) {
+    RequestLibraryRefresh();
+    return;
+  }
+  SubmitStatisticsRead();
+}
+
+auto LibraryModule::PresentationReadsRating() const -> bool {
+  if (OptionsReadRating(accepted_options_) || OptionsReadRating(RequestedOptions())) {
+    return true;
+  }
+  if (!accepted_input_) {
+    return false;
+  }
+  const auto& stats_filter  = accepted_input_->stats_filter_;
+  const auto& search_filter = accepted_input_->search_.filter_;
+  return (stats_filter.has_value() && FilterReadsRating(*stats_filter)) ||
+         (search_filter.has_value() && FilterReadsRating(*search_filter));
+}
+
+void LibraryModule::SubmitStatisticsRead() {
+  auto input = AcceptedReadInput(AlbumQueryRead{.read_statistics_ = true});
+  if (!input) {
+    return;
+  }
+  query_worker_->Submit(SearchRequestKind::kStatistics, [this, input](std::uint64_t generation) {
+    auto output = RunLibraryQuery(*input);
+    QMetaObject::invokeMethod(
+        this,
+        [this, generation, output = std::move(output)]() {
+          if (!query_worker_->IsCurrent(SearchRequestKind::kStatistics, generation) ||
+              refresh_in_flight_) {
+            // A newer read of the same query, or a refresh that brings its own statistics.
+            return;
+          }
+          if (!output.error_.isEmpty()) {
+            qWarning().noquote() << "Library statistics read failed:" << output.error_;
+            SetQueryError(output.error_);
+            return;
+          }
+          if (output.result_.statistics_.has_value()) {
+            stats_->ApplyFolderStats(ToAlbumStatsView(*output.result_.statistics_), false);
+            emit stats_->StatsChanged();
+          }
+        },
+        Qt::QueuedConnection);
+  });
+}
+
 void LibraryModule::SubmitPendingRefresh() {
   refresh_scheduled_   = false;
   // This read sees every edit written so far.
@@ -600,6 +668,7 @@ void LibraryModule::SubmitPendingRefresh() {
     query_worker_->Invalidate(SearchRequestKind::kLibraryPage);
     query_worker_->Invalidate(SearchRequestKind::kLibraryIds);
     query_worker_->Invalidate(SearchRequestKind::kSelectAll);
+    query_worker_->Invalidate(SearchRequestKind::kStatistics);
     ResetThumbnailWindow();
     if (stats_) {
       stats_->ClearStats();

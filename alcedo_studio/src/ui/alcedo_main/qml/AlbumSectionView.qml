@@ -528,12 +528,23 @@ Item {
                 clip: true
 
                 Image {
+                    id: cellImage
                     anchors.fill: parent
                     anchors.margins: 2
                     source: cell.liveThumbUrl
                     asynchronous: true
                     fillMode: Image.PreserveAspectFit
                     visible: cell.liveThumbUrl.length > 0
+                }
+
+                // Edit mark: a chip on the top-right corner of the photo.
+                ThumbnailEditMark {
+                    image: cellImage
+                    compact: root.compactText
+                    edited: cell.edited
+                    editedAt: cell.photo ? cell.photo.editedAt : undefined
+                    versionName: cell.photo && cell.photo.editVersionName
+                                 ? String(cell.photo.editVersionName) : ""
                 }
             }
 
@@ -546,8 +557,8 @@ Item {
                 height: root.textAreaHeight
                 visible: root.textAreaHeight > 0
 
-                // File-name line: the name, the edit mark, and (8 and 11 columns) the filled
-                // stars. The file name elides first.
+                // File-name line: the name and (8 and 11 columns) the filled stars. The file
+                // name elides first.
                 Item {
                     anchors.left: parent.left
                     anchors.right: parent.right
@@ -573,14 +584,6 @@ Item {
                         anchors.leftMargin: 4
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 3
-
-                        ThumbnailEditMark {
-                            anchors.verticalCenter: parent.verticalCenter
-                            edited: cell.edited
-                            editedAt: cell.photo ? cell.photo.editedAt : undefined
-                            versionName: cell.photo && cell.photo.editVersionName
-                                         ? String(cell.photo.editVersionName) : ""
-                        }
 
                         ThumbnailStarRating {
                             objectName: "albumSectionCompactStars"

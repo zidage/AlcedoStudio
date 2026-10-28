@@ -277,6 +277,53 @@ TEST_F(LibraryQueryTests, SortActionsReplaceDirectionOrClearExplicitSort) {
   EXPECT_EQ(module->SortFieldName(), QStringLiteral("import"));
 }
 
+// Issue #589: a rating change keeps the loaded photo rows (no model reset, so the views keep
+// their delegates and scroll position) and reads only the statistics again, when the shown
+// photos do not read the rating. With the rating sort the order reads the rating, so the
+// library refreshes.
+TEST_F(LibraryQueryTests, RatingChangeReadsOnlyStatisticsUnlessThePresentationReadsTheRating) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*       module = backend.library();
+  const auto& id     = library.ids();
+  const auto& images = library.image_ids();
+
+  const auto five_star_count = [&]() {
+    for (const auto& row : backend.stats()->rating_stats()) {
+      const auto bucket = row.toMap();
+      if (bucket.value(QStringLiteral("label")).toString() == QStringLiteral("5")) {
+        return bucket.value(QStringLiteral("count")).toInt();
+      }
+    }
+    return 0;
+  };
+  ASSERT_EQ(five_star_count(), 2);
+
+  QSignalSpy resets(&module->model(), &QAbstractItemModel::modelReset);
+  const auto rated = backend.images()->SetImageRating(id[0], images[0], 5);
+  ASSERT_TRUE(rated.value(QStringLiteral("success")).toBool());
+  EXPECT_FALSE(module->QueryUpdating());
+  ASSERT_TRUE(WaitUntil([&]() { return five_star_count() == 3; }));
+  ProcessEvents(200);
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(ModelIds(*module), id);
+  EXPECT_EQ(module->model().items()[0].rating, 5);
+
+  // The rating sort reads the rating: the library refreshes and shows the new order.
+  module->ToggleInspectorSort(QStringLiteral("rating"), true);
+  ASSERT_TRUE(Settle(backend));
+  resets.clear();
+  ASSERT_TRUE(backend.images()
+                  ->SetImageRating(id[5], images[5], 5)
+                  .value(QStringLiteral("success"))
+                  .toBool());
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_GT(resets.count(), 0);
+  EXPECT_EQ(ModelIds(*module),
+            (std::vector<sl_element_id_t>{id[0], id[1], id[4], id[5], id[2], id[3]}));
+}
+
 TEST_F(LibraryQueryTests, SelectingNewGroupReplacesPreviousGroupWithoutChangingFilters) {
   ApplicationModuleHost backend;
   LoadedLibrary         library;
@@ -750,7 +797,7 @@ TEST_F(LibraryQueryTests, LabelGroupOccurrencesShareThePhotoRowAndRatingUpdates)
   EXPECT_EQ(module->section_model().OccurrenceTotal(), 6);
   EXPECT_EQ(module->model().count(), 6);
 
-  // A rating change goes through its owner and the full refresh shows it on the photo row.
+  // A rating change goes through its owner and shows on the photo row.
   const auto file_id  = static_cast<uint>(library.ids()[3]);
   const auto image_id = static_cast<uint>(module->FindAlbumItem(file_id)->image_id);
   backend.images()->SetImageRating(file_id, image_id, 4);

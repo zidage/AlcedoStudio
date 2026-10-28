@@ -612,6 +612,17 @@ TEST_F(AlbumSectionQmlTests, FlatGridAtFourColumnsShowsTheEditMarkAndRatesFromTh
     EXPECT_EQ(VisibleCount(card, QStringLiteral("thumbnailEditMark")), index == 1 ? 1 : 0) << index;
     EXPECT_EQ(card->property("isEdited").toBool(), index == 1) << index;
   }
+  // The mark is a small chip on the top-right corner of the photo.
+  {
+    auto* card = GridCard(window, keys[1].file_id_);
+    auto* mark = FirstItem(card, "thumbnailEditMark");
+    ASSERT_NE(mark, nullptr);
+    const auto card_rect = card->mapRectToScene(QRectF(0, 0, card->width(), card->height()));
+    const auto mark_rect = mark->mapRectToScene(QRectF(0, 0, mark->width(), mark->height()));
+    EXPECT_LT(mark->width(), 24.0);
+    EXPECT_GT(mark_rect.center().x(), card_rect.center().x());
+    EXPECT_LT(mark_rect.center().y(), card_rect.center().y());
+  }
   // Stars: the rating as filled stars of five; an unrated photo shows none at rest.
   auto* rated_stars = FirstItem(GridCard(window, keys[0].file_id_), "thumbnailGridStars");
   ASSERT_NE(rated_stars, nullptr);
@@ -627,8 +638,10 @@ TEST_F(AlbumSectionQmlTests, FlatGridAtFourColumnsShowsTheEditMarkAndRatesFromTh
   QSignalSpy selections(view.loaded(), SIGNAL(replaceSelection(QVariant)));
   ASSERT_TRUE(selections.isValid());
   const auto target = keys[3].file_id_;  // rating 1
-  // A rating write refreshes the library, which can create new card delegates: look the
-  // stars up again for every read.
+  // A rating write keeps the photo rows: no model reset, the same card delegate.
+  QSignalSpy resets(&backend.library()->model(), &QAbstractItemModel::modelReset);
+  auto*      target_card = GridCard(window, target);
+  ASSERT_NE(target_card, nullptr);
   const auto stars  = [&]() -> QQuickItem* {
     auto* card = GridCard(window, target);
     return card ? FirstItem(card, "thumbnailGridStars") : nullptr;
@@ -666,6 +679,10 @@ TEST_F(AlbumSectionQmlTests, FlatGridAtFourColumnsShowsTheEditMarkAndRatesFromTh
   EXPECT_EQ(StarCount(stars(), QStringLiteral("☆")), 1);
   // The click rated one photo; it did not change the selection.
   EXPECT_EQ(selections.count(), 0);
+  // The statistics read can finish after the rows show the rating; wait for it.
+  ProcessEvents(500);
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(GridCard(window, target), target_card);
 
   // Wait past the double-click interval, then click star 4 again: the rating clears.
   QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() + 100);
@@ -809,7 +826,7 @@ TEST_F(AlbumSectionQmlTests, SectionCellsAtFourColumnsShowTheEditMarkAndRateFrom
   EXPECT_EQ(requests.at(0).at(1).toInt(), 4);
   ApplyRatingRequest(backend, requests.at(0));
   QTest::mouseMove(window, QPoint(2, 2));
-  // The rating write can refresh the library and rebuild the cells: look the stars up again.
+  // Look the stars up again: the rating changes their row.
   ASSERT_TRUE(WaitUntil(
       [&]() {
         auto* cell = cell_for(target);

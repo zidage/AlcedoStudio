@@ -942,8 +942,8 @@ Item {
             }
 
             function editMarkAtOverlay(x, y) {
-                const mark = root.compactText ? compactEditMark : editMark
-                if (!mark.visible || root.hideAllText) {
+                const mark = editMark
+                if (!mark.visible) {
                     return false
                 }
                 const p = overlay.mapToItem(mark, x, y)
@@ -1119,6 +1119,18 @@ Item {
                     maskSource: thumbMask
                     visible: thumbnailReady
                 }
+                // Edit mark: a chip on the top-right corner of the photo.
+                ThumbnailEditMark {
+                    id: editMark
+                    image: thumbImage
+                    compact: root.columns >= 8
+                    // Left of the problem dot (8 px margin, 18 px) when the source is missing.
+                    rightInset: cardDelegate.thumbnailProblemState ? 30 : editMark.inset
+                    edited: isEdited
+                    editedAt: cardDelegate.editedAt
+                    versionName: editVersionName
+                    pointerOver: overlay.hoveredEditMarkIndex === index
+                }
                 Rectangle {
                     anchors.top: parent.top
                     anchors.right: parent.right
@@ -1175,8 +1187,8 @@ Item {
             visible: root.textAreaHeight > 0
             spacing: root.compactText ? 0 : 2
 
-            // 8 and 11 columns: one line with the file name, the edit mark, and the filled
-            // stars. The file name elides first.
+            // 8 and 11 columns: one line with the file name and the filled stars. The file
+            // name elides first.
             Item {
                 visible: root.compactText && !root.hideAllText
                 width: parent.width
@@ -1202,15 +1214,6 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 3
 
-                    ThumbnailEditMark {
-                        id: compactEditMark
-                        anchors.verticalCenter: parent.verticalCenter
-                        edited: isEdited
-                        editedAt: cardDelegate.editedAt
-                        versionName: editVersionName
-                        pointerOver: overlay.hoveredEditMarkIndex === index
-                    }
-
                     ThumbnailStarRating {
                         objectName: "thumbnailGridCompactStars"
                         anchors.verticalCenter: parent.verticalCenter
@@ -1223,7 +1226,7 @@ Item {
                 }
             }
 
-            // 2 to 6 columns: file name and edit mark; camera line; date line with the stars.
+            // 2 to 6 columns: file name; camera line; date line with the stars.
             Item {
                 visible: !root.compactText
                 width: parent.width
@@ -1233,8 +1236,7 @@ Item {
                     id: titleLabel
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.min(implicitWidth,
-                                    parent.width - (editMark.visible ? editMark.width + 4 : 0))
+                    width: parent.width
                     text: fileName
                     color: root.cardText
                     font.family: appTheme.dataFontFamily
@@ -1242,17 +1244,6 @@ Item {
                     font.weight: root.dataFontWeight
                     font.letterSpacing: root.dataLetterSpacing
                     elide: Text.ElideRight
-                }
-
-                ThumbnailEditMark {
-                    id: editMark
-                    anchors.left: titleLabel.right
-                    anchors.leftMargin: 4
-                    anchors.verticalCenter: parent.verticalCenter
-                    edited: isEdited
-                    editedAt: cardDelegate.editedAt
-                    versionName: editVersionName
-                    pointerOver: overlay.hoveredEditMarkIndex === index
                 }
             }
             Label {
