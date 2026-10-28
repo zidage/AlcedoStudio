@@ -704,12 +704,23 @@ auto ModelDownloadController::RegisterBackgroundTask(const QString& profileId) -
   });
 }
 
+void ModelDownloadController::SetDownloadStatementCheck(DownloadStatementCheck check) {
+  download_statement_check_ = std::move(check);
+}
+
 bool ModelDownloadController::InstallModel(const QString& profileId) {
   const auto* profile = FindProfile(profileId);
   if (profile == nullptr) {
     return false;
   }
   const QString profile_id = QString::fromLatin1(profile->profile_id);
+  // One statement covers every external model; the AI Models page shows it first (plan P8).
+  if (download_statement_check_ && !download_statement_check_()) {
+    SetRowMessage(profile_id, PL_TEXT("Accept the download statement before you download a model."),
+                  true);
+    emit StateChanged();
+    return false;
+  }
   // One download at a time (plan P9). The shared DownloadService also refuses a second job of
   // another owner (application update, AI Mask package).
   if (!downloading_profile_id_.isEmpty() || service_.IsRunning() ||

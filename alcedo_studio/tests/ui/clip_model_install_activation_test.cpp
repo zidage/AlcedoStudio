@@ -255,6 +255,29 @@ TEST_F(ClipModelDownloadControllerTest, CancelKeepsProfileNotInstalledAndOneDown
   EXPECT_EQ(Status("test-clip-b"), QStringLiteral("installed"));
 }
 
+// AI Models plan P8: one download statement covers every external model, so a CLIP download
+// does not start before the user accepts it.
+TEST_F(ClipModelDownloadControllerTest, DownloadBeforeStatementAcceptedStartsNothing) {
+  bool accepted = false;
+  controller_->SetDownloadStatementCheck([&accepted] { return accepted; });
+
+  EXPECT_FALSE(controller_->InstallModel(QStringLiteral("test-clip-a")));
+  const auto row = RowOf(*controller_, QStringLiteral("test-clip-a"));
+  EXPECT_EQ(row.value(QStringLiteral("error")).toString(),
+            QStringLiteral("Accept the download statement before you download a model."));
+  EXPECT_EQ(row.value(QStringLiteral("status")).toString(), QStringLiteral("notInstalled"));
+  EXPECT_FALSE(controller_->ModelDownloadRunning());
+  EXPECT_FALSE(downloads_->IsRunning());
+  EXPECT_TRUE(tasks_->Tasks().isEmpty());
+  EXPECT_FALSE(fs::exists(model_dir_ / ".test-clip-a.download"));
+
+  // After the acceptance, the same request downloads the profile.
+  accepted = true;
+  ASSERT_TRUE(controller_->InstallModel(QStringLiteral("test-clip-a")));
+  ASSERT_TRUE(WaitUntil([&] { return !controller_->ModelDownloadRunning(); }));
+  EXPECT_EQ(Status("test-clip-a"), QStringLiteral("installed"));
+}
+
 TEST_F(ClipModelDownloadControllerTest, RemoveDeletesOnlyThatProfileAndReportsIt) {
   for (const char* id : {"test-clip-a", "test-clip-b"}) {
     ASSERT_TRUE(controller_->InstallModel(QString::fromLatin1(id)));

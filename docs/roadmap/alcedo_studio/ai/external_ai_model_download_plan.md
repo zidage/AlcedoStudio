@@ -1,7 +1,7 @@
 # AI Models Page: One Download Place for CLIP and AI Mask Models - Phase Plan
 
 Date: 2026-10-27. Status: AM1 complete (2026-10-27); AM2 complete, v1 r1 published
-(2026-10-28); AM3 complete (2026-10-28); AM4-AM5 planned.
+(2026-10-28); AM3 complete (2026-10-28); AM4 complete (2026-10-28); AM5 planned.
 
 Source audit: `main` `56df8883`.
 Tracking: [#579](https://github.com/zidage/AlcedoStudio/issues/579).
@@ -20,9 +20,9 @@ of the LUTs page (`LutSettingsPanel.qml`).
   and decoder, people and sky head, S3OD, sky head) in one download. There is no download per
   function (Subject, Sky, People). The files come from the Alcedo Cloudflare R2 bucket through a
   signed feed, as LUT packages and application updates do.
-- The card shows the earliest AI Mask model set version that this build supports (now v1). A model
-  set version change means that the inference code must change too; the app installs only a
-  version that it supports.
+- The card says in one sentence what the set does and links its GitHub project; a Pill shows the
+  version (now v1). A model set version change means that the inference code must change too; the app installs
+  only a version that it supports.
 - **CLIP** (Local Content Recognition) has one card per model profile of the platform. Install and
   activation are separate: a card downloads or removes its model; an installed model is activated
   for the open project on its card. The active model of the open project has a green border. The
@@ -129,7 +129,7 @@ Implementation decisions (this plan):
 
 | ID | Decision |
 | --- | --- |
-| P1 | **Model set version and revision.** `model_set_version` (integer, now 1) changes only when the inference code must change (inputs, outputs, files, thresholds format). `revision` (`r1`, `r2`, ...) changes the weights in one version. The build declares `kAiMaskModelSetMinimumVersion = 1` and `kAiMaskModelSetMaximumVersion = 1` (C++), and Rust declares the same range. The card shows the minimum ("Supports AI Mask models v1 and later" while the maximum equals the minimum, then the range). |
+| P1 | **Model set version and revision.** `model_set_version` (integer, now 1) changes only when the inference code must change (inputs, outputs, files, thresholds format). `revision` (`r1`, `r2`, ...) changes the weights in one version. The build declares `kAiMaskModelSetMinimumVersion = 1` and `kAiMaskModelSetMaximumVersion = 1` (C++), and Rust declares the same range. The card shows the version in its revision Pill. Its text is one sentence that says what the set does, not the supported range (user change, 2026-10-28; it replaces the "Supports AI Mask models v1 and later" line). |
 | P2 | **Feed.** `https://static.aoraw.org/ai-models/v1/manifest.json` + `.sig`, CMake `ALCEDO_AI_MODEL_FEED_URL`, signed with the update key. `schema: 1`, `kind: "alcedo-ai-model-packages"`, `sequence` with QSettings `aiModels/packages/highestTrustedSequence` (only raised). A feed can list one entry per (`id`, `model_set_version`), so an old build still finds its version after a v2 is published. The app picks the highest listed version in its range. |
 | P3 | **Package.** One `.7z` per platform (`windows-x86_64`, `macos-arm64`) per (`version`, `revision`). Root: `model_set.json`, `package-inventory.json` (path, size, SHA-256 of each file), the model files, `licenses/`, `NOTICE.txt`. Core ML `.mlmodelc` directories are inside the archive as directories; the inventory pins every file of them. |
 | P4 | **Install location.** `<model directory>/alcedo-ai-mask-v<version>/`, the directory that the sidecar reads today. Staging in `<model directory>/.alcedo-ai-mask-v<version>.download/`, verified against the inventory, then promoted by rename; `installed.json` (revision, inventory SHA-256, artifact SHA-256) is the commit point. A failed or cancelled install leaves the installed set unchanged. |
@@ -671,14 +671,14 @@ Work:
   P12) and a license Pill row.
 - `AiModelsSettingsPanel.qml`, category P12:
   - Top row: model directory tile (`FolderPathField`, open folder, refresh) as the LUT library tile.
-  - "AI Mask" section: one `PackageCard` (status, version line of P1, licenses, size, progress,
+  - "AI Mask" section: one `PackageCard` (status, a one-sentence description, licenses, size, progress,
     Download / Update / Repair / Retry / Cancel / Remove with confirmation).
   - "Content Recognition (CLIP)" section: source combo box (and the custom URL field) in the
     section header; one card per profile with Download / Cancel / Remove (confirmation) and
     Activate. Activate is enabled only for an installed, not active model with an open project;
     without a project the card says "Open a project to activate". The card shows the activation
     progress.
-  - "Download statement" text button in the page header that opens the statement read-only.
+  - The About page (not this page) opens the statement read-only (user change, 2026-10-28).
   - The statement dialog (section 4) with "Accept and Download" and "Cancel" opens on the first
     download request when the statement is not accepted.
 - `SemanticGenerationSettingsPanel.qml`: remove the Model section; show the active model name of
@@ -690,6 +690,129 @@ the page open checks the AI model feed once; the first download opens the statem
 starts nothing; Accept starts only the chosen download; the active CLIP card has the active
 border; Activate is disabled without a project; Remove asks first; the compiled catalog
 translates the statement.
+
+#### AM4 completion record (2026-10-28)
+
+**Status:** complete. Settings has the AI Models page (index 9, `sparkles.svg`; About is index
+10) with the model directory tile, the AI Mask section, and the Content Recognition (CLIP)
+section. Every card is the shared near-square `PackageCard`, so the CLIP cards and the AI Mask
+card have the LUT card shape (issue [#584](https://github.com/zidage/AlcedoStudio/issues/584):
+the interim list rows of AM3 are removed). The download statement opens before the first
+download of any model. The Local Content Recognition page shows the active model of the project
+and "Open AI Models".
+
+Details the plan did not specify, chosen in AM4:
+
+- **Shared components.** `PackageCard.qml` holds no service calls: the page sets the texts and
+  the state, and the card reports Action, Cancel, Remove, Keep, and confirmed Remove through
+  signals. Object names are `<namePrefix>:<key>` and `<namePrefix><Part>:<key>`, so the LUT page
+  keeps its `lutSettingsPackage*` names and tests. The card adds a subtitle line, a license row
+  (one Pill per license; a license with a URL opens it), a muted message line, and the `active`
+  state (2 px `activeModelBorderColor` border). `BentoTile.qml` and `SystemActionButton.qml`
+  also moved out of `LutSettingsPanel.qml`, so the model directory tile is the LUT library tile.
+  The pill and license rows use `Instantiator`, not `Repeater` (offscreen test windows).
+- **Theme.** `AppTheme::activeModelBorderColor` returns `backgroundTaskFinishedColor` (P12),
+  recorded in `DESIGN.md`.
+- **Feed check (P6).** `SettingDialog.showAiModelsPage()` checks the AI model feed the first
+  time the page shows in each Settings opening (category change, or Settings opened on the page),
+  and reads the CLIP install state again. The Settings-open check of AM1 is removed; the LUT
+  check is unchanged.
+- **Statement (P8).** The page sends every download (AI Mask install, update, repair, retry, and
+  CLIP download) through `requestDownload`: before the acceptance, the statement opens and the
+  download waits. "Accept and Download" calls `acceptDownloadStatement` and starts only that
+  download; Cancel, Escape, or a click outside starts nothing. The owner also enforces the rule
+  for CLIP: `ModelDownloadController::SetDownloadStatementCheck` (set by the host from
+  `AiModelPackageService::download_statement_accepted`) makes `InstallModel` refuse with
+  "Accept the download statement before you download a model." The statement texts are one
+  `qsTr` per paragraph; the dataset URL is a link argument (`%1`). The AI Mask paragraph keeps
+  the approved Chinese text of section 4 ("AI Mask"), while the page says "AI 蒙版" as the rest of
+  the application does.
+- **AI Mask card.** One sentence that says what the set does, a GitHub button that opens
+  `zidage/alcedo-ai-mask-lab` (the project that trains and prepares the models), a revision Pill (`v1 r1`, or `v1 r1 → v1 r2`), the
+  archive size, the license names of the feed entry (a click opens the installed license file
+  when the set is installed), the P5 status texts, and Remove with confirmation.
+- **CLIP cards.** Subtitle = one sentence shortened from the description of the publisher
+  (`apple/ml-mobileclip` README, `jinaai/jina-clip-v2` model card, the SigLIP 2 README of
+  `google-research/big_vision`); a GitHub button for MobileCLIP2 and SigLIP2 (Jina publishes no
+  GitHub project for jina-clip-v2); Pills = size and inference backend; one license Pill with
+  the catalog URL. The main action is Download (not installed) or Activate (installed, not
+  active); the active card has no action. Activate is enabled only with an open project
+  (`appModules.project.serviceReady`), no running activation, and the `canChangeSemanticModel`
+  policy; without a project the card shows "Open a project to activate this model." The active
+  border needs an open project. Remove asks first and warns when the model is active.
+- **Source.** The source combo box is in the CLIP section header; the custom URL field shows
+  below it for "Custom".
+- **Card type size (user change, 2026-10-28).** The card titles and the folder tile titles of the
+  AI Models and LUTs pages use `fontSizeSection` (14), not 28 px and `fontSizeHeadline`: the
+  display size wrapped a model name over two lines and was larger than the section headers.
+  Recorded in `DESIGN.md` (Typography, "Settings card title"). The title and the description
+  have a `spaceSm` gap.
+- **Statement on the About page (user change, 2026-10-28).** The AI Models page has no description
+  row and no "Download statement" button. Settings > About has an "AI models" section with a
+  link row that opens the statement read-only. The statement still opens on the AI Models page
+  before the first download (P8).
+- **Test factories.** `ApplicationModuleHost::LutServiceFactories` is now
+  `PackageServiceFactories` with an `ai_model_package_options` factory (the host adds the shared
+  downloader and the model directory when the options have none).
+- **Translations.** The page, the statement, the card, the AM1 service texts
+  (`alcedo::AiModelPackageService`), and the AM3 controller texts (`Alcedo` context) have Chinese
+  entries, added by hand.
+
+**Primary success call chain:**
+
+```text
+Settings > AI Models (category 9)
+  -> SettingDialog.onCurrentCategoryChanged / onVisibleChanged -> showAiModelsPage
+     -> modelDownload.refreshModels; aiModelPackages.checkPackages (once per opening)
+  -> AiModelsSettingsPanel: AI Mask PackageCard (packages row), one PackageCard per CLIP row
+Download / Update / Repair / Retry on a card
+  -> requestDownload(kind, id): statement not accepted -> AiModelDownloadStatementDialog
+  -> Accept and Download -> acceptDownloadStatement -> installPackage(id) or installModel(id)
+Activate on an installed CLIP card (open project)
+  -> semanticGeneration.activateModel(profileId) -> active border on that card
+Remove -> card confirmation -> removePackage(id) or removeModel(profileId)
+```
+
+**Primary failure call chains:**
+
+```text
+Statement not accepted -> Cancel / Escape -> pendingDownload cleared, nothing starts
+CLIP installModel without the statement (any caller) -> false, row error, no download
+No open project -> Activate disabled, card message "Open a project to activate this model."
+Feed check fails -> "The AI model check failed: %1" in the AI Mask header, Check again
+```
+
+**What was proven (executed tests):**
+
+| Required test | Test | Result |
+| --- | --- | --- |
+| The page open checks the AI model feed once | `AiModelsSettingsQmlTest.PageOpenChecksTheFeedOnceAndStartupDoesNotCheck` | PASS |
+| The first download opens the statement and Cancel starts nothing (AI Mask and CLIP) | `AiModelsSettingsQmlTest.FirstDownloadOpensTheStatementAndCancelStartsNothing` | PASS |
+| Accept starts only the chosen download | `AiModelsSettingsQmlTest.AcceptStartsOnlyTheChosenDownloadAndTheStatementStaysAccepted` | PASS |
+| A CLIP download needs the statement in the owner | `ClipModelInstallActivationTest.ClipModelDownloadControllerTest.DownloadBeforeStatementAcceptedStartsNothing` | PASS |
+| The active CLIP card has the active border | `AiModelsSettingsQmlTest.ActiveClipCardHasTheActiveBorderAndActivateStartsActivation` | PASS |
+| The AI Mask card has the CLIP card shape | `AiModelsSettingsQmlTest.PageOpenChecksTheFeedOnceAndStartupDoesNotCheck` (width and height checks) | PASS |
+| Activate is disabled without a project | `AiModelsSettingsQmlTest.ActivateIsDisabledWithoutAnOpenProject` | PASS |
+| Remove asks first | `AiModelsSettingsQmlTest.RemoveAsksBeforeTheModelIsRemoved` | PASS |
+| The compiled catalog translates the statement | `SimplifiedChineseCatalogTest.CompiledCatalogTranslatesTheAiModelDownloadStatement` | PASS |
+| The shared `PackageCard` keeps the LUT page | `LutSettingsQmlTest` (5 tests) | PASS |
+| Regression | `ClipModelInstallActivationTest`, `SimplifiedChineseCatalogTest`, `AutomationLutCommandsTest`, `AutomationProjectCommandsTest`, `ApplicationModuleHostLifecycleTest`, `ShortcutSettingsQmlTest` (About at index 10) | PASS, except below |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main
+AiModelsSettingsQmlTest LutSettingsQmlTest ClipModelInstallActivationTest
+SimplifiedChineseCatalogTest AutomationLutCommandsTest AutomationProjectCommandsTest
+ApplicationModuleHostLifecycleTest ShortcutSettingsQmlTest`; `ctest --test-dir build/debug -j 1 -R
+"^(AiModelsSettingsQmlTest|LutSettingsQmlTest|ClipModelInstallActivationTest|SimplifiedChineseCatalogTest|ShortcutSettingsQmlTest|AutomationLutCommandsTest|AutomationProjectCommandsTest|ApplicationModuleHostLifecycleTest|AiModelPackageServiceTest)\."`
+(76 tests). The page was also checked in offscreen screenshots of the Settings dialog (cards,
+statement dialog); the screenshots are not kept.
+
+**Residual gaps and problems found:** `ShortcutSettingsQmlTest.RegistryRowsAppearInStableGroups`
+fails because of the Comparison shortcut group, before and after this change (issue
+[#585](https://github.com/zidage/AlcedoStudio/issues/585)). `AiModelPackageServiceTest` fails
+intermittently at the AM1 commit move with "Access is denied" (issue
+[#586](https://github.com/zidage/AlcedoStudio/issues/586)). A CLIP download after the acceptance
+was not started in a QML test (it would run aria2c); the owner test covers it. The page was not
+checked in the running application or on macOS.
 
 ### 5.5 AM5: AI Mask tool integration
 

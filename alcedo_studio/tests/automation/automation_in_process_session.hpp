@@ -38,11 +38,12 @@ namespace alcedo::automation::test {
 class InProcessAutomationSession {
  public:
   /// @p host_mode is `headless` or `gui`; the library selection commands need `gui`.
-  /// @p lut_services points the LUT services at a test root; empty selects the production ones.
+  /// @p package_services points the package services at a test root; empty selects the
+  /// production ones.
   explicit InProcessAutomationSession(
-      const QString&                                 host_mode    = QStringLiteral("headless"),
-      ui::ApplicationModuleHost::LutServiceFactories lut_services = {})
-      : host_(nullptr, {}, std::move(lut_services)) {
+      const QString&                                     host_mode = QStringLiteral("headless"),
+      ui::ApplicationModuleHost::PackageServiceFactories package_services = {})
+      : host_(nullptr, {}, std::move(package_services)) {
     AutomationHostCommandContext context;
     context.host      = &host_;
     context.host_mode = host_mode;

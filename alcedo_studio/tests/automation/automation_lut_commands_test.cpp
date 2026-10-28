@@ -42,8 +42,8 @@ class AutomationLutCommandsTest : public ui::test::ApplicationModuleHostTestFixt
     preferences_ = std::make_shared<alcedo::test::PreferenceStore>();
   }
 
-  auto LutServices() -> ui::ApplicationModuleHost::LutServiceFactories {
-    ui::ApplicationModuleHost::LutServiceFactories factories;
+  auto LutServices() -> ui::ApplicationModuleHost::PackageServiceFactories {
+    ui::ApplicationModuleHost::PackageServiceFactories factories;
     factories.library_options = [this] {
       LutLibraryServiceOptions options;
       options.preferences       = std::make_unique<alcedo::test::MemoryPreferences>(preferences_);

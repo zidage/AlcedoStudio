@@ -10,6 +10,7 @@
 #include <QVariantList>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <optional>
 
 #include "app/model_asset_catalog.hpp"
@@ -60,8 +61,15 @@ class ModelDownloadController final : public QObject {
   QString      CustomModelEndpoint() const;
   QString      EffectiveModelEndpoint() const;
 
+  // Returns true when the user accepted the current AI model download statement (plan P8).
+  using DownloadStatementCheck = std::function<bool()>;
+  // Sets the statement check of InstallModel. The application host reads the acceptance of
+  // AiModelPackageService; without a check, InstallModel requires no statement.
+  void               SetDownloadStatementCheck(DownloadStatementCheck check);
+
   // Starts the download of @p profileId. Returns false with the reason in the row error when
-  // the profile is unknown or another download runs (one download at a time, plan P9).
+  // the profile is unknown, the download statement is not accepted (plan P8), or another
+  // download runs (one download at a time, plan P9).
   bool               InstallModel(const QString& profileId);
   // Cancels the running download of @p profileId. Returns false when it does not run.
   bool               CancelInstall(const QString& profileId);
@@ -129,6 +137,7 @@ class ModelDownloadController final : public QObject {
 
   alcedo::ModelDownloadService& service_;
   BackgroundTaskController*     background_tasks_ = nullptr;
+  DownloadStatementCheck                download_statement_check_;
   QString                               background_task_id_;
   QHash<QString, bool>                  installed_{};
   QHash<QString, RowMessage>            messages_{};
