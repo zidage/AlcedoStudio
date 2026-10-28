@@ -728,7 +728,7 @@ class GrpcSemanticEmbeddingClient final : public SemanticEmbeddingClient {
     }
     semantic::EmbeddingBatchResponseV2 response;
     const auto status = stub->EmbedTextBatchV2(&context, request, &response);
-    if (status.ok()) {
+    if (status.ok() && response.header().status() == alcedo::ai::AI_STATUS_OK) {
       std::vector<SemanticEmbeddingResult> results;
       results.reserve(static_cast<size_t>(response.items_size()));
       for (const auto& item : response.items()) {
@@ -736,12 +736,15 @@ class GrpcSemanticEmbeddingClient final : public SemanticEmbeddingClient {
       }
       return results;
     }
+    // A transport failure, or a batch error in the header (for example no active model:
+    // AI_ERROR_MODEL_NOT_READY), fails every item with the same reason.
+    const std::string error =
+        status.ok() ? response.header().error_message() : GrpcErrorMessage(status);
     std::vector<SemanticEmbeddingResult> results;
     results.reserve(requests.size());
     for (const auto& input : requests) {
       results.push_back(
-          SemanticEmbeddingResult{.request_id = input.request_id, .ok = false,
-                                  .error = GrpcErrorMessage(status)});
+          SemanticEmbeddingResult{.request_id = input.request_id, .ok = false, .error = error});
     }
     return results;
   }
@@ -785,7 +788,7 @@ class GrpcSemanticEmbeddingClient final : public SemanticEmbeddingClient {
     }
     semantic::EmbeddingBatchResponseV2 response;
     const auto status = stub->EmbedImageBatchV2(&context, request, &response);
-    if (status.ok()) {
+    if (status.ok() && response.header().status() == alcedo::ai::AI_STATUS_OK) {
       std::vector<SemanticEmbeddingResult> results;
       results.reserve(static_cast<size_t>(response.items_size()));
       for (const auto& item : response.items()) {
@@ -793,12 +796,15 @@ class GrpcSemanticEmbeddingClient final : public SemanticEmbeddingClient {
       }
       return results;
     }
+    // A transport failure, or a batch error in the header (for example no active model:
+    // AI_ERROR_MODEL_NOT_READY), fails every item with the same reason.
+    const std::string error =
+        status.ok() ? response.header().error_message() : GrpcErrorMessage(status);
     std::vector<SemanticEmbeddingResult> results;
     results.reserve(requests.size());
     for (const auto& input : requests) {
       results.push_back(
-          SemanticEmbeddingResult{.request_id = input.request_id, .ok = false,
-                                  .error = GrpcErrorMessage(status)});
+          SemanticEmbeddingResult{.request_id = input.request_id, .ok = false, .error = error});
     }
     return results;
   }

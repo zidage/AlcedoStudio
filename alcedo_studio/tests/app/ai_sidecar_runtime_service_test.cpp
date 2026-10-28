@@ -790,6 +790,35 @@ TEST(AiSidecarRuntimeServiceTest, RuntimeArgumentsCarryModelAndDeviceConfigurati
   std::filesystem::remove(record_path);
 }
 
+// A project without an active CLIP model starts the sidecar without a model (AI Models plan,
+// P10): no --model-id and no --revision on the command line.
+TEST(AiSidecarRuntimeServiceTest, RuntimeArgumentsOmitModelIdWithoutActiveModel) {
+  auto                    client = std::make_shared<FakeSidecarClient>();
+  AiSidecarRuntimeService service(FakeFactory(client));
+  const auto              record_path =
+      std::filesystem::temp_directory_path() / "semantic_runtime_no_model_args.txt";
+  std::filesystem::remove(record_path);
+
+  auto options               = BaseOptions();
+  options.model_id           = {};
+  options.revision           = {};
+  options.require_model_info = false;
+  options.extra_arguments    = {"--record-args", record_path.string(), "--sleep-ms", "30000"};
+  EXPECT_TRUE(AiSidecarRuntimeOptions{}.model_id.empty());
+
+  ASSERT_TRUE(service.StartAndWait(options));
+  service.Stop();
+
+  std::ifstream in(record_path);
+  ASSERT_TRUE(in.is_open());
+  const std::string args((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  in.close();
+  EXPECT_EQ(args.find("--model-id"), std::string::npos) << args;
+  EXPECT_EQ(args.find("--revision"), std::string::npos) << args;
+  EXPECT_NE(args.find("--model-root\n"), std::string::npos) << args;
+  std::filesystem::remove(record_path);
+}
+
 TEST(AiSidecarRuntimeServiceTest, TextIdleUnloadFollowsIdleStopDelay) {
   const auto record_path =
       std::filesystem::temp_directory_path() / "semantic_runtime_idle_args.txt";
@@ -1455,12 +1484,54 @@ TEST(AiSidecarRuntimeServiceTest, UnknownIdleStopSettingReadsAsDefault) {
   std::filesystem::remove(meta_path);
 }
 
+// The real Rust sidecar starts without --model-id (no active model in the open project), and
+// a semantic request reports that no model is active (AI_ERROR_MODEL_NOT_READY in the response
+// header) instead of an embedding.
+TEST(AiSidecarRuntimeServiceLiveTest, RustRuntimeStartsWithoutModelIdAndRejectsSemanticRequests) {
+  const char* runtime_path_env = std::getenv("ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH");
+  if (runtime_path_env == nullptr) {
+    GTEST_SKIP() << "Set ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH to run against the Rust runtime.";
+  }
+
+  AiSidecarRuntimeService service;
+  AiSidecarRuntimeOptions options;
+  options.runtime_binary     = std::filesystem::path(runtime_path_env);
+  options.model_root         = std::filesystem::temp_directory_path() / "alcedo_no_model_root";
+  options.device             = "cpu";
+  options.require_model_info = false;
+  options.startup_timeout    = std::chrono::milliseconds(60000);
+  ASSERT_TRUE(options.model_id.empty());
+
+  ASSERT_TRUE(service.StartAndWait(options)) << service.Status().message;
+  EXPECT_EQ(service.Status().state, AiSidecarRuntimeState::kReady);
+  auto session = service.ClientSession();
+  ASSERT_NE(session, nullptr);
+
+  std::vector<uint8_t>          rgba8(4u * 4u * 4u, 128);
+  SemanticImageEmbeddingRequest request;
+  request.request_id  = "no-model-image-1";
+  request.rgba8_image = std::move(rgba8);
+  request.format_hint = "rgba8:4x4";
+  const auto results =
+      session->semantic().EmbedImageBatch({request}, std::chrono::milliseconds(30000));
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_FALSE(results[0].ok);
+  EXPECT_NE(results[0].error.find("no semantic model is active"), std::string::npos)
+      << results[0].error;
+
+  AiSidecarRuntimeModelInfo info;
+  std::string               error;
+  EXPECT_FALSE(session->semantic().GetModelInfo(std::chrono::milliseconds(30000), &info, &error));
+  EXPECT_NE(error.find("no semantic model is active"), std::string::npos) << error;
+  service.Stop();
+}
+
 TEST(AiSidecarRuntimeServiceLiveTest, DefaultGrpcClientEmbedsRawRgba8AgainstRustRuntime) {
   const char* runtime_path_env = std::getenv("ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH");
   const char* model_root_env   = std::getenv("ALCEDO_SEMANTIC_LIVE_MODEL_ROOT");
   if (runtime_path_env == nullptr || model_root_env == nullptr) {
     GTEST_SKIP() << "Set ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH and "
-                    "ALCEDO_SEMANTIC_LIVE_MODEL_ROOT to run the live Rust runtime smoke.";
+                    "ALCEDO_SEMANTIC_LIVE_MODEL_ROOT to run the live Rust runtime check.";
   }
 
   const auto env_or = [](const char* name, const char* fallback) -> std::string {

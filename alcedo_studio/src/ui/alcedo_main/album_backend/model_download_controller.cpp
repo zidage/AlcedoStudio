@@ -4,7 +4,6 @@
 
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 
-#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -14,6 +13,7 @@
 #include <QPointer>
 #include <QSettings>
 #include <QUrl>
+#include <QVariantMap>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -24,8 +24,6 @@
 #include <utility>
 
 #include "app/model_asset_catalog.hpp"
-#include "ui/alcedo_main/album_backend/model_download_controller.hpp"
-#include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 
 namespace alcedo::ui {
@@ -35,40 +33,6 @@ namespace alcedo::ui {
                           QT_TRANSLATE_NOOP(ALCEDO_I18N_CONTEXT, text) __VA_OPT__(, ) __VA_ARGS__)
 
 namespace {
-
-constexpr auto kSemanticModelProfileKey      = "semantic/modelProfileId";
-constexpr auto kSemanticModelDirectoryKey    = "semantic/modelDirectory";
-constexpr auto kSemanticEndpointPresetKey    = "semantic/modelEndpointPreset";
-constexpr auto kSemanticCustomEndpointKey    = "semantic/customModelEndpoint";
-constexpr auto kSemanticResolvedManifestFile = "alcedo_model_manifest.json";
-
-auto DefaultSemanticModelDirectory() -> QString {
-  return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("model"));
-}
-
-auto NormalizedProfileId(QString profile_id) -> QString {
-  profile_id = profile_id.trimmed();
-  for (const auto& profile : SemanticModelProfiles()) {
-    if (profile_id == QLatin1String(profile.profile_id)) {
-      return profile_id;
-    }
-  }
-  return QString::fromLatin1(SemanticModelProfiles().front().profile_id);
-}
-
-auto FindProfile(const QString& profile_id) -> const ModelProfileSpec* {
-  const QString normalized = NormalizedProfileId(profile_id);
-  for (const auto& profile : SemanticModelProfiles()) {
-    if (normalized == QLatin1String(profile.profile_id)) {
-      return &profile;
-    }
-  }
-  return &SemanticModelProfiles().front();
-}
-
-auto ProfileRootPath(const QString& base_directory, const QString& profile_id) -> QString {
-  return QDir(base_directory).filePath(NormalizedProfileId(profile_id));
-}
 
 auto QStringToPath(const QString& value) -> std::filesystem::path {
 #ifdef _WIN32
@@ -234,21 +198,22 @@ auto ValidateLocalCatalogModelProfile(const ModelProfileSpec&      profile,
   return std::nullopt;
 }
 
-auto LoadLocalResolvedModelManifestImpl(const QString& profile_id, const QString& base_directory,
-                                        QString* error)
+auto LoadLocalResolvedModelManifestImpl(const ModelProfileSpec* profile,
+                                        const QString& base_directory, QString* error)
     -> std::optional<SemanticResolvedModelManifest> {
-  const auto* profile = FindProfile(profile_id);
-  const auto  root    = ProfileRootPath(base_directory, QString::fromLatin1(profile->profile_id));
-  if (const auto* catalog_profile = FindSemanticProfile(profile->profile_id);
-      catalog_profile != nullptr) {
-    const auto catalog_error =
-        ValidateLocalCatalogModelProfile(*catalog_profile, QStringToPath(root));
-    if (catalog_error.has_value()) {
-      if (error) {
-        *error = *catalog_error;
-      }
-      return std::nullopt;
+  if (profile == nullptr) {
+    if (error) {
+      *error = PL_TEXT("Unknown semantic model profile.").Render();
     }
+    return std::nullopt;
+  }
+  const auto root = QDir(base_directory).filePath(QString::fromLatin1(profile->profile_id));
+  if (const auto catalog_error = ValidateLocalCatalogModelProfile(*profile, QStringToPath(root));
+      catalog_error.has_value()) {
+    if (error) {
+      *error = *catalog_error;
+    }
+    return std::nullopt;
   }
   const auto path = QDir(root).filePath(QString::fromLatin1(kSemanticResolvedManifestFile));
   QFile      file(path);
@@ -361,29 +326,6 @@ auto LoadLocalResolvedModelManifestImpl(const QString& profile_id, const QString
   return manifest;
 }
 
-auto NormalizedEndpointPreset(QString preset) -> QString {
-  preset = preset.trimmed().toLower();
-  if (preset == QLatin1String("huggingface") || preset == QLatin1String("sufy") ||
-      preset == QLatin1String("custom")) {
-    return preset;
-  }
-  return QStringLiteral("mirror");
-}
-
-auto EndpointForPreset(const QString& preset, const QString& custom_endpoint) -> QString {
-  const QString normalized = NormalizedEndpointPreset(preset);
-  if (normalized == QLatin1String("huggingface")) {
-    return QStringLiteral("https://huggingface.co");
-  }
-  if (normalized == QLatin1String("sufy")) {
-    return QStringLiteral("https://hf-cdn.sufy.com");
-  }
-  if (normalized == QLatin1String("custom") && !custom_endpoint.trimmed().isEmpty()) {
-    return custom_endpoint.trimmed();
-  }
-  return QStringLiteral("https://hf-mirror.com");
-}
-
 auto DownloadProgressPercent(const alcedo::ModelDownloadProgress& progress) -> int {
   if (progress.bytes_total == 0) {
     return progress.phase == "installed" ? 100 : 0;
@@ -445,138 +387,189 @@ namespace detail {
 auto LoadLocalResolvedModelManifestForActivation(const QString& profileId,
                                                  const QString& baseDirectory, QString* error)
     -> std::optional<SemanticResolvedModelManifest> {
-  return LoadLocalResolvedModelManifestImpl(profileId, baseDirectory, error);
+  return LoadLocalResolvedModelManifestImpl(FindSemanticProfile(profileId.toStdString()),
+                                            baseDirectory, error);
 }
 
 }  // namespace detail
 
 ModelDownloadController::ModelDownloadController(alcedo::ModelDownloadService& service,
-                                                 BackgroundTaskController* background_tasks,
-                                                 QObject* parent)
+                                                 BackgroundTaskController*     background_tasks,
+                                                 QObject*                      parent)
     : QObject(parent), service_(service), background_tasks_(background_tasks) {
-  model_download_status_text_ = PL_TEXT("Model status has not been checked.");
-
   connect(&service_, &alcedo::ModelDownloadService::ProgressChanged, this,
           [this](const alcedo::ModelDownloadProgress& progress) {
-            model_download_progress_       = DownloadProgressPercent(progress);
-            model_download_phase_          = QString::fromStdString(progress.phase);
-            model_download_current_file_   = QString::fromStdString(progress.current_file);
-            model_download_bytes_done_     = progress.bytes_downloaded;
-            model_download_bytes_total_    = progress.bytes_total;
-            model_download_bytes_label_    = FormatBytesLabel(
-                static_cast<quint64>(progress.bytes_downloaded),
-                static_cast<quint64>(progress.bytes_total));
-            model_download_files_done_     = static_cast<int>(progress.files_completed);
-            model_download_files_total_    = static_cast<int>(progress.files_total);
+            if (downloading_profile_id_.isEmpty()) {
+              return;
+            }
+            model_download_progress_     = DownloadProgressPercent(progress);
+            model_download_phase_        = QString::fromStdString(progress.phase);
+            model_download_current_file_ = QString::fromStdString(progress.current_file);
+            model_download_bytes_done_   = progress.bytes_downloaded;
+            model_download_bytes_total_  = progress.bytes_total;
+            model_download_bytes_label_ =
+                FormatBytesLabel(static_cast<quint64>(progress.bytes_downloaded),
+                                 static_cast<quint64>(progress.bytes_total));
+            model_download_files_done_  = static_cast<int>(progress.files_completed);
+            model_download_files_total_ = static_cast<int>(progress.files_total);
             UpdateDownloadSpeed(progress);
-            const QString message          = QString::fromStdString(progress.message);
-            model_download_status_text_ =
-                message.isEmpty() ? PL_TEXT("Downloading model... %1%", model_download_progress_)
-                                  : PL_TEXT("%1 (%2%)", message, model_download_progress_);
+            if (download_canceling_) {
+              emit StateChanged();
+              return;
+            }
+            const QString message = QString::fromStdString(progress.message);
+            const auto    text    = message.isEmpty()
+                                        ? PL_TEXT("Downloading model... %1%", model_download_progress_)
+                                        : PL_TEXT("%1 (%2%)", message, model_download_progress_);
+            SetRowMessage(downloading_profile_id_, text, false);
             emit StateChanged();
             if (!background_task_id_.isEmpty()) {
-              background_tasks_->UpdateTask(background_task_id_,
-                                                    model_download_status_text_.Render(),
-                                                    model_download_bytes_label_,
-                                                    model_download_progress_);
+              background_tasks_->UpdateTask(background_task_id_, text.Render(),
+                                            model_download_bytes_label_, model_download_progress_);
             }
           });
   connect(&service_, &alcedo::ModelDownloadService::Finished, this,
           [this](bool ok, const QString& error) {
-            model_download_running_ = false;
-            // The cancel path sets phase "cancelled" before the worker emits
-            // Finished(false, ...); capture it here, before the if/ok branch
-            // overwrites the phase to "installed"/"failed".
-            const bool was_canceled = !ok && model_download_phase_ == QStringLiteral("cancelled");
-            if (ok) {
-              model_download_progress_    = 100;
-              model_download_phase_       = QStringLiteral("installed");
-              model_download_current_file_.clear();
-              model_download_bytes_done_  = model_download_bytes_total_;
-              model_download_bytes_label_ =
-                  FormatBytesLabel(model_download_bytes_total_, model_download_bytes_total_);
-              model_download_files_done_  = model_download_files_total_;
-              model_download_status_text_ = PL_TEXT("Model download complete.");
-            } else {
-              model_download_progress_    = 0;
-              model_download_phase_       = QStringLiteral("failed");
-              model_download_current_file_.clear();
-              model_download_status_text_ = error.isEmpty()
-                                                ? PL_TEXT("Model download failed.")
-                                                : PL_TEXT("Model download failed: %1", error);
+            const QString profile_id = downloading_profile_id_;
+            if (profile_id.isEmpty()) {
+              return;
             }
-            model_download_speed_label_.clear();
-            model_download_eta_label_.clear();
-            download_speed_ema_    = 0.0;
-            download_speed_primed_ = false;
-            RecomputeSelectedModelState();
+            const bool was_canceled = !ok && download_canceling_;
+            downloading_profile_id_.clear();
+            download_canceling_ = false;
+            ResetDownloadProgress();
+            installed_.insert(profile_id, IsModelInstalled(profile_id));
+            if (ok) {
+              SetRowMessage(profile_id, PL_TEXT("Model download complete."), false);
+            } else if (was_canceled) {
+              SetRowMessage(profile_id, PL_TEXT("Model download canceled."), false);
+            } else {
+              SetRowMessage(profile_id,
+                            error.isEmpty() ? PL_TEXT("Model download failed.")
+                                            : PL_TEXT("Model download failed: %1", error),
+                            true);
+            }
             if (!background_task_id_.isEmpty()) {
               const BackgroundTaskState final_state =
                   was_canceled ? BackgroundTaskState::Canceled
                                : (ok ? BackgroundTaskState::Succeeded
                                      : BackgroundTaskState::Failed);
               background_tasks_->FinishTask(background_task_id_, final_state,
-                                                    model_download_status_text_.Render());
+                                            messages_.value(profile_id).text.Render());
               background_task_id_.clear();
             }
             emit StateChanged();
           });
+  RefreshModels();
 }
 
-QVariantList ModelDownloadController::ModelProfileOptions() const {
-  QVariantList options;
-  for (const auto& profile : SemanticModelProfiles()) {
-    QVariantMap entry;
-    entry.insert(QStringLiteral("profileId"), QString::fromLatin1(profile.profile_id));
-    entry.insert(QStringLiteral("label"), QString::fromLatin1(profile.display_name));
-    entry.insert(QStringLiteral("modelId"), QString::fromLatin1(profile.model_id));
-    entry.insert(QStringLiteral("revision"), QString::fromLatin1(profile.revision));
-    entry.insert(QStringLiteral("inferenceBackend"),
-                 QString::fromLatin1(ToString(profile.inference_backend)));
-    entry.insert(QStringLiteral("language"), QString::fromLatin1(ToString(profile.language)));
-    entry.insert(QStringLiteral("imageSize"), static_cast<int>(profile.image_size));
-    entry.insert(QStringLiteral("nativeEmbeddingDim"),
-                 static_cast<int>(profile.native_embedding_dimension));
-    entry.insert(QStringLiteral("activatable"), true);
-    options.push_back(entry);
+QVariantList ModelDownloadController::Models() const {
+  QVariantList  rows;
+  const QLocale locale;
+  for (const auto& profile : service_.Profiles()) {
+    const QString profile_id = QString::fromLatin1(profile.profile_id);
+    const bool    busy       = profile_id == downloading_profile_id_;
+    const bool    installed  = installed_.value(profile_id, false);
+    const quint64 size_bytes = ProfileTotalBytes(profile);
+    QVariantMap   row;
+    row.insert(QStringLiteral("profileId"), profile_id);
+    row.insert(QStringLiteral("displayName"), QString::fromLatin1(profile.display_name));
+    row.insert(QStringLiteral("modelId"), QString::fromLatin1(profile.model_id));
+    row.insert(QStringLiteral("language"), QString::fromLatin1(ToString(profile.language)));
+    row.insert(QStringLiteral("inferenceBackend"),
+               QString::fromLatin1(ToString(profile.inference_backend)));
+    row.insert(QStringLiteral("imageSize"), static_cast<int>(profile.image_size));
+    row.insert(QStringLiteral("sizeBytes"), static_cast<double>(size_bytes));
+    row.insert(
+        QStringLiteral("sizeLabel"),
+        locale.formattedDataSize(static_cast<qint64>(size_bytes), 1, QLocale::DataSizeBase1000));
+    row.insert(QStringLiteral("licenseName"), QString::fromLatin1(profile.license_name));
+    row.insert(QStringLiteral("licenseUrl"), QString::fromLatin1(profile.license_url));
+    row.insert(QStringLiteral("installed"), installed);
+    QString status = installed ? QStringLiteral("installed") : QStringLiteral("notInstalled");
+    if (busy) {
+      status = download_canceling_ ? QStringLiteral("canceling") : QStringLiteral("downloading");
+    }
+    row.insert(QStringLiteral("status"), status);
+    row.insert(QStringLiteral("busy"), busy);
+    row.insert(QStringLiteral("progress"), busy ? model_download_progress_ : (installed ? 100 : 0));
+    row.insert(QStringLiteral("phase"), busy ? model_download_phase_ : QString{});
+    row.insert(QStringLiteral("currentFile"), busy ? model_download_current_file_ : QString{});
+    row.insert(QStringLiteral("bytesLabel"), busy ? model_download_bytes_label_ : QString{});
+    row.insert(QStringLiteral("speedLabel"), busy ? model_download_speed_label_ : QString{});
+    row.insert(QStringLiteral("etaLabel"), busy ? model_download_eta_label_ : QString{});
+    row.insert(QStringLiteral("filesDone"), busy ? model_download_files_done_ : 0);
+    row.insert(QStringLiteral("filesTotal"),
+               busy ? model_download_files_total_ : static_cast<int>(profile.assets.size()));
+    const auto    message = messages_.value(profile_id);
+    const QString text    = message.text.IsEmpty() ? QString{} : message.text.Render();
+    row.insert(QStringLiteral("message"), message.is_error ? QString{} : text);
+    row.insert(QStringLiteral("error"), message.is_error ? text : QString{});
+    rows.push_back(row);
   }
-  return options;
+  return rows;
 }
 
-QString ModelDownloadController::SelectedModelSizeLabel() const {
-  const auto  profile_id = SelectedModelProfileId();
-  const auto* profile    = FindSemanticProfile(profile_id.toStdString());
+void ModelDownloadController::RefreshModels() {
+  for (const auto& profile : service_.Profiles()) {
+    const QString profile_id = QString::fromLatin1(profile.profile_id);
+    if (profile_id != downloading_profile_id_) {
+      installed_.insert(profile_id, IsModelInstalled(profile_id));
+    }
+  }
+  emit StateChanged();
+}
+
+auto ModelDownloadController::FindProfile(const QString& profileId) const
+    -> const ModelProfileSpec* {
+  return service_.FindProfile(profileId.trimmed().toStdString());
+}
+
+bool ModelDownloadController::IsModelInstalled(const QString& profileId) const {
+  const auto* profile = FindProfile(profileId);
+  return profile != nullptr &&
+         !ValidateLocalCatalogModelProfile(
+              *profile, ModelRootForProfile(QString::fromLatin1(profile->profile_id)))
+              .has_value();
+}
+
+auto ModelDownloadController::LoadResolvedManifest(const QString& profileId, QString* error) const
+    -> std::optional<SemanticResolvedModelManifest> {
+  return LoadLocalResolvedModelManifestImpl(FindProfile(profileId), ModelDownloadDirectory(),
+                                            error);
+}
+
+void ModelDownloadController::SetRowMessage(const QString&             profileId,
+                                            const i18n::LocalizedText& text, bool is_error) {
+  messages_.insert(profileId, RowMessage{text, is_error});
+}
+
+void ModelDownloadController::SetModelMessage(const QString&             profileId,
+                                              const i18n::LocalizedText& text, bool is_error) {
+  const auto* profile = FindProfile(profileId);
   if (profile == nullptr) {
-    return {};
+    return;
   }
-  const quint64 total = ProfileTotalBytes(*profile);
-  if (total == 0) {
-    return {};
-  }
-  return QString(QChar(0x2248)) + QStringLiteral(" ")
-         + QLocale().formattedDataSize(static_cast<qint64>(total), 1, QLocale::DataSizeBase1000);
+  SetRowMessage(QString::fromLatin1(profile->profile_id), text, is_error);
+  emit StateChanged();
 }
 
-void ModelDownloadController::RecomputeSelectedModelState() {
-  const bool was_installed = selected_model_installed_;
-  const auto profile_id    = SelectedModelProfileId();
-  const auto* profile      = FindSemanticProfile(profile_id.toStdString());
-
-  // Installed: local files present and validate against the catalog checksums.
-  bool installed = false;
-  if (profile != nullptr) {
-    const auto root  = ModelRootForProfile(profile_id);
-    const auto error = ValidateLocalCatalogModelProfile(*profile, root);
-    installed        = !error.has_value();
-  }
-  selected_model_installed_ = installed;
-  if (installed != was_installed) {
-    emit SelectedModelInstallChanged();
-  }
+void ModelDownloadController::ResetDownloadProgress() {
+  model_download_progress_ = 0;
+  model_download_phase_.clear();
+  model_download_current_file_.clear();
+  model_download_bytes_done_  = 0;
+  model_download_bytes_total_ = 0;
+  model_download_bytes_label_.clear();
+  model_download_speed_label_.clear();
+  model_download_eta_label_.clear();
+  model_download_files_done_  = 0;
+  model_download_files_total_ = 0;
+  download_speed_ema_         = 0.0;
+  download_speed_primed_      = false;
 }
 
-void ModelDownloadController::UpdateDownloadSpeed(
-    const alcedo::ModelDownloadProgress& progress) {
+void ModelDownloadController::UpdateDownloadSpeed(const alcedo::ModelDownloadProgress& progress) {
   // Only the "downloading" phase moves bytes across the wire; reused/validated
   // ticks add whole staged files instantly and would otherwise report absurd
   // multi-GB/s spikes. While not downloading we drop the labels (the EMA is
@@ -588,8 +581,8 @@ void ModelDownloadController::UpdateDownloadSpeed(
     return;
   }
 
-  const auto  now       = std::chrono::steady_clock::now();
-  const auto  bytes_now = static_cast<quint64>(progress.bytes_downloaded);
+  const auto now       = std::chrono::steady_clock::now();
+  const auto bytes_now = static_cast<quint64>(progress.bytes_downloaded);
 
   if (!download_speed_primed_) {
     download_sample_bytes_ = bytes_now;
@@ -605,9 +598,9 @@ void ModelDownloadController::UpdateDownloadSpeed(
       // doesn't produce a one-shot spike.
       if (instant > 0) {
         constexpr double kAlpha = 0.3;
-        download_speed_ema_ = download_speed_ema_ == 0.0
-                                  ? instant
-                                  : (kAlpha * instant + (1.0 - kAlpha) * download_speed_ema_);
+        download_speed_ema_     = download_speed_ema_ == 0.0
+                                      ? instant
+                                      : (kAlpha * instant + (1.0 - kAlpha) * download_speed_ema_);
       }
       download_sample_bytes_ = bytes_now;
       download_sample_time_  = now;
@@ -616,78 +609,34 @@ void ModelDownloadController::UpdateDownloadSpeed(
 
   if (download_speed_ema_ > 0 && progress.bytes_total > 0) {
     model_download_speed_label_ = FormatSpeedLabel(download_speed_ema_);
-    const auto done = std::min<quint64>(bytes_now, progress.bytes_total);
-    const double remaining = static_cast<double>(progress.bytes_total - done);
-    model_download_eta_label_ = FormatEtaLabel(remaining / download_speed_ema_);
+    const auto   done           = std::min<quint64>(bytes_now, progress.bytes_total);
+    const double remaining      = static_cast<double>(progress.bytes_total - done);
+    model_download_eta_label_   = FormatEtaLabel(remaining / download_speed_ema_);
   } else {
     model_download_speed_label_.clear();
     model_download_eta_label_.clear();
   }
 }
 
-QString ModelDownloadController::SelectedModelProfileId() const {
-  const auto& profiles = SemanticModelProfiles();
-  return NormalizedProfileId(QSettings{}
-                                 .value(QLatin1String(kSemanticModelProfileKey),
-                                        QLatin1String(profiles.front().profile_id))
-                                 .toString());
-}
-
 QString ModelDownloadController::ModelDownloadDirectory() const {
-  const QString stored =
-      QSettings{}.value(QLatin1String(kSemanticModelDirectoryKey), QString{}).toString().trimmed();
-  return stored.isEmpty() ? DefaultSemanticModelDirectory() : stored;
+  return ConfiguredSemanticModelDirectory();
 }
 
 QString ModelDownloadController::ModelEndpointPreset() const {
-  return NormalizedEndpointPreset(
-      QSettings{}
-          .value(QLatin1String(kSemanticEndpointPresetKey), QStringLiteral("mirror"))
-          .toString());
+  return ConfiguredModelEndpointPreset();
 }
 
 QString ModelDownloadController::CustomModelEndpoint() const {
-  return QSettings{}.value(QLatin1String(kSemanticCustomEndpointKey), QString{}).toString();
+  return ConfiguredCustomModelEndpoint();
 }
 
 QString ModelDownloadController::EffectiveModelEndpoint() const {
-  return EndpointForPreset(ModelEndpointPreset(), CustomModelEndpoint());
+  return EffectiveSemanticModelEndpoint();
 }
 
 auto ModelDownloadController::ModelRootForProfile(const QString& profileId) const
     -> std::filesystem::path {
-  return QStringToPath(ProfileRootPath(ModelDownloadDirectory(), profileId));
-}
-
-auto ModelDownloadController::LoadSelectedResolvedManifest(QString* error) const
-    -> std::optional<SemanticResolvedModelManifest> {
-  return LoadLocalResolvedModelManifestImpl(SelectedModelProfileId(), ModelDownloadDirectory(),
-                                            error);
-}
-
-void ModelDownloadController::SetStatusText(const i18n::LocalizedText& text) {
-  model_download_status_text_ = text;
-  emit StateChanged();
-}
-
-void ModelDownloadController::SetSelectedModelProfileId(const QString& profileId) {
-  QSettings{}.setValue(QLatin1String(kSemanticModelProfileKey), NormalizedProfileId(profileId));
-  model_download_status_text_ = PL_TEXT("Model status has not been checked.");
-  model_download_progress_    = 0;
-  model_download_phase_       = {};
-  model_download_current_file_.clear();
-  model_download_bytes_done_  = 0;
-  model_download_bytes_total_ = 0;
-  model_download_bytes_label_.clear();
-  model_download_speed_label_.clear();
-  model_download_eta_label_.clear();
-  download_speed_ema_    = 0.0;
-  download_speed_primed_ = false;
-  model_download_files_done_  = 0;
-  model_download_files_total_ = 0;
-  RecomputeSelectedModelState();
-  emit SelectedModelProfileChanged();
-  emit StateChanged();
+  return QStringToPath(QDir(ModelDownloadDirectory()).filePath(profileId.trimmed()));
 }
 
 void ModelDownloadController::SetModelDownloadDirectory(const QString& directory) {
@@ -697,82 +646,50 @@ void ModelDownloadController::SetModelDownloadDirectory(const QString& directory
   }
   QSettings{}.setValue(QLatin1String(kSemanticModelDirectoryKey),
                        value.isEmpty() ? DefaultSemanticModelDirectory() : value);
-  model_download_status_text_ = PL_TEXT("Model directory updated.");
-  model_download_progress_    = 0;
-  RecomputeSelectedModelState();
-  emit StateChanged();
+  messages_.clear();
+  RefreshModels();
 }
 
 void ModelDownloadController::SetModelEndpointPreset(const QString& preset) {
-  QSettings{}.setValue(QLatin1String(kSemanticEndpointPresetKey), NormalizedEndpointPreset(preset));
+  QSettings{}.setValue(QLatin1String(kSemanticModelEndpointPresetKey),
+                       NormalizedModelEndpointPreset(preset));
   emit StateChanged();
 }
 
 void ModelDownloadController::SetCustomModelEndpoint(const QString& endpoint) {
-  QSettings{}.setValue(QLatin1String(kSemanticCustomEndpointKey), endpoint.trimmed());
+  QSettings{}.setValue(QLatin1String(kSemanticCustomModelEndpointKey), endpoint.trimmed());
   emit StateChanged();
 }
 
 void ModelDownloadController::ResetModelDownloadDirectory() {
   QSettings{}.remove(QLatin1String(kSemanticModelDirectoryKey));
-  model_download_status_text_ = PL_TEXT("Model directory reset to the executable folder.");
-  model_download_progress_    = 0;
-  RecomputeSelectedModelState();
-  emit StateChanged();
-}
-
-void ModelDownloadController::RefreshSelectedModelStatus() {
-  const auto  profile_id = SelectedModelProfileId();
-  const auto* profile    = FindSemanticProfile(profile_id.toStdString());
-  RecomputeSelectedModelState();
-  if (profile == nullptr) {
-    model_download_progress_    = 0;
-    model_download_status_text_ = PL_TEXT("Unknown semantic model profile: %1", profile_id);
-    emit StateChanged();
-    return;
-  }
-
-  const auto root  = ModelRootForProfile(profile_id);
-  const auto error = ValidateLocalCatalogModelProfile(*profile, root);
-  if (!error.has_value()) {
-    model_download_progress_ = 100;
-    model_download_status_text_ =
-        PL_TEXT("Model is installed at %1", QString::fromStdString(root.string()));
-  } else {
-    model_download_progress_    = 0;
-    model_download_status_text_ = error->isEmpty() ? PL_TEXT("Model is not installed.")
-                                                   : PL_TEXT("Model missing: %1", *error);
-  }
-  emit StateChanged();
-}
-
-void ModelDownloadController::RefreshInstallState() {
-  RecomputeSelectedModelState();
-  emit StateChanged();
+  messages_.clear();
+  RefreshModels();
 }
 
 bool ModelDownloadController::ShouldKeepSemanticModelData(const QString& profileId) const {
-  const auto* profile = FindSemanticProfile(profileId.toStdString());
-  if (profile == nullptr) {
+  if (FindProfile(profileId) == nullptr) {
     // Unknown to the catalog — install state is indeterminate, so keep the rows
     // rather than risk irreversible label loss if the profile is ever re-added.
     return true;
   }
-  return !ValidateLocalCatalogModelProfile(*profile, ModelRootForProfile(profileId)).has_value();
+  return IsModelInstalled(profileId);
 }
 
-auto ModelDownloadController::RegisterBackgroundTask() -> QString {
+auto ModelDownloadController::RegisterBackgroundTask(const QString& profileId) -> QString {
+  if (background_tasks_ == nullptr) {
+    return {};
+  }
   BackgroundTaskSnapshot snapshot;
   snapshot.kind_             = BackgroundTaskKind::ModelDownload;
   snapshot.state_            = BackgroundTaskState::Running;
-  snapshot.title_            = model_download_status_text_.Render();
-  snapshot.progress_percent_ = model_download_progress_;
+  snapshot.title_            = messages_.value(profileId).text.Render();
+  snapshot.progress_percent_ = 0;
   snapshot.cancelable_       = true;
   snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::CancelAndWait;
-  snapshot.affected_targets_ = QVariantList{SelectedModelProfileId()};
-  // Phase 2: download blocks changing download settings (directory/endpoint/
-  // selected model/delete) and blocks swapping/activating the model it is
-  // fetching. Both are global locks.
+  snapshot.affected_targets_ = QVariantList{profileId};
+  // The download blocks changes of the download settings (directory, source, removal) and the
+  // activation of a model while its files change. Both are global locks.
   snapshot.locks_.push_back(InteractionLock{
       InteractionCapability::ChangeModelDownloadSettings, 0,
       PL_TEXT("A model download is running; wait for it to finish or cancel.").Render()});
@@ -780,122 +697,94 @@ auto ModelDownloadController::RegisterBackgroundTask() -> QString {
       InteractionCapability::ChangeSemanticModel, 0,
       PL_TEXT("A model download is running; change the model after it finishes.").Render()});
   QPointer<ModelDownloadController> self(this);
-  return background_tasks_->RegisterTask(snapshot, [self]() {
+  return background_tasks_->RegisterTask(snapshot, [self, profileId]() {
     if (self) {
-      self->CancelSelectedModelDownload();
+      self->CancelInstall(profileId);
     }
   });
 }
 
-void ModelDownloadController::StartSelectedModelDownload() {
-  if (model_download_running_ || service_.IsRunning()) {
-    return;
+bool ModelDownloadController::InstallModel(const QString& profileId) {
+  const auto* profile = FindProfile(profileId);
+  if (profile == nullptr) {
+    return false;
   }
-
-  const auto profile_id = SelectedModelProfileId();
-  const auto endpoint   = EffectiveModelEndpoint().toStdString();
-  const bool started    = service_.StartDownload(
-      profile_id.toStdString(), QStringToPath(ModelDownloadDirectory()), endpoint);
-  if (!started) {
-    model_download_status_text_ = PL_TEXT("Model download failed to start.");
+  const QString profile_id = QString::fromLatin1(profile->profile_id);
+  // One download at a time (plan P9). The shared DownloadService also refuses a second job of
+  // another owner (application update, AI Mask package).
+  if (!downloading_profile_id_.isEmpty() || service_.IsRunning() ||
+      !service_.StartDownload(profile->profile_id, QStringToPath(ModelDownloadDirectory()),
+                              EffectiveModelEndpoint().toStdString())) {
+    SetRowMessage(profile_id, PL_TEXT("Another download is running."), true);
     emit StateChanged();
-    return;
+    return false;
   }
 
-  // Seed the totals from the catalog so the card can show the full size before
-  // the worker's first progress tick lands.
-  const auto* profile       = FindSemanticProfile(profile_id.toStdString());
-  const quint64 total_bytes = profile != nullptr ? ProfileTotalBytes(*profile) : 0;
-  model_download_running_     = true;
-  model_download_progress_    = 0;
+  // The totals come from the catalog so the card shows the full size before the first
+  // progress tick.
+  ResetDownloadProgress();
+  downloading_profile_id_     = profile_id;
+  download_canceling_         = false;
   model_download_phase_       = QStringLiteral("preparing");
-  model_download_current_file_.clear();
-  model_download_bytes_done_  = 0;
-  model_download_bytes_label_ =
-      FormatBytesLabel(0, static_cast<quint64>(total_bytes));
-  model_download_bytes_total_ = total_bytes;
-  model_download_speed_label_.clear();
-  model_download_eta_label_.clear();
-  download_speed_ema_    = 0.0;
-  download_speed_primed_ = false;
-  model_download_files_done_  = 0;
-  model_download_files_total_ = profile != nullptr ? static_cast<int>(profile->assets.size()) : 0;
-  selected_model_installed_   = false;
-  model_download_status_text_ = PL_TEXT("Model download queued from %1", EffectiveModelEndpoint());
+  model_download_bytes_total_ = ProfileTotalBytes(*profile);
+  model_download_bytes_label_ = FormatBytesLabel(0, model_download_bytes_total_);
+  model_download_files_total_ = static_cast<int>(profile->assets.size());
+  installed_.insert(profile_id, false);
+  SetRowMessage(profile_id, PL_TEXT("Model download queued from %1", EffectiveModelEndpoint()),
+                false);
   emit StateChanged();
-  background_task_id_ = RegisterBackgroundTask();
+  background_task_id_ = RegisterBackgroundTask(profile_id);
+  return true;
 }
 
-void ModelDownloadController::CancelSelectedModelDownload() {
-  if (!model_download_running_ && !service_.IsRunning()) {
-    return;
+bool ModelDownloadController::CancelInstall(const QString& profileId) {
+  const auto* profile = FindProfile(profileId);
+  if (profile == nullptr || downloading_profile_id_ != QLatin1String(profile->profile_id)) {
+    return false;
   }
-  if (!service_.IsRunning()) {
-    // No active worker will emit Finished; clear local state immediately.
-    model_download_running_     = false;
-    model_download_progress_    = 0;
-    model_download_phase_       = QStringLiteral("cancelled");
-    model_download_current_file_.clear();
-    model_download_bytes_done_  = 0;
-    model_download_bytes_label_.clear();
-    model_download_speed_label_.clear();
-    model_download_eta_label_.clear();
-    download_speed_ema_    = 0.0;
-    download_speed_primed_ = false;
-    model_download_status_text_ = PL_TEXT("Model download cancelled.");
-    if (!background_task_id_.isEmpty()) {
-      background_tasks_->FinishTask(background_task_id_, BackgroundTaskState::Canceled,
-                                            model_download_status_text_.Render());
-      background_task_id_.clear();
-    }
-    emit StateChanged();
-    return;
+  if (download_canceling_) {
+    return true;
   }
+  download_canceling_ = true;
   service_.CancelDownload();
-  model_download_phase_       = QStringLiteral("cancelled");
   model_download_current_file_.clear();
-  model_download_status_text_ = PL_TEXT("Cancelling model download...");
+  SetRowMessage(downloading_profile_id_, PL_TEXT("Canceling model download..."), false);
   if (!background_task_id_.isEmpty()) {
-    background_tasks_->UpdateTaskState(background_task_id_,
-                                                BackgroundTaskState::Canceling);
+    background_tasks_->UpdateTaskState(background_task_id_, BackgroundTaskState::Canceling);
   }
   emit StateChanged();
+  return true;
 }
 
-void ModelDownloadController::DeleteSelectedModel() {
-  if (model_download_running_) {
-    CancelSelectedModelDownload();
+bool ModelDownloadController::RemoveModel(const QString& profileId) {
+  const auto* profile = FindProfile(profileId);
+  if (profile == nullptr) {
+    return false;
   }
-  const auto      profile_id = SelectedModelProfileId();
-  const auto      root       = ModelRootForProfile(profile_id);
-  const auto      staging    = StagingRoot(root);
+  const QString profile_id = QString::fromLatin1(profile->profile_id);
+  if (downloading_profile_id_ == profile_id) {
+    SetRowMessage(profile_id, PL_TEXT("Cancel the download before you remove the model."), true);
+    emit StateChanged();
+    return false;
+  }
+  const auto      root    = ModelRootForProfile(profile_id);
+  const auto      staging = StagingRoot(root);
   std::error_code ec;
-  if (std::filesystem::exists(staging, ec)) {
-    std::filesystem::remove_all(staging, ec);
-  }
-  if (!ec && std::filesystem::exists(root, ec)) {
+  std::filesystem::remove_all(staging, ec);
+  if (!ec) {
     std::filesystem::remove_all(root, ec);
   }
-  model_download_progress_    = 0;
-  model_download_phase_       = {};
-  model_download_current_file_.clear();
-  model_download_bytes_done_  = 0;
-  model_download_bytes_total_ = 0;
-  model_download_bytes_label_.clear();
-  model_download_speed_label_.clear();
-  model_download_eta_label_.clear();
-  download_speed_ema_    = 0.0;
-  download_speed_primed_ = false;
-  model_download_files_done_  = 0;
-  model_download_files_total_ = 0;
-  RecomputeSelectedModelState();
-  if (!ec) {
-    model_download_status_text_ = PL_TEXT("Model files deleted.");
-  } else {
-    model_download_status_text_ =
-        PL_TEXT("Model delete failed: %1", QString::fromStdString(ec.message()));
+  installed_.insert(profile_id, IsModelInstalled(profile_id));
+  if (ec) {
+    SetRowMessage(profile_id,
+                  PL_TEXT("Model removal failed: %1", QString::fromStdString(ec.message())), true);
+    emit StateChanged();
+    return false;
   }
+  SetRowMessage(profile_id, PL_TEXT("Model files removed."), false);
   emit StateChanged();
+  emit ModelRemoved(profile_id);
+  return true;
 }
 
 }  // namespace alcedo::ui

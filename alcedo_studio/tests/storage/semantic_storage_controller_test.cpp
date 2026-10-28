@@ -842,6 +842,29 @@ TEST_F(SemanticStoreTest, ActiveModelKeyAndLanguageMetadataAreStoredPerModel) {
   EXPECT_FALSE(semantic.models_.SetActiveModelKey("missing-model", &error));
 }
 
+TEST_F(SemanticStoreTest, ClearActiveModelLeavesNoActiveModelAndKeepsRows) {
+  ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
+  std::string    error;
+  ASSERT_TRUE(
+      semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = "mobileclip-en",
+                                                       .model_id_      = "mobileclip-test",
+                                                       .revision_      = "en-rev",
+                                                       .embedding_dim_ = kSemanticEmbeddingDim,
+                                                       .image_size_    = 256,
+                                                       .active_        = true},
+                                   &error))
+      << error;
+  ASSERT_EQ(semantic.models_.ActiveModelKey(), "mobileclip-en");
+
+  ASSERT_TRUE(semantic.models_.ClearActiveModel(&error)) << error;
+  EXPECT_TRUE(semantic.models_.ActiveModelKey().empty());
+  EXPECT_FALSE(semantic.models_.ActiveModel(&error).has_value());
+  EXPECT_TRUE(semantic.models_.HasModel("mobileclip-en"));
+  ASSERT_TRUE(semantic.models_.SetActiveModelKey("mobileclip-en", &error)) << error;
+  EXPECT_EQ(semantic.models_.ActiveModelKey(), "mobileclip-en");
+}
+
 TEST_F(SemanticStoreTest, ExistingSemanticModelWithoutActiveColumnPromotesLatestModel) {
   RunRawSql(db_path_,
             "CREATE TABLE SemanticModel ("

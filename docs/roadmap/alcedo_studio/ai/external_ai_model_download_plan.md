@@ -1,7 +1,7 @@
 # AI Models Page: One Download Place for CLIP and AI Mask Models - Phase Plan
 
 Date: 2026-10-27. Status: AM1 complete (2026-10-27); AM2 complete, v1 r1 published
-(2026-10-28); AM3-AM5 planned.
+(2026-10-28); AM3 complete (2026-10-28); AM4-AM5 planned.
 
 Source audit: `main` `56df8883`.
 Tracking: [#579](https://github.com/zidage/AlcedoStudio/issues/579).
@@ -523,6 +523,145 @@ model sets the project active key; activation without a project, of a missing mo
 another activation fails with the reason; the sidecar starts without `--model-id` and returns
 `AI_ERROR_MODEL_NOT_READY` for a semantic request; the runtime options use the project's active
 model.
+
+#### AM3 completion record (2026-10-28)
+
+**Status:** complete. Each CLIP profile of the platform has its own install, cancel, and remove;
+an installed model is activated per project with `activateModel(profileId)`; the app-wide
+selected profile is gone, and the sidecar starts without a semantic model when the open project
+has no active model. The AI Models page is AM4.
+
+Details the plan did not specify, chosen in AM3:
+
+- **Row list.** `ModelDownloadController::models` has one map per profile: `profileId`,
+  `displayName`, `modelId`, `language`, `inferenceBackend`, `imageSize`, `sizeBytes`,
+  `sizeLabel`, `licenseName`, `licenseUrl`, `installed`, `status` (`notInstalled`, `installed`,
+  `downloading`, `canceling`), `busy`, `progress`, `phase`, `currentFile`, `bytesLabel`,
+  `speedLabel`, `etaLabel`, `filesDone`, `filesTotal`, `message`, and `error`. `message` and
+  `error` hold the last result of that row (download, removal, or activation); an activation
+  failure is the `error` of the card that asked for it. `installModel`, `cancelInstall`,
+  `removeModel`, and `refreshModels` follow the AM1 naming (C++ `InstallModel` and so on, QML
+  lower case). `downloadingProfileId` and `modelDownloadRunning` stay for the page.
+- **Install state.** A profile is installed when every catalog file has its catalog size and
+  the resolved manifest matches the catalog (the former selected-profile check, now for every
+  row). No file is hashed outside a download.
+- **One download at a time (P9).** A second install, or an install while the shared
+  `DownloadService` runs another owner's job, returns false with "Another download is running."
+  on that row. A profile cannot be removed while it downloads ("Cancel the download before you
+  remove the model.").
+- **Catalog injection.** `ModelDownloadService` takes its profile list (default
+  `SemanticModelProfiles()`), and the controller reads profiles only through it, so the tests
+  install small profiles through the real `DownloadService`. The test aria2 stand-in
+  `DownloadServiceRpcFakeAria2` answers the aria2 JSON-RPC calls and copies files from a source
+  directory (`ALCEDO_FAKE_ARIA2_HOLD=1` keeps a download open for the cancel test).
+- **Licenses (P13).** `license_name` and `license_url` per profile in C++ and Rust:
+  MobileCLIP2 `apple-amlr` (`https://huggingface.co/apple/MobileCLIP2-S2/blob/main/LICENSE`),
+  jina-clip-v2 `cc-by-nc-4.0` (`https://creativecommons.org/licenses/by-nc/4.0/`), SigLIP2 ONNX
+  and Core ML `Apache-2.0` (`https://www.apache.org/licenses/LICENSE-2.0`).
+  `alcedo_studio/tests/resources/clip_model_catalog/clip_model_profiles.json` holds the complete
+  catalog; the Rust test and the C++ test each compare their table with it, so the two catalogs
+  agree. After a catalog change, write the file with `ALCEDO_WRITE_CLIP_CATALOG_FIXTURE=1 cargo
+  test --lib profile_table_equals_the_shared_clip_catalog_file`.
+- **Source presets.** `NormalizedModelEndpointPreset`, `ModelEndpointForPreset`,
+  `ConfiguredSemanticModelDirectory`, and `EffectiveSemanticModelEndpoint`
+  (`app/model_asset_catalog`) replace the copies in `ModelDownloadController` and
+  `project_service.cpp`. The QSettings keys are unchanged.
+- **Activation.** `activateModel` rejects, with the reason on the row: no open project, a
+  model that is not installed, the active model ("This model is already active for this
+  project."), another activation ("Another model activation is running."), and a running
+  generation. `activatingModelProfileId` names the card that shows the activation progress. A
+  running sidecar of another model (or of no model) restarts with the model being activated
+  before the label prototypes are computed; when another operation holds the sidecar, the
+  activation fails with the reason instead of computing prototypes with the wrong model.
+- **Removing the active model.** `RemoveModel` emits `ModelRemoved`;
+  `SemanticGenerationController` then calls the new `SemanticModelRegistry::ClearActiveModel`
+  when the removed profile is the active model of the open project. The rows of the model stay
+  until the save purge (`PurgeUninstalledSemanticModels`) drops them, as before. The interim
+  panel asks before every removal and names the active-model case.
+- **No model (P10).** `AiSidecarRuntimeOptions::model_id` is empty by default and
+  `BuildArguments` omits `--model-id` when it is empty. `RuntimeOptionsForCurrentSidecarSnapshot`
+  returns the options of the project's active model, else options without a model
+  (`model_root` = model directory, `require_model_info` false). `alcedo_mind` without
+  `--model-id` (or `ALCEDO_MIND_MODEL_ID`) uses an engine without a model: the v2 embedding RPCs
+  return the header `AI_STATUS_PROVIDER_UNAVAILABLE` + `AI_ERROR_MODEL_NOT_READY` with the
+  reason, `GetModelInfo` returns `FAILED_PRECONDITION`. The v2 RPCs also report a configured
+  profile that fails to prepare this way. The C++ batch client now fails every item with the
+  header error instead of returning an empty list. Generation without an active model stops with
+  "Activate an AI model in Settings before generating labels." before the sidecar starts.
+- **Interim panel.** `SemanticGenerationSettingsPanel.qml` shows one card per profile (status,
+  license and size, progress, Download/Cancel, Activate, Delete with confirmation, active model
+  with the green border) instead of the combo box, the status card, and the four buttons, so
+  the app works until AM4 moves this to the AI Models page. The new texts get their Chinese
+  entries with the page in AM4.
+- **Terminology.** `SemanticGrpcDependencySmokeTest` is now `SemanticGrpcDependencyLinkTest`
+  (touched `tests/app/CMakeLists.txt`). The `EditorRhiContracts` library and test in
+  `tests/ui/CMakeLists.txt` are outside AM3: issue
+  [#582](https://github.com/zidage/AlcedoStudio/issues/582).
+
+**Primary success call chain:**
+
+```text
+installModel(profileId)
+  -> ModelDownloadController::InstallModel (one download at a time, row status downloading)
+  -> ModelDownloadService::StartDownload -> DownloadService (aria2c, size + SHA-256 per file)
+  -> background task ModelDownload (cancelable, affected target = profile)
+  -> Finished: ValidateDownloadedProfile -> PromoteStagingRoot -> WriteResolvedManifest
+  -> row installed, message "Model download complete."
+activateModel(profileId) (open project, installed, not active)
+  -> SemanticGenerationController::ActivateModel -> LoadResolvedManifest (catalog sizes)
+  -> worker: UpsertModel -> label prototypes cached? else sidecar with this model
+     (RuntimeOptionsForProfile) -> EnsureLabelPrototypes -> SetActiveModelKey
+  -> activeModelProfileId = profile; sidecar identity = this model
+removeModel(profileId) -> files removed -> ModelRemoved
+  -> SemanticGenerationController::OnModelRemoved -> ClearActiveModel (when it was active)
+Project without an active model
+  -> RuntimeOptionsForCurrentSidecarSnapshot: no model_id -> alcedo_mind without --model-id
+  -> AI Mask and image analysis run; semantic requests -> AI_ERROR_MODEL_NOT_READY
+```
+
+**Primary failure call chains:**
+
+```text
+Another download runs -> InstallModel false, row error "Another download is running."
+Cancel -> DownloadService cancel -> Finished(false) -> row notInstalled, "Model download canceled."
+Activation without a project / not installed / active / during another activation
+  -> ActivateModel false, row error with the reason, project unchanged
+Sidecar start fails or serves another model -> activation finishes failed, row error
+```
+
+**What was proven (executed tests):**
+
+| Required test | Test | Result |
+| --- | --- | --- |
+| Install per profile (fake aria2) | `ClipModelInstallActivationTest.ClipModelDownloadControllerTest.EachProfileInstallsIntoItsOwnDirectory` | PASS |
+| Cancel per profile; one download at a time | `...ClipModelDownloadControllerTest.CancelKeepsProfileNotInstalledAndOneDownloadRunsAtATime` | PASS |
+| Remove per profile | `...ClipModelDownloadControllerTest.RemoveDeletesOnlyThatProfileAndReportsIt` | PASS |
+| Rows show the licenses | `...ClipModelDownloadControllerTest.RowsShowLicensesOfTheModelCards` | PASS |
+| Activation sets the project active key | `...ClipModelActivationTest.ActivationOfInstalledModelSetsProjectActiveKey` | PASS |
+| Activation without a project fails with the reason | `...ClipModelActivationTest.ActivationWithoutOpenProjectFailsWithReason` | PASS |
+| Activation of a missing model fails with the reason | `...ClipModelActivationTest.ActivationOfModelThatIsNotInstalledFailsWithReason` | PASS |
+| Activation during another activation fails with the reason | `...ActivationOfInstalledModelSetsProjectActiveKey` (second request) | PASS |
+| Removing the active model leaves no active model | `...ClipModelActivationTest.RemovingActiveModelLeavesProjectWithoutActiveModel`, `SemanticStorageControllerTest.SemanticStoreTest.ClearActiveModelLeavesNoActiveModelAndKeepsRows` | PASS |
+| The runtime options use the project's active model | `...ActivationOfInstalledModelSetsProjectActiveKey`, `...WithoutActiveModelSidecarStartsWithoutModelId` | PASS |
+| The sidecar starts without `--model-id` | `AiSidecarRuntimeServiceTest.RuntimeArgumentsOmitModelIdWithoutActiveModel`, Rust `config::tests::starts_without_model_id_and_reports_no_semantic_model` | PASS |
+| A semantic request returns `AI_ERROR_MODEL_NOT_READY` | Rust `server::semantic::tests::without_model_id_semantic_requests_return_model_not_ready`; live `AiSidecarRuntimeServiceLiveTest.RustRuntimeStartsWithoutModelIdAndRejectsSemanticRequests` (release `alcedo_mind.exe`) | PASS |
+| The C++ and Rust catalogs agree | `ModelAssetCatalogTest.ProfileTableEqualsTheSharedClipCatalogFile`, Rust `model_assets::tests::profile_table_equals_the_shared_clip_catalog_file` | PASS |
+| Regression | `AiSidecarRuntimeServiceTest`, `SemanticStorageControllerTest`, `ApplicationModuleHostLifecycleTest`, `DownloadServiceTest`, `SemanticGrpcDependencyLinkTest`, `AlbumBackendProjectTest` (catalog and activation manifest cases); `cargo test --lib -- --skip live_` (377 tests) | PASS |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target ModelAssetCatalogTest
+ClipModelInstallActivationTest AiSidecarRuntimeServiceTest SemanticStorageControllerTest
+SemanticGrpcDependencyLinkTest AlbumBackendProjectTest ApplicationModuleHostLifecycleTest
+DownloadServiceTest alcedo_main`; `ctest --test-dir build/debug -R
+"^(ModelAssetCatalogTest|ClipModelInstallActivationTest|SemanticStorageControllerTest|AiSidecarRuntimeServiceTest|SemanticGrpcDependencyLinkTest|ApplicationModuleHostLifecycleTest|DownloadServiceTest)\."`
+with `ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH` set to the release `alcedo_mind.exe` (80 tests);
+`cargo test --lib -- --skip live_`. With an installed SigLIP2 and `--model-id`, the live
+embedding test loaded the model and returned an embedding; it fails only its fixed MobileCLIP
+check of 512 dimensions (SigLIP2 has 768).
+
+**Residual gaps:** the interim panel was checked with the `alcedo_main` build and `qmllint`
+(no new warning class), not in the running application; the AI Models page is AM4. Activation
+with cold label prototypes (sidecar start) is covered by the existing code path and the live
+sidecar tests, not by an AM3 test with a real model. macOS was not built.
 
 ### 5.4 AM4: AI Models settings page
 

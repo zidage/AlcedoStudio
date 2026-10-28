@@ -36,16 +36,9 @@ namespace {
 
 using namespace std::chrono_literals;
 
-constexpr auto kSemanticModelDirectoryKey      = "semantic/modelDirectory";
-constexpr auto kSemanticEndpointPresetKey      = "semantic/modelEndpointPreset";
-constexpr auto kSemanticCustomEndpointKey      = "semantic/customModelEndpoint";
 constexpr auto kAiSidecarRuntimeStartupTimeout = 60s;
 constexpr auto kJinaClipProfileId              = "jina-clip-v2-int8-multilingual";
 constexpr auto kSiglip2ProfileId               = "siglip2-b32-256-multilingual";
-
-auto           DefaultSemanticModelDirectory() -> QString {
-  return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("model"));
-}
 
 auto QStringToPath(const QString& value) -> std::filesystem::path {
 #ifdef _WIN32
@@ -53,34 +46,6 @@ auto QStringToPath(const QString& value) -> std::filesystem::path {
 #else
   return std::filesystem::path(value.toStdString());
 #endif
-}
-
-auto NormalizedEndpointPreset(QString preset) -> QString {
-  preset = preset.trimmed().toLower();
-  if (preset == QLatin1String("huggingface") || preset == QLatin1String("sufy") ||
-      preset == QLatin1String("custom")) {
-    return preset;
-  }
-  return QStringLiteral("mirror");
-}
-
-auto EffectiveSemanticModelEndpoint() -> QString {
-  QSettings     settings;
-  const QString preset = NormalizedEndpointPreset(
-      settings.value(QLatin1String(kSemanticEndpointPresetKey), QStringLiteral("mirror"))
-          .toString());
-  const QString custom_endpoint =
-      settings.value(QLatin1String(kSemanticCustomEndpointKey), QString{}).toString().trimmed();
-  if (preset == QLatin1String("huggingface")) {
-    return QStringLiteral("https://huggingface.co");
-  }
-  if (preset == QLatin1String("sufy")) {
-    return QStringLiteral("https://hf-cdn.sufy.com");
-  }
-  if (preset == QLatin1String("custom") && !custom_endpoint.isEmpty()) {
-    return custom_endpoint;
-  }
-  return QStringLiteral("https://hf-mirror.com");
 }
 
 auto SemanticModelKeyFromInfo(const AiSidecarRuntimeModelInfo& info) -> std::string {
@@ -114,10 +79,7 @@ auto EmbeddingTimeoutForModel(const SemanticModelRecord& model) -> std::chrono::
 }
 
 auto RuntimeOptionsForSemanticModel(const SemanticModelRecord& model) -> AiSidecarRuntimeOptions {
-  QSettings     settings;
-  const QString base_dir =
-      settings.value(QLatin1String(kSemanticModelDirectoryKey), DefaultSemanticModelDirectory())
-          .toString();
+  const QString base_dir   = ConfiguredSemanticModelDirectory();
   const auto    profile_id = ProfileIdForModel(model);
   const QString root =
       profile_id.empty() ? base_dir : QDir(base_dir).filePath(QString::fromStdString(profile_id));

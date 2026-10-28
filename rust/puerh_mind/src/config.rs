@@ -52,6 +52,9 @@ impl EncoderResidencyConfig {
 
 #[derive(Debug, Clone)]
 pub struct SemanticConfig {
+    /// The CLIP model profile (profile ID or model ID). Empty when the host passes no
+    /// `--model-id`: the open project has no active model, and semantic requests then return
+    /// `AI_ERROR_MODEL_NOT_READY` while segmentation and image analysis run.
     pub model_id: String,
     pub revision: String,
     pub model_root: String,
@@ -60,6 +63,13 @@ pub struct SemanticConfig {
     pub allow_download: bool,
     pub batch_cap: usize,
     pub batch_wait_ms: u64,
+}
+
+impl SemanticConfig {
+    /// True when a CLIP model profile is configured (`--model-id`).
+    pub fn has_model(&self) -> bool {
+        !self.model_id.trim().is_empty()
+    }
 }
 
 impl AppConfig {
@@ -135,7 +145,7 @@ impl AppConfig {
             allow_remote_bind: parse_bool_env("ALCEDO_MIND_ALLOW_REMOTE_BIND", false)?,
             max_message_bytes: parse_env("ALCEDO_MIND_MAX_MESSAGE_BYTES", 16 * 1024 * 1024)?,
             semantic: SemanticConfig {
-                model_id: env_value("ALCEDO_MIND_MODEL_ID", "plhery/mobileclip2-onnx:s2"),
+                model_id: env_value("ALCEDO_MIND_MODEL_ID", ""),
                 revision: env_value(
                     "ALCEDO_MIND_REVISION",
                     crate::service::model_assets::MOBILECLIP2_ONNX_REVISION,
@@ -171,9 +181,6 @@ impl AppConfig {
         }
         if self.semantic.model_root.trim().is_empty() {
             anyhow::bail!("model-root must not be empty");
-        }
-        if self.semantic.model_id.trim().is_empty() {
-            anyhow::bail!("model-id must not be empty");
         }
         if self.semantic.revision.trim().is_empty() {
             anyhow::bail!("revision must not be empty");
@@ -319,6 +326,17 @@ mod tests {
         assert_eq!(config.semantic.batch_cap, 8);
         assert_eq!(config.semantic.batch_wait_ms, 3);
         assert_eq!(config.max_message_bytes, 4096);
+    }
+
+    #[test]
+    fn starts_without_model_id_and_reports_no_semantic_model() {
+        let config = AppConfig::from_args(["--model-root", "C:/models"])
+            .expect("config without --model-id should parse");
+        assert!(config.semantic.model_id.is_empty());
+        assert!(!config.semantic.has_model());
+
+        let config = AppConfig::from_args(["--model-id", "repo/model:s2"]).expect("config");
+        assert!(config.semantic.has_model());
     }
 
     #[test]

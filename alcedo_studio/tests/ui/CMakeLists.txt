@@ -491,6 +491,14 @@ alcedo_register_test_target(AlbumBackendImportTest ui)
 def_ui_test(AlbumBackendProjectTest  album_backend_project_test.cpp)
 alcedo_register_test_target(AlbumBackendProjectTest ui)
 
+# CLIP model install, cancel, and remove per profile, and activation per project (AI Models
+# plan, AM3).
+def_ui_test(ClipModelInstallActivationTest clip_model_install_activation_test.cpp)
+target_compile_definitions(ClipModelInstallActivationTest PRIVATE
+    ALCEDO_RPC_FAKE_ARIA2_PATH="$<TARGET_FILE:DownloadServiceRpcFakeAria2>")
+add_dependencies(ClipModelInstallActivationTest DownloadServiceRpcFakeAria2)
+alcedo_register_test_target(ClipModelInstallActivationTest ui)
+
 def_ui_test(AlbumBackendFolderTest   album_backend_folder_test.cpp)
 alcedo_register_test_target(AlbumBackendFolderTest ui)
 
@@ -583,7 +591,7 @@ alcedo_register_test_target(AdjustmentTransferDialogModelTest ui)
 def_ui_test(AdjustmentTransferControllerTest adjustment_transfer_controller_test.cpp)
 alcedo_register_test_target(AdjustmentTransferControllerTest ui)
 
-# Phase 0: deterministic editor RHI contracts (backend parse, fixtures, lease schema).
+# Phase 0: deterministic editor RHI checks (backend parse, fixtures, lease schema).
 add_executable(EditorRhiContractsTest
     ${ALCEDO_TEST_ROOT}/ui/editor_rhi_contracts_test.cpp
 )
@@ -2592,7 +2600,7 @@ alcedo_register_test_target(EditorMultiSliderQuickTest ui)
 
 # Qt Quick Test: lens catalog picker (collapsible two-tier searchable menu,
 # normalized fuzzy matching, detection mapping) plus the RAW Decode
-# auto-recognition contract against a scripted-EXIF recording session.
+# auto-recognition rules against a scripted-EXIF recording session.
 # QML under tests/ui/qml_lens_picker/.
 add_executable(EditorLensPickerQuickTest
     ${ALCEDO_TEST_ROOT}/ui/editor_lens_picker_quicktest.cpp

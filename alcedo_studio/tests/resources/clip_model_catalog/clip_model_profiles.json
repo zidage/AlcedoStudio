@@ -1,0 +1,277 @@
+[
+  {
+    "assets": [
+      {
+        "local_path": "onnx/s2/text_model.onnx",
+        "remote_path": "onnx/s2/text_model.onnx",
+        "repo_id": "plhery/mobileclip2-onnx",
+        "revision": "ba95759a5bdbaca53e9111e2550a76ec09c8fd9e",
+        "role": "text_model",
+        "sha256": "622f10372bca71b5017f2efc5f8c2886610a2592b636de8984d717f03213f031",
+        "size_bytes": 254053669
+      },
+      {
+        "local_path": "onnx/s2/vision_model.onnx",
+        "remote_path": "onnx/s2/vision_model.onnx",
+        "repo_id": "plhery/mobileclip2-onnx",
+        "revision": "ba95759a5bdbaca53e9111e2550a76ec09c8fd9e",
+        "role": "vision_model",
+        "sha256": "a841f72c5a5085748bbe271a1d5718aba877822a15cba865bdbd0d37036b849e",
+        "size_bytes": 143044797
+      },
+      {
+        "local_path": "onnx/s2/config.json",
+        "remote_path": "onnx/s2/config.json",
+        "repo_id": "plhery/mobileclip2-onnx",
+        "revision": "ba95759a5bdbaca53e9111e2550a76ec09c8fd9e",
+        "role": "onnx_config",
+        "sha256": null,
+        "size_bytes": 98
+      },
+      {
+        "local_path": "onnx/s2/preprocessor_config.json",
+        "remote_path": "onnx/s2/preprocessor_config.json",
+        "repo_id": "plhery/mobileclip2-onnx",
+        "revision": "ba95759a5bdbaca53e9111e2550a76ec09c8fd9e",
+        "role": "preprocess_config",
+        "sha256": null,
+        "size_bytes": 284
+      },
+      {
+        "local_path": "tokenizer.json",
+        "remote_path": "tokenizer.json",
+        "repo_id": "plhery/mobileclip2-onnx",
+        "revision": "ba95759a5bdbaca53e9111e2550a76ec09c8fd9e",
+        "role": "tokenizer",
+        "sha256": null,
+        "size_bytes": 2224041
+      },
+      {
+        "local_path": "tokenizer_config.json",
+        "remote_path": "tokenizer_config.json",
+        "repo_id": "plhery/mobileclip2-onnx",
+        "revision": "ba95759a5bdbaca53e9111e2550a76ec09c8fd9e",
+        "role": "tokenizer_config",
+        "sha256": null,
+        "size_bytes": 568
+      }
+    ],
+    "display_name": "MobileCLIP2 S2 English",
+    "embedding_dimension": 512,
+    "embedding_transform": "l2_normalize",
+    "engine_profile_id": "mobileclip2-openclip",
+    "image_size": 256,
+    "inference_backend": "onnx_runtime",
+    "language": "en",
+    "license_name": "apple-amlr",
+    "license_url": "https://huggingface.co/apple/MobileCLIP2-S2/blob/main/LICENSE",
+    "model_id": "plhery/mobileclip2-onnx:s2",
+    "native_embedding_dimension": 512,
+    "profile_id": "mobileclip2-s2-en",
+    "revision": "ba95759a5bdbaca53e9111e2550a76ec09c8fd9e"
+  },
+  {
+    "assets": [
+      {
+        "local_path": "onnx/model_int8.onnx",
+        "remote_path": "onnx/model_int8.onnx",
+        "repo_id": "jinaai/jina-clip-v2",
+        "revision": "e10d47f5691d0454a0fb5d13f46f2199b74cb436",
+        "role": "multimodal_model",
+        "sha256": "21b8b77a009865faecaa29f076ee55d6334ea42699a9efa14d542ce8d3938a3f",
+        "size_bytes": 874350932
+      },
+      {
+        "local_path": "config.json",
+        "remote_path": "config.json",
+        "repo_id": "jinaai/jina-clip-v2",
+        "revision": "e10d47f5691d0454a0fb5d13f46f2199b74cb436",
+        "role": "model_config",
+        "sha256": null,
+        "size_bytes": 2152
+      },
+      {
+        "local_path": "preprocessor_config.json",
+        "remote_path": "preprocessor_config.json",
+        "repo_id": "jinaai/jina-clip-v2",
+        "revision": "e10d47f5691d0454a0fb5d13f46f2199b74cb436",
+        "role": "preprocess_config",
+        "sha256": null,
+        "size_bytes": 584
+      },
+      {
+        "local_path": "tokenizer.json",
+        "remote_path": "tokenizer.json",
+        "repo_id": "jinaai/jina-clip-v2",
+        "revision": "e10d47f5691d0454a0fb5d13f46f2199b74cb436",
+        "role": "tokenizer",
+        "sha256": "6601c4120779a1a3863897ba332fe3481d548e363bec2c91eba10ef8640a5e93",
+        "size_bytes": 17082997
+      },
+      {
+        "local_path": "tokenizer_config.json",
+        "remote_path": "tokenizer_config.json",
+        "repo_id": "jinaai/jina-clip-v2",
+        "revision": "e10d47f5691d0454a0fb5d13f46f2199b74cb436",
+        "role": "tokenizer_config",
+        "sha256": null,
+        "size_bytes": 1148
+      },
+      {
+        "local_path": "special_tokens_map.json",
+        "remote_path": "special_tokens_map.json",
+        "repo_id": "jinaai/jina-clip-v2",
+        "revision": "e10d47f5691d0454a0fb5d13f46f2199b74cb436",
+        "role": "special_tokens",
+        "sha256": null,
+        "size_bytes": 964
+      }
+    ],
+    "display_name": "Jina CLIP v2 INT8 Multilingual",
+    "embedding_dimension": 512,
+    "embedding_transform": "matryoshka_truncate_then_l2_normalize",
+    "engine_profile_id": "jina-clip-v2-onnx-int8",
+    "image_size": 512,
+    "inference_backend": "onnx_runtime",
+    "language": "multilingual",
+    "license_name": "cc-by-nc-4.0",
+    "license_url": "https://creativecommons.org/licenses/by-nc/4.0/",
+    "model_id": "jinaai/jina-clip-v2",
+    "native_embedding_dimension": 1024,
+    "profile_id": "jina-clip-v2-int8-multilingual",
+    "revision": "e10d47f5691d0454a0fb5d13f46f2199b74cb436"
+  },
+  {
+    "assets": [
+      {
+        "local_path": "textual/model.onnx",
+        "remote_path": "textual/model.onnx",
+        "repo_id": "immich-app/ViT-B-32-SigLIP2-256__webli",
+        "revision": "762c736d366fc253e9453021144f9fe71789b075",
+        "role": "text_model",
+        "sha256": "ba6e09d2dbb3d7ac0f9e2935676db92dceebddfd06c1462b67019caa90eeea20",
+        "size_bytes": 1129435819
+      },
+      {
+        "local_path": "visual/model.onnx",
+        "remote_path": "visual/model.onnx",
+        "repo_id": "immich-app/ViT-B-32-SigLIP2-256__webli",
+        "revision": "762c736d366fc253e9453021144f9fe71789b075",
+        "role": "vision_model",
+        "sha256": "e96b8a3d32ab1b683aa12c45312342b4a10d4befef5f195f5cf84eadf1938696",
+        "size_bytes": 378359772
+      },
+      {
+        "local_path": "config.json",
+        "remote_path": "config.json",
+        "repo_id": "immich-app/ViT-B-32-SigLIP2-256__webli",
+        "revision": "762c736d366fc253e9453021144f9fe71789b075",
+        "role": "model_config",
+        "sha256": null,
+        "size_bytes": 551
+      },
+      {
+        "local_path": "visual/preprocess_cfg.json",
+        "remote_path": "visual/preprocess_cfg.json",
+        "repo_id": "immich-app/ViT-B-32-SigLIP2-256__webli",
+        "revision": "762c736d366fc253e9453021144f9fe71789b075",
+        "role": "preprocess_config",
+        "sha256": null,
+        "size_bytes": 154
+      },
+      {
+        "local_path": "textual/tokenizer.json",
+        "remote_path": "textual/tokenizer.json",
+        "repo_id": "immich-app/ViT-B-32-SigLIP2-256__webli",
+        "revision": "762c736d366fc253e9453021144f9fe71789b075",
+        "role": "tokenizer",
+        "sha256": "220c63d496e0c14e63eb656c91e0215e926202e4c74b1f089e09f1920d779b04",
+        "size_bytes": 34362885
+      },
+      {
+        "local_path": "textual/tokenizer_config.json",
+        "remote_path": "textual/tokenizer_config.json",
+        "repo_id": "immich-app/ViT-B-32-SigLIP2-256__webli",
+        "revision": "762c736d366fc253e9453021144f9fe71789b075",
+        "role": "tokenizer_config",
+        "sha256": null,
+        "size_bytes": 46386
+      },
+      {
+        "local_path": "textual/special_tokens_map.json",
+        "remote_path": "textual/special_tokens_map.json",
+        "repo_id": "immich-app/ViT-B-32-SigLIP2-256__webli",
+        "revision": "762c736d366fc253e9453021144f9fe71789b075",
+        "role": "special_tokens",
+        "sha256": null,
+        "size_bytes": 555
+      }
+    ],
+    "display_name": "SigLIP2 B/32 256 Multilingual",
+    "embedding_dimension": 768,
+    "embedding_transform": "l2_normalize",
+    "engine_profile_id": "siglip2-openclip",
+    "image_size": 256,
+    "inference_backend": "onnx_runtime",
+    "language": "multilingual",
+    "license_name": "Apache-2.0",
+    "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+    "model_id": "immich-app/ViT-B-32-SigLIP2-256__webli",
+    "native_embedding_dimension": 768,
+    "profile_id": "siglip2-b32-256-multilingual",
+    "revision": "762c736d366fc253e9453021144f9fe71789b075"
+  },
+  {
+    "assets": [
+      {
+        "local_path": "ImageEncoder.mlmodelc.zip",
+        "remote_path": "ImageEncoder.mlmodelc.zip",
+        "repo_id": "zidage/siglip2-base-coreml-macos",
+        "revision": "5419f7d827b15c5d7e6e0fe947c25620e1c24a7e",
+        "role": "coreml_vision_model",
+        "sha256": "f3255dad62bda6c50021b4eac3bf764423dd52b198005480273e800faa1babb8",
+        "size_bytes": 91698362
+      },
+      {
+        "local_path": "TextEncoder.mlmodelc.zip",
+        "remote_path": "TextEncoder.mlmodelc.zip",
+        "repo_id": "zidage/siglip2-base-coreml-macos",
+        "revision": "5419f7d827b15c5d7e6e0fe947c25620e1c24a7e",
+        "role": "coreml_text_model",
+        "sha256": "ba64d0cac0695b5c0cd18c898382a5455ed74ac666c27421ee94047a3561a72e",
+        "size_bytes": 258591067
+      },
+      {
+        "local_path": "tokenizer.zip",
+        "remote_path": "tokenizer.zip",
+        "repo_id": "zidage/siglip2-base-coreml-macos",
+        "revision": "5419f7d827b15c5d7e6e0fe947c25620e1c24a7e",
+        "role": "tokenizer_archive",
+        "sha256": "c37f2a8e8555d8561109564c4f60ee962b0072abddcfcfd599d321469d6d1ef5",
+        "size_bytes": 5460173
+      },
+      {
+        "local_path": "manifest.json",
+        "remote_path": "manifest.json",
+        "repo_id": "zidage/siglip2-base-coreml-macos",
+        "revision": "5419f7d827b15c5d7e6e0fe947c25620e1c24a7e",
+        "role": "coreml_manifest",
+        "sha256": "5dd52b1bb33595d78da3377f6f974c2f195fc628a2554f9d09c232bfd35fb397",
+        "size_bytes": 669
+      }
+    ],
+    "display_name": "SigLIP2 Base CoreML macOS",
+    "embedding_dimension": 768,
+    "embedding_transform": "l2_normalize",
+    "engine_profile_id": "siglip2-coreml-native",
+    "image_size": 256,
+    "inference_backend": "native_coreml",
+    "language": "multilingual",
+    "license_name": "Apache-2.0",
+    "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+    "model_id": "zidage/siglip2-base-coreml-macos",
+    "native_embedding_dimension": 768,
+    "profile_id": "siglip2-base-256-coreml-macos",
+    "revision": "5419f7d827b15c5d7e6e0fe947c25620e1c24a7e"
+  }
+]
