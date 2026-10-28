@@ -227,6 +227,19 @@ auto SemanticModelRegistry::SetActiveModelKey(const std::string& model_key,
   return true;
 }
 
+auto SemanticModelRegistry::ClearActiveModel(std::string* error) const -> bool {
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  try {
+    duckorm::execute(guard.conn_, expr::raw("UPDATE SemanticModel SET active = FALSE"));
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+    return false;
+  }
+  RefreshActiveModelKey(guard.conn_);
+  return true;
+}
+
 auto SemanticModelRegistry::ListModels(std::string* error) const
     -> std::vector<SemanticModelRecord> {
   auto guard   = database_.GetConnectionGuard();

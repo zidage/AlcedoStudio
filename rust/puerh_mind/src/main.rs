@@ -24,10 +24,17 @@ fn run_server() -> anyhow::Result<()> {
     logging::init_logging();
     let config = config::AppConfig::load()?;
     // The CLIP profile is prepared on the first semantic request, not here: the AI Mask tool
-    // starts this process too and needs no CLIP model (#518).
-    let semantic_engine: Arc<dyn service::embedding::EmbeddingEngine> = Arc::new(
-        service::lazy_semantic_engine::LazySemanticEngine::new(&config.semantic, &config.residency),
-    );
+    // starts this process too and needs no CLIP model (#518). Without `--model-id` the open
+    // project has no active model: semantic requests report that, the other services run.
+    let semantic_engine: Arc<dyn service::embedding::EmbeddingEngine> =
+        if config.semantic.has_model() {
+            Arc::new(service::lazy_semantic_engine::LazySemanticEngine::new(
+                &config.semantic,
+                &config.residency,
+            ))
+        } else {
+            Arc::new(service::embedding::UnavailableEmbeddingEngine::no_model())
+        };
     let credential_vault = Arc::new(service::credential_vault::CredentialVault::new(
         if config.credential_ttl_ms == 0 {
             None

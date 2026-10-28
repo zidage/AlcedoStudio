@@ -61,7 +61,10 @@ struct AiSidecarRuntimeOptions {
   std::filesystem::path     provider_config_dir;
   std::string               host     = "127.0.0.1";
   uint16_t                  port     = 0;
-  std::string               model_id = "plhery/mobileclip2-onnx:s2";
+  /// The CLIP model of the open project's active model. Empty starts the sidecar without
+  /// `--model-id`: semantic requests then report that no model is active, and segmentation and
+  /// image analysis run (AI Models plan, P10).
+  std::string                         model_id;
   std::string               revision;
   std::string               hf_endpoint        = "https://hf-mirror.com";
   std::string               device             = "auto";

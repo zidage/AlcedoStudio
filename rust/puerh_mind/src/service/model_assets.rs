@@ -18,6 +18,18 @@ pub const RESOLVED_MANIFEST_FILE: &str = "alcedo_model_manifest.json";
 pub const REQUIRED_EMBEDDING_DIMENSION: u32 = 512;
 pub const SUPPORTED_EMBEDDING_DIMENSIONS: &[u32] = &[512, 768];
 
+/// Licenses of the CLIP model profiles (Hugging Face model cards, 2026-10-27). The C++ catalog
+/// (`model_asset_catalog.cpp`) holds the same values; `clip_model_profiles.json` checks both.
+pub const APPLE_AMLR_LICENSE_NAME: &str = "apple-amlr";
+pub const APPLE_AMLR_LICENSE_URL: &str =
+    "https://huggingface.co/apple/MobileCLIP2-S2/blob/main/LICENSE";
+pub const JINA_CLIP_LICENSE_NAME: &str = "cc-by-nc-4.0";
+pub const JINA_CLIP_LICENSE_URL: &str = "https://creativecommons.org/licenses/by-nc/4.0/";
+/// The SigLIP2 repositories that Alcedo uses have no license tag; the upstream Google SigLIP2
+/// weights are Apache-2.0.
+pub const SIGLIP2_LICENSE_NAME: &str = "Apache-2.0";
+pub const SIGLIP2_LICENSE_URL: &str = "https://www.apache.org/licenses/LICENSE-2.0";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssetRole {
@@ -95,7 +107,7 @@ impl InferenceBackend {
         match self {
             // TEMPORARY: the ONNX Runtime execution path hangs on macOS, so only
             // the native CoreML profile is offered there until it is fixed. Keep
-            // this in sync with the C++ gate in model_asset_catalog.cpp.
+            // this in sync with the C++ platform check in model_asset_catalog.cpp.
             InferenceBackend::OnnxRuntime => cfg!(not(target_os = "macos")),
             InferenceBackend::NativeCoreMl => cfg!(target_os = "macos"),
         }
@@ -126,6 +138,10 @@ pub struct ModelProfileSpec {
     pub native_embedding_dimension: u32,
     pub image_size: u32,
     pub embedding_transform: &'static str,
+    /// License name shown on the model card of the AI Models page.
+    pub license_name: &'static str,
+    /// Web page of the license text.
+    pub license_url: &'static str,
     pub assets: &'static [ModelAssetSpec],
 }
 
@@ -411,6 +427,8 @@ pub const MODEL_PROFILES: &[ModelProfileSpec] = &[
         native_embedding_dimension: REQUIRED_EMBEDDING_DIMENSION,
         image_size: 256,
         embedding_transform: "l2_normalize",
+        license_name: APPLE_AMLR_LICENSE_NAME,
+        license_url: APPLE_AMLR_LICENSE_URL,
         assets: MOBILECLIP2_ASSETS,
     },
     ModelProfileSpec {
@@ -425,6 +443,8 @@ pub const MODEL_PROFILES: &[ModelProfileSpec] = &[
         native_embedding_dimension: 1024,
         image_size: 512,
         embedding_transform: "matryoshka_truncate_then_l2_normalize",
+        license_name: JINA_CLIP_LICENSE_NAME,
+        license_url: JINA_CLIP_LICENSE_URL,
         assets: JINA_CLIP_ASSETS,
     },
     ModelProfileSpec {
@@ -439,6 +459,8 @@ pub const MODEL_PROFILES: &[ModelProfileSpec] = &[
         native_embedding_dimension: 768,
         image_size: 256,
         embedding_transform: "l2_normalize",
+        license_name: SIGLIP2_LICENSE_NAME,
+        license_url: SIGLIP2_LICENSE_URL,
         assets: SIGLIP2_B32_ASSETS,
     },
     ModelProfileSpec {
@@ -453,6 +475,8 @@ pub const MODEL_PROFILES: &[ModelProfileSpec] = &[
         native_embedding_dimension: 768,
         image_size: 256,
         embedding_transform: "l2_normalize",
+        license_name: SIGLIP2_LICENSE_NAME,
+        license_url: SIGLIP2_LICENSE_URL,
         assets: SIGLIP2_COREML_ASSETS,
     },
 ];
@@ -860,6 +884,94 @@ mod tests {
         } else {
             assert!(!has_coreml);
         }
+    }
+
+    /// The profile table as JSON, in the field names of `clip_model_profiles.json`.
+    fn catalog_json() -> serde_json::Value {
+        serde_json::Value::Array(
+            MODEL_PROFILES
+                .iter()
+                .map(|profile| {
+                    serde_json::json!({
+                        "profile_id": profile.profile_id,
+                        "display_name": profile.display_name,
+                        "model_id": profile.model_id,
+                        "revision": profile.revision,
+                        "engine_profile_id": profile.engine_profile_id,
+                        "inference_backend": profile.inference_backend.as_str(),
+                        "language": profile.language.as_str(),
+                        "embedding_dimension": profile.embedding_dimension,
+                        "native_embedding_dimension": profile.native_embedding_dimension,
+                        "image_size": profile.image_size,
+                        "embedding_transform": profile.embedding_transform,
+                        "license_name": profile.license_name,
+                        "license_url": profile.license_url,
+                        "assets": profile.assets.iter().map(|asset| serde_json::json!({
+                            "role": asset.role.as_str(),
+                            "repo_id": asset.repo_id,
+                            "revision": asset.revision,
+                            "remote_path": asset.remote_path,
+                            "local_path": asset.local_path,
+                            "size_bytes": asset.size_bytes,
+                            "sha256": asset.sha256,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    /// The C++ catalog test (`ModelAssetCatalogTest`) compares the C++ profile table with the
+    /// same file, so the two catalogs agree. Set `ALCEDO_WRITE_CLIP_CATALOG_FIXTURE=1` to write
+    /// the file from this table after a catalog change.
+    #[test]
+    fn profile_table_equals_the_shared_clip_catalog_file() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../alcedo_studio/tests/resources/clip_model_catalog/clip_model_profiles.json",
+        );
+        let expected = catalog_json();
+        if std::env::var_os("ALCEDO_WRITE_CLIP_CATALOG_FIXTURE").is_some() {
+            let mut text = serde_json::to_string_pretty(&expected).expect("catalog serializes");
+            text.push('\n');
+            std::fs::create_dir_all(path.parent().expect("fixture parent"))
+                .expect("fixture directory");
+            std::fs::write(&path, text).expect("fixture written");
+        }
+        let actual: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&path).expect("clip_model_profiles.json is readable"),
+        )
+        .expect("clip_model_profiles.json is JSON");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn every_profile_names_its_license() {
+        for profile in MODEL_PROFILES {
+            assert!(!profile.license_name.is_empty(), "{}", profile.profile_id);
+            assert!(
+                profile.license_url.starts_with("https://"),
+                "{}",
+                profile.profile_id
+            );
+        }
+        assert_eq!(
+            find_profile(MOBILECLIP2_ONNX_PROFILE).unwrap().license_name,
+            "apple-amlr"
+        );
+        assert_eq!(
+            find_profile("jina-clip-v2-int8-multilingual")
+                .unwrap()
+                .license_name,
+            "cc-by-nc-4.0"
+        );
+        assert_eq!(
+            find_profile(SIGLIP2_B32_PROFILE).unwrap().license_name,
+            "Apache-2.0"
+        );
+        assert_eq!(
+            find_profile(SIGLIP2_COREML_PROFILE).unwrap().license_name,
+            "Apache-2.0"
+        );
     }
 
     #[test]

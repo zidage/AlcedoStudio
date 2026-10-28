@@ -52,6 +52,9 @@ class SemanticModelRegistry {
   /// Make a registered model the only active one.
   [[nodiscard]] auto SetActiveModelKey(const std::string& model_key,
                                        std::string*       error = nullptr) const -> bool;
+  /// Leave no model active and keep every registered row. The open project then has no active
+  /// model, for example after the user removes the files of its active model.
+  [[nodiscard]] auto ClearActiveModel(std::string* error = nullptr) const -> bool;
   /// Every registered model (regardless of the active flag), newest first. The purge path uses
   /// it to find models whose profile is no longer installed.
   [[nodiscard]] auto ListModels(std::string* error = nullptr) const

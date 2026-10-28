@@ -804,7 +804,9 @@ auto AiSidecarRuntimeService::BuildArguments() const -> QStringList {
   if (!options_.model_root.empty()) {
     args << "--model-root" << QString::fromStdString(options_.model_root.string());
   }
-  args << "--model-id" << QString::fromStdString(options_.model_id);
+  if (!options_.model_id.empty()) {
+    args << "--model-id" << QString::fromStdString(options_.model_id);
+  }
   if (!options_.revision.empty()) {
     args << "--revision" << QString::fromStdString(options_.revision);
   }

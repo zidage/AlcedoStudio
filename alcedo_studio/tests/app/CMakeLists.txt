@@ -87,6 +87,23 @@ add_executable(DownloadServiceFakeAria2
 target_link_libraries(DownloadServiceFakeAria2 PRIVATE Qt6::Core)
 alcedo_register_test_target(DownloadServiceFakeAria2 app)
 
+# aria2c stand-in that answers the JSON-RPC calls of DownloadService and serves files from a
+# source directory (CLIP model install tests, AI Models plan AM3).
+add_executable(DownloadServiceRpcFakeAria2
+    ${ALCEDO_TEST_ROOT}/app/download_service_rpc_fake_aria2.cpp)
+target_link_libraries(DownloadServiceRpcFakeAria2 PRIVATE Qt6::Core Qt6::Network)
+alcedo_register_test_target(DownloadServiceRpcFakeAria2 app)
+
+# The C++ CLIP catalog equals the shared catalog file that the Rust catalog test also reads.
+add_executable(ModelAssetCatalogTest ${ALCEDO_TEST_ROOT}/app/model_asset_catalog_test.cpp)
+target_include_directories(ModelAssetCatalogTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_compile_definitions(ModelAssetCatalogTest PRIVATE
+    ALCEDO_CLIP_MODEL_CATALOG_FIXTURE="${ALCEDO_TEST_ROOT}/resources/clip_model_catalog/clip_model_profiles.json")
+target_link_libraries(ModelAssetCatalogTest PRIVATE ModelDownloadService JSON GTest::gtest_main)
+gtest_discover_tests(ModelAssetCatalogTest TEST_PREFIX "ModelAssetCatalogTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(ModelAssetCatalogTest app ci_core)
+
 add_executable(DownloadServiceTest
     ${ALCEDO_TEST_ROOT}/app/download_service_test.cpp
     ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
@@ -805,15 +822,15 @@ gtest_discover_tests(AiCredentialStoreTest TEST_PREFIX "AiCredentialStoreTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(AiCredentialStoreTest app ci_core)
 
-add_executable(SemanticGrpcDependencySmokeTest ${ALCEDO_TEST_ROOT}/app/semantic_grpc_dependency_smoke_test.cpp)
-target_include_directories(SemanticGrpcDependencySmokeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(SemanticGrpcDependencySmokeTest
+add_executable(SemanticGrpcDependencyLinkTest ${ALCEDO_TEST_ROOT}/app/semantic_grpc_dependency_link_test.cpp)
+target_include_directories(SemanticGrpcDependencyLinkTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(SemanticGrpcDependencyLinkTest
   puerhlab::grpc++
   puerhlab::protobuf
   GTest::gtest_main)
-gtest_discover_tests(SemanticGrpcDependencySmokeTest TEST_PREFIX "SemanticGrpcDependencySmokeTest."
+gtest_discover_tests(SemanticGrpcDependencyLinkTest TEST_PREFIX "SemanticGrpcDependencyLinkTest."
   PROPERTIES LABELS "ci_core_flow")
-alcedo_register_test_target(SemanticGrpcDependencySmokeTest app ci_core)
+alcedo_register_test_target(SemanticGrpcDependencyLinkTest app ci_core)
 
 add_executable(SemanticGenerationServiceTest ${ALCEDO_TEST_ROOT}/app/semantic_generation_service_test.cpp)
 target_include_directories(SemanticGenerationServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})

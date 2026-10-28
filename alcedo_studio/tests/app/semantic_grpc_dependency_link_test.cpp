@@ -10,7 +10,7 @@
 
 namespace alcedo {
 
-TEST(SemanticGrpcDependencySmokeTest, BundledGrpcAndProtobufAreConsumable) {
+TEST(SemanticGrpcDependencyLinkTest, BundledGrpcAndProtobufAreConsumable) {
   auto channel = grpc::CreateChannel("127.0.0.1:1", grpc::InsecureChannelCredentials());
   ASSERT_NE(channel, nullptr);
   EXPECT_GT(GOOGLE_PROTOBUF_VERSION, 0);

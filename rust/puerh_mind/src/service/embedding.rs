@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::service::encoder_residency::EncoderStatus;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EngineModelInfo {
     pub profile_id: String,
     pub model_id: String,
@@ -57,12 +57,29 @@ pub struct UnavailableEmbeddingEngine {
     reason: String,
 }
 
+/// `EngineModelInfo::provider` and reason of the engine of a process started without
+/// `--model-id`.
+pub const NO_SEMANTIC_MODEL_PROVIDER: &str = "no model";
+pub const NO_SEMANTIC_MODEL_REASON: &str =
+    "no semantic model is active for the open project; activate a model in Settings";
+
 impl UnavailableEmbeddingEngine {
     pub fn new(model_info: EngineModelInfo, reason: impl Into<String>) -> Self {
         Self {
             model_info,
             reason: reason.into(),
         }
+    }
+
+    /// The engine of a process started without `--model-id`.
+    pub fn no_model() -> Self {
+        Self::new(
+            EngineModelInfo {
+                provider: NO_SEMANTIC_MODEL_PROVIDER.to_string(),
+                ..EngineModelInfo::default()
+            },
+            NO_SEMANTIC_MODEL_REASON,
+        )
     }
 }
 

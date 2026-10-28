@@ -10,7 +10,7 @@ ColumnLayout {
     property var semanticController: null
     property var downloadController: null
     // Phase 2: the interaction-policy controller. The model/download/activate/
-    // generate gates below bind to its cached Q_PROPERTYs (re-evaluated on
+    // generate checks below bind to its cached Q_PROPERTYs (re-evaluated on
     // PolicyChanged) instead of the coarse !modelTaskRunning flags.
     property var interactionPolicy: null
     property string importPreference: "ask"
@@ -39,44 +39,8 @@ ColumnLayout {
     readonly property bool modelActivationRunning: hasController ? semanticController.modelActivationRunning : false
     readonly property string activeModelName: hasController ? semanticController.activeModelDisplayName : qsTr("No active model")
     readonly property string activeModelKey: hasController ? semanticController.activeModelKey : ""
-    readonly property string selectedModelSizeLabel: hasDownloadController ? downloadController.selectedModelSizeLabel : ""
-    readonly property bool selectedModelInstalled: hasDownloadController ? downloadController.selectedModelInstalled : false
-    readonly property bool selectedModelActive: hasController ? semanticController.selectedModelActive : false
-    readonly property string modelDownloadPhase: hasDownloadController ? downloadController.modelDownloadPhase : ""
-    readonly property int modelDownloadProgress: hasDownloadController ? downloadController.modelDownloadProgress : 0
-    readonly property real modelDownloadBytesDone: hasDownloadController ? downloadController.modelDownloadBytesDone : 0
-    readonly property real modelDownloadBytesTotal: hasDownloadController ? downloadController.modelDownloadBytesTotal : 0
-    readonly property int modelDownloadFilesDone: hasDownloadController ? downloadController.modelDownloadFilesDone : 0
-    readonly property int modelDownloadFilesTotal: hasDownloadController ? downloadController.modelDownloadFilesTotal : 0
-    readonly property string modelDownloadCurrentFile: hasDownloadController ? downloadController.modelDownloadCurrentFile : ""
-    readonly property string modelDownloadBytesLabel: hasDownloadController ? downloadController.modelDownloadBytesLabel : ""
-    readonly property string modelDownloadSpeedLabel: hasDownloadController ? downloadController.modelDownloadSpeedLabel : ""
-    readonly property string modelDownloadEtaLabel: hasDownloadController ? downloadController.modelDownloadEtaLabel : ""
-    // The controller's status text (errors, paths, completion messages). Shown
-    // as a muted detail line inside the status card only when nothing is busy,
-    // so the card stays the single source of model status.
-    readonly property string modelDownloadStatusDetail: hasDownloadController ? downloadController.modelDownloadStatusText : ""
-    readonly property string selectedModelDisplayName: {
-        if (!panel.hasDownloadController) {
-            return ""
-        }
-        const options = panel.downloadController.modelProfileOptions
-        const id = panel.downloadController.selectedModelProfileId
-        for (let i = 0; i < options.length; ++i) {
-            if (options[i].profileId === id) {
-                return options[i].label
-            }
-        }
-        return ""
-    }
-    // True while the worker is in a phase that hasn't started moving bytes yet
-    // (or is finalizing), so the progress bar shows indeterminate motion.
-    readonly property bool modelDownloadIndeterminate: panel.modelTaskRunning
-        && (panel.modelActivationRunning
-            || panel.modelDownloadPhase === "preparing"
-            || panel.modelDownloadPhase === "promoting"
-            || panel.modelDownloadPhase === "cancelled"
-            || panel.modelDownloadProgress <= 0)
+    // Profile whose removal waits for confirmation on its card.
+    property string pendingRemovalId: ""
 
     readonly property int progressTotal: hasController ? semanticController.total : 0
     readonly property int progressCompleted: hasController
@@ -156,19 +120,6 @@ ColumnLayout {
         return "ask"
     }
 
-    function modelProfileIndex(profileId) {
-        if (!panel.hasDownloadController) {
-            return 0
-        }
-        const options = panel.downloadController.modelProfileOptions
-        for (let i = 0; i < options.length; ++i) {
-            if (options[i].profileId === profileId) {
-                return i
-            }
-        }
-        return 0
-    }
-
     function endpointPresetIndex(preset) {
         if (preset === "huggingface") {
             return 1
@@ -201,37 +152,6 @@ ColumnLayout {
         onAccepted: {
             if (panel.hasDownloadController) {
                 panel.downloadController.SetModelDownloadDirectory(selectedFolder.toString())
-            }
-        }
-    }
-
-    QtObject {
-        id: modelComboModel
-        property string label: ""
-        property bool enabled: panel.hasDownloadController
-                               && (!panel.interactionPolicy
-                                   || panel.interactionPolicy.canChangeSemanticModel)
-        readonly property var entries: {
-            if (!panel.hasDownloadController)
-                return []
-            const src = panel.downloadController.modelProfileOptions || []
-            const mapped = []
-            for (let i = 0; i < src.length; ++i) {
-                mapped.push({
-                    value: src[i].profileId,
-                    label: src[i].label
-                })
-            }
-            return mapped
-        }
-        property int currentIndex: panel.hasDownloadController
-            ? panel.modelProfileIndex(panel.downloadController.selectedModelProfileId)
-            : 0
-        function selectIndex(index) {
-            const item = entries[index]
-            if (item && panel.hasDownloadController) {
-                panel.downloadController.SetSelectedModelProfileId(item.value)
-                panel.downloadController.RefreshSelectedModelStatus()
             }
         }
     }
@@ -305,7 +225,7 @@ ColumnLayout {
             panel.semanticController.RefreshAlbumSummary()
         }
         if (panel.hasDownloadController) {
-            panel.downloadController.RefreshSelectedModelStatus()
+            panel.downloadController.refreshModels()
         }
     }
 
@@ -314,13 +234,13 @@ ColumnLayout {
             panel.semanticController.RefreshAlbumSummary()
         }
         if (panel.hasDownloadController) {
-            panel.downloadController.RefreshSelectedModelStatus()
+            panel.downloadController.refreshModels()
         }
     }
 
     onDownloadControllerChanged: {
         if (panel.hasDownloadController) {
-            panel.downloadController.RefreshSelectedModelStatus()
+            panel.downloadController.refreshModels()
         }
     }
 
@@ -515,31 +435,10 @@ ColumnLayout {
         mutedTextColor: panel.mutedTextColor
         dividerColor: panel.dividerColor
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 16
+        Repeater {
+            model: panel.hasDownloadController ? panel.downloadController.models : []
 
-            Label {
-                Layout.preferredWidth: 180
-                text: qsTr("Model")
-                color: panel.textColor
-                font.pixelSize: 15
-                font.weight: 600
-            }
-
-            AdjustmentCombo {
-                id: modelBox
-                objectName: "semanticModelControl"
-                controlObjectName: "semanticModelCombo"
-                Layout.fillWidth: true
-                controlHeight: 36
-                showResetButton: false
-                model: modelComboModel
-            }
-        }
-
-        ModelStatusCard {
-            Layout.fillWidth: true
+            delegate: ModelRowCard {}
         }
 
         RowLayout {
@@ -671,51 +570,7 @@ ColumnLayout {
                 enabled: panel.hasDownloadController
                          && (!panel.interactionPolicy
                              || panel.interactionPolicy.canChangeModelDownloadSettings)
-                onClicked: panel.downloadController.RefreshSelectedModelStatus()
-            }
-
-            DialogActionButton {
-                kind: panel.modelDownloadRunning ? "warning" : "accent"
-                buttonWidth: 128
-                buttonHeight: 42
-                text: panel.modelDownloadRunning
-                      ? qsTr("Cancel")
-                      : qsTr("Download")
-                enabled: panel.hasDownloadController
-                         && (panel.modelDownloadRunning
-                             ? true
-                             : (!panel.modelActivationRunning
-                                 && (!panel.interactionPolicy
-                                     || panel.interactionPolicy.canChangeModelDownloadSettings)))
-                onClicked: {
-                    if (panel.modelDownloadRunning) {
-                        panel.downloadController.CancelSelectedModelDownload()
-                    } else {
-                        panel.downloadController.StartSelectedModelDownload()
-                    }
-                }
-            }
-
-            DialogActionButton {
-                kind: "danger"
-                buttonWidth: 112
-                buttonHeight: 42
-                text: qsTr("Delete")
-                enabled: panel.hasDownloadController
-                         && (!panel.interactionPolicy
-                             || panel.interactionPolicy.canChangeModelDownloadSettings)
-                onClicked: panel.downloadController.DeleteSelectedModel()
-            }
-
-            DialogActionButton {
-                kind: "accent"
-                buttonWidth: 128
-                buttonHeight: 42
-                text: qsTr("Activate")
-                enabled: panel.hasController
-                         && (!panel.interactionPolicy
-                             || panel.interactionPolicy.canChangeSemanticModel)
-                onClicked: panel.semanticController.ActivateSelectedModel()
+                onClicked: panel.downloadController.refreshModels()
             }
 
             Item { Layout.fillWidth: true }
@@ -852,20 +707,27 @@ ColumnLayout {
         }
     }
 
-    component ModelStatusCard: Rectangle {
+    // One CLIP model profile: its own download, cancel, removal (with confirmation), and
+    // activation for the open project. The AI Models page (AM4) replaces this card.
+    component ModelRowCard: Rectangle {
         id: card
 
-        readonly property bool downloading: panel.modelDownloadRunning
-        readonly property bool activating: panel.modelActivationRunning
+        required property var modelData
+        readonly property string profileId: card.modelData.profileId
+        readonly property bool downloading: card.modelData.busy
+        readonly property bool activating: panel.hasController
+                                           && panel.semanticController.activatingModelProfileId === card.profileId
         readonly property bool busy: card.downloading || card.activating
-        readonly property bool isActive: panel.selectedModelActive
-        readonly property bool isInstalled: panel.selectedModelInstalled
-        // Green when the selected model is the active one; muted when merely
-        // downloaded; danger red when not present locally. Accent while busy.
+        readonly property bool isInstalled: card.modelData.installed
+        readonly property bool isActive: panel.hasController
+                                         && card.isInstalled
+                                         && (panel.semanticController.activeModelProfileId === card.profileId
+                                             || panel.semanticController.activeModelProfileId === card.modelData.modelId)
+        readonly property bool confirmingRemoval: panel.pendingRemovalId === card.profileId
         readonly property color statusColor: card.busy
                                              ? panel.primaryAccent
                                              : (card.isActive
-                                                ? "#5BB37A"
+                                                ? appTheme.backgroundTaskFinishedColor
                                                 : (card.isInstalled
                                                    ? panel.mutedTextColor
                                                    : panel.dangerColor))
@@ -873,8 +735,11 @@ ColumnLayout {
             if (card.activating) {
                 return qsTr("Activating…")
             }
+            if (card.modelData.status === "canceling") {
+                return qsTr("Cancelling…")
+            }
             if (card.downloading) {
-                return qsTr("Downloading %1%").arg(panel.modelDownloadProgress)
+                return qsTr("Downloading %1%").arg(card.modelData.progress)
             }
             if (card.isActive) {
                 return qsTr("Active")
@@ -884,26 +749,21 @@ ColumnLayout {
             }
             return qsTr("Not downloaded")
         }
-        // Current file basename, shown while downloading so the card tells the
-        // user *what* is coming down — replaces the old standalone status line.
-        readonly property string currentFileName: {
-            const f = panel.modelDownloadCurrentFile
-            if (f.length === 0) {
-                return ""
-            }
-            const slash = f.lastIndexOf("/")
-            return slash >= 0 ? f.substring(slash + 1) : f
-        }
+        readonly property string detailText: card.modelData.error.length > 0
+                                             ? card.modelData.error
+                                             : card.modelData.message
 
         Layout.fillWidth: true
-        implicitHeight: inner.implicitHeight + 28
+        implicitHeight: rowInner.implicitHeight + 28
         radius: 10
         color: Qt.rgba(1, 1, 1, 0.08)
-        border.width: 1
-        border.color: Qt.rgba(card.statusColor.r, card.statusColor.g, card.statusColor.b, 0.35)
+        border.width: card.isActive ? 2 : 1
+        border.color: card.isActive
+                      ? appTheme.backgroundTaskFinishedColor
+                      : Qt.rgba(card.statusColor.r, card.statusColor.g, card.statusColor.b, 0.35)
 
         ColumnLayout {
-            id: inner
+            id: rowInner
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
@@ -919,96 +779,139 @@ ColumnLayout {
                     Layout.preferredHeight: 9
                     radius: 5
                     color: card.statusColor
-                    opacity: card.busy ? dotPulse.opacity : 1.0
+                }
+
+                Label {
+                    text: card.modelData.displayName
+                    color: panel.textColor
+                    font.pixelSize: 15
+                    font.weight: 800
                 }
 
                 Label {
                     text: card.statusText
-                    color: panel.textColor
-                    font.pixelSize: 14
-                    font.weight: 800
+                    color: panel.mutedTextColor
+                    font.pixelSize: 13
+                    font.weight: 700
                 }
 
                 Item { Layout.fillWidth: true }
 
-                // Total size on the right. Hidden while busy because the
-                // progress row below already shows "done / total".
                 Label {
-                    visible: !card.busy && panel.selectedModelSizeLabel.length > 0
-                    text: panel.selectedModelSizeLabel
+                    text: card.modelData.licenseName + "  ·  " + card.modelData.sizeLabel
                     color: panel.mutedTextColor
                     font.family: panel.dataFontFamily
-                    font.pixelSize: 13
+                    font.pixelSize: 12
                     font.weight: 700
                 }
             }
 
-            Label {
-                Layout.fillWidth: true
-                visible: panel.selectedModelDisplayName.length > 0
-                text: panel.selectedModelDisplayName
-                color: panel.textColor
-                font.pixelSize: 15
-                font.weight: 800
-                wrapMode: Text.Wrap
-            }
-
-            // Live progress: bar + byte count + current file. Shown only while
-            // a download or activation is running.
-            ColumnLayout {
+            ThemedProgressBar {
                 Layout.fillWidth: true
                 visible: card.busy
-                spacing: 5
-
-                ThemedProgressBar {
-                    Layout.fillWidth: true
-                    showDetails: panel.modelDownloadRunning
-                    progressValue: panel.modelDownloadProgress
-                    indeterminate: panel.modelDownloadIndeterminate
-                    leadingText: panel.modelActivationRunning
-                                 ? qsTr("Preparing model runtime…")
-                                 : panel.modelDownloadBytesLabel
-                    speedText: card.downloading ? panel.modelDownloadSpeedLabel : ""
-                    etaText: card.downloading ? panel.modelDownloadEtaLabel : ""
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    visible: card.downloading && card.currentFileName.length > 0
-                    text: qsTr("↓ %1").arg(card.currentFileName)
-                    color: panel.mutedTextColor
-                    font.family: panel.dataFontFamily
-                    font.pixelSize: 12
-                    font.weight: 500
-                    wrapMode: Text.Wrap
-                }
+                showDetails: card.downloading
+                progressValue: card.modelData.progress
+                indeterminate: card.activating || card.modelData.progress <= 0
+                leadingText: card.activating ? qsTr("Preparing model runtime…")
+                                             : card.modelData.bytesLabel
+                speedText: card.downloading ? card.modelData.speedLabel : ""
+                etaText: card.downloading ? card.modelData.etaLabel : ""
             }
 
-            // When idle, surface the controller's status text (errors, install
-            // path, "not checked", etc.) as a single muted detail line so the
-            // card remains the one place model state is reported.
             Label {
                 Layout.fillWidth: true
-                visible: !card.busy && panel.modelDownloadStatusDetail.length > 0
-                text: panel.modelDownloadStatusDetail
-                color: panel.mutedTextColor
+                visible: card.detailText.length > 0
+                text: card.detailText
+                color: card.modelData.error.length > 0 ? panel.dangerColor : panel.mutedTextColor
                 font.pixelSize: 12
                 font.weight: 500
                 wrapMode: Text.WordWrap
-                lineHeight: 1.25
             }
-        }
 
-        // Subtle pulse on the status dot while busy, so the card reads as
-        // "live" even when a mirror stalls for a second or two.
-        QtObject {
-            id: dotPulse
-            property real opacity: 1.0
-            SequentialAnimation on opacity {
-                running: card.busy
-                loops: Animation.Infinite
-                NumberAnimation { to: 0.35; duration: 700; easing.type: Easing.InOutSine }
-                NumberAnimation { to: 1.0; duration: 700; easing.type: Easing.InOutSine }
+            Label {
+                Layout.fillWidth: true
+                visible: card.confirmingRemoval
+                text: card.isActive
+                      ? qsTr("Remove this model? It is the active model of this project; the project then has no active model.")
+                      : qsTr("Remove this model?")
+                color: panel.textColor
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+
+                DialogActionButton {
+                    visible: !card.confirmingRemoval && !card.isInstalled
+                    kind: card.downloading ? "warning" : "accent"
+                    buttonWidth: 112
+                    buttonHeight: 36
+                    text: card.downloading ? qsTr("Cancel") : qsTr("Download")
+                    enabled: panel.hasDownloadController
+                             && (card.downloading
+                                 || (!panel.modelDownloadRunning
+                                     && (!panel.interactionPolicy
+                                         || panel.interactionPolicy.canChangeModelDownloadSettings)))
+                    onClicked: {
+                        if (card.downloading) {
+                            panel.downloadController.cancelInstall(card.profileId)
+                        } else {
+                            panel.downloadController.installModel(card.profileId)
+                        }
+                    }
+                }
+
+                DialogActionButton {
+                    visible: !card.confirmingRemoval && card.isInstalled
+                    kind: "accent"
+                    buttonWidth: 112
+                    buttonHeight: 36
+                    text: qsTr("Activate")
+                    enabled: panel.hasController
+                             && !card.isActive
+                             && !panel.modelActivationRunning
+                             && (!panel.interactionPolicy
+                                 || panel.interactionPolicy.canChangeSemanticModel)
+                    onClicked: panel.semanticController.activateModel(card.profileId)
+                }
+
+                DialogActionButton {
+                    visible: !card.confirmingRemoval && card.isInstalled
+                    kind: "danger"
+                    buttonWidth: 112
+                    buttonHeight: 36
+                    text: qsTr("Delete")
+                    enabled: panel.hasDownloadController
+                             && !card.busy
+                             && (!panel.interactionPolicy
+                                 || panel.interactionPolicy.canChangeModelDownloadSettings)
+                    onClicked: panel.pendingRemovalId = card.profileId
+                }
+
+                DialogActionButton {
+                    visible: card.confirmingRemoval
+                    kind: "danger"
+                    buttonWidth: 112
+                    buttonHeight: 36
+                    text: qsTr("Delete")
+                    onClicked: {
+                        panel.pendingRemovalId = ""
+                        panel.downloadController.removeModel(card.profileId)
+                    }
+                }
+
+                DialogActionButton {
+                    visible: card.confirmingRemoval
+                    kind: "normal"
+                    buttonWidth: 112
+                    buttonHeight: 36
+                    text: qsTr("Cancel")
+                    onClicked: panel.pendingRemovalId = ""
+                }
+
+                Item { Layout.fillWidth: true }
             }
         }
     }
