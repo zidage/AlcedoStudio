@@ -10,11 +10,9 @@ Item {
     objectName: "thumbnailGridView"
     clip: true
     readonly property color cardBg: appTheme.cardSurfaceColor
-    readonly property color cardBgSelected: appTheme.selectedTintColor
     readonly property color cardBgHover: appTheme.hoverColor
     readonly property color cardMuted: appTheme.textMutedColor
     readonly property color cardText: appTheme.textColor
-    readonly property color cardAccent: appTheme.accentColor
     readonly property color cardDanger: appTheme.dangerColor
     readonly property color cardDangerTint: appTheme.dangerTintColor
     readonly property int dataFontWeight: 500
@@ -43,9 +41,12 @@ Item {
     readonly property bool compactText: columns >= 8
     readonly property bool hideMetadata: columns >= 8
     readonly property bool hideAllText: columns >= 14
+    // 2 to 6 columns: the card stars are a control. At 8 and 11 columns a star is too small to
+    // hit, so the stars are display only and a click on them selects the card.
+    readonly property bool starsInteractive: columns <= 6
     readonly property int cardInset: columns >= 11 ? 4 : (columns >= 8 ? 6 : 8)
     readonly property int delegateGap: columns >= 11 ? 4 : (columns >= 8 ? 6 : 12)
-    readonly property int textAreaHeight: hideAllText ? 0 : (hideMetadata ? 18 : 42)
+    readonly property int textAreaHeight: hideAllText ? 0 : (hideMetadata ? 18 : 50)
     readonly property int titleFontSize: columns >= 11 ? 9 : (columns >= 8 ? 10 : 12)
     readonly property int metadataFontSize: columns >= 8 ? 8 : 10
     property bool _inZoomToCursor: false
@@ -68,6 +69,8 @@ Item {
     signal imageSelectionChanged(int elementId, int imageId, string fileName, bool isHdr,
                                  bool selected)
     signal replaceSelection(var items)
+    // A star click on the card of @p item (2 to 6 columns): rate that photo only.
+    signal ratingRequested(var item, int rating)
     signal imageFocused(var item, int index)
     signal contextMenuRequested(var item, real sceneX, real sceneY)
     signal zoomChanged(int zoomLevel)
@@ -808,6 +811,9 @@ Item {
         required property string captureDate
         required property int rating
         required property bool isHdr
+        required property bool isEdited
+        required property var editedAt
+        required property string editVersionName
         required property string tags
         required property string accent
         required property string thumbUrl
@@ -922,13 +928,47 @@ Item {
             readonly property bool isSelected: root.isImageSelected(elementId)
             readonly property bool isHovered: overlay.hoveredIndex === index
 
+            // Star (1 to 5) under the overlay point @p x, @p y, or 0 (see ThumbnailStarRating).
+            function starAtOverlay(x, y) {
+                if (!cardStars.visible || root.hideMetadata) {
+                    return 0
+                }
+                const p = overlay.mapToItem(cardStars, x, y)
+                return cardStars.starAt(p.x, p.y)
+            }
+
+            function ratingForStar(star) {
+                return cardStars.ratingForStar(star)
+            }
+
+            function editMarkAtOverlay(x, y) {
+                const mark = root.compactText ? compactEditMark : editMark
+                if (!mark.visible || root.hideAllText) {
+                    return false
+                }
+                const p = overlay.mapToItem(mark, x, y)
+                return p.x >= 0 && p.y >= 0 && p.x < mark.width && p.y < mark.height
+            }
+
+            Accessible.role: Accessible.ListItem
+            Accessible.name: {
+                const parts = [fileName,
+                               rating > 0 ? qsTr("%n star(s)", "", rating) : qsTr("Unrated")]
+                if (isEdited) {
+                    parts.push(qsTr("Edited"))
+                }
+                return parts.join(", ")
+            }
+            Accessible.selected: isSelected
+
         width: grid.cellWidth - root.delegateGap
         height: grid.cellHeight - root.delegateGap
         radius: root.columns >= 11 ? 6 : appTheme.panelRadius
-            color: isSelected ? root.cardBgSelected
-                   : (isHovered ? root.cardBgHover : root.cardBg)
+            // Monochrome selection: the normal card fill and a 2 px text-color outline, the
+            // same as AlbumSectionView; never an accent wash or frame.
+            color: isHovered ? root.cardBgHover : root.cardBg
             border.width: isSelected ? 2 : 0
-            border.color: root.cardAccent
+            border.color: root.cardText
         Behavior on color { ColorAnimation { duration: 120 } }
             Behavior on border.width { NumberAnimation { duration: 150 } }
             Behavior on x {
@@ -1134,18 +1174,86 @@ Item {
             height: root.textAreaHeight
             visible: root.textAreaHeight > 0
             spacing: root.compactText ? 0 : 2
-            Label {
-                visible: !root.hideAllText
-                text: fileName
-                color: root.cardText
-                font.family: appTheme.dataFontFamily
-                font.pixelSize: root.titleFontSize
-                font.weight: root.dataFontWeight
-                font.letterSpacing: root.dataLetterSpacing
-                elide: Text.ElideRight
+
+            // 8 and 11 columns: one line with the file name, the edit mark, and the filled
+            // stars. The file name elides first.
+            Item {
+                visible: root.compactText && !root.hideAllText
                 width: parent.width
-                height: root.compactText ? root.textAreaHeight : implicitHeight
-                verticalAlignment: Text.AlignVCenter
+                height: root.textAreaHeight
+
+                Label {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(0, parent.width - compactTrailing.width
+                                       - (compactTrailing.width > 0 ? 4 : 0))
+                    text: fileName
+                    color: root.cardText
+                    font.family: appTheme.dataFontFamily
+                    font.pixelSize: root.titleFontSize
+                    font.weight: root.dataFontWeight
+                    font.letterSpacing: root.dataLetterSpacing
+                    elide: Text.ElideRight
+                }
+
+                Row {
+                    id: compactTrailing
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 3
+
+                    ThumbnailEditMark {
+                        id: compactEditMark
+                        anchors.verticalCenter: parent.verticalCenter
+                        edited: isEdited
+                        editedAt: cardDelegate.editedAt
+                        versionName: editVersionName
+                        pointerOver: overlay.hoveredEditMarkIndex === index
+                    }
+
+                    ThumbnailStarRating {
+                        objectName: "thumbnailGridCompactStars"
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: rating > 0
+                        photoId: elementId
+                        rating: cardDelegate.rating
+                        interactive: false
+                        pixelSize: root.titleFontSize
+                    }
+                }
+            }
+
+            // 2 to 6 columns: file name and edit mark; camera line; date line with the stars.
+            Item {
+                visible: !root.compactText
+                width: parent.width
+                height: titleLabel.implicitHeight
+
+                Label {
+                    id: titleLabel
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.min(implicitWidth,
+                                    parent.width - (editMark.visible ? editMark.width + 4 : 0))
+                    text: fileName
+                    color: root.cardText
+                    font.family: appTheme.dataFontFamily
+                    font.pixelSize: root.titleFontSize
+                    font.weight: root.dataFontWeight
+                    font.letterSpacing: root.dataLetterSpacing
+                    elide: Text.ElideRight
+                }
+
+                ThumbnailEditMark {
+                    id: editMark
+                    anchors.left: titleLabel.right
+                    anchors.leftMargin: 4
+                    anchors.verticalCenter: parent.verticalCenter
+                    edited: isEdited
+                    editedAt: cardDelegate.editedAt
+                    versionName: editVersionName
+                    pointerOver: overlay.hoveredEditMarkIndex === index
+                }
             }
             Label {
                 visible: !root.hideMetadata
@@ -1158,38 +1266,41 @@ Item {
                 elide: Text.ElideRight
                 width: parent.width
             }
-            Row {
+            Item {
                 visible: !root.hideMetadata
                 width: parent.width
-                height: Math.max(ratingLabel.implicitHeight, hdrGridTag.height)
-                spacing: 5
+                height: Math.max(dateLabel.implicitHeight, cardStars.implicitHeight,
+                                 hdrGridTag.visible ? hdrGridTag.height : 0)
 
                 Label {
-                    id: ratingLabel
+                    id: dateLabel
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(0, (hdrGridTag.visible ? hdrGridTag.x : cardStars.x) - 4)
                     text: displayTags.length > 0
-                          ? qsTr("%1 | Rating %2/5 | %3").arg(captureDate).arg(rating).arg(displayTags)
-                          : qsTr("%1 | Rating %2/5").arg(captureDate).arg(rating)
+                          ? qsTr("%1 | %2").arg(captureDate).arg(displayTags)
+                          : captureDate
                     color: root.cardMuted
                     font.family: appTheme.dataFontFamily
                     font.pixelSize: root.metadataFontSize
                     font.weight: root.dataFontWeight
                     font.letterSpacing: root.dataLetterSpacing
                     elide: Text.ElideRight
-                    width: isHdr ? Math.max(0, parent.width - hdrGridTag.width - parent.spacing)
-                                 : parent.width
-                    anchors.bottom: parent.bottom
                 }
 
+                // Neutral HDR mark: the Library has no accent color.
                 Rectangle {
                     id: hdrGridTag
                     visible: isHdr
+                    anchors.right: cardStars.left
+                    anchors.rightMargin: 5
+                    anchors.verticalCenter: parent.verticalCenter
                     width: appTheme.iconSourceSizeCompact + appTheme.spaceSm
                     height: appTheme.spaceLg
                     radius: 3
-                    color: "#3A3020"
+                    color: appTheme.bgBaseColor
                     border.width: 1
-                    border.color: "#D8A93B"
-                    anchors.bottom: parent.bottom
+                    border.color: appTheme.textMutedColor
                     ColorImage {
                         anchors.centerIn: parent
                         width: appTheme.iconSourceSize
@@ -1197,8 +1308,21 @@ Item {
                         sourceSize.width: appTheme.iconSourceSize
                         sourceSize.height: appTheme.iconSourceSize
                         source: "qrc:/panel_icons/hdr.svg"
-                        color: "#F2C766"
+                        color: appTheme.textColor
                     }
+                }
+
+                ThumbnailStarRating {
+                    id: cardStars
+                    objectName: "thumbnailGridStars"
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    photoId: elementId
+                    rating: cardDelegate.rating
+                    interactive: root.starsInteractive
+                    cardHovered: cardDelegate.isHovered
+                    hoveredStar: overlay.hoveredIndex === index ? overlay.hoveredStar : 0
+                    pixelSize: root.titleFontSize
                 }
             }
         }
@@ -1217,6 +1341,13 @@ Item {
         preventStealing: true
 
         property int hoveredIndex: -1
+        // Star (1 to 5) under the pointer on the hovered card, or 0 (2 to 6 columns only).
+        property int hoveredStar: 0
+        // Card index whose edit mark is under the pointer, or -1.
+        property int hoveredEditMarkIndex: -1
+        // Star and card under the left press; a release on the same star rates the photo.
+        property int pressedStar: 0
+        property int pressedStarIndex: -1
         property point dragStart: Qt.point(0, 0)
         property point dragCurrent: Qt.point(0, 0)
         property real dragStartContentY: 0
@@ -1227,6 +1358,26 @@ Item {
 
         function gridIndexAt(viewX, viewY) {
             return grid.indexAt(viewX + grid.contentX, viewY + grid.contentY)
+        }
+
+        function starAt(idx, viewX, viewY) {
+            if (idx < 0 || !root.starsInteractive) {
+                return 0
+            }
+            const card = grid.itemAtIndex(idx)
+            return card ? card.starAtOverlay(viewX, viewY) : 0
+        }
+
+        function updatePointerTargets(viewX, viewY) {
+            hoveredIndex = gridIndexAt(viewX, viewY)
+            hoveredStar = starAt(hoveredIndex, viewX, viewY)
+            const card = hoveredIndex >= 0 ? grid.itemAtIndex(hoveredIndex) : null
+            hoveredEditMarkIndex = card && card.editMarkAtOverlay(viewX, viewY) ? hoveredIndex : -1
+        }
+
+        function hasSelectionModifier(modifiers) {
+            return ShortcutRegistry.modifierMatches("library.extendSelection", modifiers)
+                    || ShortcutRegistry.modifierMatches("library.toggleSelection", modifiers)
         }
 
         function dragStartContentTop() {
@@ -1340,7 +1491,7 @@ Item {
                     applyRubberBandSelection()
                 }
             }
-            hoveredIndex = gridIndexAt(mouse.x, mouse.y)
+            updatePointerTargets(mouse.x, mouse.y)
         }
 
         onPressed: function(mouse) {
@@ -1361,6 +1512,9 @@ Item {
             dragStartContentY = grid.contentY
             isDragging = false
             dragAdditive = false
+            pressedStarIndex = gridIndexAt(mouse.x, mouse.y)
+            pressedStar = hasSelectionModifier(mouse.modifiers)
+                    ? 0 : starAt(pressedStarIndex, mouse.x, mouse.y)
             mouse.accepted = true
         }
 
@@ -1369,6 +1523,22 @@ Item {
                 isDragging = false
                 return
             }
+            if (!isDragging && pressedStar > 0) {
+                // A click on a card star rates that photo only; the selection stays.
+                const idx = gridIndexAt(mouse.x, mouse.y)
+                const star = starAt(idx, mouse.x, mouse.y)
+                const card = idx >= 0 ? grid.itemAtIndex(idx) : null
+                const item = idx >= 0 ? root.selectionItemForIndex(idx) : null
+                if (idx === pressedStarIndex && star === pressedStar && card && item) {
+                    root.ratingRequested(item, card.ratingForStar(star))
+                }
+                pressedStar = 0
+                pressedStarIndex = -1
+                isDragging = false
+                return
+            }
+            pressedStar = 0
+            pressedStarIndex = -1
             if (!isDragging) {
                 const idx = gridIndexAt(mouse.x, mouse.y)
                 if (idx >= 0) {
@@ -1401,6 +1571,10 @@ Item {
 
         onDoubleClicked: function(mouse) {
             const idx = gridIndexAt(mouse.x, mouse.y)
+            // Two quick star clicks rate twice; they do not open the editor.
+            if (starAt(idx, mouse.x, mouse.y) > 0) {
+                return
+            }
             if (idx >= 0) {
                 const item = root.selectionItemForIndex(idx)
                 if (item) {
@@ -1410,7 +1584,11 @@ Item {
             }
         }
 
-        onExited: hoveredIndex = -1
+        onExited: {
+            hoveredIndex = -1
+            hoveredStar = 0
+            hoveredEditMarkIndex = -1
+        }
 
         onWheel: function(wheel) {
             // Ctrl+Scroll → zoom, otherwise → scroll
@@ -1427,7 +1605,7 @@ Item {
             if (isDragging) {
                 applyRubberBandSelection()
             }
-            hoveredIndex = gridIndexAt(wheel.x, wheel.y)
+            updatePointerTargets(wheel.x, wheel.y)
             wheel.accepted = true
         }
     }

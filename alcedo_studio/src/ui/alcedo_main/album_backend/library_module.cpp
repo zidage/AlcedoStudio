@@ -656,8 +656,9 @@ void LibraryModule::SubmitPendingRefresh() {
   });
 }
 
-auto LibraryModule::ItemFromRow(const SearchResultRow& row, const AlbumItem& display,
+auto LibraryModule::ItemFromRow(const AlbumQueryRow& query_row, const AlbumItem& display,
                                 sl_element_id_t folderId) -> AlbumItem {
+  const auto&   row         = query_row.photo_;
   const QString scope_type  = folderId == 0 ? QStringLiteral("root") : QStringLiteral("album");
   const auto    folder_path = folders_ ? folders_->CurrentFolderFsPath() : std::filesystem::path{};
   const auto    file_name   = conv::FromBytes(row.file_name_);
@@ -675,6 +676,10 @@ auto LibraryModule::ItemFromRow(const SearchResultRow& row, const AlbumItem& dis
   item.camera_model = QString::fromUtf8(row.camera_model_.c_str());
   item.lens         = QString::fromUtf8(row.lens_.c_str());
   item.rating       = row.rating_;
+  item.edited_at_ns      = query_row.edited_at_ns_;
+  item.edit_version_name = query_row.edited_at_ns_.has_value()
+                               ? QString::fromUtf8(query_row.edit_version_name_.c_str())
+                               : QString{};
   item.capture_date = QDate::fromString(QString::fromUtf8(row.capture_date_.c_str()), Qt::ISODate);
   item.import_date =
       row.added_time_.has_value()
@@ -716,7 +721,7 @@ void LibraryModule::PublishRefresh(const LibraryQueryInput& input, LibraryQueryO
         !seen.insert(row.photo_.file_id_).second) {
       continue;
     }
-    items.push_back(ItemFromRow(row.photo_, output.row_display_[i], input.folder_id_));
+    items.push_back(ItemFromRow(row, output.row_display_[i], input.folder_id_));
   }
 
   accepted_options_ = input.options_;
@@ -838,7 +843,7 @@ void LibraryModule::PublishPage(const LibraryQueryInput& input, LibraryQueryOutp
           FindAlbumItem(row.photo_.file_id_) != nullptr) {
         continue;
       }
-      batch.push_back(ItemFromRow(row.photo_, output.row_display_[i], input.folder_id_));
+      batch.push_back(ItemFromRow(row, output.row_display_[i], input.folder_id_));
     }
     loaded_occurrence_end_ = input.read_.offset_ + static_cast<int64_t>(rows.size());
     if (!batch.empty()) {
@@ -860,7 +865,7 @@ void LibraryModule::PublishPage(const LibraryQueryInput& input, LibraryQueryOutp
     const auto& row = rows[i];
     ids.push_back(row.photo_.file_id_);
     if (row.photo_.file_id_ != 0 && row.photo_.image_id_ != 0) {
-      (void)ItemFromRow(row.photo_, output.row_display_[i], input.folder_id_);
+      (void)ItemFromRow(row, output.row_display_[i], input.folder_id_);
     }
   }
   section_model_.StorePage(input.read_.offset_, ids, kMaxRetainedSectionPages);
@@ -1120,6 +1125,17 @@ void LibraryModule::SetAlbumItemHdrFlag(sl_element_id_t elementId, image_id_t im
   thumbnail_model_.updateHdrFlag(elementId, imageId, isHdr);
 }
 
+void LibraryModule::SetAlbumItemEditState(sl_element_id_t elementId, image_id_t imageId,
+                                          std::optional<std::int64_t> editedAtNs,
+                                          const QString&              versionName) {
+  const QString name = editedAtNs.has_value() ? versionName : QString{};
+  if (auto* item = FindAlbumItem(elementId);
+      item != nullptr && (imageId == 0 || item->image_id == imageId)) {
+    item->edited_at_ns      = editedAtNs;
+    item->edit_version_name = name;
+  }
+  thumbnail_model_.updateEditState(elementId, imageId, editedAtNs, name);
+}
 
 void LibraryModule::PersistImageHdrFlag(sl_element_id_t elementId, image_id_t imageId, bool isHdr) {
   auto proj = project_->handler().project();

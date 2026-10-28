@@ -7,8 +7,12 @@
 
 #include <QMetaObject>
 #include <QtGlobal>
+#include <cstdint>
+#include <optional>
+#include <vector>
 
 #include "editor_history_versions_rail_qml_harness.hpp"
+#include "ui/alcedo_main/album_backend/album_catalog.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -20,6 +24,82 @@ using rail_harness::StableId;
 using rail_harness::TypeText;
 
 class EditorVersionsPanelQmlTest : public RailQmlFixture {};
+
+/// Album catalog that records the edit states the editor session shows on the Library card.
+class RecordingAlbumCatalog final : public IAlbumCatalog {
+ public:
+  struct EditState {
+    sl_element_id_t             element_id = 0;
+    image_id_t                  image_id   = 0;
+    std::optional<std::int64_t> edited_at_ns;
+    QString                     version_name;
+  };
+
+  auto FindAlbumItem(sl_element_id_t) -> AlbumItem* override { return nullptr; }
+  auto FindAlbumItem(sl_element_id_t) const -> const AlbumItem* override { return nullptr; }
+  void AddOrUpdateAlbumItem(sl_element_id_t, image_id_t, sl_element_id_t, const QString&,
+                            const file_name_t&, const std::filesystem::path&) override {}
+  void SetAlbumItemHdrFlag(sl_element_id_t, image_id_t, bool) override {}
+  void SetAlbumItemEditState(sl_element_id_t element_id, image_id_t image_id,
+                             std::optional<std::int64_t> edited_at_ns,
+                             const QString&              version_name) override {
+    states.push_back({element_id, image_id, edited_at_ns, version_name});
+  }
+  void PersistImageHdrFlag(sl_element_id_t, image_id_t, bool) override {}
+  auto view_state() -> AlbumViewState& override { return view_state_; }
+  auto view_state() const -> const AlbumViewState& override { return view_state_; }
+  void ReloadFolderTree(const std::filesystem::path&) override {}
+  void ReloadCurrentFolder() override {}
+  bool LoadThumbnailWindow(const std::optional<FilterNode>&, bool) override { return false; }
+
+  std::vector<EditState> states;
+
+ private:
+  AlbumViewState view_state_;
+};
+
+// Issue #589: the edit mark of the photo open in the editor follows its history at once, before
+// the journaled edits reach storage: a new head (commit) shows the head commit time and the
+// active Version name, an undo back to the image root shows it as unedited, and a Version switch
+// reads the head and the name of the new active Version.
+TEST_F(EditorVersionsPanelQmlTest, OpenPhotoEditStateFollowsTheHistoryHeadInTheAlbumCatalog) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  RecordingAlbumCatalog catalog;
+  controller_.SetAlbumCatalog(&catalog);
+  const auto last_state = [&]() -> const RecordingAlbumCatalog::EditState& {
+    return catalog.states.back();
+  };
+
+  backend_.UndoToImageRoot();
+  ASSERT_TRUE(WaitFor([&] { return catalog.states.size() == 1u; }));
+  EXPECT_EQ(last_state().element_id, 1u);
+  EXPECT_EQ(last_state().image_id, 2u);
+  EXPECT_FALSE(last_state().edited_at_ns.has_value());
+
+  // Redo to the first commit (the fake history stamps a commit with its id as its time).
+  ASSERT_EQ(backend_.MoveHeadToCommit(StableId(11)).kind, EditorSessionResultKind::Accepted);
+  ASSERT_TRUE(WaitFor([&] { return catalog.states.size() == 2u; }));
+  ASSERT_TRUE(last_state().edited_at_ns.has_value());
+  EXPECT_EQ(*last_state().edited_at_ns, 11);
+  EXPECT_EQ(last_state().version_name, QStringLiteral("Base Look"));
+
+  // Version switch: the second Version's head is the first commit.
+  ASSERT_EQ(backend_.CheckoutVersion(StableId(2)).kind, EditorSessionResultKind::Accepted);
+  ASSERT_TRUE(WaitFor([&] { return catalog.states.size() == 3u; }));
+  ASSERT_TRUE(last_state().edited_at_ns.has_value());
+  EXPECT_EQ(*last_state().edited_at_ns, 11);
+  EXPECT_EQ(last_state().version_name, QStringLiteral("Alternate Look"));
+
+  // A new Version at the image root is unedited.
+  ASSERT_EQ(backend_.CreateRootVersion("Fresh").kind, EditorSessionResultKind::Accepted);
+  ASSERT_TRUE(WaitFor([&] { return catalog.states.size() == 4u; }));
+  EXPECT_FALSE(last_state().edited_at_ns.has_value());
+
+  // Closing the image keeps the last state: the close checkpoint writes it to storage.
+  ASSERT_EQ(backend_.Close(true).kind, EditorSessionResultKind::Accepted);
+  EXPECT_FALSE(WaitFor([&] { return catalog.states.size() != 4u; }, 200));
+  controller_.SetAlbumCatalog(nullptr);
+}
 
 TEST_F(EditorVersionsPanelQmlTest, ClickingNamedVersionChecksOutStableVersionId) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();

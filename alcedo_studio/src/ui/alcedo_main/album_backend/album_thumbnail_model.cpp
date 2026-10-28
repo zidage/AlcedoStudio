@@ -5,6 +5,8 @@
 #include "ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
 
 #include <QDate>
+#include <QDateTime>
+#include <QTimeZone>
 #include <algorithm>
 
 namespace alcedo::ui {
@@ -18,6 +20,17 @@ QString formatAperture(double v) {
 QString formatFocalLength(double v) {
   if (v <= 0.0) return QStringLiteral("--");
   return QString::number(v, 'f', 0);
+}
+
+/// Local time of the head commit of an edited photo; an empty QVariant when unedited.
+QVariant EditedAtValue(const AlbumItem& item) {
+  if (!item.edited_at_ns.has_value()) {
+    return {};
+  }
+  constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
+  return QDateTime::fromMSecsSinceEpoch(*item.edited_at_ns / kNanosecondsPerMillisecond,
+                                        QTimeZone::utc())
+      .toLocalTime();
 }
 }  // namespace
 
@@ -81,6 +94,12 @@ QVariant AlbumThumbnailModel::roleValue(const AlbumItem& item, int role) const {
       return item.thumb_missing_source;
     case ThumbErrorText:
       return item.thumb_error_text;
+    case IsEdited:
+      return item.edited_at_ns.has_value();
+    case EditedAt:
+      return EditedAtValue(item);
+    case EditVersionName:
+      return item.edit_version_name;
     default:
       return {};
   }
@@ -109,6 +128,9 @@ QHash<int, QByteArray> AlbumThumbnailModel::roleNames() const {
       {ThumbLoading, "thumbLoading"},
       {ThumbMissingSource, "thumbMissingSource"},
       {ThumbErrorText, "thumbErrorText"},
+      {IsEdited, "isEdited"},
+      {EditedAt, "editedAt"},
+      {EditVersionName, "editVersionName"},
   };
 }
 
@@ -243,6 +265,24 @@ bool AlbumThumbnailModel::updateRating(sl_element_id_t elementId, image_id_t ima
   return updated;
 }
 
+bool AlbumThumbnailModel::updateEditState(sl_element_id_t elementId, image_id_t imageId,
+                                          std::optional<std::int64_t> editedAtNs,
+                                          const QString&              versionName) {
+  const int row = rowByElementId(elementId);
+  if (row < 0 || row >= static_cast<int>(rows_.size())) return false;
+
+  auto& item = rows_[static_cast<size_t>(row)];
+  if (imageId != 0 && item.image_id != imageId) return false;
+  const QString name = editedAtNs.has_value() ? versionName : QString{};
+  if (item.edited_at_ns == editedAtNs && item.edit_version_name == name) return false;
+
+  item.edited_at_ns      = editedAtNs;
+  item.edit_version_name = name;
+  const QModelIndex idx  = index(row);
+  emit dataChanged(idx, idx, {IsEdited, EditedAt, EditVersionName});
+  return true;
+}
+
 bool AlbumThumbnailModel::updateHdrFlag(sl_element_id_t elementId, image_id_t imageId,
                                         bool isHdr) {
   const int row = rowByElementId(elementId);
@@ -270,6 +310,12 @@ QVariantMap AlbumThumbnailModel::getItemAt(int idx) const {
       {"fileName", item.file_name.isEmpty() ? QStringLiteral("(unnamed)") : item.file_name},
       {"rating", item.rating},
       {"isHdr", item.is_hdr},
+      {"captureDate", item.capture_date.isValid()
+                          ? item.capture_date.toString(QStringLiteral("yyyy-MM-dd"))
+                          : QStringLiteral("--")},
+      {"isEdited", item.edited_at_ns.has_value()},
+      {"editedAt", EditedAtValue(item)},
+      {"editVersionName", item.edit_version_name},
   };
 }
 

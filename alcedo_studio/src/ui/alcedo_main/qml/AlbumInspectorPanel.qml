@@ -114,7 +114,6 @@ ScrollView {
             DateFilterSection {
                 Layout.fillWidth: true
                 title: qsTr("By Capture Date")
-                accentColor: appTheme.toneSteel
                 model: appModules.stats.dateStats
                 selectedLabel: appModules.stats.statsFilterDate
                 folderKey: appModules.folders.currentFolderId
@@ -134,7 +133,6 @@ ScrollView {
                 objectName: "importDateFilterSection"
                 Layout.fillWidth: true
                 title: qsTr("By Import Time")
-                accentColor: appTheme.toneSteel
                 model: appModules.stats.importDateStats
                 selectedLabel: appModules.stats.statsFilterImportDate
                 folderKey: appModules.folders.currentFolderId
@@ -179,7 +177,6 @@ ScrollView {
             StatsCard {
                 Layout.fillWidth: true
                 title: qsTr("By Camera Model")
-                accentColor: appTheme.toneGold
                 model: appModules.stats.cameraStats
                 selectedLabel: appModules.stats.statsFilterCamera
                 displayMode: "chips"
@@ -195,7 +192,6 @@ ScrollView {
             StatsCard {
                 Layout.fillWidth: true
                 title: qsTr("By Labels")
-                accentColor: appTheme.toneSteel
                 model: appModules.stats.labelStats
                 selectedLabel: appModules.stats.statsFilterLabel
                 displayMode: "chips"
@@ -211,7 +207,6 @@ ScrollView {
             StarRatingFilter {
                 Layout.fillWidth: true
                 selectedRating: appModules.stats.statsFilterRating
-                accentColor: appTheme.toneGold
                 onStarClicked: function(rating) {
                     appModules.stats.ToggleStatsFilter("rating", rating);
                 }
@@ -228,7 +223,6 @@ ScrollView {
             StatsCard {
                 Layout.fillWidth: true
                 title: qsTr("By Lens")
-                accentColor: appTheme.toneGold
                 model: appModules.stats.lensStats
                 selectedLabel: appModules.stats.statsFilterLens
                 displayMode: "dots"
@@ -274,14 +268,6 @@ ScrollView {
                             anchors.leftMargin: 12
                             anchors.rightMargin: 8
                             spacing: 10
-
-                            Rectangle {
-                                Layout.preferredWidth: 9
-                                Layout.preferredHeight: 9
-                                radius: 4.5
-                                color: appTheme.toneGold
-                                Layout.alignment: Qt.AlignVCenter
-                            }
 
                             ColumnLayout {
                                 id: searchFilterColumn

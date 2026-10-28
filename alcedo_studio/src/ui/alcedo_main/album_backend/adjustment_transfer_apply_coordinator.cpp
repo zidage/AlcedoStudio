@@ -154,6 +154,14 @@ auto AdjustmentTransferApplyCoordinator::ApplyPackageToTargets(
       }
       const auto committed = pipeline_service.PersistHistory(base, graph);
       result.applied_ids_.push_back(element_id);
+      // The pasted Version is active and its head is the new commit, so the target is edited.
+      const auto& version = graph.GetActiveVersionRef();
+      if (version.head_commit_hash.has_value()) {
+        if (const auto* head = graph.FindCommit(*version.head_commit_hash)) {
+          outcome.edit_state_by_target_[element_id] = TargetEditState{
+              static_cast<std::int64_t>(head->GetCreatedAtNs()), version.display_name};
+        }
+      }
       // The planner requires a DRT node on the target, so the pasted document always has one.
       if (const auto* drt = committed->Document().Drt()) {
         outcome.hdr_by_target_[element_id] = IsHdrExportEncoding(*drt);
@@ -173,6 +181,11 @@ auto AdjustmentTransferApplyCoordinator::FinishApply(const TargetApplyOutcome& o
     const auto hdr = outcome.hdr_by_target_.find(element_id);
     RefreshOneTarget(element_id, hdr != outcome.hdr_by_target_.end() && hdr->second,
                      &hdr_metadata_dirty);
+    if (const auto edit_state = outcome.edit_state_by_target_.find(element_id);
+        edit_state != outcome.edit_state_by_target_.end()) {
+      library_->SetAlbumItemEditState(element_id, 0, edit_state->second.edited_at_ns_,
+                                      QString::fromStdString(edit_state->second.version_name_));
+    }
     emit TargetRefreshed(static_cast<uint>(element_id));
   }
   if (hdr_metadata_dirty) {

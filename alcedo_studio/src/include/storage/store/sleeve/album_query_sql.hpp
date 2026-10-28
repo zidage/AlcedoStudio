@@ -47,24 +47,32 @@ inline constexpr const char* kMatchSetTable = "SearchMatchSet";
 /// True when the options read the edit state relation (edit-day group or edit-time sort).
 [[nodiscard]] auto UsesEditStateRelation(const AlbumQueryOptions& options) -> bool;
 
+/// Whether a read projects the edit state of each photo. A page read does: every photo row
+/// carries its edit time and active Version name. Reads that return only positions, ids, or
+/// counts do not, so they join the edit state relation only when the options read it.
+enum class EditStateProjection : bool { kNotRead = false, kRead = true };
+
 /**
- * @brief `WITH <relations> ` that the options read: the label relations (LabelRelations) and
- *        the edit state relation (album_edit_state_sql::EditStateRelation, local day zone of
- *        the options). Empty when the options read neither.
+ * @brief `WITH <relations> ` that the read uses: the label relations (LabelRelations) and the
+ *        edit state relation (album_edit_state_sql::EditStateRelation, local day zone of the
+ *        options) when the options read it or @p projection is kRead. Empty when the read uses
+ *        neither.
  */
 [[nodiscard]] auto RelationsPrefix(const AlbumQueryOptions& options,
-                                   const std::string&       active_semantic_model_key)
-    -> duckorm::SqlFragment;
+                                   const std::string&       active_semantic_model_key,
+                                   EditStateProjection      projection) -> duckorm::SqlFragment;
 
 /**
  * @brief FROM clause of the ordered occurrence stream.
  *
  * @details One row per matching file, except for the label group, which has one row per
  * canonical label of a file and one unlabelled row for a file without a label (alias `m`).
- * The label sort joins label_sort (alias `ls`). The edit-day group and the edit-time sort
- * left-join edit_state (alias `es`), so an unedited file keeps its row with NULL edit values.
+ * The label sort joins label_sort (alias `ls`). The edit-day group, the edit-time sort, and a
+ * read with @p projection kRead left-join edit_state (alias `es`), so an unedited file keeps
+ * its row with NULL edit values.
  */
-[[nodiscard]] auto OccurrenceSource(const AlbumQueryOptions& options) -> duckorm::SqlFragment;
+[[nodiscard]] auto OccurrenceSource(const AlbumQueryOptions& options,
+                                    EditStateProjection      projection) -> duckorm::SqlFragment;
 
 /// Group key expression over the occurrence source; NULL is the unknown group. Empty for kNone.
 [[nodiscard]] auto GroupKeyExpression(AlbumGroupField field) -> duckorm::SqlFragment;

@@ -35,7 +35,8 @@ inline constexpr const char* kActiveHeadCommitJoin =
 
 /**
  * @brief `edit_state AS (...)`: one row per edited file of @p match_set_table with columns
- *        `file_id`, `edited_at_ns` (head commit time, UTC epoch nanoseconds), and `edit_day`.
+ *        `file_id`, `edited_at_ns` (head commit time, UTC epoch nanoseconds), `version_name`
+ *        (display name of the active Version), and `edit_day`.
  *
  * @param time_zone IANA zone of `edit_day`. Empty yields a NULL DATE.
  * @param match_set_table Table whose `file_id` column limits the relation.

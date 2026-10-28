@@ -529,6 +529,38 @@ Item {
         }
     }
 
+    // A star click on a Library card rates that one photo, not the selection, after the
+    // interaction policy check (an AI scoring run or a rating batch can hold the rating).
+    function requestSetCardImageRating(item, rating) {
+        const elementId = Number(item ? (item.elementId || item.fileId || 0) : 0)
+        const imageId = Number(item ? (item.imageId || 0) : 0)
+        if (elementId <= 0 || imageId <= 0) {
+            return
+        }
+        const policy = appModules.interactionPolicy.EvaluateEditImageRating(elementId)
+        if (policy && policy.allowed === false) {
+            if (policy.reason) {
+                host.showSnackbar(policy.reason)
+            }
+            return
+        }
+        const normalizedRating = Math.max(0, Math.min(5, Number(rating)))
+        const result = appModules.libraryMutations.RateTargetsAsUser([{
+            elementId: elementId,
+            imageId: imageId
+        }], normalizedRating)
+        if (result && result.success === true
+                && Number(root.focusedImageTarget.imageId || 0) === imageId) {
+            root.focusedImageTarget = Object.assign({}, root.focusedImageTarget, {
+                rating: Number(result.rating)
+            })
+            root.refreshFocusedImageInspection()
+        }
+        if (result && result.message) {
+            host.showSnackbar(result.message)
+        }
+    }
+
     function requestSetFocusedImageRating(rating) {
         if (!root.focusedImageTarget || Number(root.focusedImageTarget.imageId) <= 0) {
             return

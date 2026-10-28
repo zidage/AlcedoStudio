@@ -7,7 +7,6 @@ Item {
     implicitHeight: cardCol.implicitHeight
 
     property string title: ""
-    property color accentColor: appTheme.accentColor
     property var model: []
     property bool expanded: true
     readonly property int previewLimit: 10
@@ -82,9 +81,11 @@ Item {
         return Qt.rgba(color.r, color.g, color.b, alpha);
     }
 
+    // Neutral rank dots. A selected row sits on the light list well, so its dot uses the ink.
     function lensDotColor(index, isSelected) {
-        if (isSelected || index === 0) return card.accentColor;
-        if (index === 1) return appTheme.accentSecondaryColor;
+        if (isSelected) return appTheme.editorListSelectedInkColor;
+        if (index === 0) return appTheme.textColor;
+        if (index === 1) return appTheme.textMutedColor;
         if (index === 2) return card.withAlpha(appTheme.textMutedColor, 0.55);
         return card.withAlpha(appTheme.textMutedColor, 0.75);
     }
@@ -248,24 +249,26 @@ Item {
                         }
                     }
 
+                    // Selected row: the monochrome list well behind the bar.
+                    Rectangle {
+                        visible: isSelected
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 20
+                        radius: 3
+                        color: appTheme.editorListSelectedFillColor
+                    }
+
                     Rectangle {
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
                         width: parent.width * fraction
                         height: 20
                         radius: 3
-                        color: card.accentColor
-                        opacity: isSelected ? 0.55 : 0.18
-                    }
-
-                    Rectangle {
-                        visible: isSelected
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 3
-                        height: 16
-                        radius: 1.5
-                        color: card.accentColor
+                        color: isSelected ? appTheme.editorListSelectedInkColor
+                                          : appTheme.textMutedColor
+                        opacity: isSelected ? 0.18 : 0.3
                     }
 
                     RowLayout {
@@ -277,7 +280,8 @@ Item {
                         Label {
                             Layout.fillWidth: true
                             text: entryLabel
-                            color: appTheme.textColor
+                            color: isSelected ? appTheme.editorListSelectedInkColor
+                                              : appTheme.textColor
                             font.family: appTheme.dataFontFamily
                             font.pixelSize: 11
                             font.weight: 400
@@ -286,7 +290,8 @@ Item {
 
                         Label {
                             text: entryCount
-                            color: appTheme.textMutedColor
+                            color: isSelected ? appTheme.editorListSelectedInkColor
+                                              : appTheme.textMutedColor
                             font.family: appTheme.dataFontFamily
                             font.pixelSize: 11
                             font.weight: 500
@@ -331,13 +336,13 @@ Item {
                         radius: 19
                         implicitWidth: Math.min(chipLabel.implicitWidth + 28, 170)
                         color: isSelected
-                            ? card.withAlpha(appTheme.selectedTintColor, 0.26)
+                            ? appTheme.editorListSelectedFillColor
                             : chipHitArea.containsMouse
                                 ? card.withAlpha(appTheme.hoverColor, 0.78)
                                 : card.withAlpha(appTheme.bgBaseColor, 0.62)
                         border.width: 1
                         border.color: isSelected
-                            ? card.withAlpha(card.accentColor, 0.55)
+                            ? appTheme.editorListSelectedFillColor
                             : card.withAlpha(appTheme.glassStrokeColor, 0.35)
 
                         MouseArea {
@@ -355,7 +360,8 @@ Item {
                             horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.Wrap
                             text: entryLabel
-                            color: isSelected ? card.accentColor : appTheme.textColor
+                            color: isSelected ? appTheme.editorListSelectedInkColor
+                                              : appTheme.textColor
                             font.family: appTheme.uiFontFamily
                             font.pixelSize: 11
                             font.weight: isSelected ? 700 : 600
@@ -450,12 +456,10 @@ Item {
                         anchors.fill: parent
                         radius: 6
                         color: isSelected
-                            ? card.withAlpha(appTheme.bgBaseColor, 0.92)
+                            ? appTheme.editorListSelectedFillColor
                             : dotHitArea.containsMouse
                                 ? card.withAlpha(appTheme.hoverColor, 0.86)
                                 : "transparent"
-                        border.width: isSelected ? 1 : 0
-                        border.color: card.withAlpha(card.accentColor, 0.42)
                     }
 
                     MouseArea {
@@ -484,7 +488,7 @@ Item {
                         Label {
                             Layout.fillWidth: true
                             text: entryLabel
-                            color: isSelected ? appTheme.textColor
+                            color: isSelected ? appTheme.editorListSelectedInkColor
                                               : card.withAlpha(appTheme.textColor, 0.78)
                             font.family: appTheme.dataFontFamily
                             font.pixelSize: 12
@@ -495,7 +499,7 @@ Item {
                         Label {
                             text: entryCount
                             color: isSelected
-                                ? card.withAlpha(appTheme.textColor, 0.82)
+                                ? appTheme.editorListSelectedInkColor
                                 : appTheme.textMutedColor
                             font.family: appTheme.dataFontFamily
                             font.pixelSize: 12
@@ -551,7 +555,7 @@ Item {
 
                             Label {
                                 text: group ? group.year : ""
-                                color: group && group.containsSelected ? card.accentColor : appTheme.textColor
+                                color: appTheme.textColor
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: 13
                                 font.weight: 700
@@ -617,13 +621,13 @@ Item {
                                                 height: 50
                                                 radius: 3
                                                 color: isSelected
-                                                    ? card.withAlpha(appTheme.selectedTintColor, 0.18)
+                                                    ? appTheme.editorListSelectedFillColor
                                                     : dateHitArea.containsMouse
                                                         ? card.withAlpha(appTheme.hoverColor, 0.72)
                                                         : card.withAlpha(appTheme.bgBaseColor, 0.44)
                                                 border.width: 1
                                                 border.color: isSelected
-                                                    ? card.withAlpha(card.accentColor, 0.75)
+                                                    ? appTheme.editorListSelectedFillColor
                                                     : card.withAlpha(appTheme.glassStrokeColor, 0.18)
 
                                                 MouseArea {
@@ -641,7 +645,9 @@ Item {
                                                     Label {
                                                         anchors.horizontalCenter: parent.horizontalCenter
                                                         text: dayEntry ? dayEntry.day : ""
-                                                        color: isSelected ? card.accentColor : appTheme.textColor
+                                                        color: isSelected
+                                                            ? appTheme.editorListSelectedInkColor
+                                                            : appTheme.textColor
                                                         font.family: appTheme.dataFontFamily
                                                         font.pixelSize: 18
                                                         font.weight: 700
@@ -651,7 +657,7 @@ Item {
                                                         anchors.horizontalCenter: parent.horizontalCenter
                                                         text: dayEntry ? dayEntry.count : ""
                                                         color: isSelected
-                                                            ? card.withAlpha(card.accentColor, 0.9)
+                                                            ? appTheme.editorListSelectedInkColor
                                                             : appTheme.textMutedColor
                                                         font.family: appTheme.dataFontFamily
                                                         font.pixelSize: 11
@@ -686,7 +692,7 @@ Item {
             text: card.showAll
                 ? qsTr("Show less ▲")
                 : qsTr("Show all %1 ▼").arg(card.totalItems)
-            color: card.accentColor
+            color: appTheme.textMutedColor
             font.pixelSize: 10
             font.underline: true
             Layout.alignment: Qt.AlignHCenter

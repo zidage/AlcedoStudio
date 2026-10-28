@@ -6,7 +6,6 @@ Item {
     id: root
 
     property string selectedRating: ""
-    property color accentColor: appTheme.toneGold
     signal starClicked(string rating)
 
     readonly property int starCount: 5
@@ -19,22 +18,17 @@ Item {
 
     implicitHeight: ratingColumn.implicitHeight + appTheme.spaceSm
 
+    // Same star inks as the Library card rating: filled stars in textColor, the hover
+    // preview in textMutedColor, and the other stars in ratingStarEmptyColor.
     function starColor(starIndex) {
         const r = starIndex + 1;
         if (selectedRating !== "" && r <= Number(selectedRating)) {
-            return accentColor;
+            return appTheme.textColor;
         }
         if (hoveredRating > 0 && r <= hoveredRating) {
-            return Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.6);
+            return appTheme.textMutedColor;
         }
-        return appTheme.textMutedColor;
-    }
-
-    function starOpacity(starIndex) {
-        const r = starIndex + 1;
-        if (selectedRating !== "" && r <= Number(selectedRating)) return 1.0;
-        if (hoveredRating > 0 && r <= hoveredRating) return 0.7;
-        return 0.35;
+        return appTheme.ratingStarEmptyColor;
     }
 
     function starChar(starIndex) {
@@ -108,7 +102,6 @@ Item {
                     required property int index
                     text: root.starChar(index)
                     color: root.starColor(index)
-                    opacity: root.starOpacity(index)
                     font.pixelSize: 16
 
                     MouseArea {

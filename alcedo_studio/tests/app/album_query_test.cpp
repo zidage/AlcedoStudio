@@ -1053,6 +1053,75 @@ TEST_F(AlbumQueryTest, LastEditedFileAndEditedCountUseTheActiveHead) {
   EXPECT_EQ(store.ReadProjectOverview().edited_photo_count_, 3u);
 }
 
+// Issue #589: every page row carries the edit state of its photo (head commit time and name of
+// the active Version) in every presentation, not only when the edit-time sort or the edit-day
+// group reads the relation. A photo undone to the image root and a photo whose active Version
+// is at the root are unedited; a Version switch reads the head of the new active Version.
+TEST_F(AlbumQueryTest, PageRowsCarryTheActiveHeadEditStateInEveryPresentation) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  WriteFixtureEdits(project, ids_);
+  // c switches to a second Version whose head is a newer commit.
+  const auto c = std::to_string(ids_[2]);
+  RunStatement(project, "INSERT INTO EditCommit VALUES ('commit-" + c + "-warm', 'root-" + c +
+                            "', NULL, NULL, " + std::to_string(UtcNs(2026, 9, 6, 12)) +
+                            ", 0, '{}')");
+  RunStatement(project, "INSERT INTO VersionRef VALUES ('warm-" + c + "', " + c +
+                            ", 'Warm', "
+                            "'commit-" +
+                            c + "-warm', 0, 0)");
+  RunStatement(project, "UPDATE ImageEditState SET active_version_id = 'warm-" + c +
+                            "' WHERE element_id = " + c);
+  // a switches to a second Version at the image root.
+  const auto a = std::to_string(ids_[0]);
+  RunStatement(project,
+               "INSERT INTO VersionRef VALUES ('plain-" + a + "', " + a + ", 'Plain', '', 0, 0)");
+  RunStatement(project, "UPDATE ImageEditState SET active_version_id = 'plain-" + a +
+                            "' WHERE element_id = " + a);
+
+  struct ExpectedEditState {
+    std::optional<int64_t> edited_at_ns_;
+    std::string            version_name_;
+  };
+  // e keeps its first commit as head; d has no commit; f was undone to the root; b, g, and h
+  // have no edit history rows.
+  std::map<sl_element_id_t, ExpectedEditState> expected;
+  for (const auto id : ids_) {
+    expected[id] = {};
+  }
+  expected[ids_[2]] = {static_cast<int64_t>(UtcNs(2026, 9, 6, 12)), "Warm"};
+  expected[ids_[4]] = {static_cast<int64_t>(UtcNs(2026, 9, 1, 12)), "Default"};
+
+  const std::vector<AlbumQueryOptions> presentations{
+      AlbumQueryOptions{},
+      AlbumQueryOptions{.group_field_ = AlbumGroupField::kCameraModel},
+      AlbumQueryOptions{.sort_field_     = AlbumSortField::kEditTime,
+                        .sort_direction_ = SortDirection::kDescending},
+      AlbumQueryOptions{.group_field_ = AlbumGroupField::kEditDay, .local_day_time_zone_ = "UTC"},
+      AlbumQueryOptions{.group_field_ = AlbumGroupField::kLabels},
+  };
+  for (const auto& options : presentations) {
+    const auto result = ReadAll(project, options);
+    ASSERT_EQ(result.rows_.size(), ids_.size());
+    for (const auto& row : result.rows_) {
+      const auto& want = expected.at(row.photo_.file_id_);
+      EXPECT_EQ(row.edited_at_ns_, want.edited_at_ns_)
+          << Photo(row.photo_.file_id_).capture_at_ << " group "
+          << static_cast<int>(options.group_field_);
+      EXPECT_EQ(row.edit_version_name_, want.version_name_);
+    }
+  }
+
+  // A later page reads the same values.
+  const auto page =
+      Store(project).ReadAlbumQuery(0, std::nullopt, AlbumQueryOptions{}, kActiveModel,
+                                    AlbumQueryRead{.offset_ = 2, .limit_ = 3});
+  ASSERT_EQ(page.rows_.size(), 3u);
+  for (const auto& row : page.rows_) {
+    EXPECT_EQ(row.edited_at_ns_, expected.at(row.photo_.file_id_).edited_at_ns_);
+  }
+}
+
 /// Run @p setup, then @p sql on the same connection, and return column @p column of every row
 /// joined by newlines (EXPLAIN output).
 auto QueryColumnText(ProjectService& project, const std::string& setup, const std::string& sql,

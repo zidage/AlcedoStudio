@@ -207,10 +207,12 @@ Do not replace it with a blue selection slab, tinted well, or blue side stripe.
   error/warning or connection semantics retain their meaningful colors.
   Their colors must not be reused as selection decoration.
 
-The token table below also inventories existing implementation. In particular,
-the current `selectedTintColor` Library wash is a legacy accent use, not the
-pattern for new or changed selection. This policy update does not claim that
-all existing QML usages have already been replaced. Keep AppTheme values and
+The token table below also inventories existing implementation. The Library
+workspace no longer uses `selectedTintColor` or any theme accent, except the
+wordmark and the import progress ring (see "Library workspace chrome"). The
+remaining `selectedTintColor` use is a legacy accent use, not the pattern for
+new or changed selection. This policy update does not claim that all existing
+QML usages have already been replaced. Keep AppTheme values and
 this document synchronized when implementing a visual change; do not create a
 parallel palette to satisfy the policy.
 
@@ -237,7 +239,7 @@ parallel palette to satisfy the policy.
 | Background task working | `backgroundTaskWorkingColor` | Yellow status lamp for queued/running/canceling work |
 | Background task failed | `backgroundTaskFailedColor` | Red status lamp for failed work |
 | Active model border | `activeModelBorderColor` (`backgroundTaskFinishedColor`) | 2 px border of the AI model card that is active in the open project (Settings > AI Models) |
-| Selected tint | `selectedTintColor` | Legacy Library card wash; new or changed selection follows the monochrome rules above |
+| Selected tint | `selectedTintColor` | Legacy accent wash. The Library does not use it; the editor Mask type row (`EditorNodeMaskTypeRow.qml`) still does. New or changed selection follows the monochrome rules above |
 | Hover | `hoverColor` | Quiet hover wash |
 | Divider | `dividerColor` | Hairlines, card borders |
 | Glass panel | `glassPanelColor` | Translucent shells when needed |
@@ -258,8 +260,9 @@ parallel palette to satisfy the policy.
 | **List favorite active** | **`editorListFavoriteActiveColor`** | **Starred glyph on sunken rows** (existing, localized `accentColor` use) |
 | **List favorite idle on selected** | **`editorListFavoriteIdleOnSelectedColor`** | **Unstarred glyph inverted on the light well** |
 | **List favorite active on selected** | **`editorListFavoriteActiveOnSelectedColor`** | **Starred glyph inverted on the light well** (full ink) |
+| Rating star empty | `ratingStarEmptyColor` | Empty star of Library card ratings, the Inspector rating filter, and the photo Inspector rating; filled stars use `textColor`, the hover preview `textMutedColor` |
 | Filmstrip selected fill | `filmstripSelectedFillColor` | Light gray well of a filmstrip tile that is in the Library selection but not open in the editor (`cardSurfaceColor` blended 50% to `textMutedColor`) |
-| Thumbnail caption bar | `thumbnailCaptionBarColor` | `bgDeepColor` (alpha 200) caption under the file name and stars, below a filmstrip thumbnail image |
+| Thumbnail caption bar | `thumbnailCaptionBarColor` | `bgDeepColor` (alpha 200) caption under the file name and edit mark, below a filmstrip thumbnail image |
 
 **Monochrome inverted list selection:** dense catalogs (the LUT browser first) keep a
 black-and-white row language — sunken `bgBaseColor` track, light
@@ -307,14 +310,22 @@ in the Library changes only the selected state; opening an image from the
 strip (click, Left/Right) also makes it the only selected image, so keyboard
 navigation leaves one highlighted tile. The thumbnail fills the tile with a
 `spaceXs` inset. The frame holds the image and, below it, a fixed two-line
-`thumbnailCaptionBarColor` caption, so the caption never covers the photo. A
-rated image shows its five stars (`★`/`☆`, `dataFontFamily`) on the upper line,
-right-aligned; the file name (`textColor`, caption size, middle elision) uses
-the full width of the lower line. The caption keeps both lines for an unrated
-image, so every image in the strip has the same size. The tile width fits a 3:2
-image to the image height. The dock minimum and default height is 168 px
+`thumbnailCaptionBarColor` caption with one line, so the caption never covers
+the photo: the file name (`textColor`, caption size, middle elision) and the
+edit mark at the end of the line (see "Library thumbnail cards"). On the
+editing tile the caption sits on the `editorListSelectedFillColor` well, and
+the file name and the edit mark use `editorListSelectedInkColor`. The caption
+does not show the rating, the date, or the camera. The rating is an overlay on
+the photo: only the filled stars (`★`, white, `dataFontFamily`) at the
+bottom-right corner, on a short shade over the bottom part of the image only
+(`bgDeepColor` gradient from transparent to alpha 0.78). An unrated image has
+no overlay and no shade. There is no container around the stars, and they are
+display only: the user rates with the context menu and the keyboard shortcuts.
+Every image in the strip has the same size. The tile width fits a 3:2 image to
+the image height. The dock minimum and default height is 168 px
 (`EditorFilmstrip.minExpandedHeight`, `kFilmstripExpandedHeightMin`), which
-gives an image of about 80 px. There is no separate rating badge.
+gives an image of about 94 px (80 px with the former two-line caption). There
+is no separate rating badge.
 
 **Monochrome segmented controls (family):** four chrome sites share one language:
 
@@ -372,21 +383,80 @@ spacing ladder because the cells must stay dense enough for 365/366 days.
 | `dateGraphCellGap` | 3 | Gap between day squares (GitHub pitch) |
 | `dateGraphCellRadius` | 2 | Day-square corner |
 
-Intensity uses `toneSteel` (same accent as the calendar date filter), not GitHub
-green and not ad-hoc QML alpha:
+Intensity is a neutral ramp from `bgBaseColor` toward `textColor`. It is not
+GitHub green, not a theme accent, and not ad-hoc QML alpha:
 
 | Token | Use |
 | --- | --- |
-| `dateGraphLevel0Color` | Empty / padding day (`bgBase` toward `textMuted`) |
-| `dateGraphLevel1Color` | Lowest non-zero bucket |
-| `dateGraphLevel2Color` | Mid-low bucket |
-| `dateGraphLevel3Color` | Mid-high bucket |
-| `dateGraphLevel4Color` | Peak bucket (`toneSteel`) |
+| `dateGraphLevel0Color` | Empty / padding day (`bgBase` toward `textMuted`, 22%) |
+| `dateGraphLevel1Color` | Lowest non-zero bucket (`bgBase` toward `text`, 25%) |
+| `dateGraphLevel2Color` | Mid-low bucket (45%) |
+| `dateGraphLevel3Color` | Mid-high bucket (65%) |
+| `dateGraphLevel4Color` | Peak bucket (85%; stays below `textColor`) |
 
-Selected day keeps its level fill and adds a 1 px `accentColor` outline so
+Selected day keeps its level fill and adds a 1 px `textColor` outline so
 selection is not color-only. Month names sit above the week columns; there is
 no weekday gutter. Calendar / activity uses `SlidingIconNav`; the year
 picker reuses `AdjustmentCombo`. The day hover tip follows the pointer.
+
+### Library workspace chrome
+
+The Library workspace (grid, collections sidebar, Inspector, toolbar) is
+monochrome in both themes. A theme accent appears only on the "Alcedo"
+wordmark and the small import progress ring.
+
+| Surface | Treatment |
+| --- | --- |
+| Neutral filled action: Load Project (empty Library), Import From Folder, Export queue | `editorListSelectedFillColor` fill, `Qt.darker(…, 1.06)` on hover and press; text and icon in `editorListSelectedInkColor`. Disabled: `bgBaseColor` fill with `textMutedColor` ink |
+| Selected collection row | `editorListSelectedFillColor` well; name and folder icon in `editorListSelectedInkColor`. No side stripe. Hover is a quiet `hoverColor` wash |
+| New-collection name field | 1 px `textMutedColor` border on focus; text selection `textMutedColor` (alpha 0.6) with `textColor` text |
+| Grid zoom slider | `textColor` fill and handle on the `bgBaseColor` track; the handle has no border |
+| Inspector resize handle | `textMutedColor` on hover and drag |
+| Inspector stats cards (date calendar, By Camera Model, By Labels, By Lens) | Neutral bars (`textMutedColor`) and rank dots (`textColor`, then `textMutedColor`). The selected chip, row, or day tile is the `editorListSelectedFillColor` well with `editorListSelectedInkColor` text. Hover stays a `hoverColor` wash |
+| Rating filter and photo Inspector rating | Filled stars `textColor`, hover preview `textMutedColor`, other stars `ratingStarEmptyColor` |
+| Active search filter row | No marker dot; the row text names the filter |
+| Photo Inspector AI description | `sparkles.svg` in `textMutedColor` and a 3 px `dividerColor` rule |
+
+### Library thumbnail cards
+
+The Library cards (`ThumbnailGridView.qml` and the photo cells of
+`AlbumSectionView.qml`) and the editor filmstrip tiles use one language for the
+edit state and the rating. The shared parts are `ThumbnailEditMark.qml` and
+`ThumbnailStarRating.qml`.
+
+- **Selection:** the normal card fill and a 2 px `textColor` outline in both
+  views. Hover is the `hoverColor` wash. There is no accent wash or frame.
+- **Edit mark:** an edited photo (its active Version has a head commit, the
+  same rule as the edit groups and the edit-time sort) shows
+  `panel_icons/adjustments.svg` at the end of the file-name line, in
+  `textMutedColor`, at `iconSourceSizeCompact`. There is no container: no pill,
+  badge, or dot. An unedited photo shows no mark and no "Unedited" text. The
+  tooltip has two lines: the relative edit time ("Edited 2 hours ago",
+  "Edited yesterday", then the date) and the name of the active Version. The
+  mark of the photo open in the editor follows its history at once (commit,
+  undo, redo, Version switch, reset).
+- **Stars:** `★` / `☆` in `dataFontFamily`. Filled stars use `textColor`,
+  empty stars `ratingStarEmptyColor`, the hover preview `textMutedColor`.
+- **2 to 6 columns:** the date line shows the capture date (and the labels in
+  the flat grid) on the left and the five stars on the right. The stars are a
+  control. An unrated photo shows no stars at rest; the five empty stars fade
+  in (`motionFadeMs`) while the card is hovered. Hover previews the rating up to
+  the star under the pointer. A click sets that rating for that photo only
+  (`ImageController::SetImageRating` after `EvaluateEditImageRating`); a click
+  on the star of the current rating clears it to 0. Two quick star clicks do
+  not open the editor. After a rating change the filled stars appear one after
+  another, 30 ms apart, with a short scale settle in `motionFadeMs`;
+  `reduceMotion` makes it a cut. A multi-selection keeps the context menu and
+  keyboard paths.
+- **8 and 11 columns:** one caption line with the file name, the edit mark, and
+  only the filled stars; the file name elides first. The stars are display
+  only: no hover preview, no stars for an unrated photo, and a click on them is
+  a normal card click (selection).
+- **14 columns:** no caption, so no edit mark and no stars.
+- **HDR mark (flat grid):** a neutral chip (`bgBaseColor` fill, 1 px
+  `textMutedColor` border, `textColor` icon), not gold.
+- The accessible name of a card includes the rating ("3 stars", "Unrated") and
+  "Edited" for an edited photo.
 
 ### Library sort, group, and sections
 

@@ -515,6 +515,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     SyncViewportIdentity();
   void                     SyncViewportDisplayConfig();
   void                     SyncAlbumHdrFlagFromSnapshot();
+  /// Show the open photo's edit state (head commit time and name of the active Version) on
+  /// its Library card and filmstrip tile. Runs once per history revision, so a commit, an
+  /// undo or redo, a head move, a Version switch, and a reset update the edit mark at once,
+  /// before the journaled edits are written to storage.
+  void                     SyncAlbumEditStateFromHistory();
   void                     InstallBackendNotifier();
   void                     ApplyActionAvailability();
   void                     PublishRenderProgressIfChanged();

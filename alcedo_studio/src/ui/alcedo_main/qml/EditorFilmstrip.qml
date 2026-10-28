@@ -941,6 +941,9 @@ Item {
                     required property int imageId
                     required property string fileName
                     required property int rating
+                    required property bool isEdited
+                    required property var editedAt
+                    required property string editVersionName
                     required property string thumbUrl
                     required property bool thumbLoading
                     required property bool thumbMissingSource
@@ -970,9 +973,9 @@ Item {
                                                                    : qsTr("Source file was moved or deleted")
 
                     height: ListView.view ? ListView.view.height : 1
-                    // The image sits above a fixed two-line caption (stars, file
-                    // name); the tile width fits a 3:2 image to the image height.
-                    readonly property real captionAreaHeight: appTheme.lineHeightCaption * 2
+                    // The image sits above a fixed one-line caption (file name and
+                    // edit mark); the tile width fits a 3:2 image to the image height.
+                    readonly property real captionAreaHeight: appTheme.lineHeightCaption
                                                               + appTheme.spaceXs * 2
                     readonly property real imageAreaHeight: Math.max(
                         1, height - appTheme.spaceXs * 2 - 2 - captionAreaHeight)
@@ -981,11 +984,19 @@ Item {
                     Accessible.role: Accessible.ListItem
                     Accessible.name: fileName.length > 0 ? fileName
                                                          : qsTr("Image %1").arg(index + 1)
-                    Accessible.description: (isEditing
-                                             ? qsTr("Current image")
-                                             : (isLibrarySelected ? qsTr("Selected image")
-                                                                   : qsTr("Open image")))
-                                            + qsTr(" | Rating %1/5").arg(displayRating)
+                    Accessible.description: {
+                        const parts = [isEditing
+                                       ? qsTr("Current image")
+                                       : (isLibrarySelected ? qsTr("Selected image")
+                                                            : qsTr("Open image")),
+                                       displayRating > 0
+                                       ? qsTr("%n star(s)", "", displayRating)
+                                       : qsTr("Unrated")]
+                        if (isEdited) {
+                            parts.push(qsTr("Edited"))
+                        }
+                        return parts.join(", ")
+                    }
 
                     function releasePinnedThumbnail() {
                         if (pinnedElementId !== 0 && pinnedImageId !== 0 && root.libraryModule) {
@@ -1046,6 +1057,9 @@ Item {
                         saving: root.saving
                         renderBusy: root.renderBusy
                         displayRating: thumbnailDelegate.displayRating
+                        edited: thumbnailDelegate.isEdited
+                        editedAt: thumbnailDelegate.editedAt
+                        editVersionName: thumbnailDelegate.editVersionName
                         thumbnailMaxEdge: root.filmstripThumbnailMaxEdge
                     }
 

@@ -2957,6 +2957,20 @@ Original source files on disk will be kept.</source>
         <source>Open image</source>
         <translation>打开图像</translation>
     </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation>未评分</translation>
+    </message>
+    <message>
+        <source>Edited</source>
+        <translation>已编辑</translation>
+    </message>
 </context>
 <context>
     <name>EditorFilmstripThumbnailCard</name>
@@ -7132,6 +7146,24 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Source file was moved or deleted</source>
         <translation>源文件已被移动或删除</translation>
     </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation>未评分</translation>
+    </message>
+    <message>
+        <source>Edited</source>
+        <translation>已编辑</translation>
+    </message>
+    <message>
+        <source>%1 | %2</source>
+        <translation>%1 | %2</translation>
+    </message>
 </context>
 <context>
     <name>TopToolbar</name>
@@ -8048,6 +8080,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
             <numerusform>%n 张照片</numerusform>
         </translation>
     </message>
+    <message>
+        <source>Edited</source>
+        <translation>已编辑</translation>
+    </message>
 </context>
 <context>
     <name>alcedo::ui::ApplicationCloseCoordinator</name>
@@ -8435,6 +8471,50 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>The download was canceled.</source>
         <translation>下载已取消。</translation>
+    </message>
+</context>
+<context>
+    <name>ThumbnailStarRating</name>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation>未评分</translation>
+    </message>
+</context>
+<context>
+    <name>ThumbnailEditMark</name>
+    <message>
+        <source>Edited</source>
+        <translation>已编辑</translation>
+    </message>
+    <message>
+        <source>Edited just now</source>
+        <translation>刚刚编辑</translation>
+    </message>
+    <message numerus="yes">
+        <source>Edited %n minute(s) ago</source>
+        <translation>
+            <numerusform>%n 分钟前编辑</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Edited %n hour(s) ago</source>
+        <translation>
+            <numerusform>%n 小时前编辑</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Edited yesterday</source>
+        <translation>昨天编辑</translation>
+    </message>
+    <message>
+        <source>Edited %1</source>
+        <translation>编辑于 %1</translation>
     </message>
 </context>
 </TS>

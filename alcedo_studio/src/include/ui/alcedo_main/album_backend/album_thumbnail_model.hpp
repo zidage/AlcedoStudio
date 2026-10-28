@@ -10,6 +10,8 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
+#include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -48,6 +50,9 @@ class AlbumThumbnailModel : public QAbstractListModel {
     ThumbLoading,
     ThumbMissingSource,
     ThumbErrorText,
+    IsEdited,
+    EditedAt,
+    EditVersionName,
   };
 
   explicit AlbumThumbnailModel(QObject* parent = nullptr);
@@ -83,6 +88,12 @@ class AlbumThumbnailModel : public QAbstractListModel {
 
   /// Patch rating for the currently loaded row — emits dataChanged for Rating only.
   bool updateRating(sl_element_id_t elementId, image_id_t imageId, int rating);
+
+  /// Patch the edit state of the loaded row of @p elementId: the head commit time of the active
+  /// Version (empty when unedited) and its display name. Emits dataChanged for IsEdited,
+  /// EditedAt, and EditVersionName. Returns false when the row is not loaded or did not change.
+  bool updateEditState(sl_element_id_t elementId, image_id_t imageId,
+                       std::optional<std::int64_t> editedAtNs, const QString& versionName);
 
   /// Patch HDR export marker for the currently loaded row — emits dataChanged for IsHdr only.
   bool updateHdrFlag(sl_element_id_t elementId, image_id_t imageId, bool isHdr);

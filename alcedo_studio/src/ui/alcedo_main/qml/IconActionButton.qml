@@ -54,7 +54,8 @@ Item {
     property color fillHover: appTheme.buttonHoveredFillColor
     property color fillPressed: appTheme.buttonPressedFillColor
     property color fillSelected: appTheme.buttonSelectedFillColor
-    property color focusRingColor: appTheme.accentColor
+    // Keyboard focus without selection: a quiet neutral ring (DESIGN.md), never the accent.
+    property color focusRingColor: appTheme.textMutedColor
 
     readonly property int hitSize: compact
                                    ? appTheme.iconButtonHitSizeCompact

@@ -446,6 +446,18 @@ labels.
   so a collapsed section keeps its actions. The slot is empty for other callers.
 - Titles wrap. When the title and the actions do not fit on one line, the whole
   action row moves below the title. Do not clip the checkbox hit area.
+- No theme accent and no `accentColor` property. Bars are `textMutedColor`; lens
+  rank dots are `textColor`, then `textMutedColor`. The selected chip, row, or
+  day tile is the `editorListSelectedFillColor` well with
+  `editorListSelectedInkColor` text. Hover stays a `hoverColor` wash.
+- `StarRatingFilter`: filled stars `textColor`, hover preview `textMutedColor`,
+  other stars `ratingStarEmptyColor`.
+
+### `DateCommitGraph.qml`
+
+- Day cells use the neutral `dateGraphLevel0Color`..`dateGraphLevel4Color` ramp
+  (`bgBaseColor` toward `textColor`). The selected day adds a 1 px `textColor`
+  outline. No theme accent.
 
 ### `AlbumInspectorPanel.qml`
 
@@ -453,6 +465,55 @@ labels.
 - The import-time section reuses `DateFilterSection` with `activityAvailable:
   false`: calendar tiles only, no activity graph and no style switch. It has its
   own day selection; it shares the renderer, not the selected value.
+- The cards get no accent color. The active search filter row has no marker
+  dot; its text names the filter.
+
+### `ImageInspectorPanel.qml`
+
+- The rating stars use the same inks as the rating filter. The AI description
+  mark (`sparkles.svg`) is `textMutedColor` and its rule is `dividerColor`.
+
+### `CollectionsPanel.qml`
+
+- The "Alcedo" wordmark keeps the theme accent (documented use).
+- The selected collection row is the `editorListSelectedFillColor` well; its
+  name and folder icon (`ColorImage`) use `editorListSelectedInkColor`. No side
+  stripe.
+- The new-collection name field has a 1 px `textMutedColor` focus border and a
+  neutral text selection.
+- Import From Folder is the neutral filled action: `editorListSelectedFillColor`
+  fill (darker on hover and press), text and icon in
+  `editorListSelectedInkColor`; disabled uses `bgBaseColor` with
+  `textMutedColor` ink.
+
+### `ThumbnailEditMark.qml`, `ThumbnailStarRating.qml`
+
+- Shared by the Library cards and the filmstrip tiles (DESIGN.md "Library
+  thumbnail cards").
+- The edit mark is `panel_icons/adjustments.svg` in `textMutedColor` at
+  `iconSourceSizeCompact`, with no container. It shows only for an edited photo.
+  Its tooltip has two lines: the relative edit time and the active Version
+  name.
+- The stars are `★`/`☆` in `dataFontFamily`: filled `textColor`, empty
+  `ratingStarEmptyColor`, hover preview `textMutedColor`. As a control, the
+  empty stars of an unrated photo fade in on card hover, and the filled stars
+  of a new rating appear 30 ms apart with a short scale settle (a cut with
+  `reduceMotion`). As display, only the filled stars show.
+
+### `ThumbnailGridView.qml`
+
+- Selected card: the normal card fill and a 2 px `textColor` outline, the same
+  as `AlbumSectionView`. No `selectedTintColor` wash and no accent border.
+- 2 to 6 columns: the file name with the edit mark; the camera line; the date
+  line with the capture date and labels on the left, the HDR chip, and the
+  five-star control on the right. The input overlay hit-tests the stars: hover
+  previews, a click rates that photo only, and a click on the current star
+  clears it.
+- 8 and 11 columns: one line with the file name, the edit mark, and the filled
+  stars; the file name elides first. A click on the stars selects the card.
+- 14 columns: no caption.
+- The HDR chip is neutral: `bgBaseColor` fill, 1 px `textMutedColor` border,
+  `textColor` icon.
 
 ### `AlbumSectionView.qml`
 
@@ -465,6 +526,10 @@ labels.
 - Photo cells use `cardSurfaceColor`, `hoverColor` on hover, and a neutral
   selection outline (2 px `textColor`); keyboard focus without selection is a
   1 px `textMutedColor` outline. No blue frame or tint.
+- Photo cell caption: at 2 to 6 columns the file name with the edit mark, and
+  the capture date with the five-star control; at 8 and 11 columns one line
+  with the file name, the edit mark, and the filled stars (display only); at
+  14 columns no caption.
 - Expand all and Collapse all are muted caption text actions above the list.
 
 ### `LibraryWorkspace.qml`
@@ -475,12 +540,31 @@ labels.
   failed query shows the error in `dangerColor` with a compact Retry
   `DialogActionButton`. A successful empty filtered result shows No Matching
   Photos.
+- Load Project (empty Library) and the Export queue button are the neutral
+  filled action of `CollectionsPanel.qml` (Import From Folder). No gradient and
+  no `#457B9D`.
+- The grid zoom slider has a `textColor` fill and handle on the `bgBaseColor`
+  track. The Inspector resize handle shows `textMutedColor` on hover and drag.
+
+### `EditorFilmstripThumbnailCard.qml`
+
+- One caption line: the file name (middle elision) and the edit mark at the
+  end. On the editing tile the caption sits on the `editorListSelectedFillColor`
+  well and uses `editorListSelectedInkColor`.
+- Rating overlay: only the filled stars, white, at the bottom-right corner of
+  the photo, on a short `bgDeepColor` shade over the bottom part of the image.
+  No overlay and no shade for an unrated photo. Display only.
+- The image is about 94 px high at the 168 px dock minimum.
 
 ### Manual review
 
 Review in Alcedo and Classic themes, at a narrow Inspector width, with the
 Inspector closed, with collapsed groups, with a failed query, and with an empty
-filtered result.
+filtered result. No accent color is visible in the Library workspace except the
+wordmark and the import progress ring. Check the cards at 4, 8, and 14 columns
+in the flat and the grouped view (edit mark, stars, hover preview, star click),
+and the filmstrip tiles (edit mark after a commit and after an undo to the
+image root, star overlay, editing tile ink).
 
 
 ## Folder import (large folder import refactor)
