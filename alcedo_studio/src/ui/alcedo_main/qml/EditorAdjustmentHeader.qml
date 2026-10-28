@@ -4,10 +4,11 @@ import QtQuick.Layouts
 
 // Selected-node name, image-owned EXIF tokens, and Mask tool buttons under the
 // scope slot. Node switching does not reread EXIF; the session publishes the
-// four tokens when the open image identity changes. Add Radial / Add Gradient
-// arm creation on the selected Color Grade. On a locked (deletion-protected)
-// Color Grade the stored Default Behavior decides: ask, insert a new layer
-// first, or draw on the locked node.
+// four tokens when the open image identity changes. Add Radial / Add Gradient /
+// Add AI Mask arm creation on the selected Color Grade. On a locked
+// (deletion-protected) Color Grade the stored Default Behavior decides: ask,
+// insert a new layer first, or draw on the locked node. Edit AI Mask opens the
+// selected AI Mask and creates nothing, so it does not ask.
 Item {
     id: root
     objectName: "editorAdjustmentHeader"
@@ -42,6 +43,11 @@ Item {
     readonly property color colIconMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
 
     function beginMaskTool(kind) {
+        if (kind === "aiSegmentation") {
+            if (root.aiMaskTool)
+                root.aiMaskTool.open()
+            return
+        }
         if (!root.maskCreation)
             return
         if (kind === "radial")
@@ -80,7 +86,7 @@ Item {
     function requestMaskTool(kind) {
         root.pendingMaskToolKind = ""
         root.pendingMaskToolNodeId = ""
-        if (!root.maskCreation)
+        if (kind === "aiSegmentation" ? !root.aiMaskTool : !root.maskCreation)
             return
         const action = root.editorBehavior
                        ? String(root.editorBehavior.lockedNodeMaskAction || "ask")
@@ -289,7 +295,7 @@ Item {
                         if (aiMaskSelected)
                             root.aiMaskTool.openSelectedMask()
                         else
-                            root.aiMaskTool.open()
+                            root.requestMaskTool("aiSegmentation")
                     }
                 }
             }

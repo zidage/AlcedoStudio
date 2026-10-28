@@ -23,7 +23,7 @@ Popup {
     /// False while the node graph has an unfinished draft; a new layer cannot
     /// be inserted then.
     property bool canCreateLayer: true
-    /// Mask tool that opened the prompt: "radial" or "linear".
+    /// Mask tool that opened the prompt: "radial", "linear", or "aiSegmentation".
     property string toolKind: ""
 
     signal newLayerRequested(string toolKind)
