@@ -8,14 +8,20 @@ import QtQuick.Layouts
 // state. Controls are icon buttons with tooltips: the four tasks, the People list, the prompt
 // tools Point / Box / Path with Add / Subtract, the click level, Feather, Expand, and the
 // temporary Undo / Redo. A running operation shows the working border around the whole panel
-// and the stage progress at its bottom; there is no busy text.
+// and the stage progress at its bottom; there is no busy text. Without a usable installed AI
+// Mask model set (AI Models plan, AM5) the panel shows only that state and "Open AI Models".
 Rectangle {
     id: root
     objectName: "editorAiMaskPanel"
 
     property var tool: null
     property var maskCreation: null
+    // Opens Settings (openAiModelSettings); null in panel tests without the application.
+    property var host: null
     readonly property bool toolReady: !!(tool && tool.ready)
+    // The installed AI Mask model set stopped the Open; "" when it did not.
+    readonly property string modelSetState: tool && tool.modelSetState ? tool.modelSetState : ""
+    readonly property bool modelSetMissing: modelSetState.length > 0
     readonly property bool canStep: toolReady && !tool.busy
     readonly property bool busy: !!(tool && tool.busy)
     readonly property color colText: appTheme.textColor
@@ -42,6 +48,28 @@ Rectangle {
         case "committing": return qsTr("Saving the Mask")
         }
         return ""
+    }
+
+    function modelSetText(state) {
+        switch (state) {
+        case "notInstalled":
+            return qsTr("The AI Mask models are not installed. Download them on the AI Models page in Settings.")
+        case "updateRequired":
+            return qsTr("The installed AI Mask models are too old for this version of Alcedo Studio. Update them on the AI Models page in Settings.")
+        case "needsNewerApplication":
+            return qsTr("The AI Mask models need a newer version of Alcedo Studio. Update Alcedo Studio to use AI Mask.")
+        case "repairRequired":
+            return qsTr("The installed AI Mask models are incomplete. Repair them on the AI Models page in Settings.")
+        }
+        return ""
+    }
+
+    // The tool closes: the Settings page installs the models, and the next Open reads them.
+    function openAiModels() {
+        if (root.host && root.host.openAiModelSettings)
+            root.host.openAiModelSettings()
+        if (root.tool)
+            root.tool.cancel()
     }
 
     onBusyChanged: {
@@ -200,10 +228,59 @@ Rectangle {
             }
         }
 
+        // The installed AI Mask model set cannot load: its state and the way to the AI Models page.
+        // The tool never downloads (AI Models plan, decision A8).
+        ColumnLayout {
+            objectName: "editorAiMaskModelSet"
+            Layout.fillWidth: true
+            visible: root.modelSetMissing
+            spacing: appTheme.spaceSm
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: appTheme.spaceXs
+
+                ColorImage {
+                    Layout.alignment: Qt.AlignTop
+                    Layout.preferredWidth: appTheme.iconOpticalSizeCompact
+                    Layout.preferredHeight: appTheme.iconOpticalSizeCompact
+                    source: "qrc:/panel_icons/info.svg"
+                    sourceSize.width: appTheme.iconSourceSizeCompact
+                    sourceSize.height: appTheme.iconSourceSizeCompact
+                    color: root.colMuted
+                    Accessible.ignored: true
+                }
+                Label {
+                    objectName: "editorAiMaskModelSetText"
+                    Layout.fillWidth: true
+                    text: root.modelSetText(root.modelSetState)
+                    color: root.colText
+                    wrapMode: Text.Wrap
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeBody
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: text
+                }
+            }
+            DialogActionButton {
+                objectName: "editorAiMaskOpenAiModels"
+                Layout.fillWidth: true
+                buttonHeight: appTheme.iconButtonHitSizeCompact
+                font.pixelSize: appTheme.fontSizeBody
+                text: qsTr("Open AI Models")
+                onClicked: root.openAiModels()
+            }
+        }
+        Item {
+            Layout.fillHeight: true
+            visible: root.modelSetMissing
+        }
+
         ScrollView {
             id: scroll
             Layout.fillWidth: true
             Layout.fillHeight: true
+            visible: !root.modelSetMissing
             clip: true
             contentWidth: availableWidth
 
@@ -249,8 +326,9 @@ Rectangle {
                     Item { Layout.fillWidth: true }
                 }
 
-                // Training data notice of the Sky model (lab decision U18, #537). It stays visible
-                // under the tasks, so the user reads it before the first Sky run.
+                // Training data notice of the Sky model (#537; AI Models plan, decision A7 and
+                // section 4). It stays visible under the tasks, so the user reads it before the
+                // first Sky run.
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: appTheme.spaceXs
@@ -268,7 +346,7 @@ Rectangle {
                     Label {
                         objectName: "editorAiMaskSkyNotice"
                         Layout.fillWidth: true
-                        text: qsTr("Sky: the training data of the Sky model may not permit commercial use. Do not use Sky for commercial work.")
+                        text: qsTr("Sky: the license of the Sky model's training data is not clear. Decide yourself before commercial use; see Settings > AI Models.")
                         color: root.colMuted
                         wrapMode: Text.Wrap
                         font.family: appTheme.uiFontFamily
@@ -511,6 +589,7 @@ Rectangle {
         DialogActionButton {
             objectName: "editorAiMaskCommit"
             Layout.fillWidth: true
+            visible: !root.modelSetMissing
             buttonHeight: appTheme.iconButtonHitSizeCompact
             font.pixelSize: appTheme.fontSizeBody
             text: qsTr("Confirm")

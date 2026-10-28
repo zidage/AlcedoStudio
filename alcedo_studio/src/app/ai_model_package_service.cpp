@@ -210,6 +210,23 @@ auto AiModelPackageActionFor(AiModelPackageStatus status, bool offered) -> AiMod
   return AiModelPackageAction::kNone;
 }
 
+auto AiMaskModelSetReadinessFor(const AiModelInstallation& installation,
+                                AiModelPackageStatus       compared) -> AiMaskModelSetReadiness {
+  AiMaskModelSetReadiness readiness;
+  if (installation.Usable()) {
+    readiness.availability = AiMaskModelSetAvailability::kReady;
+    readiness.directory    = installation.supported->directory;
+  } else if (installation.supported) {
+    readiness.availability = AiMaskModelSetAvailability::kRepairRequired;
+  } else if (installation.below_minimum_version) {
+    readiness.availability = AiMaskModelSetAvailability::kUpdateRequired;
+  } else if (installation.above_maximum_version ||
+             compared == AiModelPackageStatus::kNeedsNewerApplication) {
+    readiness.availability = AiMaskModelSetAvailability::kNeedsNewerApplication;
+  }
+  return readiness;
+}
+
 // ── Lifecycle and reads ─────────────────────────────────────────────────────
 
 AiModelPackageService::AiModelPackageService(AiModelPackageServiceOptions options, QObject* parent)
@@ -338,6 +355,13 @@ void AiModelPackageService::RefreshInstallations() {
         directory, package.id.toStdString(), package.minimum_version, package.maximum_version);
   }
   Recompare();
+}
+
+auto AiModelPackageService::ReadAiMaskModelSet() -> AiMaskModelSetReadiness {
+  RefreshInstallations();
+  const PackageState* package = Package(ToQString(kAiMaskModelPackageId));
+  if (package == nullptr) return {};
+  return AiMaskModelSetReadinessFor(package->installation, package->comparison.status);
 }
 
 void AiModelPackageService::Recompare() {

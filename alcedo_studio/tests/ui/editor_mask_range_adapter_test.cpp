@@ -125,16 +125,21 @@ class EditorMaskRangeAdapterTest : public EditorMaskCoveragePreviewTest {
 
   auto Probe(const MaskId& mask_id) -> MaskCoverageProbe { return {GradeId(), mask_id}; }
 
-  /// The production AI Mask tool on this session. Each sidecar runtime request (the first step
-  /// of opening an AI Mask edit) is counted; the runtime is never started here.
+  /// The production AI Mask tool on this session with an installed AI Mask model set. Each
+  /// sidecar runtime request (the first step of opening an AI Mask edit) is counted; the runtime
+  /// is never started here.
   auto MakeAiMaskTool() -> std::unique_ptr<EditorAiMaskTool> {
-    return std::make_unique<EditorAiMaskTool>(controller_.get(),
-                                              EditorAiMaskTool::Services{[this] {
-                                                                           ++runtime_requests_;
-                                                                           return ai_runtime_;
-                                                                         },
-                                                                         {},
-                                                                         {}});
+    return std::make_unique<EditorAiMaskTool>(
+        controller_.get(), EditorAiMaskTool::Services{[this] {
+                                                        ++runtime_requests_;
+                                                        return ai_runtime_;
+                                                      },
+                                                      {},
+                                                      [] {
+                                                        return AiMaskModelSetReadiness{
+                                                            AiMaskModelSetAvailability::kReady,
+                                                            "alcedo-ai-mask-v1"};
+                                                      }});
   }
 
   /// End an AI Mask edit that @p tool opened (no candidate) and stop the tool.

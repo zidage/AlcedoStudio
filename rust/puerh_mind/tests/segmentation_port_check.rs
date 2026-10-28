@@ -13,7 +13,8 @@
 //! has left the cache, so its key-only start must fail with `ImageNotCached`.
 //!
 //! Environment:
-//! - `ALCEDO_SEGMENTATION_MODEL_DIR`: the model directory of the platform (SM3.A plan, 2.1);
+//! - `ALCEDO_SEGMENTATION_MODEL_DIR`: the model directory of the platform (SM3.A plan, 2.1), an
+//!   installed model set with its `model_set.json` (AI Models plan, AM5);
 //! - `ALCEDO_SEGMENTATION_PORT_REFERENCE_DIR`: the output directory of the reference script;
 //! - `ALCEDO_SEGMENTATION_PORT_CHECK_DEVICE`: optional device value (`""` is the platform default).
 //!

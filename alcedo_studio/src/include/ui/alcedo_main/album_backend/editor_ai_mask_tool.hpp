@@ -22,6 +22,7 @@
 
 #include "app/ai_mask_edit_session.hpp"
 #include "app/ai_mask_segmentation_service.hpp"
+#include "app/ai_model_package_service.hpp"
 #include "app/ai_sidecar_runtime_service.hpp"
 #include "app/editor_mask_coverage_preview.hpp"
 #include "app/editor_session_service.hpp"
@@ -50,6 +51,10 @@ namespace alcedo::ui {
  * dragged box or the released stroke. All map through the SM4 prompt geometry to normalized
  * ReferenceSpace. Tasks and person toggles close the group (SM5 M3).
  *
+ * Models: before the sidecar starts, Open reads the installed AI Mask model set (AI Models plan,
+ * AM5). Without a complete set of a supported version the tool shows @ref modelSetState and
+ * starts no sidecar and no session; the tool never downloads.
+ *
  * Progress: a running operation reports its stage (@ref busyStage). The Open stages count from 1
  * to @ref busyStepCount; other operations have no step count.
  *
@@ -69,6 +74,9 @@ class EditorAiMaskTool final : public QObject {
   Q_PROPERTY(int busyStep READ busy_step NOTIFY busyChanged)
   Q_PROPERTY(int busyStepCount READ busy_step_count NOTIFY busyChanged)
   Q_PROPERTY(QString errorText READ error_text NOTIFY messageChanged)
+  /// Why the last Open did not start: "notInstalled", "updateRequired", "needsNewerApplication",
+  /// or "repairRequired" (the installed AI Mask model set); "" otherwise.
+  Q_PROPERTY(QString modelSetState READ model_set_state NOTIFY toolChanged)
   /// Why the last input made no step (Rejected or NotFound); not an error.
   Q_PROPERTY(QString noticeText READ notice_text NOTIFY messageChanged)
   Q_PROPERTY(bool ownsLeftButton READ owns_left_button NOTIFY toolChanged)
@@ -109,8 +117,9 @@ class EditorAiMaskTool final : public QObject {
     std::function<std::shared_ptr<AiSidecarRuntimeService>()> runtime;
     /// Start options of the sidecar process.
     std::function<AiSidecarRuntimeOptions()>                  runtime_options;
-    /// `<model download directory>/alcedo-ai-mask-v1` (SM3.A section 2.1).
-    std::function<std::filesystem::path()>                    model_directory;
+    /// The installed AI Mask model set and its directory (AI Models plan, AM5). Without this
+    /// function no set is installed.
+    std::function<AiMaskModelSetReadiness()>                  model_set;
   };
 
   EditorAiMaskTool(EditorSessionController* session, Services services, QObject* parent = nullptr);
@@ -161,6 +170,7 @@ class EditorAiMaskTool final : public QObject {
   [[nodiscard]] auto        busy_step() const -> int;
   [[nodiscard]] auto        busy_step_count() const -> int;
   [[nodiscard]] auto error_text() const -> QString { return error_text_; }
+  [[nodiscard]] auto        model_set_state() const -> QString;
   [[nodiscard]] auto        notice_text() const -> QString { return notice_text_; }
   [[nodiscard]] auto        owns_left_button() const -> bool { return active_ && ready_; }
   [[nodiscard]] auto        editing_stored_mask() const -> bool { return mask_id_.has_value(); }
@@ -323,6 +333,8 @@ class EditorAiMaskTool final : public QObject {
   AiMaskToolStage                                   stage_ = AiMaskToolStage::None;
   QString                                           error_text_;
   QString                                           notice_text_;
+  /// Availability of the installed model set that stopped the last Open; kReady otherwise.
+  AiMaskModelSetAvailability model_set_availability_ = AiMaskModelSetAvailability::kReady;
   bool                                              subtract_    = false;
   PromptTool                                        prompt_tool_ = PromptTool::Point;
   SessionView                                       view_;

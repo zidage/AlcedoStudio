@@ -317,12 +317,47 @@ TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheSkyTrainingDataNo
   ASSERT_TRUE(translator.load(qm_path)) << "QTranslator failed to load " << qm_path.toStdString();
   ASSERT_TRUE(QCoreApplication::installTranslator(&translator));
 
-  // SM3.E (#537): the notice of the AI Mask panel (lab decision U18).
+  // SM3.E (#537): the notice of the AI Mask panel, in the wording of the AI Models plan
+  // (section 4, decision A7): the user decides; there is no ban on commercial use.
   EXPECT_EQ(
       QCoreApplication::translate("EditorAiMaskPanel",
-                                  "Sky: the training data of the Sky model may not permit "
-                                  "commercial use. Do not use Sky for commercial work."),
-      QStringLiteral("天空：天空模型的训练数据可能不允许商业使用。请勿将天空功能用于商业作品。"));
+                                  "Sky: the license of the Sky model's training data is not "
+                                  "clear. Decide yourself before commercial use; see "
+                                  "Settings > AI Models."),
+      QStringLiteral("天空：天空模型训练数据的许可证不明确，商业使用前请自行判断，详见“设置 > "
+                     "AI 模型”。"));
+
+  ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
+}
+
+TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheAiMaskModelSetStates) {
+  const QString qm_path = QStringLiteral(ALCEDO_ZH_CN_QM_FILE);
+  QTranslator   translator;
+  ASSERT_TRUE(translator.load(qm_path)) << "QTranslator failed to load " << qm_path.toStdString();
+  ASSERT_TRUE(QCoreApplication::installTranslator(&translator));
+
+  // AI Models plan, AM5: the AI Mask panel without a usable installed model set.
+  EXPECT_EQ(QCoreApplication::translate("EditorAiMaskPanel",
+                                        "The AI Mask models are not installed. Download them on "
+                                        "the AI Models page in Settings."),
+            QStringLiteral("AI 蒙版模型尚未安装。请在“设置 > AI 模型”页面下载。"));
+  EXPECT_EQ(QCoreApplication::translate("EditorAiMaskPanel",
+                                        "The installed AI Mask models are too old for this "
+                                        "version of Alcedo Studio. Update them on the AI Models "
+                                        "page in Settings."),
+            QStringLiteral("已安装的 AI 蒙版模型版本过旧，此版本的 Alcedo Studio "
+                           "无法使用。请在“设置 > AI 模型”页面更新。"));
+  EXPECT_EQ(QCoreApplication::translate("EditorAiMaskPanel",
+                                        "The AI Mask models need a newer version of Alcedo "
+                                        "Studio. Update Alcedo Studio to use AI Mask."),
+            QStringLiteral("AI 蒙版模型需要更新版本的 Alcedo Studio。请更新 Alcedo Studio "
+                           "后使用 AI 蒙版。"));
+  EXPECT_EQ(QCoreApplication::translate("EditorAiMaskPanel",
+                                        "The installed AI Mask models are incomplete. Repair "
+                                        "them on the AI Models page in Settings."),
+            QStringLiteral("已安装的 AI 蒙版模型不完整。请在“设置 > AI 模型”页面修复。"));
+  EXPECT_EQ(QCoreApplication::translate("EditorAiMaskPanel", "Open AI Models"),
+            QStringLiteral("打开 AI 模型"));
 
   ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
 }

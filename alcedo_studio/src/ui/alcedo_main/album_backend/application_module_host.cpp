@@ -433,10 +433,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   ai_mask_services.runtime_options = [this]() {
     return semantic_generation_->RuntimeOptionsForCurrentSidecarSnapshot(false);
   };
-  // SM3.A section 2.1: <model download directory>/alcedo-ai-mask-v1, the model set identity.
-  ai_mask_services.model_directory = [this]() {
-    return std::filesystem::path(model_download_->ModelDownloadDirectory().toStdU16String()) /
-           "alcedo-ai-mask-v1";
+  // AI Models plan, AM5: the installed AI Mask model set of a supported version,
+  // <model directory>/alcedo-ai-mask-v<version>, read again at each Open.
+  ai_mask_services.model_set = [packages = ai_model_packages_.get()] {
+    return packages->ReadAiMaskModelSet();
   };
   ai_mask_tool_ =
       std::make_unique<EditorAiMaskTool>(editor_session_.get(), std::move(ai_mask_services), this);

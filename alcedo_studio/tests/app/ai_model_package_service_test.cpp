@@ -659,6 +659,66 @@ TEST_F(AiModelPackageServiceTest, FeedWithOnlyHigherVersionsNeedsNewerApplicatio
   EXPECT_FALSE(row.value(QStringLiteral("available")).toBool());
   EXPECT_FALSE(service_->InstallPackage(kId));
   EXPECT_EQ(downloads_->starts, 0);
+  // AM5: the AI Mask tool shows the same state.
+  EXPECT_EQ(service_->ReadAiMaskModelSet().availability,
+            AiMaskModelSetAvailability::kNeedsNewerApplication);
+}
+
+// ── AI Mask tool readiness (AM5) ────────────────────────────────────────────
+
+TEST_F(AiModelPackageServiceTest, AiMaskToolReadsTheInstalledSetAgainAndItsDirectory) {
+  StartService();
+  AiMaskModelSetReadiness readiness = service_->ReadAiMaskModelSet();
+  EXPECT_EQ(readiness.availability, AiMaskModelSetAvailability::kNotInstalled);
+  EXPECT_TRUE(readiness.directory.empty());
+  EXPECT_EQ(feed_->requests, 0) << "the readiness read makes no network request";
+
+  const BuiltPackage v1 = Publish(1, "r1", 0);
+  InstallRevision(v1);
+  readiness = service_->ReadAiMaskModelSet();
+  EXPECT_EQ(readiness.availability, AiMaskModelSetAvailability::kReady);
+  EXPECT_EQ(readiness.directory, InstalledDirectory(1));
+
+  // A file changed on disk after the install: the next read finds it without a refresh call.
+  WriteBytes(InstalledDirectory(1) / "point_encoder.onnx", "short");
+  readiness = service_->ReadAiMaskModelSet();
+  EXPECT_EQ(readiness.availability, AiMaskModelSetAvailability::kRepairRequired);
+  EXPECT_TRUE(readiness.directory.empty());
+
+  // The set removed outside the application: not installed.
+  fs::remove_all(InstalledDirectory(1));
+  EXPECT_EQ(service_->ReadAiMaskModelSet().availability, AiMaskModelSetAvailability::kNotInstalled);
+}
+
+TEST_F(AiModelPackageServiceTest, AiMaskToolReadinessFollowsTheSupportedRange) {
+  StartService();
+  const BuiltPackage v1 = Publish(1, "r1", 0);
+  InstallRevision(v1);
+
+  // A build that supports versions 2-3 finds only version 1: Update required.
+  EXPECT_EQ(AiMaskModelSetReadinessFor(ReadAiModelInstallation(models_, "alcedo-ai-mask", 2, 3),
+                                       AiModelPackageStatus::kUpdateRequired)
+                .availability,
+            AiMaskModelSetAvailability::kUpdateRequired);
+  // A build that supports only an older range finds only version 1: Needs a newer Alcedo
+  // Studio, also before a feed check.
+  const AiModelInstallation above = ReadAiModelInstallation(models_, "alcedo-ai-mask", 0, 0);
+  ASSERT_TRUE(above.above_maximum_version.has_value());
+  EXPECT_EQ(AiMaskModelSetReadinessFor(above, AiModelPackageStatus::kNotInstalled).availability,
+            AiMaskModelSetAvailability::kNeedsNewerApplication);
+  // Nothing installed: the feed comparison decides between the two states.
+  EXPECT_EQ(AiMaskModelSetReadinessFor(AiModelInstallation{}, AiModelPackageStatus::kNotInstalled)
+                .availability,
+            AiMaskModelSetAvailability::kNotInstalled);
+  EXPECT_EQ(AiMaskModelSetReadinessFor(AiModelInstallation{},
+                                       AiModelPackageStatus::kNeedsNewerApplication)
+                .availability,
+            AiMaskModelSetAvailability::kNeedsNewerApplication);
+  // A usable supported set is ready whatever the feed lists (an update is optional).
+  const AiMaskModelSetReadiness ready = AiMaskModelSetReadinessFor(
+      ReadAiMaskModelInstallation(models_), AiModelPackageStatus::kUpdateAvailable);
+  EXPECT_EQ(ready.availability, AiMaskModelSetAvailability::kReady);
+  EXPECT_EQ(ready.directory, InstalledDirectory(1));
 }
 
 TEST_F(AiModelPackageServiceTest, InstalledVersionBelowMinimumIsUpdateRequired) {
