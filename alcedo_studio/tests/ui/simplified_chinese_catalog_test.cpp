@@ -357,6 +357,15 @@ TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheAiModelDownloadSt
   EXPECT_EQ(QCoreApplication::translate("AiModelDownloadStatementDialog", "Accept and Download"),
             QStringLiteral("同意并下载"));
   EXPECT_EQ(QCoreApplication::translate("SettingDialog", "AI Models"), QStringLiteral("AI 模型"));
+  // The cards say what the models do.
+  EXPECT_EQ(QCoreApplication::translate(
+                "AiModelsSettingsPanel",
+                "SAM 2.1 tiny: selects the object that you click, box, or draw over."),
+            QStringLiteral("SAM 2.1 tiny：选择你点击、框选或涂抹经过的对象。"));
+  EXPECT_EQ(QCoreApplication::translate("AiModelsSettingsPanel",
+                                        "Recognizes the content of photos, so you can find them "
+                                        "with a text search in many languages."),
+            QStringLiteral("识别照片内容，以便用多种语言的文本搜索照片。"));
 
   ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
 }

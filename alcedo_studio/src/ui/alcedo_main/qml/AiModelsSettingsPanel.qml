@@ -128,15 +128,14 @@ ColumnLayout {
 
     // ── AI Mask model set ────────────────────────────────────────────────
 
-    // Plan P1: the earliest supported version; the range once the maximum is higher.
-    function maskVersionText(row) {
-        const minimum = Number(row.minimumSupportedVersion || 0)
-        const maximum = Number(row.maximumSupportedVersion || 0)
-        if (minimum <= 0)
-            return ""
-        if (maximum <= minimum)
-            return qsTr("Supports AI Mask models v%1 and later").arg(minimum)
-        return qsTr("Supports AI Mask models v%1 to v%2").arg(minimum).arg(maximum)
+    // The models of the AI Mask set and what each one does (the revision Pill shows the version).
+    function maskContentsText() {
+        return [
+            qsTr("SAM 2.1 tiny: selects the object that you click, box, or draw over."),
+            qsTr("S3OD: selects the subject, the background, and each person."),
+            qsTr("People and sky locator: finds the people and the sky in the photo."),
+            qsTr("Sky model: selects the sky with fine edges.")
+        ].map(line => "• " + line).join("\n")
     }
 
     function maskRevisionText(row) {
@@ -211,13 +210,14 @@ ColumnLayout {
 
     // ── CLIP models ──────────────────────────────────────────────────────
 
-    function clipLanguageText(language) {
+    // What a CLIP model does, and the search language.
+    function clipPurposeText(language) {
         switch (language) {
-        case "en": return qsTr("English")
-        case "zh": return qsTr("Chinese")
-        case "multilingual": return qsTr("Multilingual")
+        case "en": return qsTr("Recognizes the content of photos, so you can find them with a text search in English.")
+        case "zh": return qsTr("Recognizes the content of photos, so you can find them with a text search in Chinese.")
+        case "multilingual": return qsTr("Recognizes the content of photos, so you can find them with a text search in many languages.")
         }
-        return ""
+        return qsTr("Recognizes the content of photos, so you can find them with a text search.")
     }
 
     function clipBackendText(backend) {
@@ -319,7 +319,7 @@ ColumnLayout {
                     text: qsTr("Model folder")
                     color: appTheme.textColor
                     font.family: appTheme.headlineFontFamily
-                    font.pixelSize: appTheme.fontSizeHeadline
+                    font.pixelSize: appTheme.fontSizeSection
                     font.weight: Font.DemiBold
                 }
                 Label {
@@ -470,7 +470,7 @@ ColumnLayout {
                 namePrefix: "aiModelsMask"
                 cardKey: packageId
                 title: row.name || packageId
-                subtitle: page.maskVersionText(row)
+                subtitle: page.maskContentsText()
                 pills: [page.maskRevisionText(row), page.formatBytes(row.archiveBytes)]
                 licenses: page.maskLicenses(row)
                 statusText: page.maskStatusText(row)
@@ -613,7 +613,7 @@ ColumnLayout {
                 namePrefix: "aiModelsClip"
                 cardKey: profileId
                 title: row.displayName || profileId
-                subtitle: page.clipLanguageText(row.language || "")
+                subtitle: page.clipPurposeText(row.language || "")
                 pills: [row.sizeLabel || "", page.clipBackendText(row.inferenceBackend || "")]
                 licenses: (row.licenseName || "").length > 0
                           ? [{ name: row.licenseName, url: row.licenseUrl || "" }] : []

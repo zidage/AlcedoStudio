@@ -20,7 +20,7 @@ Rectangle {
     property string cardKey: ""
 
     property string title: ""
-    // One line below the title (the upstream project, a supported version range, a language).
+    // Text below the title: what the package contains and what it does. Can have several lines.
     property string subtitle: ""
     // Optional link button beside the title (for example the upstream GitHub project).
     property string upstreamUrl: ""
@@ -103,7 +103,7 @@ Rectangle {
                     text: card.title
                     color: appTheme.textColor
                     font.family: appTheme.headlineFontFamily
-                    font.pixelSize: 28
+                    font.pixelSize: appTheme.fontSizeSection
                     font.weight: Font.DemiBold
                     lineHeight: 1.1
                     wrapMode: Text.Wrap
@@ -116,8 +116,10 @@ Rectangle {
                     visible: card.subtitle.length > 0
                     text: card.subtitle
                     color: appTheme.textMutedColor
-                    font.family: appTheme.headlineFontFamily
+                    font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeBody
+                    lineHeight: appTheme.lineHeightBody
+                    lineHeightMode: Text.FixedHeight
                     wrapMode: Text.Wrap
                 }
             }

@@ -203,7 +203,7 @@ ColumnLayout {
                         text: qsTr("LUT library")
                         color: page.textColor
                         font.family: appTheme.headlineFontFamily
-                        font.pixelSize: appTheme.fontSizeHeadline
+                        font.pixelSize: appTheme.fontSizeSection
                         font.weight: Font.DemiBold
                     }
                     Label {
