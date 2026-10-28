@@ -4,8 +4,6 @@
 
 #include "app/lut_package_service.hpp"
 
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QSettings>
 #include <QVariantMap>
 #include <algorithm>
@@ -27,8 +25,6 @@ namespace {
 
 namespace fs                                 = std::filesystem;
 
-constexpr qint64      kMaximumFeedBytes      = 256 * 1024;
-constexpr qint64      kMaximumSignatureBytes = 1024;
 constexpr const char* kTrustedSequenceKey    = "lut/packages/highestTrustedSequence";
 constexpr const char* kRequestIdPrefix       = "lut-package:";
 
@@ -102,19 +98,9 @@ auto ExpectedReceipt(const LutPackageDescriptor& descriptor, quint64 sequence)
   return receipt;
 }
 
-auto NewFeedRequest(const QUrl& url) -> QNetworkRequest {
-  QNetworkRequest request(url);
-  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                       QNetworkRequest::NoLessSafeRedirectPolicy);
-  request.setTransferTimeout(15000);
-  request.setRawHeader("Accept", "application/json, text/plain;q=0.9");
-  request.setRawHeader("Cache-Control", "no-cache");
-  return request;
-}
-
 }  // namespace
 
-// ── Preferences, transport, and options ──────────────────────────────────────
+// ── Preferences and options ─────────────────────────────────────────────────
 
 auto SettingsLutPackagePreferences::LoadTrustedSequence() const -> quint64 {
   return QSettings{}.value(QLatin1String(kTrustedSequenceKey), 1).toULongLong();
@@ -122,40 +108,6 @@ auto SettingsLutPackagePreferences::LoadTrustedSequence() const -> quint64 {
 
 void SettingsLutPackagePreferences::SaveTrustedSequence(quint64 sequence) {
   QSettings{}.setValue(QLatin1String(kTrustedSequenceKey), sequence);
-}
-
-DownloadServiceLutArchiveDownloader::DownloadServiceLutArchiveDownloader(DownloadService& downloads,
-                                                                         QObject*         parent)
-    : QObject(parent), downloads_(downloads) {
-  connect(&downloads_, &DownloadService::ProgressChanged, this,
-          [this](const DownloadProgress& progress) {
-            if (progress.id == active_request_id_ && on_progress_) {
-              on_progress_(progress.bytes_downloaded, progress.bytes_total);
-            }
-          });
-  connect(&downloads_, &DownloadService::Finished, this,
-          [this](const QString& id, bool ok, bool canceled, const QString& error) {
-            if (id != active_request_id_) return;
-            FinishedCallback finished = std::move(on_finished_);
-            active_request_id_.clear();
-            on_progress_ = nullptr;
-            on_finished_ = nullptr;
-            if (finished) finished(ok, canceled, error);
-          });
-}
-
-auto DownloadServiceLutArchiveDownloader::Start(const DownloadRequest& request,
-                                                ProgressCallback       on_progress,
-                                                FinishedCallback       on_finished) -> bool {
-  if (!downloads_.Start(request)) return false;
-  active_request_id_ = request.id;
-  on_progress_       = std::move(on_progress);
-  on_finished_       = std::move(on_finished);
-  return true;
-}
-
-void DownloadServiceLutArchiveDownloader::Cancel(const QString& request_id) {
-  downloads_.Cancel(request_id);
 }
 
 auto LutPackageServiceOptions::FromBuildConfiguration() -> LutPackageServiceOptions {
@@ -375,59 +327,45 @@ auto LutPackageService::CheckPackages() -> bool {
     package.error.clear();
   }
   emit StateChanged();
-  options_.fetch(options_.feed_url, kMaximumFeedBytes, [this](QByteArray bytes, QString error) {
-    if (shut_down_) return;
-    if (!error.isEmpty()) {
-      FailCheck(std::move(error));
-      return;
-    }
-    QUrl signature_url = options_.feed_url;
-    signature_url.setPath(signature_url.path() + QStringLiteral(".sig"));
-    options_.fetch(signature_url, kMaximumSignatureBytes,
-                   [this, bytes = std::move(bytes)](QByteArray signature, QString error) mutable {
-                     if (shut_down_) return;
-                     if (!error.isEmpty()) {
-                       FailCheck(std::move(error));
-                       return;
-                     }
-                     HandleFeed(std::move(bytes), std::move(signature));
-                   });
-  });
+  FetchSignedFeed(options_.fetch, options_.feed_url,
+                  [this](QByteArray manifest, QByteArray signature, QString error) {
+                    if (shut_down_) return;
+                    if (!error.isEmpty()) {
+                      FailCheck(std::move(error));
+                      return;
+                    }
+                    HandleFeed(std::move(manifest), std::move(signature));
+                  });
   return true;
 }
 
 void LutPackageService::FetchSmallFile(const QUrl& url, qint64 maximum_bytes,
                                        std::function<void(QByteArray, QString)> done) {
-  const QString feed_host = options_.feed_url.host();
-  if (url.scheme() != QStringLiteral("https") ||
-      url.host().compare(feed_host, Qt::CaseInsensitive) != 0 || !url.userInfo().isEmpty()) {
-    done({}, tr("The LUT package server URL is not allowed."));
-    return;
-  }
-  QNetworkReply* reply   = network_.get(NewFeedRequest(url));
-  auto           payload = std::make_shared<QByteArray>();
-  connect(reply, &QNetworkReply::readyRead, this, [reply, payload, maximum_bytes] {
-    payload->append(reply->readAll());
-    if (payload->size() > maximum_bytes) reply->abort();
-  });
-  connect(reply, &QNetworkReply::finished, this,
-          [this, reply, payload, maximum_bytes, feed_host, done = std::move(done)] {
-            payload->append(reply->readAll());
-            QString   error;
-            const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            if (payload->size() > maximum_bytes) {
-              error = tr("The LUT package server response is too large.");
-            } else if (reply->error() != QNetworkReply::NoError) {
-              error = reply->errorString();
-            } else if (status != 200) {
-              error = tr("The LUT package server returned HTTP %1.").arg(status);
-            } else if (reply->url().scheme() != QStringLiteral("https") ||
-                       reply->url().host().compare(feed_host, Qt::CaseInsensitive) != 0) {
-              error = tr("The LUT package server redirected to an untrusted host.");
-            }
-            reply->deleteLater();
-            done(error.isEmpty() ? std::move(*payload) : QByteArray{}, std::move(error));
-          });
+  FetchFeedFile(network_, this, url, options_.feed_url.host(), maximum_bytes,
+                [done = std::move(done)](FeedFileResult result) {
+                  QString error;
+                  switch (result.error) {
+                    case FeedFileError::kNone:
+                      break;
+                    case FeedFileError::kUrlNotAllowed:
+                      error = tr("The LUT package server URL is not allowed.");
+                      break;
+                    case FeedFileError::kTooLarge:
+                      error = tr("The LUT package server response is too large.");
+                      break;
+                    case FeedFileError::kNetwork:
+                      error = result.network_error;
+                      break;
+                    case FeedFileError::kHttpStatus:
+                      error =
+                          tr("The LUT package server returned HTTP %1.").arg(result.http_status);
+                      break;
+                    case FeedFileError::kUntrustedRedirect:
+                      error = tr("The LUT package server redirected to an untrusted host.");
+                      break;
+                  }
+                  done(std::move(result.bytes), std::move(error));
+                });
 }
 
 void LutPackageService::FailCheck(QString message) {

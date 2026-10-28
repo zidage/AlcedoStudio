@@ -55,6 +55,30 @@ gtest_discover_tests(LutPackageLiveFeedTest TEST_PREFIX "LutPackageLiveFeedTest.
     PROPERTIES LABELS "live_network")
 alcedo_register_test_target(LutPackageLiveFeedTest app)
 
+add_executable(AiModelPackageManifestTest ${ALCEDO_TEST_ROOT}/app/ai_model_package_manifest_test.cpp)
+target_include_directories(AiModelPackageManifestTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(AiModelPackageManifestTest PRIVATE AiModelPackageManifest
+    unofficial::ed25519::ed25519 GTest::gtest_main)
+gtest_discover_tests(AiModelPackageManifestTest TEST_PREFIX "AiModelPackageManifestTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(AiModelPackageManifestTest app ci_core)
+
+# AI model package feed check, install, status, statement, recovery, background task, and the
+# shared download admission (AI Models plan, AM1).
+add_executable(AiModelPackageServiceTest
+    ${ALCEDO_TEST_ROOT}/app/ai_model_package_service_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
+target_include_directories(AiModelPackageServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_compile_definitions(AiModelPackageServiceTest PRIVATE
+    ALCEDO_FAKE_ARIA2_PATH="$<TARGET_FILE:DownloadServiceFakeAria2>")
+target_link_libraries(AiModelPackageServiceTest PRIVATE AiModelPackageService
+    AiModelDownloadTaskPublisher PackageArchive LibArchive::LibArchive JSON
+    unofficial::ed25519::ed25519 GTest::gtest Qt6::Test)
+add_dependencies(AiModelPackageServiceTest DownloadServiceFakeAria2)
+gtest_discover_tests(AiModelPackageServiceTest TEST_PREFIX "AiModelPackageServiceTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(AiModelPackageServiceTest app ci_core)
+
 add_executable(DownloadServiceFakeAria2
     ${ALCEDO_TEST_ROOT}/app/download_service_fake_aria2.cpp)
 target_link_libraries(DownloadServiceFakeAria2 PRIVATE Qt6::Core)

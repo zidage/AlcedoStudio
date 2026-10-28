@@ -64,6 +64,14 @@ def_library(AgentControlOwner
     PUBLIC_DEPS BackgroundTaskController UiLocalization Qt6::Core
 )
 
+# Publishes AI model package installs as background tasks (AI Models plan, AM1).
+def_library(AiModelDownloadTaskPublisher
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/ai_model_download_task_publisher.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/ai_model_download_task_publisher.hpp"
+    PUBLIC_DEPS AiModelPackageService BackgroundTaskController Qt6::Core
+)
+
 def_library(ImageAnalysisController
     SOURCES
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_analysis_controller.cpp"
@@ -313,6 +321,8 @@ target_link_libraries(AlbumBackendLib
         UpdateService
         LutLibraryService
         LutPackageService
+        AiModelPackageService
+        AiModelDownloadTaskPublisher
         SleeveFilterService
         FSService
         AcceleratorBackend

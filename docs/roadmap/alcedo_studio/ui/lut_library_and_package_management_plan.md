@@ -1126,7 +1126,7 @@ refresh, import, and root changes. libarchive (7z/LZMA2) is linked in process; a
 | Module | Responsibility |
 | --- | --- |
 | `app/lut_package_install.{hpp,cpp}` (in `LutLibraryService` library, links `LibArchive::LibArchive`) | `ExtractLutPackageArchive`: streaming 7z read, safe-path, link, special-file, duplicate, byte-budget, and file-count checks, per-file SHA-256, inventory and descriptor cross-check. `InstallLutPackageArchive`: archive size/SHA-256 check -> retire interrupted content -> extract into `packages/<id>/content/<inventory_sha256>[-n]` -> feed evidence -> receipt replacement (commit point) -> retire old content. `RetireInactiveLutPackageContent`: moves `origin: user` files to `user/<id>/`, removes other inactive content, skips packages with unreadable receipts |
-| `app/lut_package_service.{hpp,cpp}` (new `LutPackageService` library) | Feed fetch (HTTPS, feed host only, 256 KiB / 1 KiB limits), `VerifyLutPackageManifest` with the LUT trusted sequence (`lut/packages/highestTrustedSequence`), `CompareLutPackage` (inventory-only comparison), per-package status (Not installed, Current, Update available, Repair required, Checking, Downloading, Verifying, Installing, Error), progress, cancel, retry, shutdown; `LutArchiveDownloader` port with `DownloadServiceLutArchiveDownloader`; `packages` QML property for L6 |
+| `app/lut_package_service.{hpp,cpp}` (new `LutPackageService` library) | Feed fetch (HTTPS, feed host only, 256 KiB / 1 KiB limits), `VerifyLutPackageManifest` with the LUT trusted sequence (`lut/packages/highestTrustedSequence`), `CompareLutPackage` (inventory-only comparison), per-package status (Not installed, Current, Update available, Repair required, Checking, Downloading, Verifying, Installing, Error), progress, cancel, retry, shutdown; `PackageArchiveDownloader` port with `DownloadServicePackageArchiveDownloader`; `packages` QML property for L6 |
 | `app/lut_library_inventory.{hpp,cpp}` | Receipt descriptor fields (revision, count, digest, unpacked bytes, artifact, feed sequence), `WriteLutPackageReceiptFile` (`QSaveFile`), `IsLutPackageId`, `LutInventoryMatchesPackageReceipts` |
 | `app/lut_library_service.{hpp,cpp}` | `InstallPackage`, `CancelOperation`, `PackageReceipts()`, `PackageInstallStageChanged`, `OperationResult::committed_package_id`; load and root selection retire inactive content and rebuild an inventory that disagrees with the receipts |
 | `app/lut_library_migration.{hpp,cpp}` | `write_package_receipt` step in `LutLibraryFileOperations` (failure injection) |
@@ -1158,7 +1158,7 @@ Settings open (L6) / explicit retry -> LutPackageService::CheckPackages
      no file reads) -> Not installed | Current | Update available | Repair required
   -> incomplete inventory -> LutLibraryService::RefreshInventory -> InventoryChanged -> recompute
 user action -> LutPackageService::InstallPackage(id)
-  -> LutArchiveDownloader::Start -> DownloadService (shared admission, size + SHA-256)
+  -> PackageArchiveDownloader::Start -> DownloadService (shared admission, size + SHA-256)
   -> finished -> LutLibraryService::InstallPackage (kInstallPackage on the library worker)
      -> InstallLutPackageArchive: archive hash -> RetireInactiveLutPackageContent
         -> ExtractLutPackageArchive (libarchive stream, path/link/limit checks, per-file SHA-256,
@@ -1989,7 +1989,7 @@ Settings opens -> SettingDialog.onVisibleChanged -> LutPackageService::CheckPack
   -> VerifyLutPackageManifest (Ed25519 update key, trusted sequence, optional name)
   -> CompareLutPackage per package (published inventory only) -> package rows (action per status)
 LUTs page row "Download" -> LutPackageService::InstallPackage(id)
-  -> DownloadServiceLutArchiveDownloader -> DownloadService (aria2c, size + SHA-256)
+  -> DownloadServicePackageArchiveDownloader -> DownloadService (aria2c, size + SHA-256)
   -> LutLibraryService::InstallPackage -> InstallLutPackageArchive (libarchive 7z, verify, receipt commit)
   -> rescan -> PublishInventory -> InventoryChanged -> editor LUT resources invalidated,
      LutLibraryModel rows, LutPackageService::RecomputeComparisons -> row "Installed and current"

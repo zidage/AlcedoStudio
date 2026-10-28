@@ -132,7 +132,7 @@ void Sign(FeedServer& feed, const TestKey& key) {
 // ── Transport and preference doubles ────────────────────────────────────────
 
 /// Records every transfer and holds it until Cancel().
-class HeldArchiveDownloader final : public alcedo::LutArchiveDownloader {
+class HeldArchiveDownloader final : public alcedo::PackageArchiveDownloader {
  public:
   struct State {
     std::vector<QString> started_urls;

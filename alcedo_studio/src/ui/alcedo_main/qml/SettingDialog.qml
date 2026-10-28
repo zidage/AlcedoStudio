@@ -62,6 +62,10 @@ Dialog {
             // application never checks it at startup (plan L6B).
             if (appModules.lutPackages)
                 appModules.lutPackages.checkPackages()
+            // The signed AI model package list is checked the same way (AI Models plan, AM1;
+            // AM4 moves the check to the opening of the AI Models page).
+            if (appModules.aiModelPackages)
+                appModules.aiModelPackages.checkPackages()
         }
     }
 

@@ -12,6 +12,7 @@
 
 class QQmlEngine;
 
+#include "app/ai_model_package_service.hpp"
 #include "app/ai_provider_profile.hpp"
 #include "app/download_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
@@ -22,6 +23,7 @@ class QQmlEngine;
 #include "app/update_service.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 #include "ui/alcedo_main/album_backend/agent_control_owner.hpp"
+#include "ui/alcedo_main/album_backend/ai_model_download_task_publisher.hpp"
 #include "ui/alcedo_main/album_backend/application_close_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
@@ -74,6 +76,8 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(alcedo::UpdateService* updates READ updates CONSTANT)
   Q_PROPERTY(alcedo::LutLibraryService* lutLibrary READ lut_library CONSTANT)
   Q_PROPERTY(alcedo::LutPackageService* lutPackages READ lut_packages CONSTANT)
+  /// Signed AI model package feed and the AI Mask model set install (AI Models plan, AM1).
+  Q_PROPERTY(alcedo::AiModelPackageService* aiModelPackages READ ai_model_packages CONSTANT)
   /// LUT browser rows over lutLibrary; one instance shared by every LUT surface (plan 6.4).
   Q_PROPERTY(LutLibraryModel* lutBrowser READ lut_browser CONSTANT)
   /// The Color Grade target of LUT application, read from editorSession.
@@ -147,6 +151,9 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto updates() -> alcedo::UpdateService* { return updates_.get(); }
   [[nodiscard]] auto lut_library() -> alcedo::LutLibraryService* { return lut_library_.get(); }
   [[nodiscard]] auto lut_packages() -> alcedo::LutPackageService* { return lut_packages_.get(); }
+  [[nodiscard]] auto ai_model_packages() -> alcedo::AiModelPackageService* {
+    return ai_model_packages_.get();
+  }
   [[nodiscard]] auto semantic_generation() -> SemanticGenerationController* {
     return semantic_generation_.get();
   }
@@ -238,6 +245,8 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<StatsEngine>                         stats_;
   std::unique_ptr<SearchController>                    search_;
   std::unique_ptr<ModelDownloadController>             model_download_;
+  std::unique_ptr<alcedo::AiModelPackageService>       ai_model_packages_;
+  std::unique_ptr<AiModelDownloadTaskPublisher>        ai_model_download_tasks_;
   std::unique_ptr<alcedo::AiProviderProfileController> ai_provider_profiles_;
   std::unique_ptr<SemanticGenerationController>        semantic_generation_;
   std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> image_analysis_concurrency_limit_;

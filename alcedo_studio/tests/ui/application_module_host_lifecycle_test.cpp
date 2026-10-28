@@ -77,6 +77,9 @@ TEST_F(ApplicationModuleHostLifecycleTests,
   EXPECT_LT(index_of("StatsEngine"), index_of("SearchController"));
   EXPECT_LT(index_of("BackgroundTaskController"), index_of("ModelDownloadController"));
   EXPECT_LT(index_of("ModelDownloadController"), index_of("SemanticGenerationController"));
+  // The AI model directory is read through ModelDownloadController (AI Models plan, P7).
+  EXPECT_LT(index_of("ModelDownloadController"), index_of("AiModelPackageService"));
+  EXPECT_LT(index_of("AiModelPackageService"), index_of("AiModelDownloadTaskPublisher"));
   EXPECT_LT(index_of("ProjectDbWriteBarrier"), index_of("ImageAnalysisSink"));
   EXPECT_LT(index_of("ImageAnalysisSink"), index_of("ImageAnalysisController"));
   EXPECT_LT(index_of("ImportExportHandler"), index_of("NikonHeRecoveryController"));
@@ -138,6 +141,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
         {"updates", "alcedo::UpdateService*"},
         {"lutLibrary", "alcedo::LutLibraryService*"},
         {"lutPackages", "alcedo::LutPackageService*"},
+        {"aiModelPackages", "alcedo::AiModelPackageService*"},
         {"lutBrowser", "alcedo::ui::LutLibraryModel*"},
         {"lutTarget", "alcedo::ui::LutLibraryController*"},
         {"semanticGeneration", "alcedo::ui::SemanticGenerationController*"},
