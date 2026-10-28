@@ -37,9 +37,11 @@
 #include <QVariantList>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app/ai_model_package_service.hpp"
@@ -59,6 +61,7 @@ namespace {
 namespace fs                    = std::filesystem;
 
 constexpr int kAiModelsCategory = 9;
+constexpr int kAboutCategory    = 10;
 const char*   kAiMaskId         = "alcedo-ai-mask";
 const QUrl    kFeedUrl(QStringLiteral("https://static.aoraw.org/ai-models/v1/manifest.json"));
 #ifdef __APPLE__
@@ -447,17 +450,18 @@ TEST(AiModelsSettingsQmlTest, PageOpenChecksTheFeedOnceAndStartupDoesNotCheck) {
   EXPECT_EQ(harness.feed_->manifest_requests, 2);
   EXPECT_TRUE(harness.downloads_->started_urls.empty());
 
-  // The AI Mask card names the models of the set and what each one does (no version text;
-  // the revision Pill shows the version), and the license names.
-  const QString mask     = QString::fromLatin1(kAiMaskId);
-  const QString contents = Text(harness.item(QStringLiteral("aiModelsMaskSubtitle:") + mask));
-  for (const char* line : {"SAM 2.1 tiny: selects the object that you click, box, or draw over.",
-                           "S3OD: selects the subject, the background, and each person.",
-                           "People and sky locator: finds the people and the sky in the photo.",
-                           "Sky model: selects the sky with fine edges."}) {
-    EXPECT_TRUE(contents.contains(PanelText(line))) << contents.toStdString();
-  }
-  EXPECT_FALSE(contents.contains(QStringLiteral("v1"))) << contents.toStdString();
+  // The AI Mask card says in one sentence what the set does (no version text; the revision
+  // Pill shows the version), links its GitHub project, and lists the license names.
+  const QString mask = QString::fromLatin1(kAiMaskId);
+  EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsMaskSubtitle:") + mask)),
+            PanelText("Selects the subject, people, sky, and the objects that you click, box, or "
+                      "draw over."));
+  QObject* mask_project = harness.item(QStringLiteral("aiModelsMaskUpstream:") + mask);
+  ASSERT_NE(mask_project, nullptr);
+  EXPECT_TRUE(mask_project->property("visible").toBool());
+  EXPECT_EQ(
+      harness.item(QStringLiteral("aiModelsMask:") + mask)->property("upstreamUrl").toString(),
+      QStringLiteral("https://github.com/zidage/alcedo-ai-mask-lab"));
   EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsMaskLicense0:") + mask)),
             QStringLiteral("Apache-2.0"));
   EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsMaskLicense3:") + mask)),
@@ -489,11 +493,35 @@ TEST(AiModelsSettingsQmlTest, PageOpenChecksTheFeedOnceAndStartupDoesNotCheck) {
     EXPECT_EQ(title->property("font").value<QFont>().pixelSize(),
               AppTheme::Instance().fontSizeSection());
   }
-  // A CLIP card says what the model does and its search language.
-  const QString purpose =
-      Text(harness.item(QStringLiteral("aiModelsClipSubtitle:") + first_profile));
-  EXPECT_TRUE(purpose.startsWith(QStringLiteral("Recognizes the content of photos")))
-      << purpose.toStdString();
+  // Each CLIP card has the one-sentence description of its publisher and, when the publisher
+  // has one, its GitHub project.
+  const std::map<QString, std::pair<const char*, QString>> clip_descriptions = {
+      {QStringLiteral("mobileclip2-s2-en"),
+       {"Fast image-text model from Apple, trained with multi-modal reinforced training.",
+        QStringLiteral("https://github.com/apple/ml-mobileclip")}},
+      {QStringLiteral("jina-clip-v2-int8-multilingual"),
+       {"Multilingual embedding model for text and images from Jina AI, for 89 languages.",
+        QString()}},
+      {QStringLiteral("siglip2-b32-256-multilingual"),
+       {"Multilingual vision-language encoder from Google that improves on SigLIP.",
+        QStringLiteral("https://github.com/google-research/big_vision")}},
+      {QStringLiteral("siglip2-base-256-coreml-macos"),
+       {"Multilingual vision-language encoder from Google that improves on SigLIP.",
+        QStringLiteral("https://github.com/google-research/big_vision")}}};
+  const QVariantList clip_rows = harness.host_->model_download()->Models();
+  ASSERT_FALSE(clip_rows.isEmpty());
+  for (const QVariant& row : clip_rows) {
+    const QString profile = row.toMap().value(QStringLiteral("profileId")).toString();
+    ASSERT_TRUE(clip_descriptions.contains(profile)) << profile.toStdString();
+    const auto& [description, project] = clip_descriptions.at(profile);
+    EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsClipSubtitle:") + profile)),
+              PanelText(description))
+        << profile.toStdString();
+    EXPECT_EQ(
+        harness.item(QStringLiteral("aiModelsClip:") + profile)->property("upstreamUrl").toString(),
+        project)
+        << profile.toStdString();
+  }
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
@@ -565,14 +593,25 @@ TEST(AiModelsSettingsQmlTest, AcceptStartsOnlyTheChosenDownloadAndTheStatementSt
   EXPECT_FALSE(harness.statement()->property("visible").toBool());
   EXPECT_EQ(harness.downloads_->started_urls.size(), 2u);
 
-  // The read-only statement has only Close.
-  Press(harness.item(QStringLiteral("aiModelsStatementButton")));
-  ASSERT_TRUE(WaitUntil([&] { return harness.statement()->property("visible").toBool(); }));
-  EXPECT_FALSE(harness.statementButton("aiModelDownloadStatementAcceptButton")
-                   ->property("visible")
-                   .toBool());
-  Press(harness.statementButton("aiModelDownloadStatementCloseButton"));
-  ASSERT_TRUE(WaitUntil([&] { return !harness.statement()->property("visible").toBool(); }));
+  // The AI Models page has no statement button; the About page shows the statement
+  // read-only, with only Close.
+  EXPECT_EQ(harness.item(QStringLiteral("aiModelsStatementButton")), nullptr);
+  harness.dialog()->setProperty("currentCategory", kAboutCategory);
+  ProcessEvents(100);
+  QObject* about_link = harness.item(QStringLiteral("aboutAiModelStatementLink"));
+  ASSERT_NE(about_link, nullptr);
+  ASSERT_TRUE(about_link->property("visible").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(about_link, "activated"));
+  QObject* about_statement = harness.item(QStringLiteral("aboutAiModelStatementDialog"));
+  ASSERT_NE(about_statement, nullptr);
+  ASSERT_TRUE(WaitUntil([&] { return about_statement->property("visible").toBool(); }));
+  EXPECT_FALSE(
+      about_statement->findChild<QObject*>(QStringLiteral("aiModelDownloadStatementAcceptButton"))
+          ->property("visible")
+          .toBool());
+  Press(
+      about_statement->findChild<QObject*>(QStringLiteral("aiModelDownloadStatementCloseButton")));
+  ASSERT_TRUE(WaitUntil([&] { return !about_statement->property("visible").toBool(); }));
   EXPECT_EQ(harness.downloads_->started_urls.size(), 2u);
 }
 

@@ -4,8 +4,8 @@ import QtQuick.Layouts
 
 // The download statement of the external AI models (AI Models plan, section 4, version 1).
 // Settings > AI Models opens it before the first download of any model ("Accept and Download"
-// and "Cancel") and read-only from its "Download statement" button ("Close"). The page records
-// the acceptance through AiModelPackageService::acceptDownloadStatement.
+// and "Cancel"); Settings > About opens it read-only ("Close"). The AI Models page records the
+// acceptance through AiModelPackageService::acceptDownloadStatement.
 Popup {
     id: root
     objectName: "aiModelDownloadStatementDialog"

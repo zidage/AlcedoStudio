@@ -14,8 +14,8 @@ import QtQuick.Layouts
 // - "Content Recognition (CLIP)": the download source, then one PackageCard per CLIP model
 //   (ModelDownloadController) with Download, Cancel, Remove, and Activate for the open project
 //   (SemanticGenerationController). The active model of the open project has the active border.
-// - The download statement (plan section 4) opens before the first download of any model; the
-//   "Download statement" button shows it read-only.
+// - The download statement (plan section 4) opens before the first download of any model. The
+//   About page shows it read-only.
 //
 // The dialog starts the signed feed check when this page opens; the page never starts one by
 // itself except "Check again".
@@ -87,11 +87,6 @@ ColumnLayout {
         pendingDownload = null
     }
 
-    function showStatement() {
-        pendingDownload = null
-        statementDialog.openReadOnly()
-    }
-
     function confirmRemoval() {
         const key = pendingRemovalKey
         pendingRemovalKey = ""
@@ -128,15 +123,11 @@ ColumnLayout {
 
     // ── AI Mask model set ────────────────────────────────────────────────
 
-    // The models of the AI Mask set and what each one does (the revision Pill shows the version).
-    function maskContentsText() {
-        return [
-            qsTr("SAM 2.1 tiny: selects the object that you click, box, or draw over."),
-            qsTr("S3OD: selects the subject, the background, and each person."),
-            qsTr("People and sky locator: finds the people and the sky in the photo."),
-            qsTr("Sky model: selects the sky with fine edges.")
-        ].map(line => "• " + line).join("\n")
-    }
+    // What the AI Mask set does, in one sentence (the revision Pill shows the version).
+    readonly property string maskDescription:
+        qsTr("Selects the subject, people, sky, and the objects that you click, box, or draw over.")
+    // The project that trains and prepares the AI Mask models.
+    readonly property string maskProjectUrl: "https://github.com/zidage/alcedo-ai-mask-lab"
 
     function maskRevisionText(row) {
         const installedVersion = Number(row.installedModelSetVersion || 0)
@@ -210,14 +201,38 @@ ColumnLayout {
 
     // ── CLIP models ──────────────────────────────────────────────────────
 
-    // What a CLIP model does, and the search language.
-    function clipPurposeText(language) {
-        switch (language) {
-        case "en": return qsTr("Recognizes the content of photos, so you can find them with a text search in English.")
-        case "zh": return qsTr("Recognizes the content of photos, so you can find them with a text search in Chinese.")
-        case "multilingual": return qsTr("Recognizes the content of photos, so you can find them with a text search in many languages.")
+    // One sentence per CLIP model family, shortened from the description of its publisher
+    // (apple/ml-mobileclip README, the jinaai/jina-clip-v2 model card, the SigLIP 2 README of
+    // google-research/big_vision), and the GitHub project when the publisher has one.
+    function clipFamily(profileId) {
+        const id = String(profileId || "")
+        if (id.startsWith("mobileclip2"))
+            return "mobileclip2"
+        if (id.startsWith("jina-clip-v2"))
+            return "jina-clip-v2"
+        if (id.startsWith("siglip2"))
+            return "siglip2"
+        return ""
+    }
+
+    function clipDescription(profileId) {
+        switch (clipFamily(profileId)) {
+        case "mobileclip2":
+            return qsTr("Fast image-text model from Apple, trained with multi-modal reinforced training.")
+        case "jina-clip-v2":
+            return qsTr("Multilingual embedding model for text and images from Jina AI, for 89 languages.")
+        case "siglip2":
+            return qsTr("Multilingual vision-language encoder from Google that improves on SigLIP.")
         }
-        return qsTr("Recognizes the content of photos, so you can find them with a text search.")
+        return ""
+    }
+
+    function clipProjectUrl(profileId) {
+        switch (clipFamily(profileId)) {
+        case "mobileclip2": return "https://github.com/apple/ml-mobileclip"
+        case "siglip2": return "https://github.com/google-research/big_vision"
+        }
+        return ""
     }
 
     function clipBackendText(backend) {
@@ -271,36 +286,11 @@ ColumnLayout {
         }
     }
 
-    // ── Top row: description and the statement ───────────────────────────
-    RowLayout {
-        Layout.fillWidth: true
-        Layout.topMargin: 26
-        Layout.leftMargin: 34
-        Layout.rightMargin: 34
-        spacing: appTheme.spaceMd
-
-        Label {
-            Layout.fillWidth: true
-            text: qsTr("Alcedo Studio downloads these AI models to this computer. Each model has its own license.")
-            color: appTheme.textMutedColor
-            font.family: appTheme.uiFontFamily
-            font.pixelSize: appTheme.fontSizeBody
-            wrapMode: Text.Wrap
-        }
-        DialogActionButton {
-            objectName: "aiModelsStatementButton"
-            Layout.alignment: Qt.AlignVCenter
-            buttonWidth: Math.max(160, implicitContentWidth + appTheme.spaceLg * 2)
-            buttonHeight: 34
-            text: qsTr("Download statement")
-            onClicked: page.showStatement()
-        }
-    }
-
     // ── Model directory ──────────────────────────────────────────────────
     BentoTile {
         objectName: "aiModelsDirectoryTile"
         Layout.fillWidth: true
+        Layout.topMargin: 26
         Layout.leftMargin: 34
         Layout.rightMargin: 34
         contentHeight: directoryColumn.implicitHeight
@@ -470,7 +460,9 @@ ColumnLayout {
                 namePrefix: "aiModelsMask"
                 cardKey: packageId
                 title: row.name || packageId
-                subtitle: page.maskContentsText()
+                subtitle: page.maskDescription
+                upstreamUrl: page.maskProjectUrl
+                upstreamToolTip: qsTr("Open the AI Mask model project on GitHub")
                 pills: [page.maskRevisionText(row), page.formatBytes(row.archiveBytes)]
                 licenses: page.maskLicenses(row)
                 statusText: page.maskStatusText(row)
@@ -613,7 +605,9 @@ ColumnLayout {
                 namePrefix: "aiModelsClip"
                 cardKey: profileId
                 title: row.displayName || profileId
-                subtitle: page.clipPurposeText(row.language || "")
+                subtitle: page.clipDescription(profileId)
+                upstreamUrl: page.clipProjectUrl(profileId)
+                upstreamToolTip: qsTr("Open the model project on GitHub")
                 pills: [row.sizeLabel || "", page.clipBackendText(row.inferenceBackend || "")]
                 licenses: (row.licenseName || "").length > 0
                           ? [{ name: row.licenseName, url: row.licenseUrl || "" }] : []

@@ -352,6 +352,51 @@ ColumnLayout {
         }
     }
 
+    // AI models: the download statement of the external AI models (AI Models plan, section 4),
+    // read-only. Settings > AI Models still shows it for acceptance before the first download.
+    SettingsSection {
+        Layout.fillWidth: true
+        Layout.leftMargin: 34
+        Layout.rightMargin: 34
+        title: qsTr("AI models")
+        textColor: page.textColor
+        mutedTextColor: page.mutedTextColor
+        dividerColor: page.dividerColor
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Alcedo Studio downloads the AI models of Settings > AI Models to this computer. Each model has its own license.")
+                color: page.mutedTextColor
+                font.pixelSize: 13
+                font.weight: 500
+                wrapMode: Text.WordWrap
+                lineHeight: 1.3
+            }
+
+            LinkRow {
+                objectName: "aboutAiModelStatementLink"
+                Layout.fillWidth: true
+                labelText: qsTr("AI model download statement")
+                subtitle: qsTr("Licenses and training data of the AI models")
+                accent: page.primaryAccent
+                textColor: page.textColor
+                mutedTextColor: page.mutedTextColor
+                dividerColor: page.dividerColor
+                dataFontFamily: page.uiFontFamily
+                onActivated: aiModelStatement.openReadOnly()
+            }
+        }
+    }
+
+    AiModelDownloadStatementDialog {
+        id: aiModelStatement
+        objectName: "aboutAiModelStatementDialog"
+    }
+
     // 5. Third-party licenses — the long one. Collapsible "View all" so it is
     // not front and center; collapsed by default. The list is baked in from the
     // third_party_licenses/ folder (distinct libraries, with combined license
