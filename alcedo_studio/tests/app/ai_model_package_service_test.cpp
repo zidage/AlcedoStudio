@@ -561,6 +561,55 @@ TEST_F(AiModelPackageServiceTest, InstallsHighestSupportedVersionIntoVersionDire
   EXPECT_EQ(row.value(QStringLiteral("action")).toString(), QString());
 }
 
+// scripts/ai_models/tests/test_ai_model_packages.py writes this feed and its two archives with
+// the publishing code (py7zr, LZMA2) and the key of KeyPair().
+TEST_F(AiModelPackageServiceTest, PythonPreparedPackageInstallsOnEachPlatform) {
+  const fs::path fixture = PackagePathFromUtf8(ALCEDO_AI_MODEL_PACKAGE_FIXTURE_DIR);
+  feed_->feed            = {QByteArray::fromStdString(ReadBytes(fixture / "manifest.json")),
+                            QByteArray::fromStdString(ReadBytes(fixture / "manifest.json.sig"))};
+  const Json manifest    = Json::parse(ReadBytes(fixture / "manifest.json"));
+  for (const auto& [platform, artifact] : manifest["packages"][0]["artifacts"].items()) {
+    SCOPED_TRACE(platform);
+    const std::string url    = artifact["url"].get<std::string>();
+    downloads_->sources[url] = fixture / PackagePathFromUtf8(url.substr(url.rfind('/') + 1));
+    models_                  = base_ / ("models-" + platform);
+    fs::create_directories(models_);
+    AiModelPackageServiceOptions options = MakeOptions();
+    options.platform                     = QString::fromStdString(platform);
+    service_ = std::make_unique<AiModelPackageService>(std::move(options));
+
+    Check();
+    ASSERT_TRUE(service_->checked()) << service_->last_error().toStdString();
+    EXPECT_EQ(Row().value(QStringLiteral("action")).toString(), QStringLiteral("install"));
+    EXPECT_EQ(Row().value(QStringLiteral("licenses")).toList().size(), 4);
+    ASSERT_TRUE(Install()) << State().error.toStdString();
+    EXPECT_EQ(State().status, AiModelPackageStatus::kCurrent) << State().error.toStdString();
+
+    const AiModelInstallation installation = ReadAiMaskModelInstallation(models_);
+    ASSERT_TRUE(installation.Usable());
+    EXPECT_EQ(installation.supported->receipt->platform, platform);
+    EXPECT_EQ(installation.supported->receipt->revision, "r1");
+    const std::map<std::string, std::string> files = InstalledFiles(1);
+    // Every listed file; installed.json and package-inventory.json are not listed.
+    EXPECT_EQ(files.size(), artifact["file_count"].get<std::size_t>());
+    for (const char* path :
+         {"model_set.json", "NOTICE.txt", "people_sky_head.json", "licenses/SAM2-Apache-2.0.txt",
+          "licenses/S3OD-MIT.txt", "licenses/DINOv3-License.md", "licenses/GPL-3.0.txt"}) {
+      EXPECT_TRUE(files.contains(path)) << path;
+    }
+    const Json model_set = Json::parse(files.at("model_set.json"));
+    EXPECT_EQ(model_set["platform"], platform);
+    if (platform == "macos-arm64") {
+      // Core ML model directories keep their nested files.
+      EXPECT_TRUE(files.contains("s3od.mlmodelc/weights/weight.bin"));
+      EXPECT_TRUE(files.contains("point_encoder.mlmodelc/analytics/coremldata.bin"));
+    } else {
+      EXPECT_TRUE(files.contains("subject_masks.onnx"));
+    }
+    service_.reset();
+  }
+}
+
 TEST_F(AiModelPackageServiceTest, InstallReportsDownloadVerifyAndInstallStages) {
   StartService();
   const BuiltPackage v1 = Publish(1, "r1", 0);

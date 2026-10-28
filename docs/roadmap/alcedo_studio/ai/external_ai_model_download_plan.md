@@ -1,6 +1,7 @@
 # AI Models Page: One Download Place for CLIP and AI Mask Models - Phase Plan
 
-Date: 2026-10-27. Status: AM1 complete (2026-10-27); AM2-AM5 planned.
+Date: 2026-10-27. Status: AM1 complete (2026-10-27); AM2 complete, v1 r1 published
+(2026-10-28); AM3-AM5 planned.
 
 Source audit: `main` `56df8883`.
 Tracking: [#579](https://github.com/zidage/AlcedoStudio/issues/579).
@@ -377,6 +378,123 @@ Work:
 Required tests (Python): the prepared archives verify from local files; a changed byte fails;
 the publication plan lists the live manifest last; the C++ AM1 verifier accepts the Python
 fixture manifest (shared fixture as in the LUT tests).
+
+#### AM2 completion record (2026-10-28)
+
+**Status:** complete. The prepare and publish tools build, sign, verify, and upload the AI Mask
+model set v1 r1 for `windows-x86_64` and `macos-arm64`; feed sequence `20261028041321` is live at
+`https://static.aoraw.org/ai-models/v1/manifest.json`.
+
+Details the plan did not specify, chosen in AM2:
+
+- **Model set definition.** `scripts/ai_models/ai_mask_model_set_v1.json` holds the package ID,
+  name, version, revision, the license list (feed name, package path, source file, pinned
+  SHA-256), the models by role with their file per platform, and the pinned files per platform.
+  The tools read only this file; a new revision is a new definition.
+- **Core ML pins (refines "Core ML by the directory rule").** Master plan section 8.2.1 pinned the
+  SM1 compiles by directory SHA-256, but `coremldata.bin` changes at every compile, and the SM1
+  compiles no longer exist (the Mac copy was converted and compiled again from the same
+  checkpoints on 2026-10-26). AM2 pins the published copy file by file (path, size, SHA-256 of
+  all four files of each `.mlmodelc`) and also checks its directory SHA-256 by the lab rule. The
+  byte totals equal section 8.2.1; the sky head copy equals section 8.2.1 exactly (directory,
+  `model.mil`, and `weights/weight.bin`). Section 8.2.1 now lists the published directory SHA-256
+  next to the SM1 value. The Windows files equal section 8.2.1.
+- **Package content.** Root files `model_set.json`, `package-inventory.json`, `NOTICE.txt`,
+  `people_sky_head.json`, the model files, and `licenses/` with `SAM2-Apache-2.0.txt`,
+  `S3OD-MIT.txt`, `DINOv3-License.md`, and `GPL-3.0.txt` (the root `LICENSE` text without the
+  appended NVIDIA additional permission). `model_set.json` also names the `platform` and the
+  `models` (role, path, licenses) for AM5. The feed `licenses` names are `Apache-2.0`, `MIT`,
+  `DINOv3 License`, and `GPL-3.0`. `NOTICE.txt` is
+  `scripts/ai_models/ai_mask_model_set_v1_NOTICE.txt`: source, license, changes, and training
+  data of each model, the S3OD lineage (FLUX.1 Krea [dev] images, teacher labels from DIS5K,
+  HR-SOD, UHRSD, DUTS), the MaSS13K lineage, and the statement of section 4 in English and
+  Chinese (A7, A9, A10).
+- **Reproducible archives.** The files are checked, copied into a staging directory, checked
+  again, and get one fixed modification time, so the same input on the same OS gives the same
+  archive bytes (py7zr writes OS file attributes, so archive bytes differ between Windows and
+  macOS).
+- **Shared fixture.** `alcedo_studio/tests/resources/ai_model_packages/` holds a feed and two
+  archives that the Python code prepares from the real definition with small model files and
+  short license texts, signed with the test key of `AiModelPackageServiceTest` (`KeyPair()`).
+  Regenerate with `python scripts/ai_models/tests/ai_model_test_support.py --write-cpp-fixture`.
+  The Python test compares the regenerated feed (without the archive size and SHA-256) and the
+  archive content with the committed files.
+- **Not in AM2.** The tools build one model set version per run. A later feed that must keep v1
+  for old builds while it adds v2 (P2) needs a prepare run that lists both versions.
+
+Operator steps (Windows; the private key stays offline):
+
+```text
+python scripts/ai_models/prepare_ai_model_packages.py
+  --windows-source <dir with the ONNX files> --macos-source <dir with the .mlmodelc files>
+  --private-key D:\secure\alcedo-update-private.seed
+  --signer build/release/alcedo_studio/src/alcedo_update_signer.exe [--output-dir DIR]
+python scripts/ai_models/publish_ai_model_packages.py --output-dir DIR            (plan only)
+python scripts/ai_models/publish_ai_model_packages.py --output-dir DIR --upload   (R2_* in .env.test)
+```
+
+**Primary success call chain:**
+
+```text
+prepare_ai_model_packages.main
+  -> load_definition (pins, licenses, models; every model file pinned on each platform)
+  -> build_package per platform
+     -> stage_package: check_source_file (size + SHA-256; .mlmodelc file by file + directory rule)
+        -> copy -> check again -> model_set.json, NOTICE.txt, licenses/ (pinned license texts)
+     -> build_inventory -> write_package_archive (fixed file time, LZMA2 preset 9)
+     -> verify_package_archive (archive hash, safe entries, inventory digest and fields, files,
+        model_set.json, license files)
+  -> manifest_bytes (unique id + version) -> alcedo_update_signer sign -> verify_signature
+publish_ai_model_packages.main
+  -> verify_prepared_output (signature over the exact bytes, every archive again)
+  -> planned_uploads: archives, archived .sig + manifest, live .sig, live manifest last
+  -> --upload: publish_object per item (immutable keys refuse a different object)
+App (AM1): AiModelPackageService::CheckPackages -> VerifyAiModelPackageManifest -> install
+```
+
+**Primary failure call chains:**
+
+```text
+Changed, missing, or extra source file -> check_source_file raises -> exit 1, no manifest
+Changed archive byte / model byte / inventory -> verify_package_archive raises -> nothing signed
+Manifest and signature differ, or no .sig -> publish stops before any upload
+Upload failure -> publish_object raises -> the live manifest is not replaced (it is last)
+```
+
+**What was proven (executed tests):**
+
+| Required test | Test | Result |
+| --- | --- | --- |
+| The prepared archives verify from local files | `AiModelPackagePreparationTest.test_PreparedArchivesVerifyFromLocalFiles` | PASS |
+| A changed byte fails | `...test_ChangedSourceByteStopsPreparationWithoutManifest`, `...test_ChangedArchiveByteFailsVerification`, `...test_PublicationRejectsChangedArchive` | PASS |
+| An extra or missing Core ML file fails | `...test_ExtraOrMissingCoreMlFileStopsPreparation` | PASS |
+| The publication plan lists the live manifest last | `...test_SignerSignsFeedAndPublicationPlanListsLiveManifestLast` (real `alcedo_update_signer`) | PASS |
+| Same input, same archive bytes | `...test_SameInputGivesSameArchiveBytes` | PASS |
+| The C++ AM1 verifier accepts the Python fixture manifest | `AiModelPackageManifestTest.PythonPreparedFeedVerifiesInCpp`, `AiModelPackageCppFixtureTest.test_CppFixtureIsTheCurrentPythonPreparedFeed` | PASS |
+| The C++ installer installs the Python archives (both platforms) | `AiModelPackageServiceTest.PythonPreparedPackageInstallsOnEachPlatform` | PASS |
+| The definition pins the section 8.2.1 files and the license texts | `AiMaskModelSetDefinitionTest.test_DefinitionPinsTheAcceptedModelFilesAndLicenseTexts` | PASS |
+| NOTICE names every model, license, lineage, and the statement; no commercial-use ban | `AiMaskModelSetDefinitionTest.test_NoticeNamesEveryModelLicenseAndTheStatement` | PASS |
+| AM1 tests unchanged | `AiModelPackageManifestTest`, `AiModelPackageServiceTest` (29 tests) | PASS |
+
+Commands: `python -m unittest discover -s scripts/ai_models/tests` (10 tests);
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AiModelPackageManifestTest
+AiModelPackageServiceTest`; `ctest --test-dir build/debug -R
+"^(AiModelPackageManifestTest|AiModelPackageServiceTest)\."`.
+
+Publication of v1 r1 (2026-10-28): sources `D:/Download/alcedo_models/alcedo-ai-mask-v1` (Windows)
+and the Mac copy `~/Documents/AlcedoModels/alcedo-ai-mask-v1`. Windows: 12 files, 356,878,760
+bytes, archive 319,577,246 bytes, SHA-256
+`f1f4d2465c9541161cf7ab6622a14c7f126719d778b338ecbd7055bda549a9a3`. macOS: 27 files, 433,589,987
+bytes, archive 390,518,274 bytes, SHA-256
+`b333e1fa6d2e4b8771f49880683f4384279f98dd91004af6e749071e6d686616`. Signed with the update key
+and verified against `update_public_key.txt`; uploaded with the user's approval. After the
+upload, the public `manifest.json` and `.sig` were downloaded from `static.aoraw.org`: their bytes
+equal the prepared files, the signature is valid, and both downloaded archives pass
+`verify_package_archive`.
+
+**Residual gaps:** the Python tool tests do not run in CI (as the LUT tool tests). The installed
+app has not installed the live package yet; AM1 (#580) is not merged, and the AI Models page is
+AM4.
 
 ### 5.3 AM3: CLIP install per card and activation per project
 
