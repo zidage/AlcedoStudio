@@ -16,8 +16,9 @@
 #include <memory>
 #include <optional>
 
-#include "app/update_manifest.hpp"
 #include "app/download_service.hpp"
+#include "app/signed_feed_fetch.hpp"
+#include "app/update_manifest.hpp"
 
 class QNetworkReply;
 

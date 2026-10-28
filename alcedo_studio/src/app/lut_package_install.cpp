@@ -4,21 +4,15 @@
 
 #include "app/lut_package_install.hpp"
 
-#include <archive.h>
-#include <archive_entry.h>
-
-#include <QCryptographicHash>
 #include <QFile>
 #include <QString>
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <map>
-#include <memory>
-#include <set>
 #include <system_error>
 #include <utility>
 
+#include "app/package_archive.hpp"
 #include "utils/lut/lut_metadata.hpp"
 
 namespace alcedo {
@@ -30,7 +24,6 @@ namespace fs                                      = std::filesystem;
 constexpr std::uint64_t kMaxPackageInventoryBytes = 16ULL * 1024ULL * 1024ULL;
 /// Upper bound of auxiliary files (licenses, attribution) per package.
 constexpr std::uint64_t kMaxAuxiliaryFiles        = 256;
-constexpr std::size_t   kCopyBlockBytes           = 256 * 1024;
 
 auto                    ToQString(const fs::path& path) -> QString {
   const std::u8string text = path.u8string();
@@ -45,104 +38,12 @@ auto AsciiLower(std::string text) -> std::string {
   return text;
 }
 
-auto ToHex(const QByteArray& bytes) -> std::string { return bytes.toHex().toStdString(); }
-
 auto PackageDirectory(std::string_view package_id) -> std::string {
   return std::string(kLutPackagesDirectoryName) + "/" + std::string(package_id);
 }
 
 auto ContentParent(std::string_view package_id) -> std::string {
   return PackageDirectory(package_id) + "/" + std::string(kLutPackageContentDirectoryName);
-}
-
-struct ArchiveDeleter {
-  void operator()(archive* handle) const { archive_read_free(handle); }
-};
-
-auto OpenArchive(const fs::path& path, std::string* error)
-    -> std::unique_ptr<archive, ArchiveDeleter> {
-  std::unique_ptr<archive, ArchiveDeleter> reader(archive_read_new());
-  if (!reader) {
-    *error = "the archive reader cannot be created";
-    return nullptr;
-  }
-  // Official packages are 7z archives (LZMA2); no other format is accepted.
-  archive_read_support_format_7zip(reader.get());
-#ifdef _WIN32
-  const int opened = archive_read_open_filename_w(reader.get(), path.wstring().c_str(), 64 * 1024);
-#else
-  const int opened = archive_read_open_filename(reader.get(), path.c_str(), 64 * 1024);
-#endif
-  if (opened != ARCHIVE_OK) {
-    const char* message = archive_error_string(reader.get());
-    *error = "the package archive cannot be opened: " + std::string(message ? message : "");
-    return nullptr;
-  }
-  return reader;
-}
-
-auto ArchiveError(archive* reader, std::string_view prefix) -> std::string {
-  const char* message = archive_error_string(reader);
-  return std::string(prefix) + ": " + (message != nullptr ? message : "unknown archive error");
-}
-
-auto EntryName(archive_entry* entry) -> std::string {
-  const char* name = archive_entry_pathname_utf8(entry);
-  if (name == nullptr) name = archive_entry_pathname(entry);
-  std::string text = name != nullptr ? name : "";
-  while (!text.empty() && text.back() == '/') text.pop_back();
-  return text;
-}
-
-struct ExtractedFile {
-  std::uint64_t size = 0;
-  std::string   sha256;
-};
-
-/// Stream one regular entry into a new file and hash it. The file must not exist.
-auto WriteEntry(archive* reader, const fs::path& target, std::uint64_t* budget_left,
-                const std::atomic<bool>& stop, ExtractedFile* output, bool* canceled)
-    -> std::string {
-  std::error_code error;
-  fs::create_directories(target.parent_path(), error);
-  if (error) return "cannot create " + LutPathToUtf8(target.parent_path()) + ": " + error.message();
-  QFile file(ToQString(target));
-  if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
-    return "cannot create " + LutPathToUtf8(target) + ": " + file.errorString().toStdString();
-  }
-  QCryptographicHash                hash(QCryptographicHash::Sha256);
-  std::array<char, kCopyBlockBytes> buffer{};
-  while (true) {
-    if (stop.load()) {
-      *canceled = true;
-      return "the installation was canceled";
-    }
-    const la_ssize_t read = archive_read_data(reader, buffer.data(), buffer.size());
-    if (read == 0) break;
-    if (read < 0) return ArchiveError(reader, "the package archive cannot be read");
-    const auto count = static_cast<std::uint64_t>(read);
-    if (count > *budget_left) return "the package archive holds more bytes than its descriptor";
-    *budget_left -= count;
-    if (file.write(buffer.data(), read) != read) {
-      return "cannot write " + LutPathToUtf8(target) + ": " + file.errorString().toStdString();
-    }
-    hash.addData(QByteArrayView(buffer.data(), static_cast<qsizetype>(read)));
-    output->size += count;
-  }
-  if (!file.flush()) return "cannot write " + LutPathToUtf8(target);
-  file.close();
-  output->sha256 = ToHex(hash.result());
-  return {};
-}
-
-auto ReadSmallFile(const fs::path& path, std::uint64_t limit, std::string* bytes) -> bool {
-  QFile input(ToQString(path));
-  if (!input.open(QIODevice::ReadOnly) || static_cast<std::uint64_t>(input.size()) > limit) {
-    return false;
-  }
-  const QByteArray data = input.readAll();
-  bytes->assign(data.constData(), static_cast<std::size_t>(data.size()));
-  return true;
 }
 
 auto WriteNewFile(const fs::path& path, std::string_view bytes) -> std::string {
@@ -158,7 +59,7 @@ auto WriteNewFile(const fs::path& path, std::string_view bytes) -> std::string {
 
 /// Compare the archive inventory with the signed descriptor and the extracted files.
 auto VerifyExtractedContent(const LutPackageInventory& inventory, const LutPackageReceipt& expected,
-                            const std::map<std::string, ExtractedFile>& files) -> std::string {
+                            const std::map<std::string, PackageArchiveFile>& files) -> std::string {
   if (inventory.package_id != expected.package_id) {
     return "the archive inventory names another package";
   }
@@ -167,32 +68,15 @@ auto VerifyExtractedContent(const LutPackageInventory& inventory, const LutPacka
       inventory.unpacked_bytes != expected.unpacked_bytes) {
     return "the archive inventory differs from the signed package descriptor";
   }
-  std::size_t listed = 0;
-  const auto  check  = [&](const std::string& path, std::uint64_t size,
-                         const std::string& sha256) -> std::string {
-    ++listed;
-    const auto found = files.find(path);
-    if (found == files.end()) return "the package archive does not contain " + path;
-    if (found->second.size != size || found->second.sha256 != sha256) {
-      return "an extracted file differs from the package inventory: " + path;
-    }
-    return {};
-  };
+  std::vector<PackageInventoryFile> listed;
+  listed.reserve(inventory.luts.size() + inventory.auxiliary_files.size());
   for (const LutInventoryRecord& record : inventory.luts) {
-    if (std::string error = check(record.relative_path, record.size, record.sha256);
-        !error.empty()) {
-      return error;
-    }
+    listed.push_back({record.relative_path, record.size, record.sha256});
   }
   for (const LutAuxiliaryFileRecord& record : inventory.auxiliary_files) {
-    if (std::string error = check(record.relative_path, record.size, record.sha256);
-        !error.empty()) {
-      return error;
-    }
+    listed.push_back({record.relative_path, record.size, record.sha256});
   }
-  // The inventory file itself is the one extracted file that is not listed.
-  if (files.size() != listed + 1) return "the package archive contains unlisted files";
-  return {};
+  return VerifyExtractedPackageFiles(listed, files, kLutPackageInventoryFileName);
 }
 
 /// Pick a new, unused content directory name for @p inventory_sha256.
@@ -283,66 +167,21 @@ void RetireContentDirectory(const fs::path& root, std::string_view package_id,
 auto ExtractLutPackageArchive(const fs::path& archive_path, const fs::path& destination,
                               const LutPackageReceipt& expected, const std::atomic<bool>& stop)
     -> LutPackageExtraction {
-  LutPackageExtraction result;
-  std::error_code      error;
-  if (fs::exists(destination, error) || !fs::create_directories(destination, error)) {
-    result.error = "the package content directory cannot be created: " + LutPathToUtf8(destination);
+  LutPackageExtraction           result;
+  const PackageArchiveLimits     limits{expected.unpacked_bytes + kMaxPackageInventoryBytes,
+                                    expected.file_count + kMaxAuxiliaryFiles + 1};
+  const PackageArchiveExtraction extraction =
+      ExtractPackageArchive(archive_path, destination, limits, stop);
+  if (!extraction.error.empty()) {
+    result.error    = extraction.error;
+    result.canceled = extraction.canceled;
     return result;
-  }
-  std::unique_ptr<archive, ArchiveDeleter> reader = OpenArchive(archive_path, &result.error);
-  if (!reader) return result;
-
-  std::map<std::string, ExtractedFile> files;
-  std::set<std::string>                folded_names;
-  std::uint64_t       budget_left = expected.unpacked_bytes + kMaxPackageInventoryBytes;
-  const std::uint64_t max_files   = expected.file_count + kMaxAuxiliaryFiles + 1;
-  archive_entry*      entry       = nullptr;
-  while (true) {
-    if (stop.load()) {
-      result.canceled = true;
-      result.error    = "the installation was canceled";
-      return result;
-    }
-    const int status = archive_read_next_header(reader.get(), &entry);
-    if (status == ARCHIVE_EOF) break;
-    if (status != ARCHIVE_OK) {
-      result.error = ArchiveError(reader.get(), "the package archive cannot be read");
-      return result;
-    }
-    const std::string name = EntryName(entry);
-    if (!IsSafeLutRelativePath(name)) {
-      result.error = "the package archive contains an unsafe path: " + name;
-      return result;
-    }
-    const auto type = archive_entry_filetype(entry);
-    if (archive_entry_hardlink(entry) != nullptr || archive_entry_symlink(entry) != nullptr ||
-        (type != AE_IFREG && type != AE_IFDIR)) {
-      result.error = "the package archive contains a link or special file: " + name;
-      return result;
-    }
-    if (type == AE_IFDIR) continue;  // Directories are created for the files they hold.
-    if (!folded_names.insert(AsciiLower(name)).second) {
-      result.error = "the package archive contains a duplicate destination: " + name;
-      return result;
-    }
-    if (folded_names.size() > max_files) {
-      result.error = "the package archive holds more files than its descriptor";
-      return result;
-    }
-    ExtractedFile extracted;
-    std::string   write_error = WriteEntry(reader.get(), destination / LutPathFromUtf8(name),
-                                           &budget_left, stop, &extracted, &result.canceled);
-    if (!write_error.empty()) {
-      result.error = std::move(write_error);
-      return result;
-    }
-    files.emplace(name, std::move(extracted));
   }
 
   std::string inventory_bytes;
-  if (!files.contains(std::string(kLutPackageInventoryFileName)) ||
-      !ReadSmallFile(destination / LutPathFromUtf8(kLutPackageInventoryFileName),
-                     kMaxPackageInventoryBytes, &inventory_bytes)) {
+  if (!extraction.files.contains(std::string(kLutPackageInventoryFileName)) ||
+      !ReadSmallPackageFile(destination / LutPathFromUtf8(kLutPackageInventoryFileName),
+                            kMaxPackageInventoryBytes, &inventory_bytes)) {
     result.error = "the package archive has no readable package-inventory.json";
     return result;
   }
@@ -351,7 +190,8 @@ auto ExtractLutPackageArchive(const fs::path& archive_path, const fs::path& dest
     result.error = "the package inventory is invalid: " + inventory.error;
     return result;
   }
-  if (std::string mismatch = VerifyExtractedContent(*inventory.inventory, expected, files);
+  if (std::string mismatch =
+          VerifyExtractedContent(*inventory.inventory, expected, extraction.files);
       !mismatch.empty()) {
     result.error = std::move(mismatch);
     return result;
@@ -377,14 +217,10 @@ auto InstallLutPackageArchive(const fs::path& root, const LutPackageInstallReque
 
   // 1. The exact archive bytes must match the signed size and SHA-256.
   stage(LutPackageInstallStage::kVerifying);
-  const std::optional<LutFileHash> archive_hash = HashLutFile(request.archive_path);
-  if (!archive_hash) {
-    outcome.error = "the downloaded package archive cannot be read";
-    return outcome;
-  }
-  if (archive_hash->size != expected.artifact_size ||
-      archive_hash->sha256 != expected.artifact_sha256) {
-    outcome.error = "the downloaded package archive does not match its signed size and SHA-256";
+  if (std::string mismatch = VerifyPackageArchiveFile(request.archive_path, expected.artifact_size,
+                                                      expected.artifact_sha256);
+      !mismatch.empty()) {
+    outcome.error = std::move(mismatch);
     return outcome;
   }
   if (stop.load()) {

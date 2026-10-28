@@ -10,7 +10,6 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
@@ -41,19 +40,7 @@
 namespace alcedo {
 namespace {
 
-constexpr qint64 kMaximumManifestBytes  = 256 * 1024;
-constexpr qint64 kMaximumSignatureBytes = 1024;
 constexpr auto   kTrustedSequenceKey    = "updates/" ALCEDO_UPDATE_CHANNEL "/highestTrustedSequence";
-
-auto             NewRequest(const QUrl& url) -> QNetworkRequest {
-  QNetworkRequest request(url);
-  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                       QNetworkRequest::NoLessSafeRedirectPolicy);
-  request.setTransferTimeout(15000);
-  request.setRawHeader("Accept", "application/json, text/plain;q=0.9");
-  request.setRawHeader("Cache-Control", "no-cache");
-  return request;
-}
 
 auto SafePackageName(const QUrl& url) -> QString {
   const QString suffix = QFileInfo(url.path()).suffix().toLower();
@@ -216,42 +203,32 @@ void UpdateService::Fail(QString message) {
 }
 
 void UpdateService::FetchSmallFile(const QUrl& url, qint64 maximum_size, SmallReply callback) {
-  if (url.scheme() != QStringLiteral("https") ||
-      url.host().compare(feed_url_.host(), Qt::CaseInsensitive) != 0 || !url.userInfo().isEmpty()) {
-    callback({}, tr("The update server URL is not allowed."));
-    return;
-  }
-
-  QNetworkReply* reply = network_.get(NewRequest(url));
-  active_reply_        = reply;
-  auto payload         = std::make_shared<QByteArray>();
-  connect(reply, &QNetworkReply::readyRead, this, [reply, payload, maximum_size]() {
-    payload->append(reply->readAll());
-    if (payload->size() > maximum_size) {
-      reply->abort();
-    }
-  });
-  connect(reply, &QNetworkReply::finished, this,
-          [this, reply, payload, maximum_size, callback = std::move(callback)]() mutable {
-            if (active_reply_ == reply) {
-              active_reply_.clear();
-            }
-            payload->append(reply->readAll());
-            QString   error;
-            const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            if (reply->error() != QNetworkReply::NoError) {
-              error = reply->errorString();
-            } else if (status != 200) {
-              error = tr("The update server returned HTTP %1.").arg(status);
-            } else if (reply->url().scheme() != QStringLiteral("https") ||
-                       reply->url().host().compare(feed_url_.host(), Qt::CaseInsensitive) != 0) {
-              error = tr("The update server redirected to an untrusted host.");
-            } else if (payload->size() > maximum_size) {
-              error = tr("The update server response is too large.");
-            }
-            reply->deleteLater();
-            callback(error.isEmpty() ? std::move(*payload) : QByteArray{}, std::move(error));
-          });
+  active_reply_ =
+      FetchFeedFile(network_, this, url, feed_url_.host(), maximum_size,
+                    [this, callback = std::move(callback)](FeedFileResult result) {
+                      active_reply_.clear();
+                      QString error;
+                      switch (result.error) {
+                        case FeedFileError::kNone:
+                          break;
+                        case FeedFileError::kUrlNotAllowed:
+                          error = tr("The update server URL is not allowed.");
+                          break;
+                        case FeedFileError::kTooLarge:
+                          error = tr("The update server response is too large.");
+                          break;
+                        case FeedFileError::kNetwork:
+                          error = result.network_error;
+                          break;
+                        case FeedFileError::kHttpStatus:
+                          error = tr("The update server returned HTTP %1.").arg(result.http_status);
+                          break;
+                        case FeedFileError::kUntrustedRedirect:
+                          error = tr("The update server redirected to an untrusted host.");
+                          break;
+                      }
+                      callback(std::move(result.bytes), std::move(error));
+                    });
 }
 
 void UpdateService::CheckForUpdates() {
@@ -267,24 +244,16 @@ void UpdateService::CheckForUpdates() {
   download_eta_text_.clear();
   SetState(State::Checking, tr("Checking for updates…"));
 
-  FetchSmallFile(
-      feed_url_, kMaximumManifestBytes, [this](QByteArray manifest_bytes, QString error) {
-        if (!error.isEmpty()) {
-          Fail(std::move(error));
-          return;
-        }
-        QUrl signature_url = feed_url_;
-        signature_url.setPath(signature_url.path() + QStringLiteral(".sig"));
-        FetchSmallFile(signature_url, kMaximumSignatureBytes,
-                       [this, manifest_bytes = std::move(manifest_bytes)](
-                           QByteArray signature_text, QString signature_error) mutable {
-                         if (!signature_error.isEmpty()) {
-                           Fail(std::move(signature_error));
-                           return;
-                         }
-                         HandleManifest(std::move(manifest_bytes), std::move(signature_text));
-                       });
-      });
+  FetchSignedFeed([this](const QUrl& url, qint64 maximum_bytes,
+                         SmallReply done) { FetchSmallFile(url, maximum_bytes, std::move(done)); },
+                  feed_url_,
+                  [this](QByteArray manifest_bytes, QByteArray signature_text, QString error) {
+                    if (!error.isEmpty()) {
+                      Fail(std::move(error));
+                      return;
+                    }
+                    HandleManifest(std::move(manifest_bytes), std::move(signature_text));
+                  });
 }
 
 void UpdateService::HandleManifest(QByteArray manifest_bytes, QByteArray signature_text) {

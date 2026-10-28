@@ -215,7 +215,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                                      : alcedo::LutPackageServiceOptions::FromBuildConfiguration();
     if (!lut_package_options.downloader) {
       lut_package_options.downloader =
-          std::make_unique<alcedo::DownloadServiceLutArchiveDownloader>(*download_service_);
+          std::make_unique<alcedo::DownloadServicePackageArchiveDownloader>(*download_service_);
     }
     lut_packages_ =
         std::make_unique<alcedo::LutPackageService>(std::move(lut_package_options), *lut_library_);
@@ -242,6 +242,32 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   model_download_ = std::make_unique<ModelDownloadController>(*model_download_service_,
                                                               background_tasks_.get(), this);
   RecordConstruction("ModelDownloadController", model_download_.get());
+  // Constructing the AI model package service reads the local receipts only; Settings starts
+  // the signed feed check (AI Models plan, P6). Archives use the shared download admission.
+  {
+    alcedo::AiModelPackageServiceOptions ai_model_options =
+        alcedo::AiModelPackageServiceOptions::FromBuildConfiguration();
+    ai_model_options.downloader =
+        std::make_unique<alcedo::DownloadServicePackageArchiveDownloader>(*download_service_);
+    ai_model_options.model_directory = [this] {
+      return std::filesystem::path(model_download_->ModelDownloadDirectory().toStdU16String());
+    };
+    ai_model_packages_ =
+        std::make_unique<alcedo::AiModelPackageService>(std::move(ai_model_options));
+  }
+  RecordConstruction("AiModelPackageService", ai_model_packages_.get());
+  ai_model_download_tasks_ =
+      std::make_unique<AiModelDownloadTaskPublisher>(*ai_model_packages_, *background_tasks_);
+  RecordConstruction("AiModelDownloadTaskPublisher", ai_model_download_tasks_.get());
+  // One directory setting serves all AI models (P7); a new directory has other installations.
+  QObject::connect(model_download_.get(), &ModelDownloadController::StateChanged,
+                   ai_model_packages_.get(),
+                   [packages = ai_model_packages_.get(), downloads = model_download_.get(),
+                    directory = model_download_->ModelDownloadDirectory()]() mutable {
+                     if (downloads->ModelDownloadDirectory() == directory) return;
+                     directory = downloads->ModelDownloadDirectory();
+                     packages->RefreshInstallations();
+                   });
   ai_provider_profiles_ = std::make_unique<alcedo::AiProviderProfileController>(this);
   RecordConstruction("AiProviderProfileController", ai_provider_profiles_.get());
   semantic_generation_ = std::make_unique<SemanticGenerationController>(
@@ -709,6 +735,10 @@ void ApplicationModuleHost::ShutdownModules() {
     if (lut_packages_) {
       lut_packages_->Shutdown();
     }
+    // Cancel an AI model download and wait for its install worker (AI Models plan, AM1).
+    if (ai_model_packages_) {
+      ai_model_packages_->Shutdown();
+    }
     if (lut_library_) {
       lut_library_->Shutdown();
     }
@@ -820,6 +850,8 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy_shared(image_analysis_concurrency_limit_, "ImageAnalysisConcurrencyLimit");
   destroy(semantic_generation_, "SemanticGenerationController");
   destroy(ai_provider_profiles_, "AiProviderProfileController");
+  destroy(ai_model_download_tasks_, "AiModelDownloadTaskPublisher");
+  destroy(ai_model_packages_, "AiModelPackageService");
   destroy(model_download_, "ModelDownloadController");
   destroy(search_, "SearchController");
   destroy(stats_, "StatsEngine");

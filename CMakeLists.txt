@@ -53,6 +53,15 @@ if(NOT "${ALCEDO_LUT_PACKAGE_FEED_URL}" STREQUAL "" AND
    NOT "${ALCEDO_LUT_PACKAGE_FEED_URL}" MATCHES "^https://[^/@]+/.+")
     message(FATAL_ERROR "ALCEDO_LUT_PACKAGE_FEED_URL must be an HTTPS URL without user info.")
 endif()
+# Signed AI model package feed (docs/roadmap/alcedo_studio/ai/external_ai_model_download_plan.md,
+# P2). It is signed with the update key and has no expiry. Settings downloads the AI Mask model
+# set from it. Empty disables AI model package checks and downloads in this build.
+set(ALCEDO_AI_MODEL_FEED_URL "https://static.aoraw.org/ai-models/v1/manifest.json"
+    CACHE STRING "HTTPS URL of the signed AI model package manifest. Empty disables AI model packages.")
+if(NOT "${ALCEDO_AI_MODEL_FEED_URL}" STREQUAL "" AND
+   NOT "${ALCEDO_AI_MODEL_FEED_URL}" MATCHES "^https://[^/@]+/.+")
+    message(FATAL_ERROR "ALCEDO_AI_MODEL_FEED_URL must be an HTTPS URL without user info.")
+endif()
 set(ALCEDO_UPDATE_PUBLIC_KEY_FILE
     "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/update_public_key.txt"
     CACHE FILEPATH "File containing the canonical Base64 Ed25519 update public key.")

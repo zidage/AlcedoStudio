@@ -20,6 +20,8 @@
 #include "app/download_service.hpp"
 #include "app/lut_library_service.hpp"
 #include "app/lut_package_manifest.hpp"
+#include "app/package_archive_download.hpp"
+#include "app/signed_feed_fetch.hpp"
 
 namespace alcedo {
 
@@ -39,62 +41,20 @@ class SettingsLutPackagePreferences final : public LutPackagePreferences {
   void               SaveTrustedSequence(quint64 sequence) override;
 };
 
-/// Archive transfer used by LUT package installation.
-///
-/// The production implementation routes every request through the shared
-/// DownloadService, so a LUT package and an application or model download never
-/// run two transfers at once: Start() returns false while another job runs.
-class LutArchiveDownloader {
- public:
-  using ProgressCallback = std::function<void(qint64 bytes_downloaded, qint64 bytes_total)>;
-  using FinishedCallback = std::function<void(bool ok, bool canceled, const QString& error)>;
-
-  virtual ~LutArchiveDownloader()                          = default;
-  /// Start @p request; the callbacks run on the caller's thread. Returns false
-  /// (and calls nothing) when the transport is busy or the request is invalid.
-  virtual auto Start(const DownloadRequest& request, ProgressCallback on_progress,
-                     FinishedCallback on_finished) -> bool = 0;
-  virtual void Cancel(const QString& request_id)           = 0;
-};
-
-/// LutArchiveDownloader over the process-wide DownloadService. It must not
-/// outlive @p downloads.
-class DownloadServiceLutArchiveDownloader final : public QObject, public LutArchiveDownloader {
-  Q_OBJECT
-
- public:
-  explicit DownloadServiceLutArchiveDownloader(DownloadService& downloads,
-                                               QObject*         parent = nullptr);
-  auto Start(const DownloadRequest& request, ProgressCallback on_progress,
-             FinishedCallback on_finished) -> bool override;
-  void Cancel(const QString& request_id) override;
-
- private:
-  DownloadService& downloads_;
-  QString          active_request_id_;
-  ProgressCallback on_progress_;
-  FinishedCallback on_finished_;
-};
-
-/// Fetch at most @p maximum_bytes from @p url and call @p done with the bytes or
-/// an error text. Called on the owner thread; @p done runs on the owner thread.
-using LutFeedFetch = std::function<void(const QUrl& url, qint64 maximum_bytes,
-                                        std::function<void(QByteArray bytes, QString error)> done)>;
-
 struct LutPackageServiceOptions {
   /// Signed feed URL (`ALCEDO_LUT_PACKAGE_FEED_URL`). Empty disables packages.
-  QUrl                                   feed_url;
+  QUrl                                      feed_url;
   /// 32-byte Ed25519 public key (the software-update key).
-  QByteArray                             public_key;
+  QByteArray                                public_key;
   /// Defaults to an HTTPS GET restricted to the feed host.
-  LutFeedFetch                           fetch;
+  FeedFileFetch                             fetch;
   /// Required.
-  std::unique_ptr<LutArchiveDownloader>  downloader;
+  std::unique_ptr<PackageArchiveDownloader> downloader;
   /// Defaults to SettingsLutPackagePreferences.
-  std::unique_ptr<LutPackagePreferences> preferences;
+  std::unique_ptr<LutPackagePreferences>    preferences;
 
   /// Feed URL and key from this build's compile definitions.
-  [[nodiscard]] static auto              FromBuildConfiguration() -> LutPackageServiceOptions;
+  [[nodiscard]] static auto                 FromBuildConfiguration() -> LutPackageServiceOptions;
 };
 
 /// Per-package state shown by Settings.

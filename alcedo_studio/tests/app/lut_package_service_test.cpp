@@ -276,7 +276,7 @@ struct FeedServer {
 
 /// Copies a local archive (selected by URL) to the requested destination.
 /// With `hold` set, a transfer stays running until Cancel().
-class LocalArchiveDownloader final : public LutArchiveDownloader {
+class LocalArchiveDownloader final : public PackageArchiveDownloader {
  public:
   struct State {
     std::map<std::string, fs::path> sources;
@@ -390,7 +390,7 @@ class LutPackageServiceTest : public ::testing::Test {
     ASSERT_TRUE(WaitUntil([&] { return !library_->busy(); }));
   }
 
-  auto MakeOptions(std::unique_ptr<LutArchiveDownloader> downloader = nullptr)
+  auto MakeOptions(std::unique_ptr<PackageArchiveDownloader> downloader = nullptr)
       -> LutPackageServiceOptions {
     LutPackageServiceOptions options;
     options.feed_url = kFeedUrl;
@@ -1120,7 +1120,8 @@ TEST_F(LutPackageServiceTest, ApplicationAndLutDownloadsShareAdmission) {
     DownloadService transfers;
     StartLibrary();
     packages_ = std::make_unique<LutPackageService>(
-        MakeOptions(std::make_unique<DownloadServiceLutArchiveDownloader>(transfers)), *library_);
+        MakeOptions(std::make_unique<DownloadServicePackageArchiveDownloader>(transfers)),
+        *library_);
     const BuiltPackage spectral = Publish(kSpectral, "r1", 0);
     ServeFeed({&spectral});
     Check();

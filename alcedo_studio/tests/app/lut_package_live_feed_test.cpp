@@ -137,7 +137,7 @@ class LutPackageLiveFeedTest : public ::testing::Test {
     LutPackageServiceOptions options = LutPackageServiceOptions::FromBuildConfiguration();
     options.feed_url                 = feed_url_;
     if (!public_key.isEmpty()) options.public_key = std::move(public_key);
-    options.downloader  = std::make_unique<DownloadServiceLutArchiveDownloader>(*transfers_);
+    options.downloader  = std::make_unique<DownloadServicePackageArchiveDownloader>(*transfers_);
     options.preferences = std::make_unique<MemoryPackagePreferences>(trusted_sequence);
     packages_           = std::make_unique<LutPackageService>(std::move(options), *library_);
     ASSERT_TRUE(packages_->enabled()) << "The build has no update public key.";

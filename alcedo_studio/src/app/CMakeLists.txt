@@ -49,6 +49,32 @@ def_library(DownloadService
     PUBLIC_DEPS Qt6::Core Qt6::Network
 )
 
+# Package archive transfer over the shared DownloadService admission (LUT and AI model packages).
+def_library(PackageArchiveDownload
+    SOURCES
+        "${ALCEDO_APP_ROOT}/package_archive_download.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/package_archive_download.hpp"
+    PUBLIC_DEPS DownloadService Qt6::Core
+)
+
+# Signed small-file fetch (manifest + detached signature) shared by the update, LUT, and AI
+# model feeds.
+def_library(SignedFeedFetch
+    SOURCES
+        "${ALCEDO_APP_ROOT}/signed_feed_fetch.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/signed_feed_fetch.hpp"
+    PUBLIC_DEPS Qt6::Core Qt6::Network
+)
+
+# Package archive verification and safe 7z extraction shared by LUT and AI model install.
+def_library(PackageArchive
+    SOURCES
+        "${ALCEDO_APP_ROOT}/package_archive.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/package_archive.hpp"
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS LibArchive::LibArchive
+)
+
 if(WIN32)
     def_library(UpdateInstallerWindows
         SOURCES
@@ -73,7 +99,7 @@ def_library(UpdateService
         "${ALCEDO_APP_ROOT}/update_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/update_manifest.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/update_service.hpp"
-    PUBLIC_DEPS DownloadService Qt6::Core Qt6::Network
+    PUBLIC_DEPS DownloadService SignedFeedFetch Qt6::Core Qt6::Network
     PRIVATE_DEPS DetachedSignature Qt6::Gui
 )
 if(ALCEDO_UPDATE_ALLOW_INSTALL)
@@ -117,7 +143,7 @@ def_library(LutLibraryService
         "${ALCEDO_INCLUDE_ROOT}/app/lut_library_service.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_package_install.hpp"
     PUBLIC_DEPS LutMetadata EditLutResources Qt6::Core ThreadPool
-    PRIVATE_DEPS ColorEncodingCatalog JSON Qt6::Gui LibArchive::LibArchive
+    PRIVATE_DEPS ColorEncodingCatalog JSON Qt6::Gui PackageArchive
 )
 
 # Signed LUT package feed check, per-package status, and download (L3).
@@ -125,10 +151,45 @@ def_library(LutPackageService
     SOURCES
         "${ALCEDO_APP_ROOT}/lut_package_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_package_service.hpp"
-    PUBLIC_DEPS LutLibraryService LutPackageManifest DownloadService Qt6::Core Qt6::Network
+    PUBLIC_DEPS LutLibraryService LutPackageManifest PackageArchiveDownload SignedFeedFetch
+        DownloadService Qt6::Core Qt6::Network
 )
 target_compile_definitions(LutPackageService PRIVATE
     ALCEDO_LUT_PACKAGE_FEED_URL="${ALCEDO_LUT_PACKAGE_FEED_URL}"
+    ALCEDO_UPDATE_PUBLIC_KEY_BASE64="${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}"
+)
+
+# Signed AI model package feed (docs/roadmap/alcedo_studio/ai/external_ai_model_download_plan.md,
+# AM1). No expiry, like the LUT feed.
+def_library(AiModelPackageManifest
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_model_package_manifest.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_model_package_manifest.hpp"
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS DetachedSignature PackageArchive
+)
+
+# AI model package install, removal, recovery, and the installed model set query (the AI Mask
+# tool reads it in AM5).
+def_library(AiModelPackageInstall
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_model_package_install.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_model_package_install.hpp"
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS PackageArchive
+)
+
+# AI model package feed check, per-package status, download, install, and removal (AM1).
+def_library(AiModelPackageService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_model_package_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_model_package_service.hpp"
+    PUBLIC_DEPS AiModelPackageInstall AiModelPackageManifest PackageArchiveDownload
+        SignedFeedFetch Qt6::Core Qt6::Network
+    PRIVATE_DEPS PackageArchive
+)
+target_compile_definitions(AiModelPackageService PRIVATE
+    ALCEDO_AI_MODEL_FEED_URL="${ALCEDO_AI_MODEL_FEED_URL}"
     ALCEDO_UPDATE_PUBLIC_KEY_BASE64="${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}"
 )
 

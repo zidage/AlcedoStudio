@@ -513,28 +513,17 @@ rules of SM3.A and SM3.C: the port is correct when it gives the MVP results on t
 Each outline phase lists its scope and its open decisions. A detailed phase plan replaces the outline
 before the phase starts.
 
-### 9.1 SM2 — Segmentation model download (after SM9)
+### 9.1 SM2 — Segmentation model download (replaced)
 
-SM2 runs after SM9 (D13). Until then, the sidecar reads the model files from the local model
-directory of SM3.A.
-
-Scope:
-
-- Add a segmentation profile kind to `model_asset_catalog` and to Rust `model_assets.rs`. Keep the two
-  catalogs in agreement.
-- Add a download location per profile, so that semantic profiles keep the current endpoint setting
-  and the segmentation profile reads from R2 or a Hugging Face repository.
-- Publish the Windows files (ONNX) and the macOS files (compiled Core ML directories) of section
-  8.2.1. Decide the packaging of the Core ML directories (for example one zip per model, as the
-  SigLIP2 Core ML profiles use).
-- Pin the SHA-256 of every segmentation file.
-- Download the license files with the model files (Apache-2.0, MIT, DINOv3 License).
-- Install into the local model directory that SM3.A reads, so that no sidecar change is necessary.
-- Replace the SM9 "model not installed" error state with the download panel of section 3.1 and in
-  the settings.
-
-Open decisions: download location (R2, Hugging Face, or both), settings page placement, the
-training data rule U13 and the S3OD float32 tolerance (section 8.2.6).
+The [AI Models page plan](../ai/external_ai_model_download_plan.md) (tracking
+[#579](https://github.com/zidage/AlcedoStudio/issues/579)) replaces SM2. The AI Mask model set
+(SAM 2.1 tiny encoder and decoder, people and sky head, S3OD, sky head) downloads as one signed
+package per platform from R2, as LUT packages and application updates do (AM1, AM2). The AI Models
+settings page shows and installs it (AM4), and the AI Mask tool checks the installed set before it
+loads models (AM5). The decisions A1-A10 and P1-P13 of that plan close the open decisions of the
+former SM2 outline (download location, settings page placement, training data rule U13). The
+installation directory stays `<model directory>/alcedo-ai-mask-v<version>`, the directory that
+SM3.A reads.
 
 ### 9.2 SM3 — Sidecar segmentation service and C++ client
 
