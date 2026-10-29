@@ -1098,6 +1098,8 @@ auto AppTheme::scopeHistogramBlueColor() const -> QColor {
   return Blend(QColor(0x8E, 0xB9, 0xE5), textColor(), 0.18);
 }
 
+auto AppTheme::scopeMarkerColor() const -> QColor { return textColor(); }
+
 auto AppTheme::dateGraphLevel0Color() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.22);
 }

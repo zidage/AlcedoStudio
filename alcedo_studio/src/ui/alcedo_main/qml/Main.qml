@@ -111,6 +111,7 @@ ApplicationWindow {
     readonly property color colScopeHistogramRed: appTheme.scopeHistogramRedColor
     readonly property color colScopeHistogramGreen: appTheme.scopeHistogramGreenColor
     readonly property color colScopeHistogramBlue: appTheme.scopeHistogramBlueColor
+    readonly property color colScopeMarker: appTheme.scopeMarkerColor
     readonly property string dataFontFamily: appTheme.dataFontFamily
     readonly property string uiFontFamily: appTheme.uiFontFamily
     readonly property string headlineFontFamily: appTheme.headlineFontFamily

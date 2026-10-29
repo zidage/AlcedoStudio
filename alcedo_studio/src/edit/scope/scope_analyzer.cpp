@@ -135,51 +135,6 @@ auto AverageTailRatio(const std::vector<uint32_t>& counts, int bins, int tail_bi
   return max_ratio;
 }
 
-auto NormalizeHistogramToUnitRange(const std::vector<uint32_t>& counts, int bins)
-    -> ScopeHistogramRenderData {
-  ScopeHistogramRenderData data;
-  if (bins <= 0 || counts.size() < static_cast<size_t>(bins * 3)) {
-    return data;
-  }
-
-  data.bins                   = bins;
-  data.clip_tail_bins         = HistogramTailBins(bins);
-  data.shadow_clip_ratio      = AverageTailRatio(counts, bins, data.clip_tail_bins, false);
-  data.highlight_clip_ratio   = AverageTailRatio(counts, bins, data.clip_tail_bins, true);
-  data.shadow_clip_warning    = data.shadow_clip_ratio >= kHistogramClipWarningRatio;
-  data.highlight_clip_warning = data.highlight_clip_ratio >= kHistogramClipWarningRatio;
-
-  uint32_t denom_count        = 0U;
-  for (int channel = 0; channel < 3; ++channel) {
-    const size_t channel_offset = static_cast<size_t>(channel) * static_cast<size_t>(bins);
-    for (int bin = 0; bin < bins; ++bin) {
-      const bool skip_shadow    = data.shadow_clip_warning && bin < data.clip_tail_bins;
-      const bool skip_highlight = data.highlight_clip_warning && bin >= bins - data.clip_tail_bins;
-      if (skip_shadow || skip_highlight) {
-        continue;
-      }
-      denom_count = std::max(denom_count, counts[channel_offset + static_cast<size_t>(bin)]);
-    }
-  }
-
-  if (denom_count == 0U) {
-    const auto max_it =
-        std::max_element(counts.begin(), counts.begin() + static_cast<size_t>(bins * 3));
-    if (max_it != counts.end()) {
-      denom_count = *max_it;
-    }
-  }
-
-  const float denom = denom_count > 0U ? static_cast<float>(denom_count) : 1.0f;
-
-  data.rgb.resize(static_cast<size_t>(bins * 3), 0.0f);
-  for (size_t i = 0; i < data.rgb.size(); ++i) {
-    data.rgb[i] = std::clamp(static_cast<float>(counts[i]) / denom, 0.0f, 1.0f);
-  }
-  data.valid = true;
-  return data;
-}
-
 auto NormalizeWaveformToUnitRange(const std::vector<float>& rgba, int width, int height)
     -> ScopeWaveformRenderData {
   ScopeWaveformRenderData data;
@@ -260,11 +215,72 @@ auto CreateDefaultScopeAnalyzer() -> std::shared_ptr<IScopeAnalyzer> {
   return std::make_shared<CompositeScopeAnalyzer>(std::move(analyzers));
 }
 
+auto BuildScopeHistogramRenderData(const std::vector<uint32_t>& counts, int bins)
+    -> ScopeHistogramRenderData {
+  ScopeHistogramRenderData data;
+  if (bins <= 0 || counts.size() < static_cast<size_t>(bins) * 3U) {
+    return data;
+  }
+
+  data.bins                         = bins;
+  data.clip_tail_bins               = HistogramTailBins(bins);
+  data.shadow_clip_ratio            = AverageTailRatio(counts, bins, data.clip_tail_bins, false);
+  data.highlight_clip_ratio         = AverageTailRatio(counts, bins, data.clip_tail_bins, true);
+  data.shadow_clip_warning          = data.shadow_clip_ratio >= kHistogramClipWarningRatio;
+  data.highlight_clip_warning       = data.highlight_clip_ratio >= kHistogramClipWarningRatio;
+
+  const size_t          value_count = static_cast<size_t>(bins) * 3U;
+  std::vector<uint32_t> populated;
+  populated.reserve(value_count);
+  for (int channel = 0; channel < 3; ++channel) {
+    const size_t channel_offset = static_cast<size_t>(channel) * static_cast<size_t>(bins);
+    for (int bin = 0; bin < bins; ++bin) {
+      const bool skip_shadow    = data.shadow_clip_warning && bin < data.clip_tail_bins;
+      const bool skip_highlight = data.highlight_clip_warning && bin >= bins - data.clip_tail_bins;
+      const uint32_t count      = counts[channel_offset + static_cast<size_t>(bin)];
+      if (!skip_shadow && !skip_highlight && count > 0U) {
+        populated.push_back(count);
+      }
+    }
+  }
+  if (populated.empty()) {
+    // Only the clipped tails hold pixels: they set the scale themselves.
+    for (size_t i = 0; i < value_count; ++i) {
+      if (counts[i] > 0U) {
+        populated.push_back(counts[i]);
+      }
+    }
+  }
+
+  float reference = 1.0f;
+  if (!populated.empty()) {
+    const auto max_count        = *std::max_element(populated.begin(), populated.end());
+    const auto percentile_index = static_cast<size_t>(kHistogramPeakReferencePercentile *
+                                                      static_cast<float>(populated.size() - 1U));
+    std::nth_element(populated.begin(),
+                     populated.begin() + static_cast<std::ptrdiff_t>(percentile_index),
+                     populated.end());
+    const float percentile_count = static_cast<float>(populated[percentile_index]);
+    reference                    = std::max(1.0f, std::min(static_cast<float>(max_count),
+                                                           kHistogramPeakReferenceLimit * percentile_count));
+  }
+
+  data.rgb.resize(value_count, 0.0f);
+  data.peak_cut.resize(value_count, 0U);
+  for (size_t i = 0; i < value_count; ++i) {
+    const float ratio = static_cast<float>(counts[i]) / reference;
+    data.rgb[i]       = std::sqrt(std::min(ratio, 1.0f));
+    data.peak_cut[i]  = ratio > 1.0f ? 1U : 0U;
+  }
+  data.valid = true;
+  return data;
+}
+
 auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapshot {
   ScopeRenderSnapshot snapshot;
   snapshot.generation         = output.generation;
   snapshot.image_identity     = output.image_identity;
-  snapshot.session_epoch   = output.session_epoch;
+  snapshot.session_epoch      = output.session_epoch;
   snapshot.display_generation = output.display_generation;
 
 #ifdef HAVE_CUDA
@@ -278,7 +294,7 @@ auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapsho
       if (resource->size_bytes >= expected_bytes &&
           cudaMemcpy(counts.data(), resource->device_ptr, expected_bytes, cudaMemcpyDeviceToHost) ==
               cudaSuccess) {
-        snapshot.histogram = NormalizeHistogramToUnitRange(counts, output.histogram_bins);
+        snapshot.histogram = BuildScopeHistogramRenderData(counts, output.histogram_bins);
       }
     }
   }
@@ -316,7 +332,7 @@ auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapsho
       if (resource->size_bytes >= expected_bytes &&
           clEnqueueReadBuffer(OpenClContext::Instance().ScopeQueue(), resource->buffer, CL_TRUE, 0,
                               expected_bytes, counts.data(), 0, nullptr, nullptr) == CL_SUCCESS) {
-        snapshot.histogram = NormalizeHistogramToUnitRange(counts, output.histogram_bins);
+        snapshot.histogram = BuildScopeHistogramRenderData(counts, output.histogram_bins);
       }
     }
   }
@@ -332,8 +348,8 @@ auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapsho
                                  0U);
       const size_t row_bytes = static_cast<size_t>(output.waveform_width) * sizeof(uint32_t) * 4U;
       if (resource->row_bytes == row_bytes) {
-        if (clEnqueueReadBuffer(OpenClContext::Instance().ScopeQueue(), resource->buffer, CL_TRUE, 0,
-                                rgba.size() * sizeof(uint32_t), rgba.data(), 0, nullptr,
+        if (clEnqueueReadBuffer(OpenClContext::Instance().ScopeQueue(), resource->buffer, CL_TRUE,
+                                0, rgba.size() * sizeof(uint32_t), rgba.data(), 0, nullptr,
                                 nullptr) == CL_SUCCESS) {
           snapshot.waveform = NormalizeWaveformCountsToUnitRange(rgba, output.waveform_width,
                                                                  output.waveform_height);
@@ -371,7 +387,7 @@ auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapsho
       const size_t          expected_bytes = counts.size() * sizeof(uint32_t);
       if (resource->size_bytes >= expected_bytes) {
         std::memcpy(counts.data(), resource->buffer->contents(), expected_bytes);
-        snapshot.histogram = NormalizeHistogramToUnitRange(counts, output.histogram_bins);
+        snapshot.histogram = BuildScopeHistogramRenderData(counts, output.histogram_bins);
       }
     }
   }

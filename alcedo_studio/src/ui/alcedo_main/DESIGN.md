@@ -647,16 +647,42 @@ the rail-button optical balance.
 ### Scope plot colors
 
 Scope plot colors are semantic AppTheme tokens so the scene-graph item does not
-carry palette literals into QML. They are used by both histogram lines and the
+carry palette literals into QML. They are used by both the histogram and the
 QPainter-backed waveform density image.
 
 | Token | Use |
 | --- | --- |
-| `scopeGridColor` | Plot grid lines |
-| `scopePlotBorderColor` | Horizontal plot rules |
-| `scopeHistogramRedColor` | Red channel |
-| `scopeHistogramGreenColor` | Green channel |
-| `scopeHistogramBlueColor` | Blue channel |
+| `scopeGridColor` | Guide lines: histogram zone lines, waveform level lines |
+| `scopePlotBorderColor` | Plot baseline |
+| `scopeHistogramRedColor` | Red channel hue |
+| `scopeHistogramGreenColor` | Green channel hue |
+| `scopeHistogramBlueColor` | Blue channel hue |
+| `scopeMarkerColor` (`textColor`) | Histogram clip markers |
+
+### Scope plot
+
+The plot well is a `bgBaseColor` sunken inset with `controlRadiusSmall`
+corners and no rules. The plot sits `spaceSm` inside the well on every side:
+the `EditorScopeItem` has a `spaceXs` margin, so its square opaque surface stays
+inside the rounded corners, and a `plotPadding` of `spaceSm - spaceXs`. One
+`scopePlotBorderColor` baseline is under the plot in both modes.
+
+- **Histogram.** Each channel is a filled area with a 1.25 px edge line. The
+  channels add up (`CompositionMode_Plus`): the hue of each channel tint is
+  scaled so that the three add up to white. Two channels show the mixed hue
+  (red + green = yellow), all three show a neutral tone. The color is data
+  color, so it does not break the monochrome chrome rule. The guide lines are
+  the three vertical zone lines at 25, 50, and 75 percent (shadows, midtones,
+  highlights). The height scale is a square-root scale against a robust
+  reference (`BuildScopeHistogramRenderData`), so there are no horizontal level
+  lines. A peak higher than the plot shows a 2 px break in the background
+  color, 4 px under the top. A populated bin is at least 1 px high.
+- **Clip markers.** When the shadow or highlight tail clips (2 percent of the
+  pixels of a channel in the end bins), a `scopeMarkerColor` corner triangle
+  (7 px) shows at the top of that end of the plot. There is no marker when the
+  end does not clip.
+- **Waveform.** The density image fills the same plot rectangle. The guide
+  lines are the three horizontal level lines at 25, 50, and 75 percent.
 
 ---
 
