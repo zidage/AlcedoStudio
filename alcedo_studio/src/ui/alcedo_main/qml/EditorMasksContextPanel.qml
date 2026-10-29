@@ -48,6 +48,9 @@ Item {
     readonly property bool rangeControlsEnabled: root.aiMaskEditOpen
                                                  ? !!(root.aiMaskTool.ready && !root.aiMaskTool.busy)
                                                  : root.maskSelected
+    // Expanded state of the Luminance/Hue Range section (#605): the host's session value, or a
+    // local one without a host.
+    property bool rangeSectionExpanded: !!(root.host && root.host.editorMaskRangeSectionExpanded)
 
     function loadFromSnapshot(snapshot) {
         void snapshot
@@ -95,13 +98,22 @@ Item {
 
         // Upper part: the Range section of the selected Mask or of the Mask of the AI Mask
         // edit (Mask ranges MR4, #564). It does not scroll with the lower part.
+        // Collapsed by default (#605). The host keeps the user's choice for the session; selection
+        // changes and an AI Mask edit do not change it.
         CollapsibleSection {
             id: rangeShell
             objectName: "editorMasksRangeShell"
             Layout.fillWidth: true
             visible: root.maskSelected || root.aiMaskEditOpen
-            title: qsTr("Range")
-            expanded: true
+            title: qsTr("Luminance/Hue Range")
+            expanded: root.rangeSectionExpanded
+            onToggled: function (expanded) {
+                if (root.host)
+                    root.host.editorMaskRangeSectionExpanded = expanded
+                else
+                    root.rangeSectionExpanded = expanded
+                rangeShell.expanded = Qt.binding(function () { return root.rangeSectionExpanded })
+            }
             controlsEnabled: root.rangeControlsEnabled
             disabledSurfaceColor: appTheme.cardSurfaceColor
             bodyContentHeight: rangeSection.implicitHeight + appTheme.spaceSm

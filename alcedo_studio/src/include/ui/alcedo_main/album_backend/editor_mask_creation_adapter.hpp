@@ -74,11 +74,12 @@ class EditorMaskCreationAdapter : public QObject {
   Q_PROPERTY(qreal maskLuminanceHigh READ mask_luminance_high NOTIFY maskRangeChanged)
   Q_PROPERTY(qreal maskHueStart READ mask_hue_start NOTIFY maskRangeChanged)
   Q_PROPERTY(qreal maskHueEnd READ mask_hue_end NOTIFY maskRangeChanged)
-  /// Soft transition outside the handles (stored value, or the default for a full range): OkLab
-  /// L units and degrees. The bars draw the dimming over this width, as the kernels weight it.
+  /// Soft transition outside the handles (stored value, or the kept value for a full range, #607):
+  /// OkLab L units and degrees. The bars draw the dimming over this width, as the kernels weight
+  /// it.
   Q_PROPERTY(qreal maskLuminanceSoftness READ mask_luminance_softness NOTIFY maskRangeChanged)
   Q_PROPERTY(qreal maskHueSoftness READ mask_hue_softness NOTIFY maskRangeChanged)
-  /// Saturation threshold of the Hue Range (OkLCh chroma); the default for a full range.
+  /// Saturation threshold of the Hue Range (OkLCh chroma); the kept value for a full range.
   Q_PROPERTY(qreal maskHueMinChroma READ mask_hue_min_chroma NOTIFY maskRangeChanged)
   /// Bounds and defaults of the Softness and saturation threshold controls, in model units.
   Q_PROPERTY(QVariantMap rangeParameterLimits READ range_parameter_limits CONSTANT)
@@ -156,6 +157,13 @@ class EditorMaskCreationAdapter : public QObject {
    */
   Q_INVOKABLE bool          beginRangeEdit(const QString& kind);
   /**
+   * @brief Open a Softness or threshold slider drag of @p kind (#607).
+   *
+   * A restricted range opens a range drag like @ref beginRangeEdit. A full range opens nothing:
+   * the slider values go to @ref editRangeValue as kept values. @return True when a drag opened.
+   */
+  Q_INVOKABLE bool          beginRangeParameterEdit(const QString& kind);
+  /**
    * @brief Write the handles of the open range drag: Luminance @p first = low, @p second = high
    *        (OkLab L, [0, 1]); Hue @p first = start, @p second = end (degrees; start > end wraps
    *        through 0). The values are clamped and widened to the minimum width; both handles at
@@ -183,16 +191,19 @@ class EditorMaskCreationAdapter : public QObject {
    * @p field is "first" / "second" (Luminance low / high in OkLab L, Hue start / end in degrees;
    * the value is clamped so the handles keep the minimum distance, and a Hue value wraps into
    * the bar), "softness" (clamped to the slider bounds), or "minChroma" (Hue only, clamped to
-   * [0.015, 0.2]). Softness and threshold are refused while the range is full. The value is
-   * written into the open drag of the same range (a slider drag opened with @ref
-   * beginRangeEdit), else into a key-step burst that settles as one commit like @ref
-   * stepRangeHandle; @ref commitRangeEdits settles it at once. Returns false when nothing was
-   * written.
+   * [0.015, 0.2]). The value is written into the open drag of the same range (a slider drag
+   * opened with @ref beginRangeParameterEdit), else into a key-step burst that settles as one
+   * commit like @ref stepRangeHandle; @ref commitRangeEdits settles it at once. A full range is
+   * stored as `null` and has no Softness or threshold (#607): without an open edit of that range,
+   * a Softness or threshold value is only kept for the range of the target Mask (no command, no
+   * commit), and the first write of a restricted range writes it. Returns false when nothing was
+   * written or kept.
    */
   Q_INVOKABLE bool          editRangeValue(const QString& kind, const QString& field, qreal value);
   /// Settle an open value or step burst now (a typed value: Enter or focus-out).
   Q_INVOKABLE void          commitRangeEdits();
-  /// Write the full range (`null`) of @p kind of the target Mask with one commit.
+  /// Write the full range (`null`) of @p kind of the target Mask with one commit. The Softness and
+  /// threshold values stay as kept values.
   Q_INVOKABLE void          resetRange(const QString& kind);
   /// The "Show selection" toggle. Shows or hides the range coverage of the target Mask.
   Q_INVOKABLE void          setRangeCoverageVisible(bool visible);
@@ -296,8 +307,9 @@ class EditorMaskCreationAdapter : public QObject {
   };
 
   /// Range values of the range target as last published to QML; full ranges are 0..1 and
-  /// 0..360. The softness and saturation threshold values are kept for the next restricted write
-  /// (D6).
+  /// 0..360. For a full range, the softness and saturation threshold are the kept values of the
+  /// target (#607): the defaults for a new target, the last values set or stored while the target
+  /// stays. The next restricted write writes them. They are not persisted.
   struct RangeView {
     RangeTarget target;
     bool        present                                    = false;
@@ -317,9 +329,12 @@ class EditorMaskCreationAdapter : public QObject {
   [[nodiscard]] auto        RangeTargetNow() const -> RangeTarget;
   /// Read the range values of the target from the document. The candidate of a new AI Mask is not
   /// in the document: its values are the ones that this adapter wrote (only it writes them), and
-  /// a new candidate starts with full ranges. Retargets the toggle when the target changed. True
-  /// when the published values changed.
+  /// a new candidate starts with full ranges. A full range of the same target keeps its softness
+  /// and threshold values. Retargets the toggle when the target changed. True when the published
+  /// values changed.
   auto                      SyncRangeView() -> bool;
+  /// Whether the range of @p kind is full: the open edit of that range, else the published view.
+  [[nodiscard]] auto        RangeIsFull(RangeKind kind) const -> bool;
   /// The range JSON of @p kind for the handle values @p first and @p second (`null` when full).
   [[nodiscard]] auto        RangeJson(RangeKind kind, float first, float second) -> nlohmann::json;
   void                      ShowRangeCoverage(const RangeTarget& target);

@@ -414,10 +414,7 @@ TEST_F(EditorMaskRangeAdapterTest, SoftnessAndSaturationThresholdBelongToARestri
   Select(mask_id);
   const auto commits = Graph()->CommitCount();
 
-  // A full range has no Softness or threshold to set.
-  EXPECT_FALSE(
-      adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("softness"), 0.1));
-  EXPECT_FALSE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("minChroma"), 0.1));
+  // The Luminance Range has no saturation threshold. A full range starts at the defaults.
   EXPECT_FALSE(
       adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("minChroma"), 0.1));
   EXPECT_DOUBLE_EQ(adapter_->mask_luminance_softness(), LuminanceRangeModel{}.softness);
@@ -464,17 +461,17 @@ TEST_F(EditorMaskRangeAdapterTest, SoftnessAndSaturationThresholdBelongToARestri
   EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->min_chroma, 0.08f);
   EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->softness, 45.0f);
 
-  // Reset to full writes null; the next restriction starts at the default values.
+  // Reset to full writes null; the next restriction writes the last Softness and threshold (#607).
   adapter_->resetRange(QStringLiteral("hue"));
   Settle();
   EXPECT_FALSE(LiveMask(mask_id)->color_range.has_value());
-  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), ColorRangeModel{}.softness);
-  EXPECT_DOUBLE_EQ(adapter_->mask_hue_min_chroma(), kColorRangeDefaultMinChroma);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), 45.0);
+  EXPECT_FLOAT_EQ(static_cast<float>(adapter_->mask_hue_min_chroma()), 0.08f);
   ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("first"), 10.0));
   adapter_->commitRangeEdits();
   Settle();
   ASSERT_TRUE(LiveMask(mask_id)->color_range.has_value());
-  EXPECT_EQ(*LiveMask(mask_id)->color_range, (ColorRangeModel{10.0f, 360.0f, 12.0f}));
+  EXPECT_EQ(*LiveMask(mask_id)->color_range, (ColorRangeModel{10.0f, 360.0f, 45.0f, 0.08f}));
 
   // Luminance Softness slider bounds: 0.5 to 50 in L x 100.
   ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("second"), 0.8));
@@ -488,6 +485,106 @@ TEST_F(EditorMaskRangeAdapterTest, SoftnessAndSaturationThresholdBelongToARestri
   EXPECT_FLOAT_EQ(limits.value(QStringLiteral("luminanceSoftnessMaximum")).toFloat(), 0.5f);
   EXPECT_FLOAT_EQ(limits.value(QStringLiteral("hueSoftnessMinimum")).toFloat(), 0.5f);
   EXPECT_FLOAT_EQ(limits.value(QStringLiteral("minChromaMinimum")).toFloat(), 0.015f);
+}
+
+// #607: Softness and the saturation threshold change also at a full range. The adapter keeps the
+// values for the range of the selected Mask (no command, no commit), the first restricted write
+// writes them in its commit, and a change of the selected Mask or of the image discards them.
+TEST_F(EditorMaskRangeAdapterTest, ValuesSetAtAFullRangeAreKeptAndWrittenWithTheNextRangeDrag) {
+  OpenThroughController();
+  const auto mask_id  = CreateRadialMask();
+  const auto other_id = CreateRadialMask();
+  ASSERT_NE(mask_id, other_id);
+  Select(mask_id);
+  ASSERT_FALSE(LiveMask(mask_id)->luminance_range.has_value());
+  ASSERT_FALSE(LiveMask(mask_id)->color_range.has_value());
+  const auto commits = Graph()->CommitCount();
+
+  // Typed or stepped values of a full range: kept, published, no commit, no document change.
+  ASSERT_TRUE(
+      adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("softness"), 0.2));
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("softness"), 30.0));
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("minChroma"), 0.1));
+  adapter_->commitRangeEdits();
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits) << "a value of a full range writes no history";
+  EXPECT_FALSE(LiveMask(mask_id)->luminance_range.has_value());
+  EXPECT_FALSE(LiveMask(mask_id)->color_range.has_value());
+  EXPECT_FLOAT_EQ(static_cast<float>(adapter_->mask_luminance_softness()), 0.2f);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), 30.0);
+  EXPECT_FLOAT_EQ(static_cast<float>(adapter_->mask_hue_min_chroma()), 0.1f);
+  // The kept values are clamped to the slider bounds like stored ones.
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("minChroma"), 0.9));
+  EXPECT_FLOAT_EQ(static_cast<float>(adapter_->mask_hue_min_chroma()), kColorRangeMaximumMinChroma);
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("minChroma"), 0.1));
+  EXPECT_FALSE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("minChroma"), 0.1))
+      << "an unchanged kept value is not a change";
+
+  // A slider drag of a full range opens no range edit and shows no coverage.
+  EXPECT_FALSE(adapter_->beginRangeParameterEdit(QStringLiteral("hue")));
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("softness"), 35.0));
+  adapter_->finishRangeEdit(QStringLiteral("hue"));
+  Settle();
+  EXPECT_FALSE(Preview().range_probe.has_value());
+  EXPECT_EQ(Graph()->CommitCount(), commits);
+  EXPECT_FALSE(LiveMask(mask_id)->color_range.has_value());
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), 35.0);
+
+  // The first range drag writes the kept Softness with the range, in its one commit.
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("luminance")));
+  adapter_->updateRangeEdit(QStringLiteral("luminance"), 0.2, 0.6);
+  adapter_->finishRangeEdit(QStringLiteral("luminance"));
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 1);
+  ASSERT_TRUE(LiveMask(mask_id)->luminance_range.has_value());
+  EXPECT_EQ(*LiveMask(mask_id)->luminance_range, (LuminanceRangeModel{0.2f, 0.6f, 0.2f}));
+  // For Hue, the kept Softness and threshold, also through key steps of a handle.
+  ASSERT_TRUE(adapter_->stepRangeHandle(QStringLiteral("hue"), QStringLiteral("first"), 20, false));
+  adapter_->commitRangeEdits();
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 2);
+  ASSERT_TRUE(LiveMask(mask_id)->color_range.has_value());
+  EXPECT_EQ(*LiveMask(mask_id)->color_range, (ColorRangeModel{10.0f, 360.0f, 35.0f, 0.1f}));
+  // A slider drag of a restricted range is one range edit with one commit.
+  ASSERT_TRUE(adapter_->beginRangeParameterEdit(QStringLiteral("hue")));
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("softness"), 40.0));
+  adapter_->finishRangeEdit(QStringLiteral("hue"));
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 3);
+  EXPECT_FLOAT_EQ(LiveMask(mask_id)->color_range->softness, 40.0f);
+
+  // Full again: stored as null (as before), and the sliders keep the last values.
+  adapter_->resetRange(QStringLiteral("hue"));
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("luminance")));
+  adapter_->updateRangeEdit(QStringLiteral("luminance"), 0.0, 1.0);
+  adapter_->finishRangeEdit(QStringLiteral("luminance"));
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits + 5);
+  EXPECT_FALSE(LiveMask(mask_id)->luminance_range.has_value());
+  EXPECT_FALSE(LiveMask(mask_id)->color_range.has_value());
+  EXPECT_FLOAT_EQ(static_cast<float>(adapter_->mask_luminance_softness()), 0.2f);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), 40.0);
+  EXPECT_FLOAT_EQ(static_cast<float>(adapter_->mask_hue_min_chroma()), 0.1f);
+
+  // Another selected Mask discards the kept values: its full ranges show the defaults, and coming
+  // back does not restore them.
+  Select(other_id);
+  EXPECT_DOUBLE_EQ(adapter_->mask_luminance_softness(), LuminanceRangeModel{}.softness);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), ColorRangeModel{}.softness);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_min_chroma(), kColorRangeDefaultMinChroma);
+  Select(mask_id);
+  EXPECT_DOUBLE_EQ(adapter_->mask_luminance_softness(), LuminanceRangeModel{}.softness);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), ColorRangeModel{}.softness);
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_min_chroma(), kColorRangeDefaultMinChroma);
+
+  // A change of the image discards them too.
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("softness"), 50.0));
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), 50.0);
+  controller_->Open(kOtherElementId, kImageId + 1);
+  Settle();
+  EXPECT_EQ(service_->identity().element_id, kOtherElementId);
+  EXPECT_FALSE(adapter_->mask_range_available());
+  EXPECT_DOUBLE_EQ(adapter_->mask_hue_softness(), ColorRangeModel{}.softness);
 }
 
 TEST_F(EditorMaskRangeAdapterTest, ResetWritesNullWithOneCommit) {

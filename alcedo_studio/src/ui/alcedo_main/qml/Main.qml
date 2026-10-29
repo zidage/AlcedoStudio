@@ -28,6 +28,9 @@ ApplicationWindow {
     property real collectionsSidebarGap: collectionsSidebarExpanded
                                                  ? appTheme.spaceMd : 0
     property bool editorAdjustmentStackExpanded: true
+    // Luminance/Hue Range section of the Mask panel (#605): collapsed at the start of the session;
+    // the user's choice survives the editor Loader.
+    property bool editorMaskRangeSectionExpanded: false
     readonly property string activeWorkspace: appModules.workspaceRouter
                                               ? String(appModules.workspaceRouter.workspace
                                                        || "library")

@@ -3831,8 +3831,8 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <translation>编辑 AI 蒙版</translation>
     </message>
     <message>
-        <source>Range</source>
-        <translation>范围</translation>
+        <source>Luminance/Hue Range</source>
+        <translation>明度/色相范围</translation>
     </message>
     <message>
         <location filename="../qml/EditorMasksContextPanel.qml" line="+79"/>
