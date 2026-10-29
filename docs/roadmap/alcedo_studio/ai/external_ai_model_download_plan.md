@@ -250,7 +250,12 @@ Details the plan did not specify, chosen in AM1:
   `.alcedo-ai-mask-v<N>.previous`, and moves the content into `alcedo-ai-mask-v<N>`. That second
   move is the commit point. Recovery (`RecoverAiModelPackageDirectory`, run before every install
   and removal and when Settings opens) restores `.previous` when the target is missing, removes it
-  when the target exists, and removes uncommitted staging content and `.removing` leftovers. The
+  when the target exists, and removes uncommitted staging content and `.removing` leftovers. On
+  Windows a directory move fails with "Access is denied" while another process (the antivirus
+  scanner, the search indexer) has a file of the tree open. The worker-thread moves (both commit
+  moves, the restore after a failed commit, and the removal move) therefore use
+  `RenamePackageDirectory`, which tries again for up to 10 s on access denied, sharing violation,
+  or lock violation (#586). Recovery moves once, because it also runs on the GUI thread. The
   downloaded archive stays in `.alcedo-ai-mask-v<N>.download/` after a cancellation (aria2 resumes
   it). It is removed after a rejection or a commit.
 - **Repair (P5).** An installed version needs repair when `installed.json`, `model_set.json`, and
