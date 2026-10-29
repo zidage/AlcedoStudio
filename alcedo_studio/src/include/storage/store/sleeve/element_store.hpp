@@ -108,11 +108,17 @@ struct SearchResultPageWithStats {
   FolderStatsView  stats_{};
 };
 
-/// One photo occurrence of an album query: the photo's display columns and the key of the group
-/// that holds this occurrence (std::monostate in the flat mode and for the unknown group).
+/// One photo occurrence of an album query: the photo's display columns, its edit state, and the
+/// key of the group that holds this occurrence (std::monostate in the flat mode and for the
+/// unknown group).
 struct AlbumQueryRow {
   SearchResultRow photo_{};
   AlbumGroupKey   group_key_{};
+  /// Creation time (UTC epoch nanoseconds) of the head commit of the active Version, by the
+  /// edited rule of album_edit_state_sql; empty when the photo is unedited.
+  std::optional<int64_t> edited_at_ns_{};
+  /// Display name of the active Version of an edited photo; empty when unedited.
+  std::string            edit_version_name_{};
 };
 
 /// One group of an album query: its key, its photo count, and the position of its first

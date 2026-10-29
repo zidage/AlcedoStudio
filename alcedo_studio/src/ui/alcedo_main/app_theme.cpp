@@ -978,14 +978,14 @@ auto AppTheme::editorListFavoriteActiveOnSelectedColor() const -> QColor {
   return editorListSelectedInkColor();
 }
 
-auto AppTheme::filmstripSelectedFillColor() const -> QColor {
-  // Light gray: clearly lifted from the card surface, but darker than the bone well of the
-  // editing tile, so a selected tile never reads as the open image.
-  return Blend(cardSurfaceColor(), textMutedColor(), 0.5);
+auto AppTheme::ratingStarEmptyColor() const -> QColor {
+  // Between the card surface and the muted text: visible on a card and in the Inspector, but
+  // clearly below a filled star.
+  return Blend(cardSurfaceColor(), textMutedColor(), 0.6);
 }
 
-auto AppTheme::thumbnailCaptionBarColor() const -> QColor {
-  // Deep base under light caption text, below the filmstrip image.
+auto AppTheme::thumbnailEditMarkFillColor() const -> QColor {
+  // Deep base under the light icon, so the mark reads on bright and dark photos alike.
   return WithAlpha(bgDeepColor(), 200);
 }
 
@@ -1102,20 +1102,22 @@ auto AppTheme::dateGraphLevel0Color() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.22);
 }
 
+// Levels 1-4 are a neutral ramp from bgBaseColor toward textColor. The peak stays below
+// textColor so the 1 px textColor outline of the selected day still reads on it.
 auto AppTheme::dateGraphLevel1Color() const -> QColor {
-  return Blend(bgBaseColor(), toneSteel(), 0.30);
+  return Blend(bgBaseColor(), textColor(), 0.25);
 }
 
 auto AppTheme::dateGraphLevel2Color() const -> QColor {
-  return Blend(bgBaseColor(), toneSteel(), 0.52);
+  return Blend(bgBaseColor(), textColor(), 0.45);
 }
 
 auto AppTheme::dateGraphLevel3Color() const -> QColor {
-  return Blend(bgBaseColor(), toneSteel(), 0.74);
+  return Blend(bgBaseColor(), textColor(), 0.65);
 }
 
 auto AppTheme::dateGraphLevel4Color() const -> QColor {
-  return toneSteel();
+  return Blend(bgBaseColor(), textColor(), 0.85);
 }
 
 auto AppTheme::uiFontFamily() const -> QString {

@@ -13,7 +13,6 @@ Item {
     property var model: []
     property string selectedLabel: ""
     property var folderKey: 0
-    property color accentColor: appTheme.toneSteel
     signal dayClicked(string label)
 
     property string selectedYearKey: "rolling"
@@ -517,7 +516,7 @@ Item {
                                     color: cell ? (root.levelColors[cell.level] || root.levelColors[0])
                                                 : "transparent"
                                     border.width: isSelected ? 1 : 0
-                                    border.color: root.accentColor
+                                    border.color: root.textColor
                                 }
                             }
                         }

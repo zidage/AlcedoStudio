@@ -363,7 +363,17 @@ Item {
                         width: 24
                         height: 26
                         text: (index + 1) <= stars.displayRating ? "\u2605" : "\u2606"
-                        color: (index + 1) <= stars.displayRating ? "#FFB923" : root.mutedTextColor
+                        // Card star inks: filled in textColor, hover preview in
+                        // textMutedColor, the others in ratingStarEmptyColor.
+                        color: {
+                            const r = index + 1;
+                            if (r <= root.currentRating
+                                    && (stars.hoverRating === 0 || r <= stars.hoverRating))
+                                return appTheme.textColor;
+                            if (stars.hoverRating > 0 && r <= stars.hoverRating)
+                                return appTheme.textMutedColor;
+                            return appTheme.ratingStarEmptyColor;
+                        }
                         font.family: appTheme.dataFontFamily
                         font.pixelSize: 21
                         horizontalAlignment: Text.AlignHCenter
@@ -688,14 +698,14 @@ Item {
                         Layout.preferredWidth: 22
                         Layout.preferredHeight: 22
                         source: "qrc:/panel_icons/sparkles.svg"
-                        iconColor: root.accentColor
+                        iconColor: root.mutedTextColor
                     }
 
                     Rectangle {
                         Layout.alignment: Qt.AlignHCenter
                         Layout.preferredWidth: 3
                         Layout.fillHeight: true
-                        color: root.accentColor
+                        color: appTheme.dividerColor
                     }
                 }
 

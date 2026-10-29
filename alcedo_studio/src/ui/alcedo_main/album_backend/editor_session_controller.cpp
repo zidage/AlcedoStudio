@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <optional>
 
 #include "app/editor_adjustment_context.hpp"
 #include "app/editor_panel_projection.hpp"
@@ -378,6 +379,7 @@ void EditorSessionController::OnBackendChanged() {
   const auto history_revision = session_backend_->history_revision();
   if (history_revision != last_history_revision_) {
     last_history_revision_ = history_revision;
+    SyncAlbumEditStateFromHistory();
     emit HistoryChanged();
   }
 }
@@ -1359,6 +1361,39 @@ void EditorSessionController::SyncAlbumHdrFlagFromSnapshot() {
   const bool is_hdr = eotf == ColorUtils::EOTF::ST2084 || eotf == ColorUtils::EOTF::HLG;
   album_catalog_->PersistImageHdrFlag(static_cast<sl_element_id_t>(element_id_),
                                       static_cast<image_id_t>(image_id_), is_hdr);
+}
+
+void EditorSessionController::SyncAlbumEditStateFromHistory() {
+  if (!album_catalog_ || !session_backend_ || !has_image() || element_id_ == 0 || image_id_ == 0) {
+    return;
+  }
+  // A closed history (image switch or close in progress) reads as an empty snapshot; the card
+  // keeps its last state, which the close checkpoint writes to storage.
+  const auto snapshot = session_backend_->history_snapshot();
+  if (snapshot.active_version_id == alcedo::version_ref_id_t{}) {
+    return;
+  }
+  std::optional<std::int64_t> edited_at_ns;
+  if (snapshot.active_head.has_value()) {
+    const auto head = std::find_if(snapshot.commits.begin(), snapshot.commits.end(),
+                                   [&snapshot](const alcedo::EditorHistoryCommit& commit) {
+                                     return commit.commit_hash == *snapshot.active_head;
+                                   });
+    if (head == snapshot.commits.end()) {
+      return;
+    }
+    edited_at_ns = static_cast<std::int64_t>(head->created_at_ns);
+  }
+  QString version_name;
+  for (const auto& version : snapshot.versions) {
+    if (version.version_id == snapshot.active_version_id) {
+      version_name = QString::fromStdString(version.display_name);
+      break;
+    }
+  }
+  album_catalog_->SetAlbumItemEditState(static_cast<sl_element_id_t>(element_id_),
+                                        static_cast<image_id_t>(image_id_), edited_at_ns,
+                                        version_name);
 }
 
 void EditorSessionController::updatePresentationTargetSize(int width, int height) {

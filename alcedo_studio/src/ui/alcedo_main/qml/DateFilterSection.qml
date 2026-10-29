@@ -14,7 +14,6 @@ ColumnLayout {
     property var model: []
     property string selectedLabel: ""
     property var folderKey: 0
-    property color accentColor: appTheme.toneSteel
     property bool expanded: true
     property string styleKey: "calendar"
     /// False shows only the calendar tiles, without the activity graph and the style switch.
@@ -132,7 +131,6 @@ ColumnLayout {
         StatsCard {
             title: section.title
             showHeader: false
-            accentColor: section.accentColor
             model: section.model
             selectedLabel: section.selectedLabel
             displayMode: "grouped"
@@ -146,7 +144,6 @@ ColumnLayout {
             model: section.model
             selectedLabel: section.selectedLabel
             folderKey: section.folderKey
-            accentColor: section.accentColor
             onDayClicked: function(label) { section.dayClicked(label) }
         }
     }

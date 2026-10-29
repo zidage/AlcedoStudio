@@ -7,7 +7,9 @@
 #include <QObject>
 #include <QString>
 #include <QVariantMap>
+#include <cstdint>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -96,11 +98,19 @@ class AdjustmentTransferApplyCoordinator final : public QObject {
   void RunningChanged();
 
  private:
+  /// Edit state of one applied target after its Paste: the head commit time of the active
+  /// Version (UTC epoch nanoseconds) and that Version's display name.
+  struct TargetEditState {
+    std::int64_t edited_at_ns_ = 0;
+    std::string  version_name_;
+  };
+
   /// Result of the worker-side loop: the apply result plus the HDR display
-  /// encoding of every applied target, read from its pasted document.
+  /// encoding and the edit state of every applied target, read from its pasted history.
   struct TargetApplyOutcome {
-    alcedo::AdjustmentApplyResult             result_;
-    std::unordered_map<sl_element_id_t, bool> hdr_by_target_;
+    alcedo::AdjustmentApplyResult                        result_;
+    std::unordered_map<sl_element_id_t, bool>            hdr_by_target_;
+    std::unordered_map<sl_element_id_t, TargetEditState> edit_state_by_target_;
   };
 
   /// Per-target Paste, rebuild, and persistence. Uses only the pipeline

@@ -15,12 +15,15 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSet>
+#include <QSignalSpy>
 #include <QStringList>
 #include <QTest>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <vector>
 
 #include "ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
@@ -603,110 +606,204 @@ auto HighlightedTileCount(QQuickItem* list) -> int {
   return count;
 }
 
-// Issue 442 item 4: the image sits above a fixed two-line caption: the stars on the upper line,
-// right-aligned, and the file name on the lower line. The caption never covers the image.
-TEST(EditorFilmstripQmlTest, StarsAndFileNameSitInCaptionBelowImage) {
+// Stars (ThumbnailStarRating) under @p root in the visual tree that are visible and show
+// @p glyph. Repeater items have no QObject parent in the delegate, so findChildren misses them.
+auto VisibleStarCount(QQuickItem* root, const QString& glyph) -> int {
+  if (root == nullptr || !root->isVisible()) {
+    return 0;
+  }
+  int count = 0;
+  if (root->objectName().startsWith(QStringLiteral("thumbnailStar_")) &&
+      root->property("text").toString() == glyph) {
+    ++count;
+  }
+  for (auto* child : root->childItems()) {
+    count += VisibleStarCount(child, glyph);
+  }
+  return count;
+}
+
+auto FindItem(QQuickItem* root, const QString& object_name) -> QQuickItem* {
+  if (root == nullptr) {
+    return nullptr;
+  }
+  if (root->objectName() == object_name) {
+    return root;
+  }
+  for (auto* child : root->childItems()) {
+    if (auto* found = FindItem(child, object_name)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+// Issue #589: the caption has one line, the file name; the rating is an overlay of only the
+// filled stars at the bottom-right corner of the photo, on a short shade over the bottom part of
+// the image. An unrated image has no overlay. The caption never covers the image. The editing
+// state is one ring concentric with the rounded photo, with an even gap all around.
+TEST(EditorFilmstripQmlTest, OneLineCaptionBelowImageAndFilledStarsOverlayThePhoto) {
   FilmstripQmlHarness harness;
   ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
   ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 
   auto* list = harness.list();
   ASSERT_NE(list, nullptr);
-  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
+  ASSERT_TRUE(QTest::qWaitFor([&] { return list->property("count").toInt() == 8; }, 2000));
 
   QQuickItem* editing_tile = TileAt(list, 0);
   ASSERT_NE(editing_tile, nullptr);
-  auto* surface =
-      editing_tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripTileSurface"));
-  auto* frame =
-      editing_tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripThumbnailFrame"));
-  auto* bar = editing_tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripCaptionBar"));
-  auto* image =
-      editing_tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripThumbnailImage"));
-  auto* name_label =
-      editing_tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripFileNameLabel"));
-  auto* rating_label =
-      editing_tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripRatingLabel"));
-  ASSERT_NE(surface, nullptr);
-  ASSERT_NE(frame, nullptr);
-  ASSERT_NE(bar, nullptr);
+  auto* photo     = FindItem(editing_tile, QStringLiteral("editorFilmstripPhoto"));
+  auto* ring      = FindItem(editing_tile, QStringLiteral("editorFilmstripSelectionRing"));
+  auto* image     = FindItem(editing_tile, QStringLiteral("editorFilmstripThumbnailImage"));
+  auto* name      = FindItem(editing_tile, QStringLiteral("editorFilmstripFileNameLabel"));
+  auto* edit_mark = FindItem(editing_tile, QStringLiteral("editorFilmstripEditMark"));
+  auto* overlay   = FindItem(editing_tile, QStringLiteral("editorFilmstripRatingOverlay"));
+  ASSERT_NE(photo, nullptr);
+  ASSERT_NE(ring, nullptr);
   ASSERT_NE(image, nullptr);
-  ASSERT_NE(name_label, nullptr);
-  ASSERT_NE(rating_label, nullptr);
-  // The separate rating badge is gone.
-  EXPECT_EQ(editing_tile->findChild<QObject*>(QStringLiteral("editorFilmstripRatingOverlay")),
-            nullptr);
+  ASSERT_NE(name, nullptr);
+  ASSERT_NE(edit_mark, nullptr);
+  ASSERT_NE(overlay, nullptr);
+  // The former caption star line, caption bar, and nested well and frame are gone.
+  EXPECT_EQ(FindItem(editing_tile, QStringLiteral("editorFilmstripRatingLabel")), nullptr);
+  EXPECT_EQ(FindItem(editing_tile, QStringLiteral("editorFilmstripCaptionBar")), nullptr);
+  EXPECT_EQ(FindItem(editing_tile, QStringLiteral("editorFilmstripTileSurface")), nullptr);
+  EXPECT_EQ(FindItem(editing_tile, QStringLiteral("editorFilmstripThumbnailFrame")), nullptr);
 
-  // The file name and the stars are children of the bar, and the bar sits on the bottom edge
-  // of the thumbnail frame.
-  EXPECT_EQ(name_label->parentItem(), bar);
-  EXPECT_EQ(rating_label->parentItem(), bar);
-  EXPECT_EQ(bar->parentItem(), frame);
-  EXPECT_NEAR(bar->y() + bar->height(), frame->height() - 1.0, 0.5);
-  // The image ends where the caption starts: no overlap.
-  EXPECT_EQ(image->parentItem(), frame);
-  EXPECT_LE(image->y() + image->height(), bar->y() + 0.5);
-  EXPECT_GT(image->height(), bar->height());
-  EXPECT_EQ(name_label->property("text").toString(), QStringLiteral("film_0.arw"));
-  EXPECT_TRUE(rating_label->isVisible());
-  EXPECT_EQ(rating_label->property("text").toString(), QStringLiteral("★★★☆☆"));
-  // Stars on the upper line, right-aligned; the file name on the lower line, full width.
-  EXPECT_LT(rating_label->y() + rating_label->height(), name_label->y() + 0.5);
-  EXPECT_NEAR(rating_label->x() + rating_label->width(),
-              bar->width() - AppTheme::Instance().spaceSm(), 0.5);
-  EXPECT_NEAR(name_label->width(), bar->width() - AppTheme::Instance().spaceSm() * 2, 0.5);
+  // One plain caption line below the ring; the photo and its ring end above it.
+  const auto&  theme      = AppTheme::Instance();
+  const QRectF name_rect  = name->mapRectToScene(QRectF(0, 0, name->width(), name->height()));
+  const QRectF ring_rect  = ring->mapRectToScene(QRectF(0, 0, ring->width(), ring->height()));
+  const QRectF photo_rect = photo->mapRectToScene(QRectF(0, 0, photo->width(), photo->height()));
+  EXPECT_NEAR(name->height(), theme.lineHeightCaption(), 0.5);
+  EXPECT_LE(ring_rect.bottom(), name_rect.top() + 0.5);
+  EXPECT_EQ(name->property("text").toString(), QStringLiteral("film_0.arw"));
 
-  // The thumbnail frame fills the tile except for the small inset.
-  const qreal inset = AppTheme::Instance().spaceXs();
-  EXPECT_NEAR(frame->height(), editing_tile->height() - inset * 2, 0.5);
-  EXPECT_NEAR(frame->width(), editing_tile->width() - inset * 2, 0.5);
+  // The ring is concentric with the photo: the same offset on every side, and a radius equal to
+  // the photo radius plus that offset.
+  const qreal offset = theme.spaceXs();
+  EXPECT_NEAR(photo_rect.left() - ring_rect.left(), offset, 0.5);
+  EXPECT_NEAR(ring_rect.right() - photo_rect.right(), offset, 0.5);
+  EXPECT_NEAR(photo_rect.top() - ring_rect.top(), offset, 0.5);
+  EXPECT_NEAR(ring_rect.bottom() - photo_rect.bottom(), offset, 0.5);
+  EXPECT_NEAR(ring->property("radius").toReal(), theme.controlRadiusSmall() + offset, 0.01);
+  // An unedited image has no edit mark.
+  EXPECT_FALSE(edit_mark->isVisible());
 
-  // An unrated image shows the file name without stars.
+  // The rating overlay: three filled white stars and no empty star, on the bottom part of the
+  // image only, in its bottom-right corner.
+  EXPECT_TRUE(overlay->isVisible());
+  EXPECT_EQ(VisibleStarCount(overlay, QStringLiteral("★")), 3);
+  EXPECT_EQ(VisibleStarCount(overlay, QStringLiteral("☆")), 0);
+  const QRectF image_rect = image->mapRectToScene(QRectF(0, 0, image->width(), image->height()));
+  const QRectF overlay_rect =
+      overlay->mapRectToScene(QRectF(0, 0, overlay->width(), overlay->height()));
+  EXPECT_NEAR(overlay_rect.bottom(), image_rect.bottom(), 0.5);
+  EXPECT_NEAR(overlay_rect.right(), image_rect.right(), 0.5);
+  EXPECT_LT(overlay_rect.height(), image_rect.height() / 2.0);
+  auto* stars = FindItem(overlay, QStringLiteral("editorFilmstripRatingStars"));
+  ASSERT_NE(stars, nullptr);
+  EXPECT_EQ(stars->property("filledColor").value<QColor>(), QColor(Qt::white));
+
+  // An unrated image has no overlay and the same caption height.
   QQuickItem* unrated_tile = TileAt(list, 1);
   ASSERT_NE(unrated_tile, nullptr);
-  auto* unrated_stars =
-      unrated_tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripRatingLabel"));
-  auto* unrated_bar =
-      unrated_tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripCaptionBar"));
-  ASSERT_NE(unrated_stars, nullptr);
-  ASSERT_NE(unrated_bar, nullptr);
-  EXPECT_FALSE(unrated_stars->isVisible());
-  // The caption keeps both lines without stars, so every image has the same size.
-  EXPECT_NEAR(unrated_bar->height(), bar->height(), 0.5);
+  auto* unrated_overlay = FindItem(unrated_tile, QStringLiteral("editorFilmstripRatingOverlay"));
+  auto* unrated_name    = FindItem(unrated_tile, QStringLiteral("editorFilmstripFileNameLabel"));
+  ASSERT_NE(unrated_overlay, nullptr);
+  ASSERT_NE(unrated_name, nullptr);
+  EXPECT_FALSE(unrated_overlay->isVisible());
+  EXPECT_NEAR(unrated_name->height(), name->height(), 0.5);
 
-  // Editing tile: monochrome bone well.
-  QTRY_COMPARE_WITH_TIMEOUT(surface->property("color").value<QColor>(),
-                            AppTheme::Instance().editorListSelectedFillColor(), 2000);
+  // Editing tile: a 2 px text-color ring and a text-color file name.
+  EXPECT_TRUE(ring->isVisible());
+  EXPECT_NEAR(ring->property("ringWidth").toReal(), 2.0, 0.01);
+  EXPECT_EQ(ring->property("ringColor").value<QColor>(), theme.textColor());
+  EXPECT_TRUE(QTest::qWaitFor(
+      [&] { return name->property("color").value<QColor>() == theme.textColor(); }, 2000));
 }
 
-// Issue 442 item 4: a rating change shows on the tile at once (model dataChanged on the rating
-// role, the same update that ImageController sends after a rating).
-TEST(EditorFilmstripQmlTest, RatingChangeUpdatesTileStarsImmediately) {
+// A rating change shows on the tile at once (model dataChanged on the rating role, the same
+// update that ImageController sends after a rating).
+TEST(EditorFilmstripQmlTest, RatingChangeUpdatesTileStarOverlayImmediately) {
   FilmstripQmlHarness harness;
   ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
 
   auto* list = harness.list();
   ASSERT_NE(list, nullptr);
-  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
+  ASSERT_TRUE(QTest::qWaitFor([&] { return list->property("count").toInt() == 8; }, 2000));
   QQuickItem* tile = TileAt(list, 1);
   ASSERT_NE(tile, nullptr);
-  auto* stars = tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripRatingLabel"));
-  ASSERT_NE(stars, nullptr);
-  EXPECT_FALSE(stars->isVisible());
+  auto* overlay = FindItem(tile, QStringLiteral("editorFilmstripRatingOverlay"));
+  ASSERT_NE(overlay, nullptr);
+  EXPECT_FALSE(overlay->isVisible());
 
   ASSERT_TRUE(harness.library_.model().updateRating(1001, 2001, 4));
-  EXPECT_TRUE(stars->isVisible());
-  EXPECT_EQ(stars->property("text").toString(), QStringLiteral("★★★★☆"));
+  EXPECT_TRUE(overlay->isVisible());
+  EXPECT_EQ(VisibleStarCount(overlay, QStringLiteral("★")), 4);
+  EXPECT_EQ(VisibleStarCount(overlay, QStringLiteral("☆")), 0);
   EXPECT_EQ(tile->property("displayRating").toInt(), 4);
 
   ASSERT_TRUE(harness.library_.model().updateRating(1001, 2001, 0));
-  EXPECT_FALSE(stars->isVisible());
+  EXPECT_FALSE(overlay->isVisible());
+  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+}
+
+// Issue #589: the edit mark of the open photo appears after its first commit and disappears
+// after an undo back to the image root, without a reload of the strip. The editor session
+// sends both as AlbumThumbnailModel::updateEditState (EditorSessionController and
+// LibraryModule::SetAlbumItemEditState); the session side is covered by
+// EditorVersionsPanelQmlTest.OpenPhotoEditStateFollowsTheHistoryHeadInTheAlbumCatalog.
+TEST(EditorFilmstripQmlTest, EditMarkFollowsTheOpenPhotoEditStateWithoutReload) {
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+
+  auto* list = harness.list();
+  ASSERT_NE(list, nullptr);
+  ASSERT_TRUE(QTest::qWaitFor([&] { return list->property("count").toInt() == 8; }, 2000));
+  QQuickItem* tile = TileAt(list, 0);
+  ASSERT_NE(tile, nullptr);
+  auto* edit_mark = FindItem(tile, QStringLiteral("editorFilmstripEditMark"));
+  ASSERT_NE(edit_mark, nullptr);
+  EXPECT_FALSE(edit_mark->isVisible());
+  QSignalSpy             resets(&harness.library_.model(), &QAbstractItemModel::modelReset);
+
+  // First commit.
+  constexpr std::int64_t kEditedAtNs = 1'788'429'600'000'000'000;
+  ASSERT_TRUE(harness.library_.model().updateEditState(1000, 2000, kEditedAtNs,
+                                                       QStringLiteral("Base Look")));
+  EXPECT_TRUE(edit_mark->isVisible());
+  EXPECT_TRUE(tile->property("isEdited").toBool());
+  // A chip with a fill on the top-right corner of the photo, not in the caption.
+  auto* image = FindItem(tile, QStringLiteral("editorFilmstripThumbnailImage"));
+  ASSERT_NE(image, nullptr);
+  EXPECT_EQ(edit_mark->parentItem(), image->parentItem());
+  EXPECT_EQ(edit_mark->property("color").value<QColor>(),
+            AppTheme::Instance().thumbnailEditMarkFillColor());
+  const QRectF image_rect = image->mapRectToScene(QRectF(0, 0, image->width(), image->height()));
+  const QRectF mark_rect =
+      edit_mark->mapRectToScene(QRectF(0, 0, edit_mark->width(), edit_mark->height()));
+  EXPECT_TRUE(image_rect.contains(mark_rect)) << "mark outside the photo";
+  EXPECT_LT(image_rect.right() - mark_rect.right(), 8.0);
+  EXPECT_LT(mark_rect.top() - image_rect.top(), 8.0);
+  EXPECT_LT(mark_rect.width(), 24.0);
+  EXPECT_TRUE(edit_mark->property("tooltipText").toString().endsWith(QStringLiteral("\nBase Look")))
+      << edit_mark->property("tooltipText").toString().toStdString();
+
+  // Undo back to the image root.
+  ASSERT_TRUE(harness.library_.model().updateEditState(1000, 2000, std::nullopt, {}));
+  EXPECT_FALSE(edit_mark->isVisible());
+
+  // The same delegate shows both states: no reload of the strip.
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(TileAt(list, 0), tile);
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
 // Issue 442 item 2: the filmstrip shares the Library selection, but a Library-selected image
-// that the editor does not show has its own light gray state. The editing tile keeps the bone
-// well, so a click in the Library never moves the editing highlight.
+// that the editor does not show has its own muted ring. The editing tile keeps the text-color
+// ring, so a click in the Library never moves the editing highlight.
 TEST(EditorFilmstripQmlTest, LibrarySelectionShowsGraySelectedStateSeparateFromEditingTile) {
   FilmstripQmlHarness harness;
   ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
@@ -727,10 +824,10 @@ TEST(EditorFilmstripQmlTest, LibrarySelectionShowsGraySelectedStateSeparateFromE
     EXPECT_TRUE(card->property("editing").toBool());
     EXPECT_FALSE(card->property("selected").toBool());
     EXPECT_EQ(card->property("tileState").toString(), QStringLiteral("editing"));
-    auto* surface = tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripTileSurface"));
-    ASSERT_NE(surface, nullptr);
-    QTRY_COMPARE_WITH_TIMEOUT(surface->property("color").value<QColor>(),
-                              AppTheme::Instance().editorListSelectedFillColor(), 2000);
+    auto* ring = FindItem(tile, QStringLiteral("editorFilmstripSelectionRing"));
+    ASSERT_NE(ring, nullptr);
+    EXPECT_TRUE(ring->isVisible());
+    EXPECT_EQ(ring->property("ringColor").value<QColor>(), AppTheme::Instance().textColor());
   }
   {
     QQuickItem* tile = TileAt(list, 3);
@@ -740,13 +837,18 @@ TEST(EditorFilmstripQmlTest, LibrarySelectionShowsGraySelectedStateSeparateFromE
     EXPECT_FALSE(card->property("editing").toBool());
     EXPECT_TRUE(card->property("selected").toBool());
     EXPECT_EQ(card->property("tileState").toString(), QStringLiteral("selected"));
-    auto* surface = tile->findChild<QQuickItem*>(QStringLiteral("editorFilmstripTileSurface"));
-    ASSERT_NE(surface, nullptr);
-    QTRY_COMPARE_WITH_TIMEOUT(surface->property("color").value<QColor>(),
-                              AppTheme::Instance().filmstripSelectedFillColor(), 2000);
+    auto* ring = FindItem(tile, QStringLiteral("editorFilmstripSelectionRing"));
+    ASSERT_NE(ring, nullptr);
+    EXPECT_TRUE(ring->isVisible());
+    EXPECT_EQ(ring->property("ringColor").value<QColor>(), AppTheme::Instance().textMutedColor());
   }
-  EXPECT_NE(AppTheme::Instance().filmstripSelectedFillColor(),
-            AppTheme::Instance().editorListSelectedFillColor());
+  {
+    // An idle tile has no ring.
+    auto* ring = FindItem(TileAt(list, 4), QStringLiteral("editorFilmstripSelectionRing"));
+    ASSERT_NE(ring, nullptr);
+    EXPECT_FALSE(ring->isVisible());
+  }
+  EXPECT_NE(AppTheme::Instance().textMutedColor(), AppTheme::Instance().textColor());
   // The editor did not switch.
   EXPECT_EQ(harness.router_.openCount(), 0);
   EXPECT_EQ(harness.session_.elementId(), 1000);

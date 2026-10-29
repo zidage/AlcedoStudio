@@ -437,6 +437,18 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("Redone");
   }
 
+  /// Undo back to the image root: the active Version has no working head, and every commit is
+  /// in the redo suffix.
+  void UndoToImageRoot() {
+    snapshot_.active_head = std::nullopt;
+    for (auto& commit : snapshot_.commits) {
+      commit.position = EditorHistoryTimelinePosition::Future;
+    }
+    snapshot_.can_undo = false;
+    snapshot_.can_redo = true;
+    NotifyHistoryChange();
+  }
+
   auto MoveHeadToCommit(const commit_hash_t& commit_id) -> EditorSessionResult override {
     ++move_head_count_;
     last_move_head_commit_ = commit_id;

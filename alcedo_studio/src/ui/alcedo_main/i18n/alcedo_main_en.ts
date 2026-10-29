@@ -2552,6 +2552,13 @@ Original source files on disk will be kept.</source>
         <source>Open image</source>
         <translation type="unfinished"></translation>
     </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n star</numerusform>
+            <numerusform>%n stars</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>EditorFilmstripThumbnailCard</name>
@@ -5785,6 +5792,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>%1 | Rating %2/5</source>
         <translation type="unfinished"></translation>
     </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n star</numerusform>
+            <numerusform>%n stars</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>TopToolbar</name>
@@ -6741,6 +6755,33 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>Rating must be between 0 and 5.</source>
         <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>ThumbnailStarRating</name>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n star</numerusform>
+            <numerusform>%n stars</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>ThumbnailEditMark</name>
+    <message numerus="yes">
+        <source>Edited %n minute(s) ago</source>
+        <translation>
+            <numerusform>Edited %n minute ago</numerusform>
+            <numerusform>Edited %n minutes ago</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Edited %n hour(s) ago</source>
+        <translation>
+            <numerusform>Edited %n hour ago</numerusform>
+            <numerusform>Edited %n hours ago</numerusform>
+        </translation>
     </message>
 </context>
 </TS>

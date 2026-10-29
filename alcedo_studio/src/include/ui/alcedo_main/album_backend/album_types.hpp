@@ -7,7 +7,9 @@
 #include <QDate>
 #include <QString>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -35,6 +37,11 @@ struct AlbumItem {
   QDate                 import_date{};
   int                   rating = 0;
   bool                  is_hdr = false;
+  /// Creation time (UTC epoch nanoseconds) of the head commit of the active Version; empty
+  /// when the photo is unedited (the active Version's head is the image root).
+  std::optional<std::int64_t> edited_at_ns{};
+  /// Display name of the active Version of an edited photo; empty when unedited.
+  QString                     edit_version_name{};
   QString               tags{};
   QString               accent{};
   QString               thumb_url{};

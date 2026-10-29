@@ -21,7 +21,7 @@ auto EditStateRelation(const std::string& time_zone, std::string_view match_set_
     -> duckorm::SqlFragment {
   auto relation = expr::raw(
       "edit_state AS (SELECT ies.element_id AS file_id, hc.created_at_ns AS "
-      "edited_at_ns, ");
+      "edited_at_ns, vr.display_name AS version_name, ");
   if (time_zone.empty()) {
     relation.sql_.append("CAST(NULL AS DATE)");
   } else {

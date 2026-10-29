@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -26,6 +27,13 @@ class IAlbumCatalog {
                                     const file_name_t&           fallbackName,
                                     const std::filesystem::path& filePath)        = 0;
   virtual void SetAlbumItemHdrFlag(sl_element_id_t elementId, image_id_t imageId, bool isHdr) = 0;
+  /// Show a new edit state of a loaded photo (the edit mark of its card) without a library
+  /// reload: @p editedAtNs is the head commit time of the active Version (UTC epoch
+  /// nanoseconds), empty when the head is the image root; @p versionName is that Version's
+  /// display name.
+  virtual void SetAlbumItemEditState(sl_element_id_t elementId, image_id_t imageId,
+                                     std::optional<std::int64_t> editedAtNs,
+                                     const QString&              versionName) = 0;
   virtual void PersistImageHdrFlag(sl_element_id_t elementId, image_id_t imageId, bool isHdr) = 0;
 
   virtual auto view_state() -> AlbumViewState&             = 0;

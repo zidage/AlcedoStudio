@@ -120,8 +120,17 @@ auto UsesEditStateRelation(const AlbumQueryOptions& options) -> bool {
          options.sort_field_ == AlbumSortField::kEditTime;
 }
 
-auto RelationsPrefix(const AlbumQueryOptions& options, const std::string& active_semantic_model_key)
-    -> SqlFragment {
+namespace {
+
+auto JoinsEditStateRelation(const AlbumQueryOptions& options, EditStateProjection projection)
+    -> bool {
+  return projection == EditStateProjection::kRead || UsesEditStateRelation(options);
+}
+
+}  // namespace
+
+auto RelationsPrefix(const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
+                     EditStateProjection projection) -> SqlFragment {
   SqlFragment prefix;
   const auto  add = [&prefix](SqlFragment definition) {
     prefix.sql_.append(prefix.empty() ? "WITH " : ", ");
@@ -130,7 +139,7 @@ auto RelationsPrefix(const AlbumQueryOptions& options, const std::string& active
   if (UsesLabelRelation(options)) {
     add(LabelRelations(active_semantic_model_key));
   }
-  if (UsesEditStateRelation(options)) {
+  if (JoinsEditStateRelation(options, projection)) {
     add(album_edit_state_sql::EditStateRelation(options.local_day_time_zone_, kMatchSetTable));
   }
   if (!prefix.empty()) {
@@ -139,9 +148,10 @@ auto RelationsPrefix(const AlbumQueryOptions& options, const std::string& active
   return prefix;
 }
 
-auto OccurrenceSource(const AlbumQueryOptions& options) -> SqlFragment {
+auto OccurrenceSource(const AlbumQueryOptions& options, EditStateProjection projection)
+    -> SqlFragment {
   auto source = expr::raw(std::format("FROM {} s", kMatchSetTable));
-  if (UsesEditStateRelation(options)) {
+  if (JoinsEditStateRelation(options, projection)) {
     source.sql_.append(" LEFT JOIN edit_state es ON es.file_id = s.file_id");
   }
   if (options.group_field_ == AlbumGroupField::kLabels) {

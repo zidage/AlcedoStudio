@@ -32,7 +32,11 @@ Item {
     readonly property int desiredMaxEdge: zoomResolutionEdges[zoomIndex]
     readonly property int cardInset: visualColumns >= 11 ? 4 : (visualColumns >= 8 ? 6 : 8)
     readonly property int cellGap: visualColumns >= 11 ? 4 : (visualColumns >= 8 ? 6 : 12)
-    readonly property int textAreaHeight: visualColumns >= 14 ? 0 : 18
+    // 2 to 6 columns: the file-name line and the date line with the star control. 8 and 11
+    // columns: one line with the file name, the edit mark, and the filled stars.
+    readonly property bool compactText: visualColumns >= 8
+    readonly property bool starsInteractive: visualColumns <= 6
+    readonly property int textAreaHeight: visualColumns >= 14 ? 0 : (compactText ? 18 : 36)
     readonly property int cellWidth: Math.max(72, Math.floor(list.width / visualColumns))
     readonly property int columnCount: Math.max(1, Math.floor(list.width / cellWidth))
     readonly property int photoRowHeight: Math.max(64, Math.round(
@@ -56,6 +60,8 @@ Item {
     signal imageFocused(var item, int index)
     signal contextMenuRequested(var item, real sceneX, real sceneY)
     signal zoomChanged(int zoomLevel)
+    // A star click on the cell of @p item (2 to 6 columns): rate that photo only.
+    signal ratingRequested(var item, int rating)
 
     activeFocusOnTab: true
     Accessible.role: Accessible.List
@@ -418,6 +424,9 @@ Item {
         readonly property int imageId: photo ? Number(photo.imageId) : 0
         readonly property bool selected: fileId > 0 && root.isSelected(fileId)
         readonly property bool focused: root.activeFocus && root.focusOccurrence === occurrence
+        readonly property int rating: photo ? Number(photo.rating) : 0
+        readonly property bool edited: photo ? photo.isEdited === true : false
+        readonly property bool hovered: cellHover.hovered || cellStars.pointerInside
         property string liveThumbUrl: photo ? photo.thumbUrl : ""
         property int pinnedFileId: 0
         property int pinnedImageId: 0
@@ -426,8 +435,22 @@ Item {
         width: root.cellWidth
         height: root.photoRowHeight
         Accessible.role: Accessible.ListItem
-        Accessible.name: photo ? photo.fileName : qsTr("Loading photo")
+        Accessible.name: {
+            if (!photo) {
+                return qsTr("Loading photo")
+            }
+            const parts = [photo.fileName,
+                           rating > 0 ? qsTr("%n star(s)", "", rating) : qsTr("Unrated")]
+            if (edited) {
+                parts.push(qsTr("Edited"))
+            }
+            return parts.join(", ")
+        }
         Accessible.selected: selected
+
+        HoverHandler {
+            id: cellHover
+        }
 
         function releasePin() {
             if (pinnedFileId > 0 && pinnedImageId > 0) {
@@ -482,10 +505,13 @@ Item {
         }
 
         Rectangle {
+            // Above cellHit, so the star control takes its own clicks; the rest of the card
+            // takes no pointer input and cellHit gets it.
+            z: 1
             anchors.fill: parent
             anchors.margins: root.cellGap / 2
             radius: appTheme.panelRadius
-            color: cellHit.containsMouse ? appTheme.hoverColor : appTheme.cardSurfaceColor
+            color: cell.hovered ? appTheme.hoverColor : appTheme.cardSurfaceColor
             // Monochrome selection: a neutral text-color outline, never an accent frame.
             border.width: cell.selected ? 2 : (cell.focused ? 1 : 0)
             border.color: cell.selected ? appTheme.textColor : appTheme.textMutedColor
@@ -502,6 +528,7 @@ Item {
                 clip: true
 
                 Image {
+                    id: cellImage
                     anchors.fill: parent
                     anchors.margins: 2
                     source: cell.liveThumbUrl
@@ -509,21 +536,105 @@ Item {
                     fillMode: Image.PreserveAspectFit
                     visible: cell.liveThumbUrl.length > 0
                 }
+
+                // Edit mark: a chip on the top-right corner of the photo.
+                ThumbnailEditMark {
+                    image: cellImage
+                    compact: root.compactText
+                    edited: cell.edited
+                    editedAt: cell.photo ? cell.photo.editedAt : undefined
+                    versionName: cell.photo && cell.photo.editVersionName
+                                 ? String(cell.photo.editVersionName) : ""
+                }
             }
 
-            Label {
+            Item {
+                id: captionArea
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.margins: root.cardInset
                 height: root.textAreaHeight
                 visible: root.textAreaHeight > 0
-                text: cell.photo ? cell.photo.fileName : ""
-                color: appTheme.textColor
-                font.family: appTheme.dataFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
-                elide: Text.ElideRight
-                verticalAlignment: Text.AlignVCenter
+
+                // File-name line: the name and (8 and 11 columns) the filled stars. The file
+                // name elides first.
+                Item {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: 18
+
+                    Label {
+                        id: cellName
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.min(implicitWidth, Math.max(0, parent.width
+                                        - (nameTrailing.width > 0 ? nameTrailing.width + 4 : 0)))
+                        text: cell.photo ? cell.photo.fileName : ""
+                        color: appTheme.textColor
+                        font.family: appTheme.dataFontFamily
+                        font.pixelSize: appTheme.fontSizeCaption
+                        elide: Text.ElideRight
+                    }
+
+                    Row {
+                        id: nameTrailing
+                        anchors.left: cellName.right
+                        anchors.leftMargin: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 3
+
+                        ThumbnailStarRating {
+                            objectName: "albumSectionCompactStars"
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: root.compactText && cell.rating > 0
+                            photoId: cell.fileId
+                            rating: cell.rating
+                            interactive: false
+                        }
+                    }
+                }
+
+                // Date line (2 to 6 columns): the capture date and the star control.
+                Item {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 18
+                    visible: !root.compactText
+
+                    Label {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.max(0, cellStars.x - 4)
+                        text: cell.photo && cell.photo.captureDate
+                              ? String(cell.photo.captureDate) : ""
+                        color: appTheme.textMutedColor
+                        font.family: appTheme.dataFontFamily
+                        font.pixelSize: appTheme.fontSizeCaption
+                        elide: Text.ElideRight
+                    }
+
+                    ThumbnailStarRating {
+                        id: cellStars
+                        objectName: "albumSectionStars"
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        photoId: cell.fileId
+                        rating: cell.rating
+                        interactive: root.starsInteractive
+                        handlesPointer: true
+                        cardHovered: cell.hovered
+                        pixelSize: appTheme.fontSizeBody
+                        onRatingRequested: function(rating) {
+                            const item = root.selectionItem(cell.photo)
+                            if (item) {
+                                root.ratingRequested(item, rating)
+                            }
+                        }
+                    }
+                }
             }
         }
 

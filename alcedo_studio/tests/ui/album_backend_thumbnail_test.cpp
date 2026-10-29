@@ -3,11 +3,17 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include <QByteArray>
+#include <QDate>
+#include <QDateTime>
 #include <QImage>
 #include <QSignalSpy>
+#include <QTime>
+#include <QTimeZone>
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -185,6 +191,60 @@ TEST_F(ThumbnailTests, ThumbnailModelSelectionRangeExtendsAfterPagedAppend) {
   EXPECT_EQ(completed_range.front().toMap().value("elementId").toUInt(), 3u);
   EXPECT_EQ(completed_range.back().toMap().value("elementId").toUInt(), 10u);
   EXPECT_EQ(model.rowByElementId(10), 9);
+}
+
+// Issue #589: the edit state roles of a loaded row, and the patch that the editor session and
+// Paste send after a commit, an undo to the image root, or a Version switch.
+TEST_F(ThumbnailTests, ThumbnailModelEditStateRolesFollowUpdateEditState) {
+  AlbumThumbnailModel    model;
+  auto                   items       = MakeAlbumItems(0, 3);
+  // 2026-09-03 10:00:00 UTC.
+  constexpr std::int64_t kEditedAtNs = 1'788'429'600'000'000'000;
+  items[1].edited_at_ns              = kEditedAtNs;
+  items[1].edit_version_name         = QStringLiteral("Warm");
+  model.resetModel(items, items.size());
+
+  const auto role = [&](int row, AlbumThumbnailModel::Roles name) {
+    return model.data(model.index(row), name);
+  };
+  EXPECT_FALSE(role(0, AlbumThumbnailModel::IsEdited).toBool());
+  EXPECT_FALSE(role(0, AlbumThumbnailModel::EditedAt).isValid());
+  EXPECT_TRUE(role(0, AlbumThumbnailModel::EditVersionName).toString().isEmpty());
+  EXPECT_TRUE(role(1, AlbumThumbnailModel::IsEdited).toBool());
+  EXPECT_EQ(role(1, AlbumThumbnailModel::EditedAt).toDateTime().toUTC(),
+            QDateTime(QDate(2026, 9, 3), QTime(10, 0), QTimeZone::utc()));
+  EXPECT_EQ(role(1, AlbumThumbnailModel::EditVersionName).toString(), QStringLiteral("Warm"));
+  const auto names = model.roleNames();
+  EXPECT_EQ(names.value(AlbumThumbnailModel::IsEdited), QByteArray("isEdited"));
+  EXPECT_EQ(names.value(AlbumThumbnailModel::EditedAt), QByteArray("editedAt"));
+  EXPECT_EQ(names.value(AlbumThumbnailModel::EditVersionName), QByteArray("editVersionName"));
+  EXPECT_TRUE(model.getItemAt(1).value(QStringLiteral("isEdited")).toBool());
+
+  QSignalSpy changed(&model, &QAbstractItemModel::dataChanged);
+  // First commit of row 0.
+  const auto element0 = items[0].element_id;
+  ASSERT_TRUE(model.updateEditState(element0, items[0].image_id, kEditedAtNs, "Default"));
+  ASSERT_EQ(changed.count(), 1);
+  const auto changed_roles = changed.takeFirst().at(2).value<QList<int>>();
+  EXPECT_TRUE(changed_roles.contains(AlbumThumbnailModel::IsEdited));
+  EXPECT_TRUE(changed_roles.contains(AlbumThumbnailModel::EditedAt));
+  EXPECT_TRUE(changed_roles.contains(AlbumThumbnailModel::EditVersionName));
+  EXPECT_FALSE(changed_roles.contains(AlbumThumbnailModel::Rating));
+  EXPECT_TRUE(role(0, AlbumThumbnailModel::IsEdited).toBool());
+  // The same state again changes nothing; another image id is not this row.
+  EXPECT_FALSE(model.updateEditState(element0, items[0].image_id, kEditedAtNs, "Default"));
+  EXPECT_FALSE(model.updateEditState(element0, items[0].image_id + 100, std::nullopt, {}));
+  EXPECT_EQ(changed.count(), 0);
+  // Undo to the image root: unedited, and the Version name is dropped with the edit time.
+  ASSERT_TRUE(model.updateEditState(element0, items[0].image_id, std::nullopt, "Default"));
+  EXPECT_FALSE(role(0, AlbumThumbnailModel::IsEdited).toBool());
+  EXPECT_FALSE(role(0, AlbumThumbnailModel::EditedAt).isValid());
+  EXPECT_TRUE(role(0, AlbumThumbnailModel::EditVersionName).toString().isEmpty());
+  // A Version switch to another head.
+  ASSERT_TRUE(model.updateEditState(items[1].element_id, 0, kEditedAtNs + 1, "Cool"));
+  EXPECT_EQ(role(1, AlbumThumbnailModel::EditVersionName).toString(), QStringLiteral("Cool"));
+  // A row that is not loaded is not patched.
+  EXPECT_FALSE(model.updateEditState(999999, 0, kEditedAtNs, "Default"));
 }
 
 TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesProviderUrl) {

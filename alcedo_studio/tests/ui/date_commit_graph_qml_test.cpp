@@ -227,7 +227,18 @@ TEST(DateCommitGraphQmlTest, TokensMatchAppTheme) {
   EXPECT_EQ(theme.dateGraphCellMinSize(), 10);
   EXPECT_EQ(theme.dateGraphCellGap(), 3);
   EXPECT_EQ(theme.dateGraphCellRadius(), 2);
-  EXPECT_EQ(theme.dateGraphLevel4Color(), theme.toneSteel());
+  // The activity ramp is neutral (issue #589): gray levels that grow toward textColor and stay
+  // below it, so the textColor outline of the selected day reads on the darkest cell.
+  const QColor ramp[] = {theme.dateGraphLevel1Color(), theme.dateGraphLevel2Color(),
+                         theme.dateGraphLevel3Color(), theme.dateGraphLevel4Color()};
+  for (const auto& level : ramp) {
+    EXPECT_EQ(level.red(), level.green());
+    EXPECT_EQ(level.green(), level.blue());
+  }
+  for (int i = 1; i < 4; ++i) {
+    EXPECT_GT(ramp[i].lightness(), ramp[i - 1].lightness());
+  }
+  EXPECT_LT(ramp[3].lightness(), theme.textColor().lightness());
 }
 
 TEST(DateCommitGraphQmlTest, RollingWindowEndsOnLatestPhotoAndHasYearOfDays) {

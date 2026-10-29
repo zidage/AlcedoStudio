@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
 
@@ -42,6 +43,19 @@ Item {
             return theme.secondaryButtonFill(enabled, hovered, pressed)
         }
         return colButtonSecondary
+    }
+
+    // Neutral filled action (Load Project, Export queue): the light list well with its ink.
+    // A disabled action drops to the sunken base fill with muted ink.
+    function filledActionFill(enabled, hovered, pressed) {
+        if (!enabled)
+            return appTheme.bgBaseColor
+        return hovered || pressed ? Qt.darker(appTheme.editorListSelectedFillColor, 1.06)
+                                  : appTheme.editorListSelectedFillColor
+    }
+
+    function filledActionInk(enabled) {
+        return enabled ? appTheme.editorListSelectedInkColor : appTheme.textMutedColor
     }
 
     // Inspector / browser view state is owned by the Main shell (host) so values
@@ -337,7 +351,7 @@ RowLayout {
                                 Rectangle {
                                     width: zoomSlider.visualPosition * parent.width
                                     height: parent.height
-                                    color: root.colAccentPrimary
+                                    color: appTheme.textColor
                                     radius: 2
                                 }
                             }
@@ -347,9 +361,7 @@ RowLayout {
                                 implicitWidth: 14
                                 implicitHeight: 14
                                 radius: 7
-                                color: root.colAccentPrimary
-                                border.width: 1
-                                border.color: root.colAccentSecondary
+                                color: appTheme.textColor
                             }
                         }
 
@@ -494,8 +506,24 @@ RowLayout {
                         visible: !appModules.project.serviceReady
                         enabled: appModules.interactionPolicy.canChangeStateAsUser
                         text: qsTr("Load Project")
-                        Material.background: root.colButtonPrimary
-                        Material.foreground: root.colText
+                        hoverEnabled: true
+                        leftPadding: appTheme.spaceLg
+                        rightPadding: appTheme.spaceLg
+                        background: Rectangle {
+                            implicitWidth: 100
+                            implicitHeight: 40
+                            radius: root.controlRadius
+                            color: root.filledActionFill(emptyStateLoadButton.enabled,
+                                                         emptyStateLoadButton.hovered,
+                                                         emptyStateLoadButton.down)
+                        }
+                        contentItem: Label {
+                            text: emptyStateLoadButton.text
+                            color: root.filledActionInk(emptyStateLoadButton.enabled)
+                            font: emptyStateLoadButton.font
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
                         onClicked: appModules.projectLaunch.BeginPromptOpen()
                     }
                 }
@@ -603,39 +631,23 @@ RowLayout {
                     icon.source: "qrc:/panel_icons/export.svg"
                     icon.width: 16
                     icon.height: 16
-                    icon.color: root.colText
+                    icon.color: root.filledActionInk(exportQueueBtn.enabled)
                     display: AbstractButton.TextBesideIcon
-                    background: Canvas {
-                        opacity: exportQueueBtn.enabled ? 1.0 : 0.5
-                        property color gradStart: root.colAccentPrimary
-                        property color gradEnd: root.colAccentSecondary
-                        onGradStartChanged: requestPaint()
-                        onGradEndChanged: requestPaint()
-                        onWidthChanged: requestPaint()
-                        onHeightChanged: requestPaint()
-                        onPaint: {
-                            var ctx = getContext("2d")
-                            ctx.clearRect(0, 0, width, height)
-                            var r = 8
-                            ctx.beginPath()
-                            ctx.moveTo(r, 0)
-                            ctx.lineTo(width - r, 0)
-                            ctx.quadraticCurveTo(width, 0, width, r)
-                            ctx.lineTo(width, height - r)
-                            ctx.quadraticCurveTo(width, height, width - r, height)
-                            ctx.lineTo(r, height)
-                            ctx.quadraticCurveTo(0, height, 0, height - r)
-                            ctx.lineTo(0, r)
-                            ctx.quadraticCurveTo(0, 0, r, 0)
-                            ctx.closePath()
-                            var grad = ctx.createLinearGradient(0, height, width, 0)
-                            grad.addColorStop(0.0, Qt.rgba(gradStart.r, gradStart.g, gradStart.b, 1.0))
-                            grad.addColorStop(1.0, Qt.rgba(gradEnd.r, gradEnd.g, gradEnd.b, 1.0))
-                            ctx.fillStyle = grad
-                            ctx.fill()
-                        }
+                    background: Rectangle {
+                        radius: 8
+                        color: root.filledActionFill(exportQueueBtn.enabled,
+                                                     exportQueueBtn.hovered,
+                                                     exportQueueBtn.down)
                     }
-                    Material.foreground: root.colText
+                    contentItem: IconLabel {
+                        spacing: exportQueueBtn.spacing
+                        mirrored: exportQueueBtn.mirrored
+                        display: exportQueueBtn.display
+                        icon: exportQueueBtn.icon
+                        text: exportQueueBtn.text
+                        font: exportQueueBtn.font
+                        color: root.filledActionInk(exportQueueBtn.enabled)
+                    }
                     scale: exportQueueBtn.hovered && enabled ? 1.03 : 1.0
                     Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
                     onClicked: inspectorPanel.startExport()
@@ -650,7 +662,7 @@ RowLayout {
             anchors.bottom: parent.bottom
             width: root.inspectorVisible && root.inspectorAdaptiveMaxWidth > 0 ? 5 : 0
             x: -Math.round(width / 2)
-            color: dragArea.containsMouse || dragArea.drag.active ? root.colAccentPrimary : "transparent"
+            color: dragArea.containsMouse || dragArea.drag.active ? appTheme.textMutedColor : "transparent"
             visible: width > 0
             z: 10
             Behavior on width { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
@@ -718,6 +730,9 @@ RowLayout {
             onContextMenuRequested: function(item, sceneX, sceneY) {
                 host.openImageContextMenu(item, sceneX, sceneY)
             }
+            onRatingRequested: function(item, rating) {
+                host.requestSetCardImageRating(item, rating)
+            }
         }
     }
 
@@ -756,6 +771,9 @@ RowLayout {
             }
             onContextMenuRequested: function(item, sceneX, sceneY) {
                 host.openImageContextMenu(item, sceneX, sceneY)
+            }
+            onRatingRequested: function(item, rating) {
+                host.requestSetCardImageRating(item, rating)
             }
         }
     }

@@ -514,6 +514,24 @@ auto GroupKeyFromTitle(AlbumGroupField field, const QString& title, bool unknown
   return AlbumGroupKey{title.toStdString()};
 }
 
+/// True when @p node has a condition on the rating (typed, or raw SQL on `i.rating`).
+auto FilterReadsRating(const FilterNode& node) -> bool {
+  if (node.condition_.has_value() && (node.condition_->field_ == FilterField::Rating ||
+                                      node.condition_->field_ == FilterField::RatingLabel)) {
+    return true;
+  }
+  if (node.raw_sql_.has_value() && node.raw_sql_->find(L"rating") != std::wstring::npos) {
+    return true;
+  }
+  return std::any_of(node.children_.begin(), node.children_.end(),
+                     [](const FilterNode& child) { return FilterReadsRating(child); });
+}
+
+auto OptionsReadRating(const AlbumQueryOptions& options) -> bool {
+  return options.sort_field_ == AlbumSortField::kRating ||
+         options.group_field_ == AlbumGroupField::kRating;
+}
+
 auto SamePresentation(const AlbumQueryOptions& left, const AlbumQueryOptions& right) -> bool {
   return left.sort_field_ == right.sort_field_ && left.sort_direction_ == right.sort_direction_ &&
          left.group_field_ == right.group_field_;
@@ -587,6 +605,56 @@ void LibraryModule::RequestLibraryRefresh() {
   QMetaObject::invokeMethod(this, [this]() { SubmitPendingRefresh(); }, Qt::QueuedConnection);
 }
 
+void LibraryModule::NoteRatingsChanged() {
+  if (refresh_in_flight_ || refresh_scheduled_ || !accepted_input_ || PresentationReadsRating()) {
+    RequestLibraryRefresh();
+    return;
+  }
+  SubmitStatisticsRead();
+}
+
+auto LibraryModule::PresentationReadsRating() const -> bool {
+  if (OptionsReadRating(accepted_options_) || OptionsReadRating(RequestedOptions())) {
+    return true;
+  }
+  if (!accepted_input_) {
+    return false;
+  }
+  const auto& stats_filter  = accepted_input_->stats_filter_;
+  const auto& search_filter = accepted_input_->search_.filter_;
+  return (stats_filter.has_value() && FilterReadsRating(*stats_filter)) ||
+         (search_filter.has_value() && FilterReadsRating(*search_filter));
+}
+
+void LibraryModule::SubmitStatisticsRead() {
+  auto input = AcceptedReadInput(AlbumQueryRead{.read_statistics_ = true});
+  if (!input) {
+    return;
+  }
+  query_worker_->Submit(SearchRequestKind::kStatistics, [this, input](std::uint64_t generation) {
+    auto output = RunLibraryQuery(*input);
+    QMetaObject::invokeMethod(
+        this,
+        [this, generation, output = std::move(output)]() {
+          if (!query_worker_->IsCurrent(SearchRequestKind::kStatistics, generation) ||
+              refresh_in_flight_) {
+            // A newer read of the same query, or a refresh that brings its own statistics.
+            return;
+          }
+          if (!output.error_.isEmpty()) {
+            qWarning().noquote() << "Library statistics read failed:" << output.error_;
+            SetQueryError(output.error_);
+            return;
+          }
+          if (output.result_.statistics_.has_value()) {
+            stats_->ApplyFolderStats(ToAlbumStatsView(*output.result_.statistics_), false);
+            emit stats_->StatsChanged();
+          }
+        },
+        Qt::QueuedConnection);
+  });
+}
+
 void LibraryModule::SubmitPendingRefresh() {
   refresh_scheduled_   = false;
   // This read sees every edit written so far.
@@ -600,6 +668,7 @@ void LibraryModule::SubmitPendingRefresh() {
     query_worker_->Invalidate(SearchRequestKind::kLibraryPage);
     query_worker_->Invalidate(SearchRequestKind::kLibraryIds);
     query_worker_->Invalidate(SearchRequestKind::kSelectAll);
+    query_worker_->Invalidate(SearchRequestKind::kStatistics);
     ResetThumbnailWindow();
     if (stats_) {
       stats_->ClearStats();
@@ -656,8 +725,9 @@ void LibraryModule::SubmitPendingRefresh() {
   });
 }
 
-auto LibraryModule::ItemFromRow(const SearchResultRow& row, const AlbumItem& display,
+auto LibraryModule::ItemFromRow(const AlbumQueryRow& query_row, const AlbumItem& display,
                                 sl_element_id_t folderId) -> AlbumItem {
+  const auto&   row         = query_row.photo_;
   const QString scope_type  = folderId == 0 ? QStringLiteral("root") : QStringLiteral("album");
   const auto    folder_path = folders_ ? folders_->CurrentFolderFsPath() : std::filesystem::path{};
   const auto    file_name   = conv::FromBytes(row.file_name_);
@@ -675,6 +745,10 @@ auto LibraryModule::ItemFromRow(const SearchResultRow& row, const AlbumItem& dis
   item.camera_model = QString::fromUtf8(row.camera_model_.c_str());
   item.lens         = QString::fromUtf8(row.lens_.c_str());
   item.rating       = row.rating_;
+  item.edited_at_ns      = query_row.edited_at_ns_;
+  item.edit_version_name = query_row.edited_at_ns_.has_value()
+                               ? QString::fromUtf8(query_row.edit_version_name_.c_str())
+                               : QString{};
   item.capture_date = QDate::fromString(QString::fromUtf8(row.capture_date_.c_str()), Qt::ISODate);
   item.import_date =
       row.added_time_.has_value()
@@ -716,7 +790,7 @@ void LibraryModule::PublishRefresh(const LibraryQueryInput& input, LibraryQueryO
         !seen.insert(row.photo_.file_id_).second) {
       continue;
     }
-    items.push_back(ItemFromRow(row.photo_, output.row_display_[i], input.folder_id_));
+    items.push_back(ItemFromRow(row, output.row_display_[i], input.folder_id_));
   }
 
   accepted_options_ = input.options_;
@@ -838,7 +912,7 @@ void LibraryModule::PublishPage(const LibraryQueryInput& input, LibraryQueryOutp
           FindAlbumItem(row.photo_.file_id_) != nullptr) {
         continue;
       }
-      batch.push_back(ItemFromRow(row.photo_, output.row_display_[i], input.folder_id_));
+      batch.push_back(ItemFromRow(row, output.row_display_[i], input.folder_id_));
     }
     loaded_occurrence_end_ = input.read_.offset_ + static_cast<int64_t>(rows.size());
     if (!batch.empty()) {
@@ -860,7 +934,7 @@ void LibraryModule::PublishPage(const LibraryQueryInput& input, LibraryQueryOutp
     const auto& row = rows[i];
     ids.push_back(row.photo_.file_id_);
     if (row.photo_.file_id_ != 0 && row.photo_.image_id_ != 0) {
-      (void)ItemFromRow(row.photo_, output.row_display_[i], input.folder_id_);
+      (void)ItemFromRow(row, output.row_display_[i], input.folder_id_);
     }
   }
   section_model_.StorePage(input.read_.offset_, ids, kMaxRetainedSectionPages);
@@ -1120,6 +1194,17 @@ void LibraryModule::SetAlbumItemHdrFlag(sl_element_id_t elementId, image_id_t im
   thumbnail_model_.updateHdrFlag(elementId, imageId, isHdr);
 }
 
+void LibraryModule::SetAlbumItemEditState(sl_element_id_t elementId, image_id_t imageId,
+                                          std::optional<std::int64_t> editedAtNs,
+                                          const QString&              versionName) {
+  const QString name = editedAtNs.has_value() ? versionName : QString{};
+  if (auto* item = FindAlbumItem(elementId);
+      item != nullptr && (imageId == 0 || item->image_id == imageId)) {
+    item->edited_at_ns      = editedAtNs;
+    item->edit_version_name = name;
+  }
+  thumbnail_model_.updateEditState(elementId, imageId, editedAtNs, name);
+}
 
 void LibraryModule::PersistImageHdrFlag(sl_element_id_t elementId, image_id_t imageId, bool isHdr) {
   auto proj = project_->handler().project();

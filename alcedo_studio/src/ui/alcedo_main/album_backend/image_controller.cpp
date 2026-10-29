@@ -1288,7 +1288,7 @@ auto ImageController::SetImageRating(uint elementId, uint imageId, int rating) -
       }
     }
     library_->model().updateRating(target.element_id_, target.image_id_, rating);
-    stats_->RefreshStats();
+    library_->NoteRatingsChanged();
 
     bool save_ok = true;
     try {
@@ -1522,7 +1522,7 @@ auto ImageController::FinishRatingBatch(const RatingBatch&        batch,
     return result;
   }
 
-  stats_->RefreshStats();
+  library_->NoteRatingsChanged();
 
   const int count = static_cast<int>(rated_ids.size());
   auto      msg   = batch.rating_ == 0
@@ -1808,7 +1808,7 @@ auto ImageController::SetImageRatingReasons(uint elementId, const QString& reaso
 // above). `Write_NoSync` sets the image MODIFIED and mutates the in-memory
 // `exif_display_.rating_`; the view-state patch + `thumbnail_model_.updateRating` keep
 // the UI in sync without a DB round-trip. No `SyncWithStorage`/`SaveProject`/`Package`/
-// `RefreshStats` — the batched AI scoring run flushes once at job end via
+// `NoteRatingsChanged` — the batched AI scoring run flushes once at job end via
 // `FlushPendingStarRatings`, so a batch does one DB flush instead of one per image.
 // `SetImageRating` (manual single click) is unchanged and still does a full sync+save.
 void ImageController::ApplyStarRatingLight(uint elementId, uint imageId, int rating) {
@@ -1854,10 +1854,10 @@ void ImageController::ApplyStarRatingLight(uint elementId, uint imageId, int rat
 
 // Phase 7a: the batched flush half. `SyncWithStorage` flushes every MODIFIED image row
 // (the pending star writes from `ApplyStarRatingLight`) in a single transaction;
-// `RefreshStats` re-runs the rating-bucket GROUP BY so star-filter stats reflect the
-// new stars. No `SaveProject`/`Package` — the `.alcd` packaged snapshot is left stale
-// until the next normal save/close; the live DB is authoritative (same as any DB change
-// between manual saves).
+// `NoteRatingsChanged` re-reads the rating-bucket GROUP BY so star-filter stats reflect the
+// new stars, and refreshes the photos only when the presentation reads the rating. No
+// `SaveProject`/`Package` — the `.alcd` packaged snapshot is left stale until the next normal
+// save/close; the live DB is authoritative (same as any DB change between manual saves).
 void ImageController::FlushPendingStarRatings() {
   auto proj = project_->handler().project();
   if (!proj) {
@@ -1870,7 +1870,7 @@ void ImageController::FlushPendingStarRatings() {
     }
   } catch (...) {
   }
-  stats_->RefreshStats();
+  library_->NoteRatingsChanged();
 }
 
 auto ImageController::GetImageRatingReasons(uint elementId) -> QVariantMap {

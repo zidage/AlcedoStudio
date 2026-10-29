@@ -789,6 +789,8 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/AppMenuSeparator.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ImageContextMenu.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailGridView.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailStarRating.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailEditMark.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTaskBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTasksDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AgentSessionCard.qml"

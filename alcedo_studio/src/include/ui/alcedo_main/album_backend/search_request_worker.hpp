@@ -23,6 +23,7 @@ enum class SearchRequestKind : std::uint8_t {
   kLibraryIds  = 3,  ///< Position or ordered-id read of the accepted library query.
   kSelectAll   = 4,  ///< Read of every file id of the accepted library query (Select All).
   kPrewarm     = 5,  ///< Sidecar start and neutral text embedding before the first search.
+  kStatistics  = 6,  ///< Statistics of the accepted library query, with no photo rows.
 };
 
 /// One worker thread that runs search requests in submit order with latest-wins coalescing.
@@ -79,7 +80,7 @@ class SearchRequestWorker {
   std::condition_variable      wake_;
   std::deque<PendingRequest>   pending_{};
   std::condition_variable      idle_;
-  std::array<std::uint64_t, 6> newest_generation_{};
+  std::array<std::uint64_t, 7> newest_generation_{};
   std::uint64_t                last_generation_ = 0;
   bool                         stopping_        = false;
   bool                         running_         = false;

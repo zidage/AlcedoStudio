@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 
 ColumnLayout {
@@ -442,16 +443,16 @@ ColumnLayout {
                         color: theme.colText
                         font.family: appTheme.dataFontFamily
                         font.pixelSize: 16
-                        selectedTextColor: theme.colBgCanvas
-                        selectionColor: panel.withAlpha(theme.colAccentSecondary, 0.6)
+                        selectedTextColor: appTheme.textColor
+                        selectionColor: panel.withAlpha(appTheme.textMutedColor, 0.6)
                         Material.foreground: theme.colText
-                        Material.accent: theme.colAccentSecondary
+                        Material.accent: appTheme.textMutedColor
                         background: Rectangle {
                             radius: 10
                             color: panel.withAlpha(theme.colBgBase, 0.72)
                             border.width: 1
                             border.color: draftCollectionField.activeFocus
-                                          ? panel.withAlpha(theme.colAccentSecondary, 0.62)
+                                          ? appTheme.textMutedColor
                                           : panel.withAlpha(theme.colText, 0.12)
                         }
 
@@ -494,26 +495,12 @@ ColumnLayout {
                         anchors.fill: parent
                         anchors.rightMargin: 2
                         radius: 10
+                        // Selected row: the monochrome list well with its ink.
                         color: selected
-                               ? panel.withAlpha(theme.colHover, 0.54)
+                               ? appTheme.editorListSelectedFillColor
                                : folderMouse.containsMouse
                                  ? panel.withAlpha(theme.colHover, 0.28)
                                  : "transparent"
-                        border.width: selected ? 1 : 0
-                        border.color: selected ? panel.withAlpha(theme.colText, 0.08) : "transparent"
-
-                        Rectangle {
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
-                            anchors.right: parent.right
-                            width: selected ? 2 : 0
-                            radius: 1
-                            color: theme.colAccentSecondary
-
-                            Behavior on width {
-                                NumberAnimation { duration: 130 }
-                            }
-                        }
 
                         RowLayout {
                             id: folderRowLayout
@@ -522,7 +509,8 @@ ColumnLayout {
                             anchors.rightMargin: 10
                             spacing: 10
 
-                            Image {
+                            // The SVG stroke is white; tint it with the ink on the light well.
+                            ColorImage {
                                 width: 15
                                 height: 15
                                 source: "qrc:/panel_icons/folder-open.svg"
@@ -531,12 +519,14 @@ ColumnLayout {
                                 fillMode: Image.PreserveAspectFit
                                 mipmap: false
                                 smooth: false
+                                color: selected ? appTheme.editorListSelectedInkColor : "transparent"
                             }
 
                             Label {
                                 Layout.fillWidth: true
                                 text: modelData.name
-                                color: selected ? theme.colText : panel.withAlpha(theme.colText, 0.92)
+                                color: selected ? appTheme.editorListSelectedInkColor
+                                                : panel.withAlpha(theme.colText, 0.92)
                                 font.pixelSize: 15
                                 font.weight: selected ? 600 : 400
                                 wrapMode: Text.Wrap
@@ -605,40 +595,31 @@ ColumnLayout {
         icon.source: "qrc:/panel_icons/folder-open.svg"
         icon.width: 16
         icon.height: 16
-        icon.color: theme.colText
+        // Neutral filled action: the light list well with its ink. A disabled action drops to
+        // the sunken base fill with muted ink.
+        readonly property color inkColor: enabled ? appTheme.editorListSelectedInkColor
+                                                  : appTheme.textMutedColor
+        icon.color: inkColor
         display: AbstractButton.TextBesideIcon
-        Material.foreground: theme.colText
         onClicked: panel.importFromFolderRequested()
 
-        background: Canvas {
-            opacity: importFromFolderBtn.enabled ? 1.0 : 0.5
-            property color gradStart: theme.colAccentPrimary
-            property color gradEnd: theme.colAccentSecondary
-            onGradStartChanged: requestPaint()
-            onGradEndChanged: requestPaint()
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-                var r = 8
-                ctx.beginPath()
-                ctx.moveTo(r, 0)
-                ctx.lineTo(width - r, 0)
-                ctx.quadraticCurveTo(width, 0, width, r)
-                ctx.lineTo(width, height - r)
-                ctx.quadraticCurveTo(width, height, width - r, height)
-                ctx.lineTo(r, height)
-                ctx.quadraticCurveTo(0, height, 0, height - r)
-                ctx.lineTo(0, r)
-                ctx.quadraticCurveTo(0, 0, r, 0)
-                ctx.closePath()
-                var grad = ctx.createLinearGradient(0, height, width, 0)
-                grad.addColorStop(0.0, Qt.rgba(gradStart.r, gradStart.g, gradStart.b, 1.0))
-                grad.addColorStop(1.0, Qt.rgba(gradEnd.r, gradEnd.g, gradEnd.b, 1.0))
-                ctx.fillStyle = grad
-                ctx.fill()
-            }
+        background: Rectangle {
+            radius: 8
+            color: !importFromFolderBtn.enabled
+                   ? appTheme.bgBaseColor
+                   : importFromFolderBtn.hovered || importFromFolderBtn.down
+                     ? Qt.darker(appTheme.editorListSelectedFillColor, 1.06)
+                     : appTheme.editorListSelectedFillColor
+        }
+
+        contentItem: IconLabel {
+            spacing: importFromFolderBtn.spacing
+            mirrored: importFromFolderBtn.mirrored
+            display: importFromFolderBtn.display
+            icon: importFromFolderBtn.icon
+            text: importFromFolderBtn.text
+            font: importFromFolderBtn.font
+            color: importFromFolderBtn.inkColor
         }
 
         scale: importFromFolderBtn.hovered && enabled ? 1.03 : 1.0

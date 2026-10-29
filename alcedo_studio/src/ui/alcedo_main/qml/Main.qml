@@ -527,6 +527,10 @@ ApplicationWindow {
         imageActionsController.requestSetFocusedImageRating(rating)
     }
 
+    function requestSetCardImageRating(item, rating) {
+        imageActionsController.requestSetCardImageRating(item, rating)
+    }
+
     function requestSaveFocusedDescription(caption) {
         imageActionsController.requestSaveFocusedDescription(caption)
     }
