@@ -222,6 +222,27 @@ __global__ void RasterMaskDisplayKernel(float4* output, const std::uint8_t* text
   output[index]   = make_float4(static_cast<float>(code) / 255.0f, 0.0f, 0.0f, 1.0f);
 }
 
+/// Range probe display of a Mask that is not in the plan (#604): the R8 value that
+/// RasterMaskKernel writes for it, in red; green and blue 0, alpha 1.
+template <bool kRanged>
+__global__ void RasterMaskRangeDisplayKernel(float4* output, const std::uint8_t* texture,
+                                             RasterMaskParams params, MaskRangeParams range,
+                                             const float4* scene) {
+  const auto index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= params.width * params.height) return;
+  const auto   x = index % params.width;
+  const auto   y = index / params.width;
+  std::uint8_t code;
+  if constexpr (kRanged) {
+    code =
+        QuantizeR8(FinishRangedCoverage(RasterMaskMean(texture, params, x, y), params.invert != 0u,
+                                        MaskRangeWeight(range, scene[index]), params.opacity));
+  } else {
+    code = RasterMaskCode(texture, params, x, y);
+  }
+  output[index] = make_float4(static_cast<float>(code) / 255.0f, 0.0f, 0.0f, 1.0f);
+}
+
 /// Probed Mask display (Mask ranges D8): the R8 value of each pixel in red, on the same grid;
 /// green and blue 0, alpha 1.
 __global__ void MaskValueDisplayKernel(float4* output, const std::uint8_t* mask,
@@ -436,6 +457,35 @@ void RecordMaskCoverageDisplay(CudaRenderDevice&                     device,
       MakeRasterMaskParams(request.geometry, coverage, request.invert, request.opacity));
   if (::cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("RecordMaskCoverageDisplay: CUDA kernel launch failed");
+  }
+}
+
+void RecordMaskCandidateRangeDisplay(CudaRenderDevice& device, const ExecutionPlan& plan,
+                                     const MaskCoverageImage<CudaBackend>& coverage,
+                                     const MaskModel& mask, const FrameSceneBinding& range_scene,
+                                     CudaBackend::Texture2D& output) {
+  const auto extent = plan.geometry.render_extent;
+  if (output.DevicePointer() == nullptr || output.Format() != TextureFormat::Rgba32f ||
+      output.Width() != extent.width || output.Height() != extent.height) {
+    throw std::runtime_error(
+        "RecordMaskCandidateRangeDisplay: the output is not an RGBA32F texture of the render "
+        "extent");
+  }
+  if (coverage.texture.DevicePointer() == nullptr) {
+    throw std::runtime_error("RecordMaskCandidateRangeDisplay: the coverage texture is missing");
+  }
+  const float4*           scene  = RangeScenePointer(device, mask, range_scene, extent);
+  constexpr std::uint32_t block  = 256;
+  const auto              pixels = extent.width * extent.height;
+  const auto              kernel =
+      scene == nullptr ? RasterMaskRangeDisplayKernel<false> : RasterMaskRangeDisplayKernel<true>;
+  kernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
+      static_cast<float4*>(output.DevicePointer()),
+      static_cast<const std::uint8_t*>(coverage.texture.DevicePointer()),
+      MakeRasterMaskParams(plan.geometry, coverage, mask.invert, mask.opacity),
+      MaskRangeParamsFromMask(mask), scene);
+  if (::cudaGetLastError() != cudaSuccess) {
+    throw std::runtime_error("RecordMaskCandidateRangeDisplay: CUDA kernel launch failed");
   }
 }
 

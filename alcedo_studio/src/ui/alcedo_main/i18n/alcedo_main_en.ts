@@ -3104,11 +3104,6 @@ Original source files on disk will be kept.</source>
         <source>Show selection</source>
         <translation type="unfinished"></translation>
     </message>
-    <message>
-        <location line="+12"/>
-        <source>Confirm the new AI Mask to set its ranges.</source>
-        <translation type="unfinished"></translation>
-    </message>
 </context>
 <context>
     <name>EditorMasksContextPanel</name>

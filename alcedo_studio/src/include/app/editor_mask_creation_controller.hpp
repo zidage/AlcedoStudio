@@ -217,8 +217,10 @@ class EditorMaskCreationController {
   /**
    * @brief Publish the result of an AI Mask edit session as one typed history operation.
    *
-   * Without @p mask_id: a new Mask with a new `mask.ai.N` id, the display name "AI Mask N", and
-   * @p source, appended to the Grade through AddMask. With @p mask_id: the Mask must be an AI
+   * Without @p mask_id: a new Mask with a new `mask.ai.N` id, the display name "AI Mask N",
+   * @p source, and the ranges @p luminance_range and @p color_range set during the edit of the
+   * candidate (#604), appended to the Grade through one AddMask. With @p mask_id: the ranges must
+   * be empty (a stored Mask keeps its own ranges), and the Mask must be an AI
    * Segmentation Mask of the Grade; its source changes through ReplaceMaskSource, and an equal
    * source publishes nothing. Requires no open operation. Leaves the controller Inactive on every
    * return; a failed publish restores the live Grade.
@@ -226,7 +228,10 @@ class EditorMaskCreationController {
    *         equal source; not accepted with the error otherwise.
    */
   auto CommitAiMaskSource(const NodeId& grade_id, const std::optional<MaskId>& mask_id,
-                          const AiSegmentationMaskSource& source) -> EditorMaskCreationResult;
+                          const AiSegmentationMaskSource&           source,
+                          const std::optional<LuminanceRangeModel>& luminance_range = std::nullopt,
+                          const std::optional<ColorRangeModel>&     color_range     = std::nullopt)
+      -> EditorMaskCreationResult;
 
   /**
    * @brief Open a Mask value edit on the selected Mask.

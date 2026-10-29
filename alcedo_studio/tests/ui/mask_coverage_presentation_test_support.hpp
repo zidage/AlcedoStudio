@@ -289,7 +289,8 @@ class DeviceCoverageProducer final : public CoverageProducer {
                                       metadata.image_identity},
             plan.geometry},
         coverage_sink);
-    if (record.target != nullptr) {
+    // The candidate of a new AI Mask is written straight into the display target: no R8 image.
+    if (record.target != nullptr && !probe.candidate.has_value()) {
       render.probed_r8 = DownloadProbedR8(plan, probe);
     }
     return render;

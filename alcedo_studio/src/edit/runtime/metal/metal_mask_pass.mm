@@ -383,6 +383,23 @@ void RecordMaskCoverageDisplay(MetalRenderDevice&                     device,
   EncodeRasterSampling(device, coverage, request.geometry, request.invert, request.opacity, output);
 }
 
+void RecordMaskCandidateRangeDisplay(MetalRenderDevice& device, const ExecutionPlan& plan,
+                                     const MaskCoverageImage<MetalBackend>& coverage,
+                                     const MaskModel& mask, const FrameSceneBinding& range_scene,
+                                     MetalBackend::Texture2D& output) {
+  const auto extent = plan.geometry.render_extent;
+  if (output.Native() == nullptr || output.Format() != TextureFormat::Rgba32f ||
+      output.Width() != extent.width || output.Height() != extent.height) {
+    throw std::runtime_error(
+        "RecordMaskCandidateRangeDisplay: the output is not an RGBA32F texture of the render "
+        "extent");
+  }
+  // The MaskEvaluate kernels quantize to R8 values and write (value, 0, 0, 1) into any format.
+  const auto* scene = RangeSceneTexture(device, mask, range_scene, extent);
+  EncodeRasterSampling(device, coverage, plan.geometry, mask.invert, mask.opacity, output, scene,
+                       &mask);
+}
+
 void RecordMaskValueDisplay(MetalRenderDevice& device, const MetalBackend::Texture2D& mask,
                             MetalBackend::Texture2D& output) {
   if (mask.Native() == nullptr || mask.Format() != TextureFormat::R8) {

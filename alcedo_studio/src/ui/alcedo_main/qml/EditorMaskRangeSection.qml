@@ -7,15 +7,14 @@ import QtQuick.Layouts
 // value fields, a Softness slider for each range, the saturation threshold of the Hue Range, and
 // "Show selection". Every value and action is EditorMaskCreationAdapter's: the bars show the
 // range target Mask, a drag or a burst of steps shows the range coverage of that Mask until it
-// settles, and "Show selection" keeps it shown. A new AI Mask candidate is not a Mask yet, so the
-// controls are disabled for it (D11). The Mask panel puts it in a collapsible section.
+// settles, and "Show selection" keeps it shown. During the edit of a new AI Mask the target is its
+// candidate (#604): the values are written with the new Mask at Confirm. The Mask panel puts it in
+// a collapsible section.
 ColumnLayout {
     id: root
 
     property var maskCreation: null
     property bool controlsEnabled: true
-    // The AI Mask panel edits a new candidate: show why the controls are disabled.
-    property bool newAiMaskCandidate: false
 
     readonly property bool available: root.controlsEnabled && !!root.maskCreation
                                       && root.maskCreation.maskRangeAvailable
@@ -300,17 +299,5 @@ ColumnLayout {
             if (root.maskCreation)
                 root.maskCreation.setRangeCoverageVisible(checked)
         }
-    }
-
-    Label {
-        objectName: "editorMaskRangeCandidateNotice"
-        Layout.fillWidth: true
-        visible: root.newAiMaskCandidate
-        text: qsTr("Confirm the new AI Mask to set its ranges.")
-        color: appTheme.textMutedColor
-        wrapMode: Text.Wrap
-        font.pixelSize: appTheme.fontSizeCaption
-        Accessible.role: Accessible.StaticText
-        Accessible.name: text
     }
 }

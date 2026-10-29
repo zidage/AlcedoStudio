@@ -6,6 +6,7 @@
 
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 namespace alcedo {
 
@@ -118,6 +119,14 @@ void EditorMaskCoveragePreview::ShowRangeProbe(MaskCoverageProbe probe) {
   }
   range_probe_ = std::move(probe);
   SetStatus(EditorMaskCoveragePreviewStatus::Current);
+}
+
+auto EditorMaskCoveragePreview::NewestCandidate() const -> const MaskCoverageCandidateSelection* {
+  if (!candidate_active_ || !newest_.has_value() ||
+      newest_->source != EditorMaskCoveragePreviewSource::Candidate) {
+    return nullptr;
+  }
+  return std::get_if<MaskCoverageCandidateSelection>(&newest_->port_request.selection);
 }
 
 void EditorMaskCoveragePreview::HideRangeProbe(std::uint64_t request_id) {

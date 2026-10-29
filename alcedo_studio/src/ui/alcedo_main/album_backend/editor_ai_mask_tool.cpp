@@ -214,7 +214,7 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
     emit toolChanged();
     return;
   }
-  // The range bars target the stored Mask of the edit; a new candidate has none (D11). They stay
+  // The range bars target the stored Mask of the edit or the new candidate (#604). They stay
   // disabled until the session opens the edit (OnOpened).
   session_->mask_creation()->SetAiMaskEditRangeTarget(true, {}, std::nullopt);
   StartRequest request;
@@ -738,6 +738,11 @@ void EditorAiMaskTool::retryPreview() {
 void EditorAiMaskTool::commit() {
   if (!ready_ || busy()) {
     return;
+  }
+  if (session_ != nullptr) {
+    // A key or wheel step burst of a range settles now, so its write precedes the commit, which
+    // also writes the ranges of a new candidate (#604).
+    session_->mask_creation()->commitRangeEdits();
   }
   ClearMessages();
   SetStage(AiMaskToolStage::Committing);

@@ -114,8 +114,6 @@ Item {
                 anchors.top: parent.top
                 maskCreation: root.maskCreation
                 controlsEnabled: root.rangeControlsEnabled
-                newAiMaskCandidate: root.aiMaskEditOpen && !!(root.aiMaskTool.ready
-                                                              && !root.aiMaskTool.editingStoredMask)
             }
         }
 

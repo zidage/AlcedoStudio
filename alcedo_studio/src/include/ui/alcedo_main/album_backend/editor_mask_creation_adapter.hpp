@@ -201,8 +201,10 @@ class EditorMaskCreationAdapter : public QObject {
    * @brief Set the range target of an AI Mask edit (EditorAiMaskTool, GUI thread).
    *
    * @p open true with @p mask: the stored Mask of the edit is the range target. @p open true
-   * without @p mask: a new candidate is edited, and no range target exists (D11). @p open false:
-   * the selected Mask is the target again.
+   * without @p mask: the candidate of a new Mask of Grade @p grade_id is the target (#604); its
+   * range commands carry no Mask, and the session keeps the values for the commit. An empty
+   * @p grade_id (the edit is not open yet) gives no target. @p open false: the selected Mask is
+   * the target again.
    */
   void                      SetAiMaskEditRangeTarget(bool open, const NodeId& grade_id,
                                                      const std::optional<MaskId>& mask_id);
@@ -280,13 +282,17 @@ class EditorMaskCreationAdapter : public QObject {
  private:
   enum class RangeKind : std::uint8_t { None, Luminance, Hue };
 
-  /// One Mask of one Color Grade; empty when no Mask is the range target.
+  /// One Mask of one Color Grade, or the candidate of a new AI Mask of that Grade (no Mask id);
+  /// empty when no Mask is the range target.
   struct RangeTarget {
     NodeId             grade_id;
     MaskId             mask_id;
+    bool               candidate = false;
 
-    [[nodiscard]] auto Empty() const -> bool { return grade_id.Empty() || mask_id.Empty(); }
-    auto               operator==(const RangeTarget&) const -> bool = default;
+    [[nodiscard]] auto Empty() const -> bool {
+      return grade_id.Empty() || (mask_id.Empty() && !candidate);
+    }
+    auto operator==(const RangeTarget&) const -> bool = default;
   };
 
   /// Range values of the range target as last published to QML; full ranges are 0..1 and
@@ -309,8 +315,10 @@ class EditorMaskCreationAdapter : public QObject {
   [[nodiscard]] static auto RangeKindFromString(const QString& kind) -> RangeKind;
   [[nodiscard]] static auto RangeFieldKey(RangeKind kind) -> std::string_view;
   [[nodiscard]] auto        RangeTargetNow() const -> RangeTarget;
-  /// Read the range values of the target from the document. Retargets the toggle when the target
-  /// changed. True when the published values changed.
+  /// Read the range values of the target from the document. The candidate of a new AI Mask is not
+  /// in the document: its values are the ones that this adapter wrote (only it writes them), and
+  /// a new candidate starts with full ranges. Retargets the toggle when the target changed. True
+  /// when the published values changed.
   auto                      SyncRangeView() -> bool;
   /// The range JSON of @p kind for the handle values @p first and @p second (`null` when full).
   [[nodiscard]] auto        RangeJson(RangeKind kind, float first, float second) -> nlohmann::json;

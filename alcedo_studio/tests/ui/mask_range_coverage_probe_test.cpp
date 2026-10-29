@@ -11,7 +11,8 @@
 /// download it, publish the probed coverage), and imports the coverage frame through the
 /// production ViewportMaskCoverageLayer on the real QRhi of that backend. The expected coverage is
 /// the R8 that MaskEvaluate wrote for the probed Mask in the same render, read back from the
-/// device.
+/// device. The probe of the candidate of a new AI Mask (#604) is compared with the R8 of the same
+/// Mask after its commit.
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +21,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -251,6 +253,82 @@ TEST_F(MaskRangeCoverageProbeTest, DetailRoiRenderPublishesToTheDetailChannel) {
   EXPECT_NE(presented.geometry.render_to_reference.m[2], 0.0f) << "the ROI starts inside the image";
   ExpectDisplayedCodes(render.probed_r8, "detail ROI Mask", &detail_layer_);
   EXPECT_GE(mask_range_test::SpreadOf(render.probed_r8).partial, 20u);
+}
+
+/**
+ * #604: the probe of the candidate of a new AI Mask, on a Grade without Masks, shows the R8 that
+ * MaskEvaluate writes for the same Mask after its commit (the candidate pixels as its asset, the
+ * same edge values and ranges, no invert, opacity 1). It evaluates no Mask pass and changes no
+ * photo pixel. Without the ranges the coverage is different, so the ranges are applied.
+ */
+TEST_F(MaskRangeCoverageProbeTest, CandidateProbeShowsTheR8OfTheCommittedMaskAndKeepsThePhoto) {
+  const auto                 pixels = MakeCandidatePixels(0);
+  const AiMaskEdgeAdjustment edge{1.5f, 1};
+  const LuminanceRangeModel  luminance{0.25f, 0.8f, 0.1f};
+  const ColorRangeModel      hue{20.0f, 200.0f, 25.0f};
+
+  const auto                 asset  = WholeImageAsset(pixels);
+  auto                       reader = std::make_shared<ai_mask_test::InMemoryMaskAssetReader>();
+  reader->Put(asset);
+  render_thread_.Post([&] { producer_->SetMaskAssets(reader); }).get();
+  auto committed_mask            = ai_mask_test::MakeAiMask(asset, kAnalysis, "mask.ai", edge);
+  committed_mask.luminance_range = luminance;
+  committed_mask.color_range     = hue;
+  auto committed_document        = MakePhotoDocument();
+  grade_mask_test::AddMask(*committed_document.PrimaryGrade(), committed_mask);
+  committed_document.MarkTopologyChanged();
+  const auto committed =
+      RenderProbed(committed_document, {kPrimaryGrade, MaskId{"mask.ai"}, std::nullopt}, 71);
+  ReleasePhoto(ImportPhoto());
+  ASSERT_EQ(committed.outcome, MaskCoverageProbeOutcome::Published);
+  ASSERT_TRUE(Consume());
+  const auto spread = mask_range_test::SpreadOf(committed.probed_r8);
+  EXPECT_GE(spread.zero, 20u);
+  EXPECT_GE(spread.partial, 20u);
+
+  const auto document = MakePhotoDocument();
+  const auto input    = MakePhotoInput();
+  const auto plain    = RunOnRenderThread(
+      [&] {
+        return producer_->RenderPhoto(document, input, RenderRequest{}, *viewport_->frameSink(),
+                                         PhotoSubmission(72));
+      },
+      nullptr, [this] { ServicePhotoTargets(); });
+  ReleasePhoto(ImportPhoto());
+  const auto before = render_thread_.Post([this] { return producer_->PassStats(); }).get();
+  const MaskCoverageProbe probe{
+      kPrimaryGrade, MaskId{},
+      MaskCoverageProbeCandidate{MaskCoverageCandidateSelection{pixels, kAnalysis, edge}, luminance,
+                                 hue}};
+  const auto candidate = RenderProbed(document, probe, 73);
+  ReleasePhoto(ImportPhoto());
+  const auto after = render_thread_.Post([this] { return producer_->PassStats(); }).get();
+  ASSERT_EQ(candidate.outcome, MaskCoverageProbeOutcome::Published);
+  ASSERT_TRUE(Consume());
+  EXPECT_EQ(layer_.Presentation().identity.request_id, 73u);
+  EXPECT_EQ(layer_.Presentation().geometry.render_extent, committed.photo.geometry.render_extent);
+  ExpectDisplayedCodes(committed.probed_r8, "candidate of the new AI Mask");
+  EXPECT_EQ(after.mask_execute, before.mask_execute) << "the candidate is not a Mask pass";
+  ASSERT_EQ(plain.rgba.size(), candidate.photo.rgba.size());
+  EXPECT_EQ(std::memcmp(plain.rgba.data(), candidate.photo.rgba.data(),
+                        plain.rgba.size() * sizeof(float)),
+            0)
+      << "the candidate probe changed the photo output";
+
+  // The same candidate without ranges shows a different coverage.
+  auto unranged                       = probe;
+  unranged.candidate->luminance_range = std::nullopt;
+  unranged.candidate->color_range     = std::nullopt;
+  const auto full                     = RenderProbed(document, unranged, 74);
+  ReleasePhoto(ImportPhoto());
+  ASSERT_EQ(full.outcome, MaskCoverageProbeOutcome::Published);
+  ASSERT_TRUE(Consume());
+  const auto  texels  = ReadBack(layer_.Texture());
+  std::size_t changed = 0;
+  for (std::size_t i = 0; i < committed.probed_r8.size() && i * 4 < texels.size(); ++i) {
+    changed += std::lround(texels[i * 4] * 255.0f) != committed.probed_r8[i] ? 1 : 0;
+  }
+  EXPECT_GE(changed, 20u) << "the candidate ranges did not change its coverage";
 }
 
 TEST_F(MaskRangeCoverageProbeTest, ProbeOfAMaskThatTheRenderSkipsClearsTheCoverage) {

@@ -53,7 +53,9 @@ class PlanExecutor {
    * @param probe Optional Mask coverage probe (Mask ranges plan D8). When the R8
    *        `effective_output` of the probed Mask is bound (executed or a valid result), the
    *        render also records RecordMaskValueDisplay into a coverage display target and sets
-   *        `probe->target`. The probe changes no result key and no photo pass.
+   *        `probe->target`. A probe with a candidate (#604) records the candidate of the probed
+   *        Grade with RecordMaskCandidateRangeDisplay instead. The probe changes no result key
+   *        and no photo pass.
    * @return Display GraphValueId of the compiled plan.
    * @throws std::exception from encode, upload, or submit after CancelRender.
    */
@@ -255,6 +257,11 @@ class PlanExecutor {
           }
           workspace.TransientBuffers().Reset();
         }
+        if (probe != nullptr && probe->probe.candidate.has_value() &&
+            compiled_grade.node_id == probe->probe.grade_id) {
+          // `scene` is still this Grade's input, as for its own Masks.
+          RecordProbedCandidate(device, plan, *probe->probe.candidate, scene, *probe);
+        }
 
         {
           diag::PreviewPassInterval grade_pass(compiled_grade.node_id.Value(),
@@ -381,6 +388,25 @@ class PlanExecutor {
     auto& target = workspace.AcquireMaskCoverageDisplayTarget(plan.geometry.render_extent,
                                                               device.CommandContext());
     RecordMaskValueDisplay(device, mask->Texture(), target.texture);
+    probe.target = &target;
+  }
+
+  /// Display write of the probed candidate of a new AI Mask (#604): its raster MaskEvaluate with
+  /// the probe ranges on the Grade input @p scene, straight into a coverage display target of the
+  /// render extent. No R8 image is bound, so no result, key, or photo pass changes.
+  template <class Device>
+  static void RecordProbedCandidate(Device& device, const ExecutionPlan& plan,
+                                    const MaskCoverageProbeCandidate& candidate,
+                                    const FrameSceneBinding&          scene,
+                                    MaskCoverageProbeRecord<Backend>& probe) {
+    auto&      workspace = device.Workspace();
+    const auto coverage  = workspace.AcquireAiMaskCandidateCoverage(
+        candidate.selection.pixels, candidate.selection.analysis_extent, candidate.selection.edge,
+        device.CommandContext());
+    auto& target = workspace.AcquireMaskCoverageDisplayTarget(plan.geometry.render_extent,
+                                                              device.CommandContext());
+    RecordMaskCandidateRangeDisplay(device, plan, *coverage, ProbeCandidateMaskModel(candidate),
+                                    scene, target.texture);
     probe.target = &target;
   }
 

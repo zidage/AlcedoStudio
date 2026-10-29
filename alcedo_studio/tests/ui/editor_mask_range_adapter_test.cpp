@@ -10,7 +10,9 @@
 /// A range drag of the target Mask writes live values and settles as one history commit; a
 /// reset writes `null`; the range coverage is shown during a drag and while "Show selection" is
 /// on, and an adjustment input hides it. During the AI Mask edit of a stored Mask that Mask is
-/// the target; a new candidate has none. The Hue bar fill shows the hue that the kernels test.
+/// the target; during the edit of a new AI Mask its candidate is the target (#604): its ranges
+/// write no document, show their coverage from the photo renders, and are written with the new
+/// Mask at Confirm. The Hue bar fill shows the hue that the kernels test.
 
 #include <gtest/gtest.h>
 
@@ -553,17 +555,21 @@ TEST_F(EditorMaskRangeAdapterTest, ShowSelectionKeepsTheCoverageUntilAnAdjustmen
   EXPECT_FALSE(Preview().range_probe.has_value());
 }
 
-TEST_F(EditorMaskRangeAdapterTest, AiMaskEditTargetsItsStoredMaskAndANewCandidateHasNone) {
+TEST_F(EditorMaskRangeAdapterTest, AiMaskEditTargetsItsStoredMaskOrItsNewCandidate) {
   OpenThroughController();
   const auto mask_id = CommitNewAiMask({{0.2f, 0.2f}, {0.4f, 0.4f}});
   Settle();
 
-  // A new candidate is not a Mask yet (D11): no range target.
+  // Before the session opens the edit no target exists; then the new candidate is the target.
+  adapter_->SetAiMaskEditRangeTarget(true, {}, std::nullopt);
+  Settle();
+  EXPECT_FALSE(adapter_->mask_range_available());
   ASSERT_EQ(OpenAiMaskEdit(std::nullopt).result.kind, EditorSessionResultKind::Accepted);
   adapter_->SetAiMaskEditRangeTarget(true, GradeId(), std::nullopt);
   Settle();
-  EXPECT_FALSE(adapter_->mask_range_available());
-  EXPECT_FALSE(adapter_->beginRangeEdit(QStringLiteral("luminance")));
+  EXPECT_TRUE(adapter_->mask_range_available());
+  EXPECT_FLOAT_EQ(adapter_->mask_luminance_low(), 0.0f);
+  EXPECT_FLOAT_EQ(adapter_->mask_luminance_high(), 1.0f);
   (void)service_->CancelAiMaskEdit();
   adapter_->SetAiMaskEditRangeTarget(false, {}, std::nullopt);
   Settle();
@@ -597,6 +603,196 @@ TEST_F(EditorMaskRangeAdapterTest, AiMaskEditTargetsItsStoredMaskAndANewCandidat
   adapter_->SetAiMaskEditRangeTarget(false, {}, std::nullopt);
   Settle();
   EXPECT_FALSE(adapter_->mask_range_available());
+}
+
+// #604: the ranges of a new AI Mask during its edit. A drag and a key step burst write no
+// document and show the range coverage of the candidate from the photo renders; Confirm writes
+// them with the new Mask in its one commit, also the values of a burst that has not settled.
+TEST_F(EditorMaskRangeAdapterTest, NewAiMaskCandidateRangesCommitWithTheNewMaskInOneCommit) {
+  OpenThroughController();
+  ASSERT_EQ(OpenAiMaskEdit(std::nullopt).result.kind, EditorSessionResultKind::Accepted);
+  adapter_->SetAiMaskEditRangeTarget(true, GradeId(), std::nullopt);
+  auto session = NewSession();
+  ASSERT_TRUE(Applied(
+      session->AddPromptStep(Stroke({{0.2f, 0.2f}, {0.4f, 0.4f}}), AiMaskComponentOperation::Add)));
+  Present(*session);
+  Settle();
+  ASSERT_FALSE(controller_->can_edit()) << "the AI Mask edit holds the document writes";
+  ASSERT_TRUE(adapter_->mask_range_available());
+  const auto commits = Graph()->CommitCount();
+  const auto masks   = Working()->Document().PrimaryGrade()->MaskCount();
+
+  ASSERT_TRUE(adapter_->beginRangeEdit(QStringLiteral("luminance")));
+  adapter_->updateRangeEdit(QStringLiteral("luminance"), 0.3, 0.7);
+  Settle();
+  const auto preview = Preview();
+  EXPECT_EQ(preview.source, EditorMaskCoveragePreviewSource::RangeProbe);
+  ASSERT_TRUE(preview.range_probe.has_value());
+  ASSERT_TRUE(preview.range_probe->candidate.has_value());
+  EXPECT_EQ(preview.range_probe->grade_id, GradeId());
+  EXPECT_TRUE(preview.range_probe->mask_id.Empty());
+  EXPECT_EQ(preview.range_probe->candidate->selection.pixels, session->AcquireCoveragePixels())
+      << "the probe evaluates the newest candidate";
+  ASSERT_TRUE(preview.range_probe->candidate->luminance_range.has_value());
+  EXPECT_FLOAT_EQ(preview.range_probe->candidate->luminance_range->low, 0.3f);
+  EXPECT_FLOAT_EQ(preview.range_probe->candidate->luminance_range->high, 0.7f);
+  ASSERT_FALSE(scheduler_->scheduled.empty());
+  EXPECT_EQ(scheduler_->scheduled.back().intent.mask_coverage_probe, preview.range_probe)
+      << "the photo render carries the probe with the dragged range";
+  adapter_->finishRangeEdit(QStringLiteral("luminance"));
+  Settle();
+  EXPECT_FALSE(Preview().range_probe.has_value()) << "the drag coverage ends at the release";
+  EXPECT_EQ(Graph()->CommitCount(), commits) << "a candidate range writes no history";
+  EXPECT_EQ(Working()->Document().PrimaryGrade()->MaskCount(), masks);
+  EXPECT_FLOAT_EQ(adapter_->mask_luminance_low(), 0.3f);
+  EXPECT_FLOAT_EQ(adapter_->mask_luminance_high(), 0.7f);
+
+  // A key step burst of the Hue Range that has not settled when Confirm is clicked.
+  adapter_->SetRangeStepSettleIntervalMs(60000);
+  ASSERT_TRUE(adapter_->stepRangeHandle(QStringLiteral("hue"), QStringLiteral("first"), 9, true));
+  Settle();
+  const float hue_start = static_cast<float>(adapter_->mask_hue_start());
+  ASSERT_GT(hue_start, 0.0f);
+
+  const auto committed = Commit(*session, std::nullopt);
+  ASSERT_NE(committed.kind, EditorSessionResultKind::Rejected) << committed.message;
+  ASSERT_NE(committed.kind, EditorSessionResultKind::Failed) << committed.message;
+  adapter_->SetAiMaskEditRangeTarget(false, {}, std::nullopt);
+  Settle();
+  EXPECT_FALSE(service_->ai_mask_edit_open());
+  EXPECT_EQ(Graph()->CommitCount(), commits + 1) << "the Mask and its ranges are one commit";
+  const auto all = Working()->Document().PrimaryGrade()->Masks();
+  ASSERT_EQ(all.size(), masks + 1);
+  const auto* added = LiveMask(all[all.size() - 1].id);
+  ASSERT_NE(added, nullptr);
+  EXPECT_TRUE(std::holds_alternative<AiSegmentationMaskSource>(added->source));
+  ASSERT_TRUE(added->luminance_range.has_value());
+  EXPECT_FLOAT_EQ(added->luminance_range->low, 0.3f);
+  EXPECT_FLOAT_EQ(added->luminance_range->high, 0.7f);
+  EXPECT_FLOAT_EQ(added->luminance_range->softness, LuminanceRangeModel{}.softness);
+  ASSERT_TRUE(added->color_range.has_value());
+  EXPECT_FLOAT_EQ(added->color_range->hue_start, hue_start);
+  EXPECT_FLOAT_EQ(added->color_range->hue_end, 360.0f);
+}
+
+// #604: Close without saving discards the ranges of the candidate; the next new AI Mask starts
+// with full ranges and commits none.
+TEST_F(EditorMaskRangeAdapterTest, ClosingANewAiMaskEditWithoutSavingDiscardsItsRanges) {
+  OpenThroughController();
+  ASSERT_EQ(OpenAiMaskEdit(std::nullopt).result.kind, EditorSessionResultKind::Accepted);
+  adapter_->SetAiMaskEditRangeTarget(true, GradeId(), std::nullopt);
+  auto session = NewSession();
+  ASSERT_TRUE(Applied(
+      session->AddPromptStep(Stroke({{0.2f, 0.2f}, {0.4f, 0.4f}}), AiMaskComponentOperation::Add)));
+  Present(*session);
+  Settle();
+  const auto commits = Graph()->CommitCount();
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("second"), 0.6));
+  adapter_->commitRangeEdits();
+  Settle();
+  EXPECT_FLOAT_EQ(adapter_->mask_luminance_high(), 0.6f);
+
+  (void)service_->CancelAiMaskEdit();
+  adapter_->SetAiMaskEditRangeTarget(false, {}, std::nullopt);
+  Settle();
+  EXPECT_EQ(Graph()->CommitCount(), commits);
+  EXPECT_EQ(Working()->Document().PrimaryGrade()->MaskCount(), 0u);
+  EXPECT_FALSE(adapter_->mask_range_available());
+
+  adapter_->SetAiMaskEditRangeTarget(true, {}, std::nullopt);
+  ASSERT_EQ(OpenAiMaskEdit(std::nullopt).result.kind, EditorSessionResultKind::Accepted);
+  adapter_->SetAiMaskEditRangeTarget(true, GradeId(), std::nullopt);
+  Settle();
+  EXPECT_FLOAT_EQ(adapter_->mask_luminance_high(), 1.0f) << "a new candidate has full ranges";
+  auto second = NewSession();
+  ASSERT_TRUE(Applied(
+      second->AddPromptStep(Stroke({{0.5f, 0.5f}, {0.7f, 0.6f}}), AiMaskComponentOperation::Add)));
+  Present(*second);
+  const auto committed = Commit(*second, std::nullopt);
+  ASSERT_NE(committed.kind, EditorSessionResultKind::Rejected) << committed.message;
+  adapter_->SetAiMaskEditRangeTarget(false, {}, std::nullopt);
+  Settle();
+  const auto all = Working()->Document().PrimaryGrade()->Masks();
+  ASSERT_EQ(all.size(), 1u);
+  EXPECT_FALSE(all[0].luminance_range.has_value());
+  EXPECT_FALSE(all[0].color_range.has_value());
+}
+
+// #604: "Show selection" of a new candidate shows its range coverage from the photo renders and
+// follows each range write; a candidate update (a model step) replaces it.
+TEST_F(EditorMaskRangeAdapterTest,
+       ShowSelectionOfANewCandidateFollowsItsRangesUntilACandidateUpdate) {
+  OpenThroughController();
+  ASSERT_EQ(OpenAiMaskEdit(std::nullopt).result.kind, EditorSessionResultKind::Accepted);
+  adapter_->SetAiMaskEditRangeTarget(true, GradeId(), std::nullopt);
+  auto session = NewSession();
+  ASSERT_TRUE(Applied(
+      session->AddPromptStep(Stroke({{0.2f, 0.2f}, {0.4f, 0.4f}}), AiMaskComponentOperation::Add)));
+  Present(*session);
+  Settle();
+
+  adapter_->setRangeCoverageVisible(true);
+  Settle();
+  ASSERT_TRUE(Preview().range_probe.has_value());
+  ASSERT_TRUE(Preview().range_probe->candidate.has_value());
+  EXPECT_FALSE(Preview().range_probe->candidate->color_range.has_value());
+  const auto renders = scheduler_->scheduled.size();
+
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("hue"), QStringLiteral("first"), 90.0));
+  adapter_->commitRangeEdits();
+  Settle();
+  const auto shown = Preview().range_probe;
+  ASSERT_TRUE(shown.has_value() && shown->candidate.has_value());
+  ASSERT_TRUE(shown->candidate->color_range.has_value());
+  EXPECT_FLOAT_EQ(shown->candidate->color_range->hue_start, 90.0f);
+  ASSERT_GT(scheduler_->scheduled.size(), renders) << "a range write renders the probe again";
+  EXPECT_EQ(scheduler_->scheduled.back().intent.mask_coverage_probe, shown);
+  EXPECT_TRUE(adapter_->mask_range_coverage_visible());
+
+  // A model step presents a new candidate: it replaces the range coverage (D11).
+  ASSERT_TRUE(Applied(
+      session->AddPromptStep(Stroke({{0.5f, 0.5f}, {0.6f, 0.6f}}), AiMaskComponentOperation::Add)));
+  Present(*session);
+  Settle();
+  EXPECT_FALSE(Preview().range_probe.has_value());
+  EXPECT_EQ(Preview().source, EditorMaskCoveragePreviewSource::Candidate);
+  (void)service_->CancelAiMaskEdit();
+  adapter_->SetAiMaskEditRangeTarget(false, {}, std::nullopt);
+  Settle();
+}
+
+// #604 (maintainer change, 2026-10-29): after Confirm the Range section is not kept open for the
+// new Mask. The Mask panel closes: no Mask mode, no selection, no range target, and the editor is
+// back on the panel that was open before the Mask panel.
+TEST_F(EditorMaskRangeAdapterTest, ConfirmOfANewAiMaskLeavesTheMaskPanelClosed) {
+  OpenThroughController();
+  const auto radial = CreateRadialMask();
+  Select(radial);
+  ASSERT_EQ(controller_->active_adjustment_panel(), QStringLiteral("masks"));
+
+  ASSERT_EQ(OpenAiMaskEdit(std::nullopt).result.kind, EditorSessionResultKind::Accepted);
+  adapter_->SetAiMaskEditRangeTarget(true, GradeId(), std::nullopt);
+  auto session = NewSession();
+  ASSERT_TRUE(Applied(
+      session->AddPromptStep(Stroke({{0.2f, 0.2f}, {0.4f, 0.4f}}), AiMaskComponentOperation::Add)));
+  Present(*session);
+  Settle();
+  ASSERT_TRUE(adapter_->editRangeValue(QStringLiteral("luminance"), QStringLiteral("first"), 0.2));
+  adapter_->commitRangeEdits();
+  Settle();
+  const auto committed = Commit(*session, std::nullopt);
+  ASSERT_NE(committed.kind, EditorSessionResultKind::Rejected) << committed.message;
+  adapter_->SetAiMaskEditRangeTarget(false, {}, std::nullopt);
+  Settle();
+
+  EXPECT_FALSE(adapter_->mask_controls_active());
+  EXPECT_NE(controller_->active_adjustment_panel(), QStringLiteral("masks"));
+  EXPECT_TRUE(adapter_->selected_mask_id().isEmpty()) << "the new Mask is not selected";
+  EXPECT_FALSE(adapter_->mask_range_available());
+  const auto all = Working()->Document().PrimaryGrade()->Masks();
+  ASSERT_EQ(all.size(), 2u);
+  ASSERT_TRUE(all[1].luminance_range.has_value());
+  EXPECT_FLOAT_EQ(all[1].luminance_range->low, 0.2f);
 }
 
 TEST_F(EditorMaskRangeAdapterTest, SelectingAStoredAiMaskStartsNoAiMaskEditAndItsRangesCommit) {
@@ -674,14 +870,15 @@ TEST_F(EditorMaskRangeAdapterTest, NewAiMaskOpensItsEditAtOnce) {
   const auto tool = MakeAiMaskTool();
 
   // The header AI Mask button without a selected AI Mask creates a new AI Mask: the edit opens
-  // at once, with no range target (D11).
+  // at once, and its candidate is the range target (#604).
   tool->open();
   EXPECT_TRUE(tool->active());
   EXPECT_EQ(runtime_requests_, 1);
+  EXPECT_FALSE(adapter_->mask_range_available()) << "no target before the session opens the edit";
   Drain();
   EXPECT_TRUE(service_->ai_mask_edit_open());
   QCoreApplication::processEvents();
-  EXPECT_FALSE(adapter_->mask_range_available());
+  EXPECT_TRUE(adapter_->mask_range_available());
   CloseAiMaskTool(*tool);
   controller_->BindNodeSelectionSource(nullptr);
 }
