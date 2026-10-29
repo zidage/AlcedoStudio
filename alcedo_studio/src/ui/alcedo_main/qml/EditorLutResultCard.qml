@@ -538,8 +538,10 @@ Item {
             }
         }
 
+        // Only invalid and unsupported LUTs have detail text: the reason they cannot be applied.
         ToolTip.visible: tile.hovered && tile.detailText.length > 0
-        ToolTip.delay: 600
+        ToolTip.delay: 1000
+        ToolTip.timeout: 5000
         ToolTip.text: tile.detailText
 
         // Favorite star: glyph only. Grid tiles show it when starred or hovered;

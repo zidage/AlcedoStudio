@@ -47,28 +47,16 @@ auto Choice(const QString& value, const QString& label, int count, bool selected
   return map;
 }
 
-auto FormatByteSize(std::uint64_t bytes) -> QString {
-  constexpr double kKiB = 1024.0;
-  constexpr double kMiB = 1024.0 * 1024.0;
-  if (static_cast<double>(bytes) >= kMiB) {
-    return Tr("%1 MB").arg(static_cast<double>(bytes) / kMiB, 0, 'f', 2);
-  }
-  if (static_cast<double>(bytes) >= kKiB) {
-    return Tr("%1 KB").arg(static_cast<double>(bytes) / kKiB, 0, 'f', 1);
-  }
-  return Tr("%1 B").arg(static_cast<qulonglong>(bytes));
-}
-
 auto EntryStatusText(const LutLibraryEntry& entry) -> QString {
   if (entry.header_error != LutHeaderError::kNone) return Tr("Invalid");
   if (!entry.header.SupportsGradeApplication()) return Tr("Unsupported");
   return {};
 }
 
+// Why the LUT cannot be applied; empty for a LUT that can (#305: no path or size on hover).
 auto EntryDetailText(const LutLibraryEntry& entry) -> QString {
   if (entry.header_error != LutHeaderError::kNone) return ToQString(entry.header_message);
-  if (!entry.header.SupportsGradeApplication()) return UnsupportedLutText(entry.header);
-  return ToQString(entry.relative_path) + QStringLiteral("  |  ") + FormatByteSize(entry.size);
+  return UnsupportedLutText(entry.header);
 }
 
 auto LutSizeText(const LutLibraryEntry& entry) -> QString {
