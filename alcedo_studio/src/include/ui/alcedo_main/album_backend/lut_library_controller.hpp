@@ -175,6 +175,19 @@ class LutLibraryController : public QObject {
   Q_INVOKABLE bool   applyEntry(const QString& entry_id);
   /// Remove the LUT from the captured target, keeping its strength. Same failures as applyEntry.
   Q_INVOKABLE bool   clearAssociation();
+  /**
+   * @brief The LUT write that applying library entry @p entry_id submits: its reference, display
+   *        name, and remembered encodings (ACEScc to ACEScc without a remembered pair). The
+   *        strength is not set.
+   *
+   * applyEntry and the LUT browser previews (LutPreviewController) use it, so a preview shows
+   * the LUT and encodings that a click applies.
+   * @return false with @p problem set when the entry is not listed, is invalid, or cannot be
+   *         applied to a Color Grade.
+   */
+  [[nodiscard]] static auto ReadEntryWrite(const alcedo::LutLibraryService& library,
+                                           const QString& entry_id, EditorLutWrite* write,
+                                           QString* problem) -> bool;
   /// Remember the shown inputEncoding and outputEncoding for the associated entry (@p remember
   /// true), or forget its pair (false). Writes the library only, never the document. Returns
   /// false and sets lastError when there is no library entry or the library rejects the change.

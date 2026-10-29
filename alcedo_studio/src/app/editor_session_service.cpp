@@ -21,6 +21,7 @@
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_navigation_controller.hpp"
 #include "app/editor_session_render_controller.hpp"
+#include "app/lut_preview_image.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
@@ -2687,9 +2688,6 @@ auto EditorSessionService::RenderPreviewImages(RenderRequest geometry, EditorPre
   if (!dependencies_.images) {
     return refuse(EditorPreviewImagesStatus::Rejected, "Image rendering is not available");
   }
-  if (dependencies_.images->HasImageJob()) {
-    return refuse(EditorPreviewImagesStatus::Busy, "The image renderer is running another job");
-  }
   const auto identity = lifecycle_.identity();
   auto       current  = dependencies_.pipeline->CurrentPreview(identity.element_id);
   if (!current) {
@@ -2792,9 +2790,6 @@ auto EditorSessionService::RenderAiMaskAnalysisImage(EditorAiMaskAnalysisContent
   if (with_pixels && !dependencies_.images) {
     return refuse(EditorAiMaskAnalysisStatus::Rejected, "Image rendering is not available");
   }
-  if (with_pixels && dependencies_.images->HasImageJob()) {
-    return refuse(EditorAiMaskAnalysisStatus::Busy, "The image renderer is running another job");
-  }
   const auto identity = lifecycle_.identity();
   auto       current  = dependencies_.pipeline->CurrentPreview(identity.element_id);
   if (!current) {
@@ -2862,6 +2857,99 @@ auto EditorSessionService::RenderAiMaskAnalysisImage(EditorAiMaskAnalysisContent
                   error.empty() ? "The AI Mask analysis render could not be scheduled" : error);
   }
   accepted.message = "AI Mask analysis image scheduled";
+  return accepted;
+}
+
+auto EditorSessionService::RenderLutPreview(EditorLutPreviewRequest    request,
+                                            EditorLutPreviewCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("A LUT preview requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind           = EditorSessionCommandKind::RenderLutPreview;
+    auto shared_request    = std::make_shared<EditorLutPreviewRequest>(std::move(request));
+    auto shared_completion = std::make_shared<EditorLutPreviewCompletion>(std::move(on_complete));
+    return SubmitCommand(
+        std::move(command), [this, shared_request, shared_completion](const EditorSessionCommand&) {
+          return RenderLutPreview(std::move(*shared_request), std::move(*shared_completion));
+        });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  const auto refuse = [&](EditorLutPreviewStatus status, std::string message) {
+    accepted.message = message;
+    EditorLutPreviewResult refused;
+    refused.status  = status;
+    refused.message = std::move(message);
+    on_complete(std::move(refused));
+    return accepted;
+  };
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return refuse(EditorLutPreviewStatus::Rejected,
+                  "A LUT preview requires an interactive session");
+  }
+  if (!dependencies_.pipeline || !dependencies_.history || !lifecycle_.has_history_guard()) {
+    return refuse(EditorLutPreviewStatus::Rejected, "A LUT preview requires an open image history");
+  }
+  if (!dependencies_.images) {
+    return refuse(EditorLutPreviewStatus::Rejected, "Image rendering is not available");
+  }
+  const auto identity = lifecycle_.identity();
+  if (identity.image_id != request.image_id) {
+    return refuse(EditorLutPreviewStatus::Rejected, "The LUT preview belongs to another image");
+  }
+  auto current = dependencies_.pipeline->CurrentPreview(identity.element_id);
+  if (!current) {
+    return refuse(EditorLutPreviewStatus::Rejected,
+                  "The working state of the image is not available");
+  }
+  std::shared_ptr<const PipelineGraphSnapshot> preview;
+  std::string                                  error;
+  if (!dependencies_.history->BuildLutPreviewDocument(lifecycle_.history_guard(), current,
+                                                      request.write, &preview, &error) ||
+      !preview) {
+    return refuse(EditorLutPreviewStatus::Failed,
+                  error.empty() ? "The LUT preview document could not be prepared" : error);
+  }
+
+  EditorImageRenderRequest render;
+  render.element_id            = identity.element_id;
+  render.image_id              = identity.image_id;
+  render.image_load_request_id = lifecycle_.active_image_load_request();
+  render.geometry              = MakeLutPreviewRenderRequest();
+  render.output_color          = LutPreviewOutputColor(preview->Document());
+  render.snapshots             = {std::move(preview)};
+  // The port calls the completion only for an accepted job; a refused job keeps it here.
+  auto shared_completion = std::make_shared<EditorLutPreviewCompletion>(std::move(on_complete));
+  const auto job_id      = dependencies_.images->ScheduleImages(
+      std::move(render),
+      [shared_completion](EditorImageRenderResult rendered) {
+        EditorLutPreviewResult result;
+        result.message = std::move(rendered.message);
+        if (rendered.status == EditorImageRenderStatus::Completed && rendered.images.size() == 1u) {
+          result.status = EditorLutPreviewStatus::Completed;
+          result.image  = std::move(rendered.images.front());
+        } else {
+          result.status = EditorLutPreviewStatus::Failed;
+          if (result.message.empty()) {
+            result.message = rendered.status == EditorImageRenderStatus::Cancelled
+                                      ? "The LUT preview render was cancelled"
+                                      : "The LUT preview render failed";
+          }
+        }
+        (*shared_completion)(std::move(result));
+      },
+      &error);
+  if (job_id == 0) {
+    on_complete = std::move(*shared_completion);
+    return refuse(EditorLutPreviewStatus::Failed,
+                  error.empty() ? "The LUT preview render could not be scheduled" : error);
+  }
+  accepted.message = "LUT preview scheduled";
   return accepted;
 }
 

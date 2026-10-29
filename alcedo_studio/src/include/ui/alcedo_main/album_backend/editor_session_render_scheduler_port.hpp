@@ -101,8 +101,9 @@ using EditorGpuResourceReleaseCompletion = std::function<void(EditorGpuResourceR
  *
  * Image jobs (@ref ScheduleImages): one-shot host images of the held image, rendered on the same
  * executor and worker as the frames. A job is one work item that holds the executor for all of
- * its documents, so no frame runs between A and B. Its requests have no sink, so they never
- * present; the attached viewport sink stays attached for the next frame.
+ * its documents, so no frame runs between A and B. Accepted jobs run in acceptance order. Its
+ * requests have no sink, so they never present; the attached viewport sink stays attached for the
+ * next frame.
  *
  * Coverage jobs (@ref ScheduleMaskCoverage, SM8.7): coverage-only presentation of the AI Mask
  * candidate or a committed AI Mask on the same executor, worker, and device as the frames, into
@@ -117,8 +118,8 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   ~EditorSessionRenderSchedulerPort() override;
 
   /**
-   * @brief Reject new frames and image jobs, cancel the in-flight frame and the accepted image
-   *        job, and wait until both complete.
+   * @brief Reject new frames and image jobs, cancel the in-flight frame and every accepted image
+   *        job, and wait until they complete.
    *
    * The in-flight frame presents to the viewport sink resolved at submit, and both capture this
    * port in their completions. Call this before the sink owners (the editor session controller
@@ -180,8 +181,9 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
    * preview, so the executor keeps the prepared source and sensor result of the image. Then
    * queues one work item on the editor worker. That item holds the executor render lock for the
    * whole job and renders each document with the full-image Quality Base request
-   * (MakeQualityBaseApplyRequest) and the request geometry: no sink, host output, no scope
-   * update. Each image is downloaded before the next document starts.
+   * (MakeQualityBaseApplyRequest), the request geometry, and the request output color: no sink,
+   * host output, no scope update. Each image is downloaded before the next document starts. A job
+   * accepted while another job is accepted renders after it.
    *
    * Completion runs once on the worker after the render lock is released: Completed with every
    * image, Failed with the real error and no image, or Cancelled with no image.
@@ -232,7 +234,7 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
     bool                                       cancelled = false;
   };
 
-  /// The accepted image job; the worker clears it when the job completes.
+  /// One accepted image job; the worker removes it when the job completes.
   struct ImageJob {
     std::uint64_t job_id    = 0;
     bool          cancelled = false;
@@ -275,6 +277,9 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   void FinishImageJob(std::uint64_t job_id, alcedo::EditorImageRenderResult result,
                       const alcedo::EditorImageRenderCompletion& on_complete);
   [[nodiscard]] auto ImageJobIsCancelled(std::uint64_t job_id) const -> bool;
+  /// The accepted image job @p job_id, or null. Caller holds @ref mutex_.
+  [[nodiscard]] auto FindImageJob(std::uint64_t job_id) const -> const ImageJob*;
+  [[nodiscard]] auto FindImageJob(std::uint64_t job_id) -> ImageJob*;
   /// Worker body of one coverage job: present under the executor render lock.
   void               RunMaskCoverageJob(const std::shared_ptr<alcedo::PipelineExecutor>& executor,
                                         const alcedo::EditorMaskCoverageRequest&         request,
@@ -295,7 +300,8 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   std::uint64_t                              next_job_id_ = 0;
   std::optional<Job>                         running_job_;
   std::uint64_t                              next_image_job_id_ = 0;
-  std::optional<ImageJob>                    image_job_;
+  /// Accepted image jobs in acceptance order; the worker renders them in this order.
+  std::vector<ImageJob>                      image_jobs_;
   std::uint64_t                              next_mask_coverage_job_id_    = 0;
   /// True from an accepted coverage job until its completion returns; one job at a time.
   bool                                       mask_coverage_job_            = false;

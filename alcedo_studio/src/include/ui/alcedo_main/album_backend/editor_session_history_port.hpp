@@ -124,6 +124,11 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
       const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
       std::shared_ptr<const alcedo::PipelineGraphSnapshot>* analysis, std::string* error)
       -> bool override;
+  auto BuildLutPreviewDocument(
+      const alcedo::EditorHistoryGuardHandle&                     guard,
+      const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
+      const alcedo::LmtUpdate& write, std::shared_ptr<const alcedo::PipelineGraphSnapshot>* preview,
+      std::string* error) -> bool override;
   [[nodiscard]] auto HasUncommittedLiveValues(const alcedo::EditorHistoryGuardHandle& guard) const
       -> bool override;
   auto HasUnmaterializedChanges(const alcedo::EditorHistoryGuardHandle& guard,

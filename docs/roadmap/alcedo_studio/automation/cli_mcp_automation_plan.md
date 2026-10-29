@@ -169,7 +169,7 @@ Error codes:
 | -32002 | `rejected` | The owner rejected the operation. `data.reason` holds the owner message. |
 | -32003 | `control_not_held` | A state-changing command arrived in a GUI session without agent control. |
 | -32004 | `control_revoked_by_user` | The user took control back. The agent must wait until the user returns it. |
-| -32005 | `busy` | An exclusive resource is in use (for example the image render port runs another job). |
+| -32005 | `busy` | An exclusive resource is in use. |
 | -32006 | `timeout` | The command did not reach its terminal state within `timeout_ms`. The operation can still finish later. |
 | -32007 | `failed` | The operation started and failed. `data.reason` holds the owner message. |
 
@@ -2232,8 +2232,9 @@ Remaining defects or unavailable platforms: macOS Metal runs only in CI.
   presented frame for its `render_request_id` is ready.
 - `editor.batch_set` applies changes in order. Each change is one commit. On the first failure
   it stops and reports `applied`.
-- `render.preview` returns `busy` when the image render port runs another job (for example the
-  comparison view). It does not wait for that job and does not cancel it.
+- `render.preview` renders after the image jobs that the image render port accepted before it
+  (for example the comparison view or a LUT browser preview). It does not cancel them. (Changed
+  by issue #598: before it, `render.preview` returned `busy` while another image job ran.)
 - `render.preview` writes files only inside `out_dir`. The file names are
   `<file_stem>_current.png` and, with `compare: root` (the default), `<file_stem>_root.png`.
   `compare: none` renders and writes only the current image. `file_stem` defaults to the photo
@@ -2320,8 +2321,8 @@ Implemented behavior:
     future. editor.actions lists every EditorAction with allowed and reason.
   - render.preview {out_dir, long_edge [16, 4096] = 2048, region?} renders Root and Current
     through ScheduleImages and writes <file_stem>_current.png and <file_stem>_root.png; the PNG
-    encode runs on the global thread pool. Busy -> -32005 while another image job runs (that job
-    continues); a region outside the image -> -32602.
+    encode runs on the global thread pool. Another accepted image job renders first (issue #598
+    replaced the earlier Busy -> -32005 answer); a region outside the image -> -32602.
 Deviations from the phase text:
   - Correlation point: the boundary is not routed through SubmitCommand (section "Modules,
     files, and APIs", step 1 finding). It takes an id from ReserveCommandId at admission and

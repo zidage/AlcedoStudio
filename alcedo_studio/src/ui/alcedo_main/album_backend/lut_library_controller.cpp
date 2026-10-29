@@ -300,30 +300,51 @@ auto LutLibraryController::EntryIdForReference(const LutReference& reference) co
   return entry_id;
 }
 
-auto LutLibraryController::applyEntry(const QString& entry_id) -> bool {
-  if (!library_) return Reject(Tr("The LUT library is unavailable."));
+auto LutLibraryController::ReadEntryWrite(const alcedo::LutLibraryService& library,
+                                          const QString& entry_id, EditorLutWrite* write,
+                                          QString* problem) -> bool {
   LutReference reference;
   std::string  name;
-  QString      problem = Tr("The LUT is no longer in the library. Refresh the library.");
-  library_->ReadEntryById(ToUtf8(entry_id), [&](const LutLibraryEntry& entry) {
+  QString      reason = Tr("The LUT is no longer in the library. Refresh the library.");
+  library.ReadEntryById(ToUtf8(entry_id), [&](const LutLibraryEntry& entry) {
     if (entry.header_error != LutHeaderError::kNone) {
-      problem = Tr("The LUT file is invalid: %1").arg(ToQString(entry.header_message));
+      reason = Tr("The LUT file is invalid: %1").arg(ToQString(entry.header_message));
     } else if (!entry.header.SupportsGradeApplication()) {
-      problem = UnsupportedLutText(entry.header);
+      reason = UnsupportedLutText(entry.header);
     } else {
       reference = LutLibraryPublication::ReferenceForEntry(entry);
       name      = entry.DisplayName();
-      problem.clear();
+      reason.clear();
     }
   });
-  if (!problem.isEmpty()) return Reject(problem);
+  if (!reason.isEmpty()) {
+    if (problem != nullptr) *problem = reason;
+    return false;
+  }
   // A LUT without remembered encodings applies the default pair, so the encodings of the
   // previous LUT do not stay on the image.
   LutRememberedEncodings encodings =
-      library_->RememberedEncodings(ToUtf8(entry_id))
+      library.RememberedEncodings(ToUtf8(entry_id))
           .value_or(LutRememberedEncodings{std::string(kDefaultLutEncodingId),
                                            std::string(kDefaultLutEncodingId)});
-  return SubmitReference(std::move(reference), std::move(name), std::move(encodings));
+  if (write != nullptr) {
+    *write                 = EditorLutWrite{};
+    write->reference       = std::move(reference);
+    write->display_name    = std::move(name);
+    write->input_encoding  = std::move(encodings.input_encoding);
+    write->output_encoding = std::move(encodings.output_encoding);
+  }
+  return true;
+}
+
+auto LutLibraryController::applyEntry(const QString& entry_id) -> bool {
+  if (!library_) return Reject(Tr("The LUT library is unavailable."));
+  EditorLutWrite write;
+  QString        problem;
+  if (!ReadEntryWrite(*library_, entry_id, &write, &problem)) return Reject(problem);
+  return SubmitReference(
+      std::move(*write.reference), std::move(write.display_name),
+      LutRememberedEncodings{std::move(*write.input_encoding), std::move(*write.output_encoding)});
 }
 
 auto LutLibraryController::clearAssociation() -> bool {

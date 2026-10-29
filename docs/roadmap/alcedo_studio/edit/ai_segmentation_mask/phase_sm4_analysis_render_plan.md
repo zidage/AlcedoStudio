@@ -50,7 +50,7 @@ Source revision used for the audit: `4ec7230a` on `feature/ai-segmentation-sm3c`
 | S6 | A prompt point is the normalized ReferenceSpace position of the pointer: `MaskEditGeometry::MapItemToReference` (the presented crop, rotation, Geometry panel frame, zoom, pan, and region-of-interest patch) followed by the check that the position is inside `[0, 1]` on both axes. A point outside the source gives no prompt point. | By S2, normalized ReferenceSpace is the normalized coordinate of the analysis image. The Geometry panel frame shows border corners outside the source; the model has no pixels there. |
 | S7 | A prompt box comes from two opposite corners in item coordinates. The four item corners map to ReferenceSpace; the box is their axis-aligned bounding box, clipped to `[0, 1]`. A box without area after clipping gives no box. | With a document rotation, the screen rectangle is a rotated rectangle in the source. The decoder takes only an axis-aligned box. The bounding box contains every pixel that the user enclosed. SM9 can replace this rule with a user decision. |
 | S8 | The inverse mapping from normalized analysis image coordinates to item coordinates is one affine transform, built from the current view mapping. | SM9 draws Candidate Masks over the photo with it. The same transform serves a future color picker in the other direction (D10). |
-| S9 | No new cancellation protocol. The analysis render is one image job of the existing port; the port cancels it at shutdown, and the session refuses a new job while one runs (Busy). | AGENTS.md: a consistency mechanism needs a real interleaving. The tool waits for the image before it starts a session. |
+| S9 | No new cancellation protocol. The analysis render is one image job of the existing port; the port cancels it at shutdown, and the session refuses a new job while one runs (Busy). Changed by issue #598: the port runs accepted jobs in order, so the analysis render waits for the job before it and `Busy` was removed. | AGENTS.md: a consistency mechanism needs a real interleaving. The tool waits for the image before it starts a session. |
 
 ### 1.4 Rejected options
 
@@ -77,7 +77,7 @@ and SM7 (the commit). The tool start sequence of SM9 is:
 
 | Field | Content |
 | --- | --- |
-| `status` | `Completed`, `Busy` (the port runs another image job), `Rejected` (no interactive session, no history, no render port), `Failed` (document, render, or conversion error). |
+| `status` | `Completed`, `Busy` (the port runs another image job; removed by issue #598), `Rejected` (no interactive session, no history, no render port), `Failed` (document, render, or conversion error). |
 | `message` | The real error; empty when Completed. |
 | `image_key` | S5 key; set when Completed. |
 | `image` | `SegmentationRgb8Image`; empty for KeyOnly. |
@@ -160,7 +160,7 @@ SM9 caller (any thread)
 | Failure | Result |
 | --- | --- |
 | Session not interactive, no history guard, no render port | `Rejected` with the reason; no job. |
-| The port runs another job (comparison, preview images) | `Busy`; that job continues. |
+| The port runs another job (comparison, preview images) | `Busy`; that job continues. Changed by issue #598: the analysis render runs after that job. |
 | Root replay, product validation, HDR root DRT, Develop copy | `Failed` with the real error; no job. |
 | Render or download error, cancellation at shutdown | `Failed` with the port message. |
 | Conversion error (HDR output, non-finite value, size) | `Failed` with the real error; no image. |

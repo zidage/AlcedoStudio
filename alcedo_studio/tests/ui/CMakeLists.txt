@@ -205,6 +205,7 @@ target_include_directories(EditorSessionHistoryPortTest
 target_link_libraries(EditorSessionHistoryPortTest
   AdjustmentTransferService
   AiMaskAnalysisImage
+  LutPreviewImage
   EditorComparisonInputs
   EditorWorkingDocument
   EditorSessionEditController
@@ -244,6 +245,7 @@ target_include_directories(EditorComparisonInputsTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorComparisonInputsTest
   AiMaskAnalysisImage
+  LutPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -284,6 +286,7 @@ target_link_libraries(EditorComparisonServiceTest
   EditorSessionService
   EditorComparisonService
   AiMaskAnalysisImage
+  LutPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -325,6 +328,7 @@ target_link_libraries(EditorMaskCoveragePreviewTest
   AiMaskEditSession
   EditorComparisonService
   AiMaskAnalysisImage
+  LutPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -363,6 +367,7 @@ target_link_libraries(EditorHistoryMoveDuringInputTest
   EditorSessionService
   EditorComparisonService
   AiMaskAnalysisImage
+  LutPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -2414,11 +2419,12 @@ target_link_libraries(EditorLookModelTest
 alcedo_ui_gtest_discover_tests(EditorLookModelTest TEST_PREFIX "EditorLookModelTest.")
 alcedo_register_test_target(EditorLookModelTest ui)
 
-# LUT browser queries and Color Grade target binding (LUT library plan L5).
+# LUT browser queries, Color Grade target binding (LUT library plan L5), and LUT previews (#598).
 add_executable(LutLibraryModelTest
     ${ALCEDO_TEST_ROOT}/ui/lut_library_model_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/lut_library_controller_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/lut_remembered_encodings_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/lut_preview_controller_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
 )
 target_include_directories(LutLibraryModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
