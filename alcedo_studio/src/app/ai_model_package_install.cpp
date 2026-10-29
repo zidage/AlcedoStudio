@@ -466,20 +466,23 @@ auto InstallAiModelPackageArchive(const AiModelPackageInstallRequest&           
   if (stop.load()) return abandon("the installation was canceled", true);
 
   // 4. Moving the verified content into place is the commit point.
+  // On Windows each move waits a bounded time for files that another process (the antivirus
+  // scanner, the search indexer) opened in the tree just after the extraction or verification.
   std::error_code error;
   const bool      replaces = fs::exists(target, error);
   if (replaces) {
-    fs::rename(target, previous, error);
+    error = RenamePackageDirectory(target, previous);
     if (error) {
       return abandon(
           "the installed models cannot be replaced (they may be in use): " + error.message(),
           false);
     }
   }
-  fs::rename(content, target, error);
+  error = RenamePackageDirectory(content, target);
   if (error) {
-    std::error_code restore_error;
-    if (replaces) fs::rename(previous, target, restore_error);
+    // A restore that also fails leaves `.previous`; recovery restores it before the next
+    // install or removal and when Settings opens.
+    if (replaces) (void)RenamePackageDirectory(previous, target);
     return abandon("the new models cannot be moved into place: " + error.message(), false);
   }
   outcome.committed = true;
@@ -503,7 +506,7 @@ auto RemoveAiModelPackage(const fs::path& model_directory, std::string_view pack
   const fs::path    removing = HiddenSibling(model_directory, name, "removing");
   std::error_code   error;
   if (!fs::exists(target, error)) return "the models are not installed";
-  fs::rename(target, removing, error);
+  error = RenamePackageDirectory(target, removing);
   if (error) {
     return "the installed models cannot be removed (they may be in use): " + error.message();
   }

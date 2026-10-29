@@ -11,11 +11,18 @@
 #include <QCryptographicHash>
 #include <QFile>
 #include <QString>
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <memory>
 #include <set>
 #include <system_error>
+#include <thread>
 #include <utility>
+
+#if defined(_WIN32)
+#include <Windows.h>
+#endif
 
 namespace alcedo {
 namespace {
@@ -251,6 +258,32 @@ auto ReadSmallPackageFile(const fs::path& path, std::uint64_t limit, std::string
   const QByteArray data = input.readAll();
   bytes->assign(data.constData(), static_cast<std::size_t>(data.size()));
   return true;
+}
+
+auto RenamePackageDirectory(const fs::path& from, const fs::path& to,
+                            std::chrono::milliseconds wait_limit) -> std::error_code {
+  std::error_code error;
+  fs::rename(from, to, error);
+#if defined(_WIN32)
+  // The STL reports the Win32 error of MoveFileExW in the system category.
+  const auto transient = [](const std::error_code& value) {
+    if (value.category() != std::system_category()) return false;
+    const int code = value.value();
+    return code == ERROR_ACCESS_DENIED || code == ERROR_SHARING_VIOLATION ||
+           code == ERROR_LOCK_VIOLATION;
+  };
+  const auto                deadline = std::chrono::steady_clock::now() + wait_limit;
+  std::chrono::milliseconds delay{25};
+  while (error && transient(error) && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(delay);
+    delay = (std::min)(delay * 2, std::chrono::milliseconds{500});  // Windows.h defines min.
+    error.clear();
+    fs::rename(from, to, error);
+  }
+#else
+  (void)wait_limit;
+#endif
+  return error;
 }
 
 }  // namespace alcedo

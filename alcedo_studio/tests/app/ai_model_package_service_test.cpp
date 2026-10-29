@@ -16,6 +16,7 @@
 #include <QVariantMap>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -26,6 +27,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "app/package_archive.hpp"
@@ -35,6 +37,13 @@
 extern "C" {
 #include <ed25519.h>
 }
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 #ifndef ALCEDO_FAKE_ARIA2_PATH
 #define ALCEDO_FAKE_ARIA2_PATH ""
@@ -924,6 +933,103 @@ TEST_F(AiModelPackageServiceTest, CanceledInstallKeepsInstalledSetAndDownloadedA
   EXPECT_TRUE(fs::exists(request.archive_path));  // Kept for a retry.
   EXPECT_FALSE(fs::exists(request.archive_path.parent_path() / "content"));
 }
+
+// ── Files that another process holds open (Windows) ─────────────────────────
+
+#if defined(_WIN32)
+/// A file handle that, like an antivirus scanner or the search indexer, shares read and write
+/// but not delete. While it is open, a rename of a directory that holds the file fails with
+/// access denied.
+class HeldFile {
+ public:
+  explicit HeldFile(const fs::path& path)
+      : handle_(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)) {}
+  HeldFile(const HeldFile&)                    = delete;
+  auto operator=(const HeldFile&) -> HeldFile& = delete;
+  ~HeldFile() {
+    if (releaser_.joinable()) releaser_.join();
+    Close();
+  }
+
+  [[nodiscard]] auto Open() const -> bool { return handle_.load() != INVALID_HANDLE_VALUE; }
+
+  /// Close the handle on another thread after @p delay.
+  void               ReleaseAfter(std::chrono::milliseconds delay) {
+    releaser_ = std::thread([this, delay] {
+      std::this_thread::sleep_for(delay);
+      Close();
+    });
+  }
+
+ private:
+  void Close() {
+    const HANDLE handle = handle_.exchange(INVALID_HANDLE_VALUE);
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+  }
+
+  std::atomic<HANDLE> handle_;
+  std::thread         releaser_;
+};
+
+TEST_F(AiModelPackageServiceTest, DirectoryRenameWaitsForAFileThatIsOpenForAShortTime) {
+  const fs::path from = base_ / "content";
+  const fs::path to   = base_ / "alcedo-ai-mask-v1";
+  WriteBytes(from / "point_encoder.onnx", "encoder");
+  HeldFile held(from / "point_encoder.onnx");
+  ASSERT_TRUE(held.Open());
+  // The held file blocks a plain rename: this is the failure of #586.
+  std::error_code plain;
+  fs::rename(from, to, plain);
+  ASSERT_TRUE(plain) << "the held file does not block a directory rename";
+
+  held.ReleaseAfter(std::chrono::milliseconds{400});
+  const auto            start  = std::chrono::steady_clock::now();
+  const std::error_code error  = RenamePackageDirectory(from, to, std::chrono::milliseconds{10000});
+  const auto            waited = std::chrono::steady_clock::now() - start;
+  EXPECT_FALSE(error) << error.message();
+  EXPECT_GE(waited, std::chrono::milliseconds{300});
+  EXPECT_FALSE(fs::exists(from));
+  EXPECT_EQ(ReadBytes(to / "point_encoder.onnx"), "encoder");
+}
+
+TEST_F(AiModelPackageServiceTest, DirectoryRenameReportsAFileThatStaysOpenPastTheWaitLimit) {
+  const fs::path from = base_ / "content";
+  const fs::path to   = base_ / "alcedo-ai-mask-v1";
+  WriteBytes(from / "point_encoder.onnx", "encoder");
+  HeldFile held(from / "point_encoder.onnx");
+  ASSERT_TRUE(held.Open());
+
+  const auto            start  = std::chrono::steady_clock::now();
+  const std::error_code error  = RenamePackageDirectory(from, to, std::chrono::milliseconds{300});
+  const auto            waited = std::chrono::steady_clock::now() - start;
+  EXPECT_TRUE(error);
+  EXPECT_GE(waited, std::chrono::milliseconds{300});
+  EXPECT_LT(waited, std::chrono::milliseconds{5000});
+  EXPECT_EQ(ReadBytes(from / "point_encoder.onnx"), "encoder");
+  EXPECT_FALSE(fs::exists(to));
+}
+
+TEST_F(AiModelPackageServiceTest, UpdateCommitsWhenAnInstalledFileIsOpenForAShortTime) {
+  StartService();
+  const BuiltPackage r1 = Publish(1, "r1", 0);
+  InstallRevision(r1);
+  const BuiltPackage r2 = Publish(1, "r2", 5);
+  ServeFeed({&r2});
+  Check();
+  ASSERT_EQ(State().status, AiModelPackageStatus::kUpdateAvailable);
+
+  // The commit moves the installed set aside first; a scanner holds one of its files.
+  HeldFile held(InstalledDirectory(1) / "point_encoder.onnx");
+  ASSERT_TRUE(held.Open());
+  held.ReleaseAfter(std::chrono::milliseconds{400});
+  EXPECT_TRUE(Install()) << State().error.toStdString();
+  EXPECT_EQ(State().status, AiModelPackageStatus::kCurrent) << State().error.toStdString();
+  EXPECT_EQ(InstalledFiles(1), r2.files);
+  EXPECT_EQ(Receipt(1)->revision, "r2");
+  EXPECT_FALSE(fs::exists(models_ / ".alcedo-ai-mask-v1.previous"));
+}
+#endif
 
 // ── Download statement ──────────────────────────────────────────────────────
 

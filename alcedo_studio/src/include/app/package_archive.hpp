@@ -5,12 +5,14 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace alcedo {
@@ -86,5 +88,20 @@ struct PackageArchiveExtraction {
 /// Read @p path into @p bytes. False when the file is larger than @p limit or cannot be read.
 [[nodiscard]] auto ReadSmallPackageFile(const std::filesystem::path& path, std::uint64_t limit,
                                         std::string* bytes) -> bool;
+
+/// Default time that RenamePackageDirectory waits for files that another process holds open.
+inline constexpr std::chrono::milliseconds kPackageDirectoryRenameWaitLimit{10000};
+
+/// Rename the directory @p from to @p to, which must not exist.
+///
+/// On Windows a directory rename fails with access denied or a sharing violation while another
+/// process (for example the antivirus scanner or the search indexer) has a file of the tree
+/// open, and such a process often opens new files for a short time. The rename is then tried
+/// again with increasing delays until it succeeds, it fails with another error, or
+/// @p wait_limit has passed. Other platforms rename once. Returns the error of the last try,
+/// or an empty error on success. Blocks; must not run on the GUI thread.
+[[nodiscard]] auto                         RenamePackageDirectory(
+                            const std::filesystem::path& from, const std::filesystem::path& to,
+                            std::chrono::milliseconds wait_limit = kPackageDirectoryRenameWaitLimit) -> std::error_code;
 
 }  // namespace alcedo
