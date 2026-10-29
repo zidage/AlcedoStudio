@@ -261,8 +261,6 @@ parallel palette to satisfy the policy.
 | **List favorite idle on selected** | **`editorListFavoriteIdleOnSelectedColor`** | **Unstarred glyph inverted on the light well** |
 | **List favorite active on selected** | **`editorListFavoriteActiveOnSelectedColor`** | **Starred glyph inverted on the light well** (full ink) |
 | Rating star empty | `ratingStarEmptyColor` | Empty star of Library card ratings, the Inspector rating filter, and the photo Inspector rating; filled stars use `textColor`, the hover preview `textMutedColor` |
-| Filmstrip selected fill | `filmstripSelectedFillColor` | Light gray well of a filmstrip tile that is in the Library selection but not open in the editor (`cardSurfaceColor` blended 50% to `textMutedColor`) |
-| Thumbnail caption bar | `thumbnailCaptionBarColor` | `bgDeepColor` (alpha 200) caption under the file name, below a filmstrip thumbnail image |
 | Thumbnail edit mark fill | `thumbnailEditMarkFillColor` | `bgDeepColor` (alpha 200) fill of the edit mark chip on the top-right corner of a Library card or filmstrip photo |
 
 **Monochrome inverted list selection:** dense catalogs (the LUT browser first) keep a
@@ -302,30 +300,45 @@ sunken `bgBaseColor` well with `spaceXs` gaps. Selecting or starring a tile
 never resets the tile rows or moves the scroll position.
 
 **Editor filmstrip tiles:** the filmstrip shares the Library selection, and a
-tile has two independent states. The **editing** tile (the image that the
-editor shows) uses the `editorListSelectedFillColor` well and a 1 px
-`editorListSelectedInkColor` thumbnail frame. A **selected** tile (in the
-Library selection, not open) uses the `filmstripSelectedFillColor` light gray
-well and the normal `dividerColor` frame. Editing wins when both apply. A click
-in the Library changes only the selected state; opening an image from the
-strip (click, Left/Right) also makes it the only selected image, so keyboard
-navigation leaves one highlighted tile. The thumbnail fills the tile with a
-`spaceXs` inset. The frame holds the image and, below it, a fixed two-line
-`thumbnailCaptionBarColor` caption with one line, so the caption never covers
-the photo: the file name (`textColor`, caption size, middle elision). The edit
-mark is the chip on the top-right corner of the photo (see "Library thumbnail
-cards"). On the editing tile the caption sits on the `editorListSelectedFillColor`
-well, and the file name uses `editorListSelectedInkColor`. The caption
-does not show the rating, the date, or the camera. The rating is an overlay on
-the photo: only the filled stars (`★`, white, `dataFontFamily`) at the
-bottom-right corner, on a short shade over the bottom part of the image only
-(`bgDeepColor` gradient from transparent to alpha 0.78). An unrated image has
-no overlay and no shade. There is no container around the stars, and they are
-display only: the user rates with the context menu and the keyboard shortcuts.
-Every image in the strip has the same size. The tile width fits a 3:2 image to
-the image height. The dock minimum and default height is 168 px
-(`EditorFilmstrip.minExpandedHeight`, `kFilmstripExpandedHeightMin`), which
-gives an image of about 94 px (80 px with the former two-line caption). There
+tile has two independent states. (User request 2026-10-28: the former bone well
+with an inset ink frame and a square caption bar read as a rubber band around
+the photo, because the three shapes had different corner radii and left gaps.)
+The photo keeps its own aspect ratio: it fits a 3:2 slot, is centered in it,
+and has `controlRadiusSmall` corners (`MultiEffect` mask). There is no well,
+frame, or fill around it; a `bgBaseColor` placeholder with the same radius
+fills the slot while the thumbnail loads or when it is missing. The tile state
+is **one ring** that follows the photo outline: its outer edge is `spaceXs`
+outside the photo and its radius is `controlRadiusSmall + spaceXs`, so the ring
+and the photo corners are concentric and the gap stays even all around.
+
+| State | Ring | File name |
+| --- | --- | --- |
+| Editing (the image that the editor shows) | 2 px `textColor` | `textColor`, `fontWeightStrong` |
+| Selected (in the Library selection, not open) | 2 px `textMutedColor` | `textColor` |
+| Keyboard focus without a state | 1 px `textMutedColor` | `textMutedColor` |
+| Idle | none | `textMutedColor` |
+
+Editing wins when both apply. Hover is a `hoverColor` wash in the ring area,
+behind the photo, and the file name changes to `textColor`; ring and text
+colors change in `motionFadeMs`. A click in the Library changes only the
+selected state; opening an image from the strip (click, Left/Right) also makes
+it the only selected image, so keyboard navigation leaves one highlighted
+tile. The file name is plain text below the ring (caption size, one line,
+centered, middle elision), so it never covers the photo; it has no bar or
+fill. The edit mark is the chip on the top-right corner of the photo (see
+"Library thumbnail cards"). The caption does not show the rating, the date, or
+the camera. The rating is an overlay on the photo: only the filled stars (`★`,
+white, `dataFontFamily`) at the bottom-right corner, on a short shade over the
+bottom part of the photo only (`bgDeepColor` gradient from transparent to alpha
+0.78). The photo, the shade, the stars, and the edit mark are one layer with
+one rounded mask, so none of them shows outside the photo corners. An
+unrated image has no overlay and no shade. There is no container around the
+stars, and they are display only: the user rates with the context menu and the
+keyboard shortcuts. The Saving and Rendering badges of the editing tile sit on
+the top-left corner of the photo. Every slot in the strip has the same size.
+The tile width fits the 3:2 slot to the slot height. The dock minimum and
+default height is 168 px (`EditorFilmstrip.minExpandedHeight`,
+`kFilmstripExpandedHeightMin`), which gives a slot of about 100 px. There
 is no separate rating badge.
 
 **Monochrome segmented controls (family):** four chrome sites share one language:

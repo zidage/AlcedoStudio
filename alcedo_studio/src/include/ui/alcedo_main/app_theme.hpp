@@ -190,8 +190,6 @@ class AppTheme final : public QObject {
                  editorListFavoriteActiveOnSelectedColor NOTIFY ThemeChanged)
   // Editor filmstrip: the light gray well of a Library-selected tile that the editor does not
   // show, and the dark caption under the file name and rating, below a thumbnail image.
-  Q_PROPERTY(QColor filmstripSelectedFillColor READ filmstripSelectedFillColor NOTIFY ThemeChanged)
-  Q_PROPERTY(QColor thumbnailCaptionBarColor READ thumbnailCaptionBarColor NOTIFY ThemeChanged)
   // Empty star of a Library card rating and of the Inspector rating filter: a dim neutral ink
   // below textMutedColor, so filled stars (textColor) read at a glance.
   Q_PROPERTY(QColor ratingStarEmptyColor READ ratingStarEmptyColor NOTIFY ThemeChanged)
@@ -436,8 +434,6 @@ class AppTheme final : public QObject {
   auto editorListFavoriteActiveColor() const -> QColor;
   auto editorListFavoriteIdleOnSelectedColor() const -> QColor;
   auto editorListFavoriteActiveOnSelectedColor() const -> QColor;
-  auto filmstripSelectedFillColor() const -> QColor;
-  auto thumbnailCaptionBarColor() const -> QColor;
   auto ratingStarEmptyColor() const -> QColor;
   auto thumbnailEditMarkFillColor() const -> QColor;
   auto scopeGridColor() const -> QColor;

@@ -973,14 +973,9 @@ Item {
                                                                    : qsTr("Source file was moved or deleted")
 
                     height: ListView.view ? ListView.view.height : 1
-                    // The image sits above a fixed one-line caption (file name and
-                    // edit mark); the tile width fits a 3:2 image to the image height.
-                    readonly property real captionAreaHeight: appTheme.lineHeightCaption
-                                                              + appTheme.spaceXs * 2
-                    readonly property real imageAreaHeight: Math.max(
-                        1, height - appTheme.spaceXs * 2 - 2 - captionAreaHeight)
-                    width: Math.max(appTheme.spaceXl * 7,
-                                    imageAreaHeight * 1.5 + appTheme.spaceXs * 2 + 2)
+                    // The card fits a 3:2 photo slot to the height left above its
+                    // one-line file name caption.
+                    width: Math.max(appTheme.spaceXl * 7, thumbnailCard.implicitWidth)
                     Accessible.role: Accessible.ListItem
                     Accessible.name: fileName.length > 0 ? fileName
                                                          : qsTr("Image %1").arg(index + 1)

@@ -978,17 +978,6 @@ auto AppTheme::editorListFavoriteActiveOnSelectedColor() const -> QColor {
   return editorListSelectedInkColor();
 }
 
-auto AppTheme::filmstripSelectedFillColor() const -> QColor {
-  // Light gray: clearly lifted from the card surface, but darker than the bone well of the
-  // editing tile, so a selected tile never reads as the open image.
-  return Blend(cardSurfaceColor(), textMutedColor(), 0.5);
-}
-
-auto AppTheme::thumbnailCaptionBarColor() const -> QColor {
-  // Deep base under light caption text, below the filmstrip image.
-  return WithAlpha(bgDeepColor(), 200);
-}
-
 auto AppTheme::ratingStarEmptyColor() const -> QColor {
   // Between the card surface and the muted text: visible on a card and in the Inspector, but
   // clearly below a filled star.
