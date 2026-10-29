@@ -108,6 +108,10 @@ EditorAiMaskTool::EditorAiMaskTool(EditorSessionController* session, Services se
                 [this](const EditorSessionResult& result) { OnSessionResult(result); });
     state_connection_ = connect(session_, &EditorSessionController::StateChanged, this,
                                 [this] { OnSessionStateChanged(); });
+    // The viewport lost the displayed coverage and the session presented it again (#514).
+    coverage_again_connection_ = connect(
+        session_, &EditorSessionController::MaskCoveragePresentedAgain, this,
+        [this](EditorMaskCoverageResult result) { OnCoveragePresented(std::move(result)); });
   }
 }
 
@@ -123,6 +127,7 @@ void EditorAiMaskTool::Shutdown() {
   shut_down_ = true;
   QObject::disconnect(result_connection_);
   QObject::disconnect(state_connection_);
+  QObject::disconnect(coverage_again_connection_);
   if (active_) {
     Close({});
   }

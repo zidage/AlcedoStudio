@@ -221,6 +221,19 @@ void ViewportMaskCoverageLayer::Release() {
   sequence_     = 0;
 }
 
+void ViewportMaskCoverageLayer::ReleaseWithDevice(ILeaseTargetAdapter* adapter) {
+  if (sink_) {
+    sink_->MarkDisplayLost();
+  }
+  Release();
+  if (queue_) {
+    queue_->InvalidateTargetGeneration();
+  }
+  if (adapter != nullptr) {
+    DestroyRetiredNatives(*adapter);
+  }
+}
+
 void ViewportMaskCoverageLayer::DestroyRetiredNatives(ILeaseTargetAdapter& adapter) {
   if (!queue_) {
     return;

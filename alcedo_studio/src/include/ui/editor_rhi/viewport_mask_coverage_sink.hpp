@@ -91,6 +91,17 @@ class ViewportMaskCoverageSink final : public IMaskCoverageSink {
   [[nodiscard]] auto PublishedCount() const -> std::uint64_t;
   /// Sequence of the last frame that @ref ClearCoverage hid; 0 before the first clear.
   [[nodiscard]] auto ClearedThrough() const -> std::uint64_t;
+  /**
+   * @brief Record that the viewport dropped this channel with its QRhi resources (device
+   *        recreation or renderer teardown, #514). Records a loss only when a frame was published
+   *        after the last clear: that coverage is no longer displayed, and the coverage owner must
+   *        present it again. The record outlives the renderer, so the next renderer reports it.
+   *
+   * Thread: the scene-graph render thread. It does not touch the viewport item.
+   */
+  void               MarkDisplayLost();
+  /// True once after @ref MarkDisplayLost recorded a loss; clears the record. Any thread.
+  [[nodiscard]] auto TakeDisplayLost() -> bool;
   /// Lease layer of the native targets of this channel.
   [[nodiscard]] auto LeaseLayer() const -> LeaseFrameLayer { return layer_; }
 
@@ -114,6 +125,7 @@ class ViewportMaskCoverageSink final : public IMaskCoverageSink {
 #endif
   std::uint64_t published_count_ = 0;
   std::uint64_t cleared_through_ = 0;
+  bool          display_lost_    = false;
 };
 
 }  // namespace alcedo::editor_rhi

@@ -157,6 +157,15 @@ class EditorViewportItem : public QQuickRhiItem {
   /// render thread releases the displayed frames on its next pass; a frame published before the
   /// call is never displayed. Idempotent; thread-safe.
   void               clearMaskCoverage();
+  /**
+   * @brief Emit @ref MaskCoverageDisplayLost on the GUI thread when a coverage sink recorded that
+   *        a QRhi release dropped published coverage (ViewportMaskCoverageSink::MarkDisplayLost,
+   *        #514). Each recorded loss is reported once.
+   *
+   * Called by EditorViewportRenderer::synchronize() on the render thread while the GUI thread is
+   * blocked.
+   */
+  void               reportLostMaskCoverage();
 
   /**
    * @brief Style of the coverage composite (SM8 C10): visibility, display-encoded tint, and
@@ -255,6 +264,9 @@ class EditorViewportItem : public QQuickRhiItem {
   void PresentationSuspendedChanged();
   /// Emitted on the GUI thread when @ref maskCoverageStyle changes.
   void MaskCoverageStyleChanged();
+  /// Emitted on the GUI thread after a QRhi release dropped the displayed Mask coverage: the
+  /// coverage owner must present it again (#514).
+  void MaskCoverageDisplayLost();
 
  protected:
   auto createRenderer() -> QQuickRhiItemRenderer* override;

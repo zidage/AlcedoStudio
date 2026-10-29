@@ -1270,6 +1270,10 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
     QObject::disconnect(presentation_suspended_connection_);
     presentation_suspended_connection_ = {};
   }
+  if (mask_coverage_lost_connection_) {
+    QObject::disconnect(mask_coverage_lost_connection_);
+    mask_coverage_lost_connection_ = {};
+  }
   presentation_viewport_ = viewportItem;
   if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(viewportItem)) {
     if (scope_controller_) {
@@ -1300,6 +1304,25 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
                     session_backend_->SetPresentationSuspended(item->presentationSuspended());
                   }
                 });
+    // A QRhi release (for example the window moved to another display) dropped the displayed
+    // coverage while the preview state stayed Current (#514): present the newest request again.
+    mask_coverage_lost_connection_ =
+        connect(item, &editor_rhi::EditorViewportItem::MaskCoverageDisplayLost, this, [this] {
+          if (!session_backend_) {
+            return;
+          }
+          QPointer<EditorSessionController> self(this);
+          (void)session_backend_->PresentMaskCoverageAgain([self](EditorMaskCoverageResult result) {
+            QMetaObject::invokeMethod(
+                self,
+                [self, result = std::move(result)]() mutable {
+                  if (self && result.outcome != EditorMaskCoverageOutcome::Rejected) {
+                    emit self->MaskCoveragePresentedAgain(std::move(result));
+                  }
+                },
+                Qt::QueuedConnection);
+          });
+        });
     // Stamp a stable presentation sink identity for render intents (Phase 5A).
     // DirectFrameSink owns the short scene-graph startup wait when this binding
     // precedes QQuickRhiItem::synchronize().

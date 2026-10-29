@@ -347,6 +347,7 @@ class EditorAiMaskTool final : public QObject {
   int                                               highlighted_person_ = -1;
   QMetaObject::Connection                           result_connection_;
   QMetaObject::Connection                           state_connection_;
+  QMetaObject::Connection                           coverage_again_connection_;
 };
 
 }  // namespace alcedo::ui

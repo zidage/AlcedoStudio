@@ -87,6 +87,21 @@ auto EditorMaskCoveragePreview::Retry(std::uint64_t                request_id,
   return true;
 }
 
+auto EditorMaskCoveragePreview::PresentAgain(std::uint64_t                request_id,
+                                             EditorMaskCoverageCompletion on_complete) -> bool {
+  if (range_probe_.has_value() || !newest_.has_value() ||
+      status_ == EditorMaskCoveragePreviewStatus::Previous) {
+    return false;
+  }
+  // A job in flight or a pending request may have published before the loss too, so the newest
+  // request runs again after them.
+  Request request                 = *newest_;
+  request.port_request.request_id = request_id;
+  request.on_complete             = std::move(on_complete);
+  Enqueue(std::move(request));
+  return true;
+}
+
 void EditorMaskCoveragePreview::ShowRangeProbe(MaskCoverageProbe probe) {
   if (CommitBlocked()) {
     throw std::logic_error(

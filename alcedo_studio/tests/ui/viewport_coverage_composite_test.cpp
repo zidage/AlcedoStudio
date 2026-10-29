@@ -42,7 +42,87 @@ namespace {
 
 using namespace coverage_test;
 
-class ViewportCoverageCompositeTest : public ViewportCompositeFixture {};
+/// Coverage port of the preview owner that queues its jobs and clears in call order. The test runs
+/// each one through the coverage channel of the fixture, as EditorSessionRenderSchedulerPort runs
+/// them on the editor worker.
+class QueuedCoveragePort final : public IEditorMaskCoveragePort {
+ public:
+  struct Job {
+    EditorMaskCoverageRequest       request;
+    EditorMaskCoverageJobCompletion on_complete;
+  };
+  /// A job, or std::monostate for a clear.
+  using Work = std::variant<std::monostate, Job>;
+
+  auto ScheduleMaskCoverage(EditorMaskCoverageRequest       request,
+                            EditorMaskCoverageJobCompletion on_complete, std::string* /*error*/)
+      -> std::uint64_t override {
+    work.emplace_back(Job{std::move(request), std::move(on_complete)});
+    return ++next_id;
+  }
+  void             ClearMaskCoverage() override { work.emplace_back(std::monostate{}); }
+
+  std::deque<Work> work;
+  std::uint64_t    next_id = 0;
+};
+
+class ViewportCoverageCompositeTest : public ViewportCompositeFixture {
+ protected:
+  /// A blue photo frame of the geometry of @p display, like sky or water; its pixels go to
+  /// @p rgba.
+  auto BluePhoto(const MaskCoverageDisplayRequest& display, std::vector<float>& rgba)
+      -> ImportedPhoto {
+    const auto extent = display.geometry.render_extent;
+    rgba.assign(static_cast<std::size_t>(extent.width) * extent.height * 4, 0.0f);
+    for (std::uint32_t y = 0; y < extent.height; ++y) {
+      for (std::uint32_t x = 0; x < extent.width; ++x) {
+        const std::size_t i = (static_cast<std::size_t>(y) * extent.width + x) * 4;
+        rgba[i]             = 0.2f + 0.3f * static_cast<float>(x) / extent.width;
+        rgba[i + 1]         = 0.6f;
+        rgba[i + 2]         = 0.9f - 0.3f * static_cast<float>(y) / extent.height;
+        rgba[i + 3]         = 1.0f;
+      }
+    }
+    ImportedPhoto photo;
+    photo.texture  = Upload(static_cast<int>(extent.width), static_cast<int>(extent.height), rgba);
+    photo.width    = static_cast<int>(extent.width);
+    photo.height   = static_cast<int>(extent.height);
+    photo.geometry = display.geometry;
+    return photo;
+  }
+
+  /// Run the work of @p port on the render thread, deliver the completions of @p owner_tasks on
+  /// this (owner) thread, and display the result as the viewport render thread does, until no
+  /// work is left.
+  void RunPreviewWork(QueuedCoveragePort& port, std::deque<std::function<void()>>& owner_tasks,
+                      const MaskCoverageDisplayRequest& display) {
+    while (!port.work.empty() || !owner_tasks.empty()) {
+      while (!port.work.empty()) {
+        auto work = std::move(port.work.front());
+        port.work.pop_front();
+        if (auto* job = std::get_if<QueuedCoveragePort::Job>(&work)) {
+          const auto publication =
+              Present(job->request.selection,
+                      {display.geometry, job->request.mask.invert, job->request.mask.opacity},
+                      Identity(job->request.request_id));
+          job->on_complete({publication == MaskCoveragePublication::Published
+                                ? EditorMaskCoverageJobStatus::Presented
+                                : EditorMaskCoverageJobStatus::Failed,
+                            {}});
+        } else {
+          render_thread_.Post([this] { viewport_->maskCoverageSink()->ClearCoverage(); }).get();
+        }
+      }
+      while (!owner_tasks.empty()) {
+        auto task = std::move(owner_tasks.front());
+        owner_tasks.pop_front();
+        task();
+      }
+    }
+    (void)layer_.ApplyClear();
+    (void)Consume();
+  }
+};
 
 TEST(ViewportCoverageMapping, PhotoUvMapsToCoverageUvThroughTheReferenceSpace) {
   const auto full = MakePhotoGeometry(1.0f);
@@ -535,87 +615,19 @@ TEST_F(ViewportCoverageCompositeTest, CoverageTintNeverAppearsInExportOrScopes) 
       << "the photo frame of the viewport must be the untinted display output";
 }
 
-/// Coverage port of the preview owner that queues its jobs and clears in call order. The test runs
-/// each one through the coverage channel of the fixture, as EditorSessionRenderSchedulerPort runs
-/// them on the editor worker.
-class QueuedCoveragePort final : public IEditorMaskCoveragePort {
- public:
-  struct Job {
-    EditorMaskCoverageRequest       request;
-    EditorMaskCoverageJobCompletion on_complete;
-  };
-  /// A job, or std::monostate for a clear.
-  using Work = std::variant<std::monostate, Job>;
-
-  auto ScheduleMaskCoverage(EditorMaskCoverageRequest       request,
-                            EditorMaskCoverageJobCompletion on_complete, std::string* /*error*/)
-      -> std::uint64_t override {
-    work.emplace_back(Job{std::move(request), std::move(on_complete)});
-    return ++next_id;
-  }
-  void             ClearMaskCoverage() override { work.emplace_back(std::monostate{}); }
-
-  std::deque<Work> work;
-  std::uint64_t    next_id = 0;
-};
-
 // #516: the Commit of an AI Mask edit without a committed selection shows the photo without the
 // coverage tint. The production preview owner ends the candidate; its clear reaches the viewport
 // through the coverage channel, and the composite draws the photo pixels unchanged.
 TEST_F(ViewportCoverageCompositeTest, CommitWithoutSelectionShowsPhotoWithoutTint) {
   const MaskCoverageDisplayRequest display{MakePhotoGeometry(1.0f), false, 1.0f};
-  const auto                       extent = display.geometry.render_extent;
-  // A blue photo, like sky or water.
-  std::vector<float> photo_rgba(static_cast<std::size_t>(extent.width) * extent.height * 4);
-  for (std::uint32_t y = 0; y < extent.height; ++y) {
-    for (std::uint32_t x = 0; x < extent.width; ++x) {
-      const std::size_t i = (static_cast<std::size_t>(y) * extent.width + x) * 4;
-      photo_rgba[i]       = 0.2f + 0.3f * static_cast<float>(x) / extent.width;
-      photo_rgba[i + 1]   = 0.6f;
-      photo_rgba[i + 2]   = 0.9f - 0.3f * static_cast<float>(y) / extent.height;
-      photo_rgba[i + 3]   = 1.0f;
-    }
-  }
-  ImportedPhoto photo;
-  photo.texture =
-      Upload(static_cast<int>(extent.width), static_cast<int>(extent.height), photo_rgba);
-  photo.width                            = static_cast<int>(extent.width);
-  photo.height                           = static_cast<int>(extent.height);
-  photo.geometry                         = display.geometry;
+  std::vector<float>                photo_rgba;
+  const auto                        photo = BluePhoto(display, photo_rgba);
 
   auto                              port = std::make_shared<QueuedCoveragePort>();
   std::deque<std::function<void()>> owner_tasks;
   EditorMaskCoveragePreview         preview(
       port, [&owner_tasks](std::function<void()> task) { owner_tasks.push_back(std::move(task)); });
-  // Run the port work on the render thread, deliver the completions on this (owner) thread, and
-  // display the result as the viewport render thread does, until no work is left.
-  const auto run = [&] {
-    while (!port->work.empty() || !owner_tasks.empty()) {
-      while (!port->work.empty()) {
-        auto work = std::move(port->work.front());
-        port->work.pop_front();
-        if (auto* job = std::get_if<QueuedCoveragePort::Job>(&work)) {
-          const auto publication =
-              Present(job->request.selection,
-                      {display.geometry, job->request.mask.invert, job->request.mask.opacity},
-                      Identity(job->request.request_id));
-          job->on_complete({publication == MaskCoveragePublication::Published
-                                ? EditorMaskCoverageJobStatus::Presented
-                                : EditorMaskCoverageJobStatus::Failed,
-                            {}});
-        } else {
-          render_thread_.Post([this] { viewport_->maskCoverageSink()->ClearCoverage(); }).get();
-        }
-      }
-      while (!owner_tasks.empty()) {
-        auto task = std::move(owner_tasks.front());
-        owner_tasks.pop_front();
-        task();
-      }
-    }
-    (void)layer_.ApplyClear();
-    (void)Consume();
-  };
+  const auto run = [&] { RunPreviewWork(*port, owner_tasks, display); };
   const EditorMaskCoveragePreview::ImageTarget target{kImage, kImage, {}};
   std::vector<EditorMaskCoverageOutcome>       outcomes;
 
@@ -660,6 +672,83 @@ TEST_F(ViewportCoverageCompositeTest, CommitWithoutSelectionShowsPhotoWithoutTin
   ASSERT_EQ(committed.size(), photo_rgba.size());
   EXPECT_EQ(std::memcmp(committed.data(), photo_rgba.data(), committed.size() * sizeof(float)), 0)
       << "after the Commit the viewport must show the photo pixels without the tint";
+}
+
+// #514: the viewport releases its QRhi resources (device recreation, for example when the window
+// moves to another display) while the candidate coverage is displayed. The release drops the
+// coverage, and the viewport reports that loss once. Presenting the newest request again, as the
+// session does on that report, displays the same coverage pixels with the preview state Current.
+TEST_F(ViewportCoverageCompositeTest, CoverageLostWithTheQRhiIsPresentedAgain) {
+  const MaskCoverageDisplayRequest  display{MakePhotoGeometry(1.0f), false, 1.0f};
+  std::vector<float>                photo_rgba;
+  const auto                        photo = BluePhoto(display, photo_rgba);
+
+  auto                              port  = std::make_shared<QueuedCoveragePort>();
+  std::deque<std::function<void()>> owner_tasks;
+  EditorMaskCoveragePreview         preview(
+      port, [&owner_tasks](std::function<void()> task) { owner_tasks.push_back(std::move(task)); });
+  const auto run = [&] { RunPreviewWork(*port, owner_tasks, display); };
+  const EditorMaskCoveragePreview::ImageTarget target{kImage, kImage, {}};
+  std::vector<EditorMaskCoverageOutcome>       outcomes;
+  const auto record = [&outcomes](EditorMaskCoverageResult result) {
+    outcomes.push_back(result.outcome);
+  };
+  int reported_losses = 0;
+  QObject::connect(viewport_.get(), &EditorViewportItem::MaskCoverageDisplayLost, viewport_.get(),
+                   [&reported_losses] { ++reported_losses; });
+
+  // Nothing is lost while no coverage was published.
+  layer_.ReleaseWithDevice(adapter_.get());
+  viewport_->reportLostMaskCoverage();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(reported_losses, 0);
+
+  const auto pixels = MakeCandidatePixels(0);
+  preview.UpdateCandidate(target, MaskCoverageCandidateSelection{pixels, kAnalysis, {1.5f, 1}}, {},
+                          1, record);
+  run();
+  ASSERT_EQ(outcomes, std::vector{EditorMaskCoverageOutcome::Presented});
+  ASSERT_NE(layer_.Texture(), nullptr);
+  const auto coverage_texels = ReadBack(layer_.Texture());
+  const auto displayed       = CompositeFor(photo, MaskCoverageDisplayStyle{});
+  ASSERT_EQ(displayed.size(), photo_rgba.size());
+  ASSERT_NE(std::memcmp(displayed.data(), photo_rgba.data(), displayed.size() * sizeof(float)), 0)
+      << "the candidate tint must be visible before the release";
+
+  // The QRhi release of EditorViewportRenderer::releaseResources: the coverage and its native
+  // targets go, and the viewport shows the photo alone.
+  layer_.ReleaseWithDevice(adapter_.get());
+  detail_layer_.ReleaseWithDevice(adapter_.get());
+  EXPECT_EQ(layer_.Texture(), nullptr);
+  EXPECT_EQ(layer_.NativeTargetCount(), 0u);
+  const auto released = CompositeFor(photo, MaskCoverageDisplayStyle{});
+  ASSERT_EQ(released.size(), photo_rgba.size());
+  EXPECT_EQ(std::memcmp(released.data(), photo_rgba.data(), released.size() * sizeof(float)), 0)
+      << "after the release the viewport shows the photo without the coverage";
+
+  // The next synchronize() reports the loss once, on the GUI thread.
+  viewport_->reportLostMaskCoverage();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(reported_losses, 1);
+  viewport_->reportLostMaskCoverage();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(reported_losses, 1);
+
+  // The session presents the newest request again; new native targets carry it.
+  ASSERT_TRUE(preview.PresentAgain(2, record));
+  EXPECT_EQ(preview.State().status, EditorMaskCoveragePreviewStatus::Pending);
+  run();
+  ASSERT_EQ(outcomes, (std::vector{EditorMaskCoverageOutcome::Presented,
+                                   EditorMaskCoverageOutcome::Presented}));
+  EXPECT_EQ(preview.State().status, EditorMaskCoveragePreviewStatus::Current);
+  EXPECT_EQ(preview.State().source, EditorMaskCoveragePreviewSource::Candidate);
+  ASSERT_NE(layer_.Texture(), nullptr);
+  EXPECT_EQ(layer_.Presentation().identity.request_id, 2u);
+  EXPECT_EQ(ReadBack(layer_.Texture()), coverage_texels);
+  const auto restored = CompositeFor(photo, MaskCoverageDisplayStyle{});
+  ASSERT_EQ(restored.size(), displayed.size());
+  EXPECT_EQ(std::memcmp(restored.data(), displayed.data(), restored.size() * sizeof(float)), 0)
+      << "the coverage presented again must composite as before the release";
 }
 
 TEST_F(ViewportCoverageCompositeTest, UncoveredHdrPixelsStayUnchanged) {

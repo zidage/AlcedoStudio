@@ -195,6 +195,19 @@ class EditorMaskCoveragePreview {
   auto Retry(std::uint64_t request_id, EditorMaskCoverageCompletion on_complete) -> bool;
 
   /**
+   * @brief Present the newest request again after the viewport lost the displayed coverage
+   *        (#514: it released its QRhi resources, for example when the window moved to another
+   *        display). Reuses its shared pixels and edge values; no model call.
+   *
+   * The status becomes Pending and then follows the outcome of the new job: Current, or Previous
+   * with the real error of a failed presentation (Retry, and Commit is blocked).
+   * @return False, with @p on_complete not called, when nothing is presented again: the status is
+   *         Hidden; the status is Previous (Retry already presents the newest request); or the
+   *         source is RangeProbe (the next photo frame carries its coverage).
+   */
+  auto PresentAgain(std::uint64_t request_id, EditorMaskCoverageCompletion on_complete) -> bool;
+
+  /**
    * @brief Forget the candidate and the committed selection and hide the coverage after the job in
    *        flight (ClearMaskCoveragePreview, image change, close). Ends the pending request and the
    *        job in flight as Discarded. Idempotent.

@@ -244,6 +244,75 @@ TEST_F(EditorMaskCoveragePreviewTest, GpuPreviewFailureKeepsDesiredStateAndBlock
   EXPECT_EQ(Graph()->CommitCount(), commits + 1);
 }
 
+// #514: the viewport released its QRhi resources and lost the displayed coverage. The session
+// presents the newest request again by itself; a failure of that presentation labels the result
+// Previous, so Retry is offered and Commit is refused.
+TEST_F(EditorMaskCoveragePreviewTest, LostDisplayedCoverageIsPresentedAgain) {
+  OpenInteractive();
+  ASSERT_EQ(OpenAiMaskEdit(std::nullopt).result.kind, EditorSessionResultKind::Accepted);
+  auto session = NewSession();
+  ASSERT_TRUE(Applied(
+      session->AddPromptStep(Stroke({{0.3f, 0.3f}, {0.6f, 0.5f}}), AiMaskComponentOperation::Add)));
+  ASSERT_TRUE(Applied(session->SetEdgeAdjustment(AiMaskEdgeAdjustment{2.0f, 1})));
+  Present(*session);
+  CompleteJob(0, EditorMaskCoverageJobStatus::Presented);
+  ASSERT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Current);
+  const auto displayed = session->AcquireCoveragePixels();
+  const int  calls     = runner_.calls;
+  const auto again     = [this] {
+    (void)service_->PresentMaskCoverageAgain(
+        [this](EditorMaskCoverageResult result) { outcomes_.push_back(std::move(result)); });
+    Drain();
+  };
+
+  // The newest request runs again with the same shared pixels and edge values; no model call.
+  again();
+  ASSERT_EQ(coverage_->jobs.size(), 2u);
+  const auto* presented_again = CandidateOf(coverage_->jobs[1].request);
+  ASSERT_NE(presented_again, nullptr);
+  EXPECT_EQ(presented_again->pixels.get(), displayed.get());
+  EXPECT_EQ(presented_again->edge, (AiMaskEdgeAdjustment{2.0f, 1}));
+  EXPECT_EQ(runner_.calls, calls);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Pending);
+  CompleteJob(1, EditorMaskCoverageJobStatus::Presented);
+  EXPECT_EQ(outcomes_.back().outcome, EditorMaskCoverageOutcome::Presented);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Current);
+  EXPECT_EQ(Preview().source, EditorMaskCoveragePreviewSource::Candidate);
+
+  // A failed presentation after the loss is not reported as Current.
+  again();
+  ASSERT_EQ(coverage_->jobs.size(), 3u);
+  CompleteJob(2, EditorMaskCoverageJobStatus::Failed,
+              "Mask coverage display: importing the coverage target failed");
+  EXPECT_EQ(outcomes_.back().outcome, EditorMaskCoverageOutcome::Failed);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Previous);
+  EXPECT_EQ(Preview().error, "Mask coverage display: importing the coverage target failed");
+  EXPECT_EQ(Commit(*session, std::nullopt).kind, EditorSessionResultKind::Rejected);
+
+  // In the Previous status Retry presents the newest request; a second loss adds no job.
+  const auto outcomes = outcomes_.size();
+  again();
+  ASSERT_EQ(outcomes_.size(), outcomes + 1);
+  EXPECT_EQ(outcomes_.back().outcome, EditorMaskCoverageOutcome::Rejected);
+  EXPECT_EQ(coverage_->jobs.size(), 3u);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Previous);
+  (void)service_->RetryMaskCoveragePreview(
+      [this](EditorMaskCoverageResult result) { outcomes_.push_back(std::move(result)); });
+  Drain();
+  ASSERT_EQ(coverage_->jobs.size(), 4u);
+  CompleteJob(3, EditorMaskCoverageJobStatus::Presented);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Current);
+
+  // Without coverage, nothing is presented again.
+  (void)service_->CancelAiMaskEdit();
+  Drain();
+  ASSERT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Hidden);
+  again();
+  EXPECT_EQ(outcomes_.back().outcome, EditorMaskCoverageOutcome::Rejected);
+  EXPECT_EQ(coverage_->jobs.size(), 4u);
+  EXPECT_EQ(Preview().status, EditorMaskCoveragePreviewStatus::Hidden);
+}
+
 TEST_F(EditorMaskCoveragePreviewTest, CancelRestoresCommittedPreview) {
   OpenInteractive();
   const auto mask_id = CommitNewAiMask({{0.1f, 0.6f}, {0.3f, 0.9f}});
