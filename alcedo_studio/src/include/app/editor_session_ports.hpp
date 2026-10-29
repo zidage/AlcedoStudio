@@ -24,6 +24,7 @@
 #include "edit/history/edit_commit_attribution.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_asset.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -310,6 +311,31 @@ class IEditorHistoryPort {
       std::shared_ptr<const PipelineGraphSnapshot>* /*analysis*/, std::string* error) -> bool {
     if (error != nullptr) {
       *error = "The AI Mask analysis document is not supported by this history port";
+    }
+    return false;
+  }
+
+  /**
+   * @brief Build the frozen LUT browser preview document of the held image without changing its
+   *        history (BuildLutPreviewDocument, issue #598).
+   *
+   * Replays the immutable root, gives it the sensor settings of @p captured_current, and applies
+   * @p write to the LMT of its primary Color Grade. Moves no head, writes no commit, WAL record,
+   * or checkpoint, and does not touch the working document, its dirty state, or the published
+   * previews. Session owner thread.
+   *
+   * @param captured_current Preview of the working values. It must belong to the held image and to
+   *        the lineage of its working document.
+   * @return true with @p preview set; false with @p error set and @p preview unchanged. Default
+   *         ports reject.
+   */
+  virtual auto BuildLutPreviewDocument(
+      const EditorHistoryGuardHandle& /*guard*/,
+      const std::shared_ptr<const PipelineGraphSnapshot>& /*captured_current*/,
+      const LmtUpdate& /*write*/, std::shared_ptr<const PipelineGraphSnapshot>* /*preview*/,
+      std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "The LUT preview document is not supported by this history port";
     }
     return false;
   }

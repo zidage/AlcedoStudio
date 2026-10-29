@@ -29,9 +29,14 @@
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
+#include "app/lut_preview_image.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "image/image_buffer.hpp"
 #include "json.hpp"
 #include "support/editor_history_port_test_reads.hpp"
@@ -127,6 +132,25 @@ class ControllableImageRenderPort final : public IEditorImageRenderPort {
   std::uint64_t              next_id = 0;
   std::string                reject_reason;
 };
+
+/// The LMT of the primary Color Grade of @p document.
+auto PrimaryLmt(const PipelineDocument& document) -> const LmtModel* {
+  const auto* grade = document.PrimaryGrade();
+  return grade == nullptr
+             ? nullptr
+             : dynamic_cast<const LmtModel*>(grade->FindAdjustmentByType(type_ids::Lmt()));
+}
+
+/// The LUT write that applying a library entry submits, with a strength that a preview ignores.
+auto LibraryLutWrite() -> EditorLutWrite {
+  EditorLutWrite write;
+  write.reference       = LutReference{LibraryLutReference{"user/look.cube"}};
+  write.display_name    = "Look";
+  write.input_encoding  = "acescc";
+  write.output_encoding = "acescc";
+  write.strength        = 0.25f;
+  return write;
+}
 
 auto DevelopPayloadOf(const PipelineGraphSnapshot& snapshot) -> DevelopPayload {
   return snapshot.Document().Develop()->Params().Params();
@@ -656,8 +680,9 @@ TEST_F(EditorComparisonServiceTest, PreviewImagesCurrentOnlyRenderOnlyTheWorking
   EXPECT_EQ((*outcome)->status, EditorPreviewImagesStatus::Completed) << (*outcome)->message;
 }
 
-TEST_F(EditorComparisonServiceTest,
-       PreviewImagesReportBusyWhileTheComparisonRendersAndLeaveItsJob) {
+// Issue #598: the port runs accepted image jobs in order, so preview images wait for the
+// comparison job instead of failing, and the comparison job keeps running.
+TEST_F(EditorComparisonServiceTest, PreviewImagesQueueBehindTheComparisonJobAndLeaveIt) {
   OpenInteractive();
   OpenComparison();
   ASSERT_EQ(images_->jobs.size(), 1u);
@@ -667,19 +692,11 @@ TEST_F(EditorComparisonServiceTest,
   (void)service_->RenderPreviewImages(EditorImageRenderRequest{}.geometry,
                                       EditorPreviewImageSet::CurrentAndRoot, record);
   Drain();
-  ASSERT_TRUE(outcome->has_value());
-  EXPECT_EQ((*outcome)->status, EditorPreviewImagesStatus::Busy);
-  EXPECT_EQ(images_->jobs.size(), 1u) << "no second job was started";
+  EXPECT_FALSE(outcome->has_value()) << "the preview job waits; it is not refused";
+  ASSERT_EQ(images_->jobs.size(), 2u) << "a second job was accepted";
   EXPECT_TRUE(images_->cancelled.empty()) << "the comparison job was not cancelled";
+  EXPECT_EQ(service_->comparison_state().status, EditorComparisonStatus::Rendering);
 
-  images_->CompleteLast(EditorImageRenderStatus::Completed);
-  Drain();
-  EXPECT_EQ(service_->comparison_state().status, EditorComparisonStatus::Ready);
-  outcome->reset();
-  (void)service_->RenderPreviewImages(EditorImageRenderRequest{}.geometry,
-                                      EditorPreviewImageSet::CurrentAndRoot, record);
-  Drain();
-  EXPECT_EQ(images_->jobs.size(), 2u) << "the port is free again";
   images_->CompleteLast(EditorImageRenderStatus::Failed, "device lost");
   ASSERT_TRUE(outcome->has_value());
   EXPECT_EQ((*outcome)->status, EditorPreviewImagesStatus::Failed);
@@ -770,7 +787,8 @@ TEST_F(EditorComparisonServiceTest, AiMaskAnalysisKeyOnlyStartsNoJob) {
   EXPECT_TRUE(images_->jobs.empty()) << "a key needs no render";
 }
 
-TEST_F(EditorComparisonServiceTest, AiMaskAnalysisReportsBusyWhileTheComparisonRenders) {
+// Issue #598: the analysis render waits for the comparison job instead of failing.
+TEST_F(EditorComparisonServiceTest, AiMaskAnalysisQueuesBehindTheComparisonJob) {
   OpenInteractive();
   OpenComparison();
   ASSERT_EQ(images_->jobs.size(), 1u);
@@ -781,17 +799,9 @@ TEST_F(EditorComparisonServiceTest, AiMaskAnalysisReportsBusyWhileTheComparisonR
   };
   (void)service_->RenderAiMaskAnalysisImage(EditorAiMaskAnalysisContent::KeyAndPixels, record);
   Drain();
-  ASSERT_TRUE(outcome->has_value());
-  EXPECT_EQ((*outcome)->status, EditorAiMaskAnalysisStatus::Busy);
-  EXPECT_EQ(images_->jobs.size(), 1u) << "no second job was started";
+  EXPECT_FALSE(outcome->has_value()) << "the analysis job waits; it is not refused";
+  ASSERT_EQ(images_->jobs.size(), 2u) << "a second job was accepted";
   EXPECT_TRUE(images_->cancelled.empty()) << "the comparison job was not cancelled";
-
-  images_->CompleteLast(EditorImageRenderStatus::Completed);
-  Drain();
-  outcome->reset();
-  (void)service_->RenderAiMaskAnalysisImage(EditorAiMaskAnalysisContent::KeyAndPixels, record);
-  Drain();
-  ASSERT_EQ(images_->jobs.size(), 2u) << "the port is free again";
   images_->CompleteLast(EditorImageRenderStatus::Failed, "device lost");
   ASSERT_TRUE(outcome->has_value());
   EXPECT_EQ((*outcome)->status, EditorAiMaskAnalysisStatus::Failed);
@@ -808,6 +818,133 @@ TEST_F(EditorComparisonServiceTest, AiMaskAnalysisReportsBusyWhileTheComparisonR
   EXPECT_EQ((*outcome)->status, EditorAiMaskAnalysisStatus::Failed);
   EXPECT_NE((*outcome)->message.find("no host pixels"), std::string::npos) << (*outcome)->message;
   EXPECT_TRUE((*outcome)->image.pixels.empty());
+}
+
+// Issue #598: a LUT preview is the import root of the photo with the LUT at full strength, at a
+// long edge of 256, so the edits of the photo do not change it.
+TEST_F(EditorComparisonServiceTest, LutPreviewRendersTheImportRootWithTheLutAtFullStrength) {
+  OpenInteractive();
+  ASSERT_EQ(service_
+                ->EnqueueAdjustmentInput(test::WithColorGradeTarget(
+                    test::PatchFromJson("exposure", R"({"exposure":1.5})", true)))
+                .kind,
+            EditorSessionResultKind::Accepted);
+  Drain();
+  ASSERT_TRUE(CommitPanelField("crop_rotate", R"({"rotation_degrees":7.0})"));
+  const auto              commits_before = Graph()->CommitCount();
+
+  auto                    outcome = std::make_shared<std::optional<EditorLutPreviewResult>>();
+  EditorLutPreviewRequest request;
+  request.image_id    = kImageId;
+  request.write       = LibraryLutWrite();
+  const auto accepted = service_->RenderLutPreview(
+      request, [outcome](EditorLutPreviewResult result) { *outcome = std::move(result); });
+  ASSERT_NE(accepted.kind, EditorSessionResultKind::Rejected) << accepted.message;
+  Drain();
+
+  ASSERT_EQ(images_->jobs.size(), 1u) << LastMessage();
+  const auto& job = images_->jobs.front().request;
+  ASSERT_EQ(job.snapshots.size(), 1u);
+  const auto& document = job.snapshots[0]->Document();
+  EXPECT_FLOAT_EQ(ExposureEv(document), ExposureEv(lease_.root_->document))
+      << "the preview has the root look, not the working grade";
+  EXPECT_FLOAT_EQ(ExposureEv(Working()->Document()), 1.5f);
+  EXPECT_FLOAT_EQ(document.Geometry().RotationDegrees(), 0.0f)
+      << "the preview has the root geometry, not the working crop";
+  const auto* lmt = PrimaryLmt(document);
+  ASSERT_NE(lmt, nullptr);
+  EXPECT_EQ(lmt->Reference(), (LutReference{LibraryLutReference{"user/look.cube"}}));
+  EXPECT_EQ(lmt->DisplayName(), "Look");
+  EXPECT_FLOAT_EQ(lmt->Strength(), kDefaultLutStrength) << "a preview shows the complete LUT";
+  EXPECT_EQ(job.snapshots[0]->Lineage(), Working()->Lineage())
+      << "the executor keeps the binding of the image";
+  EXPECT_EQ(job.geometry.resolution.max_edge, kLutPreviewLongEdge);
+  EXPECT_EQ(job.geometry.document_geometry, DocumentGeometryUse::ApplyCropAndRotation);
+  EXPECT_FALSE(job.output_color.has_value()) << "an SDR root renders its own encoding";
+  EXPECT_EQ(job.element_id, kElementId);
+  EXPECT_EQ(job.image_id, kImageId);
+  EXPECT_FALSE(outcome->has_value()) << "nothing is reported before the job ends";
+
+  RenderedPipelineImage rendered;
+  rendered.pixels =
+      std::make_shared<ImageBuffer>(cv::Mat(4, 6, CV_32FC4, cv::Scalar(0.5f, 0.25f, 1.0f, 1.0f)));
+  rendered.geometry.render_extent = {6, 4};
+  images_->CompleteLastWithImages({std::move(rendered)});
+  ASSERT_TRUE(outcome->has_value());
+  ASSERT_EQ((*outcome)->status, EditorLutPreviewStatus::Completed) << (*outcome)->message;
+  ASSERT_NE((*outcome)->image.pixels, nullptr);
+  EXPECT_EQ((*outcome)->image.geometry.render_extent, (Extent2D{6, 4}));
+  EXPECT_EQ(Graph()->CommitCount(), commits_before) << "a preview commits nothing";
+}
+
+TEST_F(EditorComparisonServiceTest, LutPreviewIsRejectedWithoutTheRequestedOpenImage) {
+  auto       outcome = std::make_shared<std::optional<EditorLutPreviewResult>>();
+  const auto record  = [outcome](EditorLutPreviewResult result) { *outcome = std::move(result); };
+  EditorLutPreviewRequest request;
+  request.image_id = kImageId;
+  request.write    = LibraryLutWrite();
+  (void)service_->RenderLutPreview(request, record);
+  Drain();
+  ASSERT_TRUE(outcome->has_value());
+  EXPECT_EQ((*outcome)->status, EditorLutPreviewStatus::Rejected) << "no image is open yet";
+
+  OpenInteractive();
+  outcome->reset();
+  request.image_id = kOtherImageId;
+  (void)service_->RenderLutPreview(request, record);
+  Drain();
+  ASSERT_TRUE(outcome->has_value());
+  EXPECT_EQ((*outcome)->status, EditorLutPreviewStatus::Rejected);
+  EXPECT_NE((*outcome)->message.find("another image"), std::string::npos) << (*outcome)->message;
+  EXPECT_TRUE(images_->jobs.empty()) << "a preview of another image never renders";
+
+  // A write that the LMT rejects fails with the real reason and starts no job.
+  outcome->reset();
+  request.image_id             = kImageId;
+  request.write.input_encoding = "not-an-encoding";
+  (void)service_->RenderLutPreview(request, record);
+  Drain();
+  ASSERT_TRUE(outcome->has_value());
+  EXPECT_EQ((*outcome)->status, EditorLutPreviewStatus::Failed);
+  EXPECT_FALSE((*outcome)->message.empty());
+  EXPECT_TRUE(images_->jobs.empty());
+}
+
+TEST_F(EditorComparisonServiceTest, LutPreviewQueuesBehindTheComparisonJobAndReportsItsFailure) {
+  OpenInteractive();
+  OpenComparison();
+  ASSERT_EQ(images_->jobs.size(), 1u);
+
+  auto                    outcome = std::make_shared<std::optional<EditorLutPreviewResult>>();
+  EditorLutPreviewRequest request;
+  request.image_id = kImageId;
+  request.write    = LibraryLutWrite();
+  (void)service_->RenderLutPreview(
+      request, [outcome](EditorLutPreviewResult result) { *outcome = std::move(result); });
+  Drain();
+  ASSERT_EQ(images_->jobs.size(), 2u);
+  EXPECT_TRUE(images_->cancelled.empty()) << "the comparison job was not cancelled";
+  EXPECT_FALSE(outcome->has_value());
+
+  images_->CompleteLast(EditorImageRenderStatus::Failed, "device lost");
+  ASSERT_TRUE(outcome->has_value());
+  EXPECT_EQ((*outcome)->status, EditorLutPreviewStatus::Failed);
+  EXPECT_EQ((*outcome)->message, "device lost");
+  EXPECT_EQ((*outcome)->image.pixels, nullptr);
+}
+
+TEST(LutPreviewImageTest, HdrDocumentRendersTheSdrOutputAndSdrDocumentItsOwnEncoding) {
+  auto document = CreateDefaultPipelineDocument();
+  EXPECT_FALSE(LutPreviewOutputColor(document).has_value());
+
+  DrtParameterUpdate update;
+  update.encoding_eotf = DrtEotf::St2084;
+  document.Drt()->Params().ApplyUpdate(update);
+  const auto output = LutPreviewOutputColor(document);
+  ASSERT_TRUE(output.has_value()) << "a tile is an 8-bit SDR image";
+  EXPECT_EQ(output->encoding_space, ColorUtils::ColorSpace::REC709);
+  EXPECT_EQ(output->encoding_eotf, ColorUtils::EOTF::GAMMA_2_2);
+  EXPECT_FLOAT_EQ(output->peak_luminance, 100.0f);
 }
 
 }  // namespace

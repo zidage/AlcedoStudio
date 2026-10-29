@@ -560,6 +560,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                      browser->setAppliedEntryId(target->associationEntryId());
                    });
   lut_browser_->setAppliedEntryId(lut_target_->associationEntryId());
+  lut_preview_ = std::make_unique<LutPreviewController>();
+  lut_preview_->setLibrary(lut_library_.get());
+  lut_preview_->setEditorSession(editor_session_.get());
+  RecordConstruction("LutPreviewController", lut_preview_.get());
   workspace_router_ = std::make_unique<WorkspaceRouter>(editor_session_.get(), this);
   workspace_router_->SetInteractionPolicy(interaction_policy_.get());
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
@@ -834,6 +838,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(project_launch_, "ProjectLaunchCoordinator");
   destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");
+  destroy(lut_preview_, "LutPreviewController");
   destroy(lut_target_, "LutLibraryController");
   destroy(lut_browser_, "LutLibraryModel");
   destroy(ai_mask_tool_, "EditorAiMaskTool");
@@ -919,6 +924,8 @@ void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
                            new SystemIconImageProvider());
   engine->addImageProvider(QString::fromUtf8(kComparisonImageProviderId),
                            new ComparisonImageProvider(SharedComparisonImageStore()));
+  engine->addImageProvider(QString::fromUtf8(kLutPreviewImageProviderId),
+                           new LutPreviewImageProvider(SharedLutPreviewImageStore()));
 
   if (library_ == nullptr) {
     return;

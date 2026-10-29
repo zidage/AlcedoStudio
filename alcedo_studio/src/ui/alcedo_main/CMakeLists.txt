@@ -143,6 +143,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/lut_library_query.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/lut_library_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/lut_library_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/lut_preview_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/lut_preview_image_provider.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/curve.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/lens_calib.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/color_wheel.cpp"
@@ -241,6 +243,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/lut_library_query.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/lut_library_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/lut_library_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/lut_preview_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/lut_preview_image_provider.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/curve.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/color_wheel.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/hls.hpp"
@@ -295,6 +299,7 @@ target_link_libraries(AlbumBackendLib
         AdjustmentTransferService
         AdjustmentTransferCatalog
         AiMaskAnalysisImage
+        LutPreviewImage
         # The AI Mask tool runs the segmentation service and the edit session on its worker.
         AiMaskSegmentationService
         AiMaskEditSession

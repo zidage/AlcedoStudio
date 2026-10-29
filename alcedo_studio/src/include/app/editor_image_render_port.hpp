@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,13 +17,15 @@
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/rendered_pipeline_image.hpp"
+#include "io/image/export_color_profile_config.hpp"
 #include "type/type.hpp"
 
 /**
  * @file
  * @brief Application seam for one-shot host images of the image the editor holds.
  *
- * The editor comparison renders its two inputs through this seam. The implementation renders on
+ * The editor comparison renders its two inputs through this seam, and the LUT browser its LUT
+ * previews. The implementation renders on
  * the editor's own executor and worker; callers never see the executor, the GPU backend, or the
  * viewport sink.
  */
@@ -50,6 +53,8 @@ struct EditorImageRenderRequest {
   /// (whole edit space, at most kQualityBaseMaxLongEdge pixels, Preview resampling).
   RenderRequest                                             geometry =
       MakeQualityBaseApplyRequest({}, DocumentGeometryUse::ApplyCropAndRotation).geometry;
+  /// Output encoding of every image; empty renders the DRT encoding of each document.
+  std::optional<ExportColorProfileConfig>                   output_color;
 };
 
 /// Terminal state of one image job.
@@ -75,15 +80,16 @@ struct EditorImageRenderResult {
 
 /// Completion of one image job. Runs once, on the editor render worker, after the executor is
 /// released; the receiver moves the result to its own owner thread. The job stays accepted until
-/// the completion returns, so a ScheduleImages call from inside it is rejected.
+/// the completion returns.
 using EditorImageRenderCompletion = std::function<void(EditorImageRenderResult result)>;
 
 /**
  * @brief Render one image, or a pair consecutively, of the held image on the editor executor.
  *
- * One image job is accepted at a time. Normal viewport frames keep their own single-flight
- * scheduling; the worker runs frames and the image job in submission order and never between A
- * and B of one job.
+ * Accepted image jobs run one at a time, in the order they were accepted, so a client never
+ * fails because another client's job is accepted. Normal viewport frames keep their own
+ * single-flight scheduling; the worker runs frames and image jobs in submission order and never
+ * between A and B of one job.
  */
 class IEditorImageRenderPort {
  public:
@@ -92,8 +98,8 @@ class IEditorImageRenderPort {
   /**
    * @brief Accept @p request and render it later on the editor worker.
    * @return Job id, or 0 with @p error set when the request is empty, has more than
-   *         kMaxEditorImagesPerJob snapshots, another image job is accepted, or the port is
-   *         shutting down. A rejected request never calls @p on_complete.
+   *         kMaxEditorImagesPerJob snapshots, or the port is shutting down. A rejected request
+   *         never calls @p on_complete.
    */
   virtual auto ScheduleImages(EditorImageRenderRequest    request,
                               EditorImageRenderCompletion on_complete, std::string* error)
@@ -107,7 +113,7 @@ class IEditorImageRenderPort {
    */
   virtual void CancelImages(std::uint64_t job_id) = 0;
 
-  /// True while an accepted image job has not returned from its completion. Any thread.
+  /// True while any accepted image job has not returned from its completion. Any thread.
   [[nodiscard]] virtual auto HasImageJob() const -> bool        = 0;
 };
 

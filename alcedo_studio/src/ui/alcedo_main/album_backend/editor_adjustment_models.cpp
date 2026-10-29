@@ -34,6 +34,7 @@
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
+#include "ui/alcedo_main/album_backend/lut_preview_controller.hpp"
 
 namespace alcedo::ui {
 
@@ -566,6 +567,7 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorLutEncodingModel>("Alcedo.Main", 1, 0, "EditorLutEncodingModel");
   qmlRegisterType<LutLibraryModel>("Alcedo.Main", 1, 0, "LutLibraryModel");
   qmlRegisterType<LutLibraryController>("Alcedo.Main", 1, 0, "LutLibraryController");
+  qmlRegisterType<LutPreviewController>("Alcedo.Main", 1, 0, "LutPreviewController");
   qmlRegisterType<EditorGeometryMath>("Alcedo.Main", 1, 0, "EditorGeometryMath");
   qmlRegisterType<EditorParameterCatalogAdapter>("Alcedo.Main", 1, 0, "EditorParameterCatalog");
   qmlRegisterType<EditorLensCatalogModel>("Alcedo.Main", 1, 0, "EditorLensCatalogModel");

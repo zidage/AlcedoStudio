@@ -22,6 +22,7 @@
 #include "app/editor_mask_coverage_preview.hpp"
 #include "app/editor_mask_creation_controller.hpp"
 #include "app/editor_panel_projection.hpp"
+#include "app/editor_parameter_write.hpp"
 #include "app/editor_pending_input.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
@@ -73,8 +74,6 @@ enum class EditorPreviewImageSet : std::uint8_t {
 enum class EditorPreviewImagesStatus : std::uint8_t {
   /// Every requested image rendered.
   Completed,
-  /// The image render port runs another job (for example the comparison); nothing was started.
-  Busy,
   /// The session cannot render the open image now; the message says why.
   Rejected,
   /// The render failed or was cancelled; the message says why.
@@ -106,8 +105,6 @@ enum class EditorAiMaskAnalysisContent : std::uint8_t {
 enum class EditorAiMaskAnalysisStatus : std::uint8_t {
   /// The requested content is in the result.
   Completed,
-  /// The image render port runs another job (for example the comparison); nothing was started.
-  Busy,
   /// The session cannot render the open image now; the message says why.
   Rejected,
   /// The analysis document, the render, or the conversion failed; the message has the real error.
@@ -131,6 +128,37 @@ struct EditorAiMaskAnalysisResult {
 /// Receives the outcome of RenderAiMaskAnalysisImage, once, on the session owner or the render
 /// worker.
 using EditorAiMaskAnalysisCompletion = std::function<void(EditorAiMaskAnalysisResult result)>;
+
+/// One LUT browser preview (issue #598): the import root of the open image with one LUT.
+struct EditorLutPreviewRequest {
+  /// Image the caller keys the preview with. The session refuses the request (Rejected) when
+  /// the open image is another one, so a preview is never stored under the wrong image.
+  image_id_t     image_id = 0;
+  /// Reference, display name, and encodings of the browser entry. The strength is ignored: a
+  /// preview shows the complete LUT result.
+  EditorLutWrite write;
+};
+
+/// Terminal state of one LUT preview request.
+enum class EditorLutPreviewStatus : std::uint8_t {
+  /// The preview rendered.
+  Completed,
+  /// The session cannot render the open image now; the message says why.
+  Rejected,
+  /// The preview document or the render failed; the message has the real error.
+  Failed,
+};
+
+/// One rendered LUT preview.
+struct EditorLutPreviewResult {
+  EditorLutPreviewStatus status = EditorLutPreviewStatus::Failed;
+  std::string            message;
+  /// Host pixels of the preview; set only when Completed.
+  RenderedPipelineImage  image;
+};
+
+/// Receives the outcome of RenderLutPreview, once, on the session owner or the render worker.
+using EditorLutPreviewCompletion = std::function<void(EditorLutPreviewResult result)>;
 
 /**
  * @brief Outcome of one OpenAiMaskEdit request (SM5 section 7.3).
@@ -632,6 +660,24 @@ class IEditorSessionBackend {
     return result;
   }
   /**
+   * @brief Render the LUT browser preview of @p request (issue #598).
+   *
+   * Builds the preview document from the import root of the open image
+   * (IEditorHistoryPort::BuildLutPreviewDocument) and renders it with the image render port at
+   * the LUT preview size (MakeLutPreviewRenderRequest), after the image jobs accepted before it.
+   * Edits of the image do not change the document. Presents nothing and writes nothing.
+   * @return Rejected only when the command queue refuses the command. Every other outcome,
+   *         including a refusal on the owner, reaches @p on_complete exactly once.
+   */
+  virtual auto RenderLutPreview(EditorLutPreviewRequest /*request*/,
+                                EditorLutPreviewCompletion /*on_complete*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = state();
+    result.message = "LUT previews are not supported by this backend";
+    return result;
+  }
+  /**
    * @brief Open an AI Mask edit session on Color Grade @p grade_id.
    *
    * Without @p mask_id the session makes a new AI Mask; with it, the Mask must be an AI Mask of
@@ -1040,6 +1086,8 @@ class EditorSessionService final : public IEditorSessionBackend {
       -> EditorSessionResult override;
   auto RenderAiMaskAnalysisImage(EditorAiMaskAnalysisContent    content,
                                  EditorAiMaskAnalysisCompletion on_complete)
+      -> EditorSessionResult override;
+  auto RenderLutPreview(EditorLutPreviewRequest request, EditorLutPreviewCompletion on_complete)
       -> EditorSessionResult override;
   auto               OpenAiMaskEdit(const NodeId& grade_id, std::optional<MaskId> mask_id,
                                     EditorAiMaskEditOpenCompletion on_complete) -> EditorSessionResult override;

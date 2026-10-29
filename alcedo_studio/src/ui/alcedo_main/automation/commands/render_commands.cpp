@@ -223,9 +223,7 @@ auto RegisterAutomationRenderCommands(AutomationCommandRegistry& registry,
         [answer, current_path, root_path, with_root](EditorPreviewImagesResult result) {
           const QString message = QString::fromStdString(result.message);
           if (result.status != EditorPreviewImagesStatus::Completed) {
-            const AutomationErrorCode code = result.status == EditorPreviewImagesStatus::Busy
-                                                 ? AutomationErrorCode::Busy
-                                             : result.status == EditorPreviewImagesStatus::Rejected
+            const AutomationErrorCode code = result.status == EditorPreviewImagesStatus::Rejected
                                                  ? AutomationErrorCode::Rejected
                                                  : AutomationErrorCode::Failed;
             answer([code, message](AutomationCommandWait* wait) {

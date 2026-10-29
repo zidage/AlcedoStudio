@@ -8,6 +8,7 @@
 #include <QEventLoop>
 #include <QString>
 #include <QThread>
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 #include <string>
@@ -131,9 +132,9 @@ void EditorSessionRenderSchedulerPort::Shutdown() {
       running_job_->cancelled = true;
       running_cancellation    = running_job_->request.intent.cancellation;
     }
-    if (image_job_) {
+    for (auto& image_job : image_jobs_) {
       // A document that has not started is skipped; a running one finishes and is dropped.
-      image_job_->cancelled = true;
+      image_job.cancelled = true;
     }
     sink_resolver_                      = {};
     mask_coverage_sink_resolver_        = {};
@@ -147,7 +148,7 @@ void EditorSessionRenderSchedulerPort::Shutdown() {
   // object. The in-flight frame may wait for the scene graph to hand over a present slot, which
   // needs the GUI thread, so a GUI-thread caller keeps delivering events while it waits.
   const auto drained = [this] {
-    return !running_job_.has_value() && !image_job_.has_value() && !mask_coverage_job_ &&
+    return !running_job_.has_value() && image_jobs_.empty() && !mask_coverage_job_ &&
            pending_mask_coverage_clears_ == 0;
   };
   for (;;) {
@@ -732,9 +733,6 @@ auto EditorSessionRenderSchedulerPort::ScheduleImages(
     if (released_for_export_) {
       return reject(kExportRunningMessage);
     }
-    if (image_job_) {
-      return reject("Another image job is running");
-    }
     // An image job renders the image the session bound; it never binds another one.
     if (!session_context_ || !ContextMatches(*session_context_, request.image_load_request_id.value,
                                              request.element_id, request.image_id)) {
@@ -773,13 +771,11 @@ auto EditorSessionRenderSchedulerPort::ScheduleImages(
     if (shutting_down_) {
       return reject("The editor render port is shutting down");
     }
-    if (image_job_) {
-      return reject("Another image job is running");
-    }
-    job_id     = ++next_image_job_id_;
-    image_job_ = ImageJob{.job_id = job_id};
+    job_id = ++next_image_job_id_;
+    image_jobs_.push_back(ImageJob{.job_id = job_id});
   }
-  // One work item for the whole job: the single worker runs no frame between its documents.
+  // One work item for the whole job: the single worker runs no frame between its documents. The
+  // worker runs work items in submission order, so accepted jobs render in acceptance order.
   scheduler->ScheduleWork([this, job_id, executor = std::move(executor), input = context->input,
                            request     = std::move(request),
                            on_complete = std::move(on_complete)]() mutable {
@@ -790,14 +786,14 @@ auto EditorSessionRenderSchedulerPort::ScheduleImages(
 
 void EditorSessionRenderSchedulerPort::CancelImages(std::uint64_t job_id) {
   std::scoped_lock lock(mutex_);
-  if (image_job_ && image_job_->job_id == job_id) {
-    image_job_->cancelled = true;
+  if (auto* image_job = FindImageJob(job_id)) {
+    image_job->cancelled = true;
   }
 }
 
 auto EditorSessionRenderSchedulerPort::HasImageJob() const -> bool {
   std::scoped_lock lock(mutex_);
-  return image_job_.has_value();
+  return !image_jobs_.empty();
 }
 
 void EditorSessionRenderSchedulerPort::RunImageJob(
@@ -820,6 +816,7 @@ void EditorSessionRenderSchedulerPort::RunImageJob(
     auto apply = alcedo::MakeQualityBaseApplyRequest(metadata, request.geometry.document_geometry);
     apply.geometry            = request.geometry;
     apply.require_host_output = true;
+    apply.output_color        = request.output_color;
     // The request's own sink: null, so the executor's viewport sink is never presented to.
     apply.sink                = nullptr;
 
@@ -865,15 +862,27 @@ void EditorSessionRenderSchedulerPort::FinishImageJob(
     }
   }
   std::scoped_lock lock(mutex_);
-  if (image_job_ && image_job_->job_id == job_id) {
-    image_job_.reset();
-  }
+  std::erase_if(image_jobs_,
+                [job_id](const ImageJob& image_job) { return image_job.job_id == job_id; });
   jobs_changed_.notify_all();
 }
 
 auto EditorSessionRenderSchedulerPort::ImageJobIsCancelled(std::uint64_t job_id) const -> bool {
   std::scoped_lock lock(mutex_);
-  return shutting_down_ || !image_job_ || image_job_->job_id != job_id || image_job_->cancelled;
+  const auto*      image_job = FindImageJob(job_id);
+  return shutting_down_ || image_job == nullptr || image_job->cancelled;
+}
+
+auto EditorSessionRenderSchedulerPort::FindImageJob(std::uint64_t job_id) const -> const ImageJob* {
+  const auto found = std::find_if(image_jobs_.begin(), image_jobs_.end(),
+                                  [job_id](const ImageJob& job) { return job.job_id == job_id; });
+  return found == image_jobs_.end() ? nullptr : &*found;
+}
+
+auto EditorSessionRenderSchedulerPort::FindImageJob(std::uint64_t job_id) -> ImageJob* {
+  const auto found = std::find_if(image_jobs_.begin(), image_jobs_.end(),
+                                  [job_id](const ImageJob& job) { return job.job_id == job_id; });
+  return found == image_jobs_.end() ? nullptr : &*found;
 }
 
 auto EditorSessionRenderSchedulerPort::ScheduleMaskCoverage(

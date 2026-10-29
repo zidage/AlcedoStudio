@@ -245,6 +245,7 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     // Reads the open image only; the reducer reports its own refusal to the caller.
     case EditorSessionCommandKind::RenderPreviewImages:
     case EditorSessionCommandKind::RenderAiMaskAnalysisImage:
+    case EditorSessionCommandKind::RenderLutPreview:
       return std::nullopt;
     // The AI Mask edit commands evaluate CommitAdjustment admission on the owner themselves, so
     // that a refused Open still reaches its completion and Commit ignores its own lease.

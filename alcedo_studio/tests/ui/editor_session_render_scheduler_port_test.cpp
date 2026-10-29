@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -1385,9 +1386,9 @@ TEST(EditorSessionRenderSchedulerPortTest, QualityBaseFrameAndImageJobShareOneRe
   EXPECT_EQ(images.geometry.document_geometry, alcedo::DocumentGeometryUse::ApplyCropAndRotation);
 }
 
-// Admission: an image job renders only documents of the bound, held image, one job at a time,
-// and a rejected job never completes.
-TEST(EditorSessionRenderSchedulerPortTest, ImageJobRejectsDocumentsThatWouldRebindOrOverlap) {
+// Admission: an image job renders only documents of the bound, held image, and a rejected job
+// never completes.
+TEST(EditorSessionRenderSchedulerPortTest, ImageJobRejectsDocumentsThatWouldRebind) {
   HeldImage held;
   auto      scheduler = MakeSchedulerHoldingImage(held);
   ASSERT_TRUE(held.lease.has_value()) << held.error;
@@ -1416,7 +1417,19 @@ TEST(EditorSessionRenderSchedulerPortTest, ImageJobRejectsDocumentsThatWouldRebi
   EXPECT_EQ(scheduler->ScheduleImages(MakeImageRequest(9, {preview, foreign}), count, &error), 0u);
   EXPECT_NE(error.find("does not belong"), std::string::npos) << error;
 
-  // Hold the single worker so the first job stays accepted.
+  // Only accepted jobs complete; no request above was accepted.
+  EXPECT_EQ(completions.load(), 0);
+}
+
+// Issue #598: a job accepted while another one is accepted waits and renders after it, so no
+// client fails because of another client's job. Cancel affects only the cancelled job.
+TEST(EditorSessionRenderSchedulerPortTest, SecondImageJobIsAcceptedAndRunsAfterTheFirst) {
+  HeldImage held = HoldImageInMemory(22);
+  ASSERT_TRUE(held.lease.has_value()) << held.error;
+  const auto preview = held.pipeline_port->CurrentPreview(22);
+  ASSERT_NE(preview, nullptr);
+
+  // Hold the single worker so both jobs stay accepted.
   auto pipeline_scheduler = std::make_shared<alcedo::PipelineScheduler>(1);
   auto blocked            = std::make_shared<EditorSessionRenderSchedulerPort>(pipeline_scheduler);
   blocked->SetPipelinePort(held.pipeline_port);
@@ -1424,18 +1437,42 @@ TEST(EditorSessionRenderSchedulerPortTest, ImageJobRejectsDocumentsThatWouldRebi
   auto release  = std::make_shared<std::promise<void>>();
   auto released = release->get_future().share();
   pipeline_scheduler->ScheduleWork([released] { released.wait(); });
-  const auto first = blocked->ScheduleImages(MakeImageRequest(9, {preview}), count, &error);
+
+  std::mutex                                                             order_mutex;
+  std::condition_variable                                                order_changed;
+  std::vector<std::pair<std::uint64_t, alcedo::EditorImageRenderStatus>> order;
+  const auto record = [&order_mutex, &order_changed, &order](std::uint64_t tag) {
+    return [&order_mutex, &order_changed, &order, tag](alcedo::EditorImageRenderResult result) {
+      {
+        std::scoped_lock lock(order_mutex);
+        order.emplace_back(tag, result.status);
+      }
+      order_changed.notify_all();
+    };
+  };
+  std::string error;
+  const auto  first = blocked->ScheduleImages(MakeImageRequest(9, {preview}), record(1), &error);
   ASSERT_NE(first, 0u) << error;
-  EXPECT_EQ(blocked->ScheduleImages(MakeImageRequest(9, {preview}), count, &error), 0u);
-  EXPECT_NE(error.find("Another image job"), std::string::npos) << error;
+  const auto second = blocked->ScheduleImages(MakeImageRequest(9, {preview}), record(2), &error);
+  ASSERT_NE(second, 0u) << "a second job is accepted while the first one waits: " << error;
+  EXPECT_NE(first, second);
+  EXPECT_TRUE(blocked->HasImageJob());
+
   blocked->CancelImages(first);
   release->set_value();
+  {
+    std::unique_lock lock(order_mutex);
+    ASSERT_TRUE(order_changed.wait_for(lock, kFrameTimeout, [&order] { return order.size() == 2; }))
+        << "both accepted jobs complete";
+    EXPECT_EQ(order[0].first, 1u) << "the jobs run in acceptance order";
+    EXPECT_EQ(order[0].second, alcedo::EditorImageRenderStatus::Cancelled);
+    EXPECT_EQ(order[1].first, 2u);
+    // CancelImages(first) does not cancel the second job: it reaches the renderer, which fails
+    // because the fixture context has no encoded bytes.
+    EXPECT_EQ(order[1].second, alcedo::EditorImageRenderStatus::Failed);
+  }
   blocked->Shutdown();
-  EXPECT_EQ(blocked->ScheduleImages(MakeImageRequest(9, {preview}), count, &error), 0u);
-  EXPECT_NE(error.find("shutting down"), std::string::npos) << error;
-
-  // Only the accepted job completed.
-  EXPECT_EQ(completions.load(), 1);
+  EXPECT_FALSE(blocked->HasImageJob());
 }
 
 // Close while the job is still queued: no document renders and nothing is published.

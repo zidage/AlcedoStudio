@@ -89,6 +89,8 @@ enum class EditorSessionCommandKind : std::uint8_t {
   RenderPreviewImages,
   /// Render the AI Mask analysis image of the open image, or give only its image key.
   RenderAiMaskAnalysisImage,
+  /// Render the LUT browser preview of one LUT on the import root of the open image.
+  RenderLutPreview,
   /// Open an AI Mask edit session on a Color Grade: acquire the AiMaskEdit lease.
   OpenAiMaskEdit,
   /// Store the asset of the open AI Mask edit and publish one AddMask or ReplaceMaskSource.

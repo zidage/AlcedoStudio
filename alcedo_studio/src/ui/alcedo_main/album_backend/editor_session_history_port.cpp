@@ -11,6 +11,7 @@
 #include "app/ai_mask_analysis_image.hpp"
 #include "app/editor_comparison_inputs.hpp"
 #include "app/editor_session_types.hpp"
+#include "app/lut_preview_image.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_checkpoint.hpp"
@@ -328,6 +329,40 @@ auto EditorSessionHistoryPort::BuildAiMaskAnalysisDocument(
   try {
     *analysis = alcedo::BuildAiMaskAnalysisDocument(*state->graph, *state->root, captured_current,
                                                     guard.element_id);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+  return true;
+}
+
+auto EditorSessionHistoryPort::BuildLutPreviewDocument(
+    const alcedo::EditorHistoryGuardHandle&                     guard,
+    const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
+    const alcedo::LmtUpdate& write, std::shared_ptr<const alcedo::PipelineGraphSnapshot>* preview,
+    std::string* error) -> bool {
+  if (preview == nullptr) {
+    if (error) *error = "The LUT preview document requires output storage";
+    return false;
+  }
+  if (!guard.valid) {
+    if (error) *error = "Editor history guard is invalid";
+    return false;
+  }
+  std::scoped_lock lock(mutex_);
+  auto             state = state_->EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  if (!state->graph || !state->root || !state->document) {
+    if (error) *error = "Editor history root is unavailable for the LUT preview document";
+    return false;
+  }
+  if (captured_current && captured_current->Lineage() != state->document->Lineage()) {
+    if (error) *error = "The captured working state belongs to an earlier load of this history";
+    return false;
+  }
+  try {
+    *preview = alcedo::BuildLutPreviewDocument(*state->graph, *state->root, captured_current,
+                                               guard.element_id, write);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;

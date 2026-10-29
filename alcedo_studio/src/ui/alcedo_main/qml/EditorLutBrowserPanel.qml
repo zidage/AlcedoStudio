@@ -31,6 +31,7 @@ Item {
     property var browser: modules && modules.lutBrowser ? modules.lutBrowser : null
     property var target: modules && modules.lutTarget ? modules.lutTarget : null
     property var library: modules && modules.lutLibrary ? modules.lutLibrary : null
+    property var preview: modules && modules.lutPreview ? modules.lutPreview : null
 
     // View state. The rail owns the lasting copy (this page is unloaded on close).
     // "grid" or "list".
@@ -625,6 +626,7 @@ Item {
             browser: root.browser
             target: root.target
             library: root.library
+            preview: root.preview
             host: root.host
             viewMode: root.viewMode
             onSearchRequested: root.focusSearch()

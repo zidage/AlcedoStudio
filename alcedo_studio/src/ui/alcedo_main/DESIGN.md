@@ -299,6 +299,15 @@ keyboard focus use the quiet `buttonHoveredFillColor` well. Tiles sit inside a
 sunken `bgBaseColor` well with `spaceXs` gaps. Selecting or starring a tile
 never resets the tile rows or moves the scroll position.
 
+**LUT tile preview (issue #598):** a grid tile shows the open photo with its LUT
+above the title. The preview is the import root of the photo with the LUT at full
+strength (not the current edit), 256 px on the long edge. The preview slot has
+the 3:2 shape of the filmstrip slot and the full tile content width; the photo
+fits the slot, is centered, and has `controlRadiusSmall` corners (`MultiEffect`
+mask). Until the preview is ready, and for a LUT that cannot be applied, the slot
+shows the `editorLutTileIconSize` cube centered on the well. The list layout has
+no preview slot.
+
 **Editor filmstrip tiles:** the filmstrip shares the Library selection, and a
 tile has two independent states. (User request 2026-10-28: the former bone well
 with an inset ink frame and a square caption bar read as a rubber band around
@@ -618,7 +627,7 @@ the two side columns read as one family.
 | `editorLutBrowserPanelWidthMin` | 280 | Narrowest drag-resized LUT browser page |
 | `editorLutBrowserFilterWidth` | 184 | LUT browser filter sidebar width |
 | `editorLutTileMinWidth` | 128 | Minimum LUT tile width; the grid fits as many columns as this allows |
-| `editorLutTileIconSize` | 36 | LUT tile cube placeholder icon |
+| `editorLutTileIconSize` | 36 | LUT tile cube placeholder icon, centered in the preview slot until the preview is ready |
 | `editorAdjustmentHeaderMinHeight` | 58 | Node-name / EXIF header under the scope: EXIF caption line, `spaceXs` gap, compact Mask-tool row |
 | `collectionsSidebarWidth` | 276 | Persistent left collections column |
 
