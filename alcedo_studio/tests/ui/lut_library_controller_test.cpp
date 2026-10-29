@@ -719,6 +719,12 @@ TEST(LutLibraryControllerTest, ShaperLutIsUnsupportedWithShaperReasonAndIsNotApp
   ASSERT_GE(strip_row, 0);
   EXPECT_EQ(model.data(model.index(strip_row), LutLibraryModel::DetailTextRole).toString(),
             QStringLiteral("1D LUTs cannot be applied by the grade stage."));
+  // #305: a LUT that can be applied has no detail text, so its tile shows no path/size tooltip.
+  const int teal_row = model.rowOfEntry(QStringLiteral("library:general/teal.cube"));
+  ASSERT_GE(teal_row, 0);
+  EXPECT_TRUE(model.data(model.index(teal_row), LutLibraryModel::SelectableRole).toBool());
+  EXPECT_TRUE(
+      model.data(model.index(teal_row), LutLibraryModel::DetailTextRole).toString().isEmpty());
 
   EXPECT_FALSE(controller.applyEntry(QStringLiteral("library:general/shaper.cube")));
   EXPECT_EQ(controller.lastError(), QStringLiteral("1D shaper LUTs are not supported."));
