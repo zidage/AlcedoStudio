@@ -752,6 +752,9 @@ Each phase writes its completion record and call chains into its section.
 - MR4: [#551](https://github.com/zidage/AlcedoStudio/issues/551)
 - RP1-RP4 (section 10): [#564](https://github.com/zidage/AlcedoStudio/issues/564)
 - Ranges of a new AI Mask (section 11): [#604](https://github.com/zidage/AlcedoStudio/issues/604)
+- Range section polish (section 12): [#605](https://github.com/zidage/AlcedoStudio/issues/605),
+  [#606](https://github.com/zidage/AlcedoStudio/issues/606),
+  [#607](https://github.com/zidage/AlcedoStudio/issues/607)
 
 ## 10. Precise range controls and AI Mask edit on demand (#564)
 
@@ -1157,3 +1160,90 @@ Mask were not checked by hand in the GUI.
 
 **Residual gaps:** the QML panel test uses fake owners (AGENTS.md: QML harness tests are not
 evidence); the session, adapter, and render tests are the evidence.
+
+## 12. Range section polish (#605, #606, #607)
+
+Three issues change the Range section of the Mask panel. The persisted Mask format does not
+change.
+
+- [#605](https://github.com/zidage/AlcedoStudio/issues/605): the section is collapsed by default.
+  The user's choice stays for the rest of the session. Selection changes and an AI Mask edit do
+  not change it.
+- [#606](https://github.com/zidage/AlcedoStudio/issues/606): the section title is
+  "Luminance/Hue Range" (zh-CN "明度/色相范围").
+- [#607](https://github.com/zidage/AlcedoStudio/issues/607): the Softness sliders and the
+  Saturation Threshold slider are enabled also for a full range. This replaces the "refused while
+  full" rule of RP3 (section 10.3) and the "next restriction starts at the default values" rule
+  of MR4 D6 for the current target.
+
+##### #605-#607 completion record (2026-10-29)
+
+**Status:** complete. Branch `feature/mask-range-section-polish`, stacked on
+`feature/ai-mask-new-candidate-ranges` (#604, PR #610).
+
+**Implementation and the details that the issues did not give:**
+
+- **Session state of the section (#605).** The editor workspace is in a Loader, so the panel is
+  created again after each Library to Editor route. The state is on the application window
+  (`Main.qml` `editorMaskRangeSectionExpanded`, false at the start), as
+  `editorAdjustmentStackExpanded`. The panel binds `expanded` to it; a header click writes it
+  and binds again. Without a host (QML tests) the panel keeps a local value. No other code writes
+  the value, so a selection change or an AI Mask edit does not expand the section.
+- **Title (#606).** `alcedo_main_zh_CN.ts` is edited by hand: the `Range` message of context
+  `EditorMasksContextPanel` gets the new source and translation. The message count (29) does not
+  change. No `lupdate` run.
+- **Kept values (#607).** `EditorMaskCreationAdapter::RangeView` is the store. For a full range,
+  its Softness and threshold values are the kept values of the target. `SyncRangeView` keeps
+  them while the target (Grade, Mask or candidate) stays and the Mask is present. A new target
+  starts at the defaults. A change of the selected Mask is a new target. An image change clears
+  the selection (`OnImageClosed` or the owner selection of the new image), which is also a new
+  target.
+- **Commands (#607).** `editRangeValue` with "softness" or "minChroma" for a full range and no
+  open edit of that range sends no command. It clamps the value to the slider bounds, keeps it,
+  and publishes it. `beginRangeEdit` already seeds the edit from `RangeView`, so the first write
+  of a restricted range (bar drag, value field, key step) writes the kept values in the same
+  commit. `finishRangeEdit` and `resetRange` keep the values when the range becomes full.
+- **Slider drag (#607).** A new `beginRangeParameterEdit(kind)` opens a range edit only for a
+  restricted range. For a full range it opens nothing, so a slider drag shows no range coverage
+  and writes no Mask field. `EditorMaskRangeSection.qml` uses it for the Softness and threshold
+  sliders, and enables them whenever the section is available.
+- **AI Mask edit.** The kept values of a stored Mask stay when its AI Mask edit opens (same
+  target). A new candidate is a new target: it starts at the defaults.
+
+**Primary success call chain (Softness at a full range, then a range drag):**
+
+```text
+AdjustmentSlider press -> RangeParameterModel.beginDrag -> beginRangeParameterEdit (full: false)
+AdjustmentSlider move -> editRangeValue("hue", "softness") -> RangeIsFull -> keep in RangeView
+  -> maskRangeChanged (no command, no commit)
+RangeSelectorBar press -> beginRangeEdit -> range_softness_ / range_min_chroma_ from RangeView
+RangeSelectorBar move -> WriteRangeEdit -> RangeJson with the kept values -> SetMaskField
+RangeSelectorBar release -> finishRangeEdit -> Finish (one commit with range and kept values)
+```
+
+**Primary failure call chains:**
+
+```text
+editRangeValue("luminance", "minChroma") -> refused (the Luminance Range has no threshold)
+Kept value equal to the current value -> false, no publish
+Range section not available -> kept value refused
+Change of the selected Mask or of the image -> new target -> defaults
+```
+
+**What was proven (executed tests, Windows `win_debug`):**
+
+| Criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Collapsed when the panel first shows a selected Mask and when an AI Mask edit opens; the user's choice stays through selection changes, an AI Mask edit, and a new panel; the title is "Luminance/Hue Range" | `RangeSectionIsCollapsedByDefaultAndKeepsTheUserChoice`, `RangeSectionIsCollapsedWhenAnAiMaskEditOpens` | `EditorMasksPanelQmlTest` | PASS (both fail on the old QML) |
+| The three sliders are enabled for a full range, not while the section is unavailable | `RangeParameterSlidersAreEnabledForAFullRange` | same | PASS (fails on the old QML) |
+| Values set at a full range write no commit and no document change; a slider drag at a full range opens no edit and no coverage; the next bar drag and key step write the kept values in one commit; full again keeps the slider values; another Mask or image discards them | `ValuesSetAtAFullRangeAreKeptAndWrittenWithTheNextRangeDrag` | `EditorMaskRangeAdapterTest` | PASS |
+| A reset keeps the Softness and threshold for the next restriction | `SoftnessAndSaturationThresholdBelongToARestrictedRange` (updated) | same | PASS |
+| The zh-CN catalog has the new entry | `SimplifiedChineseCatalogTest` | `SimplifiedChineseCatalogTest` | PASS |
+
+Suite totals: `EditorMasksPanelQmlTest` 5/5, `EditorMaskRangeAdapterTest` 19/19,
+`EditorMaskCoveragePreviewTest` 20/20, `AnalyticMaskCreationTest` 30/30,
+`EditorAiMaskPanelQmlTest` 2/2, `SimplifiedChineseCatalogTest` 8/8. `alcedo_main` builds (QML
+compiled by qmlcachegen). The full suite was not run. The app was not started.
+
+**Residual gaps:** the QML panel tests use fake owners; the adapter test is the evidence for the
+kept values.

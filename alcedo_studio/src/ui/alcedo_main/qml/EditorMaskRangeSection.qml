@@ -8,8 +8,9 @@ import QtQuick.Layouts
 // "Show selection". Every value and action is EditorMaskCreationAdapter's: the bars show the
 // range target Mask, a drag or a burst of steps shows the range coverage of that Mask until it
 // settles, and "Show selection" keeps it shown. During the edit of a new AI Mask the target is its
-// candidate (#604): the values are written with the new Mask at Confirm. The Mask panel puts it in
-// a collapsible section.
+// candidate (#604): the values are written with the new Mask at Confirm. The Softness and
+// threshold sliders are enabled also for a full range: the adapter keeps their values and writes
+// them with the first restricted range (#607). The Mask panel puts it in a collapsible section.
 ColumnLayout {
     id: root
 
@@ -19,12 +20,6 @@ ColumnLayout {
     readonly property bool available: root.controlsEnabled && !!root.maskCreation
                                       && root.maskCreation.maskRangeAvailable
     readonly property var limits: root.maskCreation ? root.maskCreation.rangeParameterLimits : ({})
-    readonly property bool luminanceRestricted: !!root.maskCreation
-                                                && (root.maskCreation.maskLuminanceLow > 0
-                                                    || root.maskCreation.maskLuminanceHigh < 1)
-    readonly property bool hueRestricted: !!root.maskCreation
-                                          && (root.maskCreation.maskHueStart > 0
-                                              || root.maskCreation.maskHueEnd < 360)
 
     spacing: appTheme.spaceXs
 
@@ -98,6 +93,7 @@ ColumnLayout {
 
     // AdjustmentSlider model of a Softness or threshold value of one range. The slider shows
     // model value × scale; a drag is one range edit, keys and typed values settle as one commit.
+    // For a full range the adapter keeps the value without an edit (#607).
     component RangeParameterModel: QtObject {
         property string kind: ""
         property string field: ""
@@ -117,7 +113,7 @@ ColumnLayout {
         function beginDrag() {
             valid = true
             if (root.maskCreation)
-                root.maskCreation.beginRangeEdit(kind)
+                root.maskCreation.beginRangeParameterEdit(kind)
         }
         function updateDrag(v) {
             if (root.maskCreation)
@@ -157,7 +153,7 @@ ColumnLayout {
         maximum: (root.limits.luminanceSoftnessMaximum || 0.5) * 100
         defaultValue: (root.limits.luminanceSoftnessDefault || 0.05) * 100
         step: 0.5
-        enabled: root.available && root.luminanceRestricted
+        enabled: root.available
     }
     RangeParameterModel {
         id: hueSoftnessModel
@@ -170,7 +166,7 @@ ColumnLayout {
         defaultValue: root.limits.hueSoftnessDefault || 12
         step: 0.5
         suffix: "°"
-        enabled: root.available && root.hueRestricted
+        enabled: root.available
     }
     RangeParameterModel {
         id: minChromaModel
@@ -183,7 +179,7 @@ ColumnLayout {
         maximum: (root.limits.minChromaMaximum || 0.2) * 100
         defaultValue: (root.limits.minChromaDefault || 0.03) * 100
         step: 0.1
-        enabled: root.available && root.hueRestricted
+        enabled: root.available
     }
 
     RowLayout {

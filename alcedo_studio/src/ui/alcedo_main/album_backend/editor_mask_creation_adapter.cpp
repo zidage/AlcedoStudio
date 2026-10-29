@@ -134,6 +134,17 @@ constexpr float    kHueSoftnessMinimumDegrees   = 0.5f;
   return first <= 0.0f && second >= (luminance ? 1.0f : 360.0f);
 }
 
+/// Softness of the Luminance (@p luminance) or Hue Range, or with @p min_chroma the saturation
+/// threshold of the Hue Range, clamped to its slider bounds.
+[[nodiscard]] auto ClampRangeParameter(bool luminance, bool min_chroma, float value) -> float {
+  if (min_chroma) {
+    return std::clamp(value, kColorRangeMinimumMinChroma, kColorRangeMaximumMinChroma);
+  }
+  return luminance
+             ? std::clamp(value, kLuminanceSoftnessMinimum, kLuminanceRangeMaximumSoftness)
+             : std::clamp(value, kHueSoftnessMinimumDegrees, kColorRangeMaximumSoftnessDegrees);
+}
+
 /// Circular Hue width from @p start to @p end, in (0, 360].
 [[nodiscard]] auto HueHandleWidth(float start, float end) -> float {
   return end > start ? end - start : end + 360.0f - start;
@@ -1489,6 +1500,13 @@ auto EditorMaskCreationAdapter::SyncRangeView() -> bool {
     view.target  = RangeTargetNow();
     view.present = true;
   } else if (!view.target.Empty() && session_ != nullptr) {
+    // A full range is stored as null: while the target stays, it keeps its softness and threshold
+    // values (#607); a new target starts at the defaults.
+    if (range_view_.present && range_view_.target == view.target) {
+      view.luminance_softness = range_view_.luminance_softness;
+      view.hue_softness       = range_view_.hue_softness;
+      view.hue_min_chroma     = range_view_.hue_min_chroma;
+    }
     if (const auto document = session_->pipeline_document()) {
       const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
           document->Graph().FindNode(view.target.grade_id));
@@ -1523,6 +1541,16 @@ auto EditorMaskCreationAdapter::SyncRangeView() -> bool {
     }
   }
   return true;
+}
+
+auto EditorMaskCreationAdapter::RangeIsFull(RangeKind kind) const -> bool {
+  const bool luminance = kind == RangeKind::Luminance;
+  if (range_open_ == kind) {
+    return RangeHandlesAreFull(luminance, range_first_, range_second_);
+  }
+  return luminance
+             ? RangeHandlesAreFull(true, range_view_.luminance_low, range_view_.luminance_high)
+             : RangeHandlesAreFull(false, range_view_.hue_start, range_view_.hue_end);
 }
 
 auto EditorMaskCreationAdapter::RangeJson(RangeKind kind, float first, float second)
@@ -1641,6 +1669,22 @@ auto EditorMaskCreationAdapter::beginRangeEdit(const QString& kind) -> bool {
   return true;
 }
 
+auto EditorMaskCreationAdapter::beginRangeParameterEdit(const QString& kind) -> bool {
+  SettleRangeSteps();
+  const auto range_kind = RangeKindFromString(kind);
+  if (range_kind == RangeKind::None || range_open_ != RangeKind::None) {
+    return false;
+  }
+  if (SyncRangeView()) {
+    emit maskRangeChanged();
+  }
+  // A full range has no Softness or threshold to write: the slider values are kept (#607).
+  if (RangeIsFull(range_kind)) {
+    return false;
+  }
+  return beginRangeEdit(kind);
+}
+
 void EditorMaskCreationAdapter::updateRangeEdit(const QString& kind, qreal first, qreal second) {
   const auto range_kind = RangeKindFromString(kind);
   if (range_kind == RangeKind::None || range_kind != range_open_ || !std::isfinite(first) ||
@@ -1660,19 +1704,17 @@ void EditorMaskCreationAdapter::finishRangeEdit(const QString& kind) {
   command.node_id = range_edit_target_.grade_id;
   command.mask_id = range_edit_target_.mask_id;
   (void)Enqueue(command);
-  // The settled value stays shown until the owner publishes it.
-  // A full range is stored as null; the next restriction starts at the default values (#564 D).
-  const bool full =
-      RangeHandlesAreFull(range_kind == RangeKind::Luminance, range_first_, range_second_);
+  // The settled value stays shown until the owner publishes it. A full range is stored as null;
+  // its softness and threshold stay as kept values for the next restriction (#607).
   if (range_kind == RangeKind::Luminance) {
     range_view_.luminance_low      = range_first_;
     range_view_.luminance_high     = range_second_;
-    range_view_.luminance_softness = full ? LuminanceRangeModel{}.softness : range_softness_;
+    range_view_.luminance_softness = range_softness_;
   } else {
     range_view_.hue_start      = range_first_;
     range_view_.hue_end        = range_second_;
-    range_view_.hue_softness   = full ? ColorRangeModel{}.softness : range_softness_;
-    range_view_.hue_min_chroma = full ? ColorRangeModel{}.min_chroma : range_min_chroma_;
+    range_view_.hue_softness   = range_softness_;
+    range_view_.hue_min_chroma = range_min_chroma_;
   }
   ResetRangeEdit();
   emit maskRangeChanged();
@@ -1769,16 +1811,26 @@ auto EditorMaskCreationAdapter::editRangeValue(const QString& kind, const QStrin
       !std::isfinite(value)) {
     return false;
   }
-  if (!handle) {
-    // Softness and the threshold belong to a restricted range (#564 D, G).
-    const bool full =
-        range_open_ == range_kind
-            ? RangeHandlesAreFull(luminance, range_first_, range_second_)
-            : (luminance ? RangeHandlesAreFull(true, range_view_.luminance_low,
-                                               range_view_.luminance_high)
-                         : RangeHandlesAreFull(false, range_view_.hue_start, range_view_.hue_end));
-    if (full) {
-      return false;
+  if (!handle && range_open_ != range_kind) {
+    if (SyncRangeView()) {
+      emit maskRangeChanged();
+    }
+    if (RangeIsFull(range_kind)) {
+      // A full range is stored as null and has no Softness or threshold (#607): the value is kept
+      // for this range of the target, without a command, and the next restricted write writes it.
+      if (!mask_range_available()) {
+        return false;
+      }
+      float&      kept    = luminance  ? range_view_.luminance_softness
+                            : softness ? range_view_.hue_softness
+                                       : range_view_.hue_min_chroma;
+      const float clamped = ClampRangeParameter(luminance, min_chroma, static_cast<float>(value));
+      if (kept == clamped) {
+        return false;
+      }
+      kept = clamped;
+      emit maskRangeChanged();
+      return true;
     }
   }
   if (!OpenRangeInput(range_kind, true)) {
@@ -1808,11 +1860,9 @@ auto EditorMaskCreationAdapter::editRangeValue(const QString& kind, const QStrin
       }
     }
   } else if (softness) {
-    range_softness_ =
-        luminance ? std::clamp(v, kLuminanceSoftnessMinimum, kLuminanceRangeMaximumSoftness)
-                  : std::clamp(v, kHueSoftnessMinimumDegrees, kColorRangeMaximumSoftnessDegrees);
+    range_softness_ = ClampRangeParameter(luminance, false, v);
   } else {
-    range_min_chroma_ = std::clamp(v, kColorRangeMinimumMinChroma, kColorRangeMaximumMinChroma);
+    range_min_chroma_ = ClampRangeParameter(false, true, v);
   }
   if (a == range_first_ && b == range_second_ && range_softness_ == softness_0 &&
       range_min_chroma_ == chroma_0) {
@@ -1844,16 +1894,13 @@ void EditorMaskCreationAdapter::resetRange(const QString& kind) {
   if (!Enqueue(command)) {
     return;
   }
-  // The next restriction starts at the default values (#564 D).
+  // The softness and threshold stay as kept values for the next restriction (#607).
   if (range_kind == RangeKind::Luminance) {
-    range_view_.luminance_low      = 0.0f;
-    range_view_.luminance_high     = 1.0f;
-    range_view_.luminance_softness = LuminanceRangeModel{}.softness;
+    range_view_.luminance_low  = 0.0f;
+    range_view_.luminance_high = 1.0f;
   } else {
-    range_view_.hue_start      = 0.0f;
-    range_view_.hue_end        = 360.0f;
-    range_view_.hue_softness   = ColorRangeModel{}.softness;
-    range_view_.hue_min_chroma = ColorRangeModel{}.min_chroma;
+    range_view_.hue_start = 0.0f;
+    range_view_.hue_end   = 360.0f;
   }
   emit maskRangeChanged();
 }
