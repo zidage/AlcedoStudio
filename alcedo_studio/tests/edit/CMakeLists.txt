@@ -117,6 +117,15 @@ gtest_discover_tests(LocalToneMappingConstantsMatchRuntimeTest
     TEST_PREFIX "LocalToneMappingConstantsMatchRuntimeTest.")
 alcedo_register_test_target(LocalToneMappingConstantsMatchRuntimeTest edit)
 
+# Editor scope histogram display heights: dominant-peak reference, square-root scale, empty bins.
+add_executable(ScopeHistogramRenderDataTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/scope_histogram_render_data_test.cpp)
+target_include_directories(ScopeHistogramRenderDataTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ScopeHistogramRenderDataTest PRIVATE GTest::gtest_main EditScope)
+gtest_discover_tests(ScopeHistogramRenderDataTest TEST_PREFIX "ScopeHistogramRenderDataTest."
+    PROPERTIES LABELS "edit;runtime;editor_scope")
+alcedo_register_test_target(ScopeHistogramRenderDataTest edit)
+
 # Color Grade Contrast: host reference math (OkLab lightness S curve) that the CUDA, Metal, and
 # OpenCL grade tests compare against.
 add_executable(OkLabContrastReferenceTest

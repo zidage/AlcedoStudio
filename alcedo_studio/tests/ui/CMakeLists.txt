@@ -1480,6 +1480,29 @@ alcedo_ui_gtest_discover_tests(EditorScopeControllerTest
     PROPERTIES LABELS "workspace_qml;editor_scope")
 alcedo_register_test_target(EditorScopeControllerTest ui)
 
+# Histogram plot painting: additive channel overlap, clip markers, and the break across a cut peak.
+add_executable(EditorScopeItemPaintTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_scope_item_paint_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorScopeItemPaintTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorScopeItemPaintTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Quick
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(EditorScopeItemPaintTest
+    TEST_PREFIX "EditorScopeItemPaintTest."
+    PROPERTIES LABELS "workspace_qml;editor_scope")
+alcedo_register_test_target(EditorScopeItemPaintTest ui)
+
 # Phase 6C-7: an already-restored snapshot must populate the QML Tone panel
 # during its first editor binding, without emitting a new adjustment patch.
 add_executable(EditorAdjustmentSnapshotQmlTest

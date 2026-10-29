@@ -17,10 +17,20 @@
 namespace alcedo::ui {
 namespace {
 
-auto PlotRect(qreal width, qreal height) -> QRectF {
-  constexpr qreal kInset = 1.0;
-  return QRectF(kInset, kInset, std::max<qreal>(1.0, width - 2.0 * kInset),
-                std::max<qreal>(1.0, height - 2.0 * kInset));
+// Fill and edge strengths of one histogram channel. The channels add up, so where all three
+// overlap the plot shows a neutral tone at the same strength.
+constexpr float kHistogramFillStrength = 0.36f;
+constexpr float kHistogramEdgeStrength = 0.92f;
+constexpr qreal kHistogramEdgeWidth    = 1.25;
+// Clip marker: a corner triangle at the clipped end of the plot.
+constexpr qreal kClipMarkerSize        = 7.0;
+// Cut mark: a break across a peak that is higher than the plot.
+constexpr qreal kPeakCutGapOffset      = 4.0;
+constexpr qreal kPeakCutGapHeight      = 2.0;
+
+auto            PlotRect(qreal width, qreal height, qreal padding) -> QRectF {
+  return QRectF(padding, padding, std::max<qreal>(1.0, width - 2.0 * padding),
+                           std::max<qreal>(1.0, height - 2.0 * padding));
 }
 
 auto WaveformChroma(const QColor& tint) -> std::array<float, 3> {
@@ -33,12 +43,31 @@ auto WaveformChroma(const QColor& tint) -> std::array<float, 3> {
   return {(rgb[0] - *minimum) / range, (rgb[1] - *minimum) / range, (rgb[2] - *minimum) / range};
 }
 
+// Chroma of the three channel tints, scaled per component so that the three add up to white.
+auto AdditiveChannelChroma(const std::array<QColor, 3>& tints)
+    -> std::array<std::array<float, 3>, 3> {
+  std::array<std::array<float, 3>, 3> chroma = {WaveformChroma(tints[0]), WaveformChroma(tints[1]),
+                                                WaveformChroma(tints[2])};
+  for (size_t component = 0; component < 3; ++component) {
+    const float sum = chroma[0][component] + chroma[1][component] + chroma[2][component];
+    for (auto& channel : chroma) {
+      channel[component] = sum > 0.001f ? channel[component] / sum : 1.0f / 3.0f;
+    }
+  }
+  return chroma;
+}
+
+auto ScaledColor(const std::array<float, 3>& chroma, float strength) -> QColor {
+  return QColor::fromRgbF(std::clamp(chroma[0] * strength, 0.0f, 1.0f),
+                          std::clamp(chroma[1] * strength, 0.0f, 1.0f),
+                          std::clamp(chroma[2] * strength, 0.0f, 1.0f));
+}
+
 }  // namespace
 
 EditorScopeItem::EditorScopeItem(QQuickItem* parent) : QQuickPaintedItem(parent) {
   setAntialiasing(false);
   setOpaquePainting(true);
-  setTextureSize(QSize(320, 160));
   setImplicitWidth(240);
   setImplicitHeight(120);
 }
@@ -111,6 +140,25 @@ void EditorScopeItem::set_histogram_blue_color(const QColor& color) {
   rebuild_waveform_image(scope_controller_ ? scope_controller_->snapshot_view().waveform
                                            : alcedo::ScopeWaveformRenderData{});
   emit ColorsChanged();
+  update();
+}
+
+void EditorScopeItem::set_marker_color(const QColor& color) {
+  if (marker_color_ == color) {
+    return;
+  }
+  marker_color_ = color;
+  emit ColorsChanged();
+  update();
+}
+
+void EditorScopeItem::set_plot_padding(qreal padding) {
+  const qreal clamped = std::max<qreal>(0.0, padding);
+  if (qFuzzyCompare(plot_padding_ + 1.0, clamped + 1.0)) {
+    return;
+  }
+  plot_padding_ = clamped;
+  emit PlotPaddingChanged();
   update();
 }
 
@@ -213,54 +261,141 @@ void EditorScopeItem::rebuild_waveform_image(const alcedo::ScopeWaveformRenderDa
 }
 
 void EditorScopeItem::paint(QPainter* painter) {
-  const QRectF plot = PlotRect(width(), height());
+  const QRectF plot = PlotRect(width(), height(), plot_padding_);
   painter->fillRect(boundingRect(), background_color_);
 
   const int active_view = scope_controller_ ? scope_controller_->active_view() : 0;
+  painter->setPen(QPen(grid_color_, 1.0));
+  for (int i = 1; i < 4; ++i) {
+    const qreal t = static_cast<qreal>(i) / 4.0;
+    if (active_view == 1) {
+      // Waveform: signal levels at 25, 50, and 75 percent.
+      const qreal y = std::round(plot.top() + t * plot.height()) + 0.5;
+      painter->drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
+    } else {
+      // Histogram: shadow, midtone, and highlight zones. The height scale is not linear, so the
+      // histogram has no level lines.
+      const qreal x = std::round(plot.left() + t * plot.width()) + 0.5;
+      painter->drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
+    }
+  }
+
   if (active_view == 1 && !waveform_image_.isNull()) {
     painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
     painter->drawImage(plot, waveform_image_);
     painter->setRenderHint(QPainter::SmoothPixmapTransform, false);
   } else if (active_view == 0 && histogram_.valid && histogram_.bins > 1 &&
              histogram_.rgb.size() >= static_cast<size_t>(histogram_.bins) * 3U) {
-    painter->setRenderHint(QPainter::Antialiasing, true);
-    const std::array<QColor, 3> colors = {histogram_red_color_, histogram_green_color_,
-                                          histogram_blue_color_};
-    for (int channel = 0; channel < 3; ++channel) {
-      QPainterPath path;
-      for (int bin = 0; bin < histogram_.bins; ++bin) {
-        const float value = std::clamp(
-            histogram_.rgb[static_cast<size_t>(channel * histogram_.bins + bin)], 0.0f, 1.0f);
-        const qreal x =
-            plot.left() +
-            (static_cast<qreal>(bin) / static_cast<qreal>(histogram_.bins - 1)) * plot.width();
-        const qreal y = plot.bottom() - static_cast<qreal>(value) * plot.height();
-        if (bin == 0) {
-          path.moveTo(x, y);
-        } else {
-          path.lineTo(x, y);
-        }
-      }
-      painter->setPen(QPen(colors[static_cast<size_t>(channel)], 1.0));
-      painter->drawPath(path);
-    }
-    painter->setRenderHint(QPainter::Antialiasing, false);
-  }
-
-  painter->setPen(QPen(grid_color_, 1.0));
-  for (int i = 1; i < 4; ++i) {
-    const qreal t = static_cast<qreal>(i) / 4.0;
-    const qreal y = plot.top() + t * plot.height();
-    painter->drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
-    if (active_view == 0) {
-      const qreal x = plot.left() + t * plot.width();
-      painter->drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
-    }
+    paint_histogram(painter, plot);
   }
 
   painter->setPen(QPen(border_color_, 1.0));
-  painter->drawLine(plot.topLeft(), plot.topRight());
-  painter->drawLine(plot.bottomLeft(), plot.bottomRight());
+  const qreal baseline = std::round(plot.bottom()) + 0.5;
+  painter->drawLine(QPointF(plot.left(), baseline), QPointF(plot.right(), baseline));
+
+  if (active_view == 0 && histogram_.valid) {
+    paint_clip_markers(painter, plot);
+  }
+}
+
+void EditorScopeItem::paint_histogram(QPainter* painter, const QRectF& plot) const {
+  const int  bins  = histogram_.bins;
+  const auto bin_x = [&plot, bins](qreal bin) {
+    return plot.left() + (bin / static_cast<qreal>(bins - 1)) * plot.width();
+  };
+  // A populated bin stays at least one pixel above the baseline.
+  const auto bin_y = [this, &plot](size_t index) {
+    const qreal value = std::clamp(static_cast<qreal>(histogram_.rgb[index]), 0.0, 1.0);
+    const qreal lift  = value > 0.0 ? std::max<qreal>(1.0, value * plot.height()) : 0.0;
+    return plot.bottom() - lift;
+  };
+  const auto chroma =
+      AdditiveChannelChroma({histogram_red_color_, histogram_green_color_, histogram_blue_color_});
+
+  painter->save();
+  painter->setRenderHint(QPainter::Antialiasing, true);
+  painter->setCompositionMode(QPainter::CompositionMode_Plus);
+  for (size_t channel = 0; channel < 3U; ++channel) {
+    const size_t offset    = channel * static_cast<size_t>(bins);
+    const auto   populated = [this, offset, bins](int bin) {
+      return bin >= 0 && bin < bins && histogram_.rgb[offset + static_cast<size_t>(bin)] > 0.0f;
+    };
+    QPainterPath area;
+    // The edge leaves out empty runs, so it does not trace the baseline.
+    QPainterPath edge;
+    bool         edge_open = false;
+    for (int bin = 0; bin < bins; ++bin) {
+      const QPointF point(bin_x(bin), bin_y(offset + static_cast<size_t>(bin)));
+      if (bin == 0) {
+        area.moveTo(point);
+      } else {
+        area.lineTo(point);
+      }
+      if (!populated(bin - 1) && !populated(bin) && !populated(bin + 1)) {
+        edge_open = false;
+      } else if (!edge_open) {
+        edge.moveTo(point);
+        edge_open = true;
+      } else {
+        edge.lineTo(point);
+      }
+    }
+    area.lineTo(plot.right(), plot.bottom());
+    area.lineTo(plot.left(), plot.bottom());
+    area.closeSubpath();
+
+    painter->fillPath(area, ScaledColor(chroma[channel], kHistogramFillStrength));
+    painter->strokePath(
+        edge, QPen(ScaledColor(chroma[channel], kHistogramEdgeStrength), kHistogramEdgeWidth,
+                   Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+  }
+  painter->restore();
+
+  if (histogram_.peak_cut.size() < static_cast<size_t>(bins) * 3U) {
+    return;
+  }
+  // A break across each run of bins whose peak is higher than the plot.
+  const qreal gap_top   = plot.top() + kPeakCutGapOffset;
+  int         run_start = -1;
+  for (int bin = 0; bin <= bins; ++bin) {
+    bool cut = false;
+    for (size_t channel = 0; bin < bins && channel < 3U && !cut; ++channel) {
+      cut =
+          histogram_.peak_cut[channel * static_cast<size_t>(bins) + static_cast<size_t>(bin)] != 0U;
+    }
+    if (cut && run_start < 0) {
+      run_start = bin;
+    } else if (!cut && run_start >= 0) {
+      const qreal left  = std::max(plot.left(), bin_x(static_cast<qreal>(run_start) - 0.5));
+      const qreal right = std::min(plot.right(), bin_x(static_cast<qreal>(bin - 1) + 0.5));
+      painter->fillRect(QRectF(left - 1.0, gap_top, right - left + 2.0, kPeakCutGapHeight),
+                        background_color_);
+      run_start = -1;
+    }
+  }
+}
+
+void EditorScopeItem::paint_clip_markers(QPainter* painter, const QRectF& plot) const {
+  if (!histogram_.shadow_clip_warning && !histogram_.highlight_clip_warning) {
+    return;
+  }
+  painter->save();
+  painter->setRenderHint(QPainter::Antialiasing, true);
+  painter->setPen(Qt::NoPen);
+  painter->setBrush(marker_color_);
+  if (histogram_.shadow_clip_warning) {
+    const QPointF                corner = plot.topLeft();
+    const std::array<QPointF, 3> points = {corner, corner + QPointF(kClipMarkerSize, 0.0),
+                                           corner + QPointF(0.0, kClipMarkerSize)};
+    painter->drawPolygon(points.data(), static_cast<int>(points.size()));
+  }
+  if (histogram_.highlight_clip_warning) {
+    const QPointF                corner = plot.topRight();
+    const std::array<QPointF, 3> points = {corner, corner - QPointF(kClipMarkerSize, 0.0),
+                                           corner + QPointF(0.0, kClipMarkerSize)};
+    painter->drawPolygon(points.data(), static_cast<int>(points.size()));
+  }
+  painter->restore();
 }
 
 }  // namespace alcedo::ui

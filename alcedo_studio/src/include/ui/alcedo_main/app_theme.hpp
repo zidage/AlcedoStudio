@@ -200,6 +200,7 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor scopeHistogramRedColor READ scopeHistogramRedColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramGreenColor READ scopeHistogramGreenColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramBlueColor READ scopeHistogramBlueColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor scopeMarkerColor READ scopeMarkerColor NOTIFY ThemeChanged)
   // Nodes graph canvas and node-card geometry. Colors follow the active theme;
   // sizes are logical px. See DESIGN.md "Nodes panel and graph nodes".
   Q_PROPERTY(QColor graphCanvasColor READ graphCanvasColor NOTIFY ThemeChanged)
@@ -441,6 +442,7 @@ class AppTheme final : public QObject {
   auto scopeHistogramRedColor() const -> QColor;
   auto scopeHistogramGreenColor() const -> QColor;
   auto scopeHistogramBlueColor() const -> QColor;
+  auto scopeMarkerColor() const -> QColor;
   auto graphCanvasColor() const -> QColor;
   auto graphEdgeColor() const -> QColor;
   auto graphCandidateEdgeColor() const -> QColor;
