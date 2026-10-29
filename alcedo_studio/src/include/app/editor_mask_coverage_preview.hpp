@@ -168,7 +168,8 @@ class EditorMaskCoveragePreview {
    * coverage. The status is Current while the probe is shown: the coverage follows each frame, and
    * a failed coverage publication fails that frame.
    *
-   * With a candidate (the AI Mask edit of a stored Mask, MR4), the probe covers the candidate: the
+   * With a candidate (the AI Mask edit of a stored Mask, MR4, or the probe of the candidate of a
+   * new Mask, #604), the probe covers the candidate: the
    * candidate jobs end as Discarded the same way, and the newest candidate request is kept for
    * @ref HideRangeProbe. The candidate stays active, so a candidate update replaces the probe.
    *
@@ -222,6 +223,9 @@ class EditorMaskCoveragePreview {
   [[nodiscard]] auto CommitBlocked() const -> bool;
   [[nodiscard]] auto HasCandidate() const -> bool { return candidate_active_; }
   [[nodiscard]] auto Committed() const -> const std::optional<CommittedMask>& { return committed_; }
+  /// Selection of the newest candidate request, or null without an active candidate. Owner
+  /// thread.
+  [[nodiscard]] auto NewestCandidate() const -> const MaskCoverageCandidateSelection*;
   /// The probed Mask while the source is RangeProbe. Owner thread.
   [[nodiscard]] auto RangeProbe() const -> const std::optional<MaskCoverageProbe>& {
     return range_probe_;

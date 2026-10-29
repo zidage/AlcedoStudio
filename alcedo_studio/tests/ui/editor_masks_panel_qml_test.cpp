@@ -224,7 +224,7 @@ TEST(EditorMasksPanelQmlTest, RangeSectionIsOneFixedUpperPartAndTheAiPanelReplac
   }
 
   // The AI Mask edit of a new candidate: the AI panel fills the lower part, the Range section
-  // stays above it with the candidate notice, and only one Range section exists.
+  // stays above it, and only one Range section exists.
   harness.ai_mask_tool()->setProperty("active", true);
   QQuickItem* ai_panel = nullptr;
   ASSERT_TRUE(WaitFor([&] {
@@ -242,13 +242,23 @@ TEST(EditorMasksPanelQmlTest, RangeSectionIsOneFixedUpperPartAndTheAiPanelReplac
   CollectVisualItems(harness.root(), QStringLiteral("editorMasksRangeSection"), sections);
   CollectVisualItems(harness.root(), QStringLiteral("editorAiMaskRangeSection"), sections);
   EXPECT_EQ(sections.size(), 1);
-  auto* notice = FindVisualItem(range_shell, QStringLiteral("editorMaskRangeCandidateNotice"));
-  ASSERT_NE(notice, nullptr);
-  EXPECT_TRUE(notice->isVisible());
 
-  // The edit of a stored AI Mask: no candidate notice.
-  harness.ai_mask_tool()->setProperty("editingStoredMask", true);
-  EXPECT_TRUE(WaitFor([&] { return !notice->isVisible(); }));
+  // #604: the range controls of the new candidate are enabled while the tool is ready, without
+  // the old "Confirm the new AI Mask" notice, and disabled while an AI operation runs.
+  EXPECT_EQ(FindVisualItem(harness.root(), QStringLiteral("editorMaskRangeCandidateNotice")),
+            nullptr);
+  for (const auto* name : {"editorMaskLuminanceRange", "editorMaskHueRange",
+                           "editorMaskLuminanceLowField", "editorMaskRangeShowSelection"}) {
+    auto* item = FindVisualItem(range_shell, QString::fromLatin1(name));
+    ASSERT_NE(item, nullptr) << name;
+    EXPECT_TRUE(WaitFor([&] { return item->isEnabled(); })) << name << " is disabled";
+  }
+  auto* luminance_bar = FindVisualItem(range_shell, QStringLiteral("editorMaskLuminanceRange"));
+  harness.ai_mask_tool()->setProperty("busy", true);
+  EXPECT_TRUE(WaitFor([&] { return !luminance_bar->isEnabled(); }))
+      << "the range controls stay enabled while an AI operation runs";
+  harness.ai_mask_tool()->setProperty("busy", false);
+  EXPECT_TRUE(WaitFor([&] { return luminance_bar->isEnabled(); }));
 
   EXPECT_FALSE(QString::fromStdString(harness.warnings()).contains(QStringLiteral("ReferenceError")))
       << harness.warnings();

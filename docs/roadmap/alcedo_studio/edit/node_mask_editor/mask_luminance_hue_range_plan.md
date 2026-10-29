@@ -6,7 +6,9 @@ Date: 2026-10-26. Status: MR1 complete (2026-10-26, PR #556, branch
 branches `feature/mask-ranges-mr3-*` on MR2); MR4 complete (2026-10-27, branch
 `feature/mask-ranges-mr4-range-bars`, stacked on MR3). Follow-up issue #564 (precise range
 controls, shared Range section, AI Mask edit on demand): section 10, phases RP1-RP4, complete
-(2026-10-27, four stacked branches `feature/mask-range-precision-rp*`).
+(2026-10-27, four stacked branches `feature/mask-range-precision-rp*`). Follow-up issue #604
+(ranges of a new AI Mask during its edit): section 11, complete (2026-10-29, branch
+`feature/ai-mask-new-candidate-ranges`).
 
 Parent: [Node-aware Pipeline Editing and Mask Creation Master Plan](../node_mask_editor_master_plan.md),
 sections 8.3 (Color Range and Luminance Range), 8.4 (Union), and 10.3-10.4 (content-dependent
@@ -100,7 +102,7 @@ Paths are relative to `alcedo_studio/src/`.
 | D8 | The coverage overlay of a range edit is produced inside the photo render, from the R8 that `MaskEvaluate` already writes for the selected Mask. It is not a second evaluator and not a coverage-only operation (SM8 C4 does not apply: this coverage depends on photo content). |
 | D9 | The overlay is a render request option (`MaskCoverageProbe{grade_id, mask_id}`), presentation state only. It does not change the photo DAG key, exported pixels, scopes, or history (SM8 C10). |
 | D10 | The probe publishes for the base render and for the detail ROI render, so the zoomed overlay has the detail resolution. The composite gets a detail coverage binding selected with the same ROI test as the detail photo. |
-| D11 | One coverage source at a time (SM8 C8): selecting the range probe clears an AI candidate/committed preview and the reverse. While the AI Mask tool edits a new candidate, the range bars are disabled (the candidate is not a `MaskModel` yet). MR4 (user decision): during the AI Mask edit of a stored Mask, the probe of that Mask covers the candidate and its ranges are editable; see the MR4 completion record. |
+| D11 | One coverage source at a time (SM8 C8): selecting the range probe clears an AI candidate/committed preview and the reverse. While the AI Mask tool edits a new candidate, its range bars are enabled (#604, replaces the earlier rule that disabled them): the ranges are kept by the AI Mask edit, the probe of the candidate covers the candidate, and Confirm writes them with the new Mask; see section 11. MR4 (user decision): during the AI Mask edit of a stored Mask, the probe of that Mask covers the candidate and its ranges are editable; see the MR4 completion record. |
 | D12 | Overlay visibility: shown while a range handle is dragged, and while the "Show selection" toggle of the range section is on. Starting any adjustment input hides it (master plan 10.4). |
 
 ## 4. Model and persistence (MR1)
@@ -645,7 +647,8 @@ used as evidence (AGENTS.md, Qt UI/QML tests).
 - **Range target.** The adapter targets the stored Mask of the open AI Mask edit
   (`SetAiMaskEditRangeTarget`, called by `EditorAiMaskTool` on Open, Opened, and Close), else the
   selected Mask. A new candidate has no target, so the bars are disabled (D11) with the notice
-  "Confirm the new AI Mask to set its ranges.".
+  "Confirm the new AI Mask to set its ranges.". Replaced by #604 (section 11): the candidate of a
+  new Mask is the target, and the notice is removed.
 - **Toggle rules (D12).** A drag shows the coverage from press to release when the toggle is off.
   The toggle follows a new selection; it turns off when the target is gone, when the AI Mask edit
   opens or closes, when an AI candidate replaces the probe (`OnRangeCoverageReplaced`), and at the
@@ -748,6 +751,7 @@ Each phase writes its completion record and call chains into its section.
 - MR3: [#550](https://github.com/zidage/AlcedoStudio/issues/550)
 - MR4: [#551](https://github.com/zidage/AlcedoStudio/issues/551)
 - RP1-RP4 (section 10): [#564](https://github.com/zidage/AlcedoStudio/issues/564)
+- Ranges of a new AI Mask (section 11): [#604](https://github.com/zidage/AlcedoStudio/issues/604)
 
 ## 10. Precise range controls and AI Mask edit on demand (#564)
 
@@ -1034,3 +1038,122 @@ Suite totals (all four phases on this branch): `EditorMaskRangeAdapterTest` 14/1
 `PipelineEditBatchTest` 22/22, `GpuDagCudaMaskTest` 31/31, `GpuDagOpenClGradeTest` 88/94
 (the six `OpenClMultiGradeFixture` failures are pre-existing: #496), `DocumentTransferTest`
 34/35 (pre-existing #554). `alcedo_main` builds.
+
+## 11. Ranges of a new AI Mask during its edit (#604)
+
+Issue [#604](https://github.com/zidage/AlcedoStudio/issues/604) replaces the new-candidate part of
+D11 (maintainer decision, 2026-10-29). During the edit of a new AI Mask, the Luminance Range and
+Hue Range are enabled (not while an AI operation runs). The range probe of the candidate covers
+the candidate, as for a stored AI Mask in its edit (MR4). The values set during the edit are
+written with the new Mask at Confirm, in the same commit. Close without saving discards them. The
+notice "Confirm the new AI Mask to set its ranges." and its `.ts` entries are removed.
+
+Change by the maintainer at the start of the work (2026-10-29): requirement 3 of the issue (after
+Confirm the new Mask is selected and the Range section targets it) is not done. After Confirm the
+range does not need more edits: the Mask panel closes. The maintainer also chose the full probe of
+the candidate from the photo render (not only values without a display).
+
+##### #604 completion record (2026-10-29)
+
+**Status:** complete. Branch `feature/ai-mask-new-candidate-ranges`.
+
+**Implementation and the details that the issue did not give:**
+
+- **Candidate ranges are kept by the AI Mask edit (session owner).**
+  `EditorSessionService::AiMaskEditTarget` holds `candidate_luminance_range`,
+  `candidate_color_range`, and the open range edit of the candidate (field key, value before the
+  edit). A range command of the new candidate is a normal Mask range command
+  (`IsMaskRangeEditCommand`) for the Grade of the edit with an empty Mask id.
+  `ApplyMaskCreationCommand` sends it, and Cancel and CancelMode, to
+  `ApplyAiMaskCandidateRangeCommand`: BeginMaskField opens the edit, SetMaskField parses the
+  range JSON (`LuminanceRangeFromJson` / `ColorRangeFromJson`, full range = empty), Finish closes
+  the edit, and Cancel restores the value before it. No command writes the document or the
+  history. The end of the edit (Commit, Cancel, image change) ends `ai_mask_edit_`, so Close
+  without saving discards the values.
+- **Commit.** `CommitAiMaskEdit` first applies the queued Mask commands
+  (`SettleMaskInputForBoundary`), so a key or wheel step burst that has not settled at the click
+  is part of the commit, and it ends an open candidate range edit with its current value. Then
+  `EditorMaskCreationController::CommitAiMaskSource` takes the candidate ranges: the provisional
+  Mask gets them before `PublishAddMask`, so the AddMask batch (one commit) holds the source and
+  the ranges. A stored Mask keeps its own ranges (non-empty ranges with a Mask id are refused).
+  `EditorAiMaskTool::commit` calls `commitRangeEdits()` first, so the settle of a burst is
+  queued before the commit.
+- **Range probe of the candidate.** `MaskCoverageProbe` has an optional
+  `MaskCoverageProbeCandidate` (the newest candidate selection: shared pixels, analysis size, edge
+  values; and the ranges). `ShowMaskRangeCoverage(grade, empty Mask id)` during the edit of a new
+  Mask makes this probe from `EditorMaskCoveragePreview::NewestCandidate()`; it is refused without
+  a candidate coverage or while the candidate is in the Previous status. A shown probe of the
+  candidate takes each range write (`ShowRangeProbe` with the new ranges) and routes a render:
+  Interactive inside an open edit, Quality for a settled write. A candidate update replaces the
+  probe (MR4 rule).
+- **Render.** The candidate is not a Mask of the document, so `PlanExecutor` evaluates it for the
+  display only: before the Grade pass of the probed Grade, `RecordProbedCandidate` acquires the
+  candidate coverage (`AcquireAiMaskCandidateCoverage`, now allowed in a render too) and records
+  `RecordMaskCandidateRangeDisplay` into the coverage display target. The value is the raster
+  MaskEvaluate of the candidate with the ranges on the Grade input, no invert, opacity 1: the R8
+  of the same Mask after the commit. No R8 image is bound, so no result, result key, or photo
+  pass changes. CUDA has a new kernel (`RasterMaskRangeDisplayKernel`); OpenCL and Metal use their
+  MaskEvaluate raster kernels with the RGBA32F output (they quantize and write (value, 0, 0, 1)).
+- **Adapter.** `EditorMaskCreationAdapter::RangeTarget` has a `candidate` flag. After the session
+  opens the edit (`SetAiMaskEditRangeTarget(true, grade, nullopt)`), the candidate is the target.
+  The candidate is not in the document, so the adapter shows the values that it wrote (only it
+  writes them; the session keeps them for the probe and the commit); a new candidate starts with
+  full ranges.
+- **After Confirm the Mask panel closes (maintainer change).** The AI Mask edit ends the Mask
+  mode at its Open (`AbortMaskCreation`), so the editor is already back on the panel from before
+  the Mask panel, and the stack shows the Mask page only while the tool is active. The commit
+  selects no Mask. So after Confirm the tool closes and the Mask panel with it; no Range section
+  stays open. A test keeps this behavior.
+- **QML and translations.** The candidate notice and the `newAiMaskCandidate` property of
+  `EditorMaskRangeSection.qml` are removed, and the entry is removed from both `.ts` files by hand
+  (no `lupdate` run).
+
+**Primary success call chain (range drag during the edit of a new AI Mask, then Confirm):**
+
+```text
+EditorAiMaskTool::OnOpened -> SetAiMaskEditRangeTarget(true, grade, nullopt) (candidate target)
+RangeSelectorBar press -> EditorMaskCreationAdapter::beginRangeEdit
+  -> EditorSessionController::EnqueueMaskCreation (AI edit + IsMaskRangeEditCommand)
+     -> EditorSessionService::ApplyMaskCreationCommand -> ApplyAiMaskCandidateRangeCommand
+  -> ShowMaskRangeCoverage(grade, empty Mask id) -> probe with the newest candidate + ranges
+     -> EditorMaskCoveragePreview::ShowRangeProbe (covers the candidate), Quality render
+RangeSelectorBar move -> SetMaskField -> candidate range -> ShowRangeProbe, Interactive render
+  -> PlanExecutor::RecordProbedCandidate -> RecordMaskCandidateRangeDisplay -> coverage frame
+RangeSelectorBar release -> Finish; HideMaskRangeCoverage (candidate presented again)
+Confirm -> EditorAiMaskTool::commit -> commitRangeEdits -> PrepareCommit (worker)
+  -> CommitAiMaskEdit -> SettleMaskInputForBoundary -> CommitAiMaskSource(..., ranges)
+     -> AddMask batch with source and ranges (one commit) -> edit ends -> tool Close
+```
+
+**Primary failure call chains:**
+
+```text
+Probe of the candidate before it has coverage -> refused ("has no coverage yet")
+Probe of the candidate in the Previous status -> refused (retry the AI preview first)
+Range command for a stored Mask during the edit of a new Mask -> refused by the owner
+Invalid range JSON -> refused; the candidate value does not change
+Close without saving -> CancelAiMaskEdit -> ai_mask_edit_ ends; the ranges are discarded
+```
+
+**What was proven (executed tests, Windows `win_debug` unless noted):**
+
+| Criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| The probe of the candidate shows the R8 of the same Mask after its commit, runs no Mask pass, keeps the photo byte-identical; its ranges change the coverage | `CandidateProbeShowsTheR8OfTheCommittedMaskAndKeepsThePhoto` | `MaskRangeCoverageProbeTest` | PASS on CUDA, OpenCL, and Metal (Apple Silicon, `macos-debug`) |
+| Range commands of the candidate write no document; Cancel restores; the probe needs a coverage, carries the ranges, and follows each write; a stored Mask id is refused; the commit writes the ranges in one commit | `RangeCommandsOfTheNewCandidateWriteNoDocumentUntilTheCommit` | `EditorMaskCoveragePreviewTest` | PASS |
+| A drag and an unsettled key step burst of the candidate write no history; the frames carry the candidate probe; Confirm adds the Mask with both ranges in one commit | `NewAiMaskCandidateRangesCommitWithTheNewMaskInOneCommit` | `EditorMaskRangeAdapterTest` | PASS |
+| Close without saving discards the ranges; the next candidate starts with full ranges and commits none | `ClosingANewAiMaskEditWithoutSavingDiscardsItsRanges` | same | PASS |
+| "Show selection" of the candidate follows each range write; a candidate update replaces it | `ShowSelectionOfANewCandidateFollowsItsRangesUntilACandidateUpdate` | same | PASS |
+| After Confirm the Mask panel is closed: no Mask mode, no selection, no range target, the previous panel | `ConfirmOfANewAiMaskLeavesTheMaskPanelClosed` | same | PASS |
+| The candidate is the target after the session opens the edit, not before | `AiMaskEditTargetsItsStoredMaskOrItsNewCandidate`, `NewAiMaskOpensItsEditAtOnce` | same | PASS |
+| The Range controls of a new candidate are enabled while the tool is ready, disabled while busy; no candidate notice | `RangeSectionIsOneFixedUpperPartAndTheAiPanelReplacesTheLowerPart` | `EditorMasksPanelQmlTest` | PASS (fails on the old QML: the notice exists) |
+
+Suite totals: `EditorMaskCoveragePreviewTest` 20/20, `EditorMaskRangeAdapterTest` 18/18,
+`AnalyticMaskCreationTest` 30/30, `EditorMasksPanelQmlTest` 2/2, `EditorAiMaskPanelQmlTest` 2/2,
+`SimplifiedChineseCatalogTest` 8/8, `MaskRangeCoverageProbeTest` 6/6 on CUDA, OpenCL (the process
+did not exit after PASSED: the known #559), and Metal. `alcedo_main` builds (QML compiled by
+qmlcachegen). The full suite was not run. The app was not started: the range bars of a new AI
+Mask were not checked by hand in the GUI.
+
+**Residual gaps:** the QML panel test uses fake owners (AGENTS.md: QML harness tests are not
+evidence); the session, adapter, and render tests are the evidence.

@@ -135,20 +135,21 @@ class BasicRenderWorkspace {
    * @brief Coverage of the AI Mask candidate @p pixels after @p edge. See
    *        MaskCoverageTextureCache::AcquireCandidate.
    *
-   * The candidate is presentation input (SM8 C4 and C10), so only coverage-only work acquires it;
-   * a photo render never reads it.
+   * The candidate is presentation input (SM8 C4 and C10): coverage-only work and the display
+   * write of a range probe of the candidate (#604) acquire it; no photo pass reads it.
    *
-   * @pre Coverage-only work is open (@ref BeginCoverageWork).
-   * @throws std::runtime_error without open coverage work, or from the acquisition. A failure
+   * @pre A render (@ref BeginRender) or coverage-only work (@ref BeginCoverageWork) is open.
+   * @throws std::runtime_error without an open submission, or from the acquisition. A failure
    *         keeps the current candidate entries and every photo result.
    */
   auto AcquireAiMaskCandidateCoverage(const AiMaskCoveragePixels& pixels, Extent2D analysis_extent,
                                       const AiMaskEdgeAdjustment& edge,
                                       CommandContext&             command_context)
       -> MaskCoverageRead<Backend> {
-    if (!coverage_work_) {
+    if (!rendering_ && !coverage_work_) {
       throw std::runtime_error(
-          "BasicRenderWorkspace::AcquireAiMaskCandidateCoverage: no coverage work is open");
+          "BasicRenderWorkspace::AcquireAiMaskCandidateCoverage: no render or coverage work is "
+          "open");
     }
     return mask_coverage_.AcquireCandidate(pixels, analysis_extent, edge, backend_,
                                            command_context);

@@ -387,6 +387,25 @@ void RecordMaskCoverageDisplay(OpenClRenderDevice&                     device,
   EncodeRasterSampling(device, coverage, request.geometry, request.invert, request.opacity, output);
 }
 
+void RecordMaskCandidateRangeDisplay(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                                     const MaskCoverageImage<OpenClBackend>& coverage,
+                                     const MaskModel& mask, const FrameSceneBinding& range_scene,
+                                     OpenClBackend::Texture2D& output) {
+  const auto extent = plan.geometry.render_extent;
+  if (output.Native() == nullptr || output.Format() != TextureFormat::Rgba32f ||
+      output.Width() != extent.width || output.Height() != extent.height) {
+    throw std::runtime_error(
+        "RecordMaskCandidateRangeDisplay: the output is not an RGBA32F image of the render extent");
+  }
+  // The MaskEvaluate kernels quantize to R8 values and write (value, 0, 0, 1) into any format.
+  const auto                     scene = RangeSceneView(device, mask, range_scene, extent);
+  std::optional<RasterMaskRange> range;
+  if (scene.has_value()) {
+    range.emplace(RasterMaskRange{*scene, mask});
+  }
+  EncodeRasterSampling(device, coverage, plan.geometry, mask.invert, mask.opacity, output, range);
+}
+
 void RecordMaskValueDisplay(OpenClRenderDevice& device, const OpenClBackend::Texture2D& mask,
                             OpenClBackend::Texture2D& output) {
   if (mask.Native() == nullptr || mask.Format() != TextureFormat::R8) {

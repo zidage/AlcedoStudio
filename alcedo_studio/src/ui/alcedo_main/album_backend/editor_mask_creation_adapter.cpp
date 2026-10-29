@@ -1481,7 +1481,14 @@ auto EditorMaskCreationAdapter::SyncRangeView() -> bool {
   }
   RangeView view;
   view.target = RangeTargetNow();
-  if (!view.target.Empty() && session_ != nullptr) {
+  if (view.target.candidate) {
+    // The session holds the candidate values for its probe and the commit (#604).
+    if (range_view_.target == view.target) {
+      view = range_view_;
+    }
+    view.target  = RangeTargetNow();
+    view.present = true;
+  } else if (!view.target.Empty() && session_ != nullptr) {
     if (const auto document = session_->pipeline_document()) {
       const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
           document->Graph().FindNode(view.target.grade_id));
@@ -1874,8 +1881,12 @@ void EditorMaskCreationAdapter::setRangeCoverageVisible(bool visible) {
 
 void EditorMaskCreationAdapter::SetAiMaskEditRangeTarget(bool open, const NodeId& grade_id,
                                                          const std::optional<MaskId>& mask_id) {
-  const RangeTarget target =
-      open && mask_id.has_value() ? RangeTarget{grade_id, *mask_id} : RangeTarget{};
+  RangeTarget target;
+  if (open && mask_id.has_value()) {
+    target = RangeTarget{grade_id, *mask_id};
+  } else if (open && !grade_id.Empty()) {
+    target = RangeTarget{grade_id, MaskId{}, true};
+  }
   if (open == ai_mask_edit_open_ && target == ai_mask_edit_target_) {
     return;
   }

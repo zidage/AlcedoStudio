@@ -18,6 +18,9 @@ struct MaskCoverageCandidateSelection {
   AiMaskCoveragePixels pixels{};
   Extent2D             analysis_extent{};
   AiMaskEdgeAdjustment edge{};
+
+  /// The same shared pixels (not equal values), analysis size, and edge values.
+  auto                 operator==(const MaskCoverageCandidateSelection&) const -> bool = default;
 };
 
 /// The coverage that one presentation displays: the candidate or one committed AI Mask (SM8 C8).

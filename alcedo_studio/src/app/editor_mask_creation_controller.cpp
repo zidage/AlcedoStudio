@@ -551,10 +551,11 @@ auto EditorMaskCreationController::RemoveMask(const NodeId& grade_id, const Mask
   return result;
 }
 
-auto EditorMaskCreationController::CommitAiMaskSource(const NodeId&                   grade_id,
-                                                      const std::optional<MaskId>&    mask_id,
-                                                      const AiSegmentationMaskSource& source)
-    -> EditorMaskCreationResult {
+auto EditorMaskCreationController::CommitAiMaskSource(
+    const NodeId& grade_id, const std::optional<MaskId>& mask_id,
+    const AiSegmentationMaskSource&           source,
+    const std::optional<LuminanceRangeModel>& luminance_range,
+    const std::optional<ColorRangeModel>&     color_range) -> EditorMaskCreationResult {
   if (range_edit_.has_value()) {
     return Reject(kRangeEditOpen);
   }
@@ -563,6 +564,9 @@ auto EditorMaskCreationController::CommitAiMaskSource(const NodeId&             
   }
   if (document_ == nullptr || history_ == nullptr) {
     return Reject("Mask creation controller is not bound to a document");
+  }
+  if (mask_id.has_value() && (luminance_range.has_value() || color_range.has_value())) {
+    return Reject("a stored AI Mask keeps its own ranges");
   }
   ResetMode();
   node_id_ = grade_id;
@@ -577,6 +581,15 @@ auto EditorMaskCreationController::CommitAiMaskSource(const NodeId&             
     if (!InsertProvisional(source)) {
       ResetMode();
       return Reject("the AI Mask could not be added to the Color Grade");
+    }
+    try {
+      // The ranges of the candidate are part of the new Mask, so AddMask writes them (#604).
+      Grade()->SetMaskLuminanceRange(mask_id_, luminance_range);
+      Grade()->SetMaskColorRange(mask_id_, color_range);
+    } catch (const std::exception& error) {
+      RestoreLive();
+      ResetMode();
+      return Reject(std::string{"the AI Mask ranges are invalid: "} + error.what());
     }
     result = PublishAddMask();
   } else {

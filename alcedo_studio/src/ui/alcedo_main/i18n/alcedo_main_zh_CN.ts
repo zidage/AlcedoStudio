@@ -3800,11 +3800,6 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <translation>显示选区</translation>
     </message>
     <message>
-        <location line="+12"/>
-        <source>Confirm the new AI Mask to set its ranges.</source>
-        <translation>确认新的 AI 蒙版后即可设置其范围。</translation>
-    </message>
-    <message>
         <source>Softness</source>
         <translation>柔和度</translation>
     </message>

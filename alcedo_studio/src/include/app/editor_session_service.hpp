@@ -39,6 +39,7 @@
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
+#include "json.hpp"
 #include "sidecar_client/dto/segmentation.hpp"
 
 namespace alcedo {
@@ -782,9 +783,12 @@ class IEditorSessionBackend {
    * live); one Quality render presents it at once. It replaces a committed AI Mask preview, and a
    * later AI preview replaces it. During the AI Mask edit of a stored Mask it covers the candidate
    * for that Mask only (MR4): Hide or a candidate update shows the candidate again, and the end of
-   * the edit ends the probe. Refused during the AI Mask edit of a new candidate (not a Mask yet)
-   * or of another Mask, while the candidate failed to present, without an interactive session,
-   * and for a Grade or Mask that the working document does not have. Writes nothing.
+   * the edit ends the probe. During the AI Mask edit of a new Mask, an empty @p mask_id probes the
+   * candidate (#604): the renders evaluate the newest candidate with the ranges set during the
+   * edit on the input of Grade @p grade_id, for the display only. Refused during the AI Mask edit
+   * for another Mask, while the candidate failed to present or has no coverage, without an
+   * interactive session, and for a Grade or Mask that the working document does not have. Writes
+   * nothing.
    */
   virtual auto ShowMaskRangeCoverage(const NodeId& /*grade_id*/, const MaskId& /*mask_id*/)
       -> EditorSessionResult {
@@ -1299,6 +1303,14 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto ApplyMaskCommandsToLiveDocument(const std::vector<EditorMaskCreationCommand>& batch,
                                        bool finish_open_input, MaskCommandBatchOutcome* outcome,
                                        std::string* error) -> bool;
+  /**
+   * @brief Apply a range command of the new candidate of the open AI Mask edit (#604) to its
+   *        ranges, on the owner thread. Writes no document; a shown probe of the candidate takes
+   *        the new ranges and routes a render (Interactive while the edit is open, Quality at its
+   *        end). Cancel and CancelMode restore the value before the open edit.
+   */
+  auto ApplyAiMaskCandidateRangeCommand(const EditorMaskCreationCommand& command)
+      -> EditorMaskCreationResult;
   auto ApplyMaskCreationCommand(const EditorMaskCreationCommand& command)
       -> EditorMaskCreationResult;
   auto RouteMaskCreationRender(bool interactive_preview, bool quality_requested, bool committed)
@@ -1340,8 +1352,16 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// Grade and Mask of the open AI Mask edit; owner thread only. Its action restriction is the
   /// AiMaskEdit operation lease.
   struct AiMaskEditTarget {
-    NodeId                grade_id;
-    std::optional<MaskId> mask_id;
+    NodeId                             grade_id;
+    std::optional<MaskId>              mask_id;
+    /// Ranges of a new candidate (#604). Range commands without a Mask set them; the commit
+    /// writes them with the new Mask, and the end of the edit discards them.
+    std::optional<LuminanceRangeModel> candidate_luminance_range;
+    std::optional<ColorRangeModel>     candidate_color_range;
+    /// Field key of the open range edit of the candidate (BeginMaskField to Finish), and its value
+    /// before the edit, which Cancel restores.
+    std::string                        candidate_range_edit_key;
+    nlohmann::json                     candidate_range_before;
   };
   std::optional<AiMaskEditTarget>                ai_mask_edit_;
   /// True from AI Mask edit Open to its end. Read by input admission off the owner thread.

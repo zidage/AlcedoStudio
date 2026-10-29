@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 
@@ -27,6 +28,8 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/mask/mask_model.hpp"
+#include "edit/runtime/mask_coverage_probe.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
@@ -1516,6 +1519,13 @@ void EditorSessionService::AbortMaskCreation() {
 auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationCommand& command)
     -> EditorMaskCreationResult {
   const auto identity = lifecycle_.identity();
+  if (ai_mask_edit_.has_value() && !ai_mask_edit_->mask_id.has_value() &&
+      (IsMaskRangeEditCommand(command) || command.kind == EditorMaskCreationCommandKind::Cancel ||
+       command.kind == EditorMaskCreationCommandKind::CancelMode)) {
+    // The new candidate of the AI Mask edit is the only range target (#604). The edit closed the
+    // Mask tool at its Open, so the controller has no operation that Cancel could end.
+    return ApplyAiMaskCandidateRangeCommand(command);
+  }
   if (ai_mask_edit_.has_value() && command.kind != EditorMaskCreationCommandKind::Cancel &&
       command.kind != EditorMaskCreationCommandKind::CancelMode) {
     // During the AI Mask edit only the range edit of its stored Mask writes (MR4).
@@ -1568,6 +1578,98 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
   EditorMaskCreationResult rejected;
   rejected.error = "unknown Mask creation command";
   return rejected;
+}
+
+auto EditorSessionService::ApplyAiMaskCandidateRangeCommand(
+    const EditorMaskCreationCommand& command) -> EditorMaskCreationResult {
+  auto&                    edit = *ai_mask_edit_;
+  EditorMaskCreationResult result;
+  const auto               refuse = [&result](std::string error) {
+    result.error = std::move(error);
+    return result;
+  };
+  const auto set_range = [&edit](std::string_view field_key, const nlohmann::json& value,
+                                 std::string* error) {
+    try {
+      if (field_key == kMaskFieldLuminanceRange) {
+        edit.candidate_luminance_range = LuminanceRangeFromJson(value);
+      } else {
+        edit.candidate_color_range = ColorRangeFromJson(value);
+      }
+      return true;
+    } catch (const std::exception& range_error) {
+      *error = std::string{"The AI Mask candidate range is invalid: "} + range_error.what();
+      return false;
+    }
+  };
+  // A shown probe of the candidate takes the new ranges; its next frame shows them.
+  const auto show_ranges = [this, &edit, &result](bool settled) {
+    const auto& shown = coverage_preview_.RangeProbe();
+    if (!shown.has_value() || !shown->candidate.has_value() || coverage_preview_.CommitBlocked()) {
+      return;
+    }
+    auto probe                       = *shown;
+    probe.candidate->luminance_range = edit.candidate_luminance_range;
+    probe.candidate->color_range     = edit.candidate_color_range;
+    if (probe != *shown) {
+      coverage_preview_.ShowRangeProbe(std::move(probe));
+    }
+    (settled ? result.quality_requested : result.interactive_preview) = true;
+  };
+  const bool targets_candidate = command.node_id == edit.grade_id && command.mask_id.Empty();
+  const bool edit_open         = !edit.candidate_range_edit_key.empty();
+  switch (command.kind) {
+    case EditorMaskCreationCommandKind::BeginMaskField:
+      if (!targets_candidate) {
+        return refuse("Commit or cancel the AI Mask edit before editing Masks");
+      }
+      if (edit_open) {
+        return refuse("A range edit of the AI Mask candidate is open");
+      }
+      edit.candidate_range_edit_key = command.field_key;
+      edit.candidate_range_before   = command.field_key == kMaskFieldLuminanceRange
+                                          ? LuminanceRangeToJson(edit.candidate_luminance_range)
+                                          : ColorRangeToJson(edit.candidate_color_range);
+      result.accepted               = true;
+      return result;
+    case EditorMaskCreationCommandKind::SetMaskField: {
+      if (!targets_candidate) {
+        return refuse("Commit or cancel the AI Mask edit before editing Masks");
+      }
+      // Inside an open edit only its range; without one, one settled write (a reset).
+      if (edit_open && command.field_key != edit.candidate_range_edit_key) {
+        return refuse("A range edit of the AI Mask candidate is open");
+      }
+      std::string error;
+      if (!set_range(command.field_key, command.field_value, &error)) {
+        return refuse(std::move(error));
+      }
+      result.accepted = true;
+      show_ranges(!edit_open);
+      return result;
+    }
+    case EditorMaskCreationCommandKind::Finish:
+      result.accepted = true;
+      if (edit_open) {
+        edit.candidate_range_edit_key.clear();
+        edit.candidate_range_before = nullptr;
+        show_ranges(true);
+      }
+      return result;
+    case EditorMaskCreationCommandKind::Cancel:
+    case EditorMaskCreationCommandKind::CancelMode:
+      result.accepted = true;
+      if (edit_open) {
+        std::string error;
+        (void)set_range(edit.candidate_range_edit_key, edit.candidate_range_before, &error);
+        edit.candidate_range_edit_key.clear();
+        edit.candidate_range_before = nullptr;
+        show_ranges(true);
+      }
+      return result;
+    default:
+      return refuse("Commit or cancel the AI Mask edit before editing Masks");
+  }
 }
 
 auto EditorSessionService::RouteMaskCreationRender(bool interactive_preview, bool quality_requested,
@@ -3122,6 +3224,14 @@ auto EditorSessionService::CommitAiMaskEdit(EditorAiMaskCommit commit) -> Editor
       commit.asset.descriptor != commit.source.descriptor) {
     return Reject("The AI Mask asset does not match the key and bounds of its source");
   }
+  // Range edits queued before the Confirm (a step burst that settled at the click) belong to this
+  // commit; an open range edit of the candidate ends with its current value.
+  std::string error;
+  if (!SettleMaskInputForBoundary(&error)) {
+    return Reject(error.empty() ? "The open range edit could not be committed" : error);
+  }
+  ai_mask_edit_->candidate_range_edit_key.clear();
+  ai_mask_edit_->candidate_range_before = nullptr;
   if (coverage_preview_.CommitBlocked()) {
     const auto preview = coverage_preview_.State();
     return Reject("The viewport shows a previous AI Mask result because its preview failed (" +
@@ -3143,21 +3253,23 @@ auto EditorSessionService::CommitAiMaskEdit(EditorAiMaskCommit commit) -> Editor
   };
   // M12: the asset commits its own transaction first, so no history record refers to a missing
   // asset. A failed publish leaves an unreferenced row that the cleanup at close removes.
-  std::string error;
   if (!dependencies_.mask_assets->PutMaskAsset(commit.asset, &error)) {
     return fail(error.empty() ? "The AI Mask asset could not be stored" : std::move(error));
   }
+  // A new Mask takes the ranges set during the edit of its candidate in the same commit (#604).
+  const auto&              target = *ai_mask_edit_;
   EditorMaskCreationResult published;
   const bool               applied = dependencies_.history->WithWorkingDocument(
       lifecycle_.history_guard(),
-      [this, &commit, &published](PipelineDocument& document, MiniGitWorkingHistory& history,
-                                  const IEditorHistoryPort::MaskSettle& settle, bool* input_open,
-                                  std::string* op_error) {
+      [this, &commit, &target, &published](
+          PipelineDocument& document, MiniGitWorkingHistory& history,
+          const IEditorHistoryPort::MaskSettle& settle, bool* input_open, std::string* op_error) {
         mask_creation_.Bind(document, history);
         mask_creation_.SetSettlePublisher(settle);
         mask_creation_.SetInteractivePreview({});
-        published =
-            mask_creation_.CommitAiMaskSource(commit.grade_id, commit.mask_id, commit.source);
+        published = mask_creation_.CommitAiMaskSource(
+            commit.grade_id, commit.mask_id, commit.source, target.candidate_luminance_range,
+            target.candidate_color_range);
         *input_open = mask_creation_.HasOpenOperation();
         if (!published.accepted && op_error != nullptr) {
           *op_error = published.error;
@@ -3342,14 +3454,26 @@ auto EditorSessionService::ShowMaskRangeCoverage(const NodeId& grade_id, const M
   if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
     return Reject("The Mask range coverage requires an interactive session");
   }
+  MaskCoverageProbe probe{grade_id, mask_id, std::nullopt};
   if (ai_mask_edit_.has_value()) {
     // The AI Mask edit of a stored Mask can show the range coverage of that Mask over its
-    // candidate (MR4); a new candidate is not a Mask yet (D11).
-    if (ai_mask_edit_->grade_id != grade_id || ai_mask_edit_->mask_id != mask_id) {
+    // candidate (MR4); the edit of a new Mask shows the range coverage of its candidate (#604).
+    const bool new_candidate = !ai_mask_edit_->mask_id.has_value() && mask_id.Empty();
+    if (ai_mask_edit_->grade_id != grade_id ||
+        (!new_candidate && ai_mask_edit_->mask_id != mask_id)) {
       return Reject("The AI Mask edit shows its candidate; commit or cancel it first");
     }
     if (coverage_preview_.CommitBlocked()) {
       return Reject("The AI Mask candidate failed to present; retry its preview first");
+    }
+    if (new_candidate) {
+      const auto* selection = coverage_preview_.NewestCandidate();
+      if (selection == nullptr) {
+        return Reject("The AI Mask candidate has no coverage yet");
+      }
+      probe.candidate =
+          MaskCoverageProbeCandidate{*selection, ai_mask_edit_->candidate_luminance_range,
+                                     ai_mask_edit_->candidate_color_range};
     }
   }
   const auto working =
@@ -3364,11 +3488,10 @@ auto EditorSessionService::ShowMaskRangeCoverage(const NodeId& grade_id, const M
   if (grade == nullptr) {
     return Reject("The Mask range coverage target is not a Color Grade");
   }
-  if (grade->FindMask(mask_id) == nullptr) {
+  if (!probe.candidate.has_value() && grade->FindMask(mask_id) == nullptr) {
     return Reject("The Mask is missing");
   }
-  const MaskCoverageProbe probe{grade_id, mask_id};
-  const bool              changed = coverage_preview_.RangeProbe() != probe;
+  const bool changed = coverage_preview_.RangeProbe() != probe;
   coverage_preview_.ShowRangeProbe(probe);
   if (changed) {
     // One Quality render presents the coverage of the new probe; later frames carry it too.

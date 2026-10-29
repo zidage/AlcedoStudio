@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/mask_coverage_display.hpp"
@@ -82,6 +83,22 @@ void               RecordMaskCoverageDisplay(OpenClRenderDevice&                
                                              const MaskCoverageImage<OpenClBackend>& coverage,
                                              const MaskCoverageDisplayRequest&       request,
                                              OpenClBackend::Texture2D&               output);
+
+/**
+ * @brief Record the range probe display of a Mask that is not in the plan (#604), such as the
+ *        candidate of a new AI Mask: the raster MaskEvaluate of @p coverage on the render grid of
+ *        @p plan with the invert, Luminance Range, Hue Range, and opacity of @p mask, into
+ *        @p output (RGBA32F; red is the R8 value, green and blue 0, alpha 1). The value is the
+ *        one that ExecuteOpenClMask writes for the same Mask.
+ *
+ * @param range_scene The input image of the probed Grade; only a restricted range reads it.
+ * @pre @p output has the render extent.
+ * @throws std::runtime_error for a wrong output or Grade input.
+ */
+void RecordMaskCandidateRangeDisplay(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                                     const MaskCoverageImage<OpenClBackend>& coverage,
+                                     const MaskModel& mask, const FrameSceneBinding& range_scene,
+                                     OpenClBackend::Texture2D& output);
 
 /**
  * @brief Record the display write of a probed Mask (Mask ranges plan D8): the R8 coverage
