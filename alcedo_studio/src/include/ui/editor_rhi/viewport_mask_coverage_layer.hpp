@@ -68,8 +68,19 @@ class ViewportMaskCoverageLayer {
   /// @return True when a new frame became the displayed frame.
   auto ConsumeNewest(QRhi* rhi, std::uint64_t session_epoch, std::uint64_t image_identity) -> bool;
 
-  /// Release the displayed frame (hide, image change, close, device recreation). Idempotent.
+  /// Release the displayed frame (hide, image change, close). Idempotent.
   void Release();
+
+  /**
+   * @brief Release the channel with the QRhi (device recreation or renderer teardown): the
+   *        displayed frame, the queued frames and their native targets (the queue target
+   *        generation is invalidated), and the retired targets through @p adapter when given.
+   *
+   * Coverage that was published after the last clear is lost with it; the sink records that loss
+   * (ViewportMaskCoverageSink::MarkDisplayLost) so that its owner presents the coverage again
+   * (#514).
+   */
+  void ReleaseWithDevice(ILeaseTargetAdapter* adapter);
 
   /**
    * @brief Apply a new ViewportMaskCoverageSink::ClearCoverage: release the displayed frame when

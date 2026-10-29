@@ -200,19 +200,10 @@ void EditorViewportRenderer::releaseResources() {
     present_queue_->InvalidateTargetGeneration();
   }
   releaseQueuedNatives();
-  // Device recreation or teardown: the coverage input and its targets go with the QRhi.
-  coverage_layer_.Release();
-  detail_coverage_layer_.Release();
-  if (coverage_queue_) {
-    coverage_queue_->InvalidateTargetGeneration();
-  }
-  if (detail_coverage_queue_) {
-    detail_coverage_queue_->InvalidateTargetGeneration();
-  }
-  if (adapter_) {
-    coverage_layer_.DestroyRetiredNatives(*adapter_);
-    detail_coverage_layer_.DestroyRetiredNatives(*adapter_);
-  }
+  // Device recreation or teardown: the coverage input and its targets go with the QRhi. The sinks
+  // record a lost coverage; the next synchronize() reports it so that it is presented again.
+  coverage_layer_.ReleaseWithDevice(adapter_.get());
+  detail_coverage_layer_.ReleaseWithDevice(adapter_.get());
   composite_.Release();
 }
 
@@ -226,7 +217,12 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
   // Releasing on every call used to invalidate the native target request just
   // before render() could fulfill it, leaving the viewport permanently black.
   if (rhi_ != next_rhi) {
+    const bool recreated = rhi_ != nullptr;
     releaseResources();
+    if (recreated) {
+      // One more frame, so that synchronize() reports the coverage that went with the old QRhi.
+      update();
+    }
     rhi_                = next_rhi;
     // Process-wide backend selected in main() is authoritative. Deriving only
     // from QRhi can silently flip CUDA↔OpenCL when setGraphicsApi did not take
@@ -285,6 +281,8 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   detail_coverage_queue_ = item_->detailMaskCoverageQueue();
   detail_coverage_layer_.Attach(detail_coverage_queue_, item_->detailMaskCoverageSinkShared());
   detail_coverage_queue_->SetConsumerAvailable(item_->presentationRequested());
+  // A QRhi release of this renderer or of the previous one dropped published coverage (#514).
+  item_->reportLostMaskCoverage();
 
   const auto next_session_epoch  = item_->sessionEpoch();
   const auto next_image_identity = item_->imageIdentity();

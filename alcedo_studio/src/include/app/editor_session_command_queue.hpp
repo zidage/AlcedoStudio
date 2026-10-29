@@ -103,6 +103,8 @@ enum class EditorSessionCommandKind : std::uint8_t {
   ClearMaskCoveragePreview,
   /// Present the newest coverage request again after a failed presentation.
   RetryMaskCoveragePreview,
+  /// Present the newest coverage request again after the viewport lost the displayed coverage.
+  PresentMaskCoverageAgain,
   /// Show the coverage of one Mask from the photo renders (Mask ranges D8).
   ShowMaskRangeCoverage,
   /// Hide the range probe coverage.

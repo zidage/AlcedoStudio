@@ -3340,6 +3340,32 @@ auto EditorSessionService::RetryMaskCoveragePreview(EditorMaskCoverageCompletion
   return accepted;
 }
 
+auto EditorSessionService::PresentMaskCoverageAgain(EditorMaskCoverageCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("Presenting the coverage preview again requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::PresentMaskCoverageAgain;
+    auto shared  = std::make_shared<EditorMaskCoverageCompletion>(std::move(on_complete));
+    return SubmitCommand(std::move(command), [this, shared](const EditorSessionCommand&) {
+      return PresentMaskCoverageAgain(std::move(*shared));
+    });
+  }
+  EditorSessionResult accepted;
+  accepted.kind     = EditorSessionResultKind::Accepted;
+  accepted.state    = lifecycle_.state();
+  accepted.identity = lifecycle_.identity();
+  if (!coverage_preview_.PresentAgain(current_operation_id_, on_complete)) {
+    accepted.message = "The coverage preview has no presented request to present again";
+    on_complete({EditorMaskCoverageOutcome::Rejected, accepted.message, coverage_preview_.State()});
+    return accepted;
+  }
+  accepted.message = "Coverage preview presented again";
+  return accepted;
+}
+
 void EditorSessionService::EndAiMaskWorkForImageChange() {
   (void)EndAiMaskEditOnOwner();
   coverage_preview_.Clear();

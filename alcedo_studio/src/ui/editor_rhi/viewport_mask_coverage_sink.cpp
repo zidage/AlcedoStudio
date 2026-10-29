@@ -338,4 +338,16 @@ auto ViewportMaskCoverageSink::ClearedThrough() const -> std::uint64_t {
   return cleared_through_;
 }
 
+void ViewportMaskCoverageSink::MarkDisplayLost() {
+  std::lock_guard lock(mutex_);
+  if (published_count_ > cleared_through_) {
+    display_lost_ = true;
+  }
+}
+
+auto ViewportMaskCoverageSink::TakeDisplayLost() -> bool {
+  std::lock_guard lock(mutex_);
+  return std::exchange(display_lost_, false);
+}
+
 }  // namespace alcedo::editor_rhi

@@ -265,6 +265,16 @@ void EditorViewportItem::clearMaskCoverage() {
   detail_coverage_sink_->ClearCoverage();
 }
 
+void EditorViewportItem::reportLostMaskCoverage() {
+  // Take both records: each loss is reported once.
+  const bool base_lost   = coverage_sink_->TakeDisplayLost();
+  const bool detail_lost = detail_coverage_sink_->TakeDisplayLost();
+  if (!base_lost && !detail_lost) {
+    return;
+  }
+  QMetaObject::invokeMethod(this, [this] { emit MaskCoverageDisplayLost(); }, Qt::QueuedConnection);
+}
+
 auto EditorViewportItem::maskCoverageColor() const -> QColor {
   return QColor::fromRgbF(mask_coverage_style_.red, mask_coverage_style_.green,
                           mask_coverage_style_.blue);

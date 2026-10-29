@@ -701,3 +701,57 @@ Remaining issues or unavailable platforms:
   - #531 (editor GPU memory).
   - macOS not changed (Core ML backend).
 ```
+
+### 7.8 Coverage presented again after a QRhi release (issue #514)
+
+```text
+Phase / date / status: SM9 MVP fix / 2026-10-29 / implemented on Windows (CUDA, OpenCL).
+Source revision and branch: f6b4787d; branch fix/ai-mask-coverage-after-rhi-release.
+Actual changed modules and diff size: about 430 lines (tests about 300).
+  - ViewportMaskCoverageSink MarkDisplayLost/TakeDisplayLost and
+    ViewportMaskCoverageLayer::ReleaseWithDevice; EditorViewportRenderer::releaseResources uses it.
+  - EditorViewportItem::reportLostMaskCoverage and signal MaskCoverageDisplayLost.
+  - EditorMaskCoveragePreview::PresentAgain and the session facade PresentMaskCoverageAgain
+    (command kind PresentMaskCoverageAgain, presentation-only in EditorActionPolicy).
+  - EditorSessionController forwards the viewport signal and emits MaskCoveragePresentedAgain;
+    EditorAiMaskTool takes that result like its own coverage completions.
+Implemented behavior:
+  - A QRhi release of the viewport (device recreation in initialize(), or renderer teardown)
+    releases both coverage channels with ReleaseWithDevice. When a frame was published after the
+    last clear, the sink records the loss. The record outlives the renderer: the next
+    synchronize() of this renderer or of a new one reports it once, as MaskCoverageDisplayLost
+    on the GUI thread. initialize() asks for one more frame after a recreation.
+  - The session presents the newest request again with the same shared pixels and edge values
+    (no model call). The status is Pending until the frame is displayed, then Current; a failed
+    presentation labels the result Previous with the real error, so Retry is offered and Commit
+    is refused (SM8 section 4.3 states the rule).
+  - Nothing is presented again in the Hidden status, in the Previous status (Retry presents the
+    newest request), or for a range probe (the next photo frame carries its coverage).
+Decisions made during the work:
+  - Present again by the application, not only a Previous label: the issue allows both; the
+    user sees the coverage again without an action, and a failure still reaches the Retry rule.
+  - The loss is recorded on the sink, not the renderer, because the renderer destructor can run
+    after the item is gone; the sink is shared and never touches the item.
+  - The controller, not the AI Mask tool, sends the request: the committed selection preview has
+    the same loss, and the controller owns the viewport binding.
+Primary success call chain: EditorViewportRenderer::initialize (new QRhi) or destructor ->
+  releaseResources -> ViewportMaskCoverageLayer::ReleaseWithDevice ->
+  ViewportMaskCoverageSink::MarkDisplayLost -> next synchronize() ->
+  EditorViewportItem::reportLostMaskCoverage -> MaskCoverageDisplayLost (GUI) ->
+  EditorSessionController -> PresentMaskCoverageAgain -> EditorMaskCoveragePreview::PresentAgain
+  -> Enqueue -> EditorSessionRenderSchedulerPort job (waits for the new consumer) -> Current ->
+  MaskCoveragePresentedAgain -> EditorAiMaskTool::OnCoveragePresented.
+Primary failure and restore call chain: the job fails -> Previous with the real error ->
+  CommitAiMaskEdit refused -> Retry -> Current.
+Commands and exit codes:
+  scripts\msvc_env.cmd --build build/debug: 0
+  ctest -R 'MaskCoverage|ViewportCoverage|MaskRangeCoverage|EditorSession|EditorViewport|AiMask|
+    EditorActionPolicy|WorkspaceShell|EditorPreviewPresent|EditorOverlay': 547/548 passed; the
+    failure is EditorSessionHistoryPortTest.CheckoutAndPasteHashesAreUnchanged (open issue #555).
+  New: EditorMaskCoveragePreviewTest.LostDisplayedCoverageIsPresentedAgain;
+    ViewportCoverageCompositeTest.CoverageLostWithTheQRhiIsPresentedAgain (CUDA and OpenCL).
+Remaining issues or unavailable platforms:
+  - The monitor-layout change of the issue was not repeated in the real window; the test drives
+    the production release, report, and re-presentation on a real QRhi without a window.
+  - macOS (Metal) not built.
+```

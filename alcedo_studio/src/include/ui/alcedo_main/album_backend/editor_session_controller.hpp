@@ -21,6 +21,7 @@
 #include "app/editor_adjustment_context.hpp"
 #include "app/editor_adjustment_types.hpp"
 #include "app/editor_history_types.hpp"
+#include "app/editor_mask_coverage_preview.hpp"
 #include "app/editor_node_graph_projection.hpp"
 #include "app/editor_pending_input.hpp"
 #include "app/editor_session_types.hpp"
@@ -487,6 +488,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void ImageExifChanged();
   void DesktopUiChanged();
   void PresentationBindingChanged();
+  /// Result of presenting the coverage preview again after the bound viewport lost the displayed
+  /// coverage with its QRhi resources (#514). Not emitted when nothing was presented again
+  /// (outcome Rejected). GUI thread.
+  void MaskCoveragePresentedAgain(alcedo::EditorMaskCoverageResult result);
   void LastEditedImageChanged();
   // Phase 7A P1: emitted with the typed result of a history/Version operation.
   void HistoryOperationFinished();
@@ -623,6 +628,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QMetaObject::Connection presented_geometry_connection_;
   // Forwards viewport suspension (minimize/hide) so refused frames render again on resume.
   QMetaObject::Connection presentation_suspended_connection_;
+  // Presents the coverage preview again when the viewport dropped it with its QRhi resources.
+  QMetaObject::Connection mask_coverage_lost_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
   std::unique_ptr<EditorMaskCreationAdapter>     mask_creation_;
   std::shared_ptr<alcedo::MaskThumbnailService>  mask_thumbnail_service_;

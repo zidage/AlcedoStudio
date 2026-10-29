@@ -713,6 +713,21 @@ class IEditorSessionBackend {
     return RefuseMaskCoverage(std::move(on_complete));
   }
   /**
+   * @brief Present the newest coverage request again because the viewport lost the displayed
+   *        coverage (#514: it released its QRhi resources). Uses the same shared pixels and edge
+   *        values; runs no model. A failed presentation moves the preview to Previous (Retry).
+   *
+   * The outcome is Rejected, with the preview unchanged, when nothing is presented again: no
+   * coverage is shown, the preview is already in the Previous status, or the coverage is a range
+   * probe, which the next photo frame carries.
+   * @return Rejected only when the command queue refuses the command. Every other outcome reaches
+   *         @p on_complete exactly once, on the session owner thread.
+   */
+  virtual auto PresentMaskCoverageAgain(EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult {
+    return RefuseMaskCoverage(std::move(on_complete));
+  }
+  /**
    * @brief Show the coverage of Mask @p mask_id of Color Grade @p grade_id in the viewport, from
    *        the photo renders, evaluated on the image that enters that Grade (Mask ranges D8-D11).
    *
@@ -1041,6 +1056,8 @@ class EditorSessionService final : public IEditorSessionBackend {
       -> EditorSessionResult override;
   auto HideMaskRangeCoverage() -> EditorSessionResult override;
   auto RetryMaskCoveragePreview(EditorMaskCoverageCompletion on_complete)
+      -> EditorSessionResult override;
+  auto PresentMaskCoverageAgain(EditorMaskCoverageCompletion on_complete)
       -> EditorSessionResult override;
   [[nodiscard]] auto mask_coverage_preview_state() const
       -> EditorMaskCoveragePreviewState override {

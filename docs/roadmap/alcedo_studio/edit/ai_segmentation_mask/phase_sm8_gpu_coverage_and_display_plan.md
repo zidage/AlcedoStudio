@@ -162,6 +162,12 @@ Keep that desired session state, report the real display error, and keep the pre
 Mark it explicitly as the previous result. Disable Commit until Retry displays the current state successfully.
 Retry uses the retained model outputs. It must not run inference again.
 The error must not be reported as a successful preview of the current parameters.
+A QRhi release of the viewport (device recreation or renderer teardown, for example when the window
+moves to another display) drops the displayed coverage. The viewport reports that loss, and the
+session presents the newest request again by itself, with the same retained outputs (changed by
+SM9 issue #514). The status is Pending until that frame is displayed; a failure labels the result
+Previous, so Retry is offered and Commit is disabled. In the Previous status, Retry stays the way
+to present the newest request; a range probe comes back with the next photo frame.
 
 Commit uses `PrepareCommit()` for the original R8, then the existing asset-first history publication.
 Do not read adjusted GPU pixels back to create the project asset.

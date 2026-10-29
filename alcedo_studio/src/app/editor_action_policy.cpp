@@ -258,6 +258,7 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::SelectMaskCoveragePreview:
     case EditorSessionCommandKind::ClearMaskCoveragePreview:
     case EditorSessionCommandKind::RetryMaskCoveragePreview:
+    case EditorSessionCommandKind::PresentMaskCoverageAgain:
     case EditorSessionCommandKind::ShowMaskRangeCoverage:
     case EditorSessionCommandKind::HideMaskRangeCoverage:
       return std::nullopt;
