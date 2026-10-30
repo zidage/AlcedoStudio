@@ -6,7 +6,7 @@
 /// @brief Audited zh_CN catalog coverage for the PR93-176 UI translation plan.
 ///
 /// Reads the source-of-truth TS catalog with QXmlStreamReader and verifies the
-/// 24 audited target contexts: presence, per-context message counts, finished
+/// Audited target contexts: presence, per-context message counts, finished
 /// non-empty translations, Qt placeholder parity, and the approved Mask Group
 /// terminology. A second section loads the compiled alcedo_main_zh_CN.qm with
 /// QTranslator and proves QML and C++ contexts resolve through
@@ -37,9 +37,8 @@ struct CatalogMessage {
 using CatalogMessages = QList<CatalogMessage>;
 using Catalog         = QMap<QString, CatalogMessages>;
 
-// Audited post-lupdate message counts per target context. lupdate removes
-// obsolete keys (-no-obsolete), so these counts describe the live extraction,
-// not the stale checked-in rows.
+// Audited live message counts per target context. Update the catalog by hand
+// to preserve translations outside the changed contexts.
 const QMap<QString, int>& ExpectedContextMessageCounts() {
   static const QMap<QString, int> counts = {
       {QStringLiteral("AdjustmentTransferDialog"), 7},
@@ -49,6 +48,7 @@ const QMap<QString, int>& ExpectedContextMessageCounts() {
       {QStringLiteral("CollectionsPanel"), 17},
       {QStringLiteral("EditorAdjustmentHeader"), 2},
       {QStringLiteral("EditorAdjustmentStack"), 11},
+      {QStringLiteral("EditorAiMaskPanel"), 40},
       {QStringLiteral("EditorEndpointNodeDelegate"), 2},
       {QStringLiteral("EditorGeometryPanel"), 14},
       {QStringLiteral("EditorMaskGroupDelegate"), 16},
@@ -65,12 +65,13 @@ const QMap<QString, int>& ExpectedContextMessageCounts() {
       {QStringLiteral("EditorWorkspaceRail"), 18},
       {QStringLiteral("InspectorToggleButton"), 4},
       {QStringLiteral("TopToolbar"), 8},
+      {QStringLiteral("alcedo::ui::EditorAiMaskTool"), 22},
       {QStringLiteral("alcedo::ui::EditorNodeController"), 24},
   };
   return counts;
 }
 
-constexpr int kExpectedTargetMessageTotal = 235;
+constexpr int kExpectedTargetMessageTotal = 297;
 
 /// Parses a Qt TS catalog into context -> messages. Numerus translations keep
 /// their combined <numerusform> text so placeholder checks stay meaningful.
@@ -283,6 +284,23 @@ TEST(SimplifiedChineseCatalogTest, MaskGroupTermsUseLayerWithMaskGroupParentheti
           << ctx.key().toStdString() << " | " << message.translation.toStdString();
       EXPECT_FALSE(residue.contains(QStringLiteral("图层")))
           << ctx.key().toStdString() << " | " << message.translation.toStdString();
+    }
+  }
+}
+
+TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesEveryAuditedSource) {
+  QString    error;
+  const auto catalog = ParseTsCatalog(QStringLiteral(ALCEDO_ZH_CN_TS_FILE), &error);
+  ASSERT_TRUE(error.isEmpty()) << error.toStdString();
+  QTranslator translator;
+  ASSERT_TRUE(translator.load(QStringLiteral(ALCEDO_ZH_CN_QM_FILE)));
+  for (auto it = ExpectedContextMessageCounts().begin(); it != ExpectedContextMessageCounts().end();
+       ++it) {
+    const auto context = it.key().toUtf8();
+    for (const auto& message : catalog.value(it.key())) {
+      const auto source = message.source.toUtf8();
+      EXPECT_EQ(translator.translate(context.constData(), source.constData()), message.translation)
+          << context.constData() << " | " << source.constData();
     }
   }
 }

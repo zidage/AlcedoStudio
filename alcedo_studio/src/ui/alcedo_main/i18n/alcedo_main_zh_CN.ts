@@ -2415,6 +2415,142 @@ Original source files on disk will be kept.</source>
         <source>Sky: the license of the Sky model&apos;s training data is not clear. Decide yourself before commercial use; see Settings &gt; AI Models.</source>
         <translation>天空：天空模型训练数据的许可证不明确，商业使用前请自行判断，详见“设置 &gt; AI 模型”。</translation>
     </message>
+    <message>
+        <source> px</source>
+        <translation> 像素</translation>
+    </message>
+    <message>
+        <source>%1/%2</source>
+        <translation>%1/%2</translation>
+    </message>
+    <message>
+        <source>AI Mask</source>
+        <translation>AI 蒙版</translation>
+    </message>
+    <message>
+        <source>Add to the Mask</source>
+        <translation>添加到蒙版</translation>
+    </message>
+    <message>
+        <source>Box: drag around an object</source>
+        <translation>框选：拖动以框住对象</translation>
+    </message>
+    <message>
+        <source>Close without saving</source>
+        <translation>关闭且不保存</translation>
+    </message>
+    <message>
+        <source>Confirm</source>
+        <translation>确认</translation>
+    </message>
+    <message>
+        <source>Edit AI Mask</source>
+        <translation>编辑 AI 蒙版</translation>
+    </message>
+    <message>
+        <source>Expand</source>
+        <translation>扩展</translation>
+    </message>
+    <message>
+        <source>Feather</source>
+        <translation>羽化</translation>
+    </message>
+    <message>
+        <source>Large region</source>
+        <translation>大范围</translation>
+    </message>
+    <message>
+        <source>Loading the models</source>
+        <translation>正在加载模型</translation>
+    </message>
+    <message>
+        <source>Medium region</source>
+        <translation>中范围</translation>
+    </message>
+    <message>
+        <source>New AI Mask</source>
+        <translation>新建 AI 蒙版</translation>
+    </message>
+    <message>
+        <source>Opening the edit</source>
+        <translation>正在打开编辑</translation>
+    </message>
+    <message>
+        <source>Path: draw a line over an object</source>
+        <translation>路径：在对象上画线</translation>
+    </message>
+    <message>
+        <source>People</source>
+        <translation>人物</translation>
+    </message>
+    <message>
+        <source>Person %1</source>
+        <translation>人物 %1</translation>
+    </message>
+    <message>
+        <source>Point: click to add a point</source>
+        <translation>点选：点击添加点</translation>
+    </message>
+    <message>
+        <source>Reading the image</source>
+        <translation>正在读取图像</translation>
+    </message>
+    <message>
+        <source>Redo AI Mask step</source>
+        <translation>重做 AI 蒙版步骤</translation>
+    </message>
+    <message>
+        <source>Rendering the analysis image</source>
+        <translation>正在渲染分析图像</translation>
+    </message>
+    <message>
+        <source>Retry the Mask display</source>
+        <translation>重试显示蒙版</translation>
+    </message>
+    <message>
+        <source>Running the model</source>
+        <translation>正在运行模型</translation>
+    </message>
+    <message>
+        <source>Saving the Mask</source>
+        <translation>正在保存蒙版</translation>
+    </message>
+    <message>
+        <source>Select Background</source>
+        <translation>选择背景</translation>
+    </message>
+    <message>
+        <source>Select People</source>
+        <translation>选择人物</translation>
+    </message>
+    <message>
+        <source>Select Sky</source>
+        <translation>选择天空</translation>
+    </message>
+    <message>
+        <source>Select Subject</source>
+        <translation>选择主体</translation>
+    </message>
+    <message>
+        <source>Small region</source>
+        <translation>小范围</translation>
+    </message>
+    <message>
+        <source>Starting the AI runtime</source>
+        <translation>正在启动 AI 运行时</translation>
+    </message>
+    <message>
+        <source>Subtract from the Mask</source>
+        <translation>从蒙版中减去</translation>
+    </message>
+    <message>
+        <source>Undo AI Mask step</source>
+        <translation>撤销 AI 蒙版步骤</translation>
+    </message>
+    <message>
+        <source>Updating the Mask</source>
+        <translation>正在更新蒙版</translation>
+    </message>
 </context>
 <context>
     <name>EditorCloseConfirmDialog</name>
@@ -8518,6 +8654,97 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>Edited %1</source>
         <translation>编辑于 %1</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::EditorAiMaskTool</name>
+    <message>
+        <source>Drag a box around the object.</source>
+        <translation>请拖动以框住对象。</translation>
+    </message>
+    <message>
+        <source>Open an image in the editor first.</source>
+        <translation>请先在编辑器中打开图像。</translation>
+    </message>
+    <message>
+        <source>Select a Color Grade node first.</source>
+        <translation>请先选择色彩分级节点。</translation>
+    </message>
+    <message>
+        <source>Select an AI Mask in the Mask list first.</source>
+        <translation>请先在蒙版列表中选择 AI 蒙版。</translation>
+    </message>
+    <message>
+        <source>The box is outside the photo.</source>
+        <translation>选框位于照片之外。</translation>
+    </message>
+    <message>
+        <source>The click is outside the photo.</source>
+        <translation>点击位置位于照片之外。</translation>
+    </message>
+    <message>
+        <source>The path is outside the photo.</source>
+        <translation>路径位于照片之外。</translation>
+    </message>
+    <message>
+        <source>Wait until the current model request returns.</source>
+        <translation>请等待当前模型请求完成。</translation>
+    </message>
+    <message>
+        <source>The AI sidecar runtime is not available. Open a project first.</source>
+        <translation>AI 辅助进程运行时不可用。请先打开项目。</translation>
+    </message>
+    <message>
+        <source>The AI sidecar lease is not available.</source>
+        <translation>无法获取 AI 辅助进程的使用权。</translation>
+    </message>
+    <message>
+        <source>The editor session is not available.</source>
+        <translation>编辑器会话不可用。</translation>
+    </message>
+    <message>
+        <source>The viewport is not bound to the AI Mask tool.</source>
+        <translation>视口未绑定到 AI 蒙版工具。</translation>
+    </message>
+    <message>
+        <source>The AI Mask analysis image failed: %1</source>
+        <translation>AI 蒙版分析图像生成失败：%1</translation>
+    </message>
+    <message>
+        <source>The AI Mask edit did not open: %1</source>
+        <translation>无法打开 AI 蒙版编辑：%1</translation>
+    </message>
+    <message>
+        <source>The AI Mask model status could not be read: %1</source>
+        <translation>无法读取 AI 蒙版模型状态：%1</translation>
+    </message>
+    <message>
+        <source>The AI Mask models could not be loaded from %1: %2</source>
+        <translation>无法从 %1 加载 AI 蒙版模型：%2</translation>
+    </message>
+    <message>
+        <source>The AI Mask session did not start: %1</source>
+        <translation>AI 蒙版会话未能启动：%1</translation>
+    </message>
+    <message>
+        <source>The AI Mask was not committed: %1</source>
+        <translation>AI 蒙版未能保存：%1</translation>
+    </message>
+    <message>
+        <source>The AI sidecar did not start: %1</source>
+        <translation>AI 辅助进程未能启动：%1</translation>
+    </message>
+    <message>
+        <source>The segmentation session did not start: %1</source>
+        <translation>分割会话未能启动：%1</translation>
+    </message>
+    <message>
+        <source>Unknown AI Mask task: %1</source>
+        <translation>未知的 AI 蒙版任务：%1</translation>
+    </message>
+    <message>
+        <source>The AI Mask session is closed.</source>
+        <translation>AI 蒙版会话已关闭。</translation>
     </message>
 </context>
 </TS>

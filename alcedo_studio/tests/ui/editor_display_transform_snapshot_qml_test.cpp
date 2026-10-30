@@ -16,10 +16,12 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlError>
-#include <QQuickStyle>
 #include <QQuickItem>
+#include <QQuickStyle>
 #include <QQuickWindow>
+#include <QTest>
 #include <QVariantMap>
+#include <QWheelEvent>
 #include <exception>
 #include <filesystem>
 #include <memory>
@@ -37,10 +39,11 @@ namespace {
 
 class DisplayTransformSession final : public QObject, public IEditorAdjustmentSubmitter {
   Q_OBJECT
-  Q_PROPERTY(QVariantMap adjustmentSnapshot READ adjustmentSnapshot NOTIFY AdjustmentSnapshotChanged)
+  Q_PROPERTY(
+      QVariantMap adjustmentSnapshot READ adjustmentSnapshot NOTIFY AdjustmentSnapshotChanged)
   Q_PROPERTY(quint64 snapshotRevision READ snapshotRevision NOTIFY AdjustmentSnapshotChanged)
-  Q_PROPERTY(QString activeAdjustmentPanel READ activeAdjustmentPanel
-             WRITE setActiveAdjustmentPanel NOTIFY activeAdjustmentPanelChanged)
+  Q_PROPERTY(QString activeAdjustmentPanel READ activeAdjustmentPanel WRITE setActiveAdjustmentPanel
+                 NOTIFY activeAdjustmentPanelChanged)
 
  public:
   explicit DisplayTransformSession(QVariantMap snapshot, quint64 revision)
@@ -88,10 +91,10 @@ class DisplayTransformSession final : public QObject, public IEditorAdjustmentSu
   void activeAdjustmentPanelChanged();
 
  private:
-  QVariantMap snapshot_;
-  quint64     revision_     = 0;
-  int         submit_count_ = 0;
-  QString     active_panel_ = QStringLiteral("display");
+  QVariantMap                               snapshot_;
+  quint64                                   revision_     = 0;
+  int                                       submit_count_ = 0;
+  QString                                   active_panel_ = QStringLiteral("display");
   std::vector<alcedo::EditorParameterWrite> writes_;
 };
 
@@ -131,7 +134,8 @@ class AdjustmentStackHarness {
     initial_properties.insert(QStringLiteral("editorSession"),
                               QVariant::fromValue(static_cast<QObject*>(session)));
     initial_properties.insert(QStringLiteral("controlsEnabled"), true);
-    root_.reset(qobject_cast<QQuickItem*>(component.createWithInitialProperties(initial_properties)));
+    root_.reset(
+        qobject_cast<QQuickItem*>(component.createWithInitialProperties(initial_properties)));
     if (!root_) {
       errors_ = component.errors();
       return;
@@ -139,9 +143,12 @@ class AdjustmentStackHarness {
 
     root_->setParentItem(window_.contentItem());
     window_.resize(400, 700);
+    root_->setSize(QSizeF(400, 700));
     window_.show();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 200);
   }
+
+  auto window() -> QQuickWindow* { return &window_; }
 
   auto root() const -> QQuickItem* { return root_.get(); }
   auto errors() const -> QString {
@@ -164,11 +171,11 @@ class AdjustmentStackHarness {
   QList<QQmlError>            errors_;
 };
 
-auto MakeOpenDrtSnapshot(double peak = 100.0,
+auto MakeOpenDrtSnapshot(double         peak           = 100.0,
                          const QString& encoding_space = QStringLiteral("rec709"),
-                         const QString& encoding_eotf = QStringLiteral("gamma_2_2"),
-                         const QString& look_preset = QStringLiteral("standard"),
-                         const QString& tonescale = QStringLiteral("use_look_preset"),
+                         const QString& encoding_eotf  = QStringLiteral("gamma_2_2"),
+                         const QString& look_preset    = QStringLiteral("standard"),
+                         const QString& tonescale      = QStringLiteral("use_look_preset"),
                          const QString& creative_white = QStringLiteral("use_look_preset"))
     -> QVariantMap {
   QVariantMap inner;
@@ -196,9 +203,9 @@ auto MakeOpenDrtSnapshot(double peak = 100.0,
 // Panel loads via EditorAdjustmentStack and models are accessible.
 
 TEST(EditorDisplayTransformSnapshotQmlTest, PanelLoadsAndAllModelsAreAccessible) {
-  auto snapshot = MakeOpenDrtSnapshot();
+  auto                    snapshot = MakeOpenDrtSnapshot();
   DisplayTransformSession session(snapshot, 0);
-  AdjustmentStackHarness harness(&session);
+  AdjustmentStackHarness  harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
@@ -210,13 +217,14 @@ TEST(EditorDisplayTransformSnapshotQmlTest, PanelLoadsAndAllModelsAreAccessible)
   ASSERT_NE(harness.findModel<QObject>(QStringLiteral("displayAcesLimitingSpaceModel")), nullptr);
   ASSERT_NE(harness.findModel<QObject>(QStringLiteral("displayOpenDrtLookModel")), nullptr);
   ASSERT_NE(harness.findModel<QObject>(QStringLiteral("displayOpenDrtTonescaleModel")), nullptr);
-  ASSERT_NE(harness.findModel<QObject>(QStringLiteral("displayOpenDrtCreativeWhiteModel")), nullptr);
+  ASSERT_NE(harness.findModel<QObject>(QStringLiteral("displayOpenDrtCreativeWhiteModel")),
+            nullptr);
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, MethodModelDefaultIsOpenDrt) {
-  auto snapshot = MakeOpenDrtSnapshot();
+  auto                    snapshot = MakeOpenDrtSnapshot();
   DisplayTransformSession session(snapshot, 0);
-  AdjustmentStackHarness harness(&session);
+  AdjustmentStackHarness  harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
@@ -234,9 +242,9 @@ TEST(EditorDisplayTransformSnapshotQmlTest, MethodModelDefaultIsOpenDrt) {
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, EncodingSpaceListsTheModelSpaces) {
-  auto snapshot = MakeOpenDrtSnapshot();
+  auto                    snapshot = MakeOpenDrtSnapshot();
   DisplayTransformSession session(snapshot, 0);
-  AdjustmentStackHarness harness(&session);
+  AdjustmentStackHarness  harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
@@ -282,9 +290,9 @@ TEST(EditorDisplayTransformSnapshotQmlTest, EncodingSpaceChangeSelectsAnEotfOfTh
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, PeakLuminanceRangeIsCorrect) {
-  auto snapshot = MakeOpenDrtSnapshot();
+  auto                    snapshot = MakeOpenDrtSnapshot();
   DisplayTransformSession session(snapshot, 0);
-  AdjustmentStackHarness harness(&session);
+  AdjustmentStackHarness  harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
@@ -298,9 +306,9 @@ TEST(EditorDisplayTransformSnapshotQmlTest, PeakLuminanceRangeIsCorrect) {
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, SubmitterIsWiredOnModel) {
-  auto snapshot = MakeOpenDrtSnapshot();
+  auto                    snapshot = MakeOpenDrtSnapshot();
   DisplayTransformSession session(snapshot, 0);
-  AdjustmentStackHarness harness(&session);
+  AdjustmentStackHarness  harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
@@ -313,9 +321,9 @@ TEST(EditorDisplayTransformSnapshotQmlTest, SubmitterIsWiredOnModel) {
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, OpenDrtModelEntriesAreCorrect) {
-  auto snapshot = MakeOpenDrtSnapshot();
+  auto                    snapshot = MakeOpenDrtSnapshot();
   DisplayTransformSession session(snapshot, 0);
-  AdjustmentStackHarness harness(&session);
+  AdjustmentStackHarness  harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
@@ -329,9 +337,9 @@ TEST(EditorDisplayTransformSnapshotQmlTest, OpenDrtModelEntriesAreCorrect) {
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, SubmitterFieldKeyIsOdt) {
-  auto snapshot = MakeOpenDrtSnapshot();
+  auto                    snapshot = MakeOpenDrtSnapshot();
   DisplayTransformSession session(snapshot, 0);
-  AdjustmentStackHarness harness(&session);
+  AdjustmentStackHarness  harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
@@ -344,10 +352,10 @@ TEST(EditorDisplayTransformSnapshotQmlTest, SubmitterFieldKeyIsOdt) {
 // Non-default ODT snapshot must project into every display model (load-only).
 TEST(EditorDisplayTransformSnapshotQmlTest, LoadFromSnapshotProjectsNonDefaultOdtFields) {
   auto snapshot = MakeOpenDrtSnapshot(
-      /*peak=*/420.0, QStringLiteral("rec2020"), QStringLiteral("st2084"),
-      QStringLiteral("umbra"), QStringLiteral("aces_2_0"), QStringLiteral("d60"));
+      /*peak=*/420.0, QStringLiteral("rec2020"), QStringLiteral("st2084"), QStringLiteral("umbra"),
+      QStringLiteral("aces_2_0"), QStringLiteral("d60"));
   DisplayTransformSession session(snapshot, 7);
-  AdjustmentStackHarness harness(&session);
+  AdjustmentStackHarness  harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
@@ -357,7 +365,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, LoadFromSnapshotProjectsNonDefaultOd
   auto* peakModel   = harness.findModel<QObject>(QStringLiteral("displayPeakLuminanceModel"));
   auto* lookModel   = harness.findModel<QObject>(QStringLiteral("displayOpenDrtLookModel"));
   auto* toneModel   = harness.findModel<QObject>(QStringLiteral("displayOpenDrtTonescaleModel"));
-  auto* whiteModel  = harness.findModel<QObject>(QStringLiteral("displayOpenDrtCreativeWhiteModel"));
+  auto* whiteModel = harness.findModel<QObject>(QStringLiteral("displayOpenDrtCreativeWhiteModel"));
   ASSERT_NE(methodModel, nullptr);
   ASSERT_NE(spaceModel, nullptr);
   ASSERT_NE(eotfModel, nullptr);
@@ -389,7 +397,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, LoadFromSnapshotProjectsAcesMethodAn
   snapshot.insert(QStringLiteral("odt"), odt_wrap);
 
   DisplayTransformSession session(snapshot, 3);
-  AdjustmentStackHarness harness(&session);
+  AdjustmentStackHarness  harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
   auto* methodModel = harness.findModel<QObject>(QStringLiteral("displayMethodModel"));
@@ -407,7 +415,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, LoadFromSnapshotProjectsAcesMethodAn
 
 TEST(EditorDisplayTransformSnapshotQmlTest, DeclaredDefaultsPreferOpenDrtWhenSnapshotMissingOdt) {
   DisplayTransformSession session(QVariantMap{}, 0);
-  AdjustmentStackHarness harness(&session);
+  AdjustmentStackHarness  harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
   auto* methodModel = harness.findModel<QObject>(QStringLiteral("displayMethodModel"));
@@ -426,7 +434,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, DeclaredDefaultsPreferOpenDrtWhenSna
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, MethodChangeEnqueuesDrtParameterUpdate) {
-  auto                   snapshot = MakeOpenDrtSnapshot();
+  auto                    snapshot = MakeOpenDrtSnapshot();
   DisplayTransformSession session(snapshot, 0);
   AdjustmentStackHarness  harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
@@ -444,6 +452,51 @@ TEST(EditorDisplayTransformSnapshotQmlTest, MethodChangeEnqueuesDrtParameterUpda
   ASSERT_NE(drt, nullptr);
   ASSERT_TRUE(drt->method.has_value());
   EXPECT_EQ(*drt->method, alcedo::DrtMethod::Aces20);
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest,
+     WheelAndTouchpadScrollReachTheLastControlInBothMethods) {
+  DisplayTransformSession session(MakeOpenDrtSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  harness.window()->resize(400, 560);
+  harness.root()->setSize(QSizeF(400, 560));
+  ASSERT_TRUE(QTest::qWaitForWindowExposed(harness.window()));
+  auto* scroll = harness.findModel<QQuickItem>(QStringLiteral("editorDisplayTransformPanelScroll"));
+  auto* last   = harness.findModel<QQuickItem>(QStringLiteral("displayPeakLuminanceSlider"));
+  auto* method = harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayMethodModel"));
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_NE(last, nullptr);
+  ASSERT_NE(method, nullptr);
+  for (const int index : {1, 0}) {
+    SCOPED_TRACE(index == 1 ? "OpenDRT" : "ACES");
+    method->selectIndex(index);
+    scroll->setProperty("contentY", 0.0);
+    QTest::qWait(100);
+    ASSERT_GT(scroll->height(), 0.0);
+    ASSERT_GT(scroll->property("contentHeight").toReal(), scroll->height());
+    EXPECT_GT(last->mapToItem(scroll, QPointF(0, last->height())).y(), scroll->height());
+    const auto position = scroll->mapToScene(QPointF(scroll->width() - 2, scroll->height() / 2));
+    const auto global   = harness.window()->mapToGlobal(position.toPoint());
+    auto       wheel    = [&](QPoint pixels, QPoint angle) {
+      QWheelEvent event(position, global, pixels, angle, Qt::NoButton, Qt::NoModifier,
+                                 Qt::NoScrollPhase, false);
+      QCoreApplication::sendEvent(harness.window(), &event);
+      QTest::qWait(30);
+    };
+    wheel({}, QPoint(0, -120));
+    EXPECT_GT(scroll->property("contentY").toReal(), 0.0);
+    scroll->setProperty("contentY", 0.0);
+    wheel(QPoint(0, -35), {});
+    EXPECT_GT(scroll->property("contentY").toReal(), 0.0);
+    for (int step = 0; step < 30; ++step) wheel({}, QPoint(0, -120));
+    const auto max_y = scroll->property("contentHeight").toReal() - scroll->height();
+    EXPECT_NEAR(scroll->property("contentY").toReal(), max_y, 1.0);
+    EXPECT_GE(last->mapToItem(scroll, QPointF()).y(), -1.0);
+    EXPECT_LE(last->mapToItem(scroll, QPointF(0, last->height())).y(), scroll->height() + 1.0);
+    for (int step = 0; step < 30; ++step) wheel({}, QPoint(0, 120));
+    EXPECT_NEAR(scroll->property("contentY").toReal(), 0.0, 1.0);
+  }
 }
 
 }  // namespace alcedo::ui::test
