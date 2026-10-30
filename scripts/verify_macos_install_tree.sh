@@ -153,34 +153,14 @@ assert_min_size "${macos_dir}/config/models/xtrans.safetensors" 10240
 if [[ "$skip_metal_assets" -eq 0 ]]; then
   metal_dir="${resources_dir}/metallib"
   assert_dir "$metal_dir"
-  # Keep in sync with ALCEDO_METAL_RUNTIME_LIBS in alcedo_studio/src/metal/CMakeLists.txt
-  metal_libs=(
-    metal_convert.metallib
-    geometry_utils.metallib
-    lens_calib.metallib
-    scope_analyzer.metallib
-    to_linear_ref.metallib
-    debayer_rcd.metallib
-    highlight_reconstruct.metallib
-    xtrans_interpolate.metallib
-    cvt_ref_space.metallib
-    demosaicnet_io.metallib
-    geometry_resample.metallib
-    camera_color.metallib
-    primary_grade.metallib
-    local_tone.metallib
-    mask.metallib
-    drt.metallib
-    display_to_ap1.metallib
-  )
   # The legacy fused edit pipeline metallib is archived (G10.10) and must not be packaged.
   if [[ -e "${metal_dir}/fused_pipeline.metallib" ]]; then
     fail "legacy fused pipeline metallib is packaged: ${metal_dir}/fused_pipeline.metallib"
   fi
-  for lib in "${metal_libs[@]}"; do
-    # Empty/corrupt metallibs would still "exist"; require a non-trivial size.
-    assert_min_size "${metal_dir}/${lib}" 512
-  done
+  # The build targets own the inventory and hashes. Load each installed library
+  # and create every compute pipeline before accepting the bundle.
+  assert_executable "${macos_dir}/alcedo-gpu-check"
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin "${macos_dir}/alcedo-gpu-check" --metal
 fi
 
 # A run from the build tree writes the sidecar log next to alcedo_mind; logs must not be packaged.

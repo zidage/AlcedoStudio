@@ -19,6 +19,14 @@ gtest_discover_tests(NnSharedUtilsTest TEST_PREFIX "NnSharedUtilsTest.")
 alcedo_register_test_target(NnSharedUtilsTest core)
 
 if(ALCEDO_METAL_ENABLED)
+  add_executable(MetalPackagedLibraryTest ${ALCEDO_TEST_ROOT}/ml_ops/metal_packaged_library_test.cpp)
+  target_link_libraries(MetalPackagedLibraryTest PRIVATE GTest::gtest_main MetalContext alcedo::metal_cpp)
+  target_compile_definitions(MetalPackagedLibraryTest PRIVATE
+    ALCEDO_TEST_METALLIB="${METAL_UTILS_METALLIB}"
+    ALCEDO_TEST_TEMP_ROOT="${CMAKE_SOURCE_DIR}/build/tmp/metal-packaged-library-test")
+  add_dependencies(MetalPackagedLibraryTest MetalUtilsShaders)
+  gtest_discover_tests(MetalPackagedLibraryTest TEST_PREFIX "MetalPackagedLibraryTest.")
+  alcedo_register_test_target(MetalPackagedLibraryTest gpu)
   # Boundary test kernels: compiled to a standalone metallib next to the test binary.
   find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
   set(ALCEDO_TEST_BOUNDARY_METAL_SRC
@@ -80,6 +88,14 @@ if(ALCEDO_METAL_ENABLED)
 endif()
 
 if(ALCEDO_OPENCL_ENABLED)
+  if(WIN32)
+    add_executable(PackagedOpenClPathTest ${ALCEDO_TEST_ROOT}/opencl/packaged_source_path_test.cpp)
+    target_link_libraries(PackagedOpenClPathTest PRIVATE GTest::gtest_main OpenClProgramLibrary)
+    target_compile_definitions(PackagedOpenClPathTest PRIVATE
+      ALCEDO_TEST_SOURCE_ROOT="${ALCEDO_SRC_DIR}")
+    gtest_discover_tests(PackagedOpenClPathTest TEST_PREFIX "PackagedOpenClPathTest.")
+    alcedo_register_test_target(PackagedOpenClPathTest core)
+  endif()
   add_executable(OpenClRuntimeTest ${ALCEDO_TEST_ROOT}/opencl/opencl_runtime_test.cpp)
   target_include_directories(OpenClRuntimeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClRuntimeTest PRIVATE GTest::gtest_main OpenClProgramLibrary)

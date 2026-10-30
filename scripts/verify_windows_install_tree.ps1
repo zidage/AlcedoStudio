@@ -5,6 +5,7 @@
 #>
 param(
     [string]$InstallDir = "$PSScriptRoot\..\build\install",
+    [string]$CudaBinDir = "$env:CUDA_PATH\bin",
     [switch]$SkipOpenCLAssetCheck
 )
 
@@ -107,6 +108,7 @@ Assert-MinSize (Join-Path $binDir 'config\models\bayer.safetensors') 10240
 Assert-MinSize (Join-Path $binDir 'config\models\xtrans.safetensors') 10240
 
 Assert-AnyFile -Directory $binDir -Filter 'cudart64_*.dll'
+& (Join-Path $PSScriptRoot 'verify_windows_cuda_modules.ps1') -BinDir $binDir -CudaBinDir $CudaBinDir
 
 if (-not $SkipOpenCLAssetCheck) {
     # Alcedo first-party OpenCL runtime DLLs (SHARED when CUDA DLLs are enabled).
@@ -122,38 +124,15 @@ if (-not $SkipOpenCLAssetCheck) {
         Write-Host "[alcedo] Warning: OpenCL.dll (Khronos ICD) not found in install tree or System32. OpenCL backends need a GPU driver ICD or a bundled loader." -ForegroundColor Yellow
     }
 
-    $openClFiles = @(
-        'opencl\decoders\processor\operators\gpu\opencl_shader\raw_utils_opencl.cl',
-        'opencl\decoders\processor\operators\gpu\opencl_shader\to_linear_ref.cl',
-        'opencl\decoders\processor\operators\gpu\opencl_shader\debayer_rcd.cl',
-        'opencl\decoders\processor\operators\gpu\opencl_shader\highlight_reconstruct.cl',
-        'opencl\decoders\processor\operators\gpu\opencl_shader\cvt_ref_space.cl',
-        'opencl\decoders\processor\operators\gpu\opencl_shader\xtrans_interpolate.cl',
-        'opencl\decoders\processor\operators\gpu\opencl_shader\demosaicnet_conv.cl',
-        'opencl\decoders\processor\operators\gpu\opencl_shader\demosaicnet_structural.cl',
-        'opencl\opencl\opencl_shader\prng.cl',
-        'opencl\opencl\opencl_shader\geometry_utils.cl',
-        'opencl\edit\runtime\lens\opencl\shader\lens_calib.cl',
-        'opencl\edit\scope\opencl_shader\scope_analyzer.cl',
-        'opencl\edit\runtime\opencl\shader\common.cl',
-        'opencl\edit\runtime\opencl\shader\cst.cl',
-        'opencl\edit\runtime\opencl\shader\display_to_ap1.cl',
-        'opencl\edit\runtime\opencl\shader\drt.cl',
-        'opencl\edit\runtime\opencl\shader\drt_params.cl',
-        'opencl\edit\runtime\opencl\shader\geometry_camera.cl',
-        'opencl\edit\runtime\opencl\shader\local_tone.cl',
-        'opencl\edit\runtime\opencl\shader\mask.cl',
-        'opencl\edit\runtime\opencl\shader\primary_grade.cl',
-        'opencl\edit\runtime\opencl\shader\primary_grade_neighbor.cl',
-        'opencl\include\edit\runtime\dng_profile_gpu_math.h',
-        'opencl\include\edit\runtime\aces_reference_gamut_compression.h',
-        'opencl\include\edit\runtime\aces2_reference_math.h',
-        'opencl\include\edit\runtime\display_to_ap1_math.h',
-        'opencl\include\edit\runtime\raster_linearize_math.h',
-        'opencl\include\color\color_encoding_math.h'
-    )
-    foreach ($file in $openClFiles) {
-        Assert-File (Join-Path $binDir $file)
+    $gpuCheck = Join-Path $binDir 'alcedo-gpu-check.exe'
+    Assert-File $gpuCheck
+    $savedGpuPath = $env:Path
+    try {
+        $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
+        & $gpuCheck --opencl
+        if ($LASTEXITCODE -ne 0) { throw 'Installed OpenCL program compilation failed.' }
+    } finally {
+        $env:Path = $savedGpuPath
     }
     # The legacy edit_pipeline OpenCL programs are archived (G10.10) and must not be packaged.
     $legacyOpenClDir = Join-Path $binDir 'opencl\edit\pipeline\opencl_shader'

@@ -55,3 +55,4 @@ add_subdirectory(app)
 
 add_subdirectory(automation)
 add_subdirectory(ui)
+add_subdirectory(tools)

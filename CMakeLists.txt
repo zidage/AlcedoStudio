@@ -334,7 +334,37 @@ if (ALCEDO_ENABLE_CUDA AND CUDAToolkit_FOUND)
     enable_language(CUDA)
     add_definitions(-DHAVE_CUDA)
     set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
-    set(CMAKE_CUDA_ARCHITECTURES 60-real 61-real 75-real 86-real 86-virtual 89-real 90-real)
+    if(WIN32)
+        # NVCC --relocatable-ptx reads library inputs with fatbinary as well as
+        # the linker. fatbinary does not resolve bare .lib names through /LIBPATH.
+        foreach(_cuda_library_list IN ITEMS CMAKE_CUDA_STANDARD_LIBRARIES CMAKE_CXX_STANDARD_LIBRARIES
+                CMAKE_CUDA_RUNTIME_LIBRARY_LINK_OPTIONS_SHARED
+                CMAKE_CUDA_RUNTIME_LIBRARY_LINK_OPTIONS_STATIC)
+            if(_cuda_library_list MATCHES "_STANDARD_LIBRARIES$")
+                separate_arguments(_cuda_library_names WINDOWS_COMMAND "${${_cuda_library_list}}")
+            else()
+                set(_cuda_library_names "${${_cuda_library_list}}")
+            endif()
+            set(_cuda_library_paths "")
+            foreach(_cuda_library_name IN LISTS _cuda_library_names)
+                unset(_cuda_library_path CACHE)
+                find_file(_cuda_library_path NAMES "${_cuda_library_name}" "${_cuda_library_name}.lib"
+                    PATHS "${CUDAToolkit_LIBRARY_DIR}" $ENV{LIB} NO_DEFAULT_PATH REQUIRED)
+                list(APPEND _cuda_library_paths "${_cuda_library_path}")
+            endforeach()
+            if(_cuda_library_list MATCHES "_STANDARD_LIBRARIES$")
+                list(JOIN _cuda_library_paths "\" \"" _cuda_quoted_libraries)
+                if(_cuda_library_list STREQUAL "CMAKE_CXX_STANDARD_LIBRARIES")
+                    set(ALCEDO_CUDA_DEVICE_LINK_STANDARD_LIBRARIES "\"${_cuda_quoted_libraries}\"")
+                else()
+                    set(${_cuda_library_list} "\"${_cuda_quoted_libraries}\"")
+                endif()
+            else()
+                set(${_cuda_library_list} "${_cuda_library_paths}")
+            endif()
+        endforeach()
+    endif()
+    set(CMAKE_CUDA_ARCHITECTURES 60-real 61-real 70-real 75-real 80-real 86-real 86-virtual 89-real 90-real)
     include_directories(SYSTEM ${CUDAToolkit_INCLUDE_DIRS})
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3>)
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:--use_fast_math>)
@@ -844,9 +874,18 @@ function(alcedo_install_demosaicnet_models config_dir destination)
     install(FILES ${_alcedo_demosaicnet_models} DESTINATION "${destination}/config/models")
 endfunction()
 
-# Install compiled .metallib assets. Paths are known at configure time; the
-# files themselves are produced during the build by Metal*Shaders custom
-# targets. install(FILES) fails at install time if any path is still missing.
+# The GPU build owners provide the input files for each install inventory.
+function(alcedo_install_gpu_asset_checksums source_root destination)
+    set(ALCEDO_GPU_ASSET_SOURCE_ROOT "${source_root}")
+    set(ALCEDO_GPU_ASSET_DESTINATION "${destination}")
+    set(ALCEDO_GPU_ASSET_FILES "${ARGN}")
+    string(MAKE_C_IDENTIFIER "${destination}" _script_name)
+    set(_script "${CMAKE_CURRENT_BINARY_DIR}/install_gpu_checksums_${_script_name}.cmake")
+    configure_file("${CMAKE_SOURCE_DIR}/scripts/cmake/install_gpu_asset_checksums.cmake.in"
+        "${_script}" @ONLY)
+    install(SCRIPT "${_script}")
+endfunction()
+
 function(alcedo_install_metal_runtime_libs destination)
     if(NOT ALCEDO_METAL_ENABLED)
         return()
@@ -856,7 +895,11 @@ function(alcedo_install_metal_runtime_libs destination)
             "[alcedo] ALCEDO_METAL_ENABLED but ALCEDO_METAL_RUNTIME_LIBS is empty. "
             "Metal shaders were not registered for packaging.")
     endif()
+    # The bundle copy can contain libraries left by an earlier build. Install
+    # exactly the registered libraries before writing their checksums.
+    install(CODE "file(REMOVE_RECURSE \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${destination}\")")
     install(FILES ${ALCEDO_METAL_RUNTIME_LIBS} DESTINATION "${destination}")
+    alcedo_install_gpu_asset_checksums("" "${destination}" ${ALCEDO_METAL_RUNTIME_LIBS})
 endfunction()
 
 # Install the OpenCL program sources under ${destination}/opencl, mirroring their
@@ -870,6 +913,7 @@ function(alcedo_install_opencl_sources destination)
         return()
     endif()
     set(_src_root "${CMAKE_SOURCE_DIR}/alcedo_studio/src")
+    set(_sources "")
     foreach(_shader_dir IN ITEMS
             decoders/processor/operators/gpu/opencl_shader
             edit/runtime/lens/opencl/shader
@@ -878,6 +922,9 @@ function(alcedo_install_opencl_sources destination)
             edit/runtime/opencl/shader)
         install(DIRECTORY "${_src_root}/${_shader_dir}/"
             DESTINATION "${destination}/opencl/${_shader_dir}")
+        file(GLOB_RECURSE _shader_sources CONFIGURE_DEPENDS
+            "${_src_root}/${_shader_dir}/*.cl" "${_src_root}/${_shader_dir}/*.h")
+        list(APPEND _sources ${_shader_sources})
     endforeach()
     if(NOT ALCEDO_OPENCL_PACKAGED_HEADERS)
         message(FATAL_ERROR
@@ -891,7 +938,9 @@ function(alcedo_install_opencl_sources destination)
         endif()
         get_filename_component(_rel_dir "${_rel_header}" DIRECTORY)
         install(FILES "${_header}" DESTINATION "${destination}/opencl/${_rel_dir}")
+        list(APPEND _sources "${_header}")
     endforeach()
+    alcedo_install_gpu_asset_checksums("${_src_root}" "${destination}/opencl" ${_sources})
 endfunction()
 
 # Ship Alcedo LICENSE/NOTICE plus gathered third-party texts, including the
@@ -962,6 +1011,11 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         set(_bundle_frameworks_dest "${_alcedo_macos_app_bundle}/Contents/Frameworks")
         # alcedo-cli sits beside the bundle executable so that `session start` finds it.
         install(TARGETS alcedo_cli RUNTIME DESTINATION "${_bundle_macos_dest}")
+        if(TARGET alcedo_gpu_check)
+            install(TARGETS alcedo_gpu_check RUNTIME DESTINATION "${_bundle_macos_dest}")
+            set_property(TARGET alcedo_gpu_check APPEND PROPERTY INSTALL_RPATH
+                "@executable_path/../Frameworks")
+        endif()
         # The build-tree .app can accumulate downloaded runtime models while
         # testing. Do not ship that cache in release packages; models are
         # downloaded per user through the app.
@@ -1115,6 +1169,9 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(TARGETS alcedo_cli
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         )
+        if(TARGET alcedo_gpu_check)
+            install(TARGETS alcedo_gpu_check RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        endif()
     endif()
 endif()
 
@@ -1129,11 +1186,27 @@ if(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     set(ALCEDO_RUNTIME_DEP_DIRS "" CACHE STRING "Extra directories to search for runtime DLL dependencies during install.")
     set(ALCEDO_RUNTIME_EXES "$<TARGET_FILE:${ALCEDO_MAIN_BIN}>" "$<TARGET_FILE:alcedo_cli>")
     set(ALCEDO_RUNTIME_SEARCH_DIRS "$<TARGET_FILE_DIR:${ALCEDO_MAIN_BIN}>")
+    if(TARGET alcedo_gpu_check)
+        list(APPEND ALCEDO_RUNTIME_EXES "$<TARGET_FILE:alcedo_gpu_check>")
+        list(APPEND ALCEDO_RUNTIME_SEARCH_DIRS "$<TARGET_FILE_DIR:alcedo_gpu_check>")
+    endif()
     if(ALCEDO_MIND_BINARY)
         list(APPEND ALCEDO_RUNTIME_EXES "${ALCEDO_MIND_BINARY}")
     endif()
     if(ALCEDO_MIND_TARGET_DIR)
         list(APPEND ALCEDO_RUNTIME_SEARCH_DIRS "${ALCEDO_MIND_TARGET_DIR}")
+    endif()
+
+    get_property(_cuda_targets GLOBAL PROPERTY ALCEDO_CUDA_RUNTIME_TARGETS)
+    if(_cuda_targets)
+        set(_cuda_module_names "")
+        foreach(_target IN LISTS _cuda_targets)
+            string(APPEND _cuda_module_names "$<TARGET_FILE_NAME:${_target}>\n")
+        endforeach()
+        file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/cuda-runtime-modules.txt"
+            CONTENT "${_cuda_module_names}")
+        install(FILES "${CMAKE_BINARY_DIR}/cuda-runtime-modules.txt"
+            DESTINATION "${CMAKE_INSTALL_BINDIR}")
     endif()
 
     set(_third_party_exiv2_bin "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/bin")
@@ -1888,4 +1961,7 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
         COMMENT "Installing ${ALCEDO_MACOS_BUNDLE_NAME}.app and creating macOS packages"
         USES_TERMINAL
     )
+    if(TARGET alcedo_gpu_check)
+        add_dependencies(macos_package alcedo_gpu_check)
+    endif()
 endif()

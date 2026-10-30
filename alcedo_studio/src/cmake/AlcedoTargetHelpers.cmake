@@ -38,6 +38,10 @@ endmacro()
 # keeps their host and device-link output out of unrelated executable relinks.
 # Other first-party and third-party libraries remain static.
 macro(def_cuda_library target_name)
+  if(WIN32 AND ALCEDO_CUDA_ENABLED)
+    # CMake uses the host link language's standard libraries in its device link.
+    set(CMAKE_CXX_STANDARD_LIBRARIES "${ALCEDO_CUDA_DEVICE_LINK_STANDARD_LIBRARIES}")
+  endif()
   if(WIN32 AND ALCEDO_CUDA_ENABLED AND ALCEDO_BUILD_CUDA_DLLS)
     def_library(${target_name} TYPE SHARED ${ARGN})
     set_target_properties(${target_name} PROPERTIES
@@ -52,8 +56,18 @@ macro(def_cuda_library target_name)
     install(TARGETS ${target_name}
       RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
     )
+    get_target_property(_cuda_sources ${target_name} SOURCES)
+    list(FILTER _cuda_sources INCLUDE REGEX "\\.cu$")
+    if(_cuda_sources)
+      set_property(GLOBAL APPEND PROPERTY ALCEDO_CUDA_RUNTIME_TARGETS ${target_name})
+    endif()
   else()
     def_library(${target_name} ${ARGN})
+  endif()
+  if(ALCEDO_CUDA_ENABLED)
+    # nvlink otherwise retains native cubins but discards the requested PTX
+    # from separately compiled objects. New GPU architectures need that PTX.
+    target_link_options(${target_name} PRIVATE "$<DEVICE_LINK:--relocatable-ptx>")
   endif()
 endmacro()
 

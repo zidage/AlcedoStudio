@@ -26,6 +26,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path "$PSScriptRoot\.."
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $PackageOutDir = [IO.Path]::GetFullPath($PackageOutDir)
+Set-Location -LiteralPath $repoRoot
 
 function Invoke-BuildNumberState {
     param([ValidateSet('resolve','commit')][string]$Mode)
@@ -146,7 +147,7 @@ Write-Host ""
 # 1. Configure (re-run to pick up new packaging tools like WiX/NSIS)
 # ------------------------------------------------------------------
 Write-Host "Configuring CMake with preset '$Preset' ..." -ForegroundColor Yellow
-$configureCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --preset $Preset -DCMAKE_PREFIX_PATH=`"$QtPrefix`" -DALCEDO_DUCKDB_VSS_EXTENSION=`"$resolvedDuckDbVssExtension`" -DALCEDO_DUCKDB_FTS_EXTENSION=`"$resolvedDuckDbFtsExtension`" -DALCEDO_UPDATE_ALLOW_INSTALL=ON -DALCEDO_UPDATE_CHANNEL=$Channel -DALCEDO_BUILD_NUMBER=$resolvedBuildNumber"
+$configureCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --preset $Preset -B `"$BuildDir`" -DCMAKE_INSTALL_PREFIX=`"$repoRoot\build\install`" -DCMAKE_PREFIX_PATH=`"$QtPrefix`" -DALCEDO_DUCKDB_VSS_EXTENSION=`"$resolvedDuckDbVssExtension`" -DALCEDO_DUCKDB_FTS_EXTENSION=`"$resolvedDuckDbFtsExtension`" -DALCEDO_UPDATE_ALLOW_INSTALL=ON -DALCEDO_UPDATE_CHANNEL=$Channel -DALCEDO_BUILD_NUMBER=$resolvedBuildNumber"
 Write-Host "> $configureCmd"
 Invoke-Expression $configureCmd
 if ($LASTEXITCODE -ne 0) {
@@ -185,18 +186,14 @@ if ($LASTEXITCODE -ne 0) {
 # ------------------------------------------------------------------
 Write-Host "Verifying install tree ..." -ForegroundColor Yellow
 $verifyScript = Join-Path $repoRoot "scripts\verify_windows_install_tree.ps1"
-$verifyArgs = @(
-    '-ExecutionPolicy', 'Bypass',
-    '-File', $verifyScript,
-    '-InstallDir', $installDir
-)
-if (-not $RequireOpenCLAssets) {
-    $verifyArgs += '-SkipOpenCLAssetCheck'
+function Invoke-InstallTreeVerification {
+    param([string]$Directory)
+    $verifyArgs = @('-ExecutionPolicy', 'Bypass', '-File', $verifyScript, '-InstallDir', $Directory)
+    if (-not $RequireOpenCLAssets) { $verifyArgs += '-SkipOpenCLAssetCheck' }
+    & powershell @verifyArgs
+    if ($LASTEXITCODE -ne 0) { throw "Install tree verification failed: $Directory" }
 }
-& powershell @verifyArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "Install tree verification failed."
-}
+Invoke-InstallTreeVerification -Directory $installDir
 
 # ------------------------------------------------------------------
 # 4. Run CPack
@@ -215,12 +212,27 @@ if ($cpackConfig -notmatch '(?m)^set\(CPACK_PACKAGE_FILE_NAME "([^"]+)"\)') {
 $updatePackage = Join-Path $PackageOutDir "$($Matches[1]).exe"
 $packagedCommitFile = "$updatePackage.commit"
 Remove-Item -LiteralPath $packagedCommitFile -Force -ErrorAction SilentlyContinue
+$stagingRoot = [IO.Path]::GetFullPath((Join-Path $PackageOutDir '_CPack_Packages'))
+if ([IO.Path]::GetDirectoryName($stagingRoot).TrimEnd('\', '/') -ne $PackageOutDir.TrimEnd('\', '/')) {
+    throw "CPack staging path is outside the package output directory: $stagingRoot"
+}
+if (Test-Path -LiteralPath $stagingRoot) {
+    Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+}
 Write-Host "Running CPack ..." -ForegroundColor Yellow
 $cpackCmd = "cpack --config `"$BuildDir\CPackConfig.cmake`" -B `"$PackageOutDir`""
 Write-Host "> $cpackCmd"
 Invoke-Expression $cpackCmd
 if ($LASTEXITCODE -ne 0) {
     throw "CPack failed."
+}
+
+# CPack runs its own install step. Verify that payload as well as build/install.
+$stagedExecutables = @(Get-ChildItem -LiteralPath $stagingRoot `
+    -Filter 'alcedo_main.exe' -Recurse -File)
+if ($stagedExecutables.Count -eq 0) { throw 'CPack produced no application staging tree.' }
+foreach ($stagedExe in $stagedExecutables) {
+    Invoke-InstallTreeVerification -Directory $stagedExe.Directory.Parent.FullName
 }
 
 # ------------------------------------------------------------------
