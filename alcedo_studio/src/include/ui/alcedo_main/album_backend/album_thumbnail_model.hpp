@@ -82,6 +82,19 @@ class AlbumThumbnailModel : public QAbstractListModel {
   /// Append one page — emits beginInsertRows/endInsertRows.
   void appendPage(const std::vector<AlbumItem>& newItems);
 
+  /**
+   * @brief Change the rows in place to the photos @p elementIds in that order, without a model
+   *        reset (an import or a delete in the shown result).
+   *
+   * @details A loaded row whose photo stays keeps its item, with its thumbnail state. Rows of
+   * photos that left, and rows that changed their order, are removed in contiguous runs; then
+   * the photos that are not loaded are inserted in contiguous runs from @p newItems (keyed by
+   * element id). Every id of @p elementIds must be loaded or in @p newItems.
+   */
+  void                    applyOrder(const std::vector<sl_element_id_t>&                   elementIds,
+                                     const std::unordered_map<sl_element_id_t, AlbumItem>& newItems, size_t totalCount,
+                                     bool hasMore);
+
   /// Patch thumbnail state for a single row — emits dataChanged.
   void updateThumbnailState(sl_element_id_t elementId, const QString& thumbUrl, bool loading,
                             bool missingSource, const QString& errorText);

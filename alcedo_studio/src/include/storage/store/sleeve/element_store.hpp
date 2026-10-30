@@ -135,6 +135,9 @@ struct AlbumQueryRead {
   int64_t limit_           = 0;  ///< Occurrences in the page; 0 reads no photo row.
   bool    read_groups_     = false;
   bool    read_statistics_ = false;
+  /// Read the file id of every occurrence in occurrence order (AlbumQueryResult::
+  /// occurrence_file_ids_), in the same transaction as the counts and the groups.
+  bool    read_occurrence_file_ids_ = false;
 };
 
 /// Result of ElementStore::ReadAlbumQuery: counts, the requested groups and statistics, and one
@@ -147,6 +150,10 @@ struct AlbumQueryResult {
   int64_t                           first_occurrence_ = 0;
   std::vector<AlbumQueryRow>        rows_{};
   std::optional<FolderStatsView>    statistics_{};
+  /// File id of each occurrence in occurrence order (one entry per occurrence, so a file of
+  /// several label groups is listed once per group). Empty unless
+  /// AlbumQueryRead::read_occurrence_file_ids_.
+  std::vector<sl_element_id_t>      occurrence_file_ids_{};
 };
 
 /// Position of one file's occurrence in the ordered occurrence stream.

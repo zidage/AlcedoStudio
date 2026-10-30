@@ -13,9 +13,13 @@
 
 #pragma once
 
+#include <QColor>
+#include <QImage>
 #include <QSignalSpy>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
+#include <QVariantMap>
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -24,6 +28,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app/pipeline_service.hpp"
@@ -35,6 +40,7 @@
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 
 namespace alcedo::ui::test {
@@ -220,6 +226,67 @@ inline auto LoadPackedProject(ApplicationModuleHost& backend,
   ProcessEvents(500);
   WaitForLibraryQuery(backend);
   return backend.project()->ServiceReady();
+}
+
+/// Write @p count importable 48 x 32 PNG photos named `<stem><n>.png` into @p dir.
+inline auto WritePngPhotos(const std::filesystem::path& dir, const std::string& stem, int count)
+    -> std::vector<std::filesystem::path> {
+  std::filesystem::create_directories(dir);
+  std::vector<std::filesystem::path> paths;
+  for (int index = 0; index < count; ++index) {
+    QImage image(48, 32, QImage::Format_RGB32);
+    image.fill(QColor::fromHsv((index * 47) % 360, 160, 200));
+    auto path = dir / (stem + std::to_string(index) + ".png");
+    if (!image.save(PathToQString(path), "PNG")) {
+      return {};
+    }
+    paths.push_back(std::move(path));
+  }
+  return paths;
+}
+
+/// Import @p paths into the current folder and wait until the import and the library refresh
+/// that it requests have finished.
+inline auto ImportAndWait(ApplicationModuleHost&                    backend,
+                          const std::vector<std::filesystem::path>& paths, int timeout_ms = 120000)
+    -> bool {
+  auto*       import_export = backend.import_export();
+  QStringList files;
+  for (const auto& path : paths) {
+    files.push_back(PathToQString(path));
+  }
+  import_export->StartImport(files);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  ProcessEvents(50);
+  while (import_export->ImportRunning() && std::chrono::steady_clock::now() < deadline) {
+    ProcessEvents(20);
+  }
+  // The completion and the refresh are queued after the import ends.
+  ProcessEvents(200);
+  return !import_export->ImportRunning() && WaitForLibraryQuery(backend);
+}
+
+/// Delete the library photos @p targets (element id, image id) and wait until the delete and the
+/// library refresh that it requests have finished.
+inline auto DeleteAndWait(ApplicationModuleHost&                                     backend,
+                          const std::vector<std::pair<sl_element_id_t, image_id_t>>& targets,
+                          int timeout_ms = 120000) -> bool {
+  QVariantList list;
+  for (const auto& [element_id, image_id] : targets) {
+    list.push_back(QVariantMap{{"elementId", static_cast<uint>(element_id)},
+                               {"imageId", static_cast<uint>(image_id)}});
+  }
+  QSignalSpy finished(backend.library_mutations(),
+                      &LibraryMutationOperations::DeleteTargetsFinished);
+  if (!backend.library_mutations()->StartDeleteTargets(list).value("started").toBool()) {
+    return false;
+  }
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (finished.count() == 0 && std::chrono::steady_clock::now() < deadline) {
+    ProcessEvents(20);
+  }
+  ProcessEvents(50);
+  return finished.count() == 1 && WaitForLibraryQuery(backend);
 }
 
 }  // namespace alcedo::ui::test

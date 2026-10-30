@@ -11,9 +11,11 @@
 #include <QTimeZone>
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -183,8 +185,7 @@ bool LibraryModule::LoadMoreThumbnails() {
   }
   if (accepted_options_.group_field_ != AlbumGroupField::kNone) {
     // Grouped mode: the page after the last loaded page.
-    const auto starts = section_model_.LoadedPageStarts();
-    const auto next   = starts.empty() ? 0 : starts.back() + accepted_input_->page_size_;
+    const auto next = section_model_.LoadedEnd();
     if (next >= occurrence_count_) {
       return false;
     }
@@ -591,23 +592,36 @@ void LibraryModule::RunAfterRefresh(std::function<void()> action) {
   after_refresh_.push_back(std::move(action));
 }
 
-void LibraryModule::RequestLibraryRefresh() {
+void LibraryModule::RequestLibraryRefresh() { ScheduleRefresh(RefreshKind::kReplace); }
+
+void LibraryModule::RequestLibraryContentRefresh() { ScheduleRefresh(RefreshKind::kInPlace); }
+
+void LibraryModule::ScheduleRefresh(RefreshKind kind) {
   if (!refresh_in_flight_) {
     refresh_in_flight_ = true;
     emit QueryStateChanged();
   }
   if (refresh_scheduled_) {
+    if (kind == RefreshKind::kReplace) {
+      scheduled_refresh_kind_ = RefreshKind::kReplace;
+    }
     return;
   }
-  refresh_scheduled_ = true;
+  refresh_scheduled_      = true;
+  scheduled_refresh_kind_ = kind;
   // Combine the requests of this event loop turn: a caller that clears a filter and then
   // reloads the folder gets one read with both changes.
   QMetaObject::invokeMethod(this, [this]() { SubmitPendingRefresh(); }, Qt::QueuedConnection);
 }
 
 void LibraryModule::NoteRatingsChanged() {
-  if (refresh_in_flight_ || refresh_scheduled_ || !accepted_input_ || PresentationReadsRating()) {
+  if (!accepted_input_ || PresentationReadsRating()) {
     RequestLibraryRefresh();
+    return;
+  }
+  if (refresh_in_flight_ || refresh_scheduled_) {
+    // The refresh after the running one reads the new statistics; the rows stay.
+    RequestLibraryContentRefresh();
     return;
   }
   SubmitStatisticsRead();
@@ -657,6 +671,7 @@ void LibraryModule::SubmitStatisticsRead() {
 
 void LibraryModule::SubmitPendingRefresh() {
   refresh_scheduled_   = false;
+  const auto requested_kind = std::exchange(scheduled_refresh_kind_, RefreshKind::kInPlace);
   // This read sees every edit written so far.
   edit_order_stale_    = false;
   auto       proj      = project_ ? project_->handler().project() : nullptr;
@@ -675,7 +690,8 @@ void LibraryModule::SubmitPendingRefresh() {
     }
     pending_options_.reset();
     after_refresh_.clear();
-    refresh_in_flight_ = false;
+    refresh_in_flight_   = false;
+    unpublished_replace_ = false;
     query_error_.clear();
     emit QueryStateChanged();
     return;
@@ -701,28 +717,60 @@ void LibraryModule::SubmitPendingRefresh() {
   input->storage_        = proj->GetStorage();
   input->label_language_ = CurrentUiSemanticLabelLanguage();
 
+  // In place only for the same query: the same scope, presentation, and semantic model, no
+  // pending search text, and no query change that a superseded read carried. The Inspector
+  // filter and the search change only through RequestLibraryRefresh (a replacement). An
+  // in-place change installs exactly the new result in any case; the kind decides only whether
+  // the views keep their position and animate.
+  const bool in_place =
+      requested_kind == RefreshKind::kInPlace && !unpublished_replace_ && accepted_input_ &&
+      !pending_options_.has_value() && accepted_input_->folder_id_ == input->folder_id_ &&
+      SamePresentation(accepted_input_->options_, input->options_) &&
+      accepted_input_->options_.local_day_time_zone_ == input->options_.local_day_time_zone_ &&
+      accepted_input_->active_model_key_ == input->active_model_key_ &&
+      accepted_input_->page_size_ == input->page_size_ &&
+      !input->search_.pending_text_.has_value() && !input->search_.semantic_text_.has_value();
+  if (in_place) {
+    // Counts, groups, statistics, and the file id of every occurrence from one transaction;
+    // the photo rows that the change needs are read after the change is planned.
+    input->read_ = AlbumQueryRead{.offset_                   = 0,
+                                  .limit_                    = 0,
+                                  .read_groups_              = true,
+                                  .read_statistics_          = true,
+                                  .read_occurrence_file_ids_ = true};
+  } else {
+    unpublished_replace_ = true;
+  }
+
   // A different scope must not show the previous scope's photos while the new read runs.
   if (accepted_input_ && accepted_input_->folder_id_ != input->folder_id_) {
     ResetThumbnailWindow();
     stats_->ClearStats();
   }
 
-  // Later reads of the old result must not publish after this refresh.
+  // Later reads of the old result must not publish after this refresh. The loaded pages and
+  // rows stay as they are until this refresh publishes: no page read runs meanwhile
+  // (refresh_in_flight_), so an in-place change is planned against the state it changes.
   query_worker_->Invalidate(SearchRequestKind::kLibraryPage);
   page_in_flight_                                    = false;
   std::shared_ptr<const LibraryQueryInput> submitted = input;
-  query_worker_->Submit(SearchRequestKind::kApply, [this, submitted](std::uint64_t generation) {
-    auto output = RunLibraryQuery(*submitted);
-    QMetaObject::invokeMethod(
-        this,
-        [this, submitted, generation, output = std::move(output)]() mutable {
-          if (!query_worker_->IsCurrent(SearchRequestKind::kApply, generation)) {
-            return;
-          }
-          PublishRefresh(*submitted, std::move(output));
-        },
-        Qt::QueuedConnection);
-  });
+  query_worker_->Submit(
+      SearchRequestKind::kApply, [this, submitted, in_place](std::uint64_t generation) {
+        auto output = RunLibraryQuery(*submitted);
+        QMetaObject::invokeMethod(
+            this,
+            [this, submitted, generation, in_place, output = std::move(output)]() mutable {
+              if (!query_worker_->IsCurrent(SearchRequestKind::kApply, generation)) {
+                return;
+              }
+              if (in_place) {
+                PublishInPlaceRefresh(submitted, std::move(output));
+              } else {
+                PublishRefresh(*submitted, std::move(output));
+              }
+            },
+            Qt::QueuedConnection);
+      });
 }
 
 auto LibraryModule::ItemFromRow(const AlbumQueryRow& query_row, const AlbumItem& display,
@@ -760,15 +808,41 @@ auto LibraryModule::ItemFromRow(const AlbumQueryRow& query_row, const AlbumItem&
   return item;
 }
 
+void LibraryModule::FailRefresh(const QString& error) {
+  // The accepted content and settings stay; the pending changes stay for Retry.
+  qWarning().noquote() << "Library query failed:" << error;
+  refresh_in_flight_ = refresh_scheduled_;
+  after_refresh_.clear();
+  SetQueryError(error);
+}
+
+void LibraryModule::FinishRefresh(const LibraryQueryOutput& output, bool search_changed) {
+  if (output.result_.statistics_.has_value()) {
+    stats_->ApplyFolderStats(ToAlbumStatsView(*output.result_.statistics_), false);
+  }
+  emit CountsChanged();
+  emit PresentationChanged();
+  emit QueryStateChanged();
+  emit stats_->StatsChanged();
+  emit stats_->StatsFilterChanged();
+  if (search_changed) {
+    emit search_->SearchStateChanged();
+  }
+  NotifyThumbnailsChanged();
+
+  auto actions = std::move(after_refresh_);
+  after_refresh_.clear();
+  for (auto& action : actions) {
+    action();
+  }
+}
+
 void LibraryModule::PublishRefresh(const LibraryQueryInput& input, LibraryQueryOutput output) {
   if (!output.error_.isEmpty()) {
-    // The accepted content and settings stay; the pending changes stay for Retry.
-    qWarning().noquote() << "Library query failed:" << output.error_;
-    refresh_in_flight_ = refresh_scheduled_;
-    after_refresh_.clear();
-    SetQueryError(output.error_);
+    FailRefresh(output.error_);
     return;
   }
+  unpublished_replace_     = false;
   auto&      result        = output.result_;
   const bool grouped       = input.options_.group_field_ != AlbumGroupField::kNone;
   const bool same_grouping = input.options_.group_field_ == accepted_options_.group_field_;
@@ -811,9 +885,6 @@ void LibraryModule::PublishRefresh(const LibraryQueryInput& input, LibraryQueryO
       .page_size_        = input.page_size_});
   const bool search_changed =
       search_->AcceptLibrarySearch(input.search_, output.search_filter_, output.semantic_query_);
-  if (result.statistics_.has_value()) {
-    stats_->ApplyFolderStats(ToAlbumStatsView(*result.statistics_), false);
-  }
   occurrence_count_        = result.occurrence_count_;
   loaded_occurrence_end_   = static_cast<int64_t>(result.rows_.size());
   load_through_            = -1;
@@ -834,21 +905,193 @@ void LibraryModule::PublishRefresh(const LibraryQueryInput& input, LibraryQueryO
     requested_begin_ = 0;
     requested_end_   = static_cast<int64_t>(page_ids.size());
   }
-  emit CountsChanged();
-  emit PresentationChanged();
-  emit QueryStateChanged();
-  emit stats_->StatsChanged();
-  emit stats_->StatsFilterChanged();
-  if (search_changed) {
-    emit search_->SearchStateChanged();
-  }
-  NotifyThumbnailsChanged();
+  FinishRefresh(output, search_changed);
+}
 
-  auto actions = std::move(after_refresh_);
-  after_refresh_.clear();
-  for (auto& action : actions) {
-    action();
+auto LibraryModule::PlanInPlaceChange(const LibraryQueryInput&  input,
+                                      const LibraryQueryOutput& output) const -> InPlaceChange {
+  const auto&   ids      = output.result_.occurrence_file_ids_;
+  const int64_t id_count = static_cast<int64_t>(ids.size());
+  const auto&   loaded   = thumbnail_model_.items();
+  InPlaceChange change;
+  if (accepted_options_.group_field_ != AlbumGroupField::kNone) {
+    change.pages_ = section_model_.RetainedPagesInResult(output.result_.groups_, ids);
+    std::unordered_set<sl_element_id_t> page_ids;
+    for (const auto& [start, page] : change.pages_) {
+      page_ids.insert(page.begin(), page.end());
+    }
+    // The item store of the cells: the loaded photos that stay keep their rows; the photos
+    // that are new in the moved pages follow.
+    for (const auto& item : loaded) {
+      if (page_ids.contains(item.element_id)) {
+        change.loaded_order_.push_back(item.element_id);
+      }
+    }
+    std::unordered_set<sl_element_id_t> unread;
+    for (const auto& [start, page] : change.pages_) {
+      for (size_t offset = 0; offset < page.size(); ++offset) {
+        const auto id = page[offset];
+        if (thumbnail_model_.rowByElementId(id) < 0 && unread.insert(id).second) {
+          change.unread_occurrences_.push_back(start + static_cast<int64_t>(offset));
+          change.loaded_order_.push_back(id);
+        }
+      }
+    }
+    return change;
   }
+
+  // Flat mode: the loaded prefix ends after the last loaded photo that stays. A complete prefix
+  // also takes up to one page of the photos after it (an import at the end of the order).
+  std::unordered_set<sl_element_id_t> loaded_ids;
+  for (const auto& item : loaded) {
+    loaded_ids.insert(item.element_id);
+  }
+  int64_t end = 0;
+  for (int64_t occurrence = 0; occurrence < id_count; ++occurrence) {
+    if (loaded_ids.contains(ids[static_cast<size_t>(occurrence)])) {
+      end = occurrence + 1;
+    }
+  }
+  if (end == 0) {
+    end = std::min(id_count, input.page_size_);
+  } else if (loaded_occurrence_end_ >= occurrence_count_) {
+    end = std::min(id_count, end + input.page_size_);
+  }
+  change.loaded_end_ = end;
+  change.loaded_order_.assign(ids.begin(), ids.begin() + end);
+  for (int64_t occurrence = 0; occurrence < end; ++occurrence) {
+    if (!loaded_ids.contains(ids[static_cast<size_t>(occurrence)])) {
+      change.unread_occurrences_.push_back(occurrence);
+    }
+  }
+  return change;
+}
+
+void LibraryModule::PublishInPlaceRefresh(std::shared_ptr<const LibraryQueryInput> input,
+                                          LibraryQueryOutput                       output) {
+  if (!output.error_.isEmpty()) {
+    FailRefresh(output.error_);
+    return;
+  }
+  auto change = PlanInPlaceChange(*input, output);
+  if (change.unread_occurrences_.empty()) {
+    ApplyInPlaceChange(*input, std::move(output), std::move(change), LibraryQueryOutput{});
+    return;
+  }
+
+  // Step 2: read the rows of the unread photos, in ranges of at most one page. It runs as the
+  // same refresh (kApply): a newer refresh request replaces it, and the pages and rows that the
+  // change was planned against stay as they are until it publishes.
+  std::vector<std::pair<int64_t, int64_t>> ranges;
+  const auto                               limit =
+      std::max<int64_t>(1, std::min<int64_t>(input->page_size_, kMaxAlbumQueryPageRows));
+  for (const auto occurrence : change.unread_occurrences_) {
+    if (ranges.empty() || occurrence >= ranges.back().first + limit) {
+      ranges.emplace_back(occurrence, occurrence + 1);
+    } else {
+      ranges.back().second = occurrence + 1;
+    }
+  }
+  query_worker_->Submit(
+      SearchRequestKind::kApply, [this, input, ranges, output = std::move(output),
+                                  change = std::move(change)](std::uint64_t generation) mutable {
+        LibraryQueryOutput rows;
+        for (const auto& [begin, end] : ranges) {
+          auto range_input  = *input;
+          range_input.read_ = AlbumQueryRead{.offset_ = begin, .limit_ = end - begin};
+          auto range_output = RunLibraryQuery(range_input);
+          if (!range_output.error_.isEmpty()) {
+            rows.error_ = range_output.error_;
+            break;
+          }
+          std::move(range_output.result_.rows_.begin(), range_output.result_.rows_.end(),
+                    std::back_inserter(rows.result_.rows_));
+          std::move(range_output.row_display_.begin(), range_output.row_display_.end(),
+                    std::back_inserter(rows.row_display_));
+        }
+        QMetaObject::invokeMethod(
+            this,
+            [this, input, generation, output = std::move(output), change = std::move(change),
+             rows = std::move(rows)]() mutable {
+              if (!query_worker_->IsCurrent(SearchRequestKind::kApply, generation)) {
+                return;
+              }
+              if (!rows.error_.isEmpty()) {
+                FailRefresh(rows.error_);
+                return;
+              }
+              // The rows were read in a later transaction than the occurrence ids. A photo that
+              // left between the two reads was removed by a write that requests its own refresh;
+              // read the change again so it is planned against one state.
+              std::unordered_set<sl_element_id_t> read_ids;
+              for (const auto& row : rows.result_.rows_) {
+                read_ids.insert(row.photo_.file_id_);
+              }
+              const auto& ids = output.result_.occurrence_file_ids_;
+              for (const auto occurrence : change.unread_occurrences_) {
+                if (!read_ids.contains(ids[static_cast<size_t>(occurrence)])) {
+                  RequestLibraryContentRefresh();
+                  return;
+                }
+              }
+              ApplyInPlaceChange(*input, std::move(output), std::move(change), rows);
+            },
+            Qt::QueuedConnection);
+      });
+}
+
+void LibraryModule::ApplyInPlaceChange(const LibraryQueryInput& input, LibraryQueryOutput output,
+                                       InPlaceChange change, const LibraryQueryOutput& rows) {
+  auto&      result    = output.result_;
+  const bool grouped   = accepted_options_.group_field_ != AlbumGroupField::kNone;
+  unpublished_replace_ = false;
+
+  // Views read the previous result here (scroll anchor, cell positions).
+  emit                                           LibraryChangeAboutToApply();
+  emit                                           libraryChangeAboutToApply();
+
+  std::unordered_map<sl_element_id_t, AlbumItem> new_items;
+  for (size_t index = 0; index < rows.result_.rows_.size(); ++index) {
+    const auto& row = rows.result_.rows_[index];
+    const auto  id  = row.photo_.file_id_;
+    if (id == 0 || row.photo_.image_id_ == 0 || new_items.contains(id) ||
+        thumbnail_model_.rowByElementId(id) >= 0) {
+      continue;
+    }
+    new_items.emplace(id, ItemFromRow(row, rows.row_display_[index], input.folder_id_));
+  }
+  // A row without an image has no item, as in a replacement; its cell shows no photo.
+  std::erase_if(change.loaded_order_, [&](sl_element_id_t id) {
+    return !new_items.contains(id) && thumbnail_model_.rowByElementId(id) < 0;
+  });
+
+  occurrence_count_        = result.occurrence_count_;
+  view_state_.total_count_ = static_cast<size_t>(result.unique_file_count_);
+  load_through_            = -1;
+  if (grouped) {
+    const int64_t loaded_end =
+        change.pages_.empty() ? 0
+                              : change.pages_.rbegin()->first +
+                                    static_cast<int64_t>(change.pages_.rbegin()->second.size());
+    thumbnail_model_.applyOrder(change.loaded_order_, new_items, view_state_.total_count_,
+                                loaded_end < occurrence_count_);
+    section_model_.ApplyResultChange(std::move(result.groups_), result.unique_file_count_,
+                                     result.occurrence_count_, std::move(change.pages_));
+  } else {
+    loaded_occurrence_end_ = change.loaded_end_;
+    thumbnail_model_.applyOrder(change.loaded_order_, new_items, view_state_.total_count_,
+                                loaded_occurrence_end_ < occurrence_count_);
+  }
+  view_state_.all_images_ = thumbnail_model_.items();
+  requested_begin_        = std::min(requested_begin_, occurrence_count_);
+  requested_end_          = std::min(requested_end_, occurrence_count_);
+  query_error_.clear();
+  refresh_in_flight_ = refresh_scheduled_;
+
+  emit LibraryChangeApplied();
+  emit libraryChangeApplied();
+  FinishRefresh(output, false);
+  ContinuePaging();
 }
 
 auto LibraryModule::AcceptedReadInput(AlbumQueryRead read) const
@@ -872,12 +1115,13 @@ auto LibraryModule::AcceptedReadInput(AlbumQueryRead read) const
   return input;
 }
 
-void LibraryModule::SubmitPage(int64_t offset) {
+void LibraryModule::SubmitPage(int64_t offset, int64_t limit) {
   if (refresh_in_flight_ || !accepted_input_ || offset < 0 || offset >= occurrence_count_) {
     return;
   }
-  const auto limit = std::min(accepted_input_->page_size_, occurrence_count_ - offset);
-  auto       input = AcceptedReadInput(AlbumQueryRead{.offset_ = offset, .limit_ = limit});
+  const auto page  = accepted_input_->page_size_;
+  limit            = std::min(limit > 0 ? std::min(limit, page) : page, occurrence_count_ - offset);
+  auto input       = AcceptedReadInput(AlbumQueryRead{.offset_ = offset, .limit_ = limit});
   page_in_flight_  = true;
   thumbnail_model_.setLoading(true);
   query_worker_->Submit(SearchRequestKind::kLibraryPage, [this, input](std::uint64_t generation) {
@@ -945,9 +1189,7 @@ void LibraryModule::PublishPage(const LibraryQueryInput& input, LibraryQueryOutp
     }
   }
   view_state_.all_images_ = items;
-  const auto starts       = section_model_.LoadedPageStarts();
-  const bool has_more =
-      !starts.empty() && starts.back() + accepted_input_->page_size_ < occurrence_count_;
+  const bool has_more     = section_model_.LoadedEnd() < occurrence_count_;
   thumbnail_model_.beginReplace();
   thumbnail_model_.endReplace(std::move(items), view_state_.total_count_, has_more);
   emit CountsChanged();
@@ -959,13 +1201,16 @@ void LibraryModule::ContinuePaging() {
       accepted_options_.group_field_ == AlbumGroupField::kNone) {
     return;
   }
+  // The first occurrence of the requested range (from its page boundary) that no page holds.
+  // After an in-place change the loaded pages need not start at page boundaries, so the read
+  // ends at the next loaded page.
   const auto page = accepted_input_->page_size_;
-  for (int64_t start = (requested_begin_ / page) * page; start < requested_end_; start += page) {
-    if (section_model_.FileIdAt(start) == 0) {
-      SubmitPage(start);
-      return;
-    }
+  const auto missing =
+      section_model_.FirstUnloadedOccurrence((requested_begin_ / page) * page, requested_end_);
+  if (missing < 0) {
+    return;
   }
+  SubmitPage(missing, section_model_.NextLoadedPageStart(missing) - missing);
 }
 
 void LibraryModule::RequestSectionRows(int firstRow, int lastRow) {

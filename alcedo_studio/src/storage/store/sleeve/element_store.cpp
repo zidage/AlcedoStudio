@@ -440,6 +440,23 @@ auto ReadAlbumQueryFromMatchSet(duckdb_connection conn, const AlbumQueryOptions&
     duckdb_destroy_result(&result);
   }
 
+  if (read.read_occurrence_file_ids_) {
+    auto query = album_sql::RelationsPrefix(options, active_semantic_model_key,
+                                            album_sql::EditStateProjection::kNotRead);
+    query.append(duckorm::clause::select_query(std::vector{expr::raw("s.file_id")}, source));
+    query.append(
+        duckorm::clause::order_by(album_sql::OccurrenceOrderTerms(options, has_relevance)));
+    duckdb_result result;
+    ExecuteQueryOrThrow(conn, query.sql_, query, &result);
+    const auto row_count = duckdb_row_count(&result);
+    out.occurrence_file_ids_.reserve(static_cast<size_t>(row_count));
+    for (idx_t row = 0; row < row_count; ++row) {
+      out.occurrence_file_ids_.push_back(
+          static_cast<sl_element_id_t>(duckdb_value_int64(&result, 0, row)));
+    }
+    duckdb_destroy_result(&result);
+  }
+
   if (read.read_statistics_) {
     FolderStatsView statistics;
     ReadMatchSetBuckets(conn, statistics, !options.local_day_time_zone_.empty());

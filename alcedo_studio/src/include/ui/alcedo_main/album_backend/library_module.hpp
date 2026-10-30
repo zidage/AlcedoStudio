@@ -269,8 +269,25 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
 
   /// Request one refresh of the accepted library query. Requests of one event loop turn are
   /// combined: the refresh reads the filters, the search, and the presentation options when it
-  /// is submitted to the worker. UI thread only.
+  /// is submitted to the worker. The new result replaces the shown one (a model reset). UI
+  /// thread only.
   void                   RequestLibraryRefresh();
+  /**
+   * @brief The photos of the shown scope changed (an import, a delete, or photos added to the
+   *        shown album) and the query did not: refresh it and change the shown result in place.
+   *
+   * @details No model reset. The section rows and the photo rows that stay keep their items;
+   * rows of removed photos are removed, and photos that are new in the loaded range are read and
+   * inserted at their sort positions. The retained section pages move to their new occurrences
+   * without a page read. LibraryChangeAboutToApply and LibraryChangeApplied enclose the change,
+   * so a view keeps its scroll anchor and animates the change.
+   *
+   * The change is applied in place only when every request of the same event loop turn was a
+   * content refresh, and the scope, the options, and the semantic model key equal the accepted
+   * ones; otherwise the refresh replaces the result. A caller that changes the Inspector filter
+   * or the search calls RequestLibraryRefresh. UI thread only.
+   */
+  void                   RequestLibraryContentRefresh();
 
   // ── IAlbumCatalog ──────────────────────────────────────────────────────
   auto FindAlbumItem(sl_element_id_t elementId) -> AlbumItem* override;
@@ -315,8 +332,44 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   void pendingRevealChanged();
   /// The project's last edited photo was read (see RevealLastEditedFile).
   void LastEditedFileFound(uint elementId, uint imageId);
+  /// An in-place change (RequestLibraryContentRefresh) starts: the models still show the
+  /// previous result. Emitted synchronously before the first model signal of the change.
+  void LibraryChangeAboutToApply();
+  void libraryChangeAboutToApply();
+  /// The in-place change is complete in the thumbnail model and the section model.
+  void LibraryChangeApplied();
+  void libraryChangeApplied();
 
  private:
+  /// How a submitted refresh changes the shown result.
+  enum class RefreshKind : std::uint8_t {
+    kReplace,  ///< A new result replaces the shown one (model reset).
+    kInPlace,  ///< The same query after a content change: rows are inserted and removed.
+  };
+  /// The shown result moved into a new result of the same query: the retained section pages
+  /// (grouped mode) or the loaded rows (flat mode) in the new occurrence order, and the photos
+  /// among them whose rows the refresh must read before the change is applied.
+  struct InPlaceChange {
+    AlbumSectionModel::PageMap   pages_{};               ///< Grouped mode: retained pages.
+    std::vector<sl_element_id_t> loaded_order_{};        ///< Photo rows of the thumbnail model.
+    int64_t                      loaded_end_ = 0;        ///< Flat mode: loaded occurrence prefix.
+    std::vector<int64_t>         unread_occurrences_{};  ///< One occurrence per unread photo.
+  };
+
+  void               ScheduleRefresh(RefreshKind kind);
+  /// The in-place change from the shown result to @p output (a read with occurrence ids).
+  [[nodiscard]] auto PlanInPlaceChange(const LibraryQueryInput&  input,
+                                       const LibraryQueryOutput& output) const -> InPlaceChange;
+  /// Step 1 of an in-place refresh: plan the change, then read the unread photo rows (step 2)
+  /// or apply the change at once.
+  void               PublishInPlaceRefresh(std::shared_ptr<const LibraryQueryInput> input,
+                                           LibraryQueryOutput                       output);
+  void               ApplyInPlaceChange(const LibraryQueryInput& input, LibraryQueryOutput output,
+                                        InPlaceChange change, const LibraryQueryOutput& rows);
+  /// A failed refresh: the accepted content stays and the pending changes stay for Retry.
+  void               FailRefresh(const QString& error);
+  /// Finish an accepted refresh: counts, statistics, and the deferred actions.
+  void               FinishRefresh(const LibraryQueryOutput& output, bool search_changed);
   void SaveThumbnailDiskCacheSettings();
   /// Release the pins and empty the grid model, the sections, and the counts.
   void               ResetThumbnailWindow();
@@ -328,7 +381,8 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
       -> std::shared_ptr<const LibraryQueryInput>;
   void               PublishRefresh(const LibraryQueryInput& input, LibraryQueryOutput output);
   void               PublishPage(const LibraryQueryInput& input, LibraryQueryOutput output);
-  void               SubmitPage(int64_t offset);
+  /// Read the page of at most @p limit occurrences (0: one page size) at @p offset.
+  void                SubmitPage(int64_t offset, int64_t limit = 0);
   /// True when the accepted or the requested presentation reads the rating (see
   /// NoteRatingsChanged).
   auto               PresentationReadsRating() const -> bool;
@@ -379,6 +433,12 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   int64_t                              requested_begin_       = 0;  ///< Grouped viewport range.
   int64_t                              requested_end_         = 0;
   bool                                 refresh_scheduled_     = false;
+  /// Combined kind of the refresh requests since the last submit (kReplace wins).
+  RefreshKind                              scheduled_refresh_kind_ = RefreshKind::kInPlace;
+  /// A replacing refresh was submitted and no refresh was accepted since. A later request
+  /// supersedes its read (latest wins), so that request must replace too: the superseded
+  /// read carried a query change (filter, search, scope) that the accepted input lacks.
+  bool                                     unpublished_replace_    = false;
   bool                                 refresh_in_flight_     = false;
   bool                                 page_in_flight_        = false;
   QString                              query_error_{};

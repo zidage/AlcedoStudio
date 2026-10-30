@@ -5756,6 +5756,14 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <source>Change the filters or the search to show photos.</source>
         <translation>更改筛选条件或搜索以显示照片。</translation>
     </message>
+    <message>
+        <source>Show more photos</source>
+        <translation>显示更多照片</translation>
+    </message>
+    <message>
+        <source>Show larger photos</source>
+        <translation>显示更大的照片</translation>
+    </message>
 </context>
 <context>
     <name>LockedNodeMaskPromptDialog</name>

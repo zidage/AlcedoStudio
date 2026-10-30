@@ -28,6 +28,8 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "app/pipeline_service.hpp"
@@ -836,6 +838,361 @@ TEST_F(AlbumSectionQmlTests, SectionCellsAtFourColumnsShowTheEditMarkAndRateFrom
       3000));
   // The star click rated one photo; it did not change the selection.
   EXPECT_EQ(selections.count(), 0);
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// Issue #609: the photo at the top of the grouped view, read from the cells on the screen, and its
+// position in the viewport. A cell of a pooled row is not shown.
+namespace {
+
+struct ShownPhoto {
+  uint  file_id_ = 0;
+  qreal y_       = 0;
+};
+
+auto ShownCells(QQuickWindow* window, QQuickItem* list) -> std::vector<QQuickItem*> {
+  std::vector<QQuickItem*> cells;
+  CollectNamedItems(window ? window->contentItem() : nullptr,
+                    QStringLiteral("albumSectionPhotoCell"), cells);
+  std::erase_if(cells, [&](QQuickItem* cell) {
+    auto* row = cell->parentItem() ? cell->parentItem()->parentItem() : nullptr;
+    if (!cell->isVisible() || row == nullptr || !row->property("inUse").toBool() ||
+        cell->property("fileId").toUInt() == 0) {
+      return true;
+    }
+    const auto position = cell->mapToItem(list, QPointF(0, 0));
+    return position.y() + cell->height() <= 0 || position.y() >= list->height();
+  });
+  return cells;
+}
+
+auto FirstShownPhoto(QQuickWindow* window, QQuickItem* list) -> ShownPhoto {
+  ShownPhoto best;
+  qreal      best_x = 0;
+  for (auto* cell : ShownCells(window, list)) {
+    const auto position = cell->mapToItem(list, QPointF(0, 0));
+    if (best.file_id_ == 0 || position.y() < best.y_ - 0.5 ||
+        (std::abs(position.y() - best.y_) <= 0.5 && position.x() < best_x)) {
+      best   = ShownPhoto{.file_id_ = cell->property("fileId").toUInt(), .y_ = position.y()};
+      best_x = position.x();
+    }
+  }
+  return best;
+}
+
+/// The cells and the reason each one is not shown, for a failure message.
+auto DescribeCells(QQuickWindow* window, QQuickItem* list) -> std::string {
+  std::vector<QQuickItem*> cells;
+  CollectNamedItems(window ? window->contentItem() : nullptr,
+                    QStringLiteral("albumSectionPhotoCell"), cells);
+  std::string out = "cells " + std::to_string(cells.size()) + "\n";
+  for (auto* cell : cells) {
+    auto*      row      = cell->parentItem() ? cell->parentItem()->parentItem() : nullptr;
+    const auto position = cell->mapToItem(list, QPointF(0, 0));
+    out +=
+        "visible " + std::to_string(cell->isVisible()) + " row " + std::to_string(row != nullptr) +
+        " inUse " + std::to_string(row != nullptr && row->property("inUse").toBool()) + " file " +
+        std::to_string(cell->property("fileId").toUInt()) + " y " + std::to_string(position.y()) +
+        " rowIndex " + std::to_string(row ? row->property("index").toInt() : -1) + " rowFirst " +
+        std::to_string(row ? row->property("firstOccurrence").toLongLong() : -1) + " rowIds " +
+        std::to_string(row ? row->property("fileIds").toList().size() : -1) + " first " +
+        std::to_string(row && !row->property("fileIds").toList().isEmpty()
+                           ? row->property("fileIds").toList().front().toUInt()
+                           : 0) +
+        "\n";
+  }
+  return out + "list height " + std::to_string(list->height());
+}
+
+/// Viewport height of the shown cell of @p file_id; empty when no shown cell has it.
+auto ShownPhotoY(QQuickWindow* window, QQuickItem* list, uint file_id) -> std::optional<qreal> {
+  for (auto* cell : ShownCells(window, list)) {
+    if (cell->property("fileId").toUInt() == file_id) {
+      return cell->mapToItem(list, QPointF(0, 0)).y();
+    }
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+// A delete of two rows of photos above the shown rows and an import of three photos into a new
+// group before them (an occurrence range that no loaded page holds) change the rows in place:
+// the first shown photo stays the same, at the same height in the viewport. A delete of one
+// photo above moves the photos by one cell; the first shown photo keeps its height.
+TEST_F(AlbumSectionQmlTests, InPlaceDeleteAndImportKeepTheFirstShownPhoto) {
+  ApplicationModuleHost         backend;
+  std::vector<LibraryPhotoSpec> specs(400);
+  for (auto& spec : specs) {
+    spec.added_time_ = Utc(2026, 9, 1, 10);
+  }
+  const auto packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, specs);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  auto* library = backend.library();
+  // A search keeps pages at 120 rows.
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  library->SetInspectorGrouping(QStringLiteral("import"), true);
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  auto& sections = library->section_model();
+  ASSERT_EQ(sections.GroupCount(), 1);
+
+  LoadedComponent view(backend, "AlbumSectionView.qml", 1000);
+  QQuickItem*     list    = nullptr;
+  const auto      list_up = [&]() {
+    list = qobject_cast<QQuickItem*>(view.Find("albumSectionList"));
+    return list != nullptr && list->property("count").toInt() == sections.rowCount() &&
+           list->height() > 0;
+  };
+  ASSERT_TRUE(WaitUntil(list_up)) << Joined(view.warnings());
+  auto*      window  = qobject_cast<QQuickWindow*>(view.window());
+  const auto columns = view.loaded()->property("columnCount").toInt();
+  ASSERT_GT(columns, 1);
+  // Row 30 at the top of the view, 23 px scrolled into it (ListView.Beginning is 0).
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(list, "positionViewAtIndex", Q_ARG(int, 30), Q_ARG(int, 0)));
+  list->setProperty("contentY", list->property("contentY").toReal() + 23.0);
+  ASSERT_TRUE(WaitUntil([&]() { return FirstShownPhoto(window, list).file_id_ != 0; }))
+      << DescribeCells(window, list) << " pages " <<
+      [&]() {
+        std::string text;
+        for (const auto start : sections.LoadedPageStarts()) text += std::to_string(start) + ",";
+        return text;
+      }()
+      << " updating " << library->QueryUpdating() << " total " << sections.OccurrenceTotal()
+      << " rows " << sections.rowCount() << " contentY " << list->property("contentY").toReal();
+  ProcessEvents(500);
+  const auto before = FirstShownPhoto(window, list);
+  ASSERT_NE(before.file_id_, 0u);
+  // The photos of the first occurrences are far above the shown rows.
+  const auto& keys        = packed->images_;
+  const auto  first_count = static_cast<size_t>(2 * columns + 1);
+  ASSERT_TRUE(std::none_of(keys.begin(), keys.begin() + first_count,
+                           [&](const auto& key) { return key.file_id_ == before.file_id_; }));
+
+  QSignalSpy resets(&sections, &QAbstractItemModel::modelReset);
+  std::vector<std::pair<sl_element_id_t, image_id_t>> targets;
+  for (size_t index = 0; index < static_cast<size_t>(2 * columns); ++index) {
+    targets.emplace_back(keys[index].file_id_, keys[index].image_id_);
+  }
+  ASSERT_TRUE(DeleteAndWait(backend, targets));
+  ProcessEvents(600);  // the cells finish their move
+  const auto after_delete = FirstShownPhoto(window, list);
+  EXPECT_EQ(after_delete.file_id_, before.file_id_);
+  EXPECT_NEAR(after_delete.y_, before.y_, 1.0);
+  EXPECT_EQ(sections.OccurrenceTotal(), 400 - 2 * columns);
+
+  const auto photos = WritePngPhotos(temp_dir_ / "import_source", "album-delete-import-", 3);
+  ASSERT_EQ(photos.size(), 3u);
+  ASSERT_TRUE(ImportAndWait(backend, photos));
+  ASSERT_TRUE(WaitUntil([&]() { return sections.GroupCount() == 2; }));
+  ProcessEvents(600);
+  const auto after_import = FirstShownPhoto(window, list);
+  EXPECT_EQ(after_import.file_id_, before.file_id_);
+  EXPECT_NEAR(after_import.y_, before.y_, 1.0);
+
+  ASSERT_TRUE(
+      DeleteAndWait(backend, {{keys[first_count - 1].file_id_, keys[first_count - 1].image_id_}}));
+  ProcessEvents(600);
+  const auto anchor_y = ShownPhotoY(window, list, before.file_id_);
+  ASSERT_TRUE(anchor_y.has_value());
+  EXPECT_NEAR(*anchor_y, before.y_, 1.0);
+  EXPECT_EQ(list->property("count").toInt(), sections.rowCount());
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// The flat grid keeps the first shown card at its height through a delete of photos before it.
+TEST_F(AlbumSectionQmlTests, FlatGridDeleteBeforeTheShownCardsKeepsTheFirstShownCard) {
+  ApplicationModuleHost backend;
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 300);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto&     keys = packed->images_;
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  auto* grid   = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_grid"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys[0].file_id_) != nullptr; }));
+  ProcessEvents(500);
+  const auto cell_height = grid->property("cellHeight").toReal();
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "restoreContentY",
+                                        Q_ARG(QVariant, 12.0 * cell_height + 9.0)));
+  ProcessEvents(800);
+  // Shown cards: element id and viewport position.
+  const auto shown_cards = [&]() {
+    std::vector<std::tuple<uint, qreal, qreal>> out;
+    for (const auto& key : keys) {
+      auto* card = GridCard(window, key.file_id_);
+      if (card == nullptr || !card->isVisible()) {
+        continue;
+      }
+      const auto position = card->mapToItem(grid, QPointF(0, 0));
+      if (position.y() + card->height() > 0 && position.y() < grid->height()) {
+        out.emplace_back(key.file_id_, position.y(), position.x());
+      }
+    }
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+      return std::abs(std::get<1>(a) - std::get<1>(b)) > 0.5 ? std::get<1>(a) < std::get<1>(b)
+                                                             : std::get<2>(a) < std::get<2>(b);
+    });
+    return out;
+  };
+  const auto before = shown_cards();
+  ASSERT_FALSE(before.empty());
+  const auto anchor = std::get<0>(before.front());
+  ASSERT_NE(anchor, keys[0].file_id_);
+
+  QSignalSpy resets(&backend.library()->model(), &QAbstractItemModel::modelReset);
+  ASSERT_TRUE(DeleteAndWait(backend, {{keys[0].file_id_, keys[0].image_id_},
+                                      {keys[1].file_id_, keys[1].image_id_},
+                                      {keys[2].file_id_, keys[2].image_id_}}));
+  ProcessEvents(800);
+  const auto after = shown_cards();
+  const auto it    = std::find_if(after.begin(), after.end(),
+                                  [&](const auto& card) { return std::get<0>(card) == anchor; });
+  ASSERT_NE(it, after.end());
+  EXPECT_NEAR(std::get<1>(*it), std::get<1>(before.front()), 1.0);
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// The flat grid has a scroll bar for all photos of the result, also the photos that are not
+// loaded: its size is the shown part of all rows, it follows a scroll, and a drag of its handle
+// to the end shows the last photos and loads the pages up to them.
+TEST_F(AlbumSectionQmlTests, FlatGridScrollBarDragShowsAndLoadsTheLastPhotos) {
+  ApplicationModuleHost backend;
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 300);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  // A search keeps pages at 120 rows, so 180 photos are not loaded at first.
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  auto* library = backend.library();
+  ASSERT_EQ(library->TotalCount(), 300);
+  ASSERT_EQ(library->ShownCount(), 120);
+  const auto&     keys = packed->images_;
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  auto* grid   = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_grid"));
+  auto* bar    = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_scrollBar"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(bar, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys[0].file_id_) != nullptr; }));
+  ProcessEvents(500);
+
+  // 300 photos at 6 columns are 50 rows; the bar covers all of them, not the 20 loaded rows.
+  const auto columns     = view.loaded()->property("columns").toInt();
+  const auto cell_height = grid->property("cellHeight").toReal();
+  const auto all_rows    = std::ceil(300.0 / columns);
+  EXPECT_NEAR(bar->property("size").toReal(), grid->height() / (all_rows * cell_height), 0.01);
+  EXPECT_LT(bar->property("size").toReal(), 1.0);
+  EXPECT_NEAR(bar->property("position").toReal(), 0.0, 1e-6);
+
+  // A scroll moves the bar.
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "restoreContentY",
+                                        Q_ARG(QVariant, 5.0 * cell_height)));
+  ProcessEvents(100);
+  EXPECT_NEAR(bar->property("position").toReal(), 5.0 / all_rows, 0.01);
+  EXPECT_TRUE(bar->property("active").toBool());
+
+  // Drag the handle to the end of the bar.
+  auto* handle = qvariant_cast<QQuickItem*>(bar->property("contentItem"));
+  ASSERT_NE(handle, nullptr);
+  const auto start = SceneCenter(handle);
+  const auto end   = bar->mapToScene(QPointF(bar->width() / 2.0, bar->height() + 40.0)).toPoint();
+  QTest::mouseMove(window, start);
+  QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
+  for (int step = 1; step <= 10; ++step) {
+    QTest::mouseMove(window, start + (end - start) * step / 10);
+    ProcessEvents(10);
+  }
+  QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, end);
+  ASSERT_TRUE(WaitUntil([&]() { return library->ShownCount() == 300; }))
+      << "shown " << library->ShownCount() << " contentY " << grid->property("contentY").toReal();
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys.back().file_id_) != nullptr; }));
+  const auto max_y = all_rows * cell_height - grid->height();
+  EXPECT_NEAR(grid->property("contentY").toReal() - grid->property("originY").toReal(), max_y, 1.0);
+  EXPECT_NEAR(bar->property("position").toReal() + bar->property("size").toReal(), 1.0, 0.01);
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// A rubber band drag over the flat grid selects the photos that it covers, also after a zoom
+// change while scrolled, which moves the origin of the grid content away from 0.
+TEST_F(AlbumSectionQmlTests, FlatGridRubberBandSelectsTheCoveredPhotosAfterTheOriginMoved) {
+  ApplicationModuleHost backend;
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 300);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto&     keys = packed->images_;
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  auto* grid   = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_grid"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys[0].file_id_) != nullptr; }));
+  ProcessEvents(500);
+  QSignalSpy selections(view.loaded(), SIGNAL(replaceSelection(QVariant)));
+  ASSERT_TRUE(selections.isValid());
+
+  // Drags from the center of the card at `from` to the center of the card at `to` and returns
+  // the selected element ids.
+  const auto drag = [&](size_t from, size_t to) {
+    std::vector<uint> ids;
+    auto*             first = GridCard(window, keys[from].file_id_);
+    auto*             last  = GridCard(window, keys[to].file_id_);
+    EXPECT_NE(first, nullptr);
+    EXPECT_NE(last, nullptr);
+    if (first == nullptr || last == nullptr) return ids;
+    selections.clear();
+    const auto start = SceneCenter(first);
+    const auto end   = SceneCenter(last);
+    QTest::mouseMove(window, start);
+    QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
+    for (int step = 1; step <= 10; ++step) {
+      QTest::mouseMove(window, start + (end - start) * step / 10);
+      ProcessEvents(10);
+    }
+    QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, end);
+    ProcessEvents(100);
+    if (selections.isEmpty()) return ids;
+    for (const auto& item : selections.last().at(0).toList()) {
+      ids.push_back(item.toMap().value("elementId").toUInt());
+    }
+    return ids;
+  };
+  const auto expected = [&](size_t from, int columns) {
+    return std::vector<uint>{keys[from].file_id_, keys[from + 1].file_id_,
+                             keys[from + static_cast<size_t>(columns)].file_id_,
+                             keys[from + static_cast<size_t>(columns) + 1].file_id_};
+  };
+
+  auto columns = view.loaded()->property("columns").toInt();
+  EXPECT_EQ(drag(0, static_cast<size_t>(columns) + 1), expected(0, columns));
+
+  // Scroll down, change the zoom, and scroll back to the top.
+  const auto cell_height = grid->property("cellHeight").toReal();
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "restoreContentY",
+                                        Q_ARG(QVariant, 12.0 * cell_height + 9.0)));
+  ProcessEvents(500);
+  view.loaded()->setProperty("zoomLevel", 2);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded()->property("columns").toInt() == 4; }));
+  ProcessEvents(1000);
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "restoreContentY", Q_ARG(QVariant, -1.0e9)));
+  ProcessEvents(800);
+  columns = 4;
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys[0].file_id_) != nullptr; }));
+  const auto origin_y = grid->property("originY").toReal();
+  EXPECT_NE(origin_y, 0.0) << "the zoom change did not move the content origin";
+  EXPECT_EQ(drag(0, static_cast<size_t>(columns) + 1), expected(0, columns))
+      << "originY " << origin_y << " contentY " << grid->property("contentY").toReal();
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
 }
 

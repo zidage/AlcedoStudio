@@ -304,9 +304,11 @@ RowLayout {
                 Item { Layout.fillWidth: true }
 
                 // ── Zoom slider ──
+                // Left end: the most photos (the smallest thumbnails, zoom level 7); right end:
+                // the largest photos (zoom level 0). The slider runs in the same direction.
                 Item {
-                    Layout.preferredWidth: 180
-                    Layout.preferredHeight: 36
+                    Layout.preferredWidth: 236
+                    Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
 
                     TapHandler {
                         acceptedButtons: Qt.LeftButton
@@ -317,25 +319,22 @@ RowLayout {
                         anchors.fill: parent
                         spacing: 8
 
-                        Label {
-                            text: "-"
-                            color: root.colTextMuted
-                            font.family: root.dataFontFamily
-                            font.pixelSize: 18
-                            font.weight: 600
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.gridZoomLevel = Math.min(7, root.gridZoomLevel + 1)
-                            }
+                        IconActionButton {
+                            objectName: "libraryZoomSmallerButton"
+                            compact: true
+                            fillIdle: "transparent"
+                            iconSrc: "qrc:/panel_icons/thumbnail-zoom-smallest.svg"
+                            actionName: qsTr("Show more photos")
+                            enabled: root.gridZoomLevel < 7
+                            onClicked: root.gridZoomLevel = Math.min(7, root.gridZoomLevel + 1)
                         }
 
                         Slider {
                             id: zoomSlider
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignVCenter
-                            from: 0
-                            to: 7
+                            from: 7
+                            to: 0
                             stepSize: 1
                             value: root.gridZoomLevel
                             onValueChanged: root.gridZoomLevel = Math.round(value)
@@ -365,17 +364,14 @@ RowLayout {
                             }
                         }
 
-                        Label {
-                            text: "+"
-                            color: root.colText
-                            font.family: root.dataFontFamily
-                            font.pixelSize: 18
-                            font.weight: 600
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.gridZoomLevel = Math.max(0, root.gridZoomLevel - 1)
-                            }
+                        IconActionButton {
+                            objectName: "libraryZoomLargerButton"
+                            compact: true
+                            fillIdle: "transparent"
+                            iconSrc: "qrc:/panel_icons/thumbnail-zoom-largest.svg"
+                            actionName: qsTr("Show larger photos")
+                            enabled: root.gridZoomLevel > 0
+                            onClicked: root.gridZoomLevel = Math.max(0, root.gridZoomLevel - 1)
                         }
                     }
                 }

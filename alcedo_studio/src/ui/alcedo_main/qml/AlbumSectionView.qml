@@ -53,6 +53,14 @@ Item {
     // anchor of the current position, kept while the rows match this view's geometry.
     property var pendingScrollAnchor: null
     property var currentScrollAnchor: null
+    // In-place change of the shown result (an import or a delete): the headers and cells of the
+    // created rows before the change, read on libraryChangeAboutToApply.
+    property var changeCapture: null
+    property bool changeApplying: false
+    // When more photos and headers than this appear or disappear in the view, the change is
+    // shown without animation; the scroll anchor stays.
+    readonly property int changeAnimationLimit: 48
+    readonly property int changeAnimationDuration: 260
 
     signal imageSelectionChanged(int elementId, int imageId, string fileName, bool isHdr,
                                  bool selected)
@@ -221,13 +229,225 @@ Item {
         }
     }
 
+    // ── In-place change (import or delete) ──
+    // The view keeps the first visible photo (or header) at its position on the screen: before
+    // the change it records each created header and cell with its viewport position; after the
+    // change it puts the row of the first recorded item that still exists at the same height,
+    // from the real delegate position (ListView keeps the rows it shows in place when rows
+    // above them change, so the row offsets of the model geometry can differ from contentY).
+    // Then each item that moved slides from its old place, a new item fades in, and a removed
+    // item fades out.
+    function groupKeyText(title, unknown) {
+        return unknown ? "u" : "t:" + title
+    }
+
+    function createdRows() {
+        const rows = []
+        const children = list.contentItem.children
+        for (let i = 0; i < children.length; ++i) {
+            const child = children[i]
+            if (child && child.rowKind !== undefined && child.inUse && child.visible) {
+                rows.push(child)
+            }
+        }
+        rows.sort(function(a, b) { return a.y - b.y })
+        return rows
+    }
+
+    // Headers and loaded cells of the created rows in visual order, with viewport positions.
+    function changeEntries() {
+        const entries = []
+        const rows = createdRows()
+        for (let r = 0; r < rows.length; ++r) {
+            const row = rows[r]
+            const rowTop = row.y - list.contentY
+            const groupKey = groupKeyText(row.groupTitle, row.groupUnknown)
+            if (row.rowKind === 0) {
+                entries.push({ key: "h|" + groupKey, header: true, target: row,
+                               title: row.groupTitle, unknown: row.groupUnknown, fileId: 0,
+                               occurrence: -1, x: 0, y: rowTop, w: row.width, h: row.height,
+                               rowTop: rowTop, thumb: "",
+                               text: root.groupTitleText(row.groupTitle, row.groupUnknown) })
+                continue
+            }
+            for (let c = 0; c < row.cellCount(); ++c) {
+                const cell = row.cellAt(c)
+                if (!cell || cell.fileId <= 0) {
+                    continue
+                }
+                const p = cell.mapToItem(list, 0, 0)
+                entries.push({ key: "p|" + groupKey + "|" + cell.fileId, header: false,
+                               target: cell, title: row.groupTitle, unknown: row.groupUnknown,
+                               fileId: cell.fileId, occurrence: cell.occurrence, x: p.x, y: p.y,
+                               w: cell.width, h: cell.height, rowTop: rowTop,
+                               thumb: cell.liveThumbUrl, text: "" })
+            }
+        }
+        return entries
+    }
+
+    function finishChangeAnimations() {
+        const rows = createdRows()
+        for (let r = 0; r < rows.length; ++r) {
+            rows[r].finishFlips()
+        }
+        for (let g = ghostLayer.children.length - 1; g >= 0; --g) {
+            ghostLayer.children[g].destroy()
+        }
+    }
+
+    function captureChange() {
+        changeCapture = null
+        changeApplying = true
+        if (list.width <= 0 || list.height <= 0 || list.count <= 0) {
+            return
+        }
+        finishChangeAnimations()
+        const entries = changeEntries()
+        const byKey = {}
+        let focusEntry = null
+        let rangeEntry = null
+        for (let i = 0; i < entries.length; ++i) {
+            const entry = entries[i]
+            entry.onScreen = entry.y + entry.h > 0 && entry.y < list.height
+            byKey[entry.key] = entry
+            if (!entry.header && entry.occurrence === focusOccurrence) {
+                focusEntry = entry
+            }
+            if (!entry.header && entry.occurrence === anchorOccurrence) {
+                rangeEntry = entry
+            }
+        }
+        changeCapture = { entries: entries, byKey: byKey, focus: focusEntry, range: rangeEntry }
+    }
+
+    // Row that shows a recorded entry after the change; -1 when its photo or group left.
+    function rowOfEntry(entry) {
+        const group = sections.GroupIndexForTitle(entry.title, entry.unknown)
+        if (group < 0) {
+            return -1
+        }
+        if (entry.header) {
+            return sections.GroupHeaderRow(group)
+        }
+        const occurrence = sections.LoadedOccurrenceOf(entry.fileId, group)
+        return occurrence >= 0 ? sections.RowForOccurrence(occurrence) : -1
+    }
+
+    function occurrenceOfEntry(entry) {
+        if (!entry) {
+            return -1
+        }
+        const group = sections.GroupIndexForTitle(entry.title, entry.unknown)
+        return group >= 0 ? Number(sections.LoadedOccurrenceOf(entry.fileId, group)) : -1
+    }
+
+    function keepChangeAnchor(entries) {
+        for (let i = 0; i < entries.length; ++i) {
+            const entry = entries[i]
+            if (entry.y + entry.h <= 0) {
+                continue
+            }
+            const row = rowOfEntry(entry)
+            if (row < 0) {
+                continue
+            }
+            let item = list.itemAtIndex(row)
+            if (!item) {
+                list.positionViewAtIndex(row, ListView.Beginning)
+                list.forceLayout()
+                item = list.itemAtIndex(row)
+            }
+            if (!item) {
+                return
+            }
+            const maxY = list.originY + Math.max(0, list.contentHeight - list.height)
+            list.contentY = Math.max(list.originY, Math.min(maxY, item.y - entry.rowTop))
+            list.forceLayout()
+            return
+        }
+    }
+
+    function applyChange() {
+        const capture = changeCapture
+        changeCapture = null
+        changeApplying = false
+        photoRevision++
+        if (!capture) {
+            visibleRowsTimer.restart()
+            return
+        }
+        list.forceLayout()
+        keepChangeAnchor(capture.entries)
+        focusOccurrence = occurrenceOfEntry(capture.focus)
+        anchorOccurrence = occurrenceOfEntry(capture.range)
+        visibleRowsTimer.restart()
+
+        const after = changeEntries()
+        const shown = {}
+        const moves = []
+        const fades = []
+        for (let i = 0; i < after.length; ++i) {
+            const entry = after[i]
+            shown[entry.key] = true
+            const before = capture.byKey[entry.key]
+            const onScreen = entry.y + entry.h > 0 && entry.y < list.height
+            if (before) {
+                const dx = before.x - entry.x
+                const dy = before.y - entry.y
+                if ((onScreen || before.onScreen) && (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5)) {
+                    moves.push({ target: entry.target, dx: dx, dy: dy })
+                }
+            } else if (onScreen) {
+                fades.push(entry.target)
+            }
+        }
+        const ghosts = []
+        for (let j = 0; j < capture.entries.length; ++j) {
+            const entry = capture.entries[j]
+            if (entry.onScreen && !shown[entry.key]) {
+                ghosts.push(entry)
+            }
+        }
+        if (fades.length + ghosts.length > changeAnimationLimit) {
+            return
+        }
+        for (let m = 0; m < moves.length; ++m) {
+            moves[m].target.startFlip(moves[m].dx, moves[m].dy, 1)
+        }
+        for (let f = 0; f < fades.length; ++f) {
+            fades[f].startFlip(0, 0, 0)
+        }
+        for (let g = 0; g < ghosts.length; ++g) {
+            const entry = ghosts[g]
+            changeGhostComponent.createObject(ghostLayer, {
+                x: entry.header ? entry.x : entry.x + cellGap / 2,
+                y: entry.header ? entry.y : entry.y + cellGap / 2,
+                width: entry.header ? entry.w : entry.w - cellGap,
+                height: entry.header ? entry.h : entry.h - cellGap,
+                source: entry.thumb, title: entry.text
+            })
+        }
+    }
+
+    // The rows at the top and the bottom edge of the viewport. After a jump, ListView places the
+    // rows from an estimated row height, so the rows on the screen are read from the delegates;
+    // the model geometry is used only where no delegate is created yet.
     function requestVisibleRows() {
         if (list.count <= 0 || list.height <= 0) {
             return
         }
-        const first = sections.RowAtOffset(list.contentY, headerHeight, photoRowHeight)
-        const last = sections.RowAtOffset(list.contentY + list.height, headerHeight,
+        let first = list.indexAt(1, list.contentY)
+        let last = list.indexAt(1, list.contentY + list.height - 1)
+        if (first < 0) {
+            first = sections.RowAtOffset(list.contentY, headerHeight, photoRowHeight)
+        }
+        if (last < 0) {
+            last = first >= 0 && list.itemAtIndex(first)
+                   ? list.count - 1
+                   : sections.RowAtOffset(list.contentY + list.height, headerHeight,
                                           photoRowHeight)
+        }
         library.RequestSectionRows(Math.max(0, first), Math.max(first, last))
     }
 
@@ -332,12 +552,25 @@ Item {
                 root.scrollToRow(sectionRow)
             }
         }
+        function onLibraryChangeAboutToApply() { root.captureChange() }
+        function onLibraryChangeApplied() { root.applyChange() }
     }
 
+    // During an in-place change the photo rows change in runs; the cells read the photos once,
+    // when the change is complete (applyChange).
     Connections {
         target: root.photos
         function onModelReset() { root.photoRevision++ }
-        function onRowsInserted() { root.photoRevision++ }
+        function onRowsInserted() {
+            if (!root.changeApplying) {
+                root.photoRevision++
+            }
+        }
+        function onRowsRemoved() {
+            if (!root.changeApplying) {
+                root.photoRevision++
+            }
+        }
         function onDataChanged() { root.photoRevision++ }
     }
 
@@ -431,9 +664,42 @@ Item {
         property int pinnedFileId: 0
         property int pinnedImageId: 0
         property int pinnedMaxEdge: 0
+        // In-place change: offset from the new cell to the old one.
+        property real flipX: 0
+        property real flipY: 0
 
         width: root.cellWidth
         height: root.photoRowHeight
+        transform: Translate { x: cell.flipX; y: cell.flipY }
+
+        function startFlip(dx, dy, fromOpacity) {
+            flipAnimation.stop()
+            flipX = dx
+            flipY = dy
+            opacity = fromOpacity
+            flipAnimation.restart()
+        }
+        function finishFlip() {
+            flipAnimation.stop()
+            flipX = 0
+            flipY = 0
+            opacity = 1
+        }
+        ParallelAnimation {
+            id: flipAnimation
+            NumberAnimation {
+                target: cell; property: "flipX"; to: 0
+                duration: root.changeAnimationDuration; easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                target: cell; property: "flipY"; to: 0
+                duration: root.changeAnimationDuration; easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                target: cell; property: "opacity"; to: 1
+                duration: root.changeAnimationDuration; easing.type: Easing.OutCubic
+            }
+        }
         Accessible.role: Accessible.ListItem
         Accessible.name: {
             if (!photo) {
@@ -762,12 +1028,60 @@ Item {
                 required property var occurrenceCount
                 required property var fileIds
                 property bool inUse: true
+                // In-place change of a header row (photo rows move their cells instead).
+                property real flipX: 0
+                property real flipY: 0
 
                 width: ListView.view ? ListView.view.width : 0
                 height: rowKind === 0 ? root.headerHeight : root.photoRowHeight
+                transform: Translate { x: rowItem.flipX; y: rowItem.flipY }
 
-                ListView.onPooled: inUse = false
+                ListView.onPooled: {
+                    inUse = false
+                    finishFlips()
+                }
                 ListView.onReused: inUse = true
+
+                function cellCount() {
+                    return rowKind === 1 ? cellRepeater.count : 0
+                }
+                function cellAt(column) {
+                    return cellRepeater.itemAt(column)
+                }
+                function startFlip(dx, dy, fromOpacity) {
+                    headerFlipAnimation.stop()
+                    flipX = dx
+                    flipY = dy
+                    opacity = fromOpacity
+                    headerFlipAnimation.restart()
+                }
+                function finishFlips() {
+                    headerFlipAnimation.stop()
+                    flipX = 0
+                    flipY = 0
+                    opacity = 1
+                    for (let c = 0; c < cellRepeater.count; ++c) {
+                        const cell = cellRepeater.itemAt(c)
+                        if (cell) {
+                            cell.finishFlip()
+                        }
+                    }
+                }
+                ParallelAnimation {
+                    id: headerFlipAnimation
+                    NumberAnimation {
+                        target: rowItem; property: "flipX"; to: 0
+                        duration: root.changeAnimationDuration; easing.type: Easing.OutCubic
+                    }
+                    NumberAnimation {
+                        target: rowItem; property: "flipY"; to: 0
+                        duration: root.changeAnimationDuration; easing.type: Easing.OutCubic
+                    }
+                    NumberAnimation {
+                        target: rowItem; property: "opacity"; to: 1
+                        duration: root.changeAnimationDuration; easing.type: Easing.OutCubic
+                    }
+                }
 
                 // Header: separate title, count, and disclosure roles.
                 RowLayout {
@@ -848,6 +1162,7 @@ Item {
                 Row {
                     visible: rowItem.rowKind === 1
                     Repeater {
+                        id: cellRepeater
                         model: rowItem.rowKind === 1 ? Number(rowItem.occurrenceCount) : 0
                         delegate: PhotoCell {
                             required property int index
@@ -860,6 +1175,56 @@ Item {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Removed photos and headers of an in-place change fade out here, over the list, at their
+    // old viewport positions.
+    Item {
+        id: ghostLayer
+        objectName: "albumSectionChangeGhosts"
+        // The column layout fills the view, so the list position is a view position.
+        x: list.x
+        y: list.y
+        width: list.width
+        height: list.height
+        clip: true
+        z: 2
+    }
+
+    Component {
+        id: changeGhostComponent
+        Rectangle {
+            id: ghost
+            property string source: ""
+            property string title: ""
+            radius: title.length > 0 ? 0 : appTheme.panelRadius
+            color: title.length > 0 ? "transparent" : appTheme.cardSurfaceColor
+            Image {
+                anchors.fill: parent
+                anchors.margins: root.cardInset
+                visible: ghost.title.length === 0 && ghost.source.length > 0
+                source: ghost.source
+                fillMode: Image.PreserveAspectFit
+            }
+            Label {
+                anchors.left: parent.left
+                anchors.leftMargin: appTheme.spaceSm * 2 + appTheme.inspectorHeaderActionSize
+                anchors.verticalCenter: parent.verticalCenter
+                visible: ghost.title.length > 0
+                text: ghost.title
+                color: appTheme.textColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightStrong
+            }
+            NumberAnimation on opacity {
+                from: 1
+                to: 0
+                duration: root.changeAnimationDuration
+                easing.type: Easing.OutCubic
+                onFinished: ghost.destroy()
             }
         }
     }
