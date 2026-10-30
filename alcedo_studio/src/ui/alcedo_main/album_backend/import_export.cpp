@@ -735,8 +735,15 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
   const auto recovery_target_folder_id   = import_target_folder_id_;
   const auto recovery_target_folder_path = import_target_folder_path_;
 
-  library_->ReloadCurrentFolder();
-  stats_->ClearFilters();
+  // The imported photos must be visible, so the Inspector filter is cleared. With no filter
+  // the query does not change and the Library adds the photos in place; clearing a filter is
+  // a new query and replaces the shown result.
+  if (stats_ && stats_->HasActiveFilter()) {
+    stats_->ClearFilters();
+    library_->ReloadCurrentFolder();
+  } else {
+    library_->RequestLibraryContentRefresh();
+  }
   if (stats_) emit stats_->StatsFilterChanged();
 
   import_target_folder_id_   = folders_->CurrentFolderElementId().value_or(0);

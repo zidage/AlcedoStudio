@@ -36,6 +36,12 @@ namespace alcedo::ui {
  * the group of a row without one object per photo row. Collapsing a group changes the rows only;
  * it does not change any count.
  *
+ * A loaded page is a contiguous occurrence range with its file ids. A new result of another
+ * query replaces the groups and drops the pages (a model reset). A new result of the same query
+ * after an import or a delete is applied in place (ApplyResultChange): the rows of each group
+ * are inserted or removed, and the retained pages move to their occurrences in the new result
+ * (RetainedPagesInResult), so their start need not be a multiple of the page size.
+ *
  * Thread: GUI thread only.
  */
 class AlbumSectionModel final : public QAbstractListModel {
@@ -94,11 +100,52 @@ class AlbumSectionModel final : public QAbstractListModel {
   /// End the reset that BeginReplace started and emit SectionsChanged and PagesChanged.
   void EndReplace();
 
-  /// Store the file ids of the occurrences that start at @p first_occurrence. A page that
-  /// overlaps an evicted range is kept; pages beyond @p max_retained_pages are evicted from the
-  /// end farthest from @p first_occurrence. Emits dataChanged for the rows of the stored page.
+  /// Loaded pages: first occurrence -> file id of each occurrence of the page.
+  using PageMap = std::map<int64_t, std::vector<sl_element_id_t>>;
+
+  /// Store the file ids of the occurrences that start at @p first_occurrence. Loaded pages that
+  /// overlap the range join the stored page (the new ids win); pages beyond
+  /// @p max_retained_pages are evicted from the end farthest from @p first_occurrence. Emits
+  /// dataChanged for the rows of the stored page.
   void StorePage(int64_t first_occurrence, const std::vector<sl_element_id_t>& file_ids,
                  size_t max_retained_pages);
+
+  /**
+   * @brief The loaded pages moved into a new result of the same query: each page covers the
+   *        new occurrences of its photos that remain, and holds the file ids of the new result
+   *        in that range (also the ids of photos inserted between them).
+   *
+   * @param groups Groups of the new result (empty in the flat mode).
+   * @param occurrence_file_ids File id of every occurrence of the new result, in order.
+   *
+   * A photo of a page is found in the new result by its file id in the group of the same key,
+   * so a file shown in several label groups keeps each of its occurrences. A page whose photos
+   * were all removed is dropped; pages that overlap after the move are joined. Reads only.
+   */
+  [[nodiscard]] auto RetainedPagesInResult(
+      const std::vector<AlbumGroupDescriptor>& groups,
+      const std::vector<sl_element_id_t>&      occurrence_file_ids) const -> PageMap;
+
+  /**
+   * @brief Apply a new result of the same query in place, without a model reset.
+   *
+   * @details Groups are matched by key. The rows of a removed group are removed, the rows of a
+   * new group are inserted at its position, and a group whose photo count changed inserts or
+   * removes photo rows at its end. Then the new groups and @p pages (RetainedPagesInResult of
+   * the same result) are installed and dataChanged covers every row, because the cells after a
+   * change show other occurrences. The collapse state of each remaining key stays. Emits
+   * SectionsChanged and PagesChanged after the complete change is visible.
+   */
+  void ApplyResultChange(std::vector<AlbumGroupDescriptor> groups, int64_t unique_file_count,
+                         int64_t occurrence_count, PageMap pages);
+
+  /// First occurrence in [@p begin, @p end) that no loaded page covers; -1 when all are loaded.
+  [[nodiscard]] auto FirstUnloadedOccurrence(int64_t begin, int64_t end) const -> int64_t;
+  /// First occurrence of the first loaded page that starts after @p occurrence; the occurrence
+  /// count when no page follows.
+  [[nodiscard]] auto NextLoadedPageStart(int64_t occurrence) const -> int64_t;
+  /// End of the last loaded page; 0 without a loaded page.
+  [[nodiscard]] auto LoadedEnd() const -> int64_t;
 
   [[nodiscard]] auto GroupCount() const -> int { return static_cast<int>(groups_.size()); }
   [[nodiscard]] auto ColumnCount() const -> int { return column_count_; }
@@ -139,6 +186,12 @@ class AlbumSectionModel final : public QAbstractListModel {
   [[nodiscard]] Q_INVOKABLE QVariantList VisibleOccurrenceRanges(qint64 first, qint64 last) const;
   /// File id of @p occurrence, or 0 when its page is not loaded.
   [[nodiscard]] Q_INVOKABLE uint         FileIdAt(qint64 occurrence) const;
+  /// Group of the key that a row shows as @p title and @p unknown (roles groupTitle and
+  /// groupUnknown); -1 when no group has that key.
+  [[nodiscard]] Q_INVOKABLE int    GroupIndexForTitle(const QString& title, bool unknown) const;
+  /// Occurrence of @p file_id in group @p group_index, searched in the loaded pages; -1 when
+  /// no loaded page of that group holds it.
+  [[nodiscard]] Q_INVOKABLE qint64 LoadedOccurrenceOf(uint file_id, int group_index) const;
   /// Vertical offset of @p row from the documented row heights: every header row is
   /// @p header_height high and every photo row is @p photo_row_height high.
   [[nodiscard]] Q_INVOKABLE double       RowOffset(int row, double header_height,
@@ -159,6 +212,9 @@ class AlbumSectionModel final : public QAbstractListModel {
   /// Collapse-state key of a group; the unknown group has its own key.
   [[nodiscard]] static auto         CollapseKey(const AlbumGroupKey& key) -> std::string;
   [[nodiscard]] auto                GroupRowCount(int group_index) const -> int64_t;
+  /// Rows of a group of @p photo_count photos with collapse key @p collapse_key.
+  [[nodiscard]] auto RowsOfGroup(const std::string& collapse_key, int64_t photo_count) const
+      -> int64_t;
   /// Rebuild the prefix table of row starts. Does not emit.
   void                              RebuildRowStarts();
   void                              RebuildRows();
@@ -179,7 +235,7 @@ class AlbumSectionModel final : public QAbstractListModel {
   int                               column_count_      = 1;
   bool                              replacing_         = false;
   std::set<std::string>             collapsed_keys_{};
-  std::map<int64_t, std::vector<sl_element_id_t>> pages_{};  ///< First occurrence -> file ids.
+  PageMap                           pages_{};
 };
 
 }  // namespace alcedo::ui

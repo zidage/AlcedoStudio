@@ -32,6 +32,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -422,6 +423,45 @@ TEST_F(AlbumQueryTest, LabelGroupsUseAllCanonicalAssignmentsFromActiveModel) {
   EXPECT_EQ(ids[0], ids_[2]);
   EXPECT_EQ(std::set<sl_element_id_t>(ids.begin() + 1, ids.begin() + 3),
             (std::set<sl_element_id_t>{ids_[0], ids_[1]}));
+}
+
+// Issue #609: the file id of every occurrence, read in the transaction of the counts and the
+// groups, is the order of the page rows, also when the page read reads no row.
+TEST_F(AlbumQueryTest, OccurrenceFileIdsFollowThePageOrderWithOneEntryPerOccurrence) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  for (const auto& [file_id, label] : std::vector<std::pair<sl_element_id_t, std::string>>{
+           {ids_[0], "portrait"}, {ids_[1], "landscape"}, {ids_[2], "portrait"}}) {
+    RunStatement(project,
+                 "INSERT INTO SemanticImageLabel (file_id, model_key, label, score, confident) "
+                 "VALUES (" +
+                     std::to_string(file_id) + ", '" + kActiveModel + "', '" + label +
+                     "', 0.9, TRUE)");
+  }
+  for (const auto& options : {AlbumQueryOptions{.group_field_ = AlbumGroupField::kLabels},
+                              AlbumQueryOptions{.sort_field_     = AlbumSortField::kCaptureTime,
+                                                .sort_direction_ = SortDirection::kDescending,
+                                                .group_field_ = AlbumGroupField::kCameraModel}}) {
+    const auto result = Store(project).ReadAlbumQuery(
+        0, std::nullopt, options, kActiveModel,
+        AlbumQueryRead{
+            .offset_ = 0, .limit_ = 1000, .read_groups_ = true, .read_occurrence_file_ids_ = true});
+    EXPECT_EQ(result.occurrence_file_ids_, RowIds(result));
+    EXPECT_EQ(static_cast<int64_t>(result.occurrence_file_ids_.size()), result.occurrence_count_);
+  }
+  const auto options = AlbumQueryOptions{.group_field_ = AlbumGroupField::kLabels};
+  const auto labels =
+      Store(project).ReadAlbumQuery(0, std::nullopt, options, kActiveModel,
+                                    AlbumQueryRead{.limit_ = 0, .read_occurrence_file_ids_ = true});
+  EXPECT_TRUE(labels.rows_.empty());
+  EXPECT_EQ(labels.occurrence_file_ids_, RowIds(ReadAll(project, options)));
+  // The labelled files come first: landscape, then portrait in file id order.
+  ASSERT_GE(labels.occurrence_file_ids_.size(), 3u);
+  EXPECT_EQ(std::vector<sl_element_id_t>(labels.occurrence_file_ids_.begin(),
+                                         labels.occurrence_file_ids_.begin() + 3),
+            (std::vector<sl_element_id_t>{ids_[1], ids_[0], ids_[2]}));
+  // Without the option the result has no occurrence ids.
+  EXPECT_TRUE(ReadAll(project, AlbumQueryOptions{}).occurrence_file_ids_.empty());
 }
 
 TEST_F(AlbumQueryTest, ImportDayFilterUsesLocalMidnightBoundaries) {

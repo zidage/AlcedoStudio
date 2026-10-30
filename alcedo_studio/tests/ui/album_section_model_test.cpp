@@ -4,17 +4,20 @@
 
 // Section projection of grouped library results (album_sort_group_and_import_time_plan.md,
 // Phase 2): row geometry, collapse state, occurrence ranges, and bounded page retention.
+// Issue #609: an import or a delete changes the rows and the retained pages in place.
 
 #include "ui/alcedo_main/album_backend/album_section_model.hpp"
 
 #include <gtest/gtest.h>
 
+#include <QAbstractItemModelTester>
 #include <QSignalSpy>
 #include <QVariantList>
 #include <QVariantMap>
 #include <cstdint>
 #include <numeric>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace alcedo::ui::test {
@@ -239,6 +242,165 @@ TEST(AlbumSectionModelTest, DuplicateOccurrencesOfOneFileListItOnceInUniqueOrder
   model.StorePage(0, {7, 8, 9, 7}, 3);
   EXPECT_EQ(model.LoadedUniqueFileIds(), (std::vector<sl_element_id_t>{7, 8, 9}));
   EXPECT_EQ(model.FileIdAt(3), 7u);
+}
+
+// Groups A (10 photos, ids 101..110), B (10, 201..210), and C (5, 301..305) at 4 columns, with
+// the pages [0, 8), [8, 16), and [16, 24) loaded.
+auto IdsOf(const std::vector<std::vector<sl_element_id_t>>& groups)
+    -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> ids;
+  for (const auto& group : groups) {
+    ids.insert(ids.end(), group.begin(), group.end());
+  }
+  return ids;
+}
+
+auto GroupsOf(const std::vector<std::pair<std::string, int64_t>>& counts)
+    -> std::vector<AlbumGroupDescriptor> {
+  std::vector<AlbumGroupDescriptor> groups;
+  int64_t                           next = 0;
+  for (const auto& [key, count] : counts) {
+    groups.push_back({.key_ = key, .photo_count_ = count, .first_occurrence_ = next});
+    next += count;
+  }
+  return groups;
+}
+
+auto IdRange(sl_element_id_t first, sl_element_id_t last) -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> ids(last - first + 1);
+  std::iota(ids.begin(), ids.end(), first);
+  return ids;
+}
+
+void LoadThreeGroupsWithThreePages(AlbumSectionModel& model) {
+  model.ResetGroups(GroupsOf({{"A", 10}, {"B", 10}, {"C", 5}}), 25, 25, false);
+  model.SetColumnCount(4);  // Rows: H P P P | H P P P | H P P
+  const auto ids = IdsOf({IdRange(101, 110), IdRange(201, 210), IdRange(301, 305)});
+  for (int64_t start = 0; start < 24; start += 8) {
+    model.StorePage(start,
+                    std::vector<sl_element_id_t>(ids.begin() + start, ids.begin() + start + 8), 3);
+  }
+}
+
+auto RowFileIds(const AlbumSectionModel& model, int row) -> std::vector<uint> {
+  std::vector<uint> out;
+  for (const auto& id : model.data(model.index(row), AlbumSectionModel::FileIds).toList()) {
+    out.push_back(id.toUInt());
+  }
+  return out;
+}
+
+// A delete of 102 and of 109 (the first photo of the second page) removes the last photo row of
+// group A; 110 moves up into the second photo row, and every retained page moves to the new
+// occurrences of its photos without a page read.
+TEST(AlbumSectionModelTest,
+     InPlaceDeleteRemovesRowsAndMovesRetainedPagesAcrossPageAndRowBoundaries) {
+  AlbumSectionModel model;
+  LoadThreeGroupsWithThreePages(model);
+  ASSERT_EQ(model.rowCount(), 11);
+  QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::Fatal);
+  QSignalSpy               resets(&model, &QAbstractItemModel::modelReset);
+  QSignalSpy               removed(&model, &QAbstractItemModel::rowsRemoved);
+  QSignalSpy               inserted(&model, &QAbstractItemModel::rowsInserted);
+  QSignalSpy               changed(&model, &QAbstractItemModel::dataChanged);
+
+  auto                     a_ids = IdRange(101, 110);
+  std::erase(a_ids, 102u);
+  std::erase(a_ids, 109u);
+  const auto ids    = IdsOf({a_ids, IdRange(201, 210), IdRange(301, 305)});
+  const auto groups = GroupsOf({{"A", 8}, {"B", 10}, {"C", 5}});
+  auto       pages  = model.RetainedPagesInResult(groups, ids);
+  ASSERT_EQ(pages.size(), 3u);
+  model.ApplyResultChange(groups, 23, 23, std::move(pages));
+
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(inserted.count(), 0);
+  ASSERT_EQ(removed.count(), 1);
+  EXPECT_EQ(removed.at(0).at(1).toInt(), 3);
+  EXPECT_EQ(removed.at(0).at(2).toInt(), 3);
+  EXPECT_GE(changed.count(), 1);
+  EXPECT_EQ(model.rowCount(), 10);
+  EXPECT_EQ(model.OccurrenceTotal(), 23);
+  // [0, 8) lost 102 and [8, 16) lost 109: the pages start at 0, 7, and 14.
+  EXPECT_EQ(model.LoadedPageStarts(), (std::vector<int64_t>{0, 7, 14}));
+  EXPECT_EQ(model.LoadedOccurrenceCount(), 22u);
+  EXPECT_EQ(model.FileIdAt(1), 103u);
+  EXPECT_EQ(model.FileIdAt(7), 110u);
+  EXPECT_EQ(model.FileIdAt(8), 201u);
+  EXPECT_EQ(model.FileIdAt(18), 301u);
+  EXPECT_EQ(model.FileIdAt(22), 0u);  // 305 was never loaded
+  EXPECT_EQ(RowFileIds(model, 2), (std::vector<uint>{106, 107, 108, 110}));
+  EXPECT_EQ(model.GroupHeaderRow(1), 3);
+  EXPECT_EQ(model.RowForOccurrence(8), 4);
+  EXPECT_EQ(RowFileIds(model, 4), (std::vector<uint>{201, 202, 203, 204}));
+  EXPECT_EQ(model.FirstUnloadedOccurrence(0, 23), 22);
+}
+
+// An import creates group Z before A and adds 150 at the start of A; group C, now empty, is
+// removed. The new group and the removed group give row inserts and removes, the collapse state
+// of B stays, and the photos that the pages do not hold (Z and 150) are left to the next page
+// read.
+TEST(AlbumSectionModelTest, InPlaceImportInsertsAndRemovesGroupRowsAndKeepsRetainedPages) {
+  AlbumSectionModel model;
+  LoadThreeGroupsWithThreePages(model);
+  model.SetGroupCollapsed(1, true);  // Rows: H P P P | H | H P P
+  ASSERT_EQ(model.rowCount(), 8);
+  QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::Fatal);
+  QSignalSpy               resets(&model, &QAbstractItemModel::modelReset);
+  QSignalSpy               removed(&model, &QAbstractItemModel::rowsRemoved);
+  QSignalSpy               inserted(&model, &QAbstractItemModel::rowsInserted);
+
+  auto                     a_ids = IdRange(101, 110);
+  a_ids.insert(a_ids.begin(), 150u);
+  const auto ids    = IdsOf({{901, 902}, a_ids, IdRange(201, 210)});
+  const auto groups = GroupsOf({{"Z", 2}, {"A", 11}, {"B", 10}});
+  auto       pages  = model.RetainedPagesInResult(groups, ids);
+  model.ApplyResultChange(groups, 23, 23, std::move(pages));
+
+  EXPECT_EQ(resets.count(), 0);
+  ASSERT_EQ(inserted.count(), 1);  // Z: its header and one photo row at the top
+  EXPECT_EQ(inserted.at(0).at(1).toInt(), 0);
+  EXPECT_EQ(inserted.at(0).at(2).toInt(), 1);
+  ASSERT_EQ(removed.count(), 1);  // C: its header and two photo rows after the collapsed B
+  EXPECT_EQ(removed.at(0).at(1).toInt(), 7);
+  EXPECT_EQ(removed.at(0).at(2).toInt(), 9);
+  EXPECT_EQ(model.GroupCount(), 3);
+  EXPECT_TRUE(model.IsGroupCollapsed(2));
+  EXPECT_EQ(model.rowCount(), 2 + 4 + 1);
+  // [0, 8) moved by 3 (Z and 150 before it); the photos of C left the last page.
+  EXPECT_EQ(model.LoadedPageStarts(), (std::vector<int64_t>{3, 11, 19}));
+  EXPECT_EQ(model.FileIdAt(3), 101u);
+  EXPECT_EQ(model.FileIdAt(12), 110u);
+  EXPECT_EQ(model.FileIdAt(13), 201u);
+  EXPECT_EQ(model.FileIdAt(22), 210u);
+  EXPECT_EQ(model.LoadedEnd(), 23);
+  EXPECT_EQ(model.FirstUnloadedOccurrence(0, 23), 0);
+  EXPECT_EQ(model.NextLoadedPageStart(0), 3);
+  EXPECT_EQ(model.FirstUnloadedOccurrence(3, 23), -1);
+  // A page read of the gap joins no other page, and the retention limit holds.
+  model.StorePage(0, {901, 902, 150}, 3);
+  EXPECT_EQ(model.FileIdAt(2), 150u);
+  EXPECT_EQ(model.LoadedPageCount(), 3u);
+  EXPECT_EQ(model.FirstUnloadedOccurrence(0, 19), -1);
+}
+
+// A file in two label groups keeps the occurrence of each group: the page finds the photo in
+// the group of the same key, not at its first occurrence.
+TEST(AlbumSectionModelTest, RetainedPagesFindEachLabelOccurrenceInItsOwnGroup) {
+  AlbumSectionModel model;
+  model.ResetGroups(GroupsOf({{"landscape", 2}, {"portrait", 2}}), 3, 4, false);
+  model.StorePage(0, {7, 8, 9, 7}, 3);
+  const auto                         groups = GroupsOf({{"landscape", 3}, {"portrait", 2}});
+  const std::vector<sl_element_id_t> ids{5, 7, 8, 9, 7};
+  auto                               pages = model.RetainedPagesInResult(groups, ids);
+  ASSERT_EQ(pages.size(), 1u);
+  EXPECT_EQ(pages.begin()->first, 1);
+  model.ApplyResultChange(groups, 4, 5, std::move(pages));
+  EXPECT_EQ(model.LoadedPageStarts(), (std::vector<int64_t>{1}));
+  EXPECT_EQ(model.LoadedOccurrenceOf(7, 0), 1);
+  EXPECT_EQ(model.LoadedOccurrenceOf(7, 1), 4);
+  EXPECT_EQ(model.GroupIndexForTitle(QStringLiteral("portrait"), false), 1);
+  EXPECT_EQ(model.GroupIndexForTitle(QStringLiteral("portrait"), true), -1);
 }
 
 }  // namespace

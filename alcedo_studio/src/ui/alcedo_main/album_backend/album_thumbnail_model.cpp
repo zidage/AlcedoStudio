@@ -8,6 +8,9 @@
 #include <QDateTime>
 #include <QTimeZone>
 #include <algorithm>
+#include <cstddef>
+#include <iterator>
+#include <utility>
 
 namespace alcedo::ui {
 
@@ -201,6 +204,80 @@ void AlbumThumbnailModel::appendPage(const std::vector<AlbumItem>& newItems) {
   emit countChanged();
 }
 
+void AlbumThumbnailModel::applyOrder(const std::vector<sl_element_id_t>& elementIds,
+                                     const std::unordered_map<sl_element_id_t, AlbumItem>& newItems,
+                                     size_t totalCount, bool hasMore) {
+  // The loaded rows that stay in place: in the new order, each one after the previous kept row.
+  std::vector<bool> keep(rows_.size(), false);
+  int               last_kept = -1;
+  for (const auto id : elementIds) {
+    const int row = rowByElementId(static_cast<uint>(id));
+    if (row > last_kept) {
+      keep[static_cast<size_t>(row)] = true;
+      last_kept                      = row;
+    }
+  }
+  // A row that changed its order is inserted again at its new place with its own item.
+  std::unordered_map<sl_element_id_t, AlbumItem> moved;
+  for (int end = static_cast<int>(rows_.size()); end > 0;) {
+    if (keep[static_cast<size_t>(end) - 1]) {
+      --end;
+      continue;
+    }
+    int begin = end - 1;
+    while (begin > 0 && !keep[static_cast<size_t>(begin) - 1]) {
+      --begin;
+    }
+    beginRemoveRows(QModelIndex(), begin, end - 1);
+    for (int row = begin; row < end; ++row) {
+      moved.emplace(rows_[static_cast<size_t>(row)].element_id,
+                    std::move(rows_[static_cast<size_t>(row)]));
+    }
+    rows_.erase(rows_.begin() + begin, rows_.begin() + end);
+    endRemoveRows();
+    end = begin;
+  }
+  // One index rebuild per phase: during the runs rowByElementId reports a shifted row as not
+  // loaded, never as another photo.
+  rebuildElementIdIndex();
+
+  for (size_t position = 0; position < elementIds.size();) {
+    if (position < rows_.size() && rows_[position].element_id == elementIds[position]) {
+      ++position;
+      continue;
+    }
+    // The run of photos that are not loaded at this place.
+    size_t                 end = position;
+    std::vector<AlbumItem> run;
+    while (end < elementIds.size() &&
+           !(position < rows_.size() && rows_[position].element_id == elementIds[end])) {
+      const auto id   = elementIds[end];
+      const auto from = moved.find(id);
+      if (from != moved.end()) {
+        run.push_back(std::move(from->second));
+        moved.erase(from);
+      } else {
+        run.push_back(newItems.at(id));
+      }
+      ++end;
+    }
+    beginInsertRows(QModelIndex(), static_cast<int>(position), static_cast<int>(end) - 1);
+    rows_.insert(rows_.begin() + static_cast<std::ptrdiff_t>(position),
+                 std::make_move_iterator(run.begin()), std::make_move_iterator(run.end()));
+    endInsertRows();
+    position = end;
+  }
+  rebuildElementIdIndex();
+
+  const bool total_count_changed = total_count_ != totalCount;
+  total_count_                   = totalCount;
+  setHasMore(hasMore);
+  emit countChanged();
+  if (total_count_changed) {
+    emit totalCountChanged();
+  }
+}
+
 void AlbumThumbnailModel::updateThumbnailState(sl_element_id_t elementId, const QString& thumbUrl,
                                                bool loading, bool missingSource,
                                                const QString& errorText) {
@@ -353,7 +430,12 @@ QVariantList AlbumThumbnailModel::getThumbnailStatesInRange(int firstIndex, int 
 
 int AlbumThumbnailModel::rowByElementId(uint elementId) const {
   const auto it = element_id_to_row_.find(elementId);
-  return it != element_id_to_row_.end() ? it->second : -1;
+  if (it == element_id_to_row_.end() || it->second < 0 ||
+      it->second >= static_cast<int>(rows_.size()) ||
+      rows_[static_cast<size_t>(it->second)].element_id != elementId) {
+    return -1;
+  }
+  return it->second;
 }
 
 void AlbumThumbnailModel::rebuildElementIdIndex() {

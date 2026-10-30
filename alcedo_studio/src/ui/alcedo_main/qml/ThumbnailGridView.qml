@@ -65,6 +65,14 @@ Item {
     readonly property int delegateReflowDuration: 280
     readonly property real delegateReflowTravelDamping: 0.32
     readonly property real delegateReflowMaxTravel: 44
+    // In-place change of the shown photos (an import or a delete): the cards before the change,
+    // read on libraryChangeAboutToApply. While a change animates, the cards do not spring to
+    // their new cells; they slide from their old viewport positions instead.
+    property var _changeCapture: null
+    property bool _changeLayoutAnimating: false
+    // When more cards than this appear or disappear in the view, the change is shown without
+    // animation; the scroll anchor stays.
+    readonly property int changeAnimationLimit: 48
 
     signal imageSelectionChanged(int elementId, int imageId, string fileName, bool isHdr,
                                  bool selected)
@@ -619,6 +627,144 @@ Item {
                 root.scrollToIndexAtTop(occurrence)
             }
         }
+        function onLibraryChangeAboutToApply() { root.captureChange() }
+        function onLibraryChangeApplied() { root.applyChange() }
+    }
+
+    // ── In-place change (import or delete) ──
+    // The first visible card keeps its position on the screen: before the change each created
+    // card is recorded with its viewport position; after the change the row of the first
+    // recorded card that is still shown is put at the same height. Then each card that moved
+    // slides from its old place, a new card fades in, and a removed card fades out.
+    function changeCards() {
+        const cards = []
+        const children = grid.contentItem.children
+        for (let i = 0; i < children.length; ++i) {
+            const child = children[i]
+            if (!child || child.elementId === undefined || !child.startZoomLayoutAnim
+                    || !child.visible || child.elementId <= 0) {
+                continue
+            }
+            cards.push({ target: child, elementId: child.elementId, index: child.index,
+                         x: child.x - grid.contentX, y: child.y - grid.contentY,
+                         w: child.width, h: child.height, thumb: child.liveThumbUrl })
+        }
+        cards.sort(function(a, b) { return a.index - b.index })
+        return cards
+    }
+
+    function finishChangeAnimations() {
+        changeLayoutAnimDoneTimer.stop()
+        const children = grid.contentItem ? grid.contentItem.children : []
+        for (let i = 0; i < children.length; i++) {
+            if (children[i] && children[i].finishZoomLayoutAnim) {
+                children[i].finishZoomLayoutAnim()
+            }
+        }
+        for (let g = changeGhostLayer.children.length - 1; g >= 0; --g) {
+            changeGhostLayer.children[g].destroy()
+        }
+        _changeLayoutAnimating = false
+    }
+
+    function captureChange() {
+        _changeCapture = null
+        if (grid.width <= 0 || grid.height <= 0 || grid.cellHeight <= 0) {
+            return
+        }
+        finishChangeAnimations()
+        root.finishActiveZoomLayoutAnimations()
+        // From here the cards take their new cells at once (no spring); applyChange animates.
+        _changeLayoutAnimating = true
+        const cards = changeCards()
+        const byId = {}
+        for (let i = 0; i < cards.length; ++i) {
+            cards[i].onScreen = cards[i].y + cards[i].h > 0 && cards[i].y < grid.height
+            byId[cards[i].elementId] = cards[i]
+        }
+        const anchorRow = appModules.library.thumbnailModel.getItemAt(selectionAnchorIndex)
+        _changeCapture = { cards: cards, byId: byId,
+                           selectionAnchorId: anchorRow && anchorRow.elementId
+                                              ? Number(anchorRow.elementId) : 0 }
+    }
+
+    function keepChangeAnchor(cards) {
+        const model = appModules.library.thumbnailModel
+        for (let i = 0; i < cards.length; ++i) {
+            const card = cards[i]
+            if (card.y + card.h <= 0) {
+                continue
+            }
+            const index = model.rowByElementId(card.elementId)
+            if (index < 0) {
+                continue
+            }
+            const item = grid.itemAtIndex(index)
+            const y = item ? item.y : grid.originY
+                    + Math.floor(index / root.effectiveColumnCount()) * grid.cellHeight
+            grid.contentY = root.clampYForHeight(root.layoutContentHeight(), y - card.y)
+            grid.forceLayout()
+            return
+        }
+    }
+
+    function applyChange() {
+        const capture = _changeCapture
+        _changeCapture = null
+        if (!capture) {
+            _changeLayoutAnimating = false
+            return
+        }
+        grid.forceLayout()
+        keepChangeAnchor(capture.cards)
+        if (capture.selectionAnchorId > 0) {
+            selectionAnchorIndex = root.loadedIndexForElement(capture.selectionAnchorId)
+        }
+
+        const after = changeCards()
+        const shown = {}
+        const moves = []
+        const fades = []
+        for (let i = 0; i < after.length; ++i) {
+            const card = after[i]
+            shown[card.elementId] = true
+            const before = capture.byId[card.elementId]
+            const onScreen = card.y + card.h > 0 && card.y < grid.height
+            if (before) {
+                const dx = before.x - card.x
+                const dy = before.y - card.y
+                if ((onScreen || before.onScreen) && (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5)) {
+                    moves.push({ target: card.target, dx: dx, dy: dy })
+                }
+            } else if (onScreen) {
+                fades.push(card.target)
+            }
+        }
+        const ghosts = []
+        for (let j = 0; j < capture.cards.length; ++j) {
+            const card = capture.cards[j]
+            if (card.onScreen && !shown[card.elementId]) {
+                ghosts.push(card)
+            }
+        }
+        if (moves.length === 0 && fades.length === 0 && ghosts.length === 0
+                || fades.length + ghosts.length > changeAnimationLimit) {
+            _changeLayoutAnimating = false
+            return
+        }
+        for (let m = 0; m < moves.length; ++m) {
+            moves[m].target.startZoomLayoutAnim(moves[m].dx, moves[m].dy, 1, 1, 1)
+        }
+        for (let f = 0; f < fades.length; ++f) {
+            fades[f].startZoomLayoutAnim(0, 0, 1, 1, 0)
+        }
+        for (let g = 0; g < ghosts.length; ++g) {
+            changeGhostComponent.createObject(changeGhostLayer, {
+                x: ghosts[g].x, y: ghosts[g].y, width: ghosts[g].w, height: ghosts[g].h,
+                source: ghosts[g].thumb
+            })
+        }
+        changeLayoutAnimDoneTimer.restart()
     }
 
     Connections {
@@ -677,6 +823,47 @@ Item {
         interval: 650
         repeat: false
         onTriggered: root.finishActiveZoomLayoutAnimations()
+    }
+
+    Timer {
+        id: changeLayoutAnimDoneTimer
+        interval: root.delegateReflowDuration + 50
+        repeat: false
+        onTriggered: root.finishChangeAnimations()
+    }
+
+    // Removed cards of an in-place change fade out here, over the grid, at their old viewport
+    // positions.
+    Item {
+        id: changeGhostLayer
+        objectName: "thumbnailGridView_changeGhosts"
+        anchors.fill: grid
+        clip: true
+        z: 1
+    }
+
+    Component {
+        id: changeGhostComponent
+        Rectangle {
+            id: ghost
+            property string source: ""
+            radius: root.columns >= 11 ? 6 : appTheme.panelRadius
+            color: root.cardBg
+            Image {
+                anchors.fill: parent
+                anchors.margins: root.cardInset
+                visible: ghost.source.length > 0
+                source: ghost.source
+                fillMode: Image.PreserveAspectFit
+            }
+            NumberAnimation on opacity {
+                from: 1
+                to: 0
+                duration: root.delegateReflowDuration
+                easing.type: Easing.OutCubic
+                onFinished: ghost.destroy()
+            }
+        }
     }
 
     function keyForElement(elementId) {
@@ -972,11 +1159,11 @@ Item {
         Behavior on color { ColorAnimation { duration: 120 } }
             Behavior on border.width { NumberAnimation { duration: 150 } }
             Behavior on x {
-                enabled: !root._zoomLayoutAnimating
+                enabled: !root._zoomLayoutAnimating && !root._changeLayoutAnimating
                 SpringAnimation { spring: 2.5; damping: 0.42; epsilon: 0.25 }
             }
             Behavior on y {
-                enabled: !root._zoomLayoutAnimating
+                enabled: !root._zoomLayoutAnimating && !root._changeLayoutAnimating
                 SpringAnimation { spring: 2.5; damping: 0.42; epsilon: 0.25 }
             }
             opacity: zoomOpacity

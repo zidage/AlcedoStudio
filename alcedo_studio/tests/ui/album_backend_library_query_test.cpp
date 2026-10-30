@@ -25,6 +25,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "app/album_browse_service.hpp"
@@ -935,6 +936,181 @@ TEST_F(LibraryQueryTests, DistantSectionReadKeepsMetadataPagesBounded) {
   EXPECT_LE(max_rows, 360);
   std::cout << "[library query] max loaded pages " << max_pages << ", max photo rows " << max_rows
             << "\n";
+}
+
+// Issue #609: an import or a delete changes the shown result in place. 400 photos and a search,
+// so a page holds 120 occurrences; the view has read the pages near occurrence 380, so the
+// first page is evicted and the retained pages are [120, 240), [240, 360), and [360, 400).
+namespace {
+
+auto FourHundredPhotosOnOneImportDay() -> std::vector<LibraryPhotoSpec> {
+  std::vector<LibraryPhotoSpec> specs(400);
+  for (size_t index = 0; index < specs.size(); ++index) {
+    specs[index].added_time_ = Utc(2026, 9, 1, 10);
+  }
+  return specs;
+}
+
+auto ReadPagesNearTheEnd(ApplicationModuleHost& backend) -> bool {
+  auto* module   = backend.library();
+  auto& sections = module->section_model();
+  sections.SetColumnCount(6);
+  for (const qint64 occurrence : {130, 250, 380}) {
+    const int row = sections.RowForOccurrence(occurrence);
+    module->RequestSectionRows(row, row);
+    if (!WaitUntil([&]() { return sections.FileIdAt(occurrence) != 0; })) {
+      return false;
+    }
+  }
+  return sections.LoadedPageStarts() == std::vector<int64_t>{120, 240, 360};
+}
+
+}  // namespace
+
+// A delete of ten photos in the evicted first page: the rows change in place, the retained
+// pages move back by ten without a page read, and the photo at the anchor stays loaded.
+TEST_F(LibraryQueryTests, DeleteInAnUnloadedPageKeepsTheAnchorPhotoAndMovesRetainedPages) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, FourHundredPhotosOnOneImportDay()));
+  auto* module = backend.library();
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  module->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(Settle(backend));
+  auto& sections = module->section_model();
+  ASSERT_TRUE(ReadPagesNearTheEnd(backend)) << sections.LoadedPageStarts().size();
+  const auto anchor = sections.FileIdAt(380);
+  ASSERT_NE(anchor, 0u);
+
+  QSignalSpy section_resets(&sections, &QAbstractItemModel::modelReset);
+  QSignalSpy section_removed(&sections, &QAbstractItemModel::rowsRemoved);
+  QSignalSpy photo_resets(&module->model(), &QAbstractItemModel::modelReset);
+  QSignalSpy about(module, &LibraryModule::LibraryChangeAboutToApply);
+  QSignalSpy applied(module, &LibraryModule::LibraryChangeApplied);
+  std::vector<std::pair<sl_element_id_t, image_id_t>> targets;
+  for (size_t index = 0; index < 10; ++index) {
+    targets.emplace_back(library.ids()[index], library.image_ids()[index]);
+  }
+  ASSERT_TRUE(DeleteAndWait(backend, targets));
+
+  EXPECT_EQ(about.count(), 1);
+  EXPECT_EQ(applied.count(), 1);
+  EXPECT_EQ(section_resets.count(), 0);
+  EXPECT_EQ(photo_resets.count(), 0);
+  // 400 photos at 6 columns: 67 photo rows; 390 photos: 65.
+  EXPECT_GE(section_removed.count(), 1);
+  EXPECT_EQ(sections.rowCount(), 1 + 65);
+  EXPECT_EQ(sections.OccurrenceTotal(), 390);
+  EXPECT_EQ(module->TotalCount(), 390);
+  EXPECT_EQ(sections.LoadedPageStarts(), (std::vector<int64_t>{110, 230, 350}));
+  EXPECT_EQ(sections.FileIdAt(370), anchor);
+  EXPECT_EQ(sections.LoadedOccurrenceOf(anchor, 0), 370);
+  for (const auto& [element_id, image_id] : targets) {
+    EXPECT_LT(module->model().rowByElementId(element_id), 0) << element_id;
+  }
+}
+
+// An import of three photos creates the newest import day at the top, before every loaded
+// page: the group rows are inserted, the retained pages move forward by three without a page
+// read, and the imported photos are read when a view shows them.
+TEST_F(LibraryQueryTests, ImportBeforeTheLoadedPagesKeepsTheAnchorPhotoAndInsertsItsGroup) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, FourHundredPhotosOnOneImportDay()));
+  auto* module = backend.library();
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  module->SetInspectorGrouping(QStringLiteral("import"), true);
+  ASSERT_TRUE(Settle(backend));
+  auto& sections = module->section_model();
+  ASSERT_EQ(sections.GroupCount(), 1);
+  ASSERT_TRUE(ReadPagesNearTheEnd(backend));
+  const auto anchor = sections.FileIdAt(380);
+  ASSERT_NE(anchor, 0u);
+
+  QSignalSpy section_resets(&sections, &QAbstractItemModel::modelReset);
+  QSignalSpy section_inserted(&sections, &QAbstractItemModel::rowsInserted);
+  QSignalSpy photo_resets(&module->model(), &QAbstractItemModel::modelReset);
+  const auto photos = WritePngPhotos(temp_dir_ / "import_source", "album-delete-import-", 3);
+  ASSERT_EQ(photos.size(), 3u);
+  ASSERT_TRUE(ImportAndWait(backend, photos));
+
+  EXPECT_EQ(section_resets.count(), 0);
+  EXPECT_EQ(photo_resets.count(), 0);
+  ASSERT_GE(section_inserted.count(), 1);
+  EXPECT_EQ(section_inserted.at(0).at(1).toInt(), 0);  // the new group is the first rows
+  ASSERT_EQ(sections.GroupCount(), 2);
+  EXPECT_EQ(sections.groups().front().photo_count_, 3);
+  EXPECT_EQ(sections.OccurrenceTotal(), 403);
+  EXPECT_EQ(sections.LoadedPageStarts(), (std::vector<int64_t>{123, 243, 363}));
+  EXPECT_EQ(sections.FileIdAt(383), anchor);
+  EXPECT_EQ(sections.FirstUnloadedOccurrence(0, 3), 0);
+
+  // A view that shows the new group reads it into the gap before the moved pages.
+  module->RequestSectionRows(0, 1);
+  ASSERT_TRUE(WaitUntil([&]() { return sections.FileIdAt(0) != 0; }));
+  EXPECT_EQ(sections.FirstUnloadedOccurrence(0, 3), -1);
+  EXPECT_EQ(std::count(library.ids().begin(), library.ids().end(), sections.FileIdAt(0)), 0);
+  EXPECT_LE(sections.LoadedPageCount(), 3u);
+}
+
+// Flat mode: a delete removes the rows of the loaded prefix in place, and an import at the end
+// of the order of a complete prefix reads and inserts the new rows; no model reset.
+TEST_F(LibraryQueryTests, FlatDeleteAndImportChangeTheLoadedRowsInPlace) {
+  ApplicationModuleHost         backend;
+  LoadedLibrary                 library;
+  std::vector<LibraryPhotoSpec> specs(130);
+  ASSERT_TRUE(library.Load(temp_dir_, backend, specs));
+  auto* module = backend.library();
+  ASSERT_EQ(module->ShownCount(), 130);
+  const auto anchor = library.ids()[60];
+
+  QSignalSpy resets(&module->model(), &QAbstractItemModel::modelReset);
+  QSignalSpy removed(&module->model(), &QAbstractItemModel::rowsRemoved);
+  QSignalSpy inserted(&module->model(), &QAbstractItemModel::rowsInserted);
+  ASSERT_TRUE(DeleteAndWait(backend, {{library.ids()[3], library.image_ids()[3]},
+                                      {library.ids()[4], library.image_ids()[4]},
+                                      {library.ids()[90], library.image_ids()[90]}}));
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(removed.count(), 2);  // two contiguous runs
+  EXPECT_EQ(module->ShownCount(), 127);
+  EXPECT_EQ(module->TotalCount(), 127);
+  EXPECT_EQ(module->model().rowByElementId(anchor), 58);
+
+  const auto photos = WritePngPhotos(temp_dir_ / "import_source", "flat-import-", 2);
+  ASSERT_EQ(photos.size(), 2u);
+  ASSERT_TRUE(ImportAndWait(backend, photos));
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(inserted.count(), 1);
+  EXPECT_EQ(module->ShownCount(), 129);
+  EXPECT_EQ(module->TotalCount(), 129);
+  EXPECT_EQ(module->model().rowByElementId(anchor), 58);
+  EXPECT_EQ(module->model().items().back().file_name.left(12), QStringLiteral("flat-import-"));
+}
+
+// A content refresh that supersedes the read of a filter refresh still replaces the result: the
+// superseded read carried the filter change, which the accepted result does not have.
+TEST_F(LibraryQueryTests, ContentRefreshAfterAnUnpublishedFilterRefreshReplacesTheResult) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+  ASSERT_EQ(module->ShownCount(), 6);
+
+  QSignalSpy resets(&module->model(), &QAbstractItemModel::modelReset);
+  QSignalSpy applied(module, &LibraryModule::LibraryChangeApplied);
+  WorkerHold hold(library.browse());
+  hold.ArmNext();
+  backend.stats()->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Canon R5"));
+  ASSERT_TRUE(hold.WaitHeld());
+  module->RequestLibraryContentRefresh();
+  ProcessEvents(50);  // the content refresh is submitted while the filter read is held
+  hold.Release();
+  ASSERT_TRUE(Settle(backend));
+
+  EXPECT_EQ(module->ShownCount(), 2);
+  EXPECT_EQ(module->TotalCount(), 2);
+  EXPECT_EQ(resets.count(), 1);
+  EXPECT_EQ(applied.count(), 0);
 }
 
 }  // namespace alcedo::ui::test
