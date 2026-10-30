@@ -93,6 +93,28 @@ assert_executable "$mind_exe"
 assert_executable "$aria2c_exe"
 assert_executable "$cli_exe"
 
+# Inspect all real files, including QML plugins, framework versions and the update helper.
+# The previous dependency list did not cover every Mach-O location in the bundle.
+declare -a macho_files=()
+while IFS= read -r -d '' candidate; do
+  if file -b "$candidate" | grep -q 'Mach-O'; then
+    archs="$(lipo -archs "$candidate")" || fail "cannot read Mach-O architectures: $candidate"
+    [[ " $archs " == *" arm64 "* ]] || fail "Mach-O has no arm64 slice ($archs): $candidate"
+    macho_files+=("$candidate")
+  fi
+done < <(find "$app_dir" -type f -print0)
+
+aria2_version="$(env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  "$aria2c_exe" --version)" || fail "bundled aria2c cannot run with a clean PATH"
+grep -F -q 'aria2 version 1.37.0' <<<"$aria2_version" || fail "bundled aria2c is not 1.37.0"
+grep -F -q 'AppleTLS' <<<"$aria2_version" || fail "bundled aria2c does not use AppleTLS"
+while IFS= read -r dep; do
+  case "$dep" in
+    /usr/lib/*|/System/Library/*) ;;
+    *) fail "aria2c has a non-system dependency: $dep" ;;
+  esac
+done < <(otool -L "$aria2c_exe" | awk 'NR > 1 {print $1}')
+
 required_files=(
   "${contents_dir}/Info.plist"
   "${resources_dir}/qt.conf"
@@ -194,22 +216,6 @@ if command -v codesign >/dev/null 2>&1; then
   fi
 fi
 
-declare -a macho_files=("$main_exe" "$mind_exe" "$aria2c_exe" "$cli_exe")
-while IFS= read -r -d '' file; do
-  macho_files+=("$file")
-done < <(find "$macos_dir" "$frameworks_dir" "$plugins_dir" "${resources_dir}/duckdb_extensions" \
-  \( -name '*.dylib' -o -name '*.so' -o -name '*.duckdb_extension' \) -print0 2>/dev/null || true)
-
-while IFS= read -r -d '' framework; do
-  framework_name="$(basename "$framework" .framework)"
-  for candidate in \
-    "${framework}/${framework_name}" \
-    "${framework}/Versions/Current/${framework_name}" \
-    "${framework}/Versions/"*/"${framework_name}"; do
-    [[ -f "$candidate" ]] && macho_files+=("$candidate")
-  done
-done < <(find "$frameworks_dir" -maxdepth 1 -name '*.framework' -type d -print0 2>/dev/null || true)
-
 bad_deps=()
 missing_deps=()
 
@@ -262,9 +268,6 @@ verify_dep() {
 
 for file in "${macho_files[@]}"; do
   [[ -f "$file" ]] || continue
-  if ! file "$file" | grep -q 'Mach-O'; then
-    continue
-  fi
   while IFS= read -r dep; do
     [[ -n "$dep" ]] || continue
     verify_dep "$file" "$dep"
@@ -296,6 +299,9 @@ assert_file "${resources_dir}/LICENSE"
 assert_file "${resources_dir}/NOTICE"
 assert_file "${resources_dir}/THIRD_PARTY_NOTICE.txt"
 assert_dir "${resources_dir}/third_party_licenses"
+assert_file_contains "${resources_dir}/THIRD_PARTY_NOTICE.txt" "aria2 1.37.0"
+assert_file_contains "${resources_dir}/third_party_licenses/aria2-COPYING.txt" "GNU GENERAL PUBLIC LICENSE"
+assert_file_contains "${resources_dir}/third_party_licenses/c-ares-LICENSE.md" "Permission is hereby granted"
 assert_file_contains "${resources_dir}/NOTICE" "QuickQanava"
 assert_file_contains "${resources_dir}/THIRD_PARTY_NOTICE.txt" "QuickQanava"
 assert_file_contains "${resources_dir}/THIRD_PARTY_NOTICE.txt" "bezier"
