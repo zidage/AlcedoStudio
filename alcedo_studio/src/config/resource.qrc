@@ -62,6 +62,8 @@
     <file>panel_icons/inspector-collapse.svg</file>
     <file>panel_icons/inspector-expand.svg</file>
     <file>panel_icons/layout-grid.svg</file>
+    <file>panel_icons/thumbnail-zoom-largest.svg</file>
+    <file>panel_icons/thumbnail-zoom-smallest.svg</file>
     <file>panel_icons/layout-sidebar.svg</file>
     <file>panel_icons/layout-sidebar-inactive.svg</file>
     <file>panel_icons/layout-sidebar-right.svg</file>

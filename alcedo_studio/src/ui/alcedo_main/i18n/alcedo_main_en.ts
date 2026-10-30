@@ -4963,6 +4963,14 @@ Original source files on disk will be kept.</source>
         <source>Change the filters or the search to show photos.</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Show more photos</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Show larger photos</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>LockedNodeMaskPromptDialog</name>
