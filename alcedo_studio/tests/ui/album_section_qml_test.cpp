@@ -1060,4 +1060,66 @@ TEST_F(AlbumSectionQmlTests, FlatGridDeleteBeforeTheShownCardsKeepsTheFirstShown
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
 }
 
+// The flat grid has a scroll bar for all photos of the result, also the photos that are not
+// loaded: its size is the shown part of all rows, it follows a scroll, and a drag of its handle
+// to the end shows the last photos and loads the pages up to them.
+TEST_F(AlbumSectionQmlTests, FlatGridScrollBarDragShowsAndLoadsTheLastPhotos) {
+  ApplicationModuleHost backend;
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 300);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  // A search keeps pages at 120 rows, so 180 photos are not loaded at first.
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  auto* library = backend.library();
+  ASSERT_EQ(library->TotalCount(), 300);
+  ASSERT_EQ(library->ShownCount(), 120);
+  const auto&     keys = packed->images_;
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  auto* grid   = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_grid"));
+  auto* bar    = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_scrollBar"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(bar, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys[0].file_id_) != nullptr; }));
+  ProcessEvents(500);
+
+  // 300 photos at 6 columns are 50 rows; the bar covers all of them, not the 20 loaded rows.
+  const auto columns     = view.loaded()->property("columns").toInt();
+  const auto cell_height = grid->property("cellHeight").toReal();
+  const auto all_rows    = std::ceil(300.0 / columns);
+  EXPECT_NEAR(bar->property("size").toReal(), grid->height() / (all_rows * cell_height), 0.01);
+  EXPECT_LT(bar->property("size").toReal(), 1.0);
+  EXPECT_NEAR(bar->property("position").toReal(), 0.0, 1e-6);
+
+  // A scroll moves the bar.
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "restoreContentY",
+                                        Q_ARG(QVariant, 5.0 * cell_height)));
+  ProcessEvents(100);
+  EXPECT_NEAR(bar->property("position").toReal(), 5.0 / all_rows, 0.01);
+  EXPECT_TRUE(bar->property("active").toBool());
+
+  // Drag the handle to the end of the bar.
+  auto* handle = qvariant_cast<QQuickItem*>(bar->property("contentItem"));
+  ASSERT_NE(handle, nullptr);
+  const auto start = SceneCenter(handle);
+  const auto end   = bar->mapToScene(QPointF(bar->width() / 2.0, bar->height() + 40.0)).toPoint();
+  QTest::mouseMove(window, start);
+  QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
+  for (int step = 1; step <= 10; ++step) {
+    QTest::mouseMove(window, start + (end - start) * step / 10);
+    ProcessEvents(10);
+  }
+  QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, end);
+  ASSERT_TRUE(WaitUntil([&]() { return library->ShownCount() == 300; }))
+      << "shown " << library->ShownCount() << " contentY " << grid->property("contentY").toReal();
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys.back().file_id_) != nullptr; }));
+  const auto max_y = all_rows * cell_height - grid->height();
+  EXPECT_NEAR(grid->property("contentY").toReal() - grid->property("originY").toReal(), max_y, 1.0);
+  EXPECT_NEAR(bar->property("position").toReal() + bar->property("size").toReal(), 1.0, 0.01);
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
 }  // namespace alcedo::ui::test

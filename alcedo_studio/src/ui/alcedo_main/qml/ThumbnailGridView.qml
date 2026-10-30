@@ -604,6 +604,31 @@ Item {
         appModules.library.SetThumbnailCacheHint(cols * rows, root.desiredMaxEdge)
     }
 
+    // ── Scroll bar ──
+    // The grid takes no flick input and its content height covers only the loaded rows, so the
+    // scroll bar is not attached to it: its size and position come from the height of all photos
+    // of the result (layoutContentHeight). A drag moves contentY there and loads the pages up to
+    // the rows that it shows.
+    function scrollFraction() {
+        const height = root.layoutContentHeight()
+        return height > 0 ? (grid.contentY - grid.originY) / height : 0
+    }
+
+    function scrollToFraction(fraction) {
+        const height = root.layoutContentHeight()
+        if (height <= 0 || grid.cellHeight <= 0) {
+            return
+        }
+        grid.contentY = root.clampYForHeight(height, grid.originY + fraction * height)
+        const columnsForZoom = root.effectiveColumnCount()
+        const topRow = Math.floor((grid.contentY - grid.originY) / grid.cellHeight)
+        const shownRows = Math.ceil(grid.height / grid.cellHeight) + 1
+        const lastIndex = Math.min(root.modelTotalCount() - 1, (topRow + shownRows) * columnsForZoom)
+        if (lastIndex >= root.modelCount()) {
+            appModules.library.LoadThumbnailsThroughIndex(lastIndex)
+        }
+    }
+
     function maybeLoadMoreThumbnails() {
         if (thumbnailBindingSuspended
                 || !appModules.library.thumbnailModel.hasMore
@@ -1785,6 +1810,45 @@ Item {
             }
             updatePointerTargets(wheel.x, wheel.y)
             wheel.accepted = true
+        }
+
+        // A child of the overlay: the bar takes its own presses and drags, and a wheel over it
+        // reaches the overlay, which scrolls the grid.
+        ScrollBar {
+            id: gridScrollBar
+            objectName: "thumbnailGridView_scrollBar"
+            z: 1
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            orientation: Qt.Vertical
+            policy: ScrollBar.AsNeeded
+            size: {
+                const height = root.layoutContentHeight()
+                return height > grid.height ? grid.height / height : 1
+            }
+            // Shown while it is hovered or dragged, and for a short time after a scroll.
+            active: hovered || pressed || scrollActivityTimer.running
+            onPositionChanged: {
+                if (pressed) {
+                    root.scrollToFraction(position)
+                }
+            }
+            Binding on position {
+                when: !gridScrollBar.pressed
+                value: root.scrollFraction()
+                restoreMode: Binding.RestoreNone
+            }
+        }
+
+        Timer {
+            id: scrollActivityTimer
+            interval: 800
+            repeat: false
+        }
+        Connections {
+            target: grid
+            function onContentYChanged() { scrollActivityTimer.restart() }
         }
     }
 
