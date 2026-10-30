@@ -90,12 +90,19 @@ class ComputePipelineCache {
 
     std::vector<std::filesystem::path> candidates;
     std::unordered_set<std::string>    seen;
-    AppendUniquePath(candidates, seen, configured);
 
     if (!shader_name.empty()) {
       if (auto* bundle = NS::Bundle::mainBundle(); bundle != nullptr) {
         if (auto* resource_path = bundle->resourcePath();
             resource_path != nullptr && resource_path->utf8String() != nullptr) {
+          // A .app owns its resource location even when the whole metallib
+          // directory is missing. Do not read libraries from the build checkout.
+          const auto* bundle_path = bundle->bundlePath();
+          if (bundle_path != nullptr && bundle_path->utf8String() != nullptr &&
+              std::filesystem::path(bundle_path->utf8String()).extension() == ".app") {
+            return (std::filesystem::path(resource_path->utf8String()) / "metallib" / shader_name)
+                .string();
+          }
           AppendUniquePath(
               candidates, seen,
               std::filesystem::path(resource_path->utf8String()) / "metallib" / shader_name);
@@ -118,7 +125,16 @@ class ComputePipelineCache {
       }
     }
 
+    // A bundle resource root owns all of its libraries. A missing library must fail
+    // there, even when the configured build path still exists on this machine.
     std::error_code exists_error;
+    for (const auto& candidate : candidates) {
+      if (std::filesystem::is_directory(candidate.parent_path(), exists_error) && !exists_error) {
+        return candidate.string();
+      }
+      exists_error.clear();
+    }
+    AppendUniquePath(candidates, seen, configured);
     for (const auto& candidate : candidates) {
       if (std::filesystem::exists(candidate, exists_error) && !exists_error) {
         return candidate.string();

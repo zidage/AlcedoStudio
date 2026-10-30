@@ -82,7 +82,7 @@ auto IsDirectory(const std::filesystem::path& path) -> bool {
 /**
  * @brief Map a compile-time OpenCL source path to the file the process must load.
  *
- * When the packaged shader directory for @p path exists next to the executable,
+ * When the packaged shader root exists next to the executable,
  * the packaged copy is authoritative, even if it is missing: the program build then
  * fails with the packaged path instead of silently reading the build machine's
  * source checkout. Build trees have no packaged shader directories and read
@@ -101,7 +101,7 @@ auto ResolveOpenClSourcePath(const std::filesystem::path& path) -> std::filesyst
   };
   for (const auto& packaged_root : packaged_roots) {
     const auto packaged_path = packaged_root / rel;
-    if (IsDirectory(packaged_path.parent_path())) {
+    if (IsDirectory(packaged_root)) {
       return packaged_path;
     }
   }

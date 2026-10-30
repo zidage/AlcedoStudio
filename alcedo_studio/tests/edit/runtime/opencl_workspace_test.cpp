@@ -639,6 +639,15 @@ TEST_F(OpenClWorkspaceFixture, OpenClProgramManifestCanLoadFromInstalledResource
   EXPECT_NO_THROW((void)OpenClProgramLibrary::Instance().GetProgram(program_name));
   EXPECT_TRUE(OpenClProgramLibrary::Instance().IsProgramBuilt(program_name));
   std::filesystem::remove(installed);
+  // An empty packaged root is still authoritative. Do not leave the layout
+  // created by this test beside a later test that must read build-tree sources.
+  for (auto directory = installed.parent_path(); directory != TestExecutableDir();
+       directory = directory.parent_path()) {
+    if (!std::filesystem::is_empty(directory)) {
+      break;
+    }
+    std::filesystem::remove(directory);
+  }
 }
 
 TEST_F(OpenClWorkspaceFixture, InstalledOpenClPackageBuildsEveryGpuDagProgram) {

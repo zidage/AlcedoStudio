@@ -22,6 +22,7 @@ namespace alcedo {
 
 namespace detail {
 auto FormatPathForOpenClDiagnostics(const std::filesystem::path& path) -> std::string;
+auto ResolveOpenClSourcePath(const std::filesystem::path& path) -> std::filesystem::path;
 }
 
 struct OpenClProgramDescriptor {
