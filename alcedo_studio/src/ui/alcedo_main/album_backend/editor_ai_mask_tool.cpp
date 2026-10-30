@@ -106,8 +106,8 @@ EditorAiMaskTool::EditorAiMaskTool(EditorSessionController* session, Services se
     result_connection_ =
         connect(session_, &EditorSessionController::SessionResultObserved, this,
                 [this](const EditorSessionResult& result) { OnSessionResult(result); });
-    state_connection_ = connect(session_, &EditorSessionController::StateChanged, this,
-                                [this] { OnSessionStateChanged(); });
+    state_connection_          = connect(session_, &EditorSessionController::StateChanged, this,
+                                         [this] { OnSessionStateChanged(); });
     // The viewport lost the displayed coverage and the session presented it again (#514).
     coverage_again_connection_ = connect(
         session_, &EditorSessionController::MaskCoveragePresentedAgain, this,
@@ -147,7 +147,7 @@ void EditorAiMaskTool::open() { OpenFor(std::nullopt); }
 void EditorAiMaskTool::openSelectedMask() {
   auto* adapter = session_ != nullptr ? session_->mask_creation() : nullptr;
   if (adapter == nullptr || adapter->selected_mask_id().isEmpty()) {
-    ShowError(QStringLiteral("Select an AI Mask in the Mask list first."));
+    ShowError(tr("Select an AI Mask in the Mask list first."));
     return;
   }
   OpenFor(MaskId{adapter->selected_mask_id().toStdString()});
@@ -192,7 +192,7 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
   emit busyChanged();
   emit liveInputChanged();
   if (Backend() == nullptr || session_ == nullptr || !session_->has_image()) {
-    Fail(QStringLiteral("Open an image in the editor first."));
+    Fail(tr("Open an image in the editor first."));
     return;
   }
   if (mask_id_.has_value()) {
@@ -201,7 +201,7 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
     grade_id_ = SelectedGradeId();
   }
   if (grade_id_.Empty()) {
-    Fail(QStringLiteral("Select a Color Grade node first."));
+    Fail(tr("Select a Color Grade node first."));
     return;
   }
   // AI Models plan, AM5: only a complete installed set of a supported version loads. Otherwise
@@ -221,7 +221,7 @@ void EditorAiMaskTool::OpenFor(std::optional<MaskId> mask_id) {
   request.serial  = serial_;
   request.runtime = services_.runtime ? services_.runtime() : nullptr;
   if (!request.runtime) {
-    Fail(QStringLiteral("The AI sidecar runtime is not available. Open a project first."));
+    Fail(tr("The AI sidecar runtime is not available. Open a project first."));
     return;
   }
   if (services_.runtime_options) {
@@ -281,7 +281,7 @@ void EditorAiMaskTool::OnOpened(std::uint64_t serial, EditorAiMaskEditOpenResult
     return;
   }
   if (opened.result.kind != EditorSessionResultKind::Accepted) {
-    Fail(QStringLiteral("The AI Mask edit did not open: %1").arg(ToQString(opened.result.message)));
+    Fail(tr("The AI Mask edit did not open: %1").arg(ToQString(opened.result.message)));
     return;
   }
   lease_open_ = true;
@@ -297,7 +297,7 @@ void EditorAiMaskTool::OnAnalysisRendered(std::uint64_t serial, EditorAiMaskAnal
     return;
   }
   if (analysis.status != EditorAiMaskAnalysisStatus::Completed) {
-    Fail(QStringLiteral("The AI Mask analysis image failed: %1").arg(ToQString(analysis.message)));
+    Fail(tr("The AI Mask analysis image failed: %1").arg(ToQString(analysis.message)));
     return;
   }
   SetStage(AiMaskToolStage::StartingSidecar);
@@ -330,7 +330,7 @@ void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartR
   // The lease keeps the process running from now until the service closes.
   auto       lease   = runtime->AcquireLease();
   if (!lease) {
-    fail(QStringLiteral("The AI sidecar lease is not available."));
+    fail(tr("The AI sidecar lease is not available."));
     return;
   }
   if (runtime->Status().state != AiSidecarRuntimeState::kReady) {
@@ -339,8 +339,7 @@ void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartR
     options.require_model_info = false;
     options.startup_timeout    = kSidecarStartupTimeout;
     if (!runtime->StartAndWaitInteractive(options)) {
-      fail(QStringLiteral("The AI sidecar did not start: %1")
-               .arg(ToQString(runtime->Status().message)));
+      fail(tr("The AI sidecar did not start: %1").arg(ToQString(runtime->Status().message)));
       return;
     }
   }
@@ -353,15 +352,14 @@ void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartR
   const auto load_start = std::chrono::steady_clock::now();
   const auto loaded     = service->LoadModels(request.model_directory);
   if (!loaded.ok) {
-    fail(QStringLiteral("The AI Mask models could not be loaded from %1: %2")
+    fail(tr("The AI Mask models could not be loaded from %1: %2")
              .arg(PathText(request.model_directory), ToQString(loaded.error)));
     return;
   }
   const auto load_ms = ElapsedMs(load_start);
   const auto models  = service->Status();
   if (!models.status.ok) {
-    fail(QStringLiteral("The AI Mask model status could not be read: %1")
-             .arg(ToQString(models.status.error)));
+    fail(tr("The AI Mask model status could not be read: %1").arg(ToQString(models.status.error)));
     return;
   }
 
@@ -369,8 +367,7 @@ void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartR
   const auto image_start = std::chrono::steady_clock::now();
   const auto started     = service->StartImage(analysis.image, analysis.image_key);
   if (!started.status.ok) {
-    fail(QStringLiteral("The segmentation session did not start: %1")
-             .arg(ToQString(started.status.error)));
+    fail(tr("The segmentation session did not start: %1").arg(ToQString(started.status.error)));
     return;
   }
   const auto         image_ms = ElapsedMs(image_start);
@@ -393,8 +390,7 @@ void EditorAiMaskTool::StartOnWorker(EditorAiMaskAnalysisResult analysis, StartR
       worker_.session = std::make_unique<AiMaskEditSession>(*service, image);
     }
   } catch (const std::exception& error) {
-    fail(QStringLiteral("The AI Mask session did not start: %1")
-             .arg(QString::fromUtf8(error.what())));
+    fail(tr("The AI Mask session did not start: %1").arg(QString::fromUtf8(error.what())));
     return;
   }
   worker_.service = std::move(service);
@@ -459,7 +455,7 @@ void EditorAiMaskTool::setPromptTool(const QString& tool) {
 void EditorAiMaskTool::addTask(const QString& task) {
   const auto kind = TaskKindFromName(task);
   if (!kind.has_value()) {
-    Fail(QStringLiteral("Unknown AI Mask task: %1").arg(task));
+    Fail(tr("Unknown AI Mask task: %1").arg(task));
     return;
   }
   const auto operation =
@@ -593,9 +589,9 @@ void EditorAiMaskTool::OnStepFinished(AiMaskStepResult result, SessionView view)
 
 auto EditorAiMaskTool::ReadView(const AiMaskEditSession& session) -> SessionView {
   SessionView view;
-  view.can_undo     = session.CanUndo();
+  view.can_undo      = session.CanUndo();
   view.can_redo      = session.CanRedo();
-  view.edge         = session.Edge();
+  view.edge          = session.Edge();
   const auto& recipe = session.Recipe();
   const auto* last   = recipe.components.empty() ? nullptr : &recipe.components.back();
   const auto* group  = last != nullptr ? std::get_if<AiMaskPromptGroup>(&last->content) : nullptr;
@@ -752,7 +748,7 @@ void EditorAiMaskTool::commit() {
         std::make_shared<std::optional<std::pair<MaskAsset, AiSegmentationMaskSource>>>();
     QString error;
     if (!worker.session) {
-      error = QStringLiteral("The AI Mask session is closed.");
+      error = tr("The AI Mask session is closed.");
     } else {
       try {
         *payload = worker.session->PrepareCommit();
@@ -768,7 +764,7 @@ void EditorAiMaskTool::commit() {
           }
           auto* backend = Backend();
           if (!payload->has_value() || backend == nullptr) {
-            Fail(error.isEmpty() ? QStringLiteral("The editor session is not available.") : error);
+            Fail(error.isEmpty() ? tr("The editor session is not available.") : error);
             return;
           }
           EditorAiMaskCommit commit;
@@ -797,7 +793,7 @@ void EditorAiMaskTool::OnSessionResult(const EditorSessionResult& result) {
       result.kind == EditorSessionResultKind::Failed) {
     // The session stays open: the asset write or the history publication failed (SM9.3).
     commit_operation_id_ = 0;
-    Fail(QStringLiteral("The AI Mask was not committed: %1").arg(ToQString(result.message)));
+    Fail(tr("The AI Mask was not committed: %1").arg(ToQString(result.message)));
     return;
   }
   auto* backend = Backend();
@@ -969,7 +965,7 @@ void EditorAiMaskTool::handleRelease(qreal x, qreal y, int /*button*/) {
   pointer_         = {};
   emit liveInputChanged();
   if (busy()) {
-    SetNotice(QStringLiteral("Wait until the current model request returns."));
+    SetNotice(tr("Wait until the current model request returns."));
     return;
   }
   RunPointerInput(input);
@@ -977,7 +973,7 @@ void EditorAiMaskTool::handleRelease(qreal x, qreal y, int /*button*/) {
 
 void EditorAiMaskTool::RunPointerInput(const PointerInput& input) {
   if (interaction_ == nullptr) {
-    Fail(QStringLiteral("The viewport is not bound to the AI Mask tool."));
+    Fail(tr("The viewport is not bound to the AI Mask tool."));
     return;
   }
   const auto       mapping = interaction_->maskEditViewMapping();
@@ -992,7 +988,7 @@ void EditorAiMaskTool::RunPointerInput(const PointerInput& input) {
       // A click refines the open prompt group (SM5 M3): Add and Subtract are its point labels.
       const auto point = MapItemToAiMaskPromptPoint(mapping, input.press);
       if (!point.has_value()) {
-        SetNotice(QStringLiteral("The click is outside the photo."));
+        SetNotice(tr("The click is outside the photo."));
         return;
       }
       step.points.push_back(AiMaskPromptPoint{point->x, point->y, AiMaskComponentOperation::Add});
@@ -1002,12 +998,12 @@ void EditorAiMaskTool::RunPointerInput(const PointerInput& input) {
     }
     case PromptTool::Box: {
       if (!input.dragging) {
-        SetNotice(QStringLiteral("Drag a box around the object."));
+        SetNotice(tr("Drag a box around the object."));
         return;
       }
       const auto rect = MapItemRectToAiMaskPromptBox(mapping, input.press, input.last);
       if (!rect.has_value()) {
-        SetNotice(QStringLiteral("The box is outside the photo."));
+        SetNotice(tr("The box is outside the photo."));
         return;
       }
       step.box    = AiMaskBox{rect->x, rect->y, rect->x + rect->w, rect->y + rect->h};
@@ -1018,7 +1014,7 @@ void EditorAiMaskTool::RunPointerInput(const PointerInput& input) {
       const auto points =
           MapItemStrokeToAiMaskPromptPoints(mapping, input.path, kAiMaskMaximumStrokePromptPoints);
       if (points.empty()) {
-        SetNotice(QStringLiteral("The path is outside the photo."));
+        SetNotice(tr("The path is outside the photo."));
         return;
       }
       for (const auto& point : points) {

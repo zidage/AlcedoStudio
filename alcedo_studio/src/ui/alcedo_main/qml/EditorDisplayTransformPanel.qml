@@ -323,134 +323,175 @@ Item {
     //   collapsible default-open. Method switcher = shared sunk track + monochrome
     //   inverted well, title-only segments, medium height (~48), fillWidth for a
     //   future resizable right rail.
-    ColumnLayout {
+    Flickable {
+        id: displayScroll
+        objectName: "editorDisplayTransformPanelScroll"
         anchors.fill: parent
-        spacing: appTheme.spaceSm
+        contentWidth: width
+        contentHeight: displayColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
 
-        Label {
-            Layout.fillWidth: true
-            text: qsTr("Display Transform")
-            color: root.colText
-            font.pixelSize: appTheme.fontSizeSection
-            font.weight: appTheme.fontWeightHeading
+        property int inputLockCount: 0
+        function beginInputLock() {
+            if (inputLockCount === 0)
+                interactive = false
+            inputLockCount += 1
+        }
+        function endInputLock() {
+            if (inputLockCount > 0)
+                inputLockCount -= 1
+            if (inputLockCount <= 0) {
+                inputLockCount = 0
+                interactive = true
+            }
         }
 
-        // ── Method (always visible; not collapsible) ────────────────────
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            grabPermissions: PointerHandler.CanTakeOverFromItems
+                             | PointerHandler.CanTakeOverFromHandlersOfDifferentType
+                             | PointerHandler.ApprovesTakeOverByAnything
+            onWheel: function (event) {
+                var step = event.pixelDelta.y !== 0
+                           ? event.pixelDelta.y
+                           : event.angleDelta.y / 120 * 48
+                var maxY = Math.max(0, displayScroll.contentHeight - displayScroll.height)
+                displayScroll.contentY = Math.max(0, Math.min(maxY, displayScroll.contentY - step))
+                event.accepted = true
+            }
+        }
+
         ColumnLayout {
-            id: methodGroup
-            objectName: "editorAdjustmentGroupShell_display_method"
-            Layout.fillWidth: true
+            id: displayColumn
+            width: displayScroll.width
             spacing: appTheme.spaceSm
 
             Label {
                 Layout.fillWidth: true
-                text: qsTr("Method")
-                color: root.colMuted
-                font.pixelSize: appTheme.fontSizeCaption
-                font.weight: appTheme.fontWeightStrong
+                text: qsTr("Display Transform")
+                color: root.colText
+                font.pixelSize: appTheme.fontSizeSection
+                font.weight: appTheme.fontWeightHeading
             }
 
-            // Shared sunk track; segments fillWidth so a resizable rail keeps
-            // equal halves without fixed pixel cards. Selection aliases feed
-            // the value-led highlight so snapshot load and selectIndex both
-            // invalidate it (LUT selectedPath pattern).
-            SegmentedCardSwitcher {
-                objectName: "displayMethodTrack"
+            // ── Method (always visible; not collapsible) ────────────────────
+            ColumnLayout {
+                id: methodGroup
+                objectName: "editorAdjustmentGroupShell_display_method"
                 Layout.fillWidth: true
-                entries: methodModel.entries
-                currentIndex: root.selectedMethodIndex
-                currentValue: root.selectedMethodValue
-                enabled: root.controlsEnabled
-                trackColor: root.colBase
-                trackBorderColor: root.colCardBorder
+                spacing: appTheme.spaceSm
+
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("Method")
+                    color: root.colMuted
+                    font.pixelSize: appTheme.fontSizeCaption
+                    font.weight: appTheme.fontWeightStrong
+                }
+
+                // Shared sunk track; segments fillWidth so a resizable rail keeps
+                // equal halves without fixed pixel cards. Selection aliases feed
+                // the value-led highlight so snapshot load and selectIndex both
+                // invalidate it (LUT selectedPath pattern).
+                SegmentedCardSwitcher {
+                    objectName: "displayMethodTrack"
+                    Layout.fillWidth: true
+                    entries: methodModel.entries
+                    currentIndex: root.selectedMethodIndex
+                    currentValue: root.selectedMethodValue
+                    enabled: root.controlsEnabled
+                    trackColor: root.colBase
+                    trackBorderColor: root.colCardBorder
+                    textColor: root.colText
+                    hoverColor: root.colHover
+                    onSelected: function(index, value) { methodModel.selectIndex(index) }
+                }
+
+                // Method-specific params (inline under the track).
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: appTheme.spaceSm
+                    visible: !root.isOpenDrt
+
+                    AdjustmentCombo {
+                        objectName: "displayAcesLimitingSpaceCombo"
+                        Layout.fillWidth: true
+                        model: acesLimitingSpaceModel
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: appTheme.spaceSm
+                    visible: root.isOpenDrt
+
+                    AdjustmentCombo {
+                        objectName: "displayOpenDrtLookCombo"
+                        Layout.fillWidth: true
+                        model: openDrtLookModel
+                    }
+
+                    AdjustmentCombo {
+                        objectName: "displayOpenDrtTonescaleCombo"
+                        Layout.fillWidth: true
+                        model: openDrtTonescaleModel
+                    }
+
+                    AdjustmentCombo {
+                        objectName: "displayOpenDrtCreativeWhiteCombo"
+                        Layout.fillWidth: true
+                        model: openDrtCreativeWhiteModel
+                    }
+                }
+            }
+
+            // ── Color & Encoding (collapsible, default expanded) ────────────
+            CollapsibleSection {
+                id: colorEncodingGroup
+                objectName: "editorAdjustmentGroupShell_display_color_encoding"
+                Layout.fillWidth: true
+                title: qsTr("Color & Encoding")
+                expanded: true
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
                 textColor: root.colText
+                mutedColor: root.colMuted
                 hoverColor: root.colHover
-                onSelected: function(index, value) { methodModel.selectIndex(index) }
-            }
+                accentColor: root.colAccent
+                bodyContentHeight: ceBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
 
-            // Method-specific params (inline under the track).
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: appTheme.spaceSm
-                visible: !root.isOpenDrt
+                ColumnLayout {
+                    id: ceBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
 
-                AdjustmentCombo {
-                    objectName: "displayAcesLimitingSpaceCombo"
-                    Layout.fillWidth: true
-                    model: acesLimitingSpaceModel
-                }
-            }
+                    AdjustmentCombo {
+                        objectName: "displayEncodingSpaceCombo"
+                        Layout.fillWidth: true
+                        model: encodingSpaceModel
+                    }
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: appTheme.spaceSm
-                visible: root.isOpenDrt
+                    AdjustmentCombo {
+                        objectName: "displayEncodingEotfCombo"
+                        Layout.fillWidth: true
+                        model: encodingEotfModel
+                    }
 
-                AdjustmentCombo {
-                    objectName: "displayOpenDrtLookCombo"
-                    Layout.fillWidth: true
-                    model: openDrtLookModel
-                }
-
-                AdjustmentCombo {
-                    objectName: "displayOpenDrtTonescaleCombo"
-                    Layout.fillWidth: true
-                    model: openDrtTonescaleModel
-                }
-
-                AdjustmentCombo {
-                    objectName: "displayOpenDrtCreativeWhiteCombo"
-                    Layout.fillWidth: true
-                    model: openDrtCreativeWhiteModel
+                    AdjustmentSlider {
+                        objectName: "displayPeakLuminanceSlider"
+                        Layout.fillWidth: true
+                        model: peakLuminanceModel
+                        flickable: displayScroll
+                    }
                 }
             }
         }
-
-        // ── Color & Encoding (collapsible, default expanded) ────────────
-        CollapsibleSection {
-            id: colorEncodingGroup
-            objectName: "editorAdjustmentGroupShell_display_color_encoding"
-            Layout.fillWidth: true
-            title: qsTr("Color & Encoding")
-            expanded: true
-            controlsEnabled: root.controlsEnabled
-            surfaceColor: root.colCardSurface
-            disabledSurfaceColor: root.colCardSurface
-            borderColor: root.colCardBorder
-            textColor: root.colText
-            mutedColor: root.colMuted
-            hoverColor: root.colHover
-            accentColor: root.colAccent
-            bodyContentHeight: ceBody.implicitHeight + appTheme.spaceSm
-
-            ColumnLayout {
-                id: ceBody
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: appTheme.spaceXs
-                spacing: appTheme.spaceSm
-
-                AdjustmentCombo {
-                    objectName: "displayEncodingSpaceCombo"
-                    Layout.fillWidth: true
-                    model: encodingSpaceModel
-                }
-
-                AdjustmentCombo {
-                    objectName: "displayEncodingEotfCombo"
-                    Layout.fillWidth: true
-                    model: encodingEotfModel
-                }
-
-                AdjustmentSlider {
-                    objectName: "displayPeakLuminanceSlider"
-                    Layout.fillWidth: true
-                    model: peakLuminanceModel
-                }
-            }
-        }
-
-        Item { Layout.fillHeight: true }
     }
 }
