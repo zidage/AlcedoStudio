@@ -1,83 +1,82 @@
-# Resolves the aria2c executable for the current platform into the cache
-# variable ALCEDO_ARIA2C_BINARY. The ModelDownloadService spawns this binary
-# as an --enable-rpc daemon to accelerate Hugging Face model downloads.
-#
-# Official aria2 releases only ship a Windows binary (1.37.0) and source; the
-# last prebuilt macOS build is 1.35.0 (x86_64, runs under Rosetta on Apple
-# Silicon). We fetch the prebuilt binary per platform so end users do not need
-# to install aria2 themselves.
-
-set(_aria2_stamp_dir "${CMAKE_BINARY_DIR}/aria2-download")
-file(MAKE_DIRECTORY "${_aria2_stamp_dir}")
-
-if(WIN32)
-    set(ALCEDO_ARIA2C_VERSION "1.37.0")
-    set(_aria2_url "https://github.com/aria2/aria2/releases/download/release-${ALCEDO_ARIA2C_VERSION}/aria2-${ALCEDO_ARIA2C_VERSION}-win-64bit-build1.zip")
-    set(_aria2_archive "${_aria2_stamp_dir}/aria2-${ALCEDO_ARIA2C_VERSION}-win-64bit.zip")
-    set(_aria2_extracted "${_aria2_stamp_dir}/aria2-win")
-    set(_aria2_glob_names "aria2c.exe")
-else()
-    set(ALCEDO_ARIA2C_VERSION "1.35.0")
-    set(_aria2_url "https://github.com/aria2/aria2/releases/download/release-${ALCEDO_ARIA2C_VERSION}/aria2-${ALCEDO_ARIA2C_VERSION}-osx-darwin.tar.bz2")
-    set(_aria2_archive "${_aria2_stamp_dir}/aria2-${ALCEDO_ARIA2C_VERSION}-osx.tar.bz2")
-    set(_aria2_extracted "${_aria2_stamp_dir}/aria2-osx")
-    set(_aria2_glob_names "aria2c")
-endif()
-
+# Resolve the bundled downloader. The macOS asset is built with build_aria2_macos.sh.
 option(ALCEDO_BUILD_ARIA2C_FETCH
     "Download and bundle aria2c next to alcedo_main for model downloads." ON)
-
 if(NOT ALCEDO_BUILD_ARIA2C_FETCH)
     return()
 endif()
 
-# Allow a manual override (e.g. a system aria2c or a pre-placed binary).
-if(DEFINED ALCEDO_ARIA2C_BINARY AND EXISTS "${ALCEDO_ARIA2C_BINARY}")
-    return()
-endif()
+set(ALCEDO_ARIA2C_VERSION "1.37.0")
+set(_aria2_stamp_dir "${CMAKE_BINARY_DIR}/aria2-download")
 
-set(_aria2_resolved_binary "")
-
-if(EXISTS "${_aria2_extracted}")
-    file(GLOB_RECURSE _aria2_candidates
-        "${_aria2_extracted}/${_aria2_glob_names}"
-        "${_aria2_extracted}/*/${_aria2_glob_names}")
-    if(_aria2_candidates)
-        list(GET _aria2_candidates 0 _aria2_resolved_binary)
-    endif()
-endif()
-
-if(_aria2_resolved_binary STREQUAL "")
-    message(STATUS "Fetching aria2c ${ALCEDO_ARIA2C_VERSION} for ${CMAKE_SYSTEM_NAME}")
-    if(NOT EXISTS "${_aria2_archive}")
-        file(DOWNLOAD "${_aria2_url}" "${_aria2_archive}"
-            STATUS _aria2_dl_status SHOW_PROGRESS)
-        list(GET _aria2_dl_status 0 _aria2_dl_rc)
-        if(_aria2_dl_rc)
-            list(GET _aria2_dl_status 1 _aria2_dl_msg)
-            message(WARNING
-                "Failed to download aria2c (${_aria2_dl_msg}). Models will not be downloadable. "
-                "Set ALCEDO_ARIA2C_BINARY to a local aria2c or disable ALCEDO_BUILD_ARIA2C_FETCH.")
-            unset(ALCEDO_ARIA2C_BINARY CACHE)
-            return()
+function(_alcedo_check_aria2_arch binary)
+    if(APPLE)
+        execute_process(COMMAND /usr/bin/lipo -archs "${binary}"
+            RESULT_VARIABLE _rc OUTPUT_VARIABLE _archs OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(NOT _rc EQUAL 0 OR NOT " ${_archs} " MATCHES " arm64 ")
+            message(FATAL_ERROR "aria2c must contain arm64: ${binary} (${_archs})")
         endif()
     endif()
-    file(REMOVE_RECURSE "${_aria2_extracted}")
-    file(ARCHIVE_EXTRACT INPUT "${_aria2_archive}" DESTINATION "${_aria2_extracted}")
-    file(GLOB_RECURSE _aria2_candidates
-        "${_aria2_extracted}/${_aria2_glob_names}"
-        "${_aria2_extracted}/*/${_aria2_glob_names}")
-    if(_aria2_candidates)
-        list(GET _aria2_candidates 0 _aria2_resolved_binary)
+endfunction()
+
+# The download directory belongs to this module. Do not treat a cached result from an older
+# release as a user override (in particular the former x86_64-only macOS 1.35.0).
+if(ALCEDO_ARIA2C_BINARY)
+    cmake_path(IS_PREFIX _aria2_stamp_dir "${ALCEDO_ARIA2C_BINARY}" NORMALIZE _aria2_managed)
+    if(NOT _aria2_managed)
+        if(NOT EXISTS "${ALCEDO_ARIA2C_BINARY}")
+            message(FATAL_ERROR "ALCEDO_ARIA2C_BINARY does not exist: ${ALCEDO_ARIA2C_BINARY}")
+        endif()
+        _alcedo_check_aria2_arch("${ALCEDO_ARIA2C_BINARY}")
+        return()
     endif()
 endif()
 
-if(_aria2_resolved_binary STREQUAL "")
-    message(WARNING "aria2c binary was not found after extracting ${_aria2_archive}.")
-    unset(ALCEDO_ARIA2C_BINARY CACHE)
-    return()
+if(WIN32)
+    set(_aria2_name "aria2-1.37.0-win-64bit-build1.zip")
+    set(_aria2_url "https://github.com/aria2/aria2/releases/download/release-1.37.0/${_aria2_name}")
+    set(_aria2_sha256 "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288")
+    set(_aria2_binary_name "aria2c.exe")
+elseif(APPLE)
+    set(_aria2_name "aria2-1.37.0-macos-arm64.tar.gz")
+    set(_aria2_url "https://github.com/zidage/AlcedoStudio/releases/download/aria2-1.37.0-macos-arm64-r1/${_aria2_name}")
+    set(_aria2_sha256 "279dc7a1cbd594cc55ccf36033442d99d8020c538d77e65f9710b14dcc55ed5e")
+    set(_aria2_binary_name "aria2c")
+else()
+    message(FATAL_ERROR "No bundled aria2c for ${CMAKE_SYSTEM_NAME}; set ALCEDO_ARIA2C_BINARY.")
 endif()
 
+file(MAKE_DIRECTORY "${_aria2_stamp_dir}")
+set(_aria2_archive "${_aria2_stamp_dir}/${_aria2_name}")
+set(_aria2_extracted "${_aria2_stamp_dir}/${_aria2_sha256}")
+if(NOT EXISTS "${_aria2_archive}")
+    message(STATUS "Fetching aria2c ${ALCEDO_ARIA2C_VERSION} for ${CMAKE_SYSTEM_NAME}")
+    file(DOWNLOAD "${_aria2_url}" "${_aria2_archive}.part"
+        EXPECTED_HASH "SHA256=${_aria2_sha256}" TLS_VERIFY ON
+        STATUS _aria2_dl_status SHOW_PROGRESS)
+    list(GET _aria2_dl_status 0 _aria2_dl_rc)
+    if(NOT _aria2_dl_rc EQUAL 0)
+        file(REMOVE "${_aria2_archive}.part")
+        message(FATAL_ERROR "Failed to download aria2c: ${_aria2_dl_status}")
+    endif()
+    file(RENAME "${_aria2_archive}.part" "${_aria2_archive}")
+endif()
+# Check existing archives too, rather than trusting existence after an interrupted download.
+file(SHA256 "${_aria2_archive}" _aria2_actual_sha256)
+if(NOT _aria2_actual_sha256 STREQUAL _aria2_sha256)
+    message(FATAL_ERROR "aria2c archive SHA256 mismatch: ${_aria2_archive}")
+endif()
+
+file(GLOB_RECURSE _aria2_candidates "${_aria2_extracted}/${_aria2_binary_name}")
+if(NOT _aria2_candidates)
+    file(ARCHIVE_EXTRACT INPUT "${_aria2_archive}" DESTINATION "${_aria2_extracted}")
+    file(GLOB_RECURSE _aria2_candidates "${_aria2_extracted}/${_aria2_binary_name}")
+endif()
+list(LENGTH _aria2_candidates _aria2_count)
+if(NOT _aria2_count EQUAL 1)
+    message(FATAL_ERROR "Expected one ${_aria2_binary_name} in ${_aria2_archive}")
+endif()
+list(GET _aria2_candidates 0 _aria2_resolved_binary)
+_alcedo_check_aria2_arch("${_aria2_resolved_binary}")
 set(ALCEDO_ARIA2C_BINARY "${_aria2_resolved_binary}" CACHE FILEPATH
-    "Path to the aria2c binary bundled next to alcedo_main.")
+    "Path to the aria2c binary bundled next to alcedo_main." FORCE)
 message(STATUS "aria2c binary: ${ALCEDO_ARIA2C_BINARY}")

@@ -227,6 +227,20 @@ Usage note: the people and sky locator is trained on COCO 2017 and Open Images V
 is trained on MaSS13K (https://github.com/xiechenxi99/mass13k), which does not state a clear
 license; for commercial use of the Sky model or its output, contact the authors of the dataset.
 
+31) aria2 1.37.0 (bundled downloader)
+Upstream: https://github.com/aria2/aria2
+License: GPL-2.0-or-later
+License text file: third_party_licenses/aria2-COPYING.txt
+macOS binary and corresponding source archives:
+https://github.com/zidage/AlcedoStudio/releases/tag/aria2-1.37.0-macos-arm64-r1
+The source archive includes the build recipe and the unmodified upstream source archives.
+
+32) c-ares 1.34.5 (linked statically into the macOS downloader)
+Upstream: https://github.com/c-ares/c-ares
+License: MIT
+License text file: third_party_licenses/c-ares-LICENSE.md
+The corresponding source archive is in the aria2 release above.
+
 E) Redistribution reminder
 
 - Keep this notice, the root LICENSE, the root NOTICE, and all files in third_party_licenses/ when redistributing source/binaries.
