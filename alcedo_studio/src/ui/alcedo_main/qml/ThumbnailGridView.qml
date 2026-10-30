@@ -1553,6 +1553,8 @@ Item {
         property int pressedStarIndex: -1
         property point dragStart: Qt.point(0, 0)
         property point dragCurrent: Qt.point(0, 0)
+        // Scroll position at the press, measured from the first row (grid.originY), so that a
+        // band keeps its rows when the content origin moves.
         property real dragStartContentY: 0
         property bool isDragging: false
         property bool dragAdditive: false
@@ -1583,16 +1585,23 @@ Item {
                     || ShortcutRegistry.modifierMatches("library.toggleSelection", modifiers)
         }
 
+        // Band edges in layout coordinates: 0 is the top of the first row. GridView moves
+        // originY away from 0 after a relayout or a change above the view, so contentY alone
+        // is not a row position.
+        function layoutContentY() {
+            return grid.contentY - grid.originY
+        }
+
         function dragStartContentTop() {
             return dragStart.y + dragStartContentY
         }
 
         function dragCurrentContentTop() {
-            return dragCurrent.y + grid.contentY
+            return dragCurrent.y + layoutContentY()
         }
 
         function rubberBandViewportY() {
-            return Math.min(dragStartContentTop(), dragCurrentContentTop()) - grid.contentY
+            return Math.min(dragStartContentTop(), dragCurrentContentTop()) - layoutContentY()
         }
 
         function rubberBandViewportHeight() {
@@ -1712,7 +1721,7 @@ Item {
             }
             dragStart = Qt.point(mouse.x, mouse.y)
             dragCurrent = Qt.point(mouse.x, mouse.y)
-            dragStartContentY = grid.contentY
+            dragStartContentY = layoutContentY()
             isDragging = false
             dragAdditive = false
             pressedStarIndex = gridIndexAt(mouse.x, mouse.y)

@@ -1122,4 +1122,78 @@ TEST_F(AlbumSectionQmlTests, FlatGridScrollBarDragShowsAndLoadsTheLastPhotos) {
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
 }
 
+// A rubber band drag over the flat grid selects the photos that it covers, also after a zoom
+// change while scrolled, which moves the origin of the grid content away from 0.
+TEST_F(AlbumSectionQmlTests, FlatGridRubberBandSelectsTheCoveredPhotosAfterTheOriginMoved) {
+  ApplicationModuleHost backend;
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 300);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto&     keys = packed->images_;
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  auto* grid   = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_grid"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys[0].file_id_) != nullptr; }));
+  ProcessEvents(500);
+  QSignalSpy selections(view.loaded(), SIGNAL(replaceSelection(QVariant)));
+  ASSERT_TRUE(selections.isValid());
+
+  // Drags from the center of the card at `from` to the center of the card at `to` and returns
+  // the selected element ids.
+  const auto drag = [&](size_t from, size_t to) {
+    std::vector<uint> ids;
+    auto*             first = GridCard(window, keys[from].file_id_);
+    auto*             last  = GridCard(window, keys[to].file_id_);
+    EXPECT_NE(first, nullptr);
+    EXPECT_NE(last, nullptr);
+    if (first == nullptr || last == nullptr) return ids;
+    selections.clear();
+    const auto start = SceneCenter(first);
+    const auto end   = SceneCenter(last);
+    QTest::mouseMove(window, start);
+    QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
+    for (int step = 1; step <= 10; ++step) {
+      QTest::mouseMove(window, start + (end - start) * step / 10);
+      ProcessEvents(10);
+    }
+    QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, end);
+    ProcessEvents(100);
+    if (selections.isEmpty()) return ids;
+    for (const auto& item : selections.last().at(0).toList()) {
+      ids.push_back(item.toMap().value("elementId").toUInt());
+    }
+    return ids;
+  };
+  const auto expected = [&](size_t from, int columns) {
+    return std::vector<uint>{keys[from].file_id_, keys[from + 1].file_id_,
+                             keys[from + static_cast<size_t>(columns)].file_id_,
+                             keys[from + static_cast<size_t>(columns) + 1].file_id_};
+  };
+
+  auto columns = view.loaded()->property("columns").toInt();
+  EXPECT_EQ(drag(0, static_cast<size_t>(columns) + 1), expected(0, columns));
+
+  // Scroll down, change the zoom, and scroll back to the top.
+  const auto cell_height = grid->property("cellHeight").toReal();
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "restoreContentY",
+                                        Q_ARG(QVariant, 12.0 * cell_height + 9.0)));
+  ProcessEvents(500);
+  view.loaded()->setProperty("zoomLevel", 2);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded()->property("columns").toInt() == 4; }));
+  ProcessEvents(1000);
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "restoreContentY", Q_ARG(QVariant, -1.0e9)));
+  ProcessEvents(800);
+  columns = 4;
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys[0].file_id_) != nullptr; }));
+  const auto origin_y = grid->property("originY").toReal();
+  EXPECT_NE(origin_y, 0.0) << "the zoom change did not move the content origin";
+  EXPECT_EQ(drag(0, static_cast<size_t>(columns) + 1), expected(0, columns))
+      << "originY " << origin_y << " contentY " << grid->property("contentY").toReal();
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
 }  // namespace alcedo::ui::test
