@@ -86,6 +86,22 @@ TEST(FilmPrintImagePlan, A24MegapixelFrameHasTheSizesOfTheLab) {
   EXPECT_EQ(plan.flare_x.radius, 24U);
 }
 
+TEST(FilmPrintImagePlan, TheNarrowSpreadFusesOnlyWhileItsRadiusFitsOneDispatch) {
+  const auto plan = MakeFilmPrintImagePlan(FullFrame(6000, 4000), Constants(), kLayerSpreadUm, true,
+                                           FilmPrintParams{});
+  EXPECT_TRUE(plan.spread_narrow_fused);
+  EXPECT_EQ(plan.spread_narrow.radius, 1U);
+  EXPECT_EQ(plan.spread_narrow.x[0][1], plan.spread_x[0].weights[0][1]);
+  EXPECT_EQ(plan.spread_narrow.y[2][0], plan.spread_y[0].weights[2][0]);
+
+  FilmPrintParams wide;
+  wide.light_spread = 3.0f;
+  const auto wide_plan =
+      MakeFilmPrintImagePlan(FullFrame(6000, 4000), Constants(), kLayerSpreadUm, true, wide);
+  EXPECT_FALSE(wide_plan.spread_narrow_fused);
+  EXPECT_GT(wide_plan.spread_x[0].radius, kFilmNarrowSpreadMaxRadius);
+}
+
 TEST(FilmPrintImagePlan, EachKernelHasASumOf1) {
   const auto plan = MakeFilmPrintImagePlan(FullFrame(6000, 4000), Constants(), kLayerSpreadUm, true,
                                            FilmPrintParams{});

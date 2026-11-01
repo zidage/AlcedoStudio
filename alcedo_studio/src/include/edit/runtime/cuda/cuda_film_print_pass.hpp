@@ -35,6 +35,8 @@ struct FilmPrintPassTime {
  *
  * @param pass_times When set, this function adds the time of each kernel group and waits for the
  *        GPU. The render path passes null.
+ * @param separate_narrow_spread True runs the narrow Gaussian of FP2 as its own two passes, as the
+ *        render does when that Gaussian is too wide for one dispatch. A test compares both forms.
  * @throws std::runtime_error for an output that the film print does not support, for a missing or
  *         damaged resource, for an upload or an allocation failure, and for a blur beyond the
  *         tap limit. Nothing is published then; the caller cancels the render.
@@ -42,7 +44,7 @@ struct FilmPrintPassTime {
 void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
                          const DrtNodeModel& drt, const FrameSceneBinding& scene,
                          const FrameSceneBinding& display, std::uint32_t width,
-                         std::uint32_t                   height,
-                         std::vector<FilmPrintPassTime>* pass_times = nullptr);
+                         std::uint32_t height, std::vector<FilmPrintPassTime>* pass_times = nullptr,
+                         bool separate_narrow_spread = false);
 
 }  // namespace alcedo

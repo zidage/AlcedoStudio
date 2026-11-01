@@ -83,6 +83,19 @@ void PlanSpread(const ResolvedRenderGeometry& geometry, const FilmImagePlaneCons
     plan.spread_y[pass] = MakeKernel({sigma[0] * scale_y, sigma[1] * scale_y, sigma[2] * scale_y});
     plan.spread_weight[pass] = static_cast<float>(constants.spread_gaussians[pass * 2]);
   }
+  const auto& narrow_x     = plan.spread_x[0];
+  const auto& narrow_y     = plan.spread_y[0];
+  const auto  radius       = (std::max)(narrow_x.radius, narrow_y.radius);
+  plan.spread_narrow_fused = radius <= kFilmNarrowSpreadMaxRadius;
+  if (plan.spread_narrow_fused) {
+    plan.spread_narrow.radius = radius;
+    for (std::size_t layer = 0; layer < 3; ++layer) {
+      for (std::uint32_t tap = 0; tap <= radius; ++tap) {
+        plan.spread_narrow.x[layer][tap] = narrow_x.weights[layer][tap];
+        plan.spread_narrow.y[layer][tap] = narrow_y.weights[layer][tap];
+      }
+    }
+  }
 }
 
 void PlanInhibitor(const ResolvedRenderGeometry& geometry, const FilmImagePlaneConstants& constants,

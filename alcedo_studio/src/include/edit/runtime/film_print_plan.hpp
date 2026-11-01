@@ -68,6 +68,24 @@ struct FilmBlurKernel {
   float         weights[3][kFilmBlurMaxRadius + 1]{};
 };
 
+/// Largest radius of the narrow Gaussian of FP2 that the vertical pass of the wide Gaussian can
+/// read in one dispatch. A wider one has too many taps in two dimensions, so it has its own two
+/// passes.
+inline constexpr std::uint32_t kFilmNarrowSpreadMaxRadius = 2;
+
+/**
+ * @brief The narrow Gaussian of FP2 in the form of one dispatch.
+ *
+ * `x[layer][tap]` and `y[layer][tap]` hold one half of each symmetric kernel, as in
+ * @ref FilmBlurKernel. The struct is small because one dispatch also holds a @ref FilmBlurKernel,
+ * and a kernel launch has a limit of 4 KB for its arguments.
+ */
+struct FilmNarrowKernel {
+  std::uint32_t radius = 0;
+  float         x[3][kFilmNarrowSpreadMaxRadius + 1]{};
+  float         y[3][kFilmNarrowSpreadMaxRadius + 1]{};
+};
+
 /**
  * @brief Host plan of the image-plane steps of the film print for one render.
  *
@@ -83,6 +101,9 @@ struct FilmPrintImagePlan {
   std::array<FilmBlurKernel, 2> spread_x{};
   std::array<FilmBlurKernel, 2> spread_y{};
   std::array<float, 2>          spread_weight{};
+  /// True when @ref spread_narrow holds pass 0, so that FP2 needs only 2 dispatches.
+  bool                          spread_narrow_fused = false;
+  FilmNarrowKernel              spread_narrow{};
 
   /// FP4. @ref inhibitor_half_size selects the half-size image of @ref inhibitor_extent.
   bool                          inhibitor_half_size = false;

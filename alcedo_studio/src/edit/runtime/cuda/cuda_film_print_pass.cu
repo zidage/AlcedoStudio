@@ -173,6 +173,51 @@ __global__ void BlurVerticalKernel(const float4* src, float4* dst, int width, in
                     : make_float4(weight * r, weight * g, weight * b, center.w);
 }
 
+/**
+ * FP2 in one vertical dispatch: `dst = wide_weight * wide + narrow_weight * narrow`. @p middle
+ * holds the horizontal pass of the wide Gaussian. The narrow Gaussian reads @p exposure directly,
+ * so this form needs no second horizontal pass and does not read the output.
+ */
+__global__ void SpreadVerticalKernel(const float4* middle, const float4* exposure, float4* dst,
+                                     int width, int height, FilmBlurKernel wide_y,
+                                     float wide_weight, FilmNarrowKernel narrow,
+                                     float narrow_weight) {
+  const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
+  if (x >= width || y >= height) return;
+  const std::size_t stride = static_cast<std::size_t>(width);
+  const float4      center = middle[static_cast<std::size_t>(y) * stride + x];
+  float             wr     = wide_y.weights[0][0] * center.x;
+  float             wg     = wide_y.weights[1][0] * center.y;
+  float             wb     = wide_y.weights[2][0] * center.z;
+  const int         radius = static_cast<int>(wide_y.radius);
+  for (int tap = 1; tap <= radius; ++tap) {
+    const float4& top    = middle[static_cast<std::size_t>(Reflect(y - tap, height)) * stride + x];
+    const float4& bottom = middle[static_cast<std::size_t>(Reflect(y + tap, height)) * stride + x];
+    wr += wide_y.weights[0][tap] * (top.x + bottom.x);
+    wg += wide_y.weights[1][tap] * (top.y + bottom.y);
+    wb += wide_y.weights[2][tap] * (top.z + bottom.z);
+  }
+  float     nr      = 0.0f;
+  float     ng      = 0.0f;
+  float     nb      = 0.0f;
+  const int nradius = static_cast<int>(narrow.radius);
+  for (int dy = -nradius; dy <= nradius; ++dy) {
+    const float4* row = exposure + static_cast<std::size_t>(Reflect(y + dy, height)) * stride;
+    const int     ay  = dy < 0 ? -dy : dy;
+    for (int dx = -nradius; dx <= nradius; ++dx) {
+      const float4& value = row[Reflect(x + dx, width)];
+      const int     ax    = dx < 0 ? -dx : dx;
+      nr += narrow.y[0][ay] * narrow.x[0][ax] * value.x;
+      ng += narrow.y[1][ay] * narrow.x[1][ax] * value.y;
+      nb += narrow.y[2][ay] * narrow.x[2][ax] * value.z;
+    }
+  }
+  dst[static_cast<std::size_t>(y) * stride + x] =
+      make_float4(wide_weight * wr + narrow_weight * nr, wide_weight * wg + narrow_weight * ng,
+                  wide_weight * wb + narrow_weight * nb, center.w);
+}
+
 /// Box mean with cells that cover the image exactly, as the lab reduces an image.
 __global__ void BoxReduceKernel(const float4* src, int src_width, int src_height, float4* dst,
                                 int columns, int rows) {
@@ -238,20 +283,26 @@ __global__ void CanvasReduceKernel(const float4* src, int width, int height, flo
   dst[y * dst_width + x] = make_float4(r * scale, g * scale, b * scale, 1.0f);
 }
 
-/// FP3: (1 - s) q + s blurred, per layer. @p q takes the output.
-__global__ void HalationMixKernel(float4* q, int width, int height, const float4* canvas,
-                                  int canvas_width, int canvas_height, Matrix3x3 render_to_canvas,
-                                  float3 strength) {
+/// FP3 and the first dye amounts of FP4 in one dispatch. @p q takes the mix, and @p a the amounts.
+__global__ void HalationAndFirstAmountsKernel(float4* q, float4* a, int width, int height,
+                                              const float4* canvas, int canvas_width,
+                                              int canvas_height, Matrix3x3 render_to_canvas,
+                                              float3 strength, const float* values,
+                                              FilmKernelParams params) {
   const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
   if (x >= width || y >= height) return;
   const float2 position =
       Transform(render_to_canvas, static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
   const float3 blurred = ReadBilinear(canvas, canvas_width, canvas_height, position.x, position.y);
-  float4&      value   = q[y * width + x];
-  value.x              = (1.0f - strength.x) * value.x + strength.x * blurred.x;
-  value.y              = (1.0f - strength.y) * value.y + strength.y * blurred.y;
-  value.z              = (1.0f - strength.z) * value.z + strength.z * blurred.z;
+  const int    index   = y * width + x;
+  const float4 value   = q[index];
+  const float  r       = (1.0f - strength.x) * value.x + strength.x * blurred.x;
+  const float  g       = (1.0f - strength.y) * value.y + strength.y * blurred.y;
+  const float  b       = (1.0f - strength.z) * value.z + strength.z * blurred.z;
+  q[index]             = make_float4(r, g, b, value.w);
+  const auto amounts   = FilmKernelFirstAmounts(&params, values, FilmKernelMakeRgb(r, g, b));
+  a[index]             = make_float4(amounts.r, amounts.g, amounts.b, value.w);
 }
 
 /// FP6, fused. @p flare is null when the Enlarger flare is off.
@@ -385,7 +436,8 @@ auto ReadOrBuildCanvasResult(CudaRenderDevice& device, const ExecutionPlan& plan
 void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
                          const DrtNodeModel& drt, const FrameSceneBinding& scene,
                          const FrameSceneBinding& display, std::uint32_t width,
-                         std::uint32_t height, std::vector<FilmPrintPassTime>* pass_times) {
+                         std::uint32_t height, std::vector<FilmPrintPassTime>* pass_times,
+                         bool separate_narrow_spread) {
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteCudaDrt");
   const auto  film      = drt.Params().FilmPrint();
@@ -443,15 +495,25 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
     scratch.emplace(acquire(width, height));
     auto* spread = Pointer(*second_exposure);
     auto* middle = Pointer(*scratch);
-    for (std::uint32_t pass = 0; pass < image.spread_passes; ++pass) {
+    if (image.spread_narrow_fused && !separate_narrow_spread) {
       BlurHorizontalKernel<<<image_grid, image_block, 0, stream>>>(q, middle, w, h,
-                                                                   image.spread_x[pass]);
-      BlurVerticalKernel<<<image_grid, image_block, 0, stream>>>(
-          middle, spread, w, h, image.spread_y[pass], image.spread_weight[pass], pass != 0U);
+                                                                   image.spread_x[1]);
+      clock.Mark("FP2 wide horizontal");
+      SpreadVerticalKernel<<<image_grid, image_block, 0, stream>>>(
+          middle, q, spread, w, h, image.spread_y[1], image.spread_weight[1], image.spread_narrow,
+          image.spread_weight[0]);
+      clock.Mark("FP2 vertical, with the narrow Gaussian");
+    } else {
+      for (std::uint32_t pass = 0; pass < image.spread_passes; ++pass) {
+        BlurHorizontalKernel<<<image_grid, image_block, 0, stream>>>(q, middle, w, h,
+                                                                     image.spread_x[pass]);
+        BlurVerticalKernel<<<image_grid, image_block, 0, stream>>>(
+            middle, spread, w, h, image.spread_y[pass], image.spread_weight[pass], pass != 0U);
+      }
+      clock.Mark("FP2 spread, 2 separate passes");
     }
     a = q;
     q = spread;
-    clock.Mark("FP2 spread");
   } else {
     amounts.emplace(acquire(width, height));
     a = Pointer(*amounts);
@@ -460,7 +522,7 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto           long_edge = (std::max)(width, height);
   const auto           canvas    = image.canvas_extent;
 
-  // FP3: the canonical image, then a read of it per layer.
+  // FP3: the canonical image, then a read of it per layer, in one dispatch with the first amounts.
   std::optional<Lease> temporary_halation;
   if (image.halation_active) {
     const float4* blurred = ReadOrBuildCanvasResult(
@@ -480,17 +542,17 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
                                                                image.halation_y, 1.0f, false);
         });
     clock.Mark("FP3 canvas");
-    HalationMixKernel<<<image_grid, image_block, 0, stream>>>(
-        q, w, h, blurred, static_cast<int>(canvas.width), static_cast<int>(canvas.height),
+    HalationAndFirstAmountsKernel<<<image_grid, image_block, 0, stream>>>(
+        q, a, w, h, blurred, static_cast<int>(canvas.width), static_cast<int>(canvas.height),
         image.render_to_canvas,
         make_float3(image.halation_strength[0], image.halation_strength[1],
-                    image.halation_strength[2]));
-    clock.Mark("FP3 mix");
+                    image.halation_strength[2]),
+        values, params);
+    clock.Mark("FP3 mix and FP4 first amounts");
+  } else {
+    FirstAmountsKernel<<<blocks, kBlock, 0, stream>>>(q, a, pixels, values, params);
+    clock.Mark("FP4 first amounts");
   }
-
-  // FP4.
-  FirstAmountsKernel<<<blocks, kBlock, 0, stream>>>(q, a, pixels, values, params);
-  clock.Mark("FP4 first amounts");
 
   // FP4 and FP5, rule 'inhibition_two_steps'.
   if (params.inhibition_stored != 0U) {
@@ -502,17 +564,20 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
       const auto grid    = GridFor(extent.width, extent.height);
       const auto columns = static_cast<int>(extent.width);
       const auto rows    = static_cast<int>(extent.height);
-      auto       reduced = acquire(extent.width, extent.height);
-      auto       middle  = acquire(extent.width, extent.height);
+      // The full-size image holds both half-size images. The pool frees a size that no result
+      // holds, so images of their own would need a new allocation on each edit.
+      if (!scratch.has_value()) scratch.emplace(acquire(width, height));
+      auto* reduced = Pointer(*scratch);
+      auto* middle  = reduced + static_cast<std::size_t>(columns) * rows;
       for (int step = 0; step < 2; ++step) {
-        BoxReduceKernel<<<grid, image_block, 0, stream>>>(a, w, h, Pointer(reduced), columns, rows);
-        BlurHorizontalKernel<<<grid, image_block, 0, stream>>>(Pointer(reduced), Pointer(middle),
-                                                               columns, rows, image.inhibitor_x);
-        BlurVerticalKernel<<<grid, image_block, 0, stream>>>(
-            Pointer(middle), Pointer(reduced), columns, rows, image.inhibitor_y, 1.0f, false);
+        BoxReduceKernel<<<grid, image_block, 0, stream>>>(a, w, h, reduced, columns, rows);
+        BlurHorizontalKernel<<<grid, image_block, 0, stream>>>(reduced, middle, columns, rows,
+                                                               image.inhibitor_x);
+        BlurVerticalKernel<<<grid, image_block, 0, stream>>>(middle, reduced, columns, rows,
+                                                             image.inhibitor_y, 1.0f, false);
         clock.Mark("FP4 inhibitor blur");
         InhibitedStepHalfSizeKernel<<<image_grid, image_block, 0, stream>>>(
-            q, a, w, h, Pointer(reduced), columns, rows, values, params);
+            q, a, w, h, reduced, columns, rows, values, params);
         clock.Mark("FP5 inhibited step");
       }
     } else {

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -99,6 +100,16 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
   params.locus_white[0]  = real(constants.locus_white[0]);
   params.locus_white[1]  = real(constants.locus_white[1]);
   params.locus_keep      = real(1.0 - constants.locus_inset);
+  // The largest circle at the white where rate <= room * keep holds on each facet, with Y = 1.
+  double inner_squared   = std::numeric_limits<double>::infinity();
+  for (std::size_t facet = 0; facet < layout.facets; ++facet) {
+    const double nx = constants.locus_normals[2 * facet];
+    const double nz = constants.locus_normals[2 * facet + 1];
+    const double reach =
+        (std::max)(constants.locus_room[facet], 0.0) * (1.0 - constants.locus_inset);
+    inner_squared = (std::min)(inner_squared, reach * reach / (nx * nx + nz * nz));
+  }
+  params.locus_inner_squared = real(inner_squared);
   params.uv_scale[0]     = real(static_cast<double>(nodes - 1) / constants.uv_max[0]);
   params.uv_scale[1]     = real(static_cast<double>(nodes - 1) / constants.uv_max[1]);
   params.curve_step      = real(stock.curves.log_h_step);

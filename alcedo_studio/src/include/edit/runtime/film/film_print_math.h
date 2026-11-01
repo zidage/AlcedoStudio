@@ -72,6 +72,7 @@ typedef struct {
   FilmKernelReal   ap1_to_xyz[9];
   FilmKernelReal   locus_white[2];
   FilmKernelReal   locus_keep;   // 1 - the inset of the hull
+  FilmKernelReal   locus_inner_squared;  // Squared radius of a circle at the white inside the hull
   FilmKernelReal   uv_scale[2];  // (uv_nodes - 1) / uv_max
   FilmKernelReal   layer_gain[3];
   FilmKernelReal   curve_offset[3];  // Criterion log H - the log H of the first curve value
@@ -161,10 +162,13 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelLayerExposure(
   FILM_KERNEL_VALUES FilmKernelReal* normals = values + params->normals_offset;
   FILM_KERNEL_VALUES FilmKernelReal* room    = values + params->room_offset;
   FilmKernelReal                     t       = FILM_KERNEL_REAL(1.0);
-  for (FILM_KERNEL_UINT facet = 0U; facet < params->locus_facets; ++facet) {
-    const FilmKernelReal rate = dx * normals[2U * facet] + dz * normals[2U * facet + 1U];
-    if (rate > FILM_KERNEL_REAL(0.0)) {
-      t = FilmKernelMin(t, room[facet] * params->locus_keep * y / rate);
+  // Inside the circle that the hull holds, no facet moves the colour, so most pixels skip the loop.
+  if (dx * dx + dz * dz > params->locus_inner_squared * y * y) {
+    for (FILM_KERNEL_UINT facet = 0U; facet < params->locus_facets; ++facet) {
+      const FilmKernelReal rate = dx * normals[2U * facet] + dz * normals[2U * facet + 1U];
+      if (rate > FILM_KERNEL_REAL(0.0)) {
+        t = FilmKernelMin(t, room[facet] * params->locus_keep * y / rate);
+      }
     }
   }
   const FilmKernelReal   px    = wx + t * dx;

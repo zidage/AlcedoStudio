@@ -496,7 +496,7 @@ Kernel launch error -> CudaDrtOps::CheckAfterEncode -> the same catch
 
 ##### Phase F4 completion record (2026-11-01)
 
-**Status:** complete. The complete chain FP1 to FP6 runs on CUDA, and the sliders Light spread, Halation, and Enlarger flare act on the image. The 24 MP passes take about 60 ms, under the proposed target of 150 ms. The editor cannot select the method before phase F5.
+**Status:** complete. The complete chain FP1 to FP6 runs on CUDA, and the sliders Light spread, Halation, and Enlarger flare act on the image. The 24 MP passes take about 27 ms after an edit, under the proposed target of 150 ms. The editor cannot select the method before phase F5.
 
 **Primary success call chain:**
 
@@ -536,32 +536,53 @@ Allocation failure, or a blur beyond the tap limit
 - `CanvasReduceKernel` reads `ceil(footprint)^2` nearest render pixels, in place of the bilinear reads of the Diffusion pass, because a blur of at least 6 texels follows. The flare form averages 10^-a in this kernel, so there is no full-size transmittance image.
 - A frame with an edge below 16 pixels has no image plane: lab rule 'no_image_plane_steps_on_ramps'. The test is on the reference frame, not on the ROI. The ramp and chart cases of F3 use this rule.
 - `FilmBlurKernel` holds one half of a kernel for each layer and travels by value, so a slider change uploads nothing. The limit is 128 taps, which holds a spread at slider 3 up to a long edge of about 40000 pixels. A larger blur stops with an error that states the sigma.
-- After FP2, the first exposure image holds the amounts, so FP2 needs only 3 full-size images and FP4 adds none. A full-size inhibitor uses the middle image of FP2.
+- After FP2, the first exposure image holds the amounts, so FP2 needs only 3 full-size images and FP4 adds none. The inhibitor uses the middle image of FP2, at full size or for its two half-size images.
 - Each slider or selection change marks both results stale, as F2 does. An ROI with no valid result builds temporary images from its own pixels and publishes nothing, as the Diffusion filter does.
 - A new DRT input now marks both results stale in `CollectStructureChanges`. F2 marked only the scatter image.
 - `RenderAxisScale` moved to `resolved_render_geometry.hpp` with no change, so the film print and the adjustment runtime share one rule.
 - `kFilmPrintImplementationVersion` is 3.
 - The lab values come from `build_image_expected.py` of alcedo-film-lab (`cd23015`). They are not in Git, and without them the image cases skip, which is not a pass. The script sets the option `foliage` to False, because the product resources do not have that uncommitted lab rule.
 
-**Cost record (Release, RTX 3080 Laptop, 6000 x 4006, `kodak_5207`, GPU time of one render in ms):**
+**Cost record (Release, RTX 3080 Laptop, the array of `_DSC8148`, box-reduced to each size, `kodak_5207`, median GPU time of 9 renders in ms):**
 
-| Pass | First render | Warm, results valid | Warm, after a slider change |
+| Long edge | ACES 2.0 | OpenDRT | Film print, results valid | Film print, after a slider change |
+| --- | --- | --- | --- | --- |
+| 2560 (`kFastPreviewMaxLongEdge`) | 2.1 | 1.3 | 5.1 | 7.2 |
+| 4096 (`kQualityBaseMaxLongEdge`) | 5.1 | 3.3 | 13.8 | 16.8 |
+| 6000 | 10.9 | 7.2 | 23.2 | 27.3 |
+
+Film print passes after a slider change, one render, in ms:
+
+| Pass | 2560 | 4096 | 6000 |
 | --- | --- | --- | --- |
-| FP1 exposure | 15.2 | 12.4 | 12.4 |
-| FP2 spread, 2 passes | 31.6 | 26.5 | 27.3 |
-| FP3 canvas | 4.0 | 0.0 | 2.6 |
-| FP3 mix | 2.4 | 2.1 | 2.1 |
-| FP4 first amounts | 2.2 | 2.1 | 2.0 |
-| FP4 inhibitor blur, 2 times | 5.5 | 5.3 | 5.3 |
-| FP5 inhibited step, 2 times | 6.5 | 4.6 | 4.5 |
-| FP6 flare canvas | 1.6 | 0.0 | 1.6 |
-| FP6 display | 2.2 | 2.0 | 2.0 |
-| **GPU total** | **71.1** | **54.9** | **59.8** |
-| Wall time of the recording and the wait | 1115 | 65.7 | 70.4 |
+| FP1 exposure | 0.4 | 0.9 | 2.0 |
+| FP2 wide horizontal | 0.4 | 1.0 | 2.1 |
+| FP2 vertical, with the narrow Gaussian | 0.6 | 1.6 | 3.7 to 4.2 |
+| FP3 canvas | 1.5 | 2.0 | 2.6 |
+| FP3 mix and FP4 first amounts | 0.7 | 1.5 | 3.1 |
+| FP4 inhibitor blur, 2 times | 1.6 | 5.0 | 5.2 |
+| FP5 inhibited step, 2 times | 1.1 | 2.8 | 4.5 |
+| FP6 flare canvas | 0.9 | 1.0 | 1.6 |
+| FP6 display | 0.4 | 0.9 | 2.0 |
 
-- The wall time of the first render includes the read of the bundle, the table build, and the upload. A new film on the same print material takes 170 ms.
-- The target of 150 ms holds, so the stop condition of this phase does not apply. Portra 400 has the same times within 1 ms.
-- GPU memory: the texture pool has a peak of 2145 MiB, which includes the scene and display images of the test (383 MiB each). So the film print takes about 1380 MiB at 24 MP.
+- An interactive render at 2560 reads the valid results only when nothing before the film print changed, so any edit has the cost of the last column. A QualityBase render at 4096 cannot read or publish results (`ResultPersistenceScope::SensorDevelopOnly`), so it always has that cost.
+- The target of 150 ms holds, so the stop condition of this phase does not apply.
+- The first render of a selection takes about 800 ms: the read of the bundle, the table build, and the upload.
+- GPU memory of the film print, from the texture pool peak with the 3 images of the test taken out: about 370 MiB at 2560, 680 MiB at 4096, and 1220 MiB at 6000.
+- At 4096 the inhibitor sigma is 3.98 pixels, under the limit of 4 of rule 'inhibitor_on_half_size'. So this size runs the blur at full size, and that is 30 % of its cost. This phase keeps the limit, because a change also changes the pixels of the lab rule.
+
+**Correction of the first cost record.** The first record of this phase stated about 60 ms at 24 MP. That value was too large. The test held no result at the size of the render, and the texture pool frees a size that no result holds. So each render allocated its full-size images again, and the first use of a new 384 MB image took about 10 ms. A render of the product holds its geometry and develop results at that size. The cost test now holds one image of that size and copies the scene on the GPU.
+
+**Optimizations after that record, with no change to a pixel:**
+
+| Change | Gain at 6000, after a slider change |
+| --- | --- |
+| FP1 tests a circle inside the hull first. 95.5 % of the pixels of `_DSC8148` skip the loop of 41 facets. | About 1 ms |
+| The half-size images of FP4 are in the full-size image of FP2, so an edit allocates nothing for them. The pool peak is 184 MiB lower. | About 6 ms |
+| FP2 has 2 dispatches in place of 4. One vertical dispatch also reads the narrow Gaussian directly, while its radius is at most 2. A larger one, for example at slider 3 at 6000 pixels, keeps its two passes. | About 4 ms |
+| FP3 mix and FP4 first amounts are one dispatch. | About 1 ms |
+
+Together these change the film print after a slider change, in this cost test, from 8.0 to 7.2 ms at 2560, from 19.1 to 16.8 ms at 4096, and from 38.4 to 27.3 ms at 6000.
 
 **What was proven (executed tests, final sRGB in 8 bit codes):**
 
@@ -572,10 +593,11 @@ Allocation failure, or a blur beyond the tap limit
 | `FilmPrintSliderBuildsNoTable`: no table build and no upload, and each slider changes the image | `GpuDagCudaDrtProductTest` | PASS |
 | `FilmPrintAllocationFailureReportsTheErrorAndPublishesNoPartialResult`: a failure at each allocation of the render | `GpuDagCudaDrtProductTest` | PASS, 11 failures |
 | `FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs` | `GpuDagCudaDrtProductTest` | PASS, values above |
-| `FilmPrintImagePlan.*`, 9 cases of sizes and rules | `GpuDagRawInputTest` | PASS |
+| `FilmPrintFusedSpreadMatchesSeparatePasses`, limit 0.01 | `GpuDagCudaDrtProductTest` | PASS, largest 0.00008 |
+| `FilmPrintImagePlan.*`, 10 cases of sizes and rules | `GpuDagRawInputTest` | PASS |
 | `RuntimeInvalidation.FilmPrintResultsFollowANewDrtInput` | `GpuDagRawInputTest` | PASS |
 
-Commands: the targets in `win_debug`, and the same target in `win_release` with `-DALCEDO_BUILD_TESTS=ON` and the two film print paths. The release tree then went back to its preset values. The record comes from `--gtest_also_run_disabled_tests --gtest_filter=*FilmPrintCostRecordAt24Megapixels`.
+Commands: the targets in `win_debug`, and the same target in `win_release` with `-DALCEDO_BUILD_TESTS=ON` and the two film print paths. The release tree then went back to its preset values. The record comes from `--gtest_also_run_disabled_tests --gtest_filter=*DrtCostRecordAtEditorSizes`.
 
 Suite totals, Debug: `GpuDagCudaDrtProductTest` 98, `GpuDagRawInputTest` 216, `GpuDagModelGraphTest` 169, `FilmPrintTablesTest` 29. All pass. In `GpuDagOpenClDrtProductTest`, the named stop of the film print passes.
 
@@ -584,7 +606,7 @@ Suite totals, Debug: `GpuDagCudaDrtProductTest` 98, `GpuDagRawInputTest` 216, `G
 **Not verified:**
 
 - No run in the application, so no real RAW path, zoom, or pan was seen. Phase F5 has the user review.
-- The times are for the film print passes only, with no earlier pass of the render.
+- The times are for the DRT pass only, with no earlier pass of the render.
 - No build ran on macOS. OpenCL and Metal have no image-plane steps until phases F6 and F7.
 - The full test suite did not run.
 

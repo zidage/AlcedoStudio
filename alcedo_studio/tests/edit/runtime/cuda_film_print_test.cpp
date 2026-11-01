@@ -407,6 +407,45 @@ TEST_F(CudaFilmPrintFixture, FilmPrintSliderBuildsNoTable) {
   EXPECT_EQ(device_.Workspace().Device().LutUploadBytes(), uploaded);
 }
 
+TEST_F(CudaFilmPrintFixture, FilmPrintFusedSpreadMatchesSeparatePasses) {
+  // At this size the narrow Gaussian at slider 3 still fits one dispatch.
+  constexpr std::uint32_t kWidth   = 1024;
+  constexpr std::uint32_t kHeight  = 768;
+  auto                    document = FilmPrintDocument();
+  DrtParameterUpdate      update;
+  update.film_light_spread = 3.0f;
+  document.Drt()->Params().ApplyUpdate(update);
+  const auto field = PatchField(kWidth, kHeight, 400, 400, 8);
+  SetView({kWidth, kHeight}, {kWidth, kHeight}, Matrix3x3::Identity());
+
+  const GraphValueId scene_id{NodeId{"grade.primary"}, PortId{"image"}};
+  const auto         render = [&](bool separate) {
+    device_.BeginRender();
+    auto& workspace = device_.Workspace();
+    workspace.PrepareResultValidity(plan_, document, input_);
+    auto& scene =
+        workspace.AcquireImageForWrite(scene_id, {kWidth, kHeight, TextureFormat::Rgba32f});
+    workspace.Device().UploadTexture2D(scene.Texture(), std::as_bytes(std::span(field)),
+                                               device_.CommandContext());
+    auto& display = workspace.AcquireImageForWrite(plan_.display_output,
+                                                           {kWidth, kHeight, TextureFormat::Rgba32f});
+    RecordCudaFilmPrint(device_, plan_, *document.Drt(), FrameSceneBinding::CachedImage(scene_id),
+                                FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight,
+                                nullptr, separate);
+    std::vector<Rgba> pixels(static_cast<std::size_t>(kWidth) * kHeight);
+    workspace.Device().DownloadTexture2D(
+        display.Texture(), std::as_writable_bytes(std::span(pixels)), device_.CommandContext());
+    device_.CancelRender();
+    return pixels;
+  };
+  const auto fused    = render(false);
+  const auto separate = render(true);
+  const auto largest  = LargestCodeDifference(
+      fused, fused.size(), [&separate](std::size_t index) { return separate[index]; });
+  std::cout << "fused spread against separate passes: largest " << largest << " codes\n";
+  EXPECT_LE(largest, 0.01);
+}
+
 TEST_F(CudaFilmPrintFixture, FilmPrintAllocationFailureReportsTheErrorAndPublishesNoPartialResult) {
   const auto field    = PatchField(128, 96, 40, 40, 8);
   const auto document = FilmPrintDocument();
@@ -660,72 +699,166 @@ TEST_F(CudaFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs
   EXPECT_LE(p99, 4.0);
 }
 
-/// The cost record of the plan, on a Release build. Run it with --gtest_also_run_disabled_tests.
-TEST_F(CudaFilmPrintFixture, DISABLED_FilmPrintCostRecordAt24Megapixels) {
+/// One array of the lab, box-reduced to @p width x @p height.
+auto BoxReduced(const std::vector<Rgba>& image, std::uint32_t image_width,
+                std::uint32_t image_height, std::uint32_t width, std::uint32_t height)
+    -> std::vector<Rgba> {
+  std::vector<Rgba> out(static_cast<std::size_t>(width) * height);
+  const auto        cell = [](std::uint32_t index, std::uint32_t full, std::uint32_t count) {
+    return static_cast<std::uint32_t>(static_cast<std::uint64_t>(index) * full / count);
+  };
+  for (std::uint32_t y = 0; y < height; ++y) {
+    const auto y0 = cell(y, image_height, height);
+    const auto y1 = (std::max)(y0 + 1, cell(y + 1, image_height, height));
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const auto x0 = cell(x, image_width, width);
+      const auto x1 = (std::max)(x0 + 1, cell(x + 1, image_width, width));
+      Rgba       sum{0.0f, 0.0f, 0.0f, 1.0f};
+      for (std::uint32_t sy = y0; sy < y1; ++sy) {
+        for (std::uint32_t sx = x0; sx < x1; ++sx) {
+          const auto& pixel = image[static_cast<std::size_t>(sy) * image_width + sx];
+          sum.r += pixel.r;
+          sum.g += pixel.g;
+          sum.b += pixel.b;
+        }
+      }
+      const float scale = 1.0f / static_cast<float>((y1 - y0) * (x1 - x0));
+      out[static_cast<std::size_t>(y) * width + x] = {sum.r * scale, sum.g * scale, sum.b * scale,
+                                                      1.0f};
+    }
+  }
+  return out;
+}
+
+/// The DRT pass of each method at the sizes of the editor, on a Release build: GPU time and memory.
+/// Run it with --gtest_also_run_disabled_tests.
+TEST_F(CudaFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
   if (!fs::exists(ImageExpectedDirectory() / "ap1.bin")) {
     GTEST_SKIP() << "No lab image. Run build_image_expected.py. This is not a pass.";
   }
-  std::uint32_t width  = 0;
-  std::uint32_t height = 0;
-  const auto    ap1    = ReadLabAp1(width, height);
-  SetView({width, height}, {width, height}, Matrix3x3::Identity());
-  const auto report = [](const char* title, double wall_ms,
-                         const std::vector<FilmPrintPassTime>& times) {
-    double total = 0.0;
-    std::cout << title << ":\n";
-    for (const auto& time : times) {
-      std::cout << "  " << time.name << ": " << time.milliseconds << " ms\n";
-      total += time.milliseconds;
-    }
-    std::cout << "  GPU total " << total << " ms; wall time of the recording and the wait "
-              << wall_ms << " ms\n";
-  };
-  const auto film_memory = [this](const char* title) {
-    const auto  snapshot    = device_.Workspace().CaptureResourceSnapshot();
-    std::size_t free_bytes  = 0;
-    std::size_t total_bytes = 0;
-    ::cudaMemGetInfo(&free_bytes, &total_bytes);
-    std::cout << title << ": texture pool peak " << snapshot.texture_peak_used_bytes / (1 << 20)
-              << " MiB, device in use " << (total_bytes - free_bytes) / (1 << 20) << " MiB of "
-              << total_bytes / (1 << 20) << " MiB\n";
-  };
+  std::uint32_t      reference_width  = 0;
+  std::uint32_t      reference_height = 0;
+  const auto         ap1              = ReadLabAp1(reference_width, reference_height);
   const GraphValueId scene_id{NodeId{"grade.primary"}, PortId{"image"}};
-  const GraphValueId display_id{NodeId{"display"}, PortId{"image"}};
-  const auto         render = [&](const PipelineDocument& document, const char* title) {
+  constexpr int      kRuns  = 9;
+  const auto         median = [](std::vector<double> values) {
+    std::sort(values.begin(), values.end());
+    return values[values.size() / 2];
+  };
+  for (const std::uint32_t width : {2560U, 4096U, 6000U}) {
+    const auto height = static_cast<std::uint32_t>(std::lround(
+        static_cast<double>(reference_height) * width / static_cast<double>(reference_width)));
+    const auto input  = BoxReduced(ap1, reference_width, reference_height, width, height);
+    // A render reads a scene that earlier GPU passes wrote, so each render here copies the scene on
+    // the GPU. A host upload just before the clock adds about 30 ms at 24 MP to any method.
+    void*      source = nullptr;
+    ASSERT_EQ(::cudaMalloc(&source, input.size() * sizeof(Rgba)), cudaSuccess);
+    ASSERT_EQ(
+        ::cudaMemcpy(source, input.data(), input.size() * sizeof(Rgba), cudaMemcpyHostToDevice),
+        cudaSuccess);
+    SetView({reference_width, reference_height}, {width, height},
+            Matrix3x3::Scale(static_cast<float>(reference_width) / static_cast<float>(width),
+                             static_cast<float>(reference_height) / static_cast<float>(height)));
+    // A render holds published results at its own size, so the pool keeps its images of that size.
+    auto render_size_result =
+        device_.Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
+    /// GPU time of the DRT pass, and the wall time from its start to the end of its GPU work.
+    const auto render = [&](const PipelineDocument& document, double& gpu_ms, double& wall_ms) {
+      device_.ResetPassStats();
+      device_.BeginRender();
+      auto& workspace = device_.Workspace();
+      workspace.PrepareResultValidity(plan_, document, input_);
+      auto& scene =
+          workspace.AcquireImageForWrite(scene_id, {width, height, TextureFormat::Rgba32f});
+      auto stream = device_.CommandContext().Stream();
+      ASSERT_EQ(::cudaMemcpyAsync(scene.Texture().DevicePointer(), source,
+                                  input.size() * sizeof(Rgba), cudaMemcpyDeviceToDevice, stream),
+                cudaSuccess);
+      cudaEvent_t start = nullptr;
+      cudaEvent_t stop  = nullptr;
+      ASSERT_EQ(::cudaEventCreate(&start), cudaSuccess);
+      ASSERT_EQ(::cudaEventCreate(&stop), cudaSuccess);
+      ASSERT_EQ(::cudaEventRecord(start, stream), cudaSuccess);
+      const auto wall_start = std::chrono::steady_clock::now();
+      (void)ExecuteCudaDrt(device_, plan_, document, FrameSceneBinding::CachedImage(scene_id));
+      ASSERT_EQ(::cudaEventRecord(stop, stream), cudaSuccess);
+      ASSERT_EQ(::cudaEventSynchronize(stop), cudaSuccess);
+      const std::chrono::duration<double, std::milli> wall =
+          std::chrono::steady_clock::now() - wall_start;
+      float elapsed = 0.0f;
+      ASSERT_EQ(::cudaEventElapsedTime(&elapsed, start, stop), cudaSuccess);
+      (void)::cudaEventDestroy(start);
+      (void)::cudaEventDestroy(stop);
+      gpu_ms  = elapsed;
+      wall_ms = wall.count();
+      device_.EndRender();
+      device_.PublishResults();
+    };
+    const auto record = [&](const char* title, PipelineDocument document, bool change_slider) {
+      std::vector<double> gpu;
+      float               halation   = 1.0f;
+      double              first_gpu  = 0.0;
+      double              first_wall = 0.0;
+      render(document, first_gpu, first_wall);
+      for (int run = 0; run < kRuns; ++run) {
+        if (change_slider) {
+          halation = halation >= 7.0f ? 1.0f : halation + 0.5f;
+          DrtParameterUpdate update;
+          update.film_halation = halation;
+          document.Drt()->Params().ApplyUpdate(update);
+        }
+        double gpu_ms  = 0.0;
+        double wall_ms = 0.0;
+        render(document, gpu_ms, wall_ms);
+        gpu.push_back(gpu_ms);
+      }
+      std::cout << width << " x " << height << ", " << title << ": GPU " << median(gpu)
+                << " ms (first render: GPU " << first_gpu << " ms, wall " << first_wall << " ms)\n";
+    };
+    const auto method_document = [](DrtMethod method) {
+      auto               document = CreateDefaultPipelineDocument();
+      DrtParameterUpdate update;
+      update.method         = method;
+      update.encoding_space = DrtColorSpace::Rec709;
+      update.encoding_eotf  = DrtEotf::SrgbPiecewise;
+      document.Drt()->Params().ApplyUpdate(update);
+      return document;
+    };
+    record("ACES 2.0", method_document(DrtMethod::Aces20), false);
+    record("OpenDRT", method_document(DrtMethod::OpenDrt), false);
+    record("film print, results valid", FilmPrintDocument(), false);
+    record("film print, slider change", FilmPrintDocument(), true);
+
+    // The passes of the film print, after a slider change.
+    auto   document    = FilmPrintDocument();
+    double unused_gpu  = 0.0;
+    double unused_wall = 0.0;
+    render(document, unused_gpu, unused_wall);
+    DrtParameterUpdate update;
+    update.film_halation = 2.0f;
+    document.Drt()->Params().ApplyUpdate(update);
+    const auto                     display_id = plan_.display_output;
     std::vector<FilmPrintPassTime> times;
-    device_.ResetPassStats();
     device_.BeginRender();
     auto& workspace = device_.Workspace();
     workspace.PrepareResultValidity(plan_, document, input_);
     auto& scene = workspace.AcquireImageForWrite(scene_id, {width, height, TextureFormat::Rgba32f});
-    workspace.Device().UploadTexture2D(scene.Texture(), std::as_bytes(std::span(ap1)),
-                                               device_.CommandContext());
+    ASSERT_EQ(
+        ::cudaMemcpyAsync(scene.Texture().DevicePointer(), source, input.size() * sizeof(Rgba),
+                          cudaMemcpyDeviceToDevice, device_.CommandContext().Stream()),
+        cudaSuccess);
     (void)workspace.AcquireImageForWrite(display_id, {width, height, TextureFormat::Rgba32f});
-    const auto start = std::chrono::steady_clock::now();
     RecordCudaFilmPrint(device_, plan_, *document.Drt(), FrameSceneBinding::CachedImage(scene_id),
-                                FrameSceneBinding::CachedImage(display_id), width, height, &times);
-    const std::chrono::duration<double, std::milli> wall = std::chrono::steady_clock::now() - start;
+                        FrameSceneBinding::CachedImage(display_id), width, height, &times);
     device_.EndRender();
     device_.PublishResults();
-    report(title, wall.count(), times);
-    std::cout << "  canonical results built " << device_.PassStats().film_canvas_rebuild
-              << ", sampled " << device_.PassStats().film_canvas_sample << "\n";
-  };
-  for (const auto* negative : {"kodak_5207", "kodak_portra_400"}) {
-    std::cout << "--- " << negative << " (" << width << " x " << height << ")\n";
-    auto document = FilmPrintDocument(negative);
-    render(document, "first render");
-    film_memory("after the first render");
-    render(document, "warm render, canonical results valid");
-    render(document, "warm render, canonical results valid");
-    DrtParameterUpdate update;
-    update.film_halation = 2.0f;
-    document.Drt()->Params().ApplyUpdate(update);
-    render(document, "warm render after a slider change");
-    update.film_halation = 3.0f;
-    document.Drt()->Params().ApplyUpdate(update);
-    render(document, "warm render after a slider change");
-    film_memory("after the warm renders");
+    for (const auto& time : times) {
+      std::cout << "  " << time.name << ": " << time.milliseconds << " ms\n";
+    }
+    ASSERT_EQ(::cudaFree(source), cudaSuccess);
+    std::cout << "  texture pool peak "
+              << workspace.CaptureResourceSnapshot().texture_peak_used_bytes / (1 << 20)
+              << " MiB\n";
   }
 }
 
