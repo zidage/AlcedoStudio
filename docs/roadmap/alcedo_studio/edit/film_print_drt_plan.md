@@ -133,8 +133,7 @@ These are calculations. Phase F4 measures them.
 
 Halation and Enlarger flare read published canonical results, as `DiffusionScatterId` does, so a zoom or a viewport does not
 change them. They are `film.halation.0` and `film.flare.0`. FP2 and FP4 run on the pixels of the render, with a size in pixels
-from the frame and `RenderAxisScale`. So a light spread is not visible in a fit-to-window preview and is visible at full size,
-as on film (lab measurement: mean difference 0.00 at about 2000 pixels and about 3.8 at 6000 pixels when spread is off). The audit of phase F4 finds the margin that an ROI edge needs.
+from the frame and `RenderAxisScale`. So the visible effect of a light spread is smaller in a fit-to-window preview than at full size, as on film. This is an inference from the sizes of section 3.1; phase F4 measures it. The audit of phase F4 finds the margin that an ROI edge needs.
 
 ---
 
@@ -186,6 +185,19 @@ Excluded, with the owner that keeps the work: Film Grain stays with its operator
 | Editor | `app/editor_parameter_write*.cpp`, `editor_panel_projection.cpp`, `editor_adjustment_context.cpp`, `editor_parameter_catalog.cpp` | Field `odt` writes the whole display transform; `diffusion` is one scalar | Add the fields to `odt` |
 | UI | `ui/alcedo_main/qml/EditorDisplayTransformPanel.qml`, `EditorPostProcessPanel.qml` | Panel-level `paramsBuilder`; a Halation slider | Section 2.1 |
 | Tests | `alcedo_studio/tests/edit/CMakeLists.txt` | `GpuDagCudaDrtProductTest` holds the CUDA DRT cases, label `gpu` | Add cases and new host targets |
+
+### 5.1 Target ownership and data flow
+
+| Data | Owner | Reader |
+| --- | --- | --- |
+| Selections and slider values | `DrtParamsModel` | Compile step, editor projection |
+| Stock bundle and print setup | `FilmStockBundle` (proposed), read-only after `Open` | `FilmPrintTables` |
+| Stage tables and print table | `FilmPrintTables` (proposed), in memory by content key | Backend `Ops` |
+| GPU copy of the print table | Backend LUT cache, `AcquireLut` | Film print kernels |
+| Canonical Halation and flare results | Backend published results, in the form of `DiffusionScatterId` | FP3 and FP6 at a viewport |
+
+Data flow: AP1 from the DiffusionFilter pass -> FP1 to FP6 in the `Drt` pass -> display image. A slider change
+reaches only the kernels and the published results. A new selection also reaches `FilmPrintTables`.
 
 ---
 
@@ -266,8 +278,9 @@ Performance values come from a Release build only.
 7. **Failure chain.** An allocation failure -> real error -> no published partial result.
 8. **Tests.** `FilmPrintImageMatchesLab`, on one AP1 array at full size for 3 stocks: p99.9 at most 1.0, largest at most 4.0. `FilmPrintViewportKeepsCanvas`: a zoom does not change a pixel of Halation and flare beyond the limit of the Diffusion test. `FilmPrintSliderBuildsNoTable`: a slider change has no table build.
 9. **Evidence.** Release build, RTX 3080 Laptop, 24 MP: time per pass, first and warm renders, GPU memory peak. Proposed performance target: at most 150 ms for the film print passes. If the target is not met, report the pass times and stop for a user decision.
-10. **Expected diff.** 1500 lines.
-11. **Completion record.** Pending.
+10. **Exit criteria.** All tests pass. The record states the evidence of item 9 and the source facts of the ROI audit.
+11. **Expected diff.** 1500 lines.
+12. **Completion record.** Pending.
 
 ### F5: editor controls and user review
 
@@ -280,8 +293,9 @@ Performance values come from a Release build only.
 7. **Failure chain.** A render error -> the existing editor error path. The controls keep their values.
 8. **Tests.** Parameter write tests: each field reaches the model, and undo restores it. Projection test: the panel reads the values. QML test: the Halation slider hides and returns.
 9. **User review.** RAW files by day and by night, against the lab viewer. The review confirms that the entry has no reference gamut compression. Record it as user-confirmed manual verification.
-10. **Expected diff.** 700 lines.
-11. **Completion record.** Pending.
+10. **Exit criteria.** All tests pass and the user accepts the review of item 9.
+11. **Expected diff.** 700 lines.
+12. **Completion record.** Pending.
 
 ### F6: OpenCL passes
 
