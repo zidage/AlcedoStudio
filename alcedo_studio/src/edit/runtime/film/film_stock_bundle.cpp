@@ -16,7 +16,6 @@ namespace alcedo {
 namespace {
 
 constexpr std::string_view kManifestFileName = "manifest.json";
-constexpr const char*      kReflectanceName  = "reflectance_over_uv_light";
 
 [[noreturn]] void          FailFile(const std::filesystem::path& path, std::string_view reason) {
   throw std::runtime_error("Film print resource '" + FilmPathText(path) +
@@ -110,18 +109,18 @@ auto FilmStockBundle::Open(const std::filesystem::path& directory)
   auto       table    = ReadResource(directory, manifest, "reflectance_table");
   const auto digests  = stock.sha256 + setup.sha256 + table.sha256;
   return std::shared_ptr<const FilmStockBundle>(
-      new FilmStockBundle(std::move(stock.file), std::move(setup.file), std::move(table.file),
+      new FilmStockBundle(std::move(stock.file), std::move(setup.file), table.file,
                           ComputeSha256Hex(std::as_bytes(std::span(digests)))));
 }
 
 FilmStockBundle::FilmStockBundle(FilmArrayFile stock, FilmArrayFile setup,
-                                 FilmArrayFile reflectance, std::string content_digest)
+                                 const FilmArrayFile& reflectance, std::string content_digest)
     : stock_(std::move(stock)),
       setup_(std::move(setup)),
-      reflectance_(std::move(reflectance)),
       content_digest_(std::move(content_digest)) {
   ReadLists();
   ReadCommonValues();
+  ReadReflectance(reflectance);
   CheckShapes();
 }
 
@@ -148,22 +147,64 @@ void FilmStockBundle::ReadLists() {
 }
 
 void FilmStockBundle::ReadCommonValues() {
-  const auto table = reflectance_.Shape(kReflectanceName);
-  if (table.size() != 3 || table[0] != table[1]) {
-    throw std::runtime_error(
-        "Film print resource: the reflectance table does not have the shape (nodes, nodes, "
-        "wavelengths)");
+  const auto wavelengths = stock_.Shape("common/wavelengths_nm");
+  if (wavelengths.size() != 1) {
+    throw std::runtime_error("Film print resource: the wavelength list does not have one axis");
   }
-  uv_nodes_       = table[0];
-  wavelengths_    = table[2];
+  wavelengths_    = wavelengths[0];
   print_contrast_ = stock_.F64("common/print_contrast", {})[0];
   print_flash_    = stock_.F64("common/print_flash", {})[0];
   viewing_flare_  = stock_.F64("common/viewing_flare", {})[0];
 }
 
+void FilmStockBundle::ReadReflectance(const FilmArrayFile& file) {
+  const auto fail = [&file](const std::string& reason) {
+    throw std::runtime_error("Film print resource '" + file.PathText() + "': " + reason);
+  };
+  uv_nodes_                     = file.I32("uv_nodes", {})[0];
+  reflectance_first_wavelength_ = file.I32("first_wavelength", {})[0];
+  reflectance_wavelengths_      = file.I32("wavelength_count", {})[0];
+  if (uv_nodes_ < 2 || reflectance_first_wavelength_ < 0 || reflectance_wavelengths_ < 1 ||
+      reflectance_first_wavelength_ + reflectance_wavelengths_ > wavelengths_) {
+    fail("the table has an invalid node count or wavelength band");
+  }
+  const auto node_shape = file.Shape("node_index");
+  if (node_shape.size() != 1 || node_shape[0] < 1) {
+    fail("the node list does not have one axis");
+  }
+  const auto nodes = file.I32("node_index", {node_shape[0]});
+  const auto last  = uv_nodes_ * uv_nodes_;
+  for (std::size_t row = 0; row < nodes.size(); ++row) {
+    if (nodes[row] < 0 || nodes[row] >= last || (row > 0 && nodes[row] <= nodes[row - 1])) {
+      fail("the node list does not rise inside the table");
+    }
+  }
+  const auto values = node_shape[0] * reflectance_wavelengths_;
+  const auto planes = file.U8("byte_planes", {4, values});
+  reflectance_nodes_.assign(nodes.begin(), nodes.end());
+  reflectance_rows_.resize(static_cast<std::size_t>(values));
+  // Each byte of a little-endian float32 is in its own plane, for the compression of the installer.
+  auto* const out = reinterpret_cast<std::uint8_t*>(reflectance_rows_.data());
+  for (std::size_t plane = 0; plane < sizeof(float); ++plane) {
+    const auto* const in = planes.data() + plane * reflectance_rows_.size();
+    for (std::size_t value = 0; value < reflectance_rows_.size(); ++value) {
+      out[value * sizeof(float) + plane] = in[value];
+    }
+  }
+}
+
 void FilmStockBundle::CheckShapes() const {
   for (const auto& negative : negatives_) {
-    (void)Negative(negative.id);
+    const auto weights = Negative(negative.id).exposure_weights;
+    for (std::size_t index = 0; index < weights.size(); ++index) {
+      const auto wavelength = static_cast<std::int64_t>(index) % wavelengths_;
+      if (weights[index] != 0.0 &&
+          (wavelength < reflectance_first_wavelength_ ||
+           wavelength >= reflectance_first_wavelength_ + reflectance_wavelengths_)) {
+        throw std::runtime_error("Film print resource: the exposure weights of '" + negative.id +
+                                 "' are outside the wavelength band of the reflectance table");
+      }
+    }
   }
   for (const auto& paper : papers_) {
     (void)PrintMaterial(paper.id);
@@ -264,10 +305,6 @@ auto FilmStockBundle::Selection(std::string_view negative, std::string_view prin
       .xyz_to_display        = CopyValues<9>(display, p * 9),
       .scene_spectrum        = stock_.F64(ArrayName("light", spectrum, "spectrum"), {wavelengths_}),
   };
-}
-
-auto FilmStockBundle::ReflectanceTable() const -> std::span<const float> {
-  return reflectance_.F32(kReflectanceName, {uv_nodes_, uv_nodes_, wavelengths_});
 }
 
 }  // namespace alcedo

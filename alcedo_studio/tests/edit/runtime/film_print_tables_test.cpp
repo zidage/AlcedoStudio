@@ -105,6 +105,40 @@ void WriteManifest(const fs::path& directory, int schema_version = kFilmResource
   WriteBytes(directory / "manifest.json", std::as_bytes(std::span(text)));
 }
 
+/// The compact reflectance file: rows of the kept nodes, with each byte of a float32 in its plane.
+void WriteReflectance(const fs::path& path, const std::vector<std::int32_t>& nodes,
+                      std::int32_t first_wavelength, std::int32_t wavelength_count) {
+  std::vector<float> rows;
+  for (std::size_t value = 0; value < nodes.size() * wavelength_count; ++value) {
+    rows.push_back(0.25f + 0.01f * static_cast<float>(value));
+  }
+  const auto             bytes = std::as_bytes(std::span(rows));
+  std::vector<std::byte> planes;
+  for (std::size_t plane = 0; plane < sizeof(float); ++plane) {
+    for (std::size_t value = 0; value < rows.size(); ++value) {
+      planes.push_back(bytes[value * sizeof(float) + plane]);
+    }
+  }
+  const auto values = static_cast<std::int64_t>(rows.size());
+  WriteArrayFile(
+      path,
+      {{"byte_planes", ArrayValues{"u1", {4, values}, std::move(planes)}},
+       {"node_index", ArrayValues{"i4", {static_cast<std::int64_t>(nodes.size())}, ToBytes(nodes)}},
+       {"uv_nodes", ArrayValues{"i4", {}, ToBytes<std::int32_t>({kUvNodes})}},
+       {"first_wavelength", ArrayValues{"i4", {}, ToBytes<std::int32_t>({first_wavelength})}},
+       {"wavelength_count", ArrayValues{"i4", {}, ToBytes<std::int32_t>({wavelength_count})}}},
+      nlohmann::json::object());
+}
+
+/// All nodes of the test table except the first and the last.
+auto KeptNodes() -> std::vector<std::int32_t> {
+  std::vector<std::int32_t> nodes;
+  for (std::int32_t node = 1; node + 1 < kUvNodes * kUvNodes; ++node) {
+    nodes.push_back(node);
+  }
+  return nodes;
+}
+
 /// Three rows of @p wavelengths values: each row has its own smooth bump.
 auto BandRows(double scale, double offset) -> std::vector<double> {
   std::vector<double> rows;
@@ -126,18 +160,24 @@ auto Flat(double value) -> std::vector<double> {
 void WriteSyntheticResources(const fs::path& directory) {
   fs::create_directories(directory);
   std::map<std::string, ArrayValues> stock;
+  stock["common/wavelengths_nm"] = F64Array({kWavelengths}, Flat(500.0));
   stock["common/print_contrast"] = F64Array({}, {0.85});
   stock["common/print_flash"]    = F64Array({}, {0.02});
   stock["common/viewing_flare"]  = F64Array({}, {0.003});
   stock["light/flat/spectrum"]   = F64Array({kWavelengths}, Flat(1.0));
   stock["light/ramp/spectrum"]   = F64Array({kWavelengths}, {0.5, 0.75, 1.0, 1.25, 1.5, 1.75});
   for (const auto& stock_entry : std::map<std::string, double>{{"neg_a", 1.0}, {"neg_b", 1.2}}) {
-    const auto& id      = stock_entry.first;
-    const auto  scale   = stock_entry.second;
-    const auto  name    = [&id](const char* field) { return "negative/" + id + "/" + field; };
-    stock[name("base")] = F64Array({kWavelengths}, Flat(0.1 * scale));
-    stock[name("dyes")] = F64Array({3, kWavelengths}, BandRows(scale, 0.01));
-    stock[name("exposure_weights")]   = F64Array({3, kWavelengths}, BandRows(0.3 * scale, 0.0));
+    const auto& id        = stock_entry.first;
+    const auto  scale     = stock_entry.second;
+    const auto  name      = [&id](const char* field) { return "negative/" + id + "/" + field; };
+    stock[name("base")]   = F64Array({kWavelengths}, Flat(0.1 * scale));
+    stock[name("dyes")]   = F64Array({3, kWavelengths}, BandRows(scale, 0.01));
+    // The last wavelength has no weight, so the reflectance table does not hold it.
+    auto exposure_weights = BandRows(0.3 * scale, 0.0);
+    for (std::size_t row = 1; row <= 3; ++row) {
+      exposure_weights[row * kWavelengths - 1] = 0.0;
+    }
+    stock[name("exposure_weights")]   = F64Array({3, kWavelengths}, exposure_weights);
     stock[name("density_grid_start")] = F64Array({3}, {0.0, 0.01, 0.02});
     stock[name("density_grid_stop")]  = F64Array({3}, {2.0 * scale, 2.5 * scale, 3.0 * scale});
   }
@@ -183,14 +223,7 @@ void WriteSyntheticResources(const fs::path& directory) {
   setup["scene_spectrum_index"] = ArrayValues{"i4", {2, 2}, ToBytes<std::int32_t>({0, 1, 1, 0})};
   WriteArrayFile(directory / "film_print_setup.bin", setup, nlohmann::json::object());
 
-  std::vector<float> reflectance;
-  for (std::int64_t node = 0; node < kUvNodes * kUvNodes * kWavelengths; ++node) {
-    reflectance.push_back(0.25f + 0.01f * static_cast<float>(node));
-  }
-  WriteArrayFile(directory / "film_reflectance_table.bin",
-                 {{"reflectance_over_uv_light",
-                   ArrayValues{"f4", {kUvNodes, kUvNodes, kWavelengths}, ToBytes(reflectance)}}},
-                 nlohmann::json::object());
+  WriteReflectance(directory / "film_reflectance_table.bin", KeptNodes(), 0, kWavelengths - 1);
   WriteManifest(directory);
 }
 
@@ -315,6 +348,51 @@ TEST_F(FilmPrintTablesTest, ArrayOfTheWrongShapeThrowsWithItsName) {
   EXPECT_NE(error.find("printer_balance_log10"), std::string::npos) << error;
 }
 
+TEST_F(FilmPrintTablesTest, ExposureWeightOutsideTheReflectanceBandThrows) {
+  const auto directory = CopyOfResources("short_band");
+  WriteReflectance(directory / "film_reflectance_table.bin", KeptNodes(), 0, kWavelengths - 2);
+  WriteManifest(directory);
+  const auto error = OpenError(directory);
+  EXPECT_NE(error.find("neg_a"), std::string::npos) << error;
+  EXPECT_NE(error.find("wavelength band"), std::string::npos) << error;
+}
+
+TEST_F(FilmPrintTablesTest, ReflectanceBandPastTheWavelengthListThrows) {
+  const auto directory = CopyOfResources("band_past_end");
+  WriteReflectance(directory / "film_reflectance_table.bin", KeptNodes(), 1, kWavelengths);
+  WriteManifest(directory);
+  const auto error = OpenError(directory);
+  EXPECT_NE(error.find("film_reflectance_table.bin"), std::string::npos) << error;
+}
+
+TEST_F(FilmPrintTablesTest, ReflectanceNodesThatDoNotRiseThrow) {
+  for (const auto& nodes :
+       {std::vector<std::int32_t>{2, 1}, std::vector<std::int32_t>{3, 3},
+        std::vector<std::int32_t>{1, kUvNodes * kUvNodes}, std::vector<std::int32_t>{-1, 1}}) {
+    const auto directory =
+        CopyOfResources("nodes_" + std::to_string(nodes[0]) + "_" + std::to_string(nodes[1]));
+    WriteReflectance(directory / "film_reflectance_table.bin", nodes, 0, kWavelengths - 1);
+    WriteManifest(directory);
+    const auto error = OpenError(directory);
+    EXPECT_NE(error.find("film_reflectance_table.bin"), std::string::npos) << error;
+    EXPECT_NE(error.find("node list"), std::string::npos) << error;
+  }
+}
+
+TEST_F(FilmPrintTablesTest, OpenRestoresTheReflectanceRowsFromTheirBytePlanes) {
+  const auto bundle = FilmStockBundle::Open(Resources());
+  EXPECT_EQ(bundle->Wavelengths(), kWavelengths);
+  EXPECT_EQ(bundle->ReflectanceFirstWavelength(), 0);
+  EXPECT_EQ(bundle->ReflectanceWavelengths(), kWavelengths - 1);
+  const auto nodes = KeptNodes();
+  ASSERT_EQ(bundle->ReflectanceNodes().size(), nodes.size());
+  const auto rows = bundle->ReflectanceRows();
+  ASSERT_EQ(rows.size(), nodes.size() * static_cast<std::size_t>(kWavelengths - 1));
+  for (std::size_t value = 0; value < rows.size(); ++value) {
+    EXPECT_EQ(rows[value], 0.25f + 0.01f * static_cast<float>(value));
+  }
+}
+
 TEST_F(FilmPrintTablesTest, ArrayPastTheEndOfTheFileThrows) {
   const fs::path path = root_ / "past_the_end.bin";
   WriteArrayFile(path, {{"values", F64Array({2}, {1.0, 2.0})}}, nlohmann::json::object());
@@ -347,18 +425,28 @@ TEST_F(FilmPrintTablesTest, UvTableIsTheIntegralUnderTheSceneSpectrum) {
   // neg_a under 'daylight' reads spectrum 1, 'ramp'.
   const auto      result = tables.Resolve("neg_a", "paper_a", "daylight");
   ASSERT_EQ(result->uv_nodes, kUvNodes);
-  const auto stock       = bundle->Negative("neg_a");
-  const auto setup       = bundle->Selection("neg_a", "paper_a", "daylight");
-  const auto reflectance = bundle->ReflectanceTable();
-  for (std::size_t node = 0; node < static_cast<std::size_t>(kUvNodes * kUvNodes); ++node) {
+  const auto stock = bundle->Negative("neg_a");
+  const auto setup = bundle->Selection("neg_a", "paper_a", "daylight");
+  const auto rows  = bundle->ReflectanceRows();
+  const auto nodes = bundle->ReflectanceNodes();
+  const auto band  = static_cast<std::size_t>(bundle->ReflectanceWavelengths());
+  for (std::size_t row = 0; row < nodes.size(); ++row) {
     for (std::size_t layer = 0; layer < 3; ++layer) {
       double expected = 0.0;
-      for (std::size_t w = 0; w < static_cast<std::size_t>(kWavelengths); ++w) {
-        expected += static_cast<double>(reflectance[node * kWavelengths + w]) *
-                    setup.scene_spectrum[w] * stock.exposure_weights[layer * kWavelengths + w];
+      for (std::size_t w = 0; w < band; ++w) {
+        expected += static_cast<double>(rows[row * band + w]) * setup.scene_spectrum[w] *
+                    stock.exposure_weights[layer * kWavelengths + w];
       }
-      EXPECT_NEAR(result->uv_exposure[node * 3 + layer], expected, 1e-12 * expected);
+      const auto value = result->uv_exposure[static_cast<std::size_t>(nodes[row]) * 3 + layer];
+      EXPECT_NEAR(value, expected, 1e-12 * expected);
+      EXPECT_GT(value, 0.0);
     }
+  }
+  // The first and the last node are not in the file, and no read reaches them.
+  const auto last = static_cast<std::size_t>(kUvNodes * kUvNodes - 1);
+  for (std::size_t layer = 0; layer < 3; ++layer) {
+    EXPECT_EQ(result->uv_exposure[layer], 0.0);
+    EXPECT_EQ(result->uv_exposure[last * 3 + layer], 0.0);
   }
 }
 
@@ -500,7 +588,9 @@ TEST_F(FilmPrintTablesTest, NullBundleIsRejected) {
 // time. A skip here means that the comparison with the lab did not run.
 #if defined(ALCEDO_FILM_PRINT_RESOURCE_DIR) && defined(ALCEDO_FILM_PRINT_EXPECTED_DIR)
 
-constexpr double kLabRelativeLimit = 1e-9;
+constexpr double kLabRelativeLimit          = 1e-9;
+// The largest relative rounding error of 12 mantissa bits is 1.22e-4.
+constexpr double kCompactTableRelativeLimit = 2e-4;
 
 /// Largest of |a - b| / max(|a|, |b|).
 auto LargestRelativeDifference(std::span<const double> values, std::span<const double> expected)
@@ -578,14 +668,48 @@ TEST_F(FilmPrintTablesLabTest, UvTableMatchesLab) {
     SCOPED_TRACE(selection.negative + " under " + selection.scene_light);
     const auto result =
         tables_->Resolve(selection.negative, selection.print_material, selection.scene_light);
-    const auto file  = FilmArrayFile::Parse(ReadBytes(selection.path), selection.path);
-    const auto table = file.F64("uv_table", {result->uv_nodes, result->uv_nodes, 3});
-    ASSERT_EQ(result->uv_exposure.size(), table.size());
-    const auto largest = LargestRelativeDifference(result->uv_exposure, table);
+    const auto file     = FilmArrayFile::Parse(ReadBytes(selection.path), selection.path);
+    const auto uv_nodes = result->uv_nodes;
+    // The integral of the product on the compact table, against the same integral in the lab.
+    const auto compact  = file.F64("uv_table_compact", {uv_nodes, uv_nodes, 3});
+    ASSERT_EQ(result->uv_exposure.size(), compact.size());
+    const auto largest_compact = LargestRelativeDifference(result->uv_exposure, compact);
+    EXPECT_LE(largest_compact, kLabRelativeLimit);
+
+    // The compact table against the complete table of the lab, on the nodes that a read can reach.
+    const auto complete  = file.F64("uv_table", {uv_nodes, uv_nodes, 3});
+    const auto reachable = file.U8("uv_reachable", {uv_nodes, uv_nodes});
+    double     largest   = 0.0;
+    for (std::size_t node = 0; node < reachable.size(); ++node) {
+      if (reachable[node] != 0) {
+        largest = (std::max)(
+            largest, LargestRelativeDifference(std::span(result->uv_exposure).subspan(node * 3, 3),
+                                               complete.subspan(node * 3, 3)));
+      }
+    }
     std::cout << selection.negative << " under " << selection.scene_light
-              << ": u'v' table largest relative difference " << largest << "\n";
-    EXPECT_LE(largest, kLabRelativeLimit);
+              << ": u'v' table largest relative difference " << largest_compact
+              << " against the compact lab table, " << largest << " against the complete table\n";
+    EXPECT_LE(largest, kCompactTableRelativeLimit);
   }
+}
+
+TEST_F(FilmPrintTablesLabTest, ShippedReflectanceHoldsOnlyTheNodesThatAReadCanReach) {
+  const auto selections = LabSelections();
+  ASSERT_FALSE(selections.empty());
+  const auto file      = FilmArrayFile::Parse(ReadBytes(selections[0].path), selections[0].path);
+  const auto uv_nodes  = bundle_->UvNodes();
+  const auto reachable = file.U8("uv_reachable", {uv_nodes, uv_nodes});
+  std::vector<std::int32_t> expected;
+  for (std::size_t node = 0; node < reachable.size(); ++node) {
+    if (reachable[node] != 0) {
+      expected.push_back(static_cast<std::int32_t>(node));
+    }
+  }
+  const auto nodes = bundle_->ReflectanceNodes();
+  EXPECT_TRUE(std::equal(nodes.begin(), nodes.end(), expected.begin(), expected.end()));
+  EXPECT_LT(nodes.size(), reachable.size());
+  EXPECT_LT(bundle_->ReflectanceWavelengths(), bundle_->Wavelengths());
 }
 
 TEST_F(FilmPrintTablesLabTest, ShippedListsHoldTheStocksOfThePlan) {

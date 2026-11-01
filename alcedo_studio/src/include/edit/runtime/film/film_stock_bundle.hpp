@@ -70,9 +70,9 @@ struct FilmSelectionSetup {
  * @brief The film print resources of one directory. Read-only after @ref Open.
  *
  * Owner of the stock bundle, the print setup, and the reflectance table. The reflectance table
- * holds 71 MB for the life of the object. All methods are safe to call from any thread, because
- * nothing changes after @ref Open. Spans that the methods return stay valid for the life of the
- * object.
+ * holds about 25 MB for the life of the object. All methods are safe to call from any thread,
+ * because nothing changes after @ref Open. Spans that the methods return stay valid for the life
+ * of the object.
  */
 class FilmStockBundle {
  public:
@@ -108,8 +108,26 @@ class FilmStockBundle {
   [[nodiscard]] auto Selection(std::string_view negative, std::string_view print_material,
                                std::string_view scene_light) const -> FilmSelectionSetup;
 
-  /// (uv_nodes, uv_nodes, wavelengths): reflectance shapes over u'v', with u varying slowest.
-  [[nodiscard]] auto ReflectanceTable() const -> std::span<const float>;
+  /**
+   * @brief Reflectance shapes of the kept u'v' nodes: (kept nodes, reflectance wavelengths).
+   *
+   * The file holds only the wavelengths where a weight of a negative is not zero, and only the
+   * nodes that a bilinear read can reach after the spectral locus projection. Values have 12
+   * mantissa bits.
+   */
+  [[nodiscard]] auto ReflectanceRows() const -> std::span<const float> { return reflectance_rows_; }
+  /// For each row: the node index `u * uv_nodes + v`, in rising order.
+  [[nodiscard]] auto ReflectanceNodes() const -> std::span<const std::int32_t> {
+    return reflectance_nodes_;
+  }
+  /// Index in the complete wavelength list of the first column of @ref ReflectanceRows.
+  [[nodiscard]] auto ReflectanceFirstWavelength() const -> std::int64_t {
+    return reflectance_first_wavelength_;
+  }
+  /// Column count of @ref ReflectanceRows.
+  [[nodiscard]] auto ReflectanceWavelengths() const -> std::int64_t {
+    return reflectance_wavelengths_;
+  }
   [[nodiscard]] auto UvNodes() const -> std::int64_t { return uv_nodes_; }
   [[nodiscard]] auto Wavelengths() const -> std::int64_t { return wavelengths_; }
 
@@ -118,26 +136,30 @@ class FilmStockBundle {
   [[nodiscard]] auto ViewingFlare() const -> double { return viewing_flare_; }
 
  private:
-  FilmStockBundle(FilmArrayFile stock, FilmArrayFile setup, FilmArrayFile reflectance,
+  FilmStockBundle(FilmArrayFile stock, FilmArrayFile setup, const FilmArrayFile& reflectance,
                   std::string content_digest);
 
   void                       ReadLists();
   void                       ReadCommonValues();
+  void                       ReadReflectance(const FilmArrayFile& file);
   void                       CheckShapes() const;
 
   FilmArrayFile              stock_;
   FilmArrayFile              setup_;
-  FilmArrayFile              reflectance_;
+  std::vector<float>         reflectance_rows_;
+  std::vector<std::int32_t>  reflectance_nodes_;
   std::vector<FilmStockName> negatives_;
   std::vector<FilmStockName> papers_;
   std::vector<std::string>   scene_lights_;
   std::vector<std::string>   scene_spectra_;
   std::string                content_digest_;
-  std::int64_t               uv_nodes_       = 0;
-  std::int64_t               wavelengths_    = 0;
-  double                     print_contrast_ = 0.0;
-  double                     print_flash_    = 0.0;
-  double                     viewing_flare_  = 0.0;
+  std::int64_t               reflectance_first_wavelength_ = 0;
+  std::int64_t               reflectance_wavelengths_      = 0;
+  std::int64_t               uv_nodes_                     = 0;
+  std::int64_t               wavelengths_                  = 0;
+  double                     print_contrast_               = 0.0;
+  double                     print_flash_                  = 0.0;
+  double                     viewing_flare_                = 0.0;
 };
 
 }  // namespace alcedo

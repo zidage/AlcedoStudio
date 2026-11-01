@@ -284,15 +284,28 @@ auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_
 
   {
     const auto          start = std::chrono::steady_clock::now();
-    std::vector<double> weights(wavelength * film_tables::kLayers);
-    for (std::size_t w = 0; w < weights.size(); ++w) {
-      weights[w] = stock.exposure_weights[w] * selection.scene_spectrum[w % wavelength];
+    const auto          first = static_cast<std::size_t>(bundle_->ReflectanceFirstWavelength());
+    const auto          band  = static_cast<std::size_t>(bundle_->ReflectanceWavelengths());
+    const auto          kept  = bundle_->ReflectanceNodes();
+    std::vector<double> weights(band * film_tables::kLayers);
+    for (std::size_t layer = 0; layer < film_tables::kLayers; ++layer) {
+      for (std::size_t w = 0; w < band; ++w) {
+        weights[layer * band + w] = stock.exposure_weights[layer * wavelength + first + w] *
+                                    selection.scene_spectrum[first + w];
+      }
     }
+    std::vector<double> kept_exposure(kept.size() * film_tables::kLayers);
+    film_tables::TableBandIntegral(
+        bundle_->ReflectanceRows().data(), static_cast<std::int64_t>(kept.size()),
+        bundle_->ReflectanceWavelengths(), weights.data(), kept_exposure.data());
     const auto nodes = result->uv_nodes * result->uv_nodes;
-    result->uv_exposure.resize(static_cast<std::size_t>(nodes) * film_tables::kLayers);
-    film_tables::TableBandIntegral(bundle_->ReflectanceTable().data(), nodes,
-                                   bundle_->Wavelengths(), weights.data(),
-                                   result->uv_exposure.data());
+    result->uv_exposure.assign(static_cast<std::size_t>(nodes) * film_tables::kLayers, 0.0);
+    for (std::size_t row = 0; row < kept.size(); ++row) {
+      const auto node = static_cast<std::size_t>(kept[row]) * film_tables::kLayers;
+      for (std::size_t layer = 0; layer < film_tables::kLayers; ++layer) {
+        result->uv_exposure[node + layer] = kept_exposure[row * film_tables::kLayers + layer];
+      }
+    }
     ++stats_.uv_builds;
     stats_.last_uv_seconds = SecondsSince(start);
   }

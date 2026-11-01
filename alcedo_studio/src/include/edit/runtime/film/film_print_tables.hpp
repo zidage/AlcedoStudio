@@ -28,7 +28,8 @@ inline constexpr std::int64_t kFilmPrintTableEdge = 65;
  * fastest and an alpha of 1. Node values are the cube root of print XYZ.
  */
 struct FilmPrintTableData {
-  std::vector<double>    uv_exposure;          ///< (uv_nodes, uv_nodes, 3), u varying slowest
+  /// (uv_nodes, uv_nodes, 3), u varying slowest. A node that no read can reach holds 0.
+  std::vector<double>    uv_exposure;
   std::vector<double>    print_cube_root_xyz;  ///< (edge, edge, edge, 3), red varying slowest
   std::vector<std::byte> print_rgba;
   std::int64_t           uv_nodes = 0;

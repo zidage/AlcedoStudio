@@ -177,6 +177,13 @@ auto FilmArrayFile::I32(std::string_view name, ShapeList shape) const
           entry.byte_count / sizeof(std::int32_t)};
 }
 
+auto FilmArrayFile::U8(std::string_view name, ShapeList shape) const
+    -> std::span<const std::uint8_t> {
+  const auto& entry = Checked(name, FilmArrayType::kU8, shape);
+  return {reinterpret_cast<const std::uint8_t*>(bytes_.data() + entry.first_byte),
+          entry.byte_count};
+}
+
 auto FilmArrayFile::I64(std::string_view name, ShapeList shape) const
     -> std::span<const std::int64_t> {
   const auto& entry = Checked(name, FilmArrayType::kI64, shape);

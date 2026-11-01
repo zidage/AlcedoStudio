@@ -9,8 +9,8 @@
 #include <filesystem>
 #include <functional>
 #include <initializer_list>
-#include <map>
 #include <json.hpp>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -46,6 +46,9 @@ class FilmArrayFile {
   [[nodiscard]] static auto Parse(std::vector<std::byte> bytes, const std::filesystem::path& path)
       -> FilmArrayFile;
 
+  /// UTF-8 text of the file name, for error messages.
+  [[nodiscard]] auto PathText() const -> const std::string& { return path_text_; }
+
   /// The `metadata` object of the header.
   [[nodiscard]] auto Metadata() const -> const nlohmann::json& { return metadata_; }
 
@@ -63,6 +66,9 @@ class FilmArrayFile {
   /// @copydoc F64
   [[nodiscard]] auto I64(std::string_view name, ShapeList shape) const
       -> std::span<const std::int64_t>;
+  /// @copydoc F64
+  [[nodiscard]] auto U8(std::string_view name, ShapeList shape) const
+      -> std::span<const std::uint8_t>;
 
   /**
    * @brief The shape of an array.
