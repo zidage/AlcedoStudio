@@ -6,6 +6,8 @@ Status: **Planned.** No phase has started.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
+Tracking: [#631](https://github.com/zidage/AlcedoStudio/issues/631). Section 8 lists the phase issues.
+
 Research source: [alcedo-film-lab](https://github.com/zidage/alcedo-film-lab). The decisions are ROADMAP
 U68 to U72 of that repository. The reference evaluator and the measurements are its reports P6 and P7.
 
@@ -336,3 +338,16 @@ Performance values come from a Release build only.
 | Blur at a large size | A long edge above 6000 pixels raises the FP2 and FP4 sizes. | F4 measures it. |
 | Memory | 3 full-size images on top of the current frame, on a GPU of 8 GB. | F4 measures it. A failure reports the real error. |
 | Table cache | `AcquireLut` has an LRU limit in bytes, and the print table is 4.4 MB. | F1 records the limit. |
+
+---
+
+## 8. Tracking
+
+- Tracking: [#631](https://github.com/zidage/AlcedoStudio/issues/631)
+- F1: [#624](https://github.com/zidage/AlcedoStudio/issues/624)
+- F2: [#625](https://github.com/zidage/AlcedoStudio/issues/625)
+- F3: [#626](https://github.com/zidage/AlcedoStudio/issues/626)
+- F4: [#627](https://github.com/zidage/AlcedoStudio/issues/627)
+- F5: [#628](https://github.com/zidage/AlcedoStudio/issues/628)
+- F6: [#629](https://github.com/zidage/AlcedoStudio/issues/629)
+- F7: [#630](https://github.com/zidage/AlcedoStudio/issues/630)
