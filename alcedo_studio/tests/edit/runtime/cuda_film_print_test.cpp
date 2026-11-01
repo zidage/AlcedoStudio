@@ -265,6 +265,17 @@ TEST_F(CudaFilmPrintFixture, FilmPrintRendersThroughTheCompiledPlanAndUploadsTab
   EXPECT_EQ(device_.Workspace().Device().LutUploadBytes(), uploaded);
 }
 
+TEST_F(CudaFilmPrintFixture, FilmPrintKeepsTheAlphaOfTheScene) {
+  // The images between the steps have no alpha, so the display reads it from the scene.
+  constexpr std::uint32_t kWidth  = 64;
+  constexpr std::uint32_t kHeight = 48;
+  const auto              field   = PatchField(kWidth, kHeight, 20, 20, 8);
+  SetView({kWidth, kHeight}, {kWidth, kHeight}, Matrix3x3::Identity());
+  for (const auto& pixel : RenderView(FilmPrintDocument(), field, false)) {
+    ASSERT_EQ(pixel.a, 0.75f);
+  }
+}
+
 TEST_F(CudaFilmPrintFixture, FilmPrintUploadFailureLeavesTheDisplayResultInvalid) {
   auto document = FilmPrintDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);
@@ -444,6 +455,45 @@ TEST_F(CudaFilmPrintFixture, FilmPrintFusedSpreadMatchesSeparatePasses) {
       fused, fused.size(), [&separate](std::size_t index) { return separate[index]; });
   std::cout << "fused spread against separate passes: largest " << largest << " codes\n";
   EXPECT_LE(largest, 0.01);
+}
+
+TEST_F(CudaFilmPrintFixture, FilmPrintHalfSizeCellsStayOnTheirPixelsAtAnOddSize) {
+  // One more row at the bottom must not move the cells of the half-size inhibitor. Cells that cover
+  // an odd size at a scale near 2 move up to half a pixel, and the bars show that in the inhibitor.
+  constexpr std::uint32_t kWidth    = 4200;
+  constexpr std::uint32_t kEven     = 256;
+  constexpr std::uint32_t kOdd      = 257;
+  // The rows past this one are in the reach of the blurs from the bottom edge.
+  constexpr std::size_t   kCompared = 180;
+  auto                    document  = FilmPrintDocument("fuji_eterna_500");
+  DrtParameterUpdate      no_canvas;
+  no_canvas.film_halation       = 0.0f;
+  no_canvas.film_enlarger_flare = 0.0f;
+  document.Drt()->Params().ApplyUpdate(no_canvas);
+  const auto bars = [](std::uint32_t height) {
+    std::vector<Rgba> field(static_cast<std::size_t>(kWidth) * height);
+    for (std::uint32_t y = 0; y < height; ++y) {
+      const float value = (y / 3U) % 2U == 0U ? 2.0f : 0.02f;
+      for (std::uint32_t x = 0; x < kWidth; ++x) {
+        field[static_cast<std::size_t>(y) * kWidth + x] = {value, value, value, 1.0f};
+      }
+    }
+    return field;
+  };
+
+  SetView({kWidth, kEven}, {kWidth, kEven}, Matrix3x3::Identity());
+  const auto& bundle   = SharedFilmPrintTables().Bundle();
+  const auto  film     = document.Drt()->Params().FilmPrint();
+  const auto  negative = bundle.Negative(film.negative);
+  EXPECT_TRUE(MakeFilmPrintImagePlan(plan_.geometry, bundle.ImagePlaneConstants(),
+                                     negative.layer_spread_um, true, film)
+                  .inhibitor_half_size);
+  const auto even = RenderView(document, bars(kEven), false);
+  SetView({kWidth, kOdd}, {kWidth, kOdd}, Matrix3x3::Identity());
+  const auto odd = RenderView(document, bars(kOdd), false);
+  EXPECT_LT(LargestCodeDifference(odd, kCompared * kWidth,
+                                  [&](std::size_t index) { return even[index]; }),
+            0.01);
 }
 
 TEST_F(CudaFilmPrintFixture, FilmPrintAllocationFailureReportsTheErrorAndPublishesNoPartialResult) {

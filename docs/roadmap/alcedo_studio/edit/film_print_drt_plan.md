@@ -496,7 +496,7 @@ Kernel launch error -> CudaDrtOps::CheckAfterEncode -> the same catch
 
 ##### Phase F4 completion record (2026-11-01)
 
-**Status:** complete. The complete chain FP1 to FP6 runs on CUDA, and the sliders Light spread, Halation, and Enlarger flare act on the image. The 24 MP passes take about 27 ms after an edit, under the proposed target of 150 ms. The editor cannot select the method before phase F5.
+**Status:** complete. The complete chain FP1 to FP6 runs on CUDA, and the sliders Light spread, Halation, and Enlarger flare act on the image. The 24 MP passes take about 21 ms after an edit, under the proposed target of 150 ms. The editor cannot select the method before phase F5.
 
 **Primary success call chain:**
 
@@ -506,8 +506,12 @@ DrtPostExecutor::Execute -> CudaDrtOps::DispatchFilmPrint -> RecordCudaFilmPrint
   -> ExposureKernel (FP1)
   -> BlurHorizontalKernel, BlurVerticalKernel, two times (FP2)
   -> ReadOrBuildCanvasResult (film.halation.0: DecideDiffusionScatter, CanvasReduceKernel, blur, RecordUnpublished)
-  -> HalationMixKernel (FP3) -> FirstAmountsKernel (FP4)
-  -> BoxReduceKernel, blur, InhibitedStepHalfSizeKernel, two times (FP4, FP5)
+  half-size inhibitor (sigma of at least 4 pixels):
+    -> ReducedFirstAmountsKernel (FP3, FP4) -> blur -> InhibitedStepToReducedKernel (FP5)
+    -> blur -> InhibitedStepHalfSizeKernel (FP5)
+  full-size inhibitor:
+    -> HalationAndFirstAmountsKernel (FP3, FP4)
+    -> BlurHorizontalKernel, InhibitedStepVerticalKernel, two times (FP4, FP5)
   -> ReadOrBuildCanvasResult (film.flare.0: CanvasReduceKernel of 10^-a, BoxReduceKernel, blur, RecordUnpublished)
   -> DisplayKernel (FP6)
 ROI render -> BindValidResult of both results -> the same kernels read the published images
@@ -540,36 +544,37 @@ Allocation failure, or a blur beyond the tap limit
 - Each slider or selection change marks both results stale, as F2 does. An ROI with no valid result builds temporary images from its own pixels and publishes nothing, as the Diffusion filter does.
 - A new DRT input now marks both results stale in `CollectStructureChanges`. F2 marked only the scatter image.
 - `RenderAxisScale` moved to `resolved_render_geometry.hpp` with no change, so the film print and the adjustment runtime share one rule.
-- `kFilmPrintImplementationVersion` is 3.
+- `kFilmPrintImplementationVersion` is 4. Version 4 keeps the half-size cells on their pixels at an odd size.
+- The images between the steps hold three packed floats in the pool image, with no alpha. The display reads alpha from the scene. F6 and F7 must keep this layout with explicit floats, because `float3` of OpenCL C and of Metal has 16 bytes. The canonical results stay `Rgba32f`.
+- A half-size cell has two pixels, and the last cell of an odd size has three. The enlarge reads at exactly half of the pixel position, and the reduced sigma uses a scale of exactly 2. This differs from `_reduce` and `_enlarge` of the lab at an odd size. There, cells at a scale near 2 move their centers up to half a pixel from the read position near the middle of the image. An even size has the same pixels as the lab. The lab has not changed yet: issue [#639](https://github.com/zidage/AlcedoStudio/issues/639).
 - The lab values come from `build_image_expected.py` of alcedo-film-lab (`cd23015`). They are not in Git, and without them the image cases skip, which is not a pass. The script sets the option `foliage` to False, because the product resources do not have that uncommitted lab rule.
 
 **Cost record (Release, RTX 3080 Laptop, the array of `_DSC8148`, box-reduced to each size, `kodak_5207`, median GPU time of 9 renders in ms):**
 
 | Long edge | ACES 2.0 | OpenDRT | Film print, results valid | Film print, after a slider change |
 | --- | --- | --- | --- | --- |
-| 2560 (`kFastPreviewMaxLongEdge`) | 2.1 | 1.3 | 5.1 | 7.2 |
-| 4096 (`kQualityBaseMaxLongEdge`) | 5.1 | 3.3 | 13.8 | 16.8 |
-| 6000 | 10.9 | 7.2 | 23.2 | 27.3 |
+| 2560 (`kFastPreviewMaxLongEdge`) | 2.0 | 1.3 | 3.8 | 5.8 |
+| 4096 (`kQualityBaseMaxLongEdge`) | 5.1 | 3.4 | 11.7 | 14.1 |
+| 6000 | 11.2 | 7.2 | 17.6 | 20.7 |
 
 Film print passes after a slider change, one render, in ms:
 
 | Pass | 2560 | 4096 | 6000 |
 | --- | --- | --- | --- |
-| FP1 exposure | 0.4 | 0.9 | 2.0 |
-| FP2 wide horizontal | 0.4 | 1.0 | 2.1 |
-| FP2 vertical, with the narrow Gaussian | 0.6 | 1.6 | 3.7 to 4.2 |
-| FP3 canvas | 1.5 | 2.0 | 2.6 |
-| FP3 mix and FP4 first amounts | 0.7 | 1.5 | 3.1 |
-| FP4 inhibitor blur, 2 times | 1.6 | 5.0 | 5.2 |
-| FP5 inhibited step, 2 times | 1.1 | 2.8 | 4.5 |
-| FP6 flare canvas | 0.9 | 1.0 | 1.6 |
-| FP6 display | 0.4 | 0.9 | 2.0 |
+| FP1 exposure | 0.3 | 0.8 | 1.8 |
+| FP2 wide horizontal | 0.3 | 0.7 | 1.5 |
+| FP2 vertical, with the narrow Gaussian | 0.7 | 1.9 | 4.3 |
+| FP3 canvas | 1.5 | 2.3 | 2.3 |
+| FP3 mix and FP4 first amounts | 0.5 | 1.1 | 1.8 |
+| FP4 and FP5, the two steps with their blurs | 1.5 | 5.4 | 4.6 |
+| FP6 flare canvas | 0.5 | 0.7 | 1.3 |
+| FP6 display | 0.5 | 1.3 | 2.7 |
 
 - An interactive render at 2560 reads the valid results only when nothing before the film print changed, so any edit has the cost of the last column. A QualityBase render at 4096 cannot read or publish results (`ResultPersistenceScope::SensorDevelopOnly`), so it always has that cost.
 - The target of 150 ms holds, so the stop condition of this phase does not apply.
 - The first render of a selection takes about 800 ms: the read of the bundle, the table build, and the upload.
 - GPU memory of the film print, from the texture pool peak with the 3 images of the test taken out: about 370 MiB at 2560, 680 MiB at 4096, and 1220 MiB at 6000.
-- At 4096 the inhibitor sigma is 3.98 pixels, under the limit of 4 of rule 'inhibitor_on_half_size'. So this size runs the blur at full size, and that is 30 % of its cost. This phase keeps the limit, because a change also changes the pixels of the lab rule.
+- At 4096 the inhibitor sigma is 3.98 pixels, under the limit of 4 of rule 'inhibitor_on_half_size'. So this size runs the blur at full size, and that is 38 % of its cost. This phase keeps the limit, because a change also changes the pixels of the lab rule. The measured alternative is in the second optimization table.
 
 **Correction of the first cost record.** The first record of this phase stated about 60 ms at 24 MP. That value was too large. The test held no result at the size of the render, and the texture pool frees a size that no result holds. So each render allocated its full-size images again, and the first use of a new 384 MB image took about 10 ms. A render of the product holds its geometry and develop results at that size. The cost test now holds one image of that size and copies the scene on the GPU.
 
@@ -584,6 +589,27 @@ Film print passes after a slider change, one render, in ms:
 
 Together these change the film print after a slider change, in this cost test, from 8.0 to 7.2 ms at 2560, from 19.1 to 16.8 ms at 4096, and from 38.4 to 27.3 ms at 6000.
 
+**Optimizations of the inhibitor blur.** The largest difference from the render before these changes is 0.0003 codes (floating-point rounding only), at 2560, 4096, and 6000 x 4006 on three negatives. Of these sizes, only 6000 x 4006 uses half-size cells, and its size is even. Alpha has no difference.
+
+| Change | Gain |
+| --- | --- |
+| At full size, the vertical pass and the step are one dispatch, with no blurred image. | 1.3 ms at 4096 |
+| The images between the steps have no alpha, so they use 12 in place of 16 bytes per pixel. | With the row below: 6.6 ms at 6000 |
+| With a half-size inhibitor, only the last step writes full-size amounts. The first amounts and the first step write their box mean directly, so there is no reduce pass. | See the row above |
+
+Together these change the film print after a slider change from 7.2 to 5.8 ms at 2560, from 16.8 to 14.1 ms at 4096, and from 27.3 to 20.7 ms at 6000. At 6000 the two steps with their blurs go from 9.7 to 4.6 ms.
+
+**Measured, and not adopted:**
+
+| Candidate | Result | Reason |
+| --- | --- | --- |
+| Half-float images between the steps | No gain at 4096 (14.3 ms), and up to 0.08 codes of difference | At full size, the cost follows pixels x taps, not the bytes: from 2560 to 4096, a factor 3.85 for a calculated 4.1 |
+| Dispatch blocks of other shapes (256 x 1, 64 x 4, 8 x 32, 1 x 256) | No gain; a vertical pass with 1 x 256 is 10 times slower | |
+| A block cache in shared memory, and one weight for three channels | At most about 1 ms at 4096, inside the noise of the runs (13.8 to 14.6 ms) | Not worth a form that F6 and F7 must port |
+| A blur reach of 3 sigma | About 1 ms at 4096, with up to 7.9 codes of difference | Changes rule `_kernel` of the lab for a small gain |
+| Half-size limit of 3 pixels in place of 4, with the aligned cells | **10.0 ms at 4096 in place of 14.1.** Difference from full size: `kodak_5207` p99.9 0.03, largest 0.86; `kodak_portra_400` 0.06, 1.91; `fuji_eterna_500` 0.28, 8.19. No change at 2560 or 6000 | Changes an approved lab rule, and the largest value is over the limit of 5 of `check_fast_image_steps.py` on one negative. Issue [#639](https://github.com/zidage/AlcedoStudio/issues/639) holds the decision |
+| Half-size limit of 2 pixels | About 0.3 ms at 2560 (measured before the half-size changes), with up to 11.8 codes of difference | A small gain for a large difference |
+
 **What was proven (executed tests, final sRGB in 8 bit codes):**
 
 | Required name / criterion | Target | Result |
@@ -594,6 +620,8 @@ Together these change the film print after a slider change, in this cost test, f
 | `FilmPrintAllocationFailureReportsTheErrorAndPublishesNoPartialResult`: a failure at each allocation of the render | `GpuDagCudaDrtProductTest` | PASS, 11 failures |
 | `FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs` | `GpuDagCudaDrtProductTest` | PASS, values above |
 | `FilmPrintFusedSpreadMatchesSeparatePasses`, limit 0.01 | `GpuDagCudaDrtProductTest` | PASS, largest 0.00008 |
+| `FilmPrintHalfSizeCellsStayOnTheirPixelsAtAnOddSize`, limit 0.01. With the old cells this case gives 5.0 | `GpuDagCudaDrtProductTest` | PASS |
+| `FilmPrintKeepsTheAlphaOfTheScene` | `GpuDagCudaDrtProductTest` | PASS |
 | `FilmPrintImagePlan.*`, 10 cases of sizes and rules | `GpuDagRawInputTest` | PASS |
 | `RuntimeInvalidation.FilmPrintResultsFollowANewDrtInput` | `GpuDagRawInputTest` | PASS |
 

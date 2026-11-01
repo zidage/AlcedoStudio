@@ -114,8 +114,9 @@ void PlanInhibitor(const ResolvedRenderGeometry& geometry, const FilmImagePlaneC
     return;
   }
   plan.inhibitor_extent = {(std::max)(width / 2U, 1U), (std::max)(height / 2U, 1U)};
-  plan.inhibitor_x      = MakeKernel(ReducedSigma(sigma_x, plan.inhibitor_extent.width, width));
-  plan.inhibitor_y      = MakeKernel(ReducedSigma(sigma_y, plan.inhibitor_extent.height, height));
+  // A cell has two pixels, also on an odd size. See HalfCellStart.
+  plan.inhibitor_x      = MakeKernel(ReducedSigma(sigma_x, 1U, 2U));
+  plan.inhibitor_y      = MakeKernel(ReducedSigma(sigma_y, 1U, 2U));
 }
 
 void PlanHalation(const ResolvedRenderGeometry& geometry, const FilmImagePlaneConstants& constants,
