@@ -35,6 +35,8 @@
 
 ## Still Planned
 
+- [ ] Add the film print DRT method: spectral film and print tables on the host, then CUDA, Metal, and
+      OpenCL passes; see the [Film Print DRT Plan](alcedo_studio/edit/film_print_drt_plan.md).
 - [ ] Fix the review findings of the executor ownership refactor, starting with history moves
       during an open input sequence; see the
       [Executor Ownership Refactor Review Findings](alcedo_studio/edit/executor_ownership_review_findings.md).
