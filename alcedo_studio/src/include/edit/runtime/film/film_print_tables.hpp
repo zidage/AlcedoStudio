@@ -32,10 +32,13 @@ struct FilmPrintTableData {
   std::vector<double>    uv_exposure;
   std::vector<double>    print_cube_root_xyz;  ///< (edge, edge, edge, 3), red varying slowest
   std::vector<std::byte> print_rgba;
+  /// The point kernels read these values. Layout: film_print_kernel_tables::Layout.
+  std::vector<float>     kernel_values;
   std::int64_t           uv_nodes = 0;
   std::uint32_t          edge     = 0;
   ContentKey             uv_key{};
   ContentKey             print_key{};
+  ContentKey             kernel_key{};
   std::int64_t           outside_curve     = 0;  ///< Layer values outside the paper curve
   std::int64_t           print_not_reached = 0;  ///< Nodes where the paper dye solve did not reach
 
@@ -92,6 +95,9 @@ class FilmPrintTables {
       -> std::shared_ptr<const FilmPrintTableData>;
 
   [[nodiscard]] auto Stats() const -> FilmPrintTableStats;
+
+  /// The resources of these tables. Read-only, and valid for the life of this object.
+  [[nodiscard]] auto Bundle() const -> const FilmStockBundle& { return *bundle_; }
 
  private:
   struct NegativeStage {

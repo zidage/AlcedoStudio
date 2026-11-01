@@ -241,6 +241,7 @@ endif()
 def_library(EditRuntimeFilm
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_array_file.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_print_resources.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_print_tables.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_stock_bundle.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_tables.cpp
@@ -334,6 +335,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_sensor_demosaic.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_runtime_state.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_film_print_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_neighbor_grade.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_local_tone_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_mask_pass.cu
@@ -342,7 +344,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_primary_grade_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/geometry_resample.cu
         PUBLIC_DEPS EditRuntime CUDA::cudart
-        PRIVATE_DEPS EditInput RawProcessorOp EditRuntimeLens EditScope CudaDemosaicNetEntry PreviewPerformance
+        PRIVATE_DEPS EditInput RawProcessorOp EditRuntimeFilm EditRuntimeLens EditScope CudaDemosaicNetEntry PreviewPerformance
     )
     target_compile_definitions(EditRuntimeCuda PUBLIC HAVE_CUDA)
 endif()

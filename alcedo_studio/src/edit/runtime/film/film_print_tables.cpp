@@ -14,6 +14,7 @@
 #include <string>
 #include <utility>
 
+#include "edit/runtime/film/film_print_kernel_tables.hpp"
 #include "edit/runtime/film/film_tables.hpp"
 
 namespace alcedo {
@@ -119,7 +120,7 @@ auto AllFinite(std::span<const double> values) -> bool {
 
 auto FilmPrintTableData::ByteSize() const -> std::size_t {
   return uv_exposure.size() * sizeof(double) + print_cube_root_xyz.size() * sizeof(double) +
-         print_rgba.size();
+         print_rgba.size() + kernel_values.size() * sizeof(float);
 }
 
 FilmPrintTables::FilmPrintTables(std::shared_ptr<const FilmStockBundle> bundle,
@@ -281,6 +282,13 @@ auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_
                        .MixText(negative)
                        .MixText(scene_light)
                        .Key();
+  result->kernel_key    = ContentHash{}
+                           .MixU32(kTableImplementationVersion)
+                           .MixText("kernel values")
+                           .MixText(bundle_->ContentDigest())
+                           .MixText(negative)
+                           .MixText(scene_light)
+                           .Key();
 
   {
     const auto          start = std::chrono::steady_clock::now();
@@ -344,7 +352,9 @@ auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_
                              " has a value that is not finite");
   }
   result->print_rgba = PackPrintRgba(result->print_cube_root_xyz);
-  const auto bytes   = result->ByteSize();
+  result->kernel_values =
+      film_print_kernel_tables::MakeValues<float>(*bundle_, negative, result->uv_exposure);
+  const auto bytes = result->ByteSize();
   Keep<FilmPrintTableData>(results_, print_key, result, bytes);
   return result;
 }

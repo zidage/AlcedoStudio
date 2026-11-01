@@ -1,0 +1,80 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <cmath>
+#include <cstddef>
+#include <string>
+#include <vector>
+
+#include "edit/runtime/film/film_print_kernel_tables.hpp"
+#include "edit/runtime/film/film_print_tables.hpp"
+
+namespace alcedo::film_print_reference {
+
+#define FILM_KERNEL_DOUBLE
+#include "edit/runtime/film/film_print_math.h"
+#undef FILM_KERNEL_DOUBLE
+
+struct Rgb {
+  double r = 0.0;
+  double g = 0.0;
+  double b = 0.0;
+};
+
+/**
+ * @brief Double-precision form of the point stages, from the same math as the kernels.
+ *
+ * It runs on the host tables of one selection, with no blur and no Enlarger flare: FP1, FP4, the
+ * two steps of FP5, and FP6, then the sRGB curve.
+ */
+class FilmPrintPointReference {
+ public:
+  FilmPrintPointReference(const FilmStockBundle& bundle, const FilmPrintTableData& tables,
+                          const std::string& negative, const std::string& print_material,
+                          const std::string& scene_light)
+      : values_(
+            film_print_kernel_tables::MakeValues<double>(bundle, negative, tables.uv_exposure)) {
+    film_print_kernel_tables::FillParams(bundle, negative, print_material, scene_light, tables.edge,
+                                         params_);
+    // The host table has red varying slowest. The math reads red varying fastest.
+    const std::size_t edge = tables.edge;
+    print_rgba_.resize(edge * edge * edge * 4, 1.0);
+    for (std::size_t b = 0; b < edge; ++b) {
+      for (std::size_t g = 0; g < edge; ++g) {
+        for (std::size_t r = 0; r < edge; ++r) {
+          for (std::size_t k = 0; k < 3; ++k) {
+            print_rgba_[((b * edge + g) * edge + r) * 4 + k] =
+                tables.print_cube_root_xyz[((r * edge + g) * edge + b) * 3 + k];
+          }
+        }
+      }
+    }
+  }
+
+  /// Linear AP1 to final sRGB.
+  [[nodiscard]] auto Srgb(float r, float g, float b) const -> Rgb {
+    const auto q = FilmKernelLayerExposure(&params_, values_.data(), r, g, b);
+    auto       a = FilmKernelFirstAmounts(&params_, values_.data(), q);
+    if (params_.inhibition_stored != 0U) {
+      a = FilmKernelInhibitedStep(&params_, values_.data(), q, a);
+      a = FilmKernelInhibitedStep(&params_, values_.data(), q, a);
+    }
+    const auto linear =
+        FilmKernelFinishDisplay(&params_, FilmKernelPrintDisplay(&params_, print_rgba_.data(), a));
+    return {Encode(linear.r), Encode(linear.g), Encode(linear.b)};
+  }
+
+ private:
+  static auto Encode(double x) -> double {
+    return x <= 0.0031308 ? 12.92 * x : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055;
+  }
+
+  std::vector<double> values_;
+  std::vector<double> print_rgba_;
+  FilmKernelParams    params_{};
+};
+
+}  // namespace alcedo::film_print_reference

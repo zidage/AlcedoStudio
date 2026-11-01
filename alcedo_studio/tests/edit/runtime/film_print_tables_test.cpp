@@ -26,6 +26,7 @@
 
 #include "edit/graph/film_print_model.hpp"
 #include "edit/runtime/film/film_array_file.hpp"
+#include "edit/runtime/film/film_print_kernel_tables.hpp"
 #include "edit/runtime/film/film_stock_bundle.hpp"
 #include "edit/runtime/film/film_tables.hpp"
 #include "utils/hash/sha256.hpp"
@@ -165,6 +166,15 @@ void WriteSyntheticResources(const fs::path& directory) {
   stock["common/print_contrast"] = F64Array({}, {0.85});
   stock["common/print_flash"]    = F64Array({}, {0.02});
   stock["common/viewing_flare"]  = F64Array({}, {0.003});
+  stock["common/ap1_to_xyz"]     = F64Array({3, 3}, {0.7, 0.2, 0.1, 0.3, 0.6, 0.1, 0.0, 0.1, 0.9});
+  stock["common/locus_normals"]  = F64Array({2, 2}, {1.0, 0.0, 0.0, 1.0});
+  stock["common/locus_room"]     = F64Array({2}, {4.0, 5.0});
+  stock["common/locus_white"]    = F64Array({2}, {0.95, 1.08});
+  stock["common/locus_inset"]    = F64Array({}, {0.001});
+  stock["common/uv_max"]         = F64Array({2}, {0.66, 0.62});
+  stock["common/gamut_threshold"] = F64Array({3}, {0.815, 0.803, 0.88});
+  stock["common/gamut_limit"]     = F64Array({3}, {1.4, 1.3, 1.312});
+  stock["common/gamut_power"]     = F64Array({}, {1.2});
   stock["light/flat/spectrum"]   = F64Array({kWavelengths}, Flat(1.0));
   stock["light/ramp/spectrum"]   = F64Array({kWavelengths}, {0.5, 0.75, 1.0, 1.25, 1.5, 1.75});
   for (const auto& stock_entry : std::map<std::string, double>{{"neg_a", 1.0}, {"neg_b", 1.2}}) {
@@ -181,7 +191,22 @@ void WriteSyntheticResources(const fs::path& directory) {
     stock[name("exposure_weights")]   = F64Array({3, kWavelengths}, exposure_weights);
     stock[name("density_grid_start")] = F64Array({3}, {0.0, 0.01, 0.02});
     stock[name("density_grid_stop")]  = F64Array({3}, {2.0 * scale, 2.5 * scale, 3.0 * scale});
+    stock[name("criterion_log_h")]    = F64Array({3}, {-1.0, -1.1, -1.2});
+    stock[name("curve_density")]      = F64Array(
+        {3, 4}, {0.1, 0.4 * scale, 0.9, 1.5, 0.1, 0.5, 1.0, 1.6, 0.1, 0.3, 0.8, 0.8});
+    stock[name("curve_lengths")]     = ArrayValues{"i8", {3}, ToBytes<std::int64_t>({4, 4, 3})};
+    stock[name("curve_log_h_start")] = F64Array({3}, {-3.0, -2.5, -2.0});
+    stock[name("curve_log_h_step")]  = F64Array({}, {0.5});
   }
+  // neg_b has no inhibition, as a stock with no modulation transfer data.
+  stock["negative/neg_a/inhibition_k"] =
+      F64Array({3, 3}, {0.1, 0.02, 0.03, 0.04, 0.2, 0.05, 0.06, 0.07, 0.3});
+  stock["negative/neg_a/inhibition_free"] =
+      F64Array({3, 3}, {0.1, 0.6, 1.1, 0.2, 0.7, 1.2, 0.3, 0.8, 0.8});
+  stock["negative/neg_a/inhibition_lengths"] =
+      ArrayValues{"i8", {3}, ToBytes<std::int64_t>({3, 3, 2})};
+  stock["negative/neg_a/inhibition_start"] = F64Array({3}, {-3.2, -2.7, -2.2});
+  stock["negative/neg_a/inhibition_step"]  = F64Array({}, {0.75});
   for (const auto& stock_entry :
        std::map<std::string, double>{{"paper_a", 1.0}, {"paper_b", 0.8}}) {
     const auto& id      = stock_entry.first;
@@ -471,6 +496,39 @@ TEST_F(FilmPrintTablesTest, PrintRgbaHasRedVaryingFastestAndKeepsTheValues) {
   }
 }
 
+TEST_F(FilmPrintTablesTest, KernelValuesFollowTheLayoutOfTheNegative) {
+  const auto      bundle = FilmStockBundle::Open(Resources());
+  FilmPrintTables tables(bundle);
+  const auto      with_inhibition = tables.Resolve("neg_a", "paper_a", "reference");
+  const auto      layout = film_print_kernel_tables::LayoutOf(*bundle, "neg_a");
+  EXPECT_EQ(layout.uv_values, static_cast<std::size_t>(kUvNodes * kUvNodes * 3));
+  EXPECT_EQ(layout.curve_values, 12u);
+  EXPECT_EQ(layout.inhibition_values, 9u);
+  EXPECT_EQ(layout.facets, 2u);
+  ASSERT_EQ(with_inhibition->kernel_values.size(), layout.ValueCount());
+  const auto& values = with_inhibition->kernel_values;
+  for (std::size_t index = 0; index < layout.uv_values; ++index) {
+    EXPECT_EQ(values[index], static_cast<float>(with_inhibition->uv_exposure[index]));
+  }
+  EXPECT_EQ(values[layout.CurvesOffset() + 1], 0.4f);
+  EXPECT_EQ(values[layout.InhibitionOffset() + 8], 0.8f);
+  EXPECT_EQ(values[layout.NormalsOffset() + 3], 1.0f);
+  EXPECT_EQ(values[layout.RoomOffset() + 1], 5.0f);
+
+  // neg_b has no inhibition.
+  const auto no_inhibition = film_print_kernel_tables::LayoutOf(*bundle, "neg_b");
+  EXPECT_EQ(no_inhibition.inhibition_values, 0u);
+  EXPECT_FALSE(bundle->Negative("neg_b").inhibition.Present());
+  EXPECT_EQ(tables.Resolve("neg_b", "paper_a", "reference")->kernel_values.size(),
+            no_inhibition.ValueCount());
+
+  // The key follows the negative and the light, and not the print material.
+  const auto other_paper = tables.Resolve("neg_a", "paper_b", "reference");
+  const auto other_light = tables.Resolve("neg_a", "paper_a", "daylight");
+  EXPECT_EQ(with_inhibition->kernel_key, other_paper->kernel_key);
+  EXPECT_NE(with_inhibition->kernel_key, other_light->kernel_key);
+}
+
 TEST_F(FilmPrintTablesTest, StageTablesAreReused) {
   FilmPrintTables tables(FilmStockBundle::Open(Resources()));
   (void)tables.Resolve("neg_a", "paper_a", "reference");
@@ -616,6 +674,8 @@ struct LabSelection {
 auto LabSelections() -> std::vector<LabSelection> {
   std::vector<LabSelection> selections;
   for (const auto& entry : fs::directory_iterator(fs::path(ALCEDO_FILM_PRINT_EXPECTED_DIR))) {
+    // The subdirectory 'display' holds the values of the kernel tests.
+    if (!entry.is_regular_file()) continue;
     const auto file     = FilmArrayFile::Parse(ReadBytes(entry.path()), entry.path());
     const auto metadata = file.Metadata();
     selections.push_back({entry.path(), metadata.at("negative").get<std::string>(),

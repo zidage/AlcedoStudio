@@ -231,6 +231,15 @@ class CudaBackend {
   [[nodiscard]] auto AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
                                 std::uint32_t edge, CommandContext& command_context)
       -> CudaLutBinding;
+  /**
+   * @brief Device copy of a read-only table with a content key, in the storage and byte limit of
+   *        the LUT cache. The binding has an edge size of 0.
+   *
+   * @p key and @p bytes must not be empty. Uploads only when the device does not hold @p key.
+   * @throws std::runtime_error when the allocation or the upload fails. Nothing is kept then.
+   */
+  [[nodiscard]] auto AcquireKeyedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                        CommandContext& command_context) -> CudaLutBinding;
   [[nodiscard]] auto DummyLut() -> CudaLutBinding;
   void               SetLutByteBudget(std::size_t bytes);
 
@@ -299,6 +308,10 @@ class CudaBackend {
   friend class Texture2D;
 
   void                   NoteMalloc() noexcept { ++malloc_count_; }
+  /// The cached device buffer of @p key and @p edge, after an upload when the device has none.
+  [[nodiscard]] auto     AcquireCachedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                             std::uint32_t edge, CommandContext& command_context)
+      -> CudaLutBinding;
 
   std::uint64_t          malloc_count_         = 0;
   std::uint64_t          free_count_           = 0;

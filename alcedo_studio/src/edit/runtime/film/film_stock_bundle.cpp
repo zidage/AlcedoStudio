@@ -99,6 +99,36 @@ auto CopyValues(std::span<const double> values, std::int64_t first) -> std::arra
   return out;
 }
 
+void RequireCurveLengths(std::span<const std::int64_t> lengths, std::int64_t stored_length,
+                         std::string_view id) {
+  if (std::ranges::any_of(lengths, [stored_length](std::int64_t length) {
+        return length < 2 || length > stored_length;
+      })) {
+    throw std::runtime_error("Film print resource: the curves of '" + std::string(id) +
+                             "' have an invalid length");
+  }
+}
+
+/// The characteristic curves of a negative or a paper. @p field gives the name of an array.
+template <class Field>
+auto ReadCurves(const FilmArrayFile& stock, const Field& field, std::string_view id)
+    -> FilmCurveView {
+  const auto shape = stock.Shape(field("curve_density"));
+  if (shape.size() != 2) {
+    throw std::runtime_error("Film print resource: the curves of '" + std::string(id) +
+                             "' do not have two axes");
+  }
+  const auto lengths = stock.I64(field("curve_lengths"), {3});
+  RequireCurveLengths(lengths, shape[1], id);
+  return {
+      .density       = stock.F64(field("curve_density"), {3, shape[1]}),
+      .lengths       = lengths,
+      .log_h_start   = stock.F64(field("curve_log_h_start"), {3}),
+      .stored_length = shape[1],
+      .log_h_step    = stock.F64(field("curve_log_h_step"), {})[0],
+  };
+}
+
 }  // namespace
 
 auto FilmStockBundle::Open(const std::filesystem::path& directory)
@@ -155,6 +185,21 @@ void FilmStockBundle::ReadCommonValues() {
   print_contrast_ = stock_.F64("common/print_contrast", {})[0];
   print_flash_    = stock_.F64("common/print_flash", {})[0];
   viewing_flare_  = stock_.F64("common/viewing_flare", {})[0];
+  const auto normals = stock_.Shape("common/locus_normals");
+  if (normals.size() != 2 || normals[1] != 2 || normals[0] < 1) {
+    throw std::runtime_error("Film print resource: the locus normals do not have the shape (n, 2)");
+  }
+  point_constants_ = {
+      .ap1_to_xyz      = stock_.F64("common/ap1_to_xyz", {3, 3}),
+      .locus_normals   = stock_.F64("common/locus_normals", {normals[0], 2}),
+      .locus_room      = stock_.F64("common/locus_room", {normals[0]}),
+      .locus_white     = stock_.F64("common/locus_white", {2}),
+      .uv_max          = stock_.F64("common/uv_max", {2}),
+      .gamut_threshold = stock_.F64("common/gamut_threshold", {3}),
+      .gamut_limit     = stock_.F64("common/gamut_limit", {3}),
+      .locus_inset     = stock_.F64("common/locus_inset", {})[0],
+      .gamut_power     = stock_.F64("common/gamut_power", {})[0],
+  };
 }
 
 void FilmStockBundle::ReadReflectance(const FilmArrayFile& file) {
@@ -231,32 +276,39 @@ void FilmStockBundle::CheckShapes() const {
 
 auto FilmStockBundle::Negative(std::string_view id) const -> FilmNegativeView {
   (void)IndexOf(negatives_, id, "negative");
-  const auto field = [&](std::string_view name) { return ArrayName("negative", id, name); };
+  const auto         field = [&](std::string_view name) { return ArrayName("negative", id, name); };
+  FilmInhibitionView inhibition;
+  if (stock_.Contains(field("inhibition_free"))) {
+    const auto shape = stock_.Shape(field("inhibition_free"));
+    if (shape.size() != 2 || shape[0] != 3 || shape[1] < 2) {
+      throw std::runtime_error("Film print resource: the inhibition curves of '" + std::string(id) +
+                               "' do not have the shape (3, n)");
+    }
+    inhibition = {
+        .k             = stock_.F64(field("inhibition_k"), {3, 3}),
+        .free_values   = stock_.F64(field("inhibition_free"), {3, shape[1]}),
+        .lengths       = stock_.I64(field("inhibition_lengths"), {3}),
+        .log_h_start   = stock_.F64(field("inhibition_start"), {3}),
+        .stored_length = shape[1],
+        .log_h_step    = stock_.F64(field("inhibition_step"), {})[0],
+    };
+    RequireCurveLengths(inhibition.lengths, inhibition.stored_length, id);
+  }
   return {
       .base               = stock_.F64(field("base"), {wavelengths_}),
       .dyes               = stock_.F64(field("dyes"), {3, wavelengths_}),
       .exposure_weights   = stock_.F64(field("exposure_weights"), {3, wavelengths_}),
       .density_grid_start = stock_.F64(field("density_grid_start"), {3}),
       .density_grid_stop  = stock_.F64(field("density_grid_stop"), {3}),
+      .criterion_log_h    = stock_.F64(field("criterion_log_h"), {3}),
+      .curves             = ReadCurves(stock_, field, id),
+      .inhibition         = inhibition,
   };
 }
 
 auto FilmStockBundle::PrintMaterial(std::string_view id) const -> FilmPaperView {
   (void)IndexOf(papers_, id, "print material");
-  const auto field       = [&](std::string_view name) { return ArrayName("paper", id, name); };
-  const auto curve_shape = stock_.Shape(field("curve_density"));
-  if (curve_shape.size() != 2) {
-    throw std::runtime_error("Film print resource: the curves of '" + std::string(id) +
-                             "' do not have two axes");
-  }
-  const auto stored_length = curve_shape[1];
-  const auto lengths       = stock_.I64(field("curve_lengths"), {3});
-  if (std::ranges::any_of(lengths, [stored_length](std::int64_t length) {
-        return length < 2 || length > stored_length;
-      })) {
-    throw std::runtime_error("Film print resource: the curves of '" + std::string(id) +
-                             "' have an invalid length");
-  }
+  const auto field = [&](std::string_view name) { return ArrayName("paper", id, name); };
   return {
       .base              = stock_.F64(field("base"), {wavelengths_}),
       .dyes              = stock_.F64(field("dyes"), {3, wavelengths_}),
@@ -266,15 +318,8 @@ auto FilmStockBundle::PrintMaterial(std::string_view id) const -> FilmPaperView 
       .white_xyz         = stock_.F64(field("white_xyz"), {3}),
       .status_axis_start = stock_.F64(field("status_axis_start"), {3}),
       .status_axis_range = stock_.F64(field("status_axis_range"), {3}),
-      .curves =
-          {
-              .density       = stock_.F64(field("curve_density"), {3, stored_length}),
-              .lengths       = lengths,
-              .log_h_start   = stock_.F64(field("curve_log_h_start"), {3}),
-              .stored_length = stored_length,
-              .log_h_step    = stock_.F64(field("curve_log_h_step"), {})[0],
-          },
-      .xyz_scale = stock_.F64(field("xyz_scale"), {})[0],
+      .curves            = ReadCurves(stock_, field, id),
+      .xyz_scale         = stock_.F64(field("xyz_scale"), {})[0],
   };
 }
 

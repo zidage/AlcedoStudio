@@ -21,6 +21,7 @@
 #include "edit/runtime/cuda/cuda_drt_gpu_params.cuh"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
 #include "edit/runtime/cuda/cuda_drt_runtime_state.hpp"
+#include "edit/runtime/cuda/cuda_film_print_pass.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
 #include "edit/runtime/cuda/drt/disp_enc_funcs.cuh"
 #include "edit/runtime/cuda/drt/odt_funcs.cuh"
@@ -65,8 +66,7 @@ struct CudaDrtOps {
   using LutBinding        = CudaLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteCudaDrt";
-  /// A film print stops with an error until the kernels of this backend exist.
-  static constexpr bool        kImplementsFilmPrint = false;
+  static constexpr bool        kImplementsFilmPrint = true;
 
   /// Post neighborhood parameters travel in the command, not in an arena slot.
   static void RefreshNeighborhoodAdjustment(CudaRenderDevice&, const IOperatorModel&,
@@ -161,6 +161,13 @@ struct CudaDrtOps {
     DrtKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
         static_cast<const float4*>(scene_tex.DevicePointer()),
         static_cast<float4*>(display_tex.DevicePointer()), pixels, params);
+  }
+
+  static void DispatchFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
+                                const DrtNodeModel& drt, const FrameSceneBinding& scene,
+                                const FrameSceneBinding& display, std::uint32_t width,
+                                std::uint32_t height) {
+    RecordCudaFilmPrint(device, plan, drt, scene, display, width, height);
   }
 
   static void CheckAfterEncode(CudaRenderDevice&) {

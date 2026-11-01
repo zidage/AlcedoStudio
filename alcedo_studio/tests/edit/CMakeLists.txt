@@ -456,6 +456,7 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_expected_output_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_diffusion_filter_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_print_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
@@ -465,9 +466,22 @@ if(ALCEDO_CUDA_ENABLED)
   # The frame presenter gets scope analysis from EditScope. This target must not link the legacy
   # pipeline (FramePresenterLinksScopeWithoutEditPipeline checks its link line).
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
-    GTest::gtest_main EditRuntimeCuda EditScope EditInput Image)
+    GTest::gtest_main EditRuntimeCuda EditRuntimeFilm EditScope EditInput Image)
   target_compile_definitions(GpuDagCudaDrtProductTest PRIVATE
     ALCEDO_DRT_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/drt")
+  # The film print cases read the resources from config/film_print next to the executable, as the
+  # product does. They are not in Git, so with no resource directory these cases skip.
+  if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+    add_custom_command(TARGET GpuDagCudaDrtProductTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+        "$<TARGET_FILE_DIR:GpuDagCudaDrtProductTest>/config/film_print"
+      VERBATIM)
+  endif()
+  if(ALCEDO_FILM_PRINT_EXPECTED_DIR)
+    target_compile_definitions(GpuDagCudaDrtProductTest PRIVATE
+      ALCEDO_FILM_PRINT_EXPECTED_DIR="${ALCEDO_FILM_PRINT_EXPECTED_DIR}")
+  endif()
   gtest_discover_tests(GpuDagCudaDrtProductTest TEST_PREFIX "GpuDagCudaDrtProductTest."
     PROPERTIES LABELS "gpu;edit;runtime;product")
   alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)

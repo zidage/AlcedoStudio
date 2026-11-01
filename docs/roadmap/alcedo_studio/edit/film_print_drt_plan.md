@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1 and F2 are complete (2026-11-01). F3 to F7 have not started.
+Status: **In progress.** F1, F2, and F3 are complete (2026-11-01). F4 to F7 have not started.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -287,7 +287,7 @@ Non-finite table value -> std::runtime_error with the selection, from Resolve ->
 **Source facts for later phases:**
 
 - `AcquireLut` limit: 64 MiB on CUDA, OpenCL, and Metal (`lut_byte_budget_`). No production code calls `SetLutByteBudget`. The limit holds about 14 print tables of 4.4 MB.
-- `SampleLut3d` reads a value `u` at `u * edge - 0.5`, and the lab reads a density at `(d - start) / step` on nodes. Phase F3 must convert with `u = (node + 0.5) / edge`.
+- `SampleLut3d` reads a value `u` at `u * edge - 0.5`, and the lab reads a density at `(d - start) / step` on nodes. Phase F3 must convert with `u = (node + 0.5) / edge`. (Changed in F3: `film_print_math.h` has its own read on nodes.)
 
 **Host stage times (Release, Intel Core i7-12700H, 20 threads, 3 runs, a new selection):**
 
@@ -419,7 +419,65 @@ Caller suites: `EditorPanelProjectionTest`, `AdjustmentTransferCatalogTest`, `Do
 8. **Tests.** New cases in `GpuDagCudaDrtProductTest`: `FilmPrintRampMatchesLab`, neutral ramp largest at most 0.5; `FilmPrintChartMatchesReference`, largest at most 1.0; `FilmPrintOutputIsFinite`, an AP1 image with negative values and values above the curve end.
 9. **Exit criteria.** All pass on the development GPU.
 10. **Expected diff.** 1000 lines.
-11. **Completion record.** Pending.
+11. **Completion record.** See below.
+
+##### Phase F3 completion record (2026-11-01)
+
+**Status:** complete. A render of a film print on CUDA runs FP1, FP4, FP5 with no blur, and FP6 with no flare. The sliders Light spread, Halation, and Enlarger flare have no effect until phase F4.
+
+**Primary success call chain:**
+
+```text
+DrtPostExecutor::Execute -> CudaDrtOps::DispatchFilmPrint -> RecordCudaFilmPrint
+  -> DrtOutputResolver::ResolveNode -> SharedFilmPrintTables -> FilmPrintTables::Resolve
+  -> CudaBackend::AcquireLut (print table) -> CudaBackend::AcquireKeyedBuffer (kernel values)
+  -> film_print_kernel_tables::FillParams
+  -> ExposureKernel -> FirstAmountsKernel -> InhibitedStepKernel (two times) -> DisplayKernel
+```
+
+**Primary failure call chain:**
+
+```text
+Unsupported output, missing or damaged resource, or upload failure
+  -> std::runtime_error from RecordCudaFilmPrint -> PlanExecutor catch -> device.CancelRender()
+  -> nothing is published, and the next render runs the DRT pass again
+Kernel launch error -> CudaDrtOps::CheckAfterEncode -> the same catch
+```
+
+**Decisions that the plan did not specify:**
+
+- `film_print_math.h` has its own trilinear read, in place of `SampleLut3d`, which is private to `cuda_primary_grade_pass.cu`. All backends can share this read, and it reads nodes directly, so the conversion that F1 recorded is not necessary.
+- The lab limits a table position to `nodes - 1.000001`, which is `nodes - 1` in float32 at these sizes. The math limits the cell to `nodes - 2`, so the read of the last node has a share of 1.
+- The locus projection multiplies its test by Y, in place of a division by Y. The result is the same for Y above 0. With a division, a very small Y moved X / Y out of the float32 range and the output was not finite.
+- The u'v' table, the curves, and the locus values are one float32 buffer, `FilmPrintTableData::kernel_values`, with the key `kernel_key`. `Resolve` makes it once for each selection. `CudaBackend::AcquireKeyedBuffer` holds it in the storage and the byte limit of the LUT cache, so one limit covers all film print tables on the device.
+- The fixed values are a kernel argument by value (`FilmKernelParams`), with no parameter slot. They do not depend on a revision, and an export override needs no special case.
+- Each point stage has its own kernel and writes to a pool texture, because F4 puts the blurs between them. F3 uses 2 pool textures at the render size.
+- `SharedFilmPrintTables` is one owner for the process, so all devices share the host tables. A failed open keeps nothing.
+- `kFilmPrintImplementationVersion` is 2. `kDrtImplementationVersion` stays at 6.
+- The display curve comes from the output resolve through `CeDisplayEncodeChannel`, after the clip of the lab. The lab values use sRGB, so the tests select the sRGB curve.
+- `scene_flare` of the lab is 0 for all stocks and is not in the resources, so the math has no such term.
+- Lab values: `build_display_expected.py` of alcedo-film-lab (`e35ff15`) writes `expected/display/` under `ALCEDO_FILM_PRINT_EXPECTED_DIR`, for the 3 selections of F1 and `kodak_gold_200`, which has no inhibition. They are not in Git. The script sets the lab to 2 inhibition steps for the ramp and the chart, because the kernels run 2 steps. The resource directory is copied to `config/film_print/` next to the test executable. Without these directories the film print cases skip, which is not a pass.
+- `FilmPrintChartMatchesReference` also compares the reference with the lab, with a limit of 1.0, because the reference is new code.
+
+**Measured largest difference, final sRGB, 8 bit codes (Debug, RTX 3080 Laptop):**
+
+| Selection | Ramp against the lab (limit 0.5) | Chart against the reference (limit 1.0) | Reference against the lab (limit 1.0) |
+| --- | --- | --- | --- |
+| `kodak_5207`, `kodak_2383`, `reference` | 0.0002 | 0.0072 | 0.0022 |
+| `kodak_portra_400`, `kodak_endura_premier`, `daylight` | 0.0006 | 0.0259 | 0.0039 |
+| `fuji_eterna_500`, `kodak_2383`, `street_mixed` | 0.3277 | 0.0533 | 0.4412 |
+| `kodak_gold_200`, `kodak_2383`, `reference` | 0.0002 | 0.0038 | 0.0024 |
+
+**What was proven (executed tests):** see the pull request of this phase. The target is `GpuDagCudaDrtProductTest`, suite `CudaFilmPrintFixture`, and `FilmPrintTablesTest`.
+
+**Checklist / exit condition:** all required cases pass on the development GPU.
+
+**Not verified:**
+
+- `film_print_math.h` did not compile as OpenCL C or Metal. Phases F6 and F7 compile it.
+- No build ran on macOS.
+- No performance values: phase F4 measures the complete chain in a Release build.
+- The full test suite did not run.
 
 ### F4: CUDA image-plane steps and timing
 

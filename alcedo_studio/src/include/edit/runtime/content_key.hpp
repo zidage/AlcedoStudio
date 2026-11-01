@@ -33,7 +33,8 @@ inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 2;
 /// transform. Version 6 spreads the diffusion highlight boost over a log2 exposure range.
 inline constexpr std::uint32_t kDrtImplementationVersion           = 6;
 /// Bumped when film print pixel rules change. Other DRT methods do not mix this value.
-inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 1;
+/// Version 2 adds the point kernels on CUDA. Before it, a film print stopped with an error.
+inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 2;
 /// Bumped when mask raster sampling or Union key structure changes. Version 3 is per-source Union.
 inline constexpr std::uint32_t kMaskImplementationVersion          = 3;
 
