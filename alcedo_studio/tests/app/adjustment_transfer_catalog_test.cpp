@@ -429,6 +429,18 @@ TEST(AdjustmentTransferCatalogTest, CatalogListsDevelopRowFirstWithRawAndGeometr
   EXPECT_EQ(develop.items.at(3).display_value, "3.5 deg");
 }
 
+TEST(AdjustmentTransferCatalogTest, CatalogNamesTheFilmPrintMethod) {
+  auto               document = CreateDefaultPipelineDocument();
+  DrtParameterUpdate update;
+  update.method = DrtMethod::FilmPrint;
+  document.Drt()->Params().ApplyUpdate(update);
+  std::string error;
+  const auto  nodes = AdjustmentTransferCatalogService::BuildNodeDescriptors(document, &error);
+  ASSERT_TRUE(nodes.has_value()) << error;
+  ASSERT_FALSE(nodes->empty());
+  EXPECT_EQ(nodes->back().items.at(0).display_value, "Film Print");
+}
+
 TEST(AdjustmentTransferCatalogTest, CatalogBuildsDrtPostItemsFromCurrentOwners) {
   auto        document = CreateDefaultPipelineDocument();
   std::string error;

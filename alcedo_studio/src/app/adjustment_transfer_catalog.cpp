@@ -232,7 +232,15 @@ auto BuildDevelopItems(const PipelineDocument& document, const DevelopNodeModel&
 }
 
 auto DrtMethodText(DrtMethod method) -> std::string {
-  return method == DrtMethod::Aces20 ? "ACES 2.0" : "OpenDRT";
+  switch (method) {
+    case DrtMethod::Aces20:
+      return "ACES 2.0";
+    case DrtMethod::FilmPrint:
+      return "Film Print";
+    case DrtMethod::OpenDrt:
+    default:
+      return "OpenDRT";
+  }
 }
 
 auto AdjustmentItemDescriptor(const AdjustmentInstanceId& instance_id,

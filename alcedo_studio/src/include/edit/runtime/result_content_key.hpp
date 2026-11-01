@@ -23,6 +23,9 @@ namespace alcedo {
  * Each compiled output also has an entry in @ref values keyed by @ref GraphValueId.
  * @ref primary_grade is the first compiled Color Grade scene key, or a no-Grade
  * identity derived from Develop when the backbone has none.
+ *
+ * @ref film_uv_table and @ref film_print_table follow only the selections of the film print, so a
+ * slider change keeps them. They are empty for other DRT methods.
  */
 struct FrameResultContentKeys {
   ContentKey                           sensor_linear{};
@@ -31,6 +34,8 @@ struct FrameResultContentKeys {
   ContentKey                           primary_grade{};
   ContentKey                           drt_display{};
   ContentKey                           mask{};
+  ContentKey                           film_uv_table{};
+  ContentKey                           film_print_table{};
   ImageExtent                          sensor_extent{};
   ImageExtent                          geometry_extent{};
   std::map<GraphValueId, ContentKey>   values;

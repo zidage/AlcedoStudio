@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1 is complete (2026-11-01). F2 to F7 have not started.
+Status: **In progress.** F1 and F2 are complete (2026-11-01). F3 to F7 have not started.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -342,7 +342,70 @@ Suite totals: 27/27 on Debug and on Release. The lab script: 11 selections again
 8. **Tests.** `drt_diffusion_filter_model_test` in its form, new `DrtFilmPrintModelTest`: round trip, omission for other methods, rejection of out-of-range values. `graph_compiler_test`: the plan keeps its passes. `drt_output_resolver_test`: HDR is an error. `drt_post_executor_test`: the film print schedule has no Halation, and the other methods keep it.
 9. **Exit criteria.** All existing expected values pass with no change.
 10. **Expected diff.** 900 lines.
-11. **Completion record.** Pending.
+11. **Completion record.** See below.
+
+##### Phase F2 completion record (2026-11-01)
+
+**Status:** complete. The document holds the method and the plan compiles. A render of a film print stops with a named error on CUDA, OpenCL, and Metal until the kernels of that backend exist.
+
+**Primary success call chain:**
+
+```text
+DrtParamsModel::ApplyUpdate -> RequireValidFilmPrintUpdate -> MutateWithDirtyFields (DrtDirty::FilmPrint)
+  -> RuntimeInvalidationState::CollectDrtChanges (film.halation.0, film.flare.0, display)
+  -> GraphCompiler::CompileDrt (same passes and steps as the other methods)
+  -> BuildFrameResultContentKeys (film_uv_table, film_print_table, drt_display)
+  -> PlanExecutor -> PassEncoder<Backend, GpuPassKind::Drt> -> DrtPostExecutor::Execute
+```
+
+**Primary failure call chains:**
+
+```text
+Invalid update -> ApplyUpdate throws std::invalid_argument with the field -> no field changes
+Invalid document -> LoadJson throws std::runtime_error with the key -> no field changes
+Film print with HDR, another encoding space, or a linear encoding
+  -> DrtOutputResolver::ResolveNode throws -> PlanExecutor catch -> device.CancelRender()
+Film print with a supported encoding, until F3
+  -> DrtPostExecutor::Execute throws "<prefix>: the film print is not implemented on this backend"
+```
+
+**Decisions that the plan did not specify:**
+
+- The identifier lists are constants in `film_print_model.hpp`, because a Model reads no resource file and the model tests do not need F1. `FilmPrintTablesLabTest.ShippedListsMatchTheIdentifiersOfTheDocumentModel` compares them with the shipped bundle. A change of the stock list must change these constants.
+- `OutputTransformJson` holds `film_print`, so `ToJson` and the `odt` history value both have it. Only the method `film_print` writes it. The fields stay in memory while another method is selected, but a saved document of another method does not hold them.
+- A document with no `film_print` object, or with a missing key, reads the defaults. `LoadJson` now reads `diffusion` and `film_print` before it changes a field, so a rejected document changes nothing.
+- An export to a space that other methods encode as Rec. 709 (for example ProPhoto) stops for a film print. The check reads the requested space, not the result of `ExportSpaceToDrt`. All SDR curves of the catalog pass: gamma 1.8, 2.2, 2.6, BT.1886, and sRGB.
+- `MethodFromString` still reads an unknown method as OpenDRT, as it did before this phase. The rejection of unknown identifiers applies to the fields of `film_print`.
+- `Ops::kImplementsFilmPrint` selects the stop in `DrtPostExecutor::Execute`. Phase F3 sets it to true for CUDA, F6 for OpenCL, and F7 for Metal. The executor resolves the output first, so that an unsupported encoding reports its own error.
+- `DrtPostNeighborhoodRuns` is the one rule for the schedule and for the works of `Execute`. The parameter slot of Halation stays, as `CollectParameterSlotKeys` lists all compiled adjustments.
+- `kDrtImplementationVersion` stays at 6. New `kFilmPrintImplementationVersion` covers film print pixel rules, and only a film print mixes it. Phases F3 and later raise this value, not the DRT version.
+- The frame keys `film_uv_table` and `film_print_table` follow the selections only and are empty for other methods. They do not hold the digest of the bundle; `FilmPrintTableData` holds its own keys with the digest.
+- The canonical results have edges from the scene input and the scatter image, because the film print reads the scene after the diffusion filter, and they use the canonical identity of the scatter image.
+- `ColorUtils::ODTMethod` has `FILM_PRINT`. `CudaDrtMethod` and the Pack functions do not change, because no film print reaches them before F3.
+
+**Source facts for phase F5:**
+
+- `ParseDrtUpdate` still rejects the method `film_print` and the key `film_print`, so history replay and adjustment transfer of a film print fail with the real error until F5 adds them. The editor cannot select the method before F5.
+- A raster document can have a P3 D65 encoding, and the resolver stops that with a film print. The panel of F5 hides the encoding controls, so selecting the film print must also write Rec. 709 and an SDR curve.
+
+**What was proven (executed tests, Debug):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `DrtFilmPrintModelTest`: round trip, omission for other methods, rejection of out-of-range values | `GpuDagModelGraphTest` | PASS |
+| `GpuDagGraphCompiler.FilmPrintKeepsThePassesAndStepsOfOtherMethods` | `GpuDagRawInputTest` | PASS |
+| `DrtOutputResolver.FilmPrintRejectsHdrAndLinearEncodings`, and the cases of encoding space and export | `GpuDagModelGraphTest` | PASS |
+| `DrtPostSchedule.FilmPrintScheduleHasNoHalationAndOtherMethodsKeepIt` | `GpuDagRawInputTest` | PASS |
+| `RuntimeInvalidation.FilmPrintSliderInvalidatesItsResultsAndDisplayAndKeepsTheScene` | `GpuDagRawInputTest` | PASS |
+| `GpuDagResultContentKey.FilmPrintSliderChangesDisplayKeyAndKeepsTableKeys` | `GpuDagRawInputTest` | PASS |
+| `FilmPrintRenderStopsWithNamedErrorUntilItsKernelsExist`, CUDA and OpenCL | `GpuDagCudaDrtProductTest`, `GpuDagOpenClDrtProductTest` | PASS |
+| All existing expected values, with no change | The same targets | PASS |
+
+**Checklist / exit condition:** all existing expected values pass with no change.
+
+Caller suites: `EditorPanelProjectionTest`, `AdjustmentTransferCatalogTest`, `DocumentTransferTest`, `EditorPipelineCommandServiceTest`, and `ProjectCompatibilityTest` ran 81 tests. 80 pass. `DocumentTransferTest.TransferPackageCarriesOnlyOwnedDevelopKeysAndNoCaches` fails on the `version` key of the Color Wheel. Issues #484 and #554 report this failure, and this phase adds no such key.
+
+**Not verified:** no build ran on macOS, so the one-constant change of `metal_drt_pass.mm` did not compile and the Metal stop did not run. The full test suite did not run.
 
 ### F3: CUDA point kernels
 

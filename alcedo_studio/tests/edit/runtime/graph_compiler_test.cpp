@@ -361,6 +361,34 @@ TEST(GpuDagGraphCompiler, ZeroGradesFeedDevelopIntoDrtPost) {
   EXPECT_EQ(diffusion.front()->inputs.front().source, plan.develop_output);
 }
 
+TEST(GpuDagGraphCompiler, FilmPrintKeepsThePassesAndStepsOfOtherMethods) {
+  auto               reference = CreateDefaultPipelineDocument();
+  auto               document  = CreateDefaultPipelineDocument();
+  DrtParameterUpdate update;
+  update.method = DrtMethod::FilmPrint;
+  document.Drt()->Params().ApplyUpdate(update);
+
+  const auto expected = GraphCompiler::CompileStatic(reference, DirectRgbSource());
+  const auto plan     = GraphCompiler::CompileStatic(document, DirectRgbSource());
+
+  ASSERT_EQ(plan.passes.size(), expected.passes.size());
+  for (std::size_t index = 0; index < plan.passes.size(); ++index) {
+    EXPECT_EQ(plan.passes[index].kind, expected.passes[index].kind) << index;
+  }
+  EXPECT_TRUE(plan.Contains(GpuPassKind::DiffusionFilter));
+  EXPECT_TRUE(plan.Contains(GpuPassKind::Drt));
+  ASSERT_EQ(plan.drt.steps.size(), expected.drt.steps.size());
+  EXPECT_EQ(plan.drt.steps.front().kind, CompiledDrtStepKind::DisplayTransform);
+  EXPECT_EQ(plan.drt.steps.front().input, plan.drt.scene_linear);
+  EXPECT_EQ(plan.display_output, expected.display_output);
+  // The Halation type stays compiled. The schedule skips it at encode time.
+  ASSERT_EQ(plan.drt.post_adjustments.size(), expected.drt.post_adjustments.size());
+  EXPECT_TRUE(std::any_of(plan.drt.post_adjustments.begin(), plan.drt.post_adjustments.end(),
+                          [](const CompiledAdjustment& adjustment) {
+                            return adjustment.type == type_ids::Halation();
+                          }));
+}
+
 TEST(GpuDagGraphCompiler, DiffusionFilterDecodesLastGradeOutputBeforeEveryDrt) {
   // The pass is compiled for a document without a stored diffusion strength, so the DRT never
   // decodes ACEScc itself and a strength edit never recompiles the plan.

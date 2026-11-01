@@ -19,6 +19,8 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/runtime/diffusion_filter_plan.hpp"
+#include "edit/runtime/film_print_plan.hpp"
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
@@ -106,6 +108,71 @@ TEST(RuntimeInvalidation, FirstCollectAssignsRequiredRevisionsAheadOfCompleted) 
   EXPECT_EQ(harness.Completed(harness.plan.sensor_linear_output), 0U);
   EXPECT_GT(harness.Required(harness.plan.display_output),
             harness.Completed(harness.plan.display_output));
+}
+
+TEST(RuntimeInvalidation, FilmPrintSliderInvalidatesItsResultsAndDisplayAndKeepsTheScene) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto drt_id   = harness.plan.drt.node_id;
+  const auto halation = FilmHalationResultId(drt_id);
+  const auto flare    = FilmFlareResultId(drt_id);
+  EXPECT_NE(halation, flare);
+  EXPECT_GT(harness.Required(halation), 0U);
+  EXPECT_GT(harness.Required(flare), 0U);
+  const auto         halation_before = harness.Required(halation);
+  const auto         flare_before    = harness.Required(flare);
+  const auto         display_before  = harness.Required(harness.plan.display_output);
+  const auto         scatter_before  = harness.Required(DiffusionScatterId(drt_id));
+  const auto         scene_before    = harness.Required(harness.Primary().scene_output);
+
+  DrtParameterUpdate update;
+  update.film_halation = 2.0f;
+  harness.document.Drt()->Params().ApplyUpdate(update);
+  harness.Collect();
+
+  EXPECT_GT(harness.Required(halation), halation_before);
+  EXPECT_GT(harness.Required(flare), flare_before);
+  EXPECT_GT(harness.Required(harness.plan.display_output), display_before);
+  EXPECT_EQ(harness.Required(DiffusionScatterId(drt_id)), scatter_before);
+  EXPECT_EQ(harness.Required(harness.Primary().scene_output), scene_before);
+}
+
+TEST(RuntimeInvalidation, DiffusionAndSceneChangesInvalidateFilmPrintResults) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto halation = FilmHalationResultId(harness.plan.drt.node_id);
+  const auto flare    = FilmFlareResultId(harness.plan.drt.node_id);
+
+  auto       required = harness.Required(halation);
+  harness.document.Drt()->Params().ApplyDiffusionStrength(0.5f);
+  harness.Collect();
+  EXPECT_GT(harness.Required(halation), required);
+  EXPECT_EQ(harness.Required(flare), harness.Required(halation));
+
+  required       = harness.Required(halation);
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(1.0f);
+  harness.Collect();
+  EXPECT_GT(harness.Required(halation), required);
+  EXPECT_EQ(harness.Required(flare), harness.Required(halation));
+}
+
+TEST(RuntimeInvalidation, FilmPrintResultsUseTheCanonicalIdentityOfTheScatterImage) {
+  ValidityHarness harness;
+  harness.Collect();
+  const ImageExtent extent{16, 12};
+  const auto        scatter = harness.invalidation.MakeImageRepresentation(
+      DiffusionScatterId(harness.plan.drt.node_id), extent, TextureFormat::Rgba32f);
+  for (const auto& id : {FilmHalationResultId(harness.plan.drt.node_id),
+                         FilmFlareResultId(harness.plan.drt.node_id)}) {
+    EXPECT_TRUE(IsFilmPrintResultPort(id));
+    EXPECT_EQ(
+        harness.invalidation.MakeImageRepresentation(id, extent, TextureFormat::Rgba32f).identity,
+        scatter.identity);
+  }
+  EXPECT_FALSE(IsFilmPrintResultPort(harness.plan.display_output));
 }
 
 TEST(RuntimeInvalidation, CollectLeavesEveryDocumentRevisionUnchanged) {

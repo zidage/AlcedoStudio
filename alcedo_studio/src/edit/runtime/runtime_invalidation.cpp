@@ -14,6 +14,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/dirty_field_mask.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
+#include "edit/runtime/film_print_plan.hpp"
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/result_content_key.hpp"
 
@@ -113,6 +114,14 @@ void RuntimeInvalidationState::BindCompiledPlan(const ExecutionPlan& plan) {
   AddEdge(plan.SceneInputForDrt(), scatter);
   AddEdge(scatter, plan.display_output);
   Ensure(scatter);
+  // The canonical film print results read the scene after the diffusion filter.
+  for (const auto& result :
+       {FilmHalationResultId(plan.drt.node_id), FilmFlareResultId(plan.drt.node_id)}) {
+    AddEdge(plan.SceneInputForDrt(), result);
+    AddEdge(scatter, result);
+    AddEdge(result, plan.display_output);
+    Ensure(result);
+  }
   Ensure(plan.sensor_linear_output);
   Ensure(plan.geometry_output);
   Ensure(plan.develop_output);
@@ -230,6 +239,13 @@ void RuntimeInvalidationState::CollectDrtChanges(
     origins.push_back(DiffusionScatterId(plan.drt.node_id));
     last_diffusion_revision_ = diffusion_revision;
   }
+  const auto film_print_revision =
+      drt->Params().FieldsRevision(DirtyFieldMask{DrtDirty::FilmPrint});
+  if (film_print_revision != last_film_print_revision_) {
+    origins.push_back(FilmHalationResultId(plan.drt.node_id));
+    origins.push_back(FilmFlareResultId(plan.drt.node_id));
+    last_film_print_revision_ = film_print_revision;
+  }
   for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
     const AdjustmentKey key{drt->Id(), drt->AdjustmentIdAt(index)};
     changed = ObserveRevision(last_adjustment_revision_, seen_adjustments, key,
@@ -255,6 +271,8 @@ void RuntimeInvalidationState::CollectStructureChanges(const ExecutionPlan& plan
   collect_if_unassigned(plan.develop_output);
   collect_if_unassigned(plan.display_output);
   collect_if_unassigned(DiffusionScatterId(plan.drt.node_id));
+  collect_if_unassigned(FilmHalationResultId(plan.drt.node_id));
+  collect_if_unassigned(FilmFlareResultId(plan.drt.node_id));
 
   std::set<NodeId> current_grades;
   for (const auto& grade : plan.grade_nodes) {
@@ -360,6 +378,7 @@ void RuntimeInvalidationState::ClearLastSeenRevisions() {
   last_white_balance_revision_ = kNoParameterRevision;
   last_drt_revision_           = kNoParameterRevision;
   last_diffusion_revision_     = kNoParameterRevision;
+  last_film_print_revision_    = kNoParameterRevision;
 }
 
 void RuntimeInvalidationState::Clear() {
@@ -420,7 +439,7 @@ auto RuntimeInvalidationState::MakeImageRepresentation(const GraphValueId& id, I
   repr.source_detail  = source_detail;
   if (id == sensor_output_) {
     repr.identity = sensor_identity_;
-  } else if (IsLocalTonePort(id) || IsDiffusionScatterPort(id)) {
+  } else if (IsLocalTonePort(id) || IsDiffusionScatterPort(id) || IsFilmPrintResultPort(id)) {
     repr.identity = canonical_identity_;
   } else {
     repr.identity = frame_identity_;

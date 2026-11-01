@@ -136,7 +136,15 @@ auto ReadDrtFlatScalar(const PipelineDocument& document, const EditorParameterTa
 }
 
 auto DrtMethodText(DrtMethod method) -> const char* {
-  return method == DrtMethod::Aces20 ? "aces_2_0" : "open_drt";
+  switch (method) {
+    case DrtMethod::Aces20:
+      return "aces_2_0";
+    case DrtMethod::FilmPrint:
+      return "film_print";
+    case DrtMethod::OpenDrt:
+    default:
+      return "open_drt";
+  }
 }
 
 auto DrtSpaceText(DrtColorSpace space) -> const char* {

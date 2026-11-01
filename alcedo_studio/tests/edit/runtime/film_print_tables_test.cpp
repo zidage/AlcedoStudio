@@ -24,6 +24,7 @@
 #include <thread>
 #include <vector>
 
+#include "edit/graph/film_print_model.hpp"
 #include "edit/runtime/film/film_array_file.hpp"
 #include "edit/runtime/film/film_stock_bundle.hpp"
 #include "edit/runtime/film/film_tables.hpp"
@@ -718,6 +719,21 @@ TEST_F(FilmPrintTablesLabTest, ShippedListsHoldTheStocksOfThePlan) {
   EXPECT_EQ(bundle_->SceneLights().size(), 11u);
   EXPECT_EQ(bundle_->SceneLights()[0], "reference");
   EXPECT_NO_THROW((void)bundle_->Selection("kodak_5207", "kodak_2383", "reference"));
+}
+
+TEST_F(FilmPrintTablesLabTest, ShippedListsMatchTheIdentifiersOfTheDocumentModel) {
+  ASSERT_EQ(bundle_->Negatives().size(), kFilmNegativeIds.size());
+  for (const auto& negative : bundle_->Negatives()) {
+    EXPECT_TRUE(IsFilmIdentifier(kFilmNegativeIds, negative.id)) << negative.id;
+  }
+  ASSERT_EQ(bundle_->PrintMaterials().size(), kFilmPrintMaterialIds.size());
+  for (const auto& material : bundle_->PrintMaterials()) {
+    EXPECT_TRUE(IsFilmIdentifier(kFilmPrintMaterialIds, material.id)) << material.id;
+  }
+  ASSERT_EQ(bundle_->SceneLights().size(), kFilmSceneLightIds.size());
+  for (const auto& light : bundle_->SceneLights()) {
+    EXPECT_TRUE(IsFilmIdentifier(kFilmSceneLightIds, light)) << light;
+  }
 }
 
 TEST_F(FilmPrintTablesLabTest, RecordsTheHostTimeOfEachStage) {

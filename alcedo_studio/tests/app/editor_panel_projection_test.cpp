@@ -175,6 +175,22 @@ void SetOwnedScalars(PipelineDocument& document) {
 
 }  // namespace
 
+TEST(EditorPanelProjectionTest, FilmPrintMethodProjectsItsOwnName) {
+  auto               document = CreateDefaultPipelineDocument();
+  DrtParameterUpdate update;
+  update.method = DrtMethod::FilmPrint;
+  document.Drt()->Params().ApplyUpdate(update);
+
+  EditorPanelProjection projection;
+  std::string           error;
+  ASSERT_TRUE(ProjectCurrentPanelFields(document, 1, &projection, &error)) << error;
+  const auto* odt = FindField(projection, "odt");
+  ASSERT_NE(odt, nullptr);
+  const auto* odt_value = std::get_if<EditorPanelOdtValue>(&odt->value);
+  ASSERT_NE(odt_value, nullptr);
+  EXPECT_EQ(odt_value->method, "film_print");
+}
+
 TEST(EditorPanelProjectionTest, ProjectsToneLookLutRawOdtAndGeometryFromExplicitInstances) {
   auto document = CreateDefaultPipelineDocument();
   SetOwnedScalars(document);

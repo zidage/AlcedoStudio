@@ -297,6 +297,39 @@ TEST(GpuDagCudaDrtProduct, DefaultCudaPipelineBuildsThreeVisibleNodes) {
   EXPECT_EQ(document.ToJson().at("format_version"), kPipelineDocumentFormatVersion);
 }
 
+TEST_F(CudaDrtProductFixture, FilmPrintRenderStopsWithNamedErrorUntilItsKernelsExist) {
+  auto               document = CreateDefaultPipelineDocument();
+  DrtParameterUpdate update;
+  update.method = DrtMethod::FilmPrint;
+  document.Drt()->Params().ApplyUpdate(update);
+  try {
+    (void)Render(document);
+    FAIL() << "the film print rendered on a backend with no film print kernels";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string{error.what()}.find("film print is not implemented on this backend"),
+              std::string::npos)
+        << error.what();
+  }
+
+  auto recovered = CreateDefaultPipelineDocument();
+  EXPECT_FALSE(Render(recovered).empty());
+}
+
+TEST_F(CudaDrtProductFixture, FilmPrintHdrRenderReportsTheOutputErrorFirst) {
+  auto               document = CreateDefaultPipelineDocument();
+  DrtParameterUpdate update;
+  update.method        = DrtMethod::FilmPrint;
+  update.encoding_eotf = DrtEotf::St2084;
+  document.Drt()->Params().ApplyUpdate(update);
+  try {
+    (void)Render(document);
+    FAIL() << "the film print rendered with HDR";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string{error.what()}.find("the film print encodes only SDR"), std::string::npos)
+        << error.what();
+  }
+}
+
 TEST_F(CudaDrtProductFixture, CudaDrtOpenDrtProducesFiniteDisplayReferredOutput) {
   auto       document = CreateDefaultPipelineDocument();
   const auto pixels   = Render(document);
