@@ -89,8 +89,12 @@ auto MakeDiffusionFilterLayout(ImageExtent canvas_extent, const DiffusionFilterS
 auto MakeDiffusionScatterMapping(const ResolvedRenderGeometry& geometry,
                                  const DiffusionFilterLayout&  layout)
     -> DiffusionScatterMapping {
+  return MakeDiffusionScatterMapping(geometry, layout.extents[0]);
+}
+
+auto MakeDiffusionScatterMapping(const ResolvedRenderGeometry& geometry, ImageExtent base)
+    -> DiffusionScatterMapping {
   const auto reference = geometry.full_reference_extent;
-  const auto base      = layout.extents[0];
   if (reference.Empty() || base.width == 0 || base.height == 0) {
     throw std::invalid_argument("MakeDiffusionScatterMapping: empty reference or base extent");
   }

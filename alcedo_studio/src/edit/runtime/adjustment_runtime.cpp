@@ -64,18 +64,6 @@ void BuildGaussianWeights(float sigma, std::uint32_t max_radius, GradeNeighborPa
   }
 }
 
-auto RenderAxisScale(const ResolvedRenderGeometry& geometry, bool horizontal) -> float {
-  const auto& matrix                            = geometry.render_to_reference.m;
-  const float dx                                = horizontal ? matrix[0] : matrix[1];
-  const float dy                                = horizontal ? matrix[3] : matrix[4];
-  const float reference_pixels_per_render_pixel = std::hypot(dx, dy);
-  if (!(reference_pixels_per_render_pixel > 0.0f) ||
-      !std::isfinite(reference_pixels_per_render_pixel)) {
-    return 1.0f;
-  }
-  return std::clamp(1.0f / reference_pixels_per_render_pixel, 1.0e-4f, 1.0f);
-}
-
 /** @brief Mean of the X/Y render-to-reference scales, clamped like the per-axis helper. */
 auto NeighborhoodRenderScale(const ResolvedRenderGeometry& geometry) -> float {
   return 0.5f * (RenderAxisScale(geometry, true) + RenderAxisScale(geometry, false));

@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1, F2, and F3 are complete (2026-11-01). F4 to F7 have not started.
+Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). F5 to F7 have not started.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -123,10 +123,10 @@ of phase F5 confirms it.
 
 ### 3.1 Sizes
 
-These are calculations. Phase F4 measures them.
+These are calculations. The record of phase F4 holds the measured memory and times.
 
 - Peak full-size images: 3 (input, output, and the temporary image of a separable blur in FP2). After FP2 the chain
-  uses 2 full-size images for exposure and amounts, with half-size buffers for FP4 at large sizes. At a small size the inhibitor blur needs a third full-size image. At 24 MP, one `float4` image is 384 MB.
+  uses 2 full-size images for exposure and amounts, with half-size buffers for FP4 at large sizes. At a small size the inhibitor blur uses the temporary image of FP2. At 24 MP, one `float4` image is 384 MB.
 - Blur sizes at a 6000 pixel long edge, for a 36 mm frame (6 um per pixel): spread sigma at most about 1.2 pixels at
   slider 1, inhibitor 5.8 pixels before the half-size reduction.
 - Halation (sigma 20 pixels at this size) and Enlarger flare (sigma 10 % of the long edge) exceed
@@ -136,7 +136,7 @@ These are calculations. Phase F4 measures them.
 
 Halation and Enlarger flare read published canonical results, as `DiffusionScatterId` does, so a zoom or a viewport does not
 change them. They are `film.halation.0` and `film.flare.0`. FP2 and FP4 run on the pixels of the render, with a size in pixels
-from the frame and `RenderAxisScale`. So the visible effect of a light spread is smaller in a fit-to-window preview than at full size, as on film. This is an inference from the sizes of section 3.1; phase F4 measures it. The audit of phase F4 finds the margin that an ROI edge needs.
+from the frame and `RenderAxisScale`. So the visible effect of a light spread is smaller in a fit-to-window preview than at full size, as on film. This is an inference from the sizes of section 3.1. The record of phase F4 holds the audit: an ROI edge needs a margin of 49 pixels at slider 1, the source has no ROI margin, and FP2 and FP4 use the boundary rule reflect at the ROI edge.
 
 ---
 
@@ -492,7 +492,101 @@ Kernel launch error -> CudaDrtOps::CheckAfterEncode -> the same catch
 9. **Evidence.** Release build, RTX 3080 Laptop, 24 MP: time per pass, first and warm renders, GPU memory peak. Proposed performance target: at most 150 ms for the film print passes. If the target is not met, report the pass times and stop for a user decision.
 10. **Exit criteria.** All tests pass. The record states the evidence of item 9 and the source facts of the ROI audit.
 11. **Expected diff.** 1500 lines.
-12. **Completion record.** Pending.
+12. **Completion record.** See below.
+
+##### Phase F4 completion record (2026-11-01)
+
+**Status:** complete. The complete chain FP1 to FP6 runs on CUDA, and the sliders Light spread, Halation, and Enlarger flare act on the image. The 24 MP passes take about 60 ms, under the proposed target of 150 ms. The editor cannot select the method before phase F5.
+
+**Primary success call chain:**
+
+```text
+DrtPostExecutor::Execute -> CudaDrtOps::DispatchFilmPrint -> RecordCudaFilmPrint
+  -> MakeFilmPrintImagePlan (sizes from the frame, RenderAxisScale, and the canvas)
+  -> ExposureKernel (FP1)
+  -> BlurHorizontalKernel, BlurVerticalKernel, two times (FP2)
+  -> ReadOrBuildCanvasResult (film.halation.0: DecideDiffusionScatter, CanvasReduceKernel, blur, RecordUnpublished)
+  -> HalationMixKernel (FP3) -> FirstAmountsKernel (FP4)
+  -> BoxReduceKernel, blur, InhibitedStepHalfSizeKernel, two times (FP4, FP5)
+  -> ReadOrBuildCanvasResult (film.flare.0: CanvasReduceKernel of 10^-a, BoxReduceKernel, blur, RecordUnpublished)
+  -> DisplayKernel (FP6)
+ROI render -> BindValidResult of both results -> the same kernels read the published images
+```
+
+**Primary failure call chain:**
+
+```text
+Allocation failure, or a blur beyond the tap limit
+  -> std::runtime_error from RecordCudaFilmPrint -> PlanExecutor catch -> device.CancelRender()
+  -> RecordUnpublished entries are discarded -> no partial canonical result is visible
+```
+
+**Source facts of the ROI audit (section 3.2):**
+
+- The render extent is the visible ROI. `render_geometry_resolver.cpp` adds no margin, so the DRT pass has no pixels outside the ROI.
+- The neighborhood steps of `cuda_neighbor_grade.cuh` have no margin either. They clamp a read to the render (`ReadClamped`).
+- An ROI edge of the film print needs a margin of 49 pixels at slider 1 and 6 um per pixel: 5 for the spread, and 2 x 22 for the two inhibitor blurs. This phase adds no margin, because a margin changes the geometry of each pass. FP2 and FP4 use the boundary rule reflect at the ROI edge.
+- Measured on `_DSC8148` (`kodak_5207`, a 1600 x 1200 ROI), in 8 bit codes: the edge band has a mean of 0.052, p99 1.30, p99.9 3.66, and a largest value of 47.9. Inside the band the largest value is 0.038, because the half-size grid of the inhibitor has another phase. Issue [#636](https://github.com/zidage/AlcedoStudio/issues/636) holds the decision for the review of phase F5.
+
+**Decisions that the plan did not specify:**
+
+- `film.flare.0` is on the canvas, reduced by rule 'large_blur_on_reduced_image': 60 x 40 texels at 2048 pixels, with a sigma of about 6 texels. A FIR of sigma 205 on the canvas would need about 820 taps per side. The lab uses the same reduced grid. All sizes come from the reference frame, so a zoom does not change them.
+- `film.halation.0` holds the blurred Q after the spread, as in the lab. The canvas has a sigma of 6.8 texels at 2048 pixels.
+- A reduction takes out the variance of the box and of the bilinear read (1/4 of a reduced pixel), as the lab does. A canvas at the size of the frame has no reduction, so its sigma does not change.
+- `CanvasReduceKernel` reads `ceil(footprint)^2` nearest render pixels, in place of the bilinear reads of the Diffusion pass, because a blur of at least 6 texels follows. The flare form averages 10^-a in this kernel, so there is no full-size transmittance image.
+- A frame with an edge below 16 pixels has no image plane: lab rule 'no_image_plane_steps_on_ramps'. The test is on the reference frame, not on the ROI. The ramp and chart cases of F3 use this rule.
+- `FilmBlurKernel` holds one half of a kernel for each layer and travels by value, so a slider change uploads nothing. The limit is 128 taps, which holds a spread at slider 3 up to a long edge of about 40000 pixels. A larger blur stops with an error that states the sigma.
+- After FP2, the first exposure image holds the amounts, so FP2 needs only 3 full-size images and FP4 adds none. A full-size inhibitor uses the middle image of FP2.
+- Each slider or selection change marks both results stale, as F2 does. An ROI with no valid result builds temporary images from its own pixels and publishes nothing, as the Diffusion filter does.
+- A new DRT input now marks both results stale in `CollectStructureChanges`. F2 marked only the scatter image.
+- `RenderAxisScale` moved to `resolved_render_geometry.hpp` with no change, so the film print and the adjustment runtime share one rule.
+- `kFilmPrintImplementationVersion` is 3.
+- The lab values come from `build_image_expected.py` of alcedo-film-lab (`cd23015`). They are not in Git, and without them the image cases skip, which is not a pass. The script sets the option `foliage` to False, because the product resources do not have that uncommitted lab rule.
+
+**Cost record (Release, RTX 3080 Laptop, 6000 x 4006, `kodak_5207`, GPU time of one render in ms):**
+
+| Pass | First render | Warm, results valid | Warm, after a slider change |
+| --- | --- | --- | --- |
+| FP1 exposure | 15.2 | 12.4 | 12.4 |
+| FP2 spread, 2 passes | 31.6 | 26.5 | 27.3 |
+| FP3 canvas | 4.0 | 0.0 | 2.6 |
+| FP3 mix | 2.4 | 2.1 | 2.1 |
+| FP4 first amounts | 2.2 | 2.1 | 2.0 |
+| FP4 inhibitor blur, 2 times | 5.5 | 5.3 | 5.3 |
+| FP5 inhibited step, 2 times | 6.5 | 4.6 | 4.5 |
+| FP6 flare canvas | 1.6 | 0.0 | 1.6 |
+| FP6 display | 2.2 | 2.0 | 2.0 |
+| **GPU total** | **71.1** | **54.9** | **59.8** |
+| Wall time of the recording and the wait | 1115 | 65.7 | 70.4 |
+
+- The wall time of the first render includes the read of the bundle, the table build, and the upload. A new film on the same print material takes 170 ms.
+- The target of 150 ms holds, so the stop condition of this phase does not apply. Portra 400 has the same times within 1 ms.
+- GPU memory: the texture pool has a peak of 2145 MiB, which includes the scene and display images of the test (383 MiB each). So the film print takes about 1380 MiB at 24 MP.
+
+**What was proven (executed tests, final sRGB in 8 bit codes):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `FilmPrintImageMatchesLab`, limits p99.9 1.0 and largest 4.0 | `GpuDagCudaDrtProductTest` | PASS. `kodak_5207`: 0.44, 1.33. `kodak_portra_400`: 0.53, 1.47. `fuji_eterna_500`: 0.50, 1.16. Debug and Release |
+| `FilmPrintViewportKeepsCanvas`, the tolerance of the Diffusion test, 1e-5 x (1 + value) | `GpuDagCudaDrtProductTest` | PASS |
+| `FilmPrintSliderBuildsNoTable`: no table build and no upload, and each slider changes the image | `GpuDagCudaDrtProductTest` | PASS |
+| `FilmPrintAllocationFailureReportsTheErrorAndPublishesNoPartialResult`: a failure at each allocation of the render | `GpuDagCudaDrtProductTest` | PASS, 11 failures |
+| `FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs` | `GpuDagCudaDrtProductTest` | PASS, values above |
+| `FilmPrintImagePlan.*`, 9 cases of sizes and rules | `GpuDagRawInputTest` | PASS |
+| `RuntimeInvalidation.FilmPrintResultsFollowANewDrtInput` | `GpuDagRawInputTest` | PASS |
+
+Commands: the targets in `win_debug`, and the same target in `win_release` with `-DALCEDO_BUILD_TESTS=ON` and the two film print paths. The release tree then went back to its preset values. The record comes from `--gtest_also_run_disabled_tests --gtest_filter=*FilmPrintCostRecordAt24Megapixels`.
+
+Suite totals, Debug: `GpuDagCudaDrtProductTest` 98, `GpuDagRawInputTest` 216, `GpuDagModelGraphTest` 169, `FilmPrintTablesTest` 29. All pass. In `GpuDagOpenClDrtProductTest`, the named stop of the film print passes.
+
+**Checklist / exit condition:** all tests pass, and this record states the evidence of item 9 and the source facts of the ROI audit.
+
+**Not verified:**
+
+- No run in the application, so no real RAW path, zoom, or pan was seen. Phase F5 has the user review.
+- The times are for the film print passes only, with no earlier pass of the render.
+- No build ran on macOS. OpenCL and Metal have no image-plane steps until phases F6 and F7.
+- The full test suite did not run.
 
 ### F5: editor controls and user review
 

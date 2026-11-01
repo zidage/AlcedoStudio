@@ -399,6 +399,7 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/drt_post_executor_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/diffusion_filter_plan_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/film_print_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/renderer_metal_instantiate_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/result_content_key_test.cpp

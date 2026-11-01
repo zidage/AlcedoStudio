@@ -111,6 +111,14 @@ struct DiffusionScatterMapping {
                                                const DiffusionFilterLayout&  layout)
     -> DiffusionScatterMapping;
 
+/**
+ * @brief Map an image of @p base_extent that covers the full reference frame onto the render.
+ *
+ * @throws std::invalid_argument when the reference extent or @p base_extent is empty.
+ */
+[[nodiscard]] auto MakeDiffusionScatterMapping(const ResolvedRenderGeometry& geometry,
+                                               ImageExtent base_extent) -> DiffusionScatterMapping;
+
 /** @brief Host action chosen before any scatter GPU work. */
 enum class DiffusionScatterAction : std::uint8_t {
   SampleCanonical,
