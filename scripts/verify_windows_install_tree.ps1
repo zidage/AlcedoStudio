@@ -6,7 +6,8 @@
 param(
     [string]$InstallDir = "$PSScriptRoot\..\build\install",
     [string]$CudaBinDir = "$env:CUDA_PATH\bin",
-    [switch]$SkipOpenCLAssetCheck
+    [switch]$SkipOpenCLAssetCheck,
+    [switch]$RequireFilmPrintResources
 )
 
 $ErrorActionPreference = 'Stop'
@@ -106,6 +107,21 @@ function Assert-MinSize {
 # Real bayer/xtrans safetensors are ~130–160 KiB; LFS pointers are ~130 bytes.
 Assert-MinSize (Join-Path $binDir 'config\models\bayer.safetensors') 10240
 Assert-MinSize (Join-Path $binDir 'config\models\xtrans.safetensors') 10240
+
+if ($RequireFilmPrintResources) {
+    $filmPrintDir = Join-Path $binDir 'config\film_print'
+    $filmPrintManifestPath = Join-Path $filmPrintDir 'manifest.json'
+    Assert-File $filmPrintManifestPath
+    $filmPrintManifest = Get-Content -LiteralPath $filmPrintManifestPath -Raw | ConvertFrom-Json
+    foreach ($resource in $filmPrintManifest.resources.PSObject.Properties.Value) {
+        $resourcePath = Join-Path $filmPrintDir $resource.file
+        Assert-File $resourcePath
+        $digest = (Get-FileHash -LiteralPath $resourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($digest -ne $resource.sha256) {
+            throw "SHA-256 $digest is not the manifest value $($resource.sha256): $resourcePath"
+        }
+    }
+}
 
 Assert-AnyFile -Directory $binDir -Filter 'cudart64_*.dll'
 & (Join-Path $PSScriptRoot 'verify_windows_cuda_modules.ps1') -BinDir $binDir -CudaBinDir $CudaBinDir

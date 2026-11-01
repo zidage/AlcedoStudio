@@ -4,10 +4,11 @@ set -euo pipefail
 install_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/build/install"
 bundle_name="AlcedoStudio"
 skip_metal_assets=0
+require_film_print_resources=0
 
 usage() {
   cat <<USAGE
-Usage: $0 [--install-dir PATH] [--bundle-name NAME] [--skip-metal-asset-check]
+Usage: $0 [--install-dir PATH] [--bundle-name NAME] [--skip-metal-asset-check] [--require-film-print-resources]
 
 Verify that the macOS .app install tree contains the payload needed on a clean user Mac.
 USAGE
@@ -25,6 +26,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-metal-asset-check)
       skip_metal_assets=1
+      shift
+      ;;
+    --require-film-print-resources)
+      require_film_print_resources=1
       shift
       ;;
     -h|--help)
@@ -140,6 +145,17 @@ required_files=(
   "${resources_dir}/qml/QtQuick/Effects/qmldir"
   "${plugins_dir}/platforms/libqcocoa.dylib"
 )
+
+if [[ "$require_film_print_resources" -eq 1 ]]; then
+  film_print_dir="${macos_dir}/config/film_print"
+  assert_file "${film_print_dir}/manifest.json"
+  for film_print_file in film_stock_bundle.bin film_print_setup.bin film_reflectance_table.bin; do
+    assert_file "${film_print_dir}/${film_print_file}"
+    film_print_digest="$(shasum -a 256 "${film_print_dir}/${film_print_file}" | cut -d' ' -f1)"
+    grep -q "\"sha256\": \"${film_print_digest}\"" "${film_print_dir}/manifest.json" ||
+      fail "SHA-256 is not in the manifest: ${film_print_dir}/${film_print_file}"
+  done
+fi
 
 for file in "${required_files[@]}"; do
   assert_file "$file"

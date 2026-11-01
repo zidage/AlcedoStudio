@@ -874,6 +874,29 @@ function(alcedo_install_demosaicnet_models config_dir destination)
     install(FILES ${_alcedo_demosaicnet_models} DESTINATION "${destination}/config/models")
 endfunction()
 
+# Film print resources (docs/roadmap/alcedo_studio/edit/film_print_drt_plan.md, section 4). They are
+# not in Git. A release build names the output directory of build_product_resources.py of
+# alcedo-film-lab, and the installer ships an unchanged copy under config/film_print/.
+set(ALCEDO_FILM_PRINT_RESOURCE_DIR "" CACHE PATH
+    "Directory with manifest.json of the film print resources. Empty: the install tree has none.")
+set(ALCEDO_FILM_PRINT_EXPECTED_DIR "" CACHE PATH
+    "Directory with the lab values of FilmPrintTablesTest. Test input only; never installed.")
+function(alcedo_install_film_print_resources destination)
+    if("${ALCEDO_FILM_PRINT_RESOURCE_DIR}" STREQUAL "")
+        return()
+    endif()
+    set(_alcedo_film_print_files "")
+    foreach(_alcedo_file IN ITEMS manifest.json film_stock_bundle.bin film_print_setup.bin
+            film_reflectance_table.bin)
+        set(_alcedo_path "${ALCEDO_FILM_PRINT_RESOURCE_DIR}/${_alcedo_file}")
+        if(NOT EXISTS "${_alcedo_path}")
+            message(FATAL_ERROR "[alcedo] Film print resource missing: ${_alcedo_path}")
+        endif()
+        list(APPEND _alcedo_film_print_files "${_alcedo_path}")
+    endforeach()
+    install(FILES ${_alcedo_film_print_files} DESTINATION "${destination}/config/film_print")
+endfunction()
+
 # The GPU build owners provide the input files for each install inventory.
 function(alcedo_install_gpu_asset_checksums source_root destination)
     set(ALCEDO_GPU_ASSET_SOURCE_ROOT "${source_root}")
@@ -1031,6 +1054,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${_bundle_macos_dest}/config/nikon_lens")
         alcedo_install_legal_notices("${_bundle_resources_dest}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${_bundle_macos_dest}")
+        alcedo_install_film_print_resources("${_bundle_macos_dest}")
         alcedo_remove_installed_lut_payloads("${_bundle_macos_dest}/LUTs")
         alcedo_install_opencl_sources("${_bundle_macos_dest}")
         alcedo_install_metal_runtime_libs("${_bundle_resources_dest}/metallib")
@@ -1134,6 +1158,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/nikon_lens")
         alcedo_install_legal_notices("${CMAKE_INSTALL_BINDIR}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${CMAKE_INSTALL_BINDIR}")
+        alcedo_install_film_print_resources("${CMAKE_INSTALL_BINDIR}")
 
         alcedo_remove_installed_lut_payloads("${CMAKE_INSTALL_BINDIR}/LUTs")
         alcedo_install_opencl_sources("${CMAKE_INSTALL_BINDIR}")

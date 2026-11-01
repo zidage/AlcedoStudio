@@ -242,6 +242,21 @@ gtest_discover_tests(GpuDagModelGraphTest TEST_PREFIX "GpuDagModelGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;graph")
 alcedo_register_test_target(GpuDagModelGraphTest edit)
 
+# Film print DRT: resources and host tables, with no GPU. The comparison with the lab values needs
+# the output of build_product_resources.py of alcedo-film-lab, which is not in Git.
+add_executable(FilmPrintTablesTest
+  ${ALCEDO_TEST_ROOT}/edit/runtime/film_print_tables_test.cpp)
+target_include_directories(FilmPrintTablesTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(FilmPrintTablesTest PRIVATE GTest::gtest_main EditRuntimeFilm Sha256Digest)
+if(ALCEDO_FILM_PRINT_RESOURCE_DIR AND ALCEDO_FILM_PRINT_EXPECTED_DIR)
+  target_compile_definitions(FilmPrintTablesTest PRIVATE
+    ALCEDO_FILM_PRINT_RESOURCE_DIR="${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+    ALCEDO_FILM_PRINT_EXPECTED_DIR="${ALCEDO_FILM_PRINT_EXPECTED_DIR}")
+endif()
+gtest_discover_tests(FilmPrintTablesTest TEST_PREFIX "FilmPrintTablesTest."
+  PROPERTIES LABELS "edit;runtime;film_print")
+alcedo_register_test_target(FilmPrintTablesTest edit)
+
 # Executor ownership refactor P0: cost of the whole-document copy, static plan key, and Grade
 # parameter packing, recorded before P2 replaces the copy with a copy-on-write freeze.
 add_executable(PipelineDocumentCopyCostTest

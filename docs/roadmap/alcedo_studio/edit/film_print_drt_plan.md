@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **Planned.** No phase has started.
+Status: **In progress.** F1 is complete (2026-11-01). F2 to F7 have not started.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -158,7 +158,7 @@ calculates them; the product does not need the logic of `_camera_filter`, `_prin
 - All three sliders act on the image, so a slider change builds no table. A new film, print material, or scene light takes about 1 s on the host
   (lab P7, 20 threads).
 - Each resource has a schema version and a SHA-256 in a manifest.
-- The 71 MB table does not go into Git. Phase F1 fixes the delivery route with the release packaging.
+- The 71 MB table does not go into Git. Delivery route, from phase F1: the release installer ships the resources. `build_product_resources.py` of the lab makes the directory. `package_windows.ps1 -FilmPrintResourceDir DIR` and `package_macos.sh --film-print-resource-dir DIR` set `ALCEDO_FILM_PRINT_RESOURCE_DIR`, the install rule copies the unchanged files to `config/film_print/`, and the install tree check compares each file with the SHA-256 of the manifest. A release machine gets the directory from the lab script or from a copy of its output. There is no download at run time.
 - Before a release: license record of the training data of the reflectance table (ISSA and others, CC BY 4.0), spectral_film_lut (MIT), and the digitized
   Kodak values. This does not stop development.
 
@@ -239,7 +239,90 @@ Performance values come from a Release build only.
 8. **Tests (proposed).** `FilmPrintTablesTest.PrintTableMatchesLab` and `.UvTableMatchesLab`: largest relative difference 1e-9 against lab values for 3 selections. `.StageTablesAreReused`: a second selection with one paper builds no new stage B. `.DamagedResourceThrows`: a changed byte gives an error that names the file.
 9. **Exit criteria.** All tests pass. The record states stage times on the host.
 10. **Expected diff.** 1500 lines.
-11. **Completion record.** Pending.
+11. **Completion record.** See below.
+
+##### Phase F1 completion record (2026-11-01)
+
+**Status:** complete. Host tables and resources, with no document and no GPU. No product code calls `FilmPrintTables` until phase F3.
+
+**Primary success call chain:**
+
+```text
+FilmStockBundle::Open(directory)
+  -> ReadManifest -> ReadResource (size, SHA-256) -> FilmArrayFile::Parse (schema version, array bounds)
+  -> FilmStockBundle constructor (lists, shape of each array)
+FilmPrintTables::Resolve(negative, print_material, scene_light)
+  -> FilmStockBundle::Selection
+  -> film_tables::TableBandIntegral (u'v' table)
+  -> NegativeStageOf -> film_tables::Log10BandResponse (stage A, kept by negative and paper)
+  -> PaperStageOf -> film_tables::BuildPaperTable (stage B, kept by paper)
+  -> film_tables::ComposePrintTable -> PackPrintRgba
+  -> immutable FilmPrintTableData, kept by ContentKey
+```
+
+**Primary failure call chain:**
+
+```text
+Missing file, wrong size, wrong SHA-256, other schema version, or wrong array shape
+  -> std::runtime_error with the file name, from Open
+  -> no bundle object exists
+Unknown identifier -> std::runtime_error with the identifier, from Resolve -> no table is built
+Non-finite table value -> std::runtime_error with the selection, from Resolve -> no result is kept
+```
+
+**Decisions that the plan did not specify:**
+
+- Lab commits: `film_tables` is a copy from `8b16c67` of alcedo-film-lab, the last commit that changed the library. `build_product_resources.py` is from `40cee41`, which the manifest of the resources names. The product adds `TableBandIntegral`, the u'v' integral, on the same worker threads. The product copy is now the source of the library, as this phase states.
+- Each resource uses one array file (`film_array_file.hpp`): a JSON header, then raw arrays. The stock names are in the header of the stock bundle.
+- The bundle holds shared values once: per negative, per paper, and per pair. The script stops if a value differs between two selections that use it. The print setup is 167 KB and the stock bundle is 2.7 MB.
+- The bundle also holds the values of phase F3 (curves, inhibition, locus projection, gamut limits, and fixed strengths), so F3 needs no new schema version. F1 reads only the values of its tables.
+- One byte limit covers stage A, stage B, and complete results: 128 MiB, about 5 selections. `Resolve` keeps complete results because the render path of phase F3 calls it on each render. Stage A takes 6.6 MB, stage B takes 6.9 MB, and a complete result takes 11.9 MB.
+- One lock serializes `Resolve`, so each table builds one time. A new selection takes about 0.55 s.
+- `print_rgba` has red varying fastest, as `LutIndex` reads it. The lab table has red varying slowest.
+- Stage A depends on the negative and the paper, because the printing weights belong to the paper. A new scene light changes only the u'v' table and the composition.
+- The expected values are local output of the lab script and are not in Git. Without `ALCEDO_FILM_PRINT_RESOURCE_DIR` and `ALCEDO_FILM_PRINT_EXPECTED_DIR`, one test skips with a message in place of the comparison. This is not a pass. The other tests use small resources that the test writes.
+
+**Source facts for later phases:**
+
+- `AcquireLut` limit: 64 MiB on CUDA, OpenCL, and Metal (`lut_byte_budget_`). No production code calls `SetLutByteBudget`. The limit holds about 14 print tables of 4.4 MB.
+- `SampleLut3d` reads a value `u` at `u * edge - 0.5`, and the lab reads a density at `(d - start) / step` on nodes. Phase F3 must convert with `u = (node + 0.5) / edge`.
+
+**Host stage times (Release, Intel Core i7-12700H, 20 threads, 3 runs, a new selection):**
+
+| Stage | Time |
+| --- | --- |
+| `FilmStockBundle::Open`, with all SHA-256 checks | 0.29 to 0.31 s |
+| u'v' table | 0.007 to 0.009 s |
+| Stage A | 0.067 to 0.070 s |
+| Stage B | 0.46 to 0.49 s |
+| Composition | 0.012 to 0.014 s |
+
+**Resource sizes:** 73.8 MB in the install tree. A 7-Zip archive at level 5 takes 39.8 MB, as an estimate of the increase of the installer.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `FilmPrintTablesLabTest.PrintTableMatchesLab`, 3 selections, limit 1e-9 | `FilmPrintTablesTest` | PASS, largest 2.0e-15 |
+| `FilmPrintTablesLabTest.UvTableMatchesLab`, 3 selections, limit 1e-9 | `FilmPrintTablesTest` | PASS, largest 2.4e-15 |
+| `FilmPrintTablesTest.StageTablesAreReused` | `FilmPrintTablesTest` | PASS |
+| `FilmPrintTablesTest.DamagedResourceThrows`, each of 3 files | `FilmPrintTablesTest` | PASS |
+
+The plan names these four tests in one suite. The two lab comparisons are in the suite `FilmPrintTablesLabTest`, because they need the lab files.
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target FilmPrintTablesTest`, then the executable in `FilmPrintTablesTest_runtime/`, and `ctest --test-dir build/debug -R "^FilmPrintTablesTest\." -j 1`. For the times, the same target in `win_release` with `-DALCEDO_BUILD_TESTS=ON`. The release tree then went back to its preset values.
+
+Suite totals: 22/22 on Debug and on Release. The lab script: 11 selections against the complete `FilmPreview`, largest difference 1.8e-15, limit 1e-9.
+
+**Checklist / exit condition:** all tests pass, and this record states the stage times and the `AcquireLut` limit.
+
+**LOC note:** all new files are under 1000 lines.
+
+**Not verified:**
+
+- No complete package ran. The generated `cmake_install.cmake` of the Windows release tree holds the copy to `bin/config/film_print`. The SHA-256 logic of the Windows and macOS install tree checks ran alone on the resource directory.
+- No build ran on macOS.
+- The license record of section 4 stays a requirement before a release.
 
 ### F2: model, JSON, compile, and invalidation
 
@@ -260,7 +343,7 @@ Performance values come from a Release build only.
 1. **Objective.** FP1, FP4 and FP5 with no blur, and FP6 with no flare, on CUDA.
 2. **Inputs.** F1, F2.
 3. **Modules (proposed).** `include/edit/runtime/film/film_print_math.h`, shared by the host, CUDA, OpenCL C, and Metal in the form of `aces_reference_gamut_compression.h`; `edit/runtime/cuda/cuda_film_print_pass.cu`; `alcedo_studio/tests/edit/runtime/film_print_reference.hpp`, a double-precision host form on `film_print_math.h`.
-4. **Data rules.** Arithmetic is float32. The print table uses `AcquireLut`; the u'v' table and curves use content-keyed device buffers. All sizes of 3.1 hold.
+4. **Data rules.** Arithmetic is float32. The print table uses `AcquireLut`; the u'v' table and curves use content-keyed device buffers. All sizes of 3.1 hold. The first caller opens the bundle from `config/film_print/` next to the executable; F1 gives `Open` only a path.
 5. **Steps.** (a) Write the math header. (b) Write the reference. (c) Write the kernels. (d) Add dispatch to `CudaDrtOps`.
 6. **Success chain.** `CudaDrtOps::BindDisplayParams` -> `FilmPrintTables::Resolve` -> `AcquireLut` -> `DispatchDisplayTransform` -> film print kernels -> display image.
 7. **Failure chain.** A resolve error or a kernel launch error -> throw -> `CheckAfterEncode` or the `PlanExecutor` catch. The display result stays invalid.
@@ -289,7 +372,7 @@ Performance values come from a Release build only.
 1. **Objective.** Section 2.1, on CUDA.
 2. **Inputs.** F4.
 3. **Modules.** Rows Editor and UI of section 5; `ui/alcedo_main/i18n/*.ts`. Use the skills `alcedo-qml-ui` and the design rules.
-4. **Data rules.** The fields go through `odt`. History rows use `OutputTransformJson`. Film and print lists come from the stock bundle, with the catalog names.
+4. **Data rules.** The fields go through `odt`. History rows use `OutputTransformJson`. Film and print lists come from the stock bundle, with the catalog names. This phase makes the film print selectable, so it also makes `-FilmPrintResourceDir` and `--film-print-resource-dir` required in the package scripts.
 5. **Steps.** (a) Extend the catalog and `paramsBuilder`. (b) Add parse and write. (c) Add the panel states. (d) Add translations.
 6. **Success chain.** QML control -> `parameterCatalog.modelParamsJson("odt", ...)` -> `editor_parameter_write` -> `DrtParamsModel::ApplyUpdate` -> render.
 7. **Failure chain.** A render error -> the existing editor error path. The controls keep their values.

@@ -19,6 +19,7 @@ codesign_timestamp="OFF"
 codesign_timestamp_set=0
 channel="stable"
 build_number=""
+film_print_resource_dir=""
 
 usage() {
   cat <<USAGE
@@ -41,6 +42,9 @@ Options:
   --skip-metal-asset-check   Do not require Metal metallib assets in verification
   --channel stable|beta      Update channel the build checks (default: stable). Use beta for test builds.
   --build-number N           Override the automatically incremented build number.
+  --film-print-resource-dir PATH
+                             Ship the film print resources of this directory, and require them in
+                             each verification. Made by build_product_resources.py of alcedo-film-lab.
   -h, --help                 Show this help
 USAGE
 }
@@ -96,6 +100,10 @@ while [[ $# -gt 0 ]]; do
     --skip-metal-asset-check)
       require_metal_assets=0
       shift
+      ;;
+    --film-print-resource-dir)
+      film_print_resource_dir="$2"
+      shift 2
       ;;
     --channel)
       channel="$2"
@@ -237,9 +245,14 @@ configure_args=(
   "-DALCEDO_UPDATE_ALLOW_INSTALL=ON"
   "-DALCEDO_UPDATE_CHANNEL=${channel}"
   "-DALCEDO_BUILD_NUMBER=${resolved_build_number}"
+  "-DALCEDO_FILM_PRINT_RESOURCE_DIR=${film_print_resource_dir}"
 )
 if [[ -n "$qt_prefix" ]]; then
   configure_args+=("-DALCEDO_QT_PREFIX=${qt_prefix}")
+fi
+film_print_verify_args=()
+if [[ -n "$film_print_resource_dir" ]]; then
+  film_print_verify_args+=(--require-film-print-resources)
 fi
 
 echo "Configuring CMake with preset '${preset}' ..."
@@ -273,6 +286,7 @@ echo "Verifying install tree ..."
 verify_args=(
   --install-dir "$install_dir"
   --bundle-name "$bundle_name"
+  ${film_print_verify_args[@]+"${film_print_verify_args[@]}"}
 )
 if [[ "$require_metal_assets" -eq 0 ]]; then
   verify_args+=(--skip-metal-asset-check)
@@ -305,6 +319,7 @@ if [[ -d "$staging_root" ]]; then
     staged_verify_args=(
       --install-dir "$staged_install_dir"
       --bundle-name "$bundle_name"
+      ${film_print_verify_args[@]+"${film_print_verify_args[@]}"}
     )
     if [[ "$require_metal_assets" -eq 0 ]]; then
       staged_verify_args+=(--skip-metal-asset-check)
@@ -319,7 +334,7 @@ fi
 package_verify_dir="${package_out_dir}/_package_verify"
 rm -rf "$package_verify_dir"
 mkdir -p "${package_verify_dir}/zip" "${package_verify_dir}/dmg"
-package_verify_args=(--bundle-name "$bundle_name")
+package_verify_args=(--bundle-name "$bundle_name" ${film_print_verify_args[@]+"${film_print_verify_args[@]}"})
 if [[ "$require_metal_assets" -eq 0 ]]; then
   package_verify_args+=(--skip-metal-asset-check)
 fi
