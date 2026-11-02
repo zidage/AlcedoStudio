@@ -416,7 +416,7 @@ FILM_KERNEL_INLINE FilmKernelReal FilmKernelSmoothstep(FilmKernelReal low, FilmK
  * Rule 'negative_show_grade' (lab decisions U82, U83): a fixed creative grade of the negative
  * record, before the print table, as a DI grades a scan before the print transform. All constants
  * are creative choices. The steps and the order are those of `negative_grade.py` of
- * alcedo-film-lab. Only Kodak 5219 on print material `cine_look` has it.
+ * alcedo-film-lab. Only the tungsten stocks on print material `cine_look` have it (lab U84).
  *
  * @param params The fixed values of the selection, for the record of an 18 % grey.
  * @param record Dye amounts of the negative, after the enlarger flare.

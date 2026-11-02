@@ -843,9 +843,12 @@ TEST_F(FilmPrintTablesLabTest, OnlyCineLookHasTheCinemaLook) {
   }
 }
 
-TEST_F(FilmPrintTablesLabTest, OnlyVision3500THasTheNegativeGradeWithItsGrey) {
+TEST_F(FilmPrintTablesLabTest, OnlyTungstenStocksHaveTheNegativeGradeWithItsGrey) {
+  constexpr std::array<std::string_view, 7> tungsten = {
+      "kodak_5219",     "kodak_5213",      "kodak_5277",           "kodak_5293",
+      "kodak_exr_5248", "fuji_eterna_500", "fuji_eterna_500_vivid"};
   for (const auto& negative : bundle_->Negatives()) {
-    const bool expected = negative.id == "kodak_5219";
+    const bool expected = IsFilmIdentifier(tungsten, negative.id);
     EXPECT_EQ(bundle_->Negative(negative.id).negative_grade, expected) << negative.id;
     const auto grey = bundle_->Selection(negative.id, "cine_look", "reference").negative_grade_grey;
     EXPECT_EQ(grey[1] > 0.0, expected) << negative.id;

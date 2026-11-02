@@ -830,11 +830,11 @@ On 5207 + 2383, the range of b\* for L\* 15 to 88 goes from 13.7 to 7.2, and of 
 
 **Decision.** The user finds the look good, and states that it is very different from 2383, so the product must not name it 2383. Lab decisions U82 and U83, sections 5.14 and 5.15 of the P7 report.
 
-**Change.** New print material `cine_look`, with the name "Cine Look (2383)": the data of Kodak Vision 2383, with `FilmKernelCinemaLook` on any negative, and on `kodak_5219` the new `FilmKernelNegativeGrade`. This kernel is a fixed creative grade of the negative record, after the enlarger flare and before the print table. All its constants are creative choices. `kodak_2383` has neither step, so it returns to the print conditions of lab U80. The other materials and the defaults do not change. The arrays of `kFilmNegativeIds` and `kFilmPrintMaterialIds` set the order of the editor lists: the common stocks first, then Fuji, then the old Kodak stocks. A document stores the identifier, so the order has no effect on a document.
+**Change.** New print material `cine_look`, with the name "Cine Look (2383)": the data of Kodak Vision 2383, with `FilmKernelCinemaLook` on any negative, and on the tungsten stocks (lab U84) the new `FilmKernelNegativeGrade`. This kernel is a fixed creative grade of the negative record, after the enlarger flare and before the print table. All its constants are creative choices. `kodak_2383` has neither step, so it returns to the print conditions of lab U80. The other materials and the defaults do not change. The arrays of `kFilmNegativeIds` and `kFilmPrintMaterialIds` set the order of the editor lists: the common stocks first, then Fuji, then the old Kodak stocks. A document stores the identifier, so the order has no effect on a document.
 
-**Versions.** Resource schema 5: `negative/<id>/negative_grade`, and `negative_grade_grey` of the setup. `kFilmPrintImplementationVersion` is 11.
+**Versions.** Resource schema 5: `negative/<id>/negative_grade`, and `negative_grade_grey` of the setup. `kFilmPrintImplementationVersion` is 12.
 
-**Not done.** The user review in the running application. The other negatives on Cine Look take the step of the print with no review of the negative grade, because only 5219 has that grade.
+**Not done.** The user review of each stock in the running application. The tungsten stocks: `kodak_5219`, `kodak_5213`, `kodak_5277`, `kodak_5293`, `kodak_exr_5248`, `fuji_eterna_500`, and `fuji_eterna_500_vivid`.
 
 ### F6: OpenCL passes
 
