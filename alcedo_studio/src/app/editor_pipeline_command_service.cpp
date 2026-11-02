@@ -18,6 +18,7 @@
 #include "edit/graph/graph_validation.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 
 namespace alcedo {
 namespace {
@@ -164,6 +165,29 @@ auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParam
   } catch (const std::exception& ex) {
     return SetError(error, ex.what());
   }
+}
+
+auto FilmPrintEntrySaturationTarget(const PipelineDocument& document,
+                                    const nlohmann::json&   odt_before,
+                                    const nlohmann::json&   odt_after)
+    -> std::optional<EditorParameterTarget> {
+  const auto is_film_print = [](const nlohmann::json& odt) {
+    return odt.value("method", std::string{}) == "film_print";
+  };
+  if (is_film_print(odt_before) || !is_film_print(odt_after)) {
+    return std::nullopt;
+  }
+  const auto* grade = CurrentPanelColorGrade(document);
+  if (grade == nullptr) {
+    return std::nullopt;
+  }
+  const auto* saturation =
+      dynamic_cast<const SaturationModel*>(grade->FindAdjustmentByType(type_ids::Saturation()));
+  if (saturation == nullptr || saturation->Value() != kDefaultPipelineSaturation) {
+    return std::nullopt;
+  }
+  std::string ignored;
+  return CompleteCurrentPanelParameterTarget(document, "saturation", &ignored);
 }
 
 auto CanonicalPipelineDocumentJson(const PipelineDocument& document) -> std::string {

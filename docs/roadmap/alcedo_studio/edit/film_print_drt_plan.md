@@ -117,9 +117,7 @@ The input is linear AP1 from the DiffusionFilter pass, the same as the other DRT
 This chain has 6 blur passes. Python step P6 had 12. The point stages between blurs cannot fuse, because each one
 needs a blur result. FP6 fuses all stages after the Enlarger flare.
 
-There is no reference gamut compression at the entry of this method. The current `DrtKernel` applies it to the other
-methods. The lab chain has no such step, and rule `spectral_locus_projection` holds the out-of-locus colours. This is an inference; the review
-of phase F5 confirms it.
+The entry of this method has the reference gamut compression, as `DrtKernel` has for the other methods (lab U80, rule `entry_reference_gamut_compression`). The final colour space is not known at this point. This replaces the earlier inference that rule `spectral_locus_projection` is sufficient.
 
 ### 3.1 Sizes
 
@@ -813,6 +811,12 @@ On 5207 + 2383, the range of b\* for L\* 15 to 88 goes from 13.7 to 7.2, and of 
 - A reflection paper has no surround rule. Endura Premier, the default print, changes its look with the curve and the flash: a grey stays near L\* 50, and the black falls.
 
 **Not run.** The review by the user, the other cine pairs, the full test suite, and a complete package.
+
+##### Saturation of the default look (record, 2026-11-02)
+
+**Fault.** The user finds the saturation too high on Eterna 500, Ektar 100, and Portra 800, and the highlights pink on a cine print. Lab decision U80, section 5.12 of the P7 report.
+
+**Change.** The default of a RAW document stays saturation 1.3. When an `odt` edit changes the method to `film_print`, `EditorHistoryMutation::CommitAdjustment` also writes 1.0 to the saturation of the Default Grade, in the same history batch, so one undo restores both. This applies only while the value is still the import default; a value that the user selected stays. Leaving the film print does not restore the value. K total equals the image part (lab rule `inhibition_total_from_image_part`), so `fuji_eterna_500` has no inhibition. Each negative on a cine print has `printing_gain` from lab rule `print_slope_match`, strength 0.5: a product choice, with no such step in a real printer. The entry of the CUDA film print has the reference gamut compression. Resource schema 3 does not change. `kFilmPrintImplementationVersion` is 9.
 
 ### F6: OpenCL passes
 

@@ -168,6 +168,18 @@ auto MakeSetParameterBatch(const EditorParameterTarget& target, nlohmann::json b
                                  std::move(args));
 }
 
+void AppendSetParameterChange(PipelineEditBatch& batch, const EditorParameterTarget& target,
+                              nlohmann::json before_value, nlohmann::json after_value) {
+  SetParameterChange change;
+  change.target         = ToPipelineParameterTarget(target);
+  change.before_value   = std::move(before_value);
+  change.after_value    = std::move(after_value);
+  change.before_enabled = true;
+  change.after_enabled  = true;
+  batch.changes.emplace_back(std::move(change));
+  batch.Validate();
+}
+
 auto CaptureAddColorGradeChange(const PipelineDocument& document, const NodeId& before_node_id,
                                 const NodeId& new_id) -> AddColorGradeChange {
   if (new_id.Empty()) {

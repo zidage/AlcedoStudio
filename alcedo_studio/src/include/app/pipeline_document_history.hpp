@@ -80,6 +80,17 @@ namespace alcedo {
                                          std::string node_display_name) -> PipelineEditBatch;
 
 /**
+ * @brief Add one more parameter change to the same user action.
+ *
+ * The presentation of @p batch stays that of its first change.
+ *
+ * @param batch A SetParameter batch from @ref MakeSetParameterBatch.
+ * @throws std::runtime_error when the result does not validate.
+ */
+void AppendSetParameterChange(PipelineEditBatch& batch, const EditorParameterTarget& target,
+                              nlohmann::json before_value, nlohmann::json after_value);
+
+/**
  * @brief Capture a clean Color Grade insertion at @p before_node_id as a typed change.
  *
  * Creates the node JSON with @p new_id before any graph mutation. Apply inserts

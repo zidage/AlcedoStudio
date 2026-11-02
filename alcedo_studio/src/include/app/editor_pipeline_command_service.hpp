@@ -45,6 +45,27 @@ auto ApplyEditorParameterPatch(PipelineDocument& document, const EditorParameter
 auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParameterTarget& target,
                              nlohmann::json* json, std::string* error) -> bool;
 
+/// Saturation of the Default Grade after the method changes to the film print.
+inline constexpr float kFilmPrintEntrySaturation = 1.0f;
+
+/**
+ * @brief Default Grade saturation that an `odt` edit resets when it turns on the film print.
+ *
+ * The negative and the print already give the colour of this method, so the saturation of the
+ * RAW import look stays out of it (lab U80). The rule applies only when @p odt_before has another
+ * method and @p odt_after has `film_print`, and only while the saturation is still
+ * @ref kDefaultPipelineSaturation. A value that the user selected stays.
+ *
+ * @param odt_before Output transform JSON before the edit.
+ * @param odt_after Output transform JSON after the edit.
+ * @return The target to write @ref kFilmPrintEntrySaturation to, or nullopt when the rule does not
+ *         apply.
+ */
+[[nodiscard]] auto FilmPrintEntrySaturationTarget(const PipelineDocument& document,
+                                                  const nlohmann::json&   odt_before,
+                                                  const nlohmann::json&   odt_after)
+    -> std::optional<EditorParameterTarget>;
+
 /**
  * @brief Stable JSON dump of @p document for comparisons in tests.
  */
