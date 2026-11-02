@@ -92,10 +92,19 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
   const auto nodes     = bundle.UvNodes();
   const auto real      = [](double value) { return static_cast<Real>(value); };
 
+  bool has_image = false;
+  bool has_point = false;
   for (std::size_t k = 0; k < 9; ++k) {
     params.ap1_to_xyz[k]     = real(constants.ap1_to_xyz[k]);
     params.xyz_to_display[k] = real(setup.xyz_to_display[k]);
     params.inhibition_k[k]   = stock.inhibition.Present() ? real(stock.inhibition.k[k]) : Real{};
+    params.inhibition_image_k[k] =
+        stock.inhibition.Present() ? real(stock.inhibition.image_k[k]) : Real{};
+    params.inhibition_point_k[k] = stock.inhibition.Present()
+                                       ? real(stock.inhibition.k[k] - stock.inhibition.image_k[k])
+                                       : Real{};
+    has_image                    = has_image || params.inhibition_image_k[k] != Real{};
+    has_point                    = has_point || params.inhibition_point_k[k] != Real{};
   }
   params.locus_white[0]  = real(constants.locus_white[0]);
   params.locus_white[1]  = real(constants.locus_white[1]);
@@ -137,6 +146,8 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
                              1.0 / constants.gamut_power));
   }
   params.gamut_power              = real(constants.gamut_power);
+  params.inhibition_has_image     = has_image ? 1U : 0U;
+  params.inhibition_has_point     = has_point ? 1U : 0U;
   params.locus_facets             = static_cast<std::uint32_t>(layout.facets);
   params.uv_nodes                 = static_cast<std::uint32_t>(nodes);
   params.curve_stored             = static_cast<std::uint32_t>(stock.curves.stored_length);

@@ -27,6 +27,7 @@
 #include "edit/graph/film_print_model.hpp"
 #include "edit/runtime/film/film_array_file.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
+#include "edit/runtime/film/film_print_math.h"
 #include "edit/runtime/film/film_stock_bundle.hpp"
 #include "edit/runtime/film/film_tables.hpp"
 #include "utils/hash/sha256.hpp"
@@ -208,6 +209,8 @@ void WriteSyntheticResources(const fs::path& directory) {
   // neg_b has no inhibition, as a stock with no modulation transfer data.
   stock["negative/neg_a/inhibition_k"] =
       F64Array({3, 3}, {0.1, 0.02, 0.03, 0.04, 0.2, 0.05, 0.06, 0.07, 0.3});
+  stock["negative/neg_a/inhibition_image_k"] =
+      F64Array({3, 3}, {0.05, 0.02, 0.03, 0.0, 0.0, 0.0, 0.06, 0.07, 0.3});
   stock["negative/neg_a/inhibition_free"] =
       F64Array({3, 3}, {0.1, 0.6, 1.1, 0.2, 0.7, 1.2, 0.3, 0.8, 0.8});
   stock["negative/neg_a/inhibition_lengths"] =
@@ -534,6 +537,26 @@ TEST_F(FilmPrintTablesTest, KernelValuesFollowTheLayoutOfTheNegative) {
   const auto other_light = tables.Resolve("neg_a", "paper_a", "daylight");
   EXPECT_EQ(with_inhibition->kernel_key, other_paper->kernel_key);
   EXPECT_NE(with_inhibition->kernel_key, other_light->kernel_key);
+}
+
+TEST_F(FilmPrintTablesTest, KernelParamsSplitTheInhibitionIntoAnImagePartAndAPointPart) {
+  const auto       bundle = FilmStockBundle::Open(Resources());
+  FilmKernelParams params{};
+  film_print_kernel_tables::FillParams(*bundle, "neg_a", "paper_a", "reference", 3, params);
+  EXPECT_EQ(params.inhibition_k[0], 0.1f);
+  EXPECT_EQ(params.inhibition_image_k[0], 0.05f);
+  EXPECT_FLOAT_EQ(params.inhibition_point_k[0], 0.05f);
+  EXPECT_EQ(params.inhibition_image_k[4], 0.0f);
+  EXPECT_FLOAT_EQ(params.inhibition_point_k[4], 0.2f);
+  EXPECT_EQ(params.inhibition_point_k[8], 0.0f);
+  EXPECT_EQ(params.inhibition_has_image, 1U);
+  EXPECT_EQ(params.inhibition_has_point, 1U);
+
+  // neg_b has no inhibition.
+  FilmKernelParams none{};
+  film_print_kernel_tables::FillParams(*bundle, "neg_b", "paper_a", "reference", 3, none);
+  EXPECT_EQ(none.inhibition_has_image, 0U);
+  EXPECT_EQ(none.inhibition_has_point, 0U);
 }
 
 TEST_F(FilmPrintTablesTest, StageTablesAreReused) {

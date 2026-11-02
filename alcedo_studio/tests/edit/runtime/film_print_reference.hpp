@@ -57,11 +57,7 @@ class FilmPrintPointReference {
   /// Linear AP1 to final sRGB.
   [[nodiscard]] auto Srgb(float r, float g, float b) const -> Rgb {
     const auto q = FilmKernelLayerExposure(&params_, values_.data(), r, g, b);
-    auto       a = FilmKernelFirstAmounts(&params_, values_.data(), q);
-    if (params_.inhibition_stored != 0U) {
-      a = FilmKernelInhibitedStep(&params_, values_.data(), q, a);
-      a = FilmKernelInhibitedStep(&params_, values_.data(), q, a);
-    }
+    const auto a = FilmKernelPointAmounts(&params_, values_.data(), q);
     const auto linear =
         FilmKernelFinishDisplay(&params_, FilmKernelPrintDisplay(&params_, print_rgba_.data(), a));
     return {Encode(linear.r), Encode(linear.g), Encode(linear.b)};

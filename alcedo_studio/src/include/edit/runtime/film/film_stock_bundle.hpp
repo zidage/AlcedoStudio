@@ -34,7 +34,8 @@ struct FilmCurveView {
 
 /// Rule 'development_inhibition' of a negative. A negative with no modulation transfer data has none.
 struct FilmInhibitionView {
-  std::span<const double>       k;            ///< (3, 3), row major
+  std::span<const double>       k;            ///< (3, 3), row major: the total, which sets F_i
+  std::span<const double>       image_k;      ///< (3, 3): the part of `k` with a blur of the image
   std::span<const double>       free_values;  ///< (3, stored_length): F_i on one uniform log H step
   std::span<const std::int64_t> lengths;      ///< (3)
   std::span<const double>       log_h_start;  ///< (3)

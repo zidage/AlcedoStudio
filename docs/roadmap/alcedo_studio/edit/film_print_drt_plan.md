@@ -110,8 +110,8 @@ The input is linear AP1 from the DiffusionFilter pass, the same as the other DRT
 | FP1 | AP1 to XYZ, rule `spectral_locus_projection`, bilinear read of the u'v' table (192^2), layer gain: exposure Q | Point | `fast_kernels.layer_exposure` |
 | FP2 | Rule `spread_per_layer_pass`: two passes, each with one Gaussian per layer | Blur | `fast_kernels.gaussian_blur_per_layer` |
 | FP3 | Halation: read of the canonical Q canvas, mix per layer | Canvas and point | `fast_kernels.mix_exposure` |
-| FP4 | First amounts from the curves; a Gaussian of them, on a half-size image when the sigma is at least 4 pixels | Point and blur | `negative_density`, `gaussian_blur_half_size` |
-| FP5 | Rule `inhibition_two_steps`: a = F(log H - K * inhibitor), and FP4 and FP5 once more from these amounts | Point and blur | `fast_kernels.inhibited_step` |
+| FP4 | First amounts from the curves; rule `inhibition_image_part` (see the [record of issue #642](#fix-of-issue-642-record-2026-11-01)); a Gaussian of the amounts, on a half-size image when the sigma is at least 4 pixels | Point and blur | `negative_density`, `gaussian_blur_half_size` |
+| FP5 | Rule `inhibition_two_steps`: a = F(log H' - K_image * inhibitor), and FP4 and FP5 once more from these amounts. log H' is log H minus the point part of FP4 | Point and blur | `fast_kernels.inhibited_step` |
 | FP6 | Transmittance, Enlarger flare from the canonical canvas, density, print table (65^3), cube, display matrix, gamut compression, display encoding | Fused point | `flare_density`, `print_display`, `finish_display` |
 
 This chain has 6 blur passes. Python step P6 had 12. The point stages between blurs cannot fuse, because each one
@@ -719,6 +719,36 @@ Caller suites, Debug: `AdjustmentTransferCatalogTest` 9, `EditorPanelProjectionT
 - The panel in a window. The QML tests load the panel with no real input.
 - A complete package, and any build on macOS.
 - The full test suite did not run.
+
+##### Fix of issue #642 record (2026-11-01)
+
+**Fault.** Eterna 500, Eterna 500 Vivid, `kodak_5277`, `kodak_5203`, and `kodak_5206` looked sharpened. The fits of the lab discarded their inhibitor length, and the render used 35 um, so the render had an edge effect that the modulation transfer chart did not have. Lab report: [P7, section 5.6](https://github.com/zidage/alcedo-film-lab/blob/feature/p7-product-resources/docs/exploration/p7_spectral_acceleration.md), lab decision U74.
+
+**Rule `inhibition_image_part`.** K stays as the total, because K also sets the colour of a flat area, and lab decision U72 accepts these colours. `F_i` stays on this total. Only the part `K_image`, from a fit at 35 um, has a blur. Array `negative/<id>/inhibition_image_k` holds it, and the resource schema version is 2.
+
+**Change from the form in the issue.** The issue proposes `a = F(log H - K_image G(a) - (K - K_image) a)`. That form needs the full-size amounts of the previous step at each pixel, and the half-size path does not write them. The user requires no increase of the render time. So the first pass computes the point part once:
+
+1. `a0` = the curve of `log H`, and `a1 = F(log H - K a0)`.
+2. The pass stores `log H' = log H - K_point a1` in the image of the exposure.
+3. Each step reads `log H'` with no `log10`: `a = F(log H' - K_image I)`.
+
+A negative with no image part runs no blur: one dispatch computes the two steps of the total K at each pixel. This also is the form with no image plane. The later steps of all negatives have 6 fewer `log10` calls per pixel, and this pays for the 3 reads of a curve in the first pass.
+
+**Cost, Release, RTX 3080 Laptop, two runs of `DrtCostRecordAtEditorSizes`, GPU ms after a slider change:**
+
+| Size | `kodak_5207` before | After | `kodak_ultramax_400` (both parts) before | After | `fuji_eterna_500` (point part only) before | After |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2560 x 1709 | 5.70, 6.22 | 5.79, 5.79 | 5.66, 6.25 | 5.76, 5.74 | 6.23, 5.66 | 4.15, 4.11 |
+| 4096 x 2735 | 14.45, 14.59 | 13.94, 14.11 | 15.10, 14.32 | 14.04, 14.08 | 17.38, 17.27 | 7.96, 8.17 |
+| 6000 x 4006 | 20.73, 21.17 | 20.59, 21.36 | 26.10, 27.55 | 21.20, 21.01 | 26.75, 27.33 | 21.57, 21.55 |
+
+The texture pool peak does not change: 571, 1196, and 2371 MiB.
+
+**Checks.** The lab check `check_inhibition_image.py` has limits set before the run, and all pass: the largest response above the chart is 0.09 on 29 negatives (1.12 before), Eterna 500 has an edge of 0.02 codes (14.6 before), and its mean chroma is 54.42 (54.39 before). `kodak_5207` and `kodak_portra_400` differ from before by a mean of 0.017 and 0.033 codes. Tests `FilmPrintStepEdgeFollowsTheImagePartOfTheInhibition`, `FilmPrintWithNoImagePartRunsNoInhibitorBlur`, and `KernelParamsSplitTheInhibitionIntoAnImagePartAndAPointPart` hold the rule. After this change, the image comparison with the new lab values, p99.9 and largest in codes: `kodak_5207` 0.44, 1.34; `kodak_portra_400` 0.53, 1.47; `fuji_eterna_500` 0.51, 1.44. The earlier records hold the values from before this rule.
+
+**For F6 and F7.** The kernels of `cuda_film_print_pass.cu` are the form to port: after FP4 the image of the exposure holds the log exposure, and `inhibitor_blur` selects the no-blur path.
+
+**Open.** The user review of the new look of these stocks joins item 9 of F5. The charts are digitized values that were not checked against the manufacturer documents.
 
 ### F6: OpenCL passes
 

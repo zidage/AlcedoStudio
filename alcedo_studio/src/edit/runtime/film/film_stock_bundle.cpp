@@ -294,6 +294,7 @@ auto FilmStockBundle::Negative(std::string_view id) const -> FilmNegativeView {
     }
     inhibition = {
         .k             = stock_.F64(field("inhibition_k"), {3, 3}),
+        .image_k       = stock_.F64(field("inhibition_image_k"), {3, 3}),
         .free_values   = stock_.F64(field("inhibition_free"), {3, shape[1]}),
         .lengths       = stock_.I64(field("inhibition_lengths"), {3}),
         .log_h_start   = stock_.F64(field("inhibition_start"), {3}),

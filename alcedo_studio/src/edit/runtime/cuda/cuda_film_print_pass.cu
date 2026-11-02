@@ -100,16 +100,36 @@ __device__ __forceinline__ auto HalfCellStart(int index, int size, int count) ->
 }
 
 /// One step at pixel (@p x, @p y), with a half-size inhibitor that the bilinear read of the lab
-/// enlarges.
-__device__ __forceinline__ auto StepWithHalfSizeInhibitor(const float3& q, int x, int y,
+/// enlarges. @p log_q is the stored log exposure.
+__device__ __forceinline__ auto StepWithHalfSizeInhibitor(const float3& log_q, int x, int y,
                                                           const float3* inhibitor, int columns,
                                                           int rows, const float* values,
                                                           const FilmKernelParams& params)
     -> FilmKernelRgb {
   const float3 i = ReadBilinear(inhibitor, columns, rows, (static_cast<float>(x) + 0.5f) * 0.5f,
                                 (static_cast<float>(y) + 0.5f) * 0.5f);
-  return FilmKernelInhibitedStep(&params, values, FilmKernelMakeRgb(q.x, q.y, q.z),
-                                 FilmKernelMakeRgb(i.x, i.y, i.z));
+  return FilmKernelStep(&params, values, params.inhibition_image_k,
+                        FilmKernelMakeRgb(log_q.x, log_q.y, log_q.z),
+                        FilmKernelMakeRgb(i.x, i.y, i.z));
+}
+
+/**
+ * FP4 at one pixel from the exposure @p value. With a blur of the inhibitor, @p a takes the first
+ * amounts and @p q the log exposure of the later steps. With no blur, @p a takes the final amounts,
+ * and there are no later steps.
+ */
+__device__ __forceinline__ void FirstStage(const float3& value, float3& q, float3& a,
+                                           bool inhibitor_blur, const float* values,
+                                           const FilmKernelParams& params) {
+  const auto exposure = FilmKernelMakeRgb(value.x, value.y, value.z);
+  if (inhibitor_blur) {
+    const auto first = FilmKernelFirstAmountsWithPointPart(&params, values, exposure);
+    q                = make_float3(first.log_q.r, first.log_q.g, first.log_q.b);
+    a                = make_float3(first.amounts.r, first.amounts.g, first.amounts.b);
+  } else {
+    const auto amounts = FilmKernelPointAmounts(&params, values, exposure);
+    a                  = make_float3(amounts.r, amounts.g, amounts.b);
+  }
 }
 
 /// The point stages have their own kernels, because the blurs run between them.
@@ -122,29 +142,15 @@ __global__ void ExposureKernel(const float4* input, float3* output, std::uint32_
   output[index]       = make_float3(q.r, q.g, q.b);
 }
 
-__global__ void FirstAmountsKernel(const float3* exposure, float3* output, std::uint32_t pixels,
+__global__ void FirstAmountsKernel(float3* q, float3* a, std::uint32_t pixels, bool inhibitor_blur,
                                    const float* values, FilmKernelParams params) {
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixels) return;
-  const float3 q = exposure[index];
-  const auto   a = FilmKernelFirstAmounts(&params, values, FilmKernelMakeRgb(q.x, q.y, q.z));
-  output[index]  = make_float3(a.r, a.g, a.b);
-}
-
-/// @p amounts holds the inhibitor at the size of the render, and takes the output.
-__global__ void InhibitedStepKernel(const float3* exposure, float3* amounts, std::uint32_t pixels,
-                                    const float* values, FilmKernelParams params) {
-  const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (index >= pixels) return;
-  const float3 q = exposure[index];
-  const float3 i = amounts[index];
-  const auto   a = FilmKernelInhibitedStep(&params, values, FilmKernelMakeRgb(q.x, q.y, q.z),
-                                           FilmKernelMakeRgb(i.x, i.y, i.z));
-  amounts[index] = make_float3(a.r, a.g, a.b);
+  FirstStage(q[index], q[index], a[index], inhibitor_blur, values, params);
 }
 
 /// The last step with a half-size inhibitor.
-__global__ void InhibitedStepHalfSizeKernel(const float3* exposure, float3* amounts, int width,
+__global__ void InhibitedStepHalfSizeKernel(const float3* log_q, float3* amounts, int width,
                                             int height, const float3* inhibitor, int columns,
                                             int rows, const float* values,
                                             FilmKernelParams params) {
@@ -153,7 +159,7 @@ __global__ void InhibitedStepHalfSizeKernel(const float3* exposure, float3* amou
   if (x >= width || y >= height) return;
   const int  index = y * width + x;
   const auto a =
-      StepWithHalfSizeInhibitor(exposure[index], x, y, inhibitor, columns, rows, values, params);
+      StepWithHalfSizeInhibitor(log_q[index], x, y, inhibitor, columns, rows, values, params);
   amounts[index] = make_float3(a.r, a.g, a.b);
 }
 
@@ -161,7 +167,7 @@ __global__ void InhibitedStepHalfSizeKernel(const float3* exposure, float3* amou
  * A step with a half-size inhibitor before the last step: the output is only the input of the next
  * blur, so this form writes its box mean and no full-size image. One thread covers one cell.
  */
-__global__ void InhibitedStepToReducedKernel(const float3* exposure, int width, int height,
+__global__ void InhibitedStepToReducedKernel(const float3* log_q, int width, int height,
                                              const float3* inhibitor, float3* reduced, int columns,
                                              int rows, const float* values,
                                              FilmKernelParams params) {
@@ -177,8 +183,8 @@ __global__ void InhibitedStepToReducedKernel(const float3* exposure, int width, 
   float     b  = 0.0f;
   for (int y = y0; y < y1; ++y) {
     for (int x = x0; x < x1; ++x) {
-      const auto a = StepWithHalfSizeInhibitor(exposure[y * width + x], x, y, inhibitor, columns,
-                                               rows, values, params);
+      const auto a = StepWithHalfSizeInhibitor(log_q[y * width + x], x, y, inhibitor, columns, rows,
+                                               values, params);
       r += a.r;
       g += a.g;
       b += a.b;
@@ -193,7 +199,7 @@ __global__ void InhibitedStepToReducedKernel(const float3* exposure, int width, 
  * @p middle holds the horizontal pass. This form writes no blurred image, so it has one image write
  * and one image read less than a blur and a step.
  */
-__global__ void InhibitedStepVerticalKernel(const float3* middle, const float3* exposure,
+__global__ void InhibitedStepVerticalKernel(const float3* middle, const float3* log_q,
                                             float3* amounts, int width, int height,
                                             FilmBlurKernel inhibitor_y, const float* values,
                                             FilmKernelParams params) {
@@ -214,9 +220,9 @@ __global__ void InhibitedStepVerticalKernel(const float3* middle, const float3* 
     g += inhibitor_y.weights[1][tap] * (top.y + bottom.y);
     b += inhibitor_y.weights[2][tap] * (top.z + bottom.z);
   }
-  const float3 q = exposure[index];
-  const auto   a = FilmKernelInhibitedStep(&params, values, FilmKernelMakeRgb(q.x, q.y, q.z),
-                                           FilmKernelMakeRgb(r, g, b));
+  const float3 q = log_q[index];
+  const auto   a = FilmKernelStep(&params, values, params.inhibition_image_k,
+                                  FilmKernelMakeRgb(q.x, q.y, q.z), FilmKernelMakeRgb(r, g, b));
   amounts[index] = make_float3(a.r, a.g, a.b);
 }
 
@@ -378,12 +384,12 @@ __global__ void CanvasReduceKernel(const float3* src, int width, int height, flo
   dst[y * dst_width + x] = make_float4(r * scale, g * scale, b * scale, 1.0f);
 }
 
-/// FP3 and the first dye amounts of FP4 in one dispatch. @p q takes the mix, and @p a the amounts.
+/// FP3 and FP4 in one dispatch. See `FirstStage` for what @p q and @p a take.
 __global__ void HalationAndFirstAmountsKernel(float3* q, float3* a, int width, int height,
                                               const float4* canvas, int canvas_width,
                                               int canvas_height, Matrix3x3 render_to_canvas,
-                                              float3 strength, const float* values,
-                                              FilmKernelParams params) {
+                                              float3 strength, bool inhibitor_blur,
+                                              const float* values, FilmKernelParams params) {
   const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
   if (x >= width || y >= height) return;
@@ -392,18 +398,16 @@ __global__ void HalationAndFirstAmountsKernel(float3* q, float3* a, int width, i
   const float3 blurred = ReadBilinear(canvas, canvas_width, canvas_height, position.x, position.y);
   const int    index   = y * width + x;
   const float3 value   = q[index];
-  const float  r       = (1.0f - strength.x) * value.x + strength.x * blurred.x;
-  const float  g       = (1.0f - strength.y) * value.y + strength.y * blurred.y;
-  const float  b       = (1.0f - strength.z) * value.z + strength.z * blurred.z;
-  q[index]             = make_float3(r, g, b);
-  const auto amounts   = FilmKernelFirstAmounts(&params, values, FilmKernelMakeRgb(r, g, b));
-  a[index]             = make_float3(amounts.r, amounts.g, amounts.b);
+  const float3 mix     = make_float3((1.0f - strength.x) * value.x + strength.x * blurred.x,
+                                     (1.0f - strength.y) * value.y + strength.y * blurred.y,
+                                     (1.0f - strength.z) * value.z + strength.z * blurred.z);
+  FirstStage(mix, q[index], a[index], inhibitor_blur, values, params);
 }
 
 /**
- * The first dye amounts for a half-size inhibitor, with FP3 when @p canvas is not null. The amounts
- * are only the input of the first blur, so this form writes their box mean and no full-size image.
- * One thread covers one cell.
+ * FP4 for a half-size inhibitor, with FP3 when @p canvas is not null. The amounts are only the input
+ * of the first blur, so this form writes their box mean and no full-size image of them. @p q takes
+ * the log exposure of the later steps. One thread covers one cell.
  */
 __global__ void ReducedFirstAmountsKernel(float3* q, int width, int height, float3* reduced,
                                           int columns, int rows, const float4* canvas,
@@ -429,16 +433,16 @@ __global__ void ReducedFirstAmountsKernel(float3* q, int width, int height, floa
             Transform(render_to_canvas, static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
         const float3 blurred =
             ReadBilinear(canvas, canvas_width, canvas_height, position.x, position.y);
-        value    = make_float3((1.0f - strength.x) * value.x + strength.x * blurred.x,
-                               (1.0f - strength.y) * value.y + strength.y * blurred.y,
-                               (1.0f - strength.z) * value.z + strength.z * blurred.z);
-        q[index] = value;
+        value = make_float3((1.0f - strength.x) * value.x + strength.x * blurred.x,
+                            (1.0f - strength.y) * value.y + strength.y * blurred.y,
+                            (1.0f - strength.z) * value.z + strength.z * blurred.z);
       }
-      const auto a =
-          FilmKernelFirstAmounts(&params, values, FilmKernelMakeRgb(value.x, value.y, value.z));
-      r += a.r;
-      g += a.g;
-      b += a.b;
+      const auto first = FilmKernelFirstAmountsWithPointPart(
+          &params, values, FilmKernelMakeRgb(value.x, value.y, value.z));
+      q[index] = make_float3(first.log_q.r, first.log_q.g, first.log_q.b);
+      r += first.amounts.r;
+      g += first.amounts.g;
+      b += first.amounts.b;
     }
   }
   const float scale        = 1.0f / static_cast<float>((y1 - y0) * (x1 - x0));
@@ -605,7 +609,9 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto negative     = bundle.Negative(film.negative);
   const auto image =
       MakeFilmPrintImagePlan(plan.geometry, bundle.ImagePlaneConstants(), negative.layer_spread_um,
-                             params.inhibition_stored != 0U, film);
+                             params.inhibition_has_image != 0U, film);
+  // With no blur, one dispatch computes the final amounts, so FP4 and FP5 need no other image.
+  const bool inhibitor_blur = image.image_plane && params.inhibition_has_image != 0U;
 
   const auto* values  = static_cast<const float*>(table.device_pointer);
   const auto* rgba    = static_cast<const float*>(print.device_pointer);
@@ -697,8 +703,9 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto canvas_width      = static_cast<int>(canvas.width);
   const auto canvas_height     = static_cast<int>(canvas.height);
 
-  // FP4 and FP5, rule 'inhibition_two_steps'.
-  if (params.inhibition_stored != 0U && image.image_plane && image.inhibitor_half_size) {
+  // FP4 and FP5, rules 'inhibition_two_steps' and 'inhibition_image_part'. After FP4, the image of
+  // the exposure holds the log exposure that the steps read.
+  if (inhibitor_blur && image.inhibitor_half_size) {
     // Only the last step writes full-size amounts. The first amounts and the first step write the
     // box mean directly, so the full-size image has no write and no read to reduce it.
     const auto extent  = image.inhibitor_extent;
@@ -734,27 +741,23 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
     if (image.halation_active) {
       HalationAndFirstAmountsKernel<<<image_grid, image_block, 0, stream>>>(
           q, a, w, h, halation, canvas_width, canvas_height, image.render_to_canvas,
-          halation_strength, values, params);
-      clock.Mark("FP3 mix and FP4 first amounts");
+          halation_strength, inhibitor_blur, values, params);
+      clock.Mark("FP3 mix and FP4 amounts");
     } else {
-      FirstAmountsKernel<<<blocks, kBlock, 0, stream>>>(q, a, pixels, values, params);
-      clock.Mark("FP4 first amounts");
+      FirstAmountsKernel<<<blocks, kBlock, 0, stream>>>(q, a, pixels, inhibitor_blur, values,
+                                                        params);
+      clock.Mark("FP4 amounts");
     }
-    if (params.inhibition_stored != 0U) {
-      if (!image.image_plane) {
-        InhibitedStepKernel<<<blocks, kBlock, 0, stream>>>(q, a, pixels, values, params);
-        InhibitedStepKernel<<<blocks, kBlock, 0, stream>>>(q, a, pixels, values, params);
-      } else {
-        if (!scratch.has_value()) scratch.emplace(acquire(width, height));
-        auto* middle = PointerRgb(*scratch);
-        for (int step = 0; step < 2; ++step) {
-          BlurHorizontalKernel<<<image_grid, image_block, 0, stream>>>(
-              static_cast<const float3*>(a), middle, w, h, image.inhibitor_x);
-          clock.Mark("FP4 inhibitor horizontal");
-          InhibitedStepVerticalKernel<<<image_grid, image_block, 0, stream>>>(
-              middle, q, a, w, h, image.inhibitor_y, values, params);
-          clock.Mark("FP4 vertical and FP5 inhibited step");
-        }
+    if (inhibitor_blur) {
+      if (!scratch.has_value()) scratch.emplace(acquire(width, height));
+      auto* middle = PointerRgb(*scratch);
+      for (int step = 0; step < 2; ++step) {
+        BlurHorizontalKernel<<<image_grid, image_block, 0, stream>>>(
+            static_cast<const float3*>(a), middle, w, h, image.inhibitor_x);
+        clock.Mark("FP4 inhibitor horizontal");
+        InhibitedStepVerticalKernel<<<image_grid, image_block, 0, stream>>>(
+            middle, q, a, w, h, image.inhibitor_y, values, params);
+        clock.Mark("FP4 vertical and FP5 inhibited step");
       }
     }
   }
