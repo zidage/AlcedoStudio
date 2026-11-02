@@ -200,6 +200,7 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
     stock[name("density_grid_stop")]  = F64Array({3}, {2.0 * scale, 2.5 * scale, 3.0 * scale});
     stock[name("criterion_log_h")]    = F64Array({3}, {-1.0, -1.1, -1.2});
     stock[name("layer_spread_um")]    = F64Array({3}, {5.0, 3.0, 3.0});
+    stock[name("negative_grade")]     = F64Array({}, {0.0});
     stock[name("curve_density")]      = F64Array(
         {3, 4}, {0.1, 0.4 * scale, 0.9, 1.5, 0.1, 0.5, 1.0, 1.6, 0.1, 0.3, 0.8, 0.8});
     stock[name("curve_lengths")]     = ArrayValues{"i8", {3}, ToBytes<std::int64_t>({4, 4, 3})};
@@ -258,6 +259,7 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
   setup["printing_gain"] =
       F64Array({2, 2, 3}, {1.0, 1.0, 1.0, 1.0, 0.9, 1.1, 1.0, 1.0, 1.0, 1.0, 0.95, 1.05});
   setup["aim_log_h"]            = F64Array({2, 3}, {-1.0, -1.1, -1.2, -0.9, -0.8, -0.7});
+  setup["negative_grade_grey"]  = F64Array({2, 2, 3}, std::vector<double>(12, 0.0));
   setup["xyz_to_display"]       = F64Array({2, 3, 3}, std::vector<double>(18, 0.01));
   setup["scene_spectrum_index"] = ArrayValues{"i4", {2, 2}, ToBytes<std::int32_t>({0, 1, 1, 0})};
   WriteArrayFile(directory / "film_print_setup.bin", setup, nlohmann::json::object());
@@ -828,16 +830,25 @@ TEST_F(FilmPrintTablesLabTest, ShippedReflectanceHoldsOnlyTheNodesThatAReadCanRe
 
 TEST_F(FilmPrintTablesLabTest, ShippedListsHoldTheStocksOfThePlan) {
   EXPECT_EQ(bundle_->Negatives().size(), 30u);
-  EXPECT_EQ(bundle_->PrintMaterials().size(), 18u);
+  EXPECT_EQ(bundle_->PrintMaterials().size(), 19u);
   EXPECT_EQ(bundle_->SceneLights().size(), 11u);
   EXPECT_EQ(bundle_->SceneLights()[0], "reference");
   EXPECT_NO_THROW((void)bundle_->Selection("kodak_5207", "kodak_2383", "reference"));
 }
 
-TEST_F(FilmPrintTablesLabTest, OnlyVision2383HasTheCinemaLook) {
+TEST_F(FilmPrintTablesLabTest, OnlyCineLookHasTheCinemaLook) {
   for (const auto& material : bundle_->PrintMaterials()) {
-    EXPECT_EQ(bundle_->PrintMaterial(material.id).cinema_look, material.id == "kodak_2383")
+    EXPECT_EQ(bundle_->PrintMaterial(material.id).cinema_look, material.id == "cine_look")
         << material.id;
+  }
+}
+
+TEST_F(FilmPrintTablesLabTest, OnlyVision3500THasTheNegativeGradeWithItsGrey) {
+  for (const auto& negative : bundle_->Negatives()) {
+    const bool expected = negative.id == "kodak_5219";
+    EXPECT_EQ(bundle_->Negative(negative.id).negative_grade, expected) << negative.id;
+    const auto grey = bundle_->Selection(negative.id, "cine_look", "reference").negative_grade_grey;
+    EXPECT_EQ(grey[1] > 0.0, expected) << negative.id;
   }
 }
 
@@ -857,14 +868,15 @@ TEST_F(FilmPrintTablesLabTest, ShippedListsMatchTheIdentifiersOfTheDocumentModel
 }
 
 TEST_F(FilmPrintTablesLabTest, ShippedNamesMatchTheNamesOfTheDocumentModel) {
-  for (std::size_t i = 0; i < kFilmNegativeIds.size(); ++i) {
-    EXPECT_EQ(bundle_->Negatives()[i].id, kFilmNegativeIds[i]);
-    EXPECT_EQ(bundle_->Negatives()[i].display_name, kFilmNegativeNames[i]);
-  }
-  for (std::size_t i = 0; i < kFilmPrintMaterialIds.size(); ++i) {
-    EXPECT_EQ(bundle_->PrintMaterials()[i].id, kFilmPrintMaterialIds[i]);
-    EXPECT_EQ(bundle_->PrintMaterials()[i].display_name, kFilmPrintMaterialNames[i]);
-  }
+  const auto expect_names = [](const auto& shipped, const auto& ids, const auto& names) {
+    for (const auto& entry : shipped) {
+      const auto position = std::find(ids.begin(), ids.end(), entry.id);
+      ASSERT_NE(position, ids.end()) << entry.id;
+      EXPECT_EQ(entry.display_name, names[static_cast<std::size_t>(position - ids.begin())]);
+    }
+  };
+  expect_names(bundle_->Negatives(), kFilmNegativeIds, kFilmNegativeNames);
+  expect_names(bundle_->PrintMaterials(), kFilmPrintMaterialIds, kFilmPrintMaterialNames);
 }
 
 TEST_F(FilmPrintTablesLabTest, RecordsTheHostTimeOfEachStage) {

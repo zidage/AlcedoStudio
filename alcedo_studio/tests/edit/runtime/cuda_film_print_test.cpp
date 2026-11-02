@@ -759,7 +759,7 @@ TEST_F(CudaFilmPrintFixture, FilmPrintImageMatchesLab) {
     EXPECT_LE(difference.largest, 4.0);
     ++compared;
   }
-  EXPECT_EQ(compared, 3);
+  EXPECT_EQ(compared, 5);
 }
 
 TEST_F(CudaFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs) {

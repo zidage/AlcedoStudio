@@ -88,6 +88,7 @@ typedef struct {
   FilmKernelReal   gamut_threshold[3];
   FilmKernelReal   gamut_scale[3];
   FilmKernelReal   gamut_power;
+  FilmKernelReal   negative_grade_grey[3];  // Rule 'negative_show_grade': the record of an 18 % grey
   FILM_KERNEL_UINT locus_facets;
   FILM_KERNEL_UINT uv_nodes;
   FILM_KERNEL_UINT curve_stored;
@@ -103,6 +104,7 @@ typedef struct {
   FILM_KERNEL_UINT room_offset;
   FILM_KERNEL_UINT display_encoding;  // CE_TF_* of the display curve. Read by the backend kernel.
   FILM_KERNEL_UINT cinema_look;       // 1: rule 'print_cinema_look'. Read by the backend kernel.
+  FILM_KERNEL_UINT negative_grade;    // 1: rule 'negative_show_grade'. Read by the backend kernel.
 } FilmKernelParams;
 
 FILM_KERNEL_INLINE FilmKernelRgb FilmKernelMakeRgb(FilmKernelReal r, FilmKernelReal g,
@@ -403,6 +405,59 @@ FilmKernelFinishDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params, FilmKernelR
                            FilmKernelClipUnit(a - db * a));
 }
 
+/** Smoothstep from 0 at @p low to 1 at @p high. */
+FILM_KERNEL_INLINE FilmKernelReal FilmKernelSmoothstep(FilmKernelReal low, FilmKernelReal high,
+                                                       FilmKernelReal x) {
+  const FilmKernelReal t = FilmKernelClipUnit((x - low) / (high - low));
+  return t * t * (FILM_KERNEL_REAL(3.0) - FILM_KERNEL_REAL(2.0) * t);
+}
+
+/**
+ * Rule 'negative_show_grade' (lab decisions U82, U83): a fixed creative grade of the negative
+ * record, before the print table, as a DI grades a scan before the print transform. All constants
+ * are creative choices. The steps and the order are those of `negative_grade.py` of
+ * alcedo-film-lab. Only Kodak 5219 on print material `cine_look` has it.
+ *
+ * @param params The fixed values of the selection, for the record of an 18 % grey.
+ * @param record Dye amounts of the negative, after the enlarger flare.
+ * @return The graded dye amounts, not below 0.
+ */
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelNegativeGrade(FILM_KERNEL_PARAMS FilmKernelParams* params,
+                                                         FilmKernelRgb record) {
+  const FilmKernelReal d_r   = record.r - params->negative_grade_grey[0];
+  const FilmKernelReal d_g   = record.g - params->negative_grade_grey[1];
+  const FilmKernelReal d_b   = record.b - params->negative_grade_grey[2];
+  const FilmKernelReal level = (d_r + d_g + d_b) / FILM_KERNEL_REAL(3.0);
+  const FilmKernelReal c_r   = d_r - level;
+  const FilmKernelReal c_g   = d_g - level;
+  const FilmKernelReal c_b   = d_b - level;
+  const FilmKernelReal shadow =
+      FilmKernelSmoothstep(FILM_KERNEL_REAL(-0.05), FILM_KERNEL_REAL(0.40), -level);
+  const FilmKernelReal highlight =
+      FilmKernelSmoothstep(FILM_KERNEL_REAL(0.35), FILM_KERNEL_REAL(0.95), level);
+  // A colour where green or blue leads: the emitters of signs lose their electric look.
+  const FilmKernelReal green_lead =
+      FilmKernelMax(c_g - FilmKernelMax(c_r, c_b), FILM_KERNEL_REAL(0.0));
+  const FilmKernelReal blue_lead =
+      FilmKernelMax(c_b - FilmKernelMax(c_r, c_g), FILM_KERNEL_REAL(0.0));
+  const FilmKernelReal cool_lead = green_lead + blue_lead;
+  const FilmKernelReal scale = FILM_KERNEL_REAL(0.88) *
+                               (FILM_KERNEL_REAL(1.0) - FILM_KERNEL_REAL(0.35) * shadow) *
+                               (FILM_KERNEL_REAL(1.0) - FILM_KERNEL_REAL(0.22) * highlight) *
+                               (FILM_KERNEL_REAL(1.0) - FILM_KERNEL_REAL(0.45) * cool_lead);
+  const FilmKernelReal base = level - FILM_KERNEL_REAL(0.45) * cool_lead;
+  return FilmKernelMakeRgb(
+      FilmKernelMax(base + scale * c_r - FILM_KERNEL_REAL(0.035) * shadow +
+                        params->negative_grade_grey[0],
+                    FILM_KERNEL_REAL(0.0)),
+      FilmKernelMax(base + scale * c_g + FILM_KERNEL_REAL(0.02) * shadow +
+                        params->negative_grade_grey[1],
+                    FILM_KERNEL_REAL(0.0)),
+      FilmKernelMax(base + scale * c_b + FILM_KERNEL_REAL(0.05) * shadow +
+                        params->negative_grade_grey[2],
+                    FILM_KERNEL_REAL(0.0)));
+}
+
 /** The sRGB code of a linear value in 0 to 1. Rule 'print_cinema_look' is defined on this code. */
 FILM_KERNEL_INLINE FilmKernelReal FilmKernelSrgbEncode(FilmKernelReal linear) {
   return linear <= FILM_KERNEL_REAL(0.0031308)
@@ -445,8 +500,8 @@ FILM_KERNEL_INLINE FilmKernelReal FilmKernelCinemaPrintDown(FilmKernelReal x) {
 
 /**
  * Rule 'print_cinema_look' (lab decision U81): a fixed creative step on the sRGB code of a finished
- * print, which the user selected for Kodak Vision 2383. All constants are creative choices. The
- * density here is a density of display code, and not an optical density of a film. The steps and
+ * print, which the user selected for print material `cine_look`. All constants are creative
+ * choices. The density here is a density of display code, and not an optical density of a film. The steps and
  * the order are those of `cinema_look.py` of alcedo-film-lab.
  *
  * @param linear Linear Rec. 709 in 0 to 1, after FilmKernelFinishDisplay.

@@ -471,6 +471,7 @@ __global__ void DisplayKernel(const float3* amounts, const float4* scene, float4
     record = FilmKernelFlareAmounts(record, FilmKernelMakeRgb(blurred.x, blurred.y, blurred.z),
                                     flare_strength);
   }
+  if (params.negative_grade != 0U) record = FilmKernelNegativeGrade(&params, record);
   const auto finished =
       FilmKernelFinishDisplay(&params, FilmKernelPrintDisplay(&params, print_rgba, record));
   const auto linear = params.cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
