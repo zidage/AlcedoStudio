@@ -1253,6 +1253,19 @@ TEST(EditorHistoryCommitPresentationTest, FormatsNumericBooleanPathEnumAndCompou
   EXPECT_EQ(odt.before_text.toStdString(), "Rec.709 / Gamma 2.2");
   EXPECT_EQ(odt.after_text.toStdString(), "Display P3 / Gamma 2.4");
 
+  // Film print: the selection of the method, then a slider of the method.
+  const auto film_print_method = PresentEditorHistoryCommit(
+      "odt", R"({"odt":{"method":"open_drt","encoding_space":"rec709","encoding_eotf":"gamma_2_2"}})",
+      R"({"odt":{"method":"film_print","encoding_space":"rec709","encoding_eotf":"gamma_2_2","film_print":{"halation":1.0}}})",
+      true, true);
+  EXPECT_EQ(film_print_method.after_text.toStdString(), "Film Print");
+  const auto film_print_slider = PresentEditorHistoryCommit(
+      "odt", R"({"odt":{"method":"film_print","film_print":{"negative":"kodak_5207","halation":1.0}}})",
+      R"({"odt":{"method":"film_print","film_print":{"negative":"kodak_5207","halation":2.5}}})", true,
+      true);
+  EXPECT_EQ(film_print_slider.before_text.toStdString(), "1");
+  EXPECT_EQ(film_print_slider.after_text.toStdString(), "2.5");
+
   // Compound (crop/rotate angle). A crop commit stores the geometry model JSON; the before value
   // is a geometry written before the aspect fields existed.
   auto crop = PresentEditorHistoryCommit(

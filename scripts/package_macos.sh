@@ -19,7 +19,7 @@ codesign_timestamp="OFF"
 codesign_timestamp_set=0
 channel="stable"
 build_number=""
-film_print_resource_dir=""
+film_print_resource_dir="${ALCEDO_FILM_PRINT_RESOURCE_DIR:-}"
 
 usage() {
   cat <<USAGE
@@ -43,8 +43,9 @@ Options:
   --channel stable|beta      Update channel the build checks (default: stable). Use beta for test builds.
   --build-number N           Override the automatically incremented build number.
   --film-print-resource-dir PATH
-                             Ship the film print resources of this directory, and require them in
-                             each verification. Made by build_product_resources.py of alcedo-film-lab.
+                             Required (or set ALCEDO_FILM_PRINT_RESOURCE_DIR). Ship the film print
+                             resources of this directory, and require them in each verification.
+                             Made by build_product_resources.py of alcedo-film-lab.
   -h, --help                 Show this help
 USAGE
 }
@@ -132,6 +133,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$film_print_resource_dir" ]]; then
+  echo "Film print resources are required: pass --film-print-resource-dir DIR or set ALCEDO_FILM_PRINT_RESOURCE_DIR." >&2
+  exit 2
+fi
 
 # publish_update.py refuses a package whose recorded commit differs from the manifest commit,
 # so a package from another checkout or from uncommitted changes cannot be published.
@@ -250,10 +256,7 @@ configure_args=(
 if [[ -n "$qt_prefix" ]]; then
   configure_args+=("-DALCEDO_QT_PREFIX=${qt_prefix}")
 fi
-film_print_verify_args=()
-if [[ -n "$film_print_resource_dir" ]]; then
-  film_print_verify_args+=(--require-film-print-resources)
-fi
+film_print_verify_args=(--require-film-print-resources)
 
 echo "Configuring CMake with preset '${preset}' ..."
 printf '> cmake'

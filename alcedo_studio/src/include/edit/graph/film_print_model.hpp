@@ -47,6 +47,46 @@ inline constexpr std::array<std::string_view, 18> kFilmPrintMaterialIds = {
     "kodak_5384",          "kodak_duraflex_plus", "kodak_endura_premier", "kodak_exr_5386",
     "kodak_portra_endura", "kodak_supra_endura"};
 
+/// Catalog names of @ref kFilmNegativeIds, in the same order. A lab test compares them with the
+/// shipped files.
+inline constexpr std::array<std::string_view, 30> kFilmNegativeNames = {
+    "Agfa Vista 100",          "Fuji C200",
+    "Fuji Eterna 500",         "Fuji Eterna 500 Vivid",
+    "Fuji Natura 1600",        "Fuji Pro 160C",
+    "Fuji Pro 160S",           "Fuji Pro 400H",
+    "Fuji Superia Reala",      "Fuji Superia X-Tra 400",
+    "Kodak Vision3 50D 5203",  "Kodak Verita 200D 5206",
+    "Kodak Vision3 250D 5207", "Kodak Vision3 200T 5213",
+    "Kodak Vision3 500T 5219", "Kodak 5247",
+    "Kodak 5247 II",           "Kodak 5248",
+    "Kodak 5250",              "Kodak Vision 320T 5277",
+    "Kodak EXR 200T 5293",     "Kodak Aerocolor IV 2460",
+    "Kodak Ektar 100",         "Kodak EXR 100T 5248",
+    "Kodak Gold 200",          "Kodak Portra 160",
+    "Kodak Portra 400",        "Kodak Portra 800",
+    "Kodak Ultramax 400",      "Kodak Vericolor III"};
+
+/// Catalog names of @ref kFilmPrintMaterialIds, in the same order.
+inline constexpr std::array<std::string_view, 18> kFilmPrintMaterialNames = {
+    "Fuji Eterna-CP Type 3513DI",
+    "Fuji Eterna-CP 3523XD",
+    "Fuji Crystal Archive DPII",
+    "Fuji Crystal Archive Maxima",
+    "Fuji Crystal Archive Pro PDII",
+    "Fuji Crystal Archive Super Type C",
+    "Fujiflex Crystal Archive New Version",
+    "Fujiflex Crystal Archive Old Version",
+    "Kodak Vision 2383",
+    "Kodak Vision Premier 2393",
+    "Kodak 5381",
+    "Kodak 5383",
+    "Kodak 5384",
+    "Kodak Duraflex Plus",
+    "Kodak Endura Premier Paper",
+    "Kodak EXR 5386",
+    "Kodak Portra Endura Paper",
+    "Kodak Supra Endura Paper"};
+
 /// Scene light identifiers: the reference, 5 lights, and 5 scenes. See @ref kFilmNegativeIds.
 inline constexpr std::array<std::string_view, 11> kFilmSceneLightIds = {
     "reference",  "daylight",      "tungsten",       "fluorescent",

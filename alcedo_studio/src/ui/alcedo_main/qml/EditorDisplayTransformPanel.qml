@@ -6,7 +6,9 @@ import Alcedo.Main 1.0
 // Phase 6E Display Transform panel: output color-space selection, CST/ODT,
 // ACES tone mapping, transfer function (EOTF), peak luminance, and HDR
 // display intent. Method-specific controls for ACES 2.0 (limiting space) and
-// OpenDRT (look/tonescale/creative-white presets). All models share fieldKey
+// OpenDRT (look/tonescale/creative-white presets), and the film print (film,
+// print material, scene light, three sliders; Rec. 709 SDR output, so its page
+// has no encoding controls). All models share fieldKey
 // "odt" with a panel-level paramsBuilder that collects the complete state so
 // every partial edit carries the full ODT JSON. The option lists, the EOTF
 // choices of each encoding space, the peak range, and the parameter object
@@ -29,6 +31,9 @@ Item {
 
     readonly property var odtDefaults: parameterCatalog.uiDefault("odt")
     readonly property var peakSpec: parameterCatalog.propertySpec("odt", "peak_luminance")
+    readonly property var filmLightSpreadSpec: parameterCatalog.propertySpec("odt", "light_spread")
+    readonly property var filmHalationSpec: parameterCatalog.propertySpec("odt", "halation")
+    readonly property var filmEnlargerFlareSpec: parameterCatalog.propertySpec("odt", "enlarger_flare")
 
     EditorParameterCatalog {
         id: parameterCatalog
@@ -93,7 +98,13 @@ Item {
             limiting_space: root.selectedValue(acesLimitingSpaceModel, "limiting_space"),
             look_preset: root.selectedValue(openDrtLookModel, "look_preset"),
             tonescale_preset: root.selectedValue(openDrtTonescaleModel, "tonescale_preset"),
-            creative_white: root.selectedValue(openDrtCreativeWhiteModel, "creative_white")
+            creative_white: root.selectedValue(openDrtCreativeWhiteModel, "creative_white"),
+            negative: root.selectedValue(filmNegativeModel, "negative"),
+            print_material: root.selectedValue(filmPrintMaterialModel, "print_material"),
+            scene_light: root.selectedValue(filmSceneLightModel, "scene_light"),
+            light_spread: filmLightSpreadModel.value,
+            halation: filmHalationModel.value,
+            enlarger_flare: filmEnlargerFlareModel.value
         })
     }
 
@@ -107,6 +118,12 @@ Item {
         openDrtLookModel.enabled = on
         openDrtTonescaleModel.enabled = on
         openDrtCreativeWhiteModel.enabled = on
+        filmNegativeModel.enabled = on
+        filmPrintMaterialModel.enabled = on
+        filmSceneLightModel.enabled = on
+        filmLightSpreadModel.enabled = on
+        filmHalationModel.enabled = on
+        filmEnlargerFlareModel.enabled = on
     }
 
     /// Apply declared defaultIndex / defaultValue before any snapshot load so the
@@ -120,6 +137,12 @@ Item {
         openDrtLookModel.currentIndex = openDrtLookModel.defaultIndex
         openDrtTonescaleModel.currentIndex = openDrtTonescaleModel.defaultIndex
         openDrtCreativeWhiteModel.currentIndex = openDrtCreativeWhiteModel.defaultIndex
+        filmNegativeModel.currentIndex = filmNegativeModel.defaultIndex
+        filmPrintMaterialModel.currentIndex = filmPrintMaterialModel.defaultIndex
+        filmSceneLightModel.currentIndex = filmSceneLightModel.defaultIndex
+        filmLightSpreadModel.value = filmLightSpreadModel.defaultValue
+        filmHalationModel.value = filmHalationModel.defaultValue
+        filmEnlargerFlareModel.value = filmEnlargerFlareModel.defaultValue
         updateEotfOptions()
     }
 
@@ -132,6 +155,15 @@ Item {
             return
         if (idx !== model.currentIndex)
             model.currentIndex = idx
+    }
+
+    /// Load-only slider write. A drag in progress keeps its value.
+    function setValueFromSnapshot(model, value) {
+        if (model.dragActive)
+            return
+        const number = Number(value)
+        if (!isNaN(number) && Math.abs(model.value - number) > (model.step * 0.1))
+            model.value = number
     }
 
     /// ODT UI value of the snapshot. BuildSnapshotMap stores
@@ -173,18 +205,18 @@ Item {
         updateEotfOptions()
         setEnumFromSnapshot(encodingEotfModel, odt["encoding_eotf"])
 
-        if (!peakLuminanceModel.dragActive) {
-            const pl = Number(odt["peak_luminance"])
-            if (!isNaN(pl)
-                    && Math.abs(peakLuminanceModel.value - pl) > (peakLuminanceModel.step * 0.1)) {
-                peakLuminanceModel.value = pl
-            }
-        }
+        setValueFromSnapshot(peakLuminanceModel, odt["peak_luminance"])
 
         setEnumFromSnapshot(acesLimitingSpaceModel, odt["limiting_space"])
         setEnumFromSnapshot(openDrtLookModel, odt["look_preset"])
         setEnumFromSnapshot(openDrtTonescaleModel, odt["tonescale_preset"])
         setEnumFromSnapshot(openDrtCreativeWhiteModel, odt["creative_white"])
+        setEnumFromSnapshot(filmNegativeModel, odt["negative"])
+        setEnumFromSnapshot(filmPrintMaterialModel, odt["print_material"])
+        setEnumFromSnapshot(filmSceneLightModel, odt["scene_light"])
+        setValueFromSnapshot(filmLightSpreadModel, odt["light_spread"])
+        setValueFromSnapshot(filmHalationModel, odt["halation"])
+        setValueFromSnapshot(filmEnlargerFlareModel, odt["enlarger_flare"])
     }
 
     /// Rebuild EOTF entries based on current encoding space, preserving EOTF
@@ -298,6 +330,81 @@ Item {
         paramsBuilder: root.buildOdtParams
     }
 
+    EditorAdjustmentEnumModel {
+        id: filmNegativeModel
+        objectName: "displayFilmNegativeModel"
+        fieldKey: "odt"
+        label: qsTr("Film")
+        entries: root.catalogEntries("negative")
+        defaultIndex: root.defaultIndexOf(entries, "negative")
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentEnumModel {
+        id: filmPrintMaterialModel
+        objectName: "displayFilmPrintMaterialModel"
+        fieldKey: "odt"
+        label: qsTr("Print Material")
+        entries: root.catalogEntries("print_material")
+        defaultIndex: root.defaultIndexOf(entries, "print_material")
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentEnumModel {
+        id: filmSceneLightModel
+        objectName: "displayFilmSceneLightModel"
+        fieldKey: "odt"
+        label: qsTr("Scene Light")
+        entries: root.catalogEntries("scene_light")
+        defaultIndex: root.defaultIndexOf(entries, "scene_light")
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmLightSpreadModel
+        objectName: "displayFilmLightSpreadModel"
+        fieldKey: "odt"
+        label: qsTr("Light Spread")
+        minimum: root.filmLightSpreadSpec.ui_min
+        maximum: root.filmLightSpreadSpec.ui_max
+        defaultValue: root.odtDefaults.light_spread
+        step: root.filmLightSpreadSpec.ui_step
+        precision: root.filmLightSpreadSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmHalationModel
+        objectName: "displayFilmHalationModel"
+        fieldKey: "odt"
+        label: qsTr("Halation")
+        minimum: root.filmHalationSpec.ui_min
+        maximum: root.filmHalationSpec.ui_max
+        defaultValue: root.odtDefaults.halation
+        step: root.filmHalationSpec.ui_step
+        precision: root.filmHalationSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmEnlargerFlareModel
+        objectName: "displayFilmEnlargerFlareModel"
+        fieldKey: "odt"
+        label: qsTr("Enlarger Flare")
+        minimum: root.filmEnlargerFlareSpec.ui_min
+        maximum: root.filmEnlargerFlareSpec.ui_max
+        defaultValue: root.odtDefaults.enlarger_flare
+        step: root.filmEnlargerFlareSpec.ui_step
+        precision: root.filmEnlargerFlareSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
     // ── Derived state ───────────────────────────────────────────────────────
     // Panel-level selection aliases so method-card delegates re-evaluate when
     // currentIndex changes or snapshot load restores (LUT selectedPath pattern).
@@ -308,6 +415,7 @@ Item {
     }
     readonly property bool isOpenDrt: root.selectedMethodValue === "open_drt"
         || (root.selectedMethodValue.length === 0)
+    readonly property bool isFilmPrint: root.selectedMethodValue === "film_print"
 
     // Encoding space drives the EOTF option table (user select + snapshot load).
     Connections {
@@ -413,7 +521,7 @@ Item {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: appTheme.spaceSm
-                    visible: !root.isOpenDrt
+                    visible: !root.isOpenDrt && !root.isFilmPrint
 
                     AdjustmentCombo {
                         objectName: "displayAcesLimitingSpaceCombo"
@@ -445,6 +553,52 @@ Item {
                         model: openDrtCreativeWhiteModel
                     }
                 }
+
+                ColumnLayout {
+                    objectName: "displayFilmPrintControls"
+                    Layout.fillWidth: true
+                    spacing: appTheme.spaceSm
+                    visible: root.isFilmPrint
+
+                    AdjustmentCombo {
+                        objectName: "displayFilmNegativeCombo"
+                        Layout.fillWidth: true
+                        model: filmNegativeModel
+                    }
+
+                    AdjustmentCombo {
+                        objectName: "displayFilmPrintMaterialCombo"
+                        Layout.fillWidth: true
+                        model: filmPrintMaterialModel
+                    }
+
+                    AdjustmentCombo {
+                        objectName: "displayFilmSceneLightCombo"
+                        Layout.fillWidth: true
+                        model: filmSceneLightModel
+                    }
+
+                    AdjustmentSlider {
+                        objectName: "displayFilmLightSpreadSlider"
+                        Layout.fillWidth: true
+                        model: filmLightSpreadModel
+                        flickable: displayScroll
+                    }
+
+                    AdjustmentSlider {
+                        objectName: "displayFilmHalationSlider"
+                        Layout.fillWidth: true
+                        model: filmHalationModel
+                        flickable: displayScroll
+                    }
+
+                    AdjustmentSlider {
+                        objectName: "displayFilmEnlargerFlareSlider"
+                        Layout.fillWidth: true
+                        model: filmEnlargerFlareModel
+                        flickable: displayScroll
+                    }
+                }
             }
 
             // ── Color & Encoding (collapsible, default expanded) ────────────
@@ -452,6 +606,7 @@ Item {
                 id: colorEncodingGroup
                 objectName: "editorAdjustmentGroupShell_display_color_encoding"
                 Layout.fillWidth: true
+                visible: !root.isFilmPrint
                 title: qsTr("Color & Encoding")
                 expanded: true
                 controlsEnabled: root.controlsEnabled

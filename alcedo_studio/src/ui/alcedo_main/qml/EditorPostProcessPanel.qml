@@ -21,6 +21,14 @@ Item {
     readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
     readonly property color colAccent: theme ? theme.colAccentPrimary : appTheme.accentColor
 
+    // The film print takes its halation from the film layers and skips this operator. The stored
+    // value does not change, and the slider returns with another method.
+    property bool filmPrintSelected: false
+
+    EditorParameterCatalog {
+        id: parameterCatalog
+    }
+
     function wireEnabled() {
         const on = root.controlsEnabled
         diffusionModel.enabled = on
@@ -41,6 +49,9 @@ Item {
     function loadFromSnapshot(snapshot) {
         if (snapshot === undefined || snapshot === null)
             return
+        const odt = snapshot["odt"]
+        root.filmPrintSelected = odt !== undefined && odt !== null
+                                 && parameterCatalog.uiValue("odt", odt).method === "film_print"
         // Each model converts its Model value to UI units through EditorParameterCatalog.
         diffusionModel.loadFromSnapshot(snapshot)
         clarityModel.loadFromSnapshot(snapshot)
@@ -221,6 +232,7 @@ Item {
                     AdjustmentSlider {
                         objectName: "postHalationSlider"
                         Layout.fillWidth: true
+                        visible: !root.filmPrintSelected
                         model: halationModel
                         flickable: postScroll
                     }

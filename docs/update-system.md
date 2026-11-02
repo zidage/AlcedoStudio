@@ -84,6 +84,9 @@ beta feed. Override `ALCEDO_UPDATE_BASE_URL` for local staging.
 
 ## Package
 
+The package scripts require the film print resources. Set `ALCEDO_FILM_PRINT_RESOURCE_DIR` before
+these commands; see "Packaging" in `build_from_source.md`.
+
 ```powershell
 # Windows (sets ALCEDO_UPDATE_ALLOW_INSTALL=ON, stable feed)
 powershell -ExecutionPolicy Bypass -File scripts\package_windows.ps1
