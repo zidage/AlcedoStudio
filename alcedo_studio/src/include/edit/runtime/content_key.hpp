@@ -38,7 +38,10 @@ inline constexpr std::uint32_t kDrtImplementationVersion           = 6;
 /// Version 5 reads the reflectance table with the lab rule foliage_spectra.
 /// Version 7 reads the resources with no neutral printing gain and with the lab rule
 /// projected_print_white.
-inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 7;
+/// Version 8 reads the resources of schema 3: on a cine print the printer has a UV filter, the
+/// grey is the LAD patch, the light is the projection light, the clear print is the white, and
+/// the dark surround acts on the print table. All prints have the published curve with no flash.
+inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 8;
 /// Bumped when mask raster sampling or Union key structure changes. Version 3 is per-source Union.
 inline constexpr std::uint32_t kMaskImplementationVersion          = 3;
 

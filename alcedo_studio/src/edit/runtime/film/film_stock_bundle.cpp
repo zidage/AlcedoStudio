@@ -330,6 +330,8 @@ auto FilmStockBundle::PrintMaterial(std::string_view id) const -> FilmPaperView 
       .status_axis_range = stock_.F64(field("status_axis_range"), {3}),
       .curves            = ReadCurves(stock_, field, id),
       .xyz_scale         = stock_.F64(field("xyz_scale"), {})[0],
+      .clear_luminance   = stock_.F64(field("clear_luminance"), {})[0],
+      .surround_exponent = stock_.F64(field("surround_exponent"), {})[0],
   };
 }
 

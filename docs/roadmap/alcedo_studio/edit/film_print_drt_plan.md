@@ -48,7 +48,7 @@ These are user decisions of 2026-10-31 and 2026-11-01.
 | Default DRT of a new document | OpenDRT stays. A user selects the film print. |
 | Stock data | 13 stocks have rule `grey_anchor` from the repair of lab U71. The print setup resource holds the result. |
 | Reflectance table | Compact form in the installer, with no download (2026-11-01): only the used wavelengths, only the u'v' nodes that a read can reach, and 12 mantissa bits. The u'v' limit against the complete lab table is a relative difference of 2e-4, and the final difference is at most 0.5 of an 8 bit code. |
-| Look | The user reviewed the lab viewer with the speed rules and the stock repair, and accepts the look (lab U72). Lab U75 replaces the neutral axis of the projected prints. |
+| Look | The user reviewed the lab viewer with the speed rules and the stock repair, and accepts the look (lab U72). Lab U78 replaces the print conditions: see the [record of issue #645](#fix-of-issue-645-record-2026-11-02). |
 
 Rejected work that must not return: a 3x3 matrix in place of the spectral input, a look LUT fitted to other renders, one Gaussian in place of the
 two Gaussians of the light spread, and neutralization of a stock cast.
@@ -758,7 +758,7 @@ The texture pool peak does not change: 571, 1196, and 2371 MiB.
 
 **User decision.** The user compared three versions on four photos, selected the print with no gain, and asked for the change. This replaces the 2383 colours of lab decision U72. It is not the neutralization that section 1 rejects: a negative keeps its own difference from the other negatives, and the white has one value per print material.
 
-**Change.** Lab decision U75, section 5.7 of the P7 report. The manifest names lab commit `476153c`, and the record of that run and the expected values are from `37443d5`. Projected prints have no neutral printing gain, and lab rule `projected_print_white` gives each of them one display white. Reflection papers do not change. Only values of `film_print_setup.bin` change: `printing_gain` and `xyz_to_display`. The layout stays, so the schema version stays 2, the kernels do not change, and `kFilmPrintImplementationVersion` is 7. F6 and F7 have no extra work.
+**Change, replaced by the [record of issue #645](#fix-of-issue-645-record-2026-11-02).** Lab decision U75, section 5.7 of the P7 report. The manifest names lab commit `476153c`, and the record of that run and the expected values are from `37443d5`. Projected prints have no neutral printing gain, and lab rule `projected_print_white` gives each of them one display white. Reflection papers do not change. Only values of `film_print_setup.bin` change: `printing_gain` and `xyz_to_display`. The layout stays, so the schema version stays 2, the kernels do not change, and `kFilmPrintImplementationVersion` is 7. F6 and F7 have no extra work.
 
 **Checks (debug, RTX 3080 Laptop).** `FilmPrintTablesTest`: 31 of 31 pass. `GpuDagCudaDrtProductTest --gtest_filter=*FilmPrint*`: 17 of 17 pass, with the new lab values. Largest ramp difference 0.30 of an 8 bit code; largest image difference 1.47 codes. The lab rule against the look that the user selected: 0.0003 codes on `_DSC8148`. The mean a*b* distance of the 5207 + 2383 neutral axis from the Resolve LUT `Rec709 Kodak 2383 D65` goes from 6.8 to 2.1. That LUT is an emulation, not a measurement of a real print.
 
@@ -767,6 +767,52 @@ The texture pool peak does not change: 571, 1196, and 2371 MiB.
 ##### Default print material record (2026-11-01)
 
 The user finds 2383 strange on daylight photos, and selects Kodak Endura Premier as the default print material of the film print (lab U76). The default negative stays `kodak_5207`. `FilmPrintParams` holds the value, and the panel and the parameter catalog read it. A document with the film print holds its `print_material`, so it keeps its material and its bytes. A document with another method omits the object, so its bytes do not change, and it gets the new default when the user selects the film print.
+
+##### Fix of issue #645 record (2026-11-02)
+
+**Fault.** The user finds Kodak 2383 strange on daylight photos, and states that the cause is in the photochemical chain, not in the neutral axis and not in a distance from a Resolve LUT. The user also asks to remove the values that were selected by comparison with spektrafilm, and to build the print from its process. Lab decisions U77 and U78; sections 5.8 and 5.9 of the P7 report.
+
+**Cause of the colour.** The printer model was lamp A with no filter. The data sheets of 2383 and 2393 state: "Overall filtration should include a UV-absorbing filter, such as a KODAK WRATTEN Filter No. 2B." The blue layer of a cine print stays sensitive down to the end of its chart, and the yellow dye of a negative falls below 450 nm. So 25 % of the blue layer exposure of `kodak_2383` through a `kodak_5207` grey fell below 400 nm, where the exposure does not follow the image. For `kodak_5383` the share was 68 %. On reflection papers it is about 3 %, which is why Endura Premier did not show this fault. This is the low blue slope that section 8.4 of lab report P2 could not explain, and that the lab rules `neutral_printing_gain` and `projected_print_white` tried to absorb.
+
+**Change.** Each value now has a source or is removed:
+
+| Item | Before | Now | Source |
+| --- | --- | --- | --- |
+| Printer light of a cine print | Lamp A | Lamp A with a Wratten 2B filter (rule `printer_uv_filter`) | Data sheets of 2383 and 2393 |
+| Grey of a cine print, Status A | 0.85, by comparison with spektrafilm | 1.09, 1.06, 1.03 | LAD patch, KODAK H-61b |
+| Paper log exposure scale, all prints | 0.85, by a sweep against spektrafilm | 1: the published curve | Data sheets |
+| Paper flash, all prints | 0.02, by eye | 0 | No measured value |
+| Surface reflection, all prints | 0.003, by eye | 0 | No measured value |
+| Viewing light of a cine print | D65 | D54 (rule `projection_light`) | SMPTE 196M-2003: 5400 K, x = 0.332, y = 0.347. D54 as the spectrum of a xenon lamp is an inference |
+| White of a cine print | Fitted from the 5207 print (`projected_print_white`, removed) | The clear print goes to display white (rule `clear_print_white`). One value per material, with no negative | In a dark cinema the clear print is the brightest light |
+| Surround of a cine print | None | Exponent 0.525 / 0.59 = 0.89 on luminance relative to the clear print (rule `dark_surround_on_display`) | CIECAM02 surround values, dark and dim |
+
+A reflection paper keeps D50, the perfect reflector as white, and the grey at Status A 0.75, which is 18 % reflectance.
+
+**Product.** Resource schema 3: each paper has `clear_luminance` and `surround_exponent`. `FilmPrintTables::Resolve` applies the exponent to the print table after the composition. The kernels do not change, so F6 and F7 have no extra work. `kFilmPrintImplementationVersion` is 8. A build tree needs a relink to copy the new resources; an old executable stops on the schema version.
+
+**Result, neutral ramp, a\*, b\* at the same L\*:**
+
+| Selection | | L\* 20 | L\* 45 | L\* 60 | L\* 75 | L\* 85 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 5207 + 2383, reference | Before | +1.3, -8.6 | +1.2, -4.9 | -0.1, 0.0 | -2.6, +3.8 | -4.6, +4.8 |
+| | After | -1.5, -2.1 | -1.0, -2.5 | -0.5, +0.2 | -2.3, +3.0 | -4.0, +3.2 |
+| 5219 + 2383, reference | After | -2.9, -2.7 | -2.9, -2.9 | -1.9, -0.4 | -3.1, +3.0 | -4.4, +3.7 |
+
+On 5207 + 2383, the range of b\* for L\* 15 to 88 goes from 13.7 to 7.2, and of a\* from 6.3 to 4.9. A grey of 0.18 goes from L\* 46.2 to 44.9. The black goes from L\* 3.7 to 1.0, and the top of the ramp from L\* 92.9 to 99.0. A sky of AP1 (0.10, 0.22, 0.42) goes from L\* 45, a\* -13, b\* -26 to L\* 46, a\* -3, b\* -39.
+
+**Checks (debug, RTX 3080 Laptop).** `FilmPrintTablesTest`: 32 of 32 pass, with the new test `DarkSurroundMovesLuminanceAndKeepsChromaticity`. `GpuDagCudaDrtProductTest --gtest_filter=*FilmPrint*`: 17 of 17 pass, with the new lab values. Largest ramp difference 0.47 of an 8 bit code; largest image difference 1.70 codes. These runs read resources with the name of a lab tree with uncommitted changes. The resources were then built again: the manifest names lab commit `3020bd2`, and the record of that run is `ce2e8cc`. The tests did not run again after that build.
+
+**Limits.**
+
+- No real print was measured. The look is not reviewed on the RAW files of the issue, which were not on this machine.
+- Chroma rises, because the published curve is steeper than the 0.85 scale. The default grade of the product (+1.5 EV, contrast 15, saturation 1.3) stays in front of the film, and its saturation was selected with the earlier print.
+- The LAD patch is not neutral on this chain: L\* 44.5, a\* +0.7, b\* -6.0, where H-61b states a visual neutral. So the digitized dyes or the adaptation to the clear print has an error of this size.
+- Blue through the print stays about 12 % below green on `kodak_2383`, as the printing slope times the paper slope. The digitized curves were not checked against the Kodak documents.
+- These values keep no source and stay: the default of the Enlarger flare slider (0.01), the Halation strength, the share 0.5 of the inhibition between layers, the band split of the dyes for a stock with no published dyes, rule `grey_anchor` for a stock with a relative chart, and the Gaussian tail of a dye below 400 nm. The inhibition is an empirical model that agrees with DIR couplers in quality only. It has the algorithm of spektrafilm, with K from a fit to the modulation transfer charts here. KODAK H-24 modules 1, 7, 8, 9, and 10 give no value for it. It fails the form of a real over-corrected negative (section 5.10 of the P7 report): on `kodak_5207` the separation curve is below the neutral curve, and the K adds only +0.014 density at 1.3 above base. The model does not change from this check.
+- A reflection paper has no surround rule. Endura Premier, the default print, changes its look with the curve and the flash: a grey stays near L\* 50, and the black falls.
+
+**Not run.** The review by the user, the other cine pairs, the full test suite, and a complete package.
 
 ### F6: OpenCL passes
 

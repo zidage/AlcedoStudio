@@ -160,7 +160,7 @@ auto Flat(double value) -> std::vector<double> {
 
 /// Small resources with two negatives, two papers, and two scene lights. The values have no
 /// physical meaning. Each one is distinct, so that a wrong index gives a wrong table.
-void WriteSyntheticResources(const fs::path& directory) {
+void WriteSyntheticResources(const fs::path& directory, double surround_exponent = 1.0) {
   fs::create_directories(directory);
   std::map<std::string, ArrayValues> stock;
   stock["common/wavelengths_nm"] = F64Array({kWavelengths}, Flat(500.0));
@@ -231,6 +231,8 @@ void WriteSyntheticResources(const fs::path& directory) {
     stock[name("status_axis_start")] = F64Array({3}, {0.1, 0.1, 0.1});
     stock[name("status_axis_range")] = F64Array({3}, {2.0, 2.0, 2.0});
     stock[name("xyz_scale")]         = F64Array({}, {10.0 * scale});
+    stock[name("clear_luminance")]   = F64Array({}, {100.0});
+    stock[name("surround_exponent")] = F64Array({}, {surround_exponent});
     stock[name("curve_density")]     = F64Array(
         {3, 5}, {0.1, 0.5, 1.0, 1.6, 2.1, 0.1, 0.6, 1.1, 1.7, 2.1, 0.1, 0.4, 0.9, 1.5, 1.5});
     stock[name("curve_lengths")]     = ArrayValues{"i8", {3}, ToBytes<std::int64_t>({5, 5, 4})};
@@ -503,6 +505,26 @@ TEST_F(FilmPrintTablesTest, PrintRgbaHasRedVaryingFastestAndKeepsTheValues) {
     EXPECT_EQ(voxel[1], static_cast<float>(result->print_cube_root_xyz[source + 1]));
     EXPECT_EQ(voxel[2], static_cast<float>(result->print_cube_root_xyz[source + 2]));
     EXPECT_EQ(voxel[3], 1.0f);
+  }
+}
+
+TEST_F(FilmPrintTablesTest, DarkSurroundMovesLuminanceAndKeepsChromaticity) {
+  constexpr double kExponent = 0.5;
+  WriteSyntheticResources(root_ / "dark_surround", kExponent);
+  FilmPrintTables plain_tables(FilmStockBundle::Open(Resources()));
+  FilmPrintTables dark_tables(FilmStockBundle::Open(root_ / "dark_surround"));
+  const auto      plain = plain_tables.Resolve("neg_a", "paper_a", "reference");
+  const auto      dark  = dark_tables.Resolve("neg_a", "paper_a", "reference");
+  ASSERT_EQ(plain->print_cube_root_xyz.size(), dark->print_cube_root_xyz.size());
+  for (const std::size_t node : {std::size_t{0}, std::size_t{4000}, std::size_t{100000}}) {
+    SCOPED_TRACE(node);
+    const auto* before = plain->print_cube_root_xyz.data() + node * 3;
+    const auto* after  = dark->print_cube_root_xyz.data() + node * 3;
+    const auto  cube   = [](double value) { return value * value * value; };
+    // The synthetic clear print has Y = 100.
+    EXPECT_NEAR(cube(after[1]) / 100.0, std::pow(cube(before[1]) / 100.0, kExponent), 1e-9);
+    EXPECT_NEAR(after[0] / after[1], before[0] / before[1], 1e-12);
+    EXPECT_NEAR(after[2] / after[1], before[2] / before[1], 1e-12);
   }
 }
 

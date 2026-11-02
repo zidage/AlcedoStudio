@@ -95,7 +95,9 @@ struct FilmPaperView {
   std::span<const double> status_axis_start;  ///< (3)
   std::span<const double> status_axis_range;  ///< (3)
   FilmCurveView           curves;
-  double                  xyz_scale = 0.0;
+  double                  xyz_scale         = 0.0;
+  double                  clear_luminance   = 0.0;  ///< Y of the clear print under the viewing light
+  double                  surround_exponent = 1.0;  ///< Lab rule dark_surround_on_display
 };
 
 /// The fixed scalar values of one selection of film, print material, and scene light.
