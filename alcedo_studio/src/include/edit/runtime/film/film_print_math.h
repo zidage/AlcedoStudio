@@ -71,16 +71,16 @@ typedef struct {
 typedef struct {
   FilmKernelReal   ap1_to_xyz[9];
   FilmKernelReal   locus_white[2];
-  FilmKernelReal   locus_keep;   // 1 - the inset of the hull
+  FilmKernelReal   locus_keep;           // 1 - the inset of the hull
   FilmKernelReal   locus_inner_squared;  // Squared radius of a circle at the white inside the hull
-  FilmKernelReal   uv_scale[2];  // (uv_nodes - 1) / uv_max
+  FilmKernelReal   uv_scale[2];          // (uv_nodes - 1) / uv_max
   FilmKernelReal   layer_gain[3];
   FilmKernelReal   curve_offset[3];  // Criterion log H - the log H of the first curve value
   FilmKernelReal   curve_step;
   FilmKernelReal   inhibition_k[9];        // Row major. The total, which sets F_i.
   FilmKernelReal   inhibition_image_k[9];  // Rule 'inhibition_image_part': the part with a blur
   FilmKernelReal   inhibition_point_k[9];  // The total minus the image part
-  FilmKernelReal   inhibition_offset[3];  // Criterion log H - the log H of the first F_i value
+  FilmKernelReal   inhibition_offset[3];   // Criterion log H - the log H of the first F_i value
   FilmKernelReal   inhibition_step;
   FilmKernelReal   print_start[3];
   FilmKernelReal   print_step[3];
@@ -102,6 +102,7 @@ typedef struct {
   FILM_KERNEL_UINT normals_offset;
   FILM_KERNEL_UINT room_offset;
   FILM_KERNEL_UINT display_encoding;  // CE_TF_* of the display curve. Read by the backend kernel.
+  FILM_KERNEL_UINT cinema_look;       // 1: rule 'print_cinema_look'. Read by the backend kernel.
 } FilmKernelParams;
 
 FILM_KERNEL_INLINE FilmKernelRgb FilmKernelMakeRgb(FilmKernelReal r, FilmKernelReal g,
@@ -220,13 +221,12 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelCurveAmounts(FILM_KERNEL_PARAMS FilmK
   FILM_KERNEL_VALUES FilmKernelReal* curves = values + params->curves_offset;
   const FILM_KERNEL_UINT             stored = params->curve_stored;
   const FilmKernelReal               step   = params->curve_step;
-  return FilmKernelMakeRgb(
-      FilmKernelReadCurve(curves, params->curve_lengths[0],
-                          (params->curve_offset[0] + log_q.r) / step),
-      FilmKernelReadCurve(curves + stored, params->curve_lengths[1],
-                          (params->curve_offset[1] + log_q.g) / step),
-      FilmKernelReadCurve(curves + 2U * stored, params->curve_lengths[2],
-                          (params->curve_offset[2] + log_q.b) / step));
+  return FilmKernelMakeRgb(FilmKernelReadCurve(curves, params->curve_lengths[0],
+                                               (params->curve_offset[0] + log_q.r) / step),
+                           FilmKernelReadCurve(curves + stored, params->curve_lengths[1],
+                                               (params->curve_offset[1] + log_q.g) / step),
+                           FilmKernelReadCurve(curves + 2U * stored, params->curve_lengths[2],
+                                               (params->curve_offset[2] + log_q.b) / step));
 }
 
 /**
@@ -256,9 +256,9 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelStep(FILM_KERNEL_PARAMS FilmKernelPar
 }
 
 /**
- * FP4 and FP5 with no blur: the amounts of an exposure Q, with the total K in two steps. This is the
- * form with no image plane, and the form of a negative with no image part. With no inhibition, it
- * gives the first amounts.
+ * FP4 and FP5 with no blur: the amounts of an exposure Q, with the total K in two steps. This is
+ * the form with no image plane, and the form of a negative with no image part. With no inhibition,
+ * it gives the first amounts.
  */
 FILM_KERNEL_INLINE FilmKernelRgb FilmKernelPointAmounts(FILM_KERNEL_PARAMS FilmKernelParams* params,
                                                         FILM_KERNEL_VALUES FilmKernelReal*   values,
@@ -280,12 +280,12 @@ typedef struct {
 
 /**
  * FP4 for a negative with an image part, rule 'inhibition_image_part'. The point part acts here,
- * with the amounts a1 = F(log Q - K a) of one point step: log Q - K_point a1. So the later steps need
- * no image of the amounts for this part, and they read a stored log exposure with no log10.
+ * with the amounts a1 = F(log Q - K a) of one point step: log Q - K_point a1. So the later steps
+ * need no image of the amounts for this part, and they read a stored log exposure with no log10.
  */
-FILM_KERNEL_INLINE FilmKernelFirstStage FilmKernelFirstAmountsWithPointPart(
-    FILM_KERNEL_PARAMS FilmKernelParams* params, FILM_KERNEL_VALUES FilmKernelReal* values,
-    FilmKernelRgb q) {
+FILM_KERNEL_INLINE FilmKernelFirstStage
+FilmKernelFirstAmountsWithPointPart(FILM_KERNEL_PARAMS FilmKernelParams* params,
+                                    FILM_KERNEL_VALUES FilmKernelReal* values, FilmKernelRgb q) {
   FilmKernelFirstStage first;
   first.log_q   = FilmKernelLogExposures(q);
   first.amounts = FilmKernelCurveAmounts(params, values, first.log_q);
@@ -401,6 +401,133 @@ FilmKernelFinishDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params, FilmKernelR
       (a - rgb.b) / a, params->gamut_threshold[2], params->gamut_scale[2], power);
   return FilmKernelMakeRgb(FilmKernelClipUnit(a - dr * a), FilmKernelClipUnit(a - dg * a),
                            FilmKernelClipUnit(a - db * a));
+}
+
+/** The sRGB code of a linear value in 0 to 1. Rule 'print_cinema_look' is defined on this code. */
+FILM_KERNEL_INLINE FilmKernelReal FilmKernelSrgbEncode(FilmKernelReal linear) {
+  return linear <= FILM_KERNEL_REAL(0.0031308)
+             ? FILM_KERNEL_REAL(12.92) * linear
+             : FILM_KERNEL_REAL(1.055) *
+                       FILM_KERNEL_POW(linear, FILM_KERNEL_REAL(1.0) / FILM_KERNEL_REAL(2.4)) -
+                   FILM_KERNEL_REAL(0.055);
+}
+
+FILM_KERNEL_INLINE FilmKernelReal FilmKernelSrgbDecode(FilmKernelReal code) {
+  return code <= FILM_KERNEL_REAL(0.04045)
+             ? code / FILM_KERNEL_REAL(12.92)
+             : FILM_KERNEL_POW((code + FILM_KERNEL_REAL(0.055)) / FILM_KERNEL_REAL(1.055),
+                               FILM_KERNEL_REAL(2.4));
+}
+
+/** Rule 'print_cinema_look': the curve that prints the lower mids down. Outside 0 to 1: the end
+ * value. */
+FILM_KERNEL_INLINE FilmKernelReal FilmKernelCinemaPrintDown(FilmKernelReal x) {
+  if (x <= FILM_KERNEL_REAL(0.0)) return FILM_KERNEL_REAL(0.0);
+  if (x < FILM_KERNEL_REAL(0.08)) return x * (FILM_KERNEL_REAL(0.045) / FILM_KERNEL_REAL(0.08));
+  if (x < FILM_KERNEL_REAL(0.20)) {
+    return FILM_KERNEL_REAL(0.045) +
+           (x - FILM_KERNEL_REAL(0.08)) * (FILM_KERNEL_REAL(0.09) / FILM_KERNEL_REAL(0.12));
+  }
+  if (x < FILM_KERNEL_REAL(0.42)) {
+    return FILM_KERNEL_REAL(0.135) +
+           (x - FILM_KERNEL_REAL(0.20)) * (FILM_KERNEL_REAL(0.215) / FILM_KERNEL_REAL(0.22));
+  }
+  if (x < FILM_KERNEL_REAL(0.65)) {
+    return FILM_KERNEL_REAL(0.35) +
+           (x - FILM_KERNEL_REAL(0.42)) * (FILM_KERNEL_REAL(0.27) / FILM_KERNEL_REAL(0.23));
+  }
+  if (x < FILM_KERNEL_REAL(0.85)) {
+    return FILM_KERNEL_REAL(0.62) +
+           (x - FILM_KERNEL_REAL(0.65)) * (FILM_KERNEL_REAL(0.23) / FILM_KERNEL_REAL(0.20));
+  }
+  return x < FILM_KERNEL_REAL(1.0) ? x : FILM_KERNEL_REAL(1.0);
+}
+
+/**
+ * Rule 'print_cinema_look' (lab decision U81): a fixed creative step on the sRGB code of a finished
+ * print, which the user selected for Kodak Vision 2383. All constants are creative choices. The
+ * density here is a density of display code, and not an optical density of a film. The steps and
+ * the order are those of `cinema_look.py` of alcedo-film-lab.
+ *
+ * @param linear Linear Rec. 709 in 0 to 1, after FilmKernelFinishDisplay.
+ * @return Linear Rec. 709 in 0 to 1.
+ */
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelCinemaLook(FilmKernelRgb linear) {
+  const FilmKernelReal strength   = FILM_KERNEL_REAL(0.65);
+  const FilmKernelReal separation = FILM_KERNEL_REAL(1.169);
+  const FilmKernelReal luma_r     = FILM_KERNEL_REAL(0.2126);
+  const FilmKernelReal luma_g     = FILM_KERNEL_REAL(0.7152);
+  const FilmKernelReal luma_b     = FILM_KERNEL_REAL(0.0722);
+  const FilmKernelReal smallest   = FILM_KERNEL_REAL(1e-6);
+  const FilmKernelReal ten_to     = FILM_KERNEL_REAL(-2.302585092994046);
+
+  // A separation and a coupling of the channels in a density of code.
+  const FilmKernelReal d0_r =
+      -FILM_KERNEL_LOG10(FilmKernelMax(FilmKernelSrgbEncode(linear.r), smallest));
+  const FilmKernelReal d0_g =
+      -FILM_KERNEL_LOG10(FilmKernelMax(FilmKernelSrgbEncode(linear.g), smallest));
+  const FilmKernelReal d0_b =
+      -FILM_KERNEL_LOG10(FilmKernelMax(FilmKernelSrgbEncode(linear.b), smallest));
+  const FilmKernelReal mean = (d0_r + d0_g + d0_b) / FILM_KERNEL_REAL(3.0);
+  const FilmKernelReal d1_r = mean + separation * (d0_r - mean);
+  const FilmKernelReal d1_g = mean + separation * (d0_g - mean);
+  const FilmKernelReal d1_b = mean + separation * (d0_b - mean);
+  const FilmKernelReal d_r  = FILM_KERNEL_REAL(1.039) * d1_r - FILM_KERNEL_REAL(0.026) * d1_g -
+                             FILM_KERNEL_REAL(0.013) * d1_b;
+  const FilmKernelReal d_g = -FILM_KERNEL_REAL(0.0195) * d1_r + FILM_KERNEL_REAL(1.026) * d1_g -
+                             FILM_KERNEL_REAL(0.0065) * d1_b;
+  const FilmKernelReal d_b = -FILM_KERNEL_REAL(0.013) * d1_r - FILM_KERNEL_REAL(0.052) * d1_g +
+                             FILM_KERNEL_REAL(1.065) * d1_b;
+  const FilmKernelReal x0_r      = FILM_KERNEL_EXP(ten_to * d_r);
+  const FilmKernelReal x0_g      = FILM_KERNEL_EXP(ten_to * d_g);
+  const FilmKernelReal x0_b      = FILM_KERNEL_EXP(ten_to * d_b);
+
+  // Lower mids printed down.
+  const FilmKernelReal keep      = FILM_KERNEL_REAL(1.0) - strength;
+  const FilmKernelReal x1_r      = strength * FilmKernelCinemaPrintDown(x0_r) + keep * x0_r;
+  const FilmKernelReal x1_g      = strength * FilmKernelCinemaPrintDown(x0_g) + keep * x0_g;
+  const FilmKernelReal x1_b      = strength * FilmKernelCinemaPrintDown(x0_b) + keep * x0_b;
+
+  // Blue in the blacks and warm lit surfaces.
+  const FilmKernelReal y1        = luma_r * x1_r + luma_g * x1_g + luma_b * x1_b;
+  const FilmKernelReal y1_scaled = y1 / FILM_KERNEL_REAL(0.25);
+  const FilmKernelReal blue_blacks =
+      FILM_KERNEL_EXP(-y1_scaled * y1_scaled) *
+      (FILM_KERNEL_REAL(1.0) - FILM_KERNEL_EXP(-y1 / FILM_KERNEL_REAL(0.025)));
+  const FilmKernelReal warm = FILM_KERNEL_REAL(4.0) * y1 * (FILM_KERNEL_REAL(1.0) - y1);
+  const FilmKernelReal x2_r = FilmKernelClipUnit(
+      x1_r + strength * (-FILM_KERNEL_REAL(0.009) * blue_blacks + FILM_KERNEL_REAL(0.012) * warm));
+  const FilmKernelReal x2_g = FilmKernelClipUnit(
+      x1_g + strength * (FILM_KERNEL_REAL(0.002) * blue_blacks + FILM_KERNEL_REAL(0.002) * warm));
+  const FilmKernelReal x2_b = FilmKernelClipUnit(
+      x1_b + strength * (FILM_KERNEL_REAL(0.024) * blue_blacks - FILM_KERNEL_REAL(0.009) * warm));
+
+  // A lower chroma, and more density on blue.
+  const FilmKernelReal y2   = luma_r * x2_r + luma_g * x2_g + luma_b * x2_b;
+  const FilmKernelReal x3_r = y2 + FILM_KERNEL_REAL(0.93) * (x2_r - y2);
+  const FilmKernelReal x3_g = y2 + FILM_KERNEL_REAL(0.93) * (x2_g - y2);
+  const FilmKernelReal x3_b = y2 + FILM_KERNEL_REAL(0.93) * (x2_b - y2);
+  const FilmKernelReal blue3 =
+      FilmKernelMax(x3_b - (x3_r + x3_g) / FILM_KERNEL_REAL(2.0), FILM_KERNEL_REAL(0.0));
+  const FilmKernelReal chroma = FILM_KERNEL_REAL(1.0) - FILM_KERNEL_REAL(0.65) * blue3;
+  const FilmKernelReal dense  = FILM_KERNEL_REAL(1.0) - FILM_KERNEL_REAL(0.70) * blue3;
+  const FilmKernelReal x4_r   = (y2 + chroma * (x3_r - y2)) * dense;
+  const FilmKernelReal x4_g   = (y2 + chroma * (x3_g - y2)) * dense;
+  const FilmKernelReal x4_b   = (y2 + chroma * (x3_b - y2)) * dense;
+
+  // A small shift of blue and green.
+  const FilmKernelReal blue4 =
+      FILM_KERNEL_REAL(0.12) *
+      FilmKernelMax(x4_b - (x4_r + x4_g) / FILM_KERNEL_REAL(2.0), FILM_KERNEL_REAL(0.0));
+  const FilmKernelReal green4 =
+      FILM_KERNEL_REAL(0.6) *
+      FilmKernelMax(x4_g - (x4_r + x4_b) / FILM_KERNEL_REAL(2.0), FILM_KERNEL_REAL(0.0));
+  return FilmKernelMakeRgb(
+      FilmKernelSrgbDecode(FilmKernelClipUnit(x4_r + FILM_KERNEL_REAL(0.06) * blue4 +
+                                              FILM_KERNEL_REAL(0.06) * green4)),
+      FilmKernelSrgbDecode(FilmKernelClipUnit(x4_g + FILM_KERNEL_REAL(0.20) * blue4)),
+      FilmKernelSrgbDecode(FilmKernelClipUnit(x4_b - FILM_KERNEL_REAL(0.18) * blue4 -
+                                              FILM_KERNEL_REAL(0.14) * green4)));
 }
 
 #undef FILM_KERNEL_INLINE

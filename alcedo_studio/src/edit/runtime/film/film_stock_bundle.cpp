@@ -181,10 +181,10 @@ void FilmStockBundle::ReadCommonValues() {
   if (wavelengths.size() != 1) {
     throw std::runtime_error("Film print resource: the wavelength list does not have one axis");
   }
-  wavelengths_    = wavelengths[0];
-  print_contrast_ = stock_.F64("common/print_contrast", {})[0];
-  print_flash_    = stock_.F64("common/print_flash", {})[0];
-  viewing_flare_  = stock_.F64("common/viewing_flare", {})[0];
+  wavelengths_           = wavelengths[0];
+  print_contrast_        = stock_.F64("common/print_contrast", {})[0];
+  print_flash_           = stock_.F64("common/print_flash", {})[0];
+  viewing_flare_         = stock_.F64("common/viewing_flare", {})[0];
   image_plane_constants_ = {
       .halation_strength   = stock_.F64("common/halation_strength", {3}),
       .spread_gaussians    = stock_.F64("common/spread_gaussians", {2, 2}),
@@ -332,6 +332,7 @@ auto FilmStockBundle::PrintMaterial(std::string_view id) const -> FilmPaperView 
       .xyz_scale         = stock_.F64(field("xyz_scale"), {})[0],
       .clear_luminance   = stock_.F64(field("clear_luminance"), {})[0],
       .surround_exponent = stock_.F64(field("surround_exponent"), {})[0],
+      .cinema_look       = stock_.F64(field("cinema_look"), {})[0] != 0.0,
   };
 }
 

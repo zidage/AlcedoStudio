@@ -233,6 +233,7 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
     stock[name("xyz_scale")]         = F64Array({}, {10.0 * scale});
     stock[name("clear_luminance")]   = F64Array({}, {100.0});
     stock[name("surround_exponent")] = F64Array({}, {surround_exponent});
+    stock[name("cinema_look")]       = F64Array({}, {0.0});
     stock[name("curve_density")]     = F64Array(
         {3, 5}, {0.1, 0.5, 1.0, 1.6, 2.1, 0.1, 0.6, 1.1, 1.7, 2.1, 0.1, 0.4, 0.9, 1.5, 1.5});
     stock[name("curve_lengths")]     = ArrayValues{"i8", {3}, ToBytes<std::int64_t>({5, 5, 4})};
@@ -831,6 +832,13 @@ TEST_F(FilmPrintTablesLabTest, ShippedListsHoldTheStocksOfThePlan) {
   EXPECT_EQ(bundle_->SceneLights().size(), 11u);
   EXPECT_EQ(bundle_->SceneLights()[0], "reference");
   EXPECT_NO_THROW((void)bundle_->Selection("kodak_5207", "kodak_2383", "reference"));
+}
+
+TEST_F(FilmPrintTablesLabTest, OnlyVision2383HasTheCinemaLook) {
+  for (const auto& material : bundle_->PrintMaterials()) {
+    EXPECT_EQ(bundle_->PrintMaterial(material.id).cinema_look, material.id == "kodak_2383")
+        << material.id;
+  }
 }
 
 TEST_F(FilmPrintTablesLabTest, ShippedListsMatchTheIdentifiersOfTheDocumentModel) {

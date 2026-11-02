@@ -471,8 +471,9 @@ __global__ void DisplayKernel(const float3* amounts, const float4* scene, float4
     record = FilmKernelFlareAmounts(record, FilmKernelMakeRgb(blurred.x, blurred.y, blurred.z),
                                     flare_strength);
   }
-  const auto linear =
+  const auto finished =
       FilmKernelFinishDisplay(&params, FilmKernelPrintDisplay(&params, print_rgba, record));
+  const auto linear = params.cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
   const int tf  = static_cast<int>(params.display_encoding);
   output[index] = make_float4(CeDisplayEncodeChannel(tf, linear.r, 1.0f),
                               CeDisplayEncodeChannel(tf, linear.g, 1.0f),
