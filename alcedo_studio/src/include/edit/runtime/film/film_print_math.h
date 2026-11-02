@@ -420,10 +420,14 @@ FILM_KERNEL_INLINE FilmKernelReal FilmKernelSmoothstep(FilmKernelReal low, FilmK
  *
  * @param params The fixed values of the selection, for the record of an 18 % grey.
  * @param record Dye amounts of the negative, after the enlarger flare.
+ * @param soft_record The amounts before the flare, with the blur of lab decision U85. The colours
+ * where green or blue leads are found on it, so the noise of one channel of a pixel does not move
+ * the density of the other channels. A test ramp with no image plane gives @p record here.
  * @return The graded dye amounts, not below 0.
  */
 FILM_KERNEL_INLINE FilmKernelRgb FilmKernelNegativeGrade(FILM_KERNEL_PARAMS FilmKernelParams* params,
-                                                         FilmKernelRgb record) {
+                                                         FilmKernelRgb record,
+                                                         FilmKernelRgb soft_record) {
   const FilmKernelReal d_r   = record.r - params->negative_grade_grey[0];
   const FilmKernelReal d_g   = record.g - params->negative_grade_grey[1];
   const FilmKernelReal d_b   = record.b - params->negative_grade_grey[2];
@@ -435,11 +439,15 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelNegativeGrade(FILM_KERNEL_PARAMS Film
       FilmKernelSmoothstep(FILM_KERNEL_REAL(-0.05), FILM_KERNEL_REAL(0.40), -level);
   const FilmKernelReal highlight =
       FilmKernelSmoothstep(FILM_KERNEL_REAL(0.35), FILM_KERNEL_REAL(0.95), level);
-  // A colour where green or blue leads: the emitters of signs lose their electric look.
+  const FilmKernelReal s_r = soft_record.r - params->negative_grade_grey[0];
+  const FilmKernelReal s_g = soft_record.g - params->negative_grade_grey[1];
+  const FilmKernelReal s_b = soft_record.b - params->negative_grade_grey[2];
+  // A colour where green or blue leads: the emitters of signs lose their electric look. The mean of
+  // the three channels has no effect on these differences.
   const FilmKernelReal green_lead =
-      FilmKernelMax(c_g - FilmKernelMax(c_r, c_b), FILM_KERNEL_REAL(0.0));
+      FilmKernelMax(s_g - FilmKernelMax(s_r, s_b), FILM_KERNEL_REAL(0.0));
   const FilmKernelReal blue_lead =
-      FilmKernelMax(c_b - FilmKernelMax(c_r, c_g), FILM_KERNEL_REAL(0.0));
+      FilmKernelMax(s_b - FilmKernelMax(s_r, s_g), FILM_KERNEL_REAL(0.0));
   const FilmKernelReal cool_lead = green_lead + blue_lead;
   const FilmKernelReal scale = FILM_KERNEL_REAL(0.88) *
                                (FILM_KERNEL_REAL(1.0) - FILM_KERNEL_REAL(0.35) * shadow) *

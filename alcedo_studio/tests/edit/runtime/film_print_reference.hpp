@@ -61,7 +61,7 @@ class FilmPrintPointReference {
     const auto q =
         FilmKernelLayerExposure(&params_, values_.data(), compressed.r, compressed.g, compressed.b);
     auto a = FilmKernelPointAmounts(&params_, values_.data(), q);
-    if (params_.negative_grade != 0U) a = FilmKernelNegativeGrade(&params_, a);
+    if (params_.negative_grade != 0U) a = FilmKernelNegativeGrade(&params_, a, a);
     const auto finished =
         FilmKernelFinishDisplay(&params_, FilmKernelPrintDisplay(&params_, print_rgba_.data(), a));
     const auto linear = params_.cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;

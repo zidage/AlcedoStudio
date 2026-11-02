@@ -136,8 +136,8 @@ struct FilmPrintImagePlan {
  * @brief Make the plan of the image-plane steps. Backend-neutral; computed on the CPU per render.
  *
  * @param layer_spread_um The spread lengths of the negative.
- * @param has_inhibitor_blur False for a negative with no image part of its inhibition. The plan then
- *        has no inhibitor.
+ * @param has_inhibitor_blur False for a selection with no image part of its inhibition and no
+ *        negative grade, which reads the same blur. The plan then has no inhibitor.
  * @throws std::runtime_error when a blur needs more than @ref kFilmBlurMaxRadius taps. The message
  *         states the sigma. There is no substitute blur.
  */

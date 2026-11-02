@@ -832,7 +832,9 @@ On 5207 + 2383, the range of b\* for L\* 15 to 88 goes from 13.7 to 7.2, and of 
 
 **Change.** New print material `cine_look`, with the name "Cine Look (2383)": the data of Kodak Vision 2383, with `FilmKernelCinemaLook` on any negative, and on the tungsten stocks (lab U84) the new `FilmKernelNegativeGrade`. This kernel is a fixed creative grade of the negative record, after the enlarger flare and before the print table. All its constants are creative choices. `kodak_2383` has neither step, so it returns to the print conditions of lab U80. The other materials and the defaults do not change. The arrays of `kFilmNegativeIds` and `kFilmPrintMaterialIds` set the order of the editor lists: the common stocks first, then Fuji, then the old Kodak stocks. A document stores the identifier, so the order has no effect on a document.
 
-**Versions.** Resource schema 5: `negative/<id>/negative_grade`, and `negative_grade_grey` of the setup. `kFilmPrintImplementationVersion` is 12.
+**Versions.** Resource schema 5: `negative/<id>/negative_grade`, and `negative_grade_grey` of the setup. `kFilmPrintImplementationVersion` is 13.
+
+**Noise.** The user reported that the grade adds much noise on an ISO 3200 file. The density loss of a colour where green or blue leads read the noise of one pixel and moved all channels. It now reads the amounts before the flare with a blur of 35 um (lab U85), with the kernels and the half-size rule of the inhibitor, so a stock with this grade has one more blur. A lab check limits the luma noise on a flat dusk blue to the noise of Kodak Vision 2383.
 
 **Not done.** The user review of each stock in the running application. The tungsten stocks: `kodak_5219`, `kodak_5213`, `kodak_5277`, `kodak_5293`, `kodak_exr_5248`, `fuji_eterna_500`, and `fuji_eterna_500_vivid`.
 
