@@ -149,7 +149,7 @@ calculates them; the product does not need the logic of `_camera_filter`, `_prin
 | --- | --- | --- | --- |
 | Stock bundle | Per negative: base, dyes, layer weights, dye amount curves, F and K of the inhibition, spread lengths. Per paper: base, dyes, printing, Status A, and viewing weights, curves. Scene light spectra. | Under 10 MB | Lab script |
 | Print setup | Per film, print material, and light: printer balance, printing gain, layer gain, aim, display matrix | About 200 KB | Lab script |
-| Reflectance table | Compact form of `reflectance_over_uv_light` (192^2 x 481 float32, 71 MB): 18103 nodes, 346 wavelengths, 12 mantissa bits, one byte plane per float32 byte | 25 MB, 5.5 MB after xz | Lab script |
+| Reflectance table | Compact form of the final lab table with rule `foliage_spectra` (192^2 x 481 float32, 71 MB): 18103 nodes, 346 wavelengths, 12 mantissa bits, one byte plane per float32 byte | 25 MB, 5.6 MB after xz | Lab script |
 | u'v' table | 192^2, from the reflectance table, the layer weights, and the light. A node that no read can reach holds 0 | 0.6 MB, in memory | `film_tables` |
 | Stage A | Negative to paper exposure (65^3) | 6.6 MB, in memory | `film_tables` |
 | Stage B | Paper Status A to XYZ (65^3, axis power 2) | 6.6 MB, in memory | `film_tables` |
@@ -273,7 +273,7 @@ Non-finite table value -> std::runtime_error with the selection, from Resolve ->
 
 **Decisions that the plan did not specify:**
 
-- Lab commits: `film_tables` is a copy from `8b16c67` of alcedo-film-lab, the last commit that changed the library. `build_product_resources.py` is from `2c6c14c`. The manifest of the resources names the lab commit of its run. The product adds `TableBandIntegral`, the u'v' integral, on the same worker threads. The product copy is now the source of the library, as this phase states.
+- Lab commits: `film_tables` is a copy from `8b16c67` of alcedo-film-lab, the last commit that changed the library. `build_product_resources.py` is from `f7084c0`, which is also the lab commit that the manifest of the current resources names. The manifest of the resources names the lab commit of its run. The product adds `TableBandIntegral`, the u'v' integral, on the same worker threads. The product copy is now the source of the library, as this phase states.
 - Each resource uses one array file (`film_array_file.hpp`): a JSON header, then raw arrays. The stock names are in the header of the stock bundle.
 - User decision of 2026-11-01: the installer ships a compact reflectance table, in place of the complete table of 71 MB. Each byte of a float32 is in its own plane, so that the compression of the installer finds the repeated high bytes. `Open` restores the rows and keeps them, about 25 MB. `Open` stops with an error if a negative has a weight outside the wavelength band.
 - The bundle holds shared values once: per negative, per paper, and per pair. The script stops if a value differs between two selections that use it. The print setup is 167 KB and the stock bundle is 2.7 MB.
@@ -302,6 +302,15 @@ Non-finite table value -> std::runtime_error with the selection, from Resolve ->
 **Resource sizes (measured):** 28.0 MB in the install tree. These files alone add 6.63 MB to an NSIS file with `SetCompressor lzma`, the CPack default. A ZIP at deflate level 6 takes 9.31 MB, as an estimate for the macOS update ZIP. With the complete table, a 7-Zip archive took 39.8 MB.
 
 **Compact table checks (lab script, limits written before the first run):** on 11 selections, the largest relative u'v' difference against the complete table is 1.2e-4 (limit 2e-4). The removed nodes held NaN, and the layer exposure stayed finite on 3 photos, a ramp, 512^2 random colours, and the edge of the hull. On 6 selections, the final sRGB differs by at most 0.0054 of an 8 bit code (limit 0.5).
+
+**Resources with rule `foliage_spectra` (2026-11-01, issue [#635](https://github.com/zidage/AlcedoStudio/issues/635)):** the lab rule moves one u'v' sector of the reflectance table to a leaf shape, because the table had no chlorophyll band near 670 nm and foliage turned yellow. The rule is in the table and has no value per stock, so the product has no new control and no new kernel.
+
+- The complete set comes from lab commit `f7084c0`. The record of that run is in `51f627a`, so the files in `expected/display/` and `expected/image/` name that later commit. `film_stock_bundle.bin` and `film_print_setup.bin` have the same bytes as before. `film_reflectance_table.bin` has a new SHA-256, with the same size and the same array form, so the schema version stays at 1.
+- The rule changes 1497 of the 36864 nodes of the complete table.
+- `kFilmPrintImplementationVersion` is 5, because the pixels of a film print change and the content keys do not hold a digest of the resources.
+- The compact table checks and the host test values in this record did not change at the stated precision.
+- CUDA against the new lab values (Debug, RTX 3080 Laptop), in 8 bit codes, with the limits of F3 and F4. `FilmPrintRampMatchesLab`: at most 0.33. `FilmPrintChartMatchesReference`: at most 0.053 against the reference, and at most 0.43 for the reference against the lab. `FilmPrintImageMatchesLab`, p99.9 and largest: `kodak_5207` 0.44, 1.34; `kodak_portra_400` 0.53, 1.47; `fuji_eterna_500` 0.50, 1.33. The records of F3 and F4 hold the values from before the rule.
+- `check_foliage_spectra.py`, all 30 negatives, on the clean lab commit: a grey ramp changes by 0 of 8 bit code, the six colours outside the sector change by at most 1, and the largest step along the chroma sweeps grows by at most 1 against a limit of 2.
 
 **What was proven (executed tests):**
 
@@ -547,7 +556,7 @@ Allocation failure, or a blur beyond the tap limit
 - `kFilmPrintImplementationVersion` is 4. Version 4 keeps the half-size cells on their pixels at an odd size.
 - The images between the steps hold three packed floats in the pool image, with no alpha. The display reads alpha from the scene. F6 and F7 must keep this layout with explicit floats, because `float3` of OpenCL C and of Metal has 16 bytes. The canonical results stay `Rgba32f`.
 - A half-size cell has two pixels, and the last cell of an odd size has three. The enlarge reads at exactly half of the pixel position, and the reduced sigma uses a scale of exactly 2. This differs from `_reduce` and `_enlarge` of the lab at an odd size. There, cells at a scale near 2 move their centers up to half a pixel from the read position near the middle of the image. An even size has the same pixels as the lab. The lab has not changed yet: issue [#639](https://github.com/zidage/AlcedoStudio/issues/639).
-- The lab values come from `build_image_expected.py` of alcedo-film-lab (`cd23015`). They are not in Git, and without them the image cases skip, which is not a pass. The script sets the option `foliage` to False, because the product resources do not have that uncommitted lab rule.
+- The lab values come from `build_image_expected.py` of alcedo-film-lab (`f7084c0`). They are not in Git, and without them the image cases skip, which is not a pass. The values have rule `foliage_spectra`, as the product resources do.
 
 **Cost record (Release, RTX 3080 Laptop, the array of `_DSC8148`, box-reduced to each size, `kodak_5207`, median GPU time of 9 renders in ms):**
 
