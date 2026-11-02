@@ -48,7 +48,7 @@ These are user decisions of 2026-10-31 and 2026-11-01.
 | Default DRT of a new document | OpenDRT stays. A user selects the film print. |
 | Stock data | 13 stocks have rule `grey_anchor` from the repair of lab U71. The print setup resource holds the result. |
 | Reflectance table | Compact form in the installer, with no download (2026-11-01): only the used wavelengths, only the u'v' nodes that a read can reach, and 12 mantissa bits. The u'v' limit against the complete lab table is a relative difference of 2e-4, and the final difference is at most 0.5 of an 8 bit code. |
-| Look | The user reviewed the lab viewer with the speed rules and the stock repair, and accepts the look (lab U72). |
+| Look | The user reviewed the lab viewer with the speed rules and the stock repair, and accepts the look (lab U72). Lab U75 replaces the neutral axis of the projected prints. |
 
 Rejected work that must not return: a 3x3 matrix in place of the spectral input, a look LUT fitted to other renders, one Gaussian in place of the
 two Gaussians of the light spread, and neutralization of a stock cast.
@@ -65,7 +65,7 @@ The method list of `EditorDisplayTransformPanel.qml` gets the item "Film Print".
 Display Transform
   Method          [Film Print      v]
   Film            [Kodak Vision3 250D 5207 v]
-  Print material  [Kodak Vision 2383       v]
+  Print material  [Kodak Endura Premier    v]
   Scene light     [Reference       v]
   Light spread    ----o----------   1.00
   Halation        ---o-----------   1.00
@@ -81,7 +81,7 @@ Display Transform
 | Field | JSON key in `params.film_print` of the DRT node | Default | Range |
 | --- | --- | --- | --- |
 | Film | `negative` | `kodak_5207` | Identifier of the stock bundle |
-| Print material | `print_material` | `kodak_2383` | Identifier of the stock bundle |
+| Print material | `print_material` | `kodak_endura_premier` (user decision of 2026-11-01, lab U76) | Identifier of the stock bundle |
 | Scene light | `scene_light` | `reference` | `reference`, 5 lights, 5 scenes of the lab |
 | Light spread | `light_spread` | 1.0 | 0 to 3 |
 | Halation | `halation` | 1.0 | 0 to 8 |
@@ -749,6 +749,24 @@ The texture pool peak does not change: 571, 1196, and 2371 MiB.
 **For F6 and F7.** The kernels of `cuda_film_print_pass.cu` are the form to port: after FP4 the image of the exposure holds the log exposure, and `inhibitor_blur` selects the no-blur path.
 
 **Open.** The user review of the new look of these stocks joins item 9 of F5. The charts are digitized values that were not checked against the manufacturer documents.
+
+##### Neutral axis of the projected prints record (2026-11-01)
+
+**Fault.** The user found Kodak 2383 yellow-green. A neutral ramp of `kodak_5207` on `kodak_2383` had green shadows (L* 20: a* -5.3, b* +1.5) and yellow-green highlights (L* 85: a* -3.5, b* +9.3).
+
+**Cause.** Lab rule `neutral_printing_gain` makes the shadows green, and the perfect reflector as display white adds about b* +6 along the ramp.
+
+**User decision.** The user compared three versions on four photos, selected the print with no gain, and asked for the change. This replaces the 2383 colours of lab decision U72. It is not the neutralization that section 1 rejects: a negative keeps its own difference from the other negatives, and the white has one value per print material.
+
+**Change.** Lab decision U75, section 5.7 of the P7 report. The manifest names lab commit `476153c`, and the record of that run and the expected values are from `37443d5`. Projected prints have no neutral printing gain, and lab rule `projected_print_white` gives each of them one display white. Reflection papers do not change. Only values of `film_print_setup.bin` change: `printing_gain` and `xyz_to_display`. The layout stays, so the schema version stays 2, the kernels do not change, and `kFilmPrintImplementationVersion` is 7. F6 and F7 have no extra work.
+
+**Checks (debug, RTX 3080 Laptop).** `FilmPrintTablesTest`: 31 of 31 pass. `GpuDagCudaDrtProductTest --gtest_filter=*FilmPrint*`: 17 of 17 pass, with the new lab values. Largest ramp difference 0.30 of an 8 bit code; largest image difference 1.47 codes. The lab rule against the look that the user selected: 0.0003 codes on `_DSC8148`. The mean a*b* distance of the 5207 + 2383 neutral axis from the Resolve LUT `Rec709 Kodak 2383 D65` goes from 6.8 to 2.1. That LUT is an emulation, not a measurement of a real print.
+
+**Not run.** The review of other stocks and print materials by the user, the full test suite, and a complete package.
+
+##### Default print material record (2026-11-01)
+
+The user finds 2383 strange on daylight photos, and selects Kodak Endura Premier as the default print material of the film print (lab U76). The default negative stays `kodak_5207`. `FilmPrintParams` holds the value, and the panel and the parameter catalog read it. A document with the film print holds its `print_material`, so it keeps its material and its bytes. A document with another method omits the object, so its bytes do not change, and it gets the new default when the user selects the film print.
 
 ### F6: OpenCL passes
 

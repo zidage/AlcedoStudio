@@ -34,7 +34,7 @@ auto FilmPrintUpdate() -> DrtParameterUpdate {
 
 void ExpectDefaultFilmPrint(const FilmPrintParams& film) {
   EXPECT_EQ(film.negative, "kodak_5207");
-  EXPECT_EQ(film.print_material, "kodak_2383");
+  EXPECT_EQ(film.print_material, "kodak_endura_premier");
   EXPECT_EQ(film.scene_light, "reference");
   EXPECT_EQ(film.light_spread, 1.0f);
   EXPECT_EQ(film.halation, 1.0f);
