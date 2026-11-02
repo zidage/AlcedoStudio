@@ -15,6 +15,7 @@
 
 #include "color/color_encoding_math.h"
 #include "cuda/cuda_check.hpp"
+#include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/cuda/cuda_backend.hpp"
 #include "edit/runtime/cuda/cuda_film_print_pass.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
@@ -138,7 +139,10 @@ __global__ void ExposureKernel(const float4* input, float3* output, std::uint32_
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixels) return;
   const float4 source = input[index];
-  const auto   q = FilmKernelLayerExposure(&params, values, source.x, source.y, source.z);
+  // Input is linear AP1. The final colour space is not known here, so a colour that a grade moved
+  // out of AP1 comes back at this point, as in DrtKernel.
+  const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
+  const auto q = FilmKernelLayerExposure(&params, values, compressed.r, compressed.g, compressed.b);
   output[index]       = make_float3(q.r, q.g, q.b);
 }
 

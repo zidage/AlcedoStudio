@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
 #include "edit/runtime/film/film_print_tables.hpp"
 
@@ -27,8 +28,8 @@ struct Rgb {
 /**
  * @brief Double-precision form of the point stages, from the same math as the kernels.
  *
- * It runs on the host tables of one selection, with no blur and no Enlarger flare: FP1, FP4, the
- * two steps of FP5, and FP6, then the sRGB curve.
+ * It runs on the host tables of one selection, with no blur and no Enlarger flare: the entry gamut
+ * compression, FP1, FP4, the two steps of FP5, and FP6, then the sRGB curve.
  */
 class FilmPrintPointReference {
  public:
@@ -56,7 +57,9 @@ class FilmPrintPointReference {
 
   /// Linear AP1 to final sRGB.
   [[nodiscard]] auto Srgb(float r, float g, float b) const -> Rgb {
-    const auto q = FilmKernelLayerExposure(&params_, values_.data(), r, g, b);
+    const auto compressed = AcesReferenceGamutCompress(r, g, b);
+    const auto q =
+        FilmKernelLayerExposure(&params_, values_.data(), compressed.r, compressed.g, compressed.b);
     const auto a = FilmKernelPointAmounts(&params_, values_.data(), q);
     const auto linear =
         FilmKernelFinishDisplay(&params_, FilmKernelPrintDisplay(&params_, print_rgba_.data(), a));

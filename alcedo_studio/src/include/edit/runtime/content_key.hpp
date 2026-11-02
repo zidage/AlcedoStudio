@@ -41,7 +41,9 @@ inline constexpr std::uint32_t kDrtImplementationVersion           = 6;
 /// Version 8 reads the resources of schema 3: on a cine print the printer has a UV filter, the
 /// grey is the LAD patch, the light is the projection light, the clear print is the white, and
 /// the dark surround acts on the print table. All prints have the published curve with no flash.
-inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 8;
+/// Version 9 applies the reference gamut compression at the entry, and reads the resources with the
+/// lab rules inhibition_total_from_image_part and print_slope_match.
+inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 9;
 /// Bumped when mask raster sampling or Union key structure changes. Version 3 is per-source Union.
 inline constexpr std::uint32_t kMaskImplementationVersion          = 3;
 
