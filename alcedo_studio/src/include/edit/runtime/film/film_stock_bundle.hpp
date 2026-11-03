@@ -57,6 +57,7 @@ struct FilmNegativeView {
   std::span<const double> layer_spread_um;     ///< (3): 0 for a negative with no transfer data
   FilmCurveView           curves;              ///< Dye amounts on log H
   FilmInhibitionView      inhibition;
+  bool                    negative_grade = false;  ///< Lab rule negative_show_grade, on cine_look
 };
 
 /// Values of the point stages that are the same for all stocks. Lab rules
@@ -105,6 +106,7 @@ struct FilmPaperView {
 /// The fixed scalar values of one selection of film, print material, and scene light.
 struct FilmSelectionSetup {
   std::array<double, 3>   printer_balance_log10{};
+  std::array<double, 3>   negative_grade_grey{};  ///< Record of an 18 % grey. 0: no such rule
   std::array<double, 3>   layer_gain{};
   std::array<double, 3>   printing_gain{};
   std::array<double, 3>   aim_log_h{};

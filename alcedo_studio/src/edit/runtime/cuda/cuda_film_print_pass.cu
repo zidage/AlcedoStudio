@@ -453,23 +453,65 @@ __global__ void ReducedFirstAmountsKernel(float3* q, int width, int height, floa
   reduced[i * columns + j] = make_float3(r * scale, g * scale, b * scale);
 }
 
-/// FP6, fused. @p flare is null when the Enlarger flare is off. Alpha comes from @p scene.
+/// Rule 'negative_show_grade': the box mean of the amounts on the half-size image. One thread covers
+/// one cell.
+__global__ void AmountsReduceKernel(const float3* amounts, int width, int height, float3* reduced,
+                                    int columns, int rows) {
+  const int i = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
+  const int j = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (i >= rows || j >= columns) return;
+  const int y0 = HalfCellStart(i, height, rows);
+  const int y1 = HalfCellStart(i + 1, height, rows);
+  const int x0 = HalfCellStart(j, width, columns);
+  const int x1 = HalfCellStart(j + 1, width, columns);
+  float     r  = 0.0f;
+  float     g  = 0.0f;
+  float     b  = 0.0f;
+  for (int y = y0; y < y1; ++y) {
+    for (int x = x0; x < x1; ++x) {
+      const float3 value = amounts[y * width + x];
+      r += value.x;
+      g += value.y;
+      b += value.z;
+    }
+  }
+  const float scale        = 1.0f / static_cast<float>((y1 - y0) * (x1 - x0));
+  reduced[i * columns + j] = make_float3(r * scale, g * scale, b * scale);
+}
+
+/// FP6, fused. @p flare is null when the Enlarger flare is off. Alpha comes from @p scene. @p soft is
+/// the blurred amounts of rule 'negative_show_grade', null with no image plane, and half size when
+/// @p soft_half_size is true.
 __global__ void DisplayKernel(const float3* amounts, const float4* scene, float4* output, int width,
                               int height, const float* print_rgba, const float4* flare,
                               int flare_width, int flare_height, Matrix3x3 render_to_flare,
-                              float flare_strength, FilmKernelParams params) {
+                              float flare_strength, const float3* soft, int soft_columns,
+                              int soft_rows, bool soft_half_size, FilmKernelParams params) {
   const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
   if (x >= width || y >= height) return;
   const int     index  = y * width + x;
   const float3  a      = amounts[index];
   FilmKernelRgb record = FilmKernelMakeRgb(a.x, a.y, a.z);
+  FilmKernelRgb soft_record = record;
+  if (params.negative_grade != 0U && soft != nullptr) {
+    const float3 s = soft_half_size
+                         ? ReadBilinear(soft, soft_columns, soft_rows,
+                                        (static_cast<float>(x) + 0.5f) * 0.5f,
+                                        (static_cast<float>(y) + 0.5f) * 0.5f)
+                         : soft[index];
+    soft_record = FilmKernelMakeRgb(s.x, s.y, s.z);
+  }
   if (flare != nullptr) {
     const float2 position =
         Transform(render_to_flare, static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
     const float3 blurred = ReadBilinear(flare, flare_width, flare_height, position.x, position.y);
     record = FilmKernelFlareAmounts(record, FilmKernelMakeRgb(blurred.x, blurred.y, blurred.z),
                                     flare_strength);
+  }
+  if (params.negative_grade != 0U) {
+    if (soft == nullptr) soft_record = record;
+    record = FilmKernelNegativeGrade(&params, record, soft_record);
   }
   const auto finished =
       FilmKernelFinishDisplay(&params, FilmKernelPrintDisplay(&params, print_rgba, record));
@@ -614,7 +656,7 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto negative     = bundle.Negative(film.negative);
   const auto image =
       MakeFilmPrintImagePlan(plan.geometry, bundle.ImagePlaneConstants(), negative.layer_spread_um,
-                             params.inhibition_has_image != 0U, film);
+                             params.inhibition_has_image != 0U || params.negative_grade != 0U, film);
   // With no blur, one dispatch computes the final amounts, so FP4 and FP5 need no other image.
   const bool inhibitor_blur = image.image_plane && params.inhibition_has_image != 0U;
 
@@ -767,6 +809,34 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
     }
   }
 
+  // Rule 'negative_show_grade': the blurred amounts, before the flare of FP6.
+  std::optional<Lease> soft_reduced;
+  std::optional<Lease> soft_middle;
+  std::optional<Lease> soft_image;
+  const float3*        soft = nullptr;
+  if (image.image_plane && params.negative_grade != 0U) {
+    const auto    extent  = image.inhibitor_extent;
+    const auto    grid    = GridFor(extent.width, extent.height);
+    const auto    columns = static_cast<int>(extent.width);
+    const auto    rows    = static_cast<int>(extent.height);
+    const float3* source  = a;
+    if (image.inhibitor_half_size) {
+      soft_reduced.emplace(acquire(extent.width, extent.height));
+      AmountsReduceKernel<<<grid, image_block, 0, stream>>>(a, w, h, PointerRgb(*soft_reduced),
+                                                            columns, rows);
+      source = PointerRgb(*soft_reduced);
+    }
+    soft_middle.emplace(acquire(extent.width, extent.height));
+    soft_image.emplace(acquire(extent.width, extent.height));
+    BlurHorizontalKernel<<<grid, image_block, 0, stream>>>(source, PointerRgb(*soft_middle), columns,
+                                                           rows, image.inhibitor_x);
+    BlurVerticalKernel<<<grid, image_block, 0, stream>>>(
+        static_cast<const float3*>(PointerRgb(*soft_middle)), PointerRgb(*soft_image), columns, rows,
+        image.inhibitor_y, 1.0f, false);
+    soft = PointerRgb(*soft_image);
+    clock.Mark("FP6 blurred amounts of the negative grade");
+  }
+
   // FP6: the canonical image of the blurred transmittance, then the fused point stages.
   std::optional<Lease> temporary_flare;
   const float4*        flare = nullptr;
@@ -805,7 +875,9 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
   DisplayKernel<<<image_grid, image_block, 0, stream>>>(
       a, scene_pixels, static_cast<float4*>(CudaSceneTexture(device, display).DevicePointer()), w,
       h, rgba, flare, static_cast<int>(image.flare_extent.width),
-      static_cast<int>(image.flare_extent.height), image.render_to_flare, image.flare, params);
+      static_cast<int>(image.flare_extent.height), image.render_to_flare, image.flare, soft,
+      static_cast<int>(image.inhibitor_extent.width), static_cast<int>(image.inhibitor_extent.height),
+      image.inhibitor_half_size, params);
   clock.Mark("FP6 display");
   cuda::CheckCuda(::cudaGetLastError(), "RecordCudaFilmPrint: kernel launch");
   clock.Finish();

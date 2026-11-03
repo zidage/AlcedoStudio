@@ -313,6 +313,7 @@ auto FilmStockBundle::Negative(std::string_view id) const -> FilmNegativeView {
       .layer_spread_um    = stock_.F64(field("layer_spread_um"), {3}),
       .curves             = ReadCurves(stock_, field, id),
       .inhibition         = inhibition,
+      .negative_grade     = stock_.F64(field("negative_grade"), {})[0] != 0.0,
   };
 }
 
@@ -354,9 +355,11 @@ auto FilmStockBundle::Selection(std::string_view negative, std::string_view prin
   const auto  aim       = setup_.F64("aim_log_h", {papers, 3});
   const auto  display   = setup_.F64("xyz_to_display", {papers, 3, 3});
   const auto  spectra   = setup_.I32("scene_spectrum_index", {negatives, lights});
+  const auto  grey      = setup_.F64("negative_grade_grey", {negatives, lights, 3});
   const auto& spectrum  = scene_spectra_[static_cast<std::size_t>(spectra[n * lights + l])];
   return {
       .printer_balance_log10 = CopyValues<3>(balance, ((n * papers + p) * lights + l) * 3),
+      .negative_grade_grey   = CopyValues<3>(grey, (n * lights + l) * 3),
       .layer_gain            = CopyValues<3>(gain, (n * lights + l) * 3),
       .printing_gain         = CopyValues<3>(printing, (n * papers + p) * 3),
       .aim_log_h             = CopyValues<3>(aim, p * 3),

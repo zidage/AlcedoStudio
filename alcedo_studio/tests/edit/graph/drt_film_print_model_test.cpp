@@ -35,6 +35,11 @@ auto FilmPrintUpdate() -> DrtParameterUpdate {
 void ExpectDefaultFilmPrint(const FilmPrintParams& film) {
   EXPECT_EQ(film.negative, "kodak_5207");
   EXPECT_EQ(film.print_material, "kodak_endura_premier");
+  // The lists of the editor put Cine Look and the most common negative first. The defaults stay.
+  EXPECT_EQ(kFilmPrintMaterialIds.front(), "cine_look");
+  EXPECT_EQ(kFilmPrintMaterialNames.front(), "Cine Look (2383)");
+  EXPECT_EQ(kFilmNegativeIds.front(), "kodak_5207");
+  EXPECT_TRUE(IsFilmIdentifier(kFilmPrintMaterialIds, "kodak_2383"));
   EXPECT_EQ(film.scene_light, "reference");
   EXPECT_EQ(film.light_spread, 1.0f);
   EXPECT_EQ(film.halation, 1.0f);

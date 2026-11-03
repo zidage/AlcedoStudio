@@ -43,7 +43,7 @@ inline constexpr std::uint32_t kDrtImplementationVersion           = 6;
 /// the dark surround acts on the print table. All prints have the published curve with no flash.
 /// Version 9 applies the reference gamut compression at the entry, and reads the resources with the
 /// lab rules inhibition_total_from_image_part and print_slope_match.
-inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 10;
+inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 13;
 /// Bumped when mask raster sampling or Union key structure changes. Version 3 is per-source Union.
 inline constexpr std::uint32_t kMaskImplementationVersion          = 3;
 
