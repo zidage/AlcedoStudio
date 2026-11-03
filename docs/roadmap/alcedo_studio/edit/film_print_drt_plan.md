@@ -48,7 +48,7 @@ These are user decisions of 2026-10-31 and 2026-11-01.
 | Default DRT of a new document | OpenDRT stays. A user selects the film print. |
 | Stock data | 13 stocks have rule `grey_anchor` from the repair of lab U71. The print setup resource holds the result. |
 | Reflectance table | Compact form in the installer, with no download (2026-11-01): only the used wavelengths, only the u'v' nodes that a read can reach, and 12 mantissa bits. The u'v' limit against the complete lab table is a relative difference of 2e-4, and the final difference is at most 0.5 of an 8 bit code. |
-| Look | The user reviewed the lab viewer with the speed rules and the stock repair, and accepts the look (lab U72). |
+| Look | The user reviewed the lab viewer with the speed rules and the stock repair, and accepts the look (lab U72). Lab U78 replaces the print conditions: see the [record of issue #645](#fix-of-issue-645-record-2026-11-02). |
 
 Rejected work that must not return: a 3x3 matrix in place of the spectral input, a look LUT fitted to other renders, one Gaussian in place of the
 two Gaussians of the light spread, and neutralization of a stock cast.
@@ -65,7 +65,7 @@ The method list of `EditorDisplayTransformPanel.qml` gets the item "Film Print".
 Display Transform
   Method          [Film Print      v]
   Film            [Kodak Vision3 250D 5207 v]
-  Print material  [Kodak Vision 2383       v]
+  Print material  [Kodak Endura Premier    v]
   Scene light     [Reference       v]
   Light spread    ----o----------   1.00
   Halation        ---o-----------   1.00
@@ -81,7 +81,7 @@ Display Transform
 | Field | JSON key in `params.film_print` of the DRT node | Default | Range |
 | --- | --- | --- | --- |
 | Film | `negative` | `kodak_5207` | Identifier of the stock bundle |
-| Print material | `print_material` | `kodak_2383` | Identifier of the stock bundle |
+| Print material | `print_material` | `kodak_endura_premier` (user decision of 2026-11-01, lab U76) | Identifier of the stock bundle |
 | Scene light | `scene_light` | `reference` | `reference`, 5 lights, 5 scenes of the lab |
 | Light spread | `light_spread` | 1.0 | 0 to 3 |
 | Halation | `halation` | 1.0 | 0 to 8 |
@@ -110,16 +110,14 @@ The input is linear AP1 from the DiffusionFilter pass, the same as the other DRT
 | FP1 | AP1 to XYZ, rule `spectral_locus_projection`, bilinear read of the u'v' table (192^2), layer gain: exposure Q | Point | `fast_kernels.layer_exposure` |
 | FP2 | Rule `spread_per_layer_pass`: two passes, each with one Gaussian per layer | Blur | `fast_kernels.gaussian_blur_per_layer` |
 | FP3 | Halation: read of the canonical Q canvas, mix per layer | Canvas and point | `fast_kernels.mix_exposure` |
-| FP4 | First amounts from the curves; a Gaussian of them, on a half-size image when the sigma is at least 4 pixels | Point and blur | `negative_density`, `gaussian_blur_half_size` |
-| FP5 | Rule `inhibition_two_steps`: a = F(log H - K * inhibitor), and FP4 and FP5 once more from these amounts | Point and blur | `fast_kernels.inhibited_step` |
+| FP4 | First amounts from the curves; rule `inhibition_image_part` (see the [record of issue #642](#fix-of-issue-642-record-2026-11-01)); a Gaussian of the amounts, on a half-size image when the sigma is at least 4 pixels | Point and blur | `negative_density`, `gaussian_blur_half_size` |
+| FP5 | Rule `inhibition_two_steps`: a = F(log H' - K_image * inhibitor), and FP4 and FP5 once more from these amounts. log H' is log H minus the point part of FP4 | Point and blur | `fast_kernels.inhibited_step` |
 | FP6 | Transmittance, Enlarger flare from the canonical canvas, density, print table (65^3), cube, display matrix, gamut compression, display encoding | Fused point | `flare_density`, `print_display`, `finish_display` |
 
 This chain has 6 blur passes. Python step P6 had 12. The point stages between blurs cannot fuse, because each one
 needs a blur result. FP6 fuses all stages after the Enlarger flare.
 
-There is no reference gamut compression at the entry of this method. The current `DrtKernel` applies it to the other
-methods. The lab chain has no such step, and rule `spectral_locus_projection` holds the out-of-locus colours. This is an inference; the review
-of phase F5 confirms it.
+The entry of this method has the reference gamut compression, as `DrtKernel` has for the other methods (lab U80, rule `entry_reference_gamut_compression`). The final colour space is not known at this point. This replaces the earlier inference that rule `spectral_locus_projection` is sufficient.
 
 ### 3.1 Sizes
 
@@ -719,6 +717,106 @@ Caller suites, Debug: `AdjustmentTransferCatalogTest` 9, `EditorPanelProjectionT
 - The panel in a window. The QML tests load the panel with no real input.
 - A complete package, and any build on macOS.
 - The full test suite did not run.
+
+##### Fix of issue #642 record (2026-11-01)
+
+**Fault.** Eterna 500, Eterna 500 Vivid, `kodak_5277`, `kodak_5203`, and `kodak_5206` looked sharpened. The fits of the lab discarded their inhibitor length, and the render used 35 um, so the render had an edge effect that the modulation transfer chart did not have. Lab report: [P7, section 5.6](https://github.com/zidage/alcedo-film-lab/blob/feature/p7-product-resources/docs/exploration/p7_spectral_acceleration.md), lab decision U74.
+
+**Rule `inhibition_image_part`.** K stays as the total, because K also sets the colour of a flat area, and lab decision U72 accepts these colours. `F_i` stays on this total. Only the part `K_image`, from a fit at 35 um, has a blur. Array `negative/<id>/inhibition_image_k` holds it, and the resource schema version is 2.
+
+**Change from the form in the issue.** The issue proposes `a = F(log H - K_image G(a) - (K - K_image) a)`. That form needs the full-size amounts of the previous step at each pixel, and the half-size path does not write them. The user requires no increase of the render time. So the first pass computes the point part once:
+
+1. `a0` = the curve of `log H`, and `a1 = F(log H - K a0)`.
+2. The pass stores `log H' = log H - K_point a1` in the image of the exposure.
+3. Each step reads `log H'` with no `log10`: `a = F(log H' - K_image I)`.
+
+A negative with no image part runs no blur: one dispatch computes the two steps of the total K at each pixel. This also is the form with no image plane. The later steps of all negatives have 6 fewer `log10` calls per pixel, and this pays for the 3 reads of a curve in the first pass.
+
+**Cost, Release, RTX 3080 Laptop, two runs of `DrtCostRecordAtEditorSizes`, GPU ms after a slider change:**
+
+| Size | `kodak_5207` before | After | `kodak_ultramax_400` (both parts) before | After | `fuji_eterna_500` (point part only) before | After |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2560 x 1709 | 5.70, 6.22 | 5.79, 5.79 | 5.66, 6.25 | 5.76, 5.74 | 6.23, 5.66 | 4.15, 4.11 |
+| 4096 x 2735 | 14.45, 14.59 | 13.94, 14.11 | 15.10, 14.32 | 14.04, 14.08 | 17.38, 17.27 | 7.96, 8.17 |
+| 6000 x 4006 | 20.73, 21.17 | 20.59, 21.36 | 26.10, 27.55 | 21.20, 21.01 | 26.75, 27.33 | 21.57, 21.55 |
+
+The texture pool peak does not change: 571, 1196, and 2371 MiB.
+
+**Checks.** The lab check `check_inhibition_image.py` has limits set before the run, and all pass: the largest response above the chart is 0.09 on 29 negatives (1.12 before), Eterna 500 has an edge of 0.02 codes (14.6 before), and its mean chroma is 54.42 (54.39 before). `kodak_5207` and `kodak_portra_400` differ from before by a mean of 0.017 and 0.033 codes. Tests `FilmPrintStepEdgeFollowsTheImagePartOfTheInhibition`, `FilmPrintWithNoImagePartRunsNoInhibitorBlur`, and `KernelParamsSplitTheInhibitionIntoAnImagePartAndAPointPart` hold the rule. After this change, the image comparison with the new lab values, p99.9 and largest in codes: `kodak_5207` 0.44, 1.34; `kodak_portra_400` 0.53, 1.47; `fuji_eterna_500` 0.51, 1.44. The earlier records hold the values from before this rule.
+
+**For F6 and F7.** The kernels of `cuda_film_print_pass.cu` are the form to port: after FP4 the image of the exposure holds the log exposure, and `inhibitor_blur` selects the no-blur path.
+
+**Open.** The user review of the new look of these stocks joins item 9 of F5. The charts are digitized values that were not checked against the manufacturer documents.
+
+##### Neutral axis of the projected prints record (2026-11-01)
+
+**Fault.** The user found Kodak 2383 yellow-green. A neutral ramp of `kodak_5207` on `kodak_2383` had green shadows (L* 20: a* -5.3, b* +1.5) and yellow-green highlights (L* 85: a* -3.5, b* +9.3).
+
+**Cause.** Lab rule `neutral_printing_gain` makes the shadows green, and the perfect reflector as display white adds about b* +6 along the ramp.
+
+**User decision.** The user compared three versions on four photos, selected the print with no gain, and asked for the change. This replaces the 2383 colours of lab decision U72. It is not the neutralization that section 1 rejects: a negative keeps its own difference from the other negatives, and the white has one value per print material.
+
+**Change, replaced by the [record of issue #645](#fix-of-issue-645-record-2026-11-02).** Lab decision U75, section 5.7 of the P7 report. The manifest names lab commit `476153c`, and the record of that run and the expected values are from `37443d5`. Projected prints have no neutral printing gain, and lab rule `projected_print_white` gives each of them one display white. Reflection papers do not change. Only values of `film_print_setup.bin` change: `printing_gain` and `xyz_to_display`. The layout stays, so the schema version stays 2, the kernels do not change, and `kFilmPrintImplementationVersion` is 7. F6 and F7 have no extra work.
+
+**Checks (debug, RTX 3080 Laptop).** `FilmPrintTablesTest`: 31 of 31 pass. `GpuDagCudaDrtProductTest --gtest_filter=*FilmPrint*`: 17 of 17 pass, with the new lab values. Largest ramp difference 0.30 of an 8 bit code; largest image difference 1.47 codes. The lab rule against the look that the user selected: 0.0003 codes on `_DSC8148`. The mean a*b* distance of the 5207 + 2383 neutral axis from the Resolve LUT `Rec709 Kodak 2383 D65` goes from 6.8 to 2.1. That LUT is an emulation, not a measurement of a real print.
+
+**Not run.** The review of other stocks and print materials by the user, the full test suite, and a complete package.
+
+##### Default print material record (2026-11-01)
+
+The user finds 2383 strange on daylight photos, and selects Kodak Endura Premier as the default print material of the film print (lab U76). The default negative stays `kodak_5207`. `FilmPrintParams` holds the value, and the panel and the parameter catalog read it. A document with the film print holds its `print_material`, so it keeps its material and its bytes. A document with another method omits the object, so its bytes do not change, and it gets the new default when the user selects the film print.
+
+##### Fix of issue #645 record (2026-11-02)
+
+**Fault.** The user finds Kodak 2383 strange on daylight photos, and states that the cause is in the photochemical chain, not in the neutral axis and not in a distance from a Resolve LUT. The user also asks to remove the values that were selected by comparison with spektrafilm, and to build the print from its process. Lab decisions U77 and U78; sections 5.8 and 5.9 of the P7 report.
+
+**Cause of the colour.** The printer model was lamp A with no filter. The data sheets of 2383 and 2393 state: "Overall filtration should include a UV-absorbing filter, such as a KODAK WRATTEN Filter No. 2B." The blue layer of a cine print stays sensitive down to the end of its chart, and the yellow dye of a negative falls below 450 nm. So 25 % of the blue layer exposure of `kodak_2383` through a `kodak_5207` grey fell below 400 nm, where the exposure does not follow the image. For `kodak_5383` the share was 68 %. On reflection papers it is about 3 %, which is why Endura Premier did not show this fault. This is the low blue slope that section 8.4 of lab report P2 could not explain, and that the lab rules `neutral_printing_gain` and `projected_print_white` tried to absorb.
+
+**Change.** Each value now has a source or is removed:
+
+| Item | Before | Now | Source |
+| --- | --- | --- | --- |
+| Printer light of a cine print | Lamp A | Lamp A with a Wratten 2B filter (rule `printer_uv_filter`) | Data sheets of 2383 and 2393 |
+| Grey of a cine print, Status A | 0.85, by comparison with spektrafilm | 1.09, 1.06, 1.03 | LAD patch, KODAK H-61b |
+| Paper log exposure scale, all prints | 0.85, by a sweep against spektrafilm | 1: the published curve | Data sheets |
+| Paper flash, all prints | 0.02, by eye | 0 | No measured value |
+| Surface reflection, all prints | 0.003, by eye | 0 | No measured value |
+| Viewing light of a cine print | D65 | D54 (rule `projection_light`) | SMPTE 196M-2003: 5400 K, x = 0.332, y = 0.347. D54 as the spectrum of a xenon lamp is an inference |
+| White of a cine print | Fitted from the 5207 print (`projected_print_white`, removed) | The clear print goes to display white (rule `clear_print_white`). One value per material, with no negative | In a dark cinema the clear print is the brightest light |
+| Surround of a cine print | None | Exponent 0.525 / 0.59 = 0.89 on luminance relative to the clear print (rule `dark_surround_on_display`) | CIECAM02 surround values, dark and dim |
+
+A reflection paper keeps D50, the perfect reflector as white, and the grey at Status A 0.75, which is 18 % reflectance.
+
+**Product.** Resource schema 3: each paper has `clear_luminance` and `surround_exponent`. `FilmPrintTables::Resolve` applies the exponent to the print table after the composition. The kernels do not change, so F6 and F7 have no extra work. `kFilmPrintImplementationVersion` is 8. A build tree needs a relink to copy the new resources; an old executable stops on the schema version.
+
+**Result, neutral ramp, a\*, b\* at the same L\*:**
+
+| Selection | | L\* 20 | L\* 45 | L\* 60 | L\* 75 | L\* 85 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 5207 + 2383, reference | Before | +1.3, -8.6 | +1.2, -4.9 | -0.1, 0.0 | -2.6, +3.8 | -4.6, +4.8 |
+| | After | -1.5, -2.1 | -1.0, -2.5 | -0.5, +0.2 | -2.3, +3.0 | -4.0, +3.2 |
+| 5219 + 2383, reference | After | -2.9, -2.7 | -2.9, -2.9 | -1.9, -0.4 | -3.1, +3.0 | -4.4, +3.7 |
+
+On 5207 + 2383, the range of b\* for L\* 15 to 88 goes from 13.7 to 7.2, and of a\* from 6.3 to 4.9. A grey of 0.18 goes from L\* 46.2 to 44.9. The black goes from L\* 3.7 to 1.0, and the top of the ramp from L\* 92.9 to 99.0. A sky of AP1 (0.10, 0.22, 0.42) goes from L\* 45, a\* -13, b\* -26 to L\* 46, a\* -3, b\* -39.
+
+**Checks (debug, RTX 3080 Laptop).** `FilmPrintTablesTest`: 32 of 32 pass, with the new test `DarkSurroundMovesLuminanceAndKeepsChromaticity`. `GpuDagCudaDrtProductTest --gtest_filter=*FilmPrint*`: 17 of 17 pass, with the new lab values. Largest ramp difference 0.47 of an 8 bit code; largest image difference 1.70 codes. These runs read resources with the name of a lab tree with uncommitted changes. The resources were then built again: the manifest names lab commit `3020bd2`, and the record of that run is `ce2e8cc`. The tests did not run again after that build.
+
+**Limits.**
+
+- No real print was measured. The look is not reviewed on the RAW files of the issue, which were not on this machine.
+- Chroma rises, because the published curve is steeper than the 0.85 scale. The default grade of the product (+1.5 EV, contrast 15, saturation 1.3) stays in front of the film, and its saturation was selected with the earlier print.
+- The LAD patch is not neutral on this chain: L\* 44.5, a\* +0.7, b\* -6.0, where H-61b states a visual neutral. So the digitized dyes or the adaptation to the clear print has an error of this size.
+- Blue through the print stays about 12 % below green on `kodak_2383`, as the printing slope times the paper slope. The digitized curves were not checked against the Kodak documents.
+- These values keep no source and stay: the default of the Enlarger flare slider (0.01), the Halation strength, the share 0.5 of the inhibition between layers, the band split of the dyes for a stock with no published dyes, rule `grey_anchor` for a stock with a relative chart, and the Gaussian tail of a dye below 400 nm. The inhibition is an empirical model that agrees with DIR couplers in quality only. It has the algorithm of spektrafilm, with K from a fit to the modulation transfer charts here. KODAK H-24 modules 1, 7, 8, 9, and 10 give no value for it. It fails the form of a real over-corrected negative (section 5.10 of the P7 report): on `kodak_5207` the separation curve is below the neutral curve, and the K adds only +0.014 density at 1.3 above base. The model does not change from this check.
+- A reflection paper has no surround rule. Endura Premier, the default print, changes its look with the curve and the flash: a grey stays near L\* 50, and the black falls.
+
+**Not run.** The review by the user, the other cine pairs, the full test suite, and a complete package.
+
+##### Saturation of the default look (record, 2026-11-02)
+
+**Fault.** The user finds the saturation too high on Eterna 500, Ektar 100, and Portra 800, and the highlights pink on a cine print. Lab decision U80, section 5.12 of the P7 report.
+
+**Change.** The default of a RAW document stays saturation 1.3. When an `odt` edit changes the method to `film_print`, `EditorHistoryMutation::CommitAdjustment` also writes 1.0 to the saturation of the Default Grade, in the same history batch, so one undo restores both. This applies only while the value is still the import default; a value that the user selected stays. Leaving the film print does not restore the value. K total equals the image part (lab rule `inhibition_total_from_image_part`), so `fuji_eterna_500` has no inhibition. Each negative on a cine print has `printing_gain` from lab rule `print_slope_match`, strength 0.5: a product choice, with no such step in a real printer. The entry of the CUDA film print has the reference gamut compression. Resource schema 3 does not change. `kFilmPrintImplementationVersion` is 9.
 
 ### F6: OpenCL passes
 

@@ -746,7 +746,7 @@ TEST(EditorParameterCatalogTest, FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput)
                                       {"peak_luminance", 100.0},
                                       {"film_print",
                                        {{"negative", "kodak_portra_400"},
-                                        {"print_material", "kodak_2383"},
+                                        {"print_material", "kodak_endura_premier"},
                                         {"scene_light", "reference"},
                                         {"light_spread", 1.0},
                                         {"halation", 2.5},

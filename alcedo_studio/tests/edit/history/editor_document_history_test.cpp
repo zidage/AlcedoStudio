@@ -227,6 +227,83 @@ TEST_F(EditorDocumentHistoryTest, UndoSettledExposureRestoresDocumentValue) {
   EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.5f);
 }
 
+auto DocumentSaturation(const alcedo::PipelineDocument& document) -> float {
+  nlohmann::json json;
+  std::string    error;
+  EXPECT_TRUE(alcedo::ReadEditorParameterJson(
+      document, ColorGradeFieldTarget("saturation", "grade.primary"), &json, &error))
+      << error;
+  return json.at("saturation").get<float>();
+}
+
+auto DocumentOdtMethod(const alcedo::PipelineDocument& document) -> std::string {
+  return document.Drt()->Params().OutputTransformJson().at("method").get<std::string>();
+}
+
+TEST_F(EditorDocumentHistoryTest, FilmPrintEntryResetsImportSaturationInOneUndoStep) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto method_before = DocumentOdtMethod(Working()->Document());
+  ASSERT_NE(method_before, "film_print");
+  EXPECT_FLOAT_EQ(DocumentSaturation(Working()->Document()), alcedo::kDefaultPipelineSaturation);
+
+  auto film = WithDrtPostTarget({"odt", R"({"method":"film_print"})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, film, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, film, &error)) << error;
+  EXPECT_EQ(DocumentOdtMethod(Working()->Document()), "film_print");
+  EXPECT_FLOAT_EQ(DocumentSaturation(Working()->Document()), alcedo::kFilmPrintEntrySaturation);
+
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  EXPECT_EQ(DocumentOdtMethod(Working()->Document()), method_before);
+  EXPECT_FLOAT_EQ(DocumentSaturation(Working()->Document()), alcedo::kDefaultPipelineSaturation);
+  EXPECT_FALSE(Head().has_value());
+
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  EXPECT_EQ(DocumentOdtMethod(Working()->Document()), "film_print");
+  EXPECT_FLOAT_EQ(DocumentSaturation(Working()->Document()), alcedo::kFilmPrintEntrySaturation);
+}
+
+TEST_F(EditorDocumentHistoryTest, FilmPrintEntryKeepsSaturationThatTheUserSelected) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  auto user = WithColorGradeTarget({"saturation", R"({"saturation":1.6})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, user, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, user, &error)) << error;
+
+  auto film = WithDrtPostTarget({"odt", R"({"method":"film_print"})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, film, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, film, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentSaturation(Working()->Document()), 1.6f);
+}
+
+TEST_F(EditorDocumentHistoryTest, FilmPrintControlsAndOtherMethodsLeaveSaturation) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  auto aces = WithDrtPostTarget({"odt", R"({"method":"aces_2_0"})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, aces, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, aces, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentSaturation(Working()->Document()), alcedo::kDefaultPipelineSaturation);
+
+  auto film = WithDrtPostTarget({"odt", R"({"method":"film_print"})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, film, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, film, &error)) << error;
+
+  // The user raises it on the film print. A later control of the same method keeps that value.
+  auto user = WithColorGradeTarget({"saturation", R"({"saturation":1.3})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, user, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, user, &error)) << error;
+  auto control =
+      WithDrtPostTarget({"odt",
+                         R"({"method":"film_print","film_print":{"negative":"kodak_gold_200"}})",
+                         true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, control, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, control, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentSaturation(Working()->Document()), 1.3f);
+}
+
 TEST_F(EditorDocumentHistoryTest, IncompleteLaterPatchRejectedLeavesLockedDocumentUnchanged) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);

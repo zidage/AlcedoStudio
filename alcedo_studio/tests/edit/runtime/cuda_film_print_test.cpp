@@ -496,6 +496,74 @@ TEST_F(CudaFilmPrintFixture, FilmPrintHalfSizeCellsStayOnTheirPixelsAtAnOddSize)
             0.01);
 }
 
+/// A neutral step edge of 3 stops about the grey, at the middle of each row.
+auto NeutralStepEdge(std::uint32_t width, std::uint32_t height) -> std::vector<Rgba> {
+  std::vector<Rgba> field(static_cast<std::size_t>(width) * height);
+  const float       low  = 0.18f * std::pow(2.0f, -1.5f);
+  const float       high = 0.18f * std::pow(2.0f, 1.5f);
+  for (std::size_t index = 0; index < field.size(); ++index) {
+    const float value = index % width < width / 2 ? low : high;
+    field[index]      = {value, value, value, 1.0f};
+  }
+  return field;
+}
+
+// Eterna 500 has a chart with no rise above 1, so its inhibition has no image part. The chart of
+// Portra 400 rises, so that stock keeps an edge. Lab rule 'inhibition_image_part'.
+TEST_F(CudaFilmPrintFixture, FilmPrintStepEdgeFollowsTheImagePartOfTheInhibition) {
+  constexpr std::uint32_t kWidth  = 6000;
+  constexpr std::uint32_t kHeight = 4000;
+  const auto              field   = NeutralStepEdge(kWidth, kHeight);
+  SetView({kWidth, kHeight}, {kWidth, kHeight}, Matrix3x3::Identity());
+  /// The larger of the overshoot and the undershoot of the green channel, in 8 bit codes.
+  const auto largest_edge_codes = [&](const char* negative) {
+    const auto  pixels = RenderView(FilmPrintDocument(negative), field, false);
+    const auto* row    = pixels.data() + static_cast<std::size_t>(kHeight / 2) * kWidth;
+    const float low    = row[kWidth / 2 - 1500].g;
+    const float high   = row[kWidth / 2 + 1500].g;
+    float       over   = 0.0f;
+    float       under  = 0.0f;
+    for (std::uint32_t x = 0; x < kWidth; ++x) {
+      if (x < kWidth / 2) {
+        under = (std::max)(under, low - row[x].g);
+      } else {
+        over = (std::max)(over, row[x].g - high);
+      }
+    }
+    return (std::max)(over, under) * 255.0f;
+  };
+  EXPECT_LE(largest_edge_codes("fuji_eterna_500"), 1.0f);
+  EXPECT_GE(largest_edge_codes("kodak_portra_400"), 2.0f);
+}
+
+TEST_F(CudaFilmPrintFixture, FilmPrintWithNoImagePartRunsNoInhibitorBlur) {
+  constexpr std::uint32_t kWidth  = 6000;
+  constexpr std::uint32_t kHeight = 4000;
+  const auto              field   = NeutralStepEdge(kWidth, kHeight);
+  SetView({kWidth, kHeight}, {kWidth, kHeight}, Matrix3x3::Identity());
+  const auto runs_inhibitor_blur = [&](const char* negative) {
+    const auto document = FilmPrintDocument(negative);
+    device_.BeginRender();
+    auto& workspace = device_.Workspace();
+    workspace.PrepareResultValidity(plan_, document, input_);
+    const GraphValueId scene_id{NodeId{"grade.primary"}, PortId{"image"}};
+    auto& scene = workspace.AcquireImageForWrite(scene_id, {kWidth, kHeight, TextureFormat::Rgba32f});
+    workspace.Device().UploadTexture2D(scene.Texture(), std::as_bytes(std::span(field)),
+                                       device_.CommandContext());
+    const auto display_id = plan_.display_output;
+    (void)workspace.AcquireImageForWrite(display_id, {kWidth, kHeight, TextureFormat::Rgba32f});
+    std::vector<FilmPrintPassTime> times;
+    RecordCudaFilmPrint(device_, plan_, *document.Drt(), FrameSceneBinding::CachedImage(scene_id),
+                        FrameSceneBinding::CachedImage(display_id), kWidth, kHeight, &times);
+    device_.CancelRender();
+    return std::any_of(times.begin(), times.end(), [](const FilmPrintPassTime& time) {
+      return time.name.find("inhibitor") != std::string::npos;
+    });
+  };
+  EXPECT_FALSE(runs_inhibitor_blur("fuji_eterna_500"));
+  EXPECT_TRUE(runs_inhibitor_blur("kodak_portra_400"));
+}
+
 TEST_F(CudaFilmPrintFixture, FilmPrintAllocationFailureReportsTheErrorAndPublishesNoPartialResult) {
   const auto field    = PatchField(128, 96, 40, 40, 8);
   const auto document = FilmPrintDocument();
@@ -878,6 +946,10 @@ TEST_F(CudaFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
     record("OpenDRT", method_document(DrtMethod::OpenDrt), false);
     record("film print, results valid", FilmPrintDocument(), false);
     record("film print, slider change", FilmPrintDocument(), true);
+    // A stock with only the point part of the inhibition, and a stock with both parts.
+    record("film print, slider change, fuji_eterna_500", FilmPrintDocument("fuji_eterna_500"), true);
+    record("film print, slider change, kodak_ultramax_400", FilmPrintDocument("kodak_ultramax_400"),
+           true);
 
     // The passes of the film print, after a slider change.
     auto   document    = FilmPrintDocument();

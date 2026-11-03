@@ -77,7 +77,9 @@ typedef struct {
   FilmKernelReal   layer_gain[3];
   FilmKernelReal   curve_offset[3];  // Criterion log H - the log H of the first curve value
   FilmKernelReal   curve_step;
-  FilmKernelReal   inhibition_k[9];       // Row major
+  FilmKernelReal   inhibition_k[9];        // Row major. The total, which sets F_i.
+  FilmKernelReal   inhibition_image_k[9];  // Rule 'inhibition_image_part': the part with a blur
+  FilmKernelReal   inhibition_point_k[9];  // The total minus the image part
   FilmKernelReal   inhibition_offset[3];  // Criterion log H - the log H of the first F_i value
   FilmKernelReal   inhibition_step;
   FilmKernelReal   print_start[3];
@@ -92,6 +94,8 @@ typedef struct {
   FILM_KERNEL_UINT curve_lengths[3];
   FILM_KERNEL_UINT inhibition_stored;  // 0: this negative has no inhibition
   FILM_KERNEL_UINT inhibition_lengths[3];
+  FILM_KERNEL_UINT inhibition_has_image;  // 0: no value of the image part is above 0
+  FILM_KERNEL_UINT inhibition_has_point;  // 0: no value of the point part is above 0
   FILM_KERNEL_UINT print_edge;
   FILM_KERNEL_UINT curves_offset;
   FILM_KERNEL_UINT inhibition_values_offset;
@@ -203,47 +207,97 @@ FILM_KERNEL_INLINE FilmKernelReal FilmKernelLogExposure(FilmKernelReal q) {
   return FILM_KERNEL_LOG10(FilmKernelMax(q, FILM_KERNEL_REAL(1e-30)));
 }
 
-/** FP4: the exposure Q to the first dye amounts, on the curves of rule 'dye_amount_curves'. */
-FILM_KERNEL_INLINE FilmKernelRgb FilmKernelFirstAmounts(FILM_KERNEL_PARAMS FilmKernelParams* params,
+/** log10 of the exposure Q of each layer. */
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelLogExposures(FilmKernelRgb q) {
+  return FilmKernelMakeRgb(FilmKernelLogExposure(q.r), FilmKernelLogExposure(q.g),
+                           FilmKernelLogExposure(q.b));
+}
+
+/** FP4: log exposure to the first dye amounts, on the curves of rule 'dye_amount_curves'. */
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelCurveAmounts(FILM_KERNEL_PARAMS FilmKernelParams* params,
                                                         FILM_KERNEL_VALUES FilmKernelReal*   values,
-                                                        FilmKernelRgb                        q) {
+                                                        FilmKernelRgb log_q) {
   FILM_KERNEL_VALUES FilmKernelReal* curves = values + params->curves_offset;
   const FILM_KERNEL_UINT             stored = params->curve_stored;
   const FilmKernelReal               step   = params->curve_step;
   return FilmKernelMakeRgb(
       FilmKernelReadCurve(curves, params->curve_lengths[0],
-                          (params->curve_offset[0] + FilmKernelLogExposure(q.r)) / step),
+                          (params->curve_offset[0] + log_q.r) / step),
       FilmKernelReadCurve(curves + stored, params->curve_lengths[1],
-                          (params->curve_offset[1] + FilmKernelLogExposure(q.g)) / step),
+                          (params->curve_offset[1] + log_q.g) / step),
       FilmKernelReadCurve(curves + 2U * stored, params->curve_lengths[2],
-                          (params->curve_offset[2] + FilmKernelLogExposure(q.b)) / step));
+                          (params->curve_offset[2] + log_q.b) / step));
 }
 
 /**
- * FP5: one step of rule 'development_inhibition': a_i = F_i(log H_i - sum_j K_ij I_j).
- * @p inhibitor is the blurred amounts (phase F4), or the amounts themselves with no image plane.
+ * FP5: one step of rule 'development_inhibition': a_i = F_i(log Q_i - sum_j K_ij I_j).
  * Call this only when `params->inhibition_stored` is not 0.
  */
-FILM_KERNEL_INLINE FilmKernelRgb FilmKernelInhibitedStep(
-    FILM_KERNEL_PARAMS FilmKernelParams* params, FILM_KERNEL_VALUES FilmKernelReal* values,
-    FilmKernelRgb q, FilmKernelRgb inhibitor) {
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelStep(FILM_KERNEL_PARAMS FilmKernelParams* params,
+                                                FILM_KERNEL_VALUES FilmKernelReal*   values,
+                                                FILM_KERNEL_PARAMS FilmKernelReal*   k,
+                                                FilmKernelRgb log_q, FilmKernelRgb inhibitor) {
   FILM_KERNEL_VALUES FilmKernelReal* free_curves = values + params->inhibition_values_offset;
-  FILM_KERNEL_PARAMS FilmKernelReal* k           = params->inhibition_k;
   const FILM_KERNEL_UINT             stored      = params->inhibition_stored;
   const FilmKernelReal               step        = params->inhibition_step;
-  const FilmKernelReal t0 = (params->inhibition_offset[0] + FilmKernelLogExposure(q.r) -
-                             k[0] * inhibitor.r - k[1] * inhibitor.g - k[2] * inhibitor.b) /
+  const FilmKernelReal t0 = (params->inhibition_offset[0] + log_q.r - k[0] * inhibitor.r -
+                             k[1] * inhibitor.g - k[2] * inhibitor.b) /
                             step;
-  const FilmKernelReal t1 = (params->inhibition_offset[1] + FilmKernelLogExposure(q.g) -
-                             k[3] * inhibitor.r - k[4] * inhibitor.g - k[5] * inhibitor.b) /
+  const FilmKernelReal t1 = (params->inhibition_offset[1] + log_q.g - k[3] * inhibitor.r -
+                             k[4] * inhibitor.g - k[5] * inhibitor.b) /
                             step;
-  const FilmKernelReal t2 = (params->inhibition_offset[2] + FilmKernelLogExposure(q.b) -
-                             k[6] * inhibitor.r - k[7] * inhibitor.g - k[8] * inhibitor.b) /
+  const FilmKernelReal t2 = (params->inhibition_offset[2] + log_q.b - k[6] * inhibitor.r -
+                             k[7] * inhibitor.g - k[8] * inhibitor.b) /
                             step;
   return FilmKernelMakeRgb(
       FilmKernelReadCurve(free_curves, params->inhibition_lengths[0], t0),
       FilmKernelReadCurve(free_curves + stored, params->inhibition_lengths[1], t1),
       FilmKernelReadCurve(free_curves + 2U * stored, params->inhibition_lengths[2], t2));
+}
+
+/**
+ * FP4 and FP5 with no blur: the amounts of an exposure Q, with the total K in two steps. This is the
+ * form with no image plane, and the form of a negative with no image part. With no inhibition, it
+ * gives the first amounts.
+ */
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelPointAmounts(FILM_KERNEL_PARAMS FilmKernelParams* params,
+                                                        FILM_KERNEL_VALUES FilmKernelReal*   values,
+                                                        FilmKernelRgb                        q) {
+  const FilmKernelRgb log_q = FilmKernelLogExposures(q);
+  FilmKernelRgb       a     = FilmKernelCurveAmounts(params, values, log_q);
+  if (params->inhibition_stored != 0U) {
+    a = FilmKernelStep(params, values, params->inhibition_k, log_q, a);
+    a = FilmKernelStep(params, values, params->inhibition_k, log_q, a);
+  }
+  return a;
+}
+
+/** The first dye amounts, and the log exposure that the steps with a blurred inhibitor read. */
+typedef struct {
+  FilmKernelRgb amounts;
+  FilmKernelRgb log_q;
+} FilmKernelFirstStage;
+
+/**
+ * FP4 for a negative with an image part, rule 'inhibition_image_part'. The point part acts here,
+ * with the amounts a1 = F(log Q - K a) of one point step: log Q - K_point a1. So the later steps need
+ * no image of the amounts for this part, and they read a stored log exposure with no log10.
+ */
+FILM_KERNEL_INLINE FilmKernelFirstStage FilmKernelFirstAmountsWithPointPart(
+    FILM_KERNEL_PARAMS FilmKernelParams* params, FILM_KERNEL_VALUES FilmKernelReal* values,
+    FilmKernelRgb q) {
+  FilmKernelFirstStage first;
+  first.log_q   = FilmKernelLogExposures(q);
+  first.amounts = FilmKernelCurveAmounts(params, values, first.log_q);
+  if (params->inhibition_has_point != 0U) {
+    const FilmKernelRgb a1 =
+        FilmKernelStep(params, values, params->inhibition_k, first.log_q, first.amounts);
+    FILM_KERNEL_PARAMS FilmKernelReal* k = params->inhibition_point_k;
+    first.log_q.r -= k[0] * a1.r + k[1] * a1.g + k[2] * a1.b;
+    first.log_q.g -= k[3] * a1.r + k[4] * a1.g + k[5] * a1.b;
+    first.log_q.b -= k[6] * a1.r + k[7] * a1.g + k[8] * a1.b;
+  }
+  return first;
 }
 
 /**

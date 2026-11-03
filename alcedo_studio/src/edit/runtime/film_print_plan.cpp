@@ -178,7 +178,7 @@ void PlanFlare(const FilmImagePlaneConstants& constants, const FilmPrintParams& 
 
 auto MakeFilmPrintImagePlan(const ResolvedRenderGeometry&  geometry,
                             const FilmImagePlaneConstants& constants,
-                            std::span<const double> layer_spread_um, bool has_inhibition,
+                            std::span<const double> layer_spread_um, bool has_inhibitor_blur,
                             const FilmPrintParams& film) -> FilmPrintImagePlan {
   FilmPrintImagePlan plan;
   const auto         reference = geometry.full_reference_extent;
@@ -194,7 +194,7 @@ auto MakeFilmPrintImagePlan(const ResolvedRenderGeometry&  geometry,
   plan.canvas_to_render = mapping.base_to_render;
   plan.canvas_samples   = mapping.reduce_samples;
   PlanSpread(geometry, constants, layer_spread_um, film, pixel_um, plan);
-  if (has_inhibition) {
+  if (has_inhibitor_blur) {
     PlanInhibitor(geometry, constants, pixel_um, plan);
   }
   PlanHalation(geometry, constants, film, pixel_um, plan);

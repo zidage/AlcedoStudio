@@ -34,7 +34,8 @@ struct FilmCurveView {
 
 /// Rule 'development_inhibition' of a negative. A negative with no modulation transfer data has none.
 struct FilmInhibitionView {
-  std::span<const double>       k;            ///< (3, 3), row major
+  std::span<const double>       k;            ///< (3, 3), row major: the total, which sets F_i
+  std::span<const double>       image_k;      ///< (3, 3): the part of `k` with a blur of the image
   std::span<const double>       free_values;  ///< (3, stored_length): F_i on one uniform log H step
   std::span<const std::int64_t> lengths;      ///< (3)
   std::span<const double>       log_h_start;  ///< (3)
@@ -94,7 +95,9 @@ struct FilmPaperView {
   std::span<const double> status_axis_start;  ///< (3)
   std::span<const double> status_axis_range;  ///< (3)
   FilmCurveView           curves;
-  double                  xyz_scale = 0.0;
+  double                  xyz_scale         = 0.0;
+  double                  clear_luminance   = 0.0;  ///< Y of the clear print under the viewing light
+  double                  surround_exponent = 1.0;  ///< Lab rule dark_surround_on_display
 };
 
 /// The fixed scalar values of one selection of film, print material, and scene light.

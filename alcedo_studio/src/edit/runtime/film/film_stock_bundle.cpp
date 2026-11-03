@@ -294,6 +294,7 @@ auto FilmStockBundle::Negative(std::string_view id) const -> FilmNegativeView {
     }
     inhibition = {
         .k             = stock_.F64(field("inhibition_k"), {3, 3}),
+        .image_k       = stock_.F64(field("inhibition_image_k"), {3, 3}),
         .free_values   = stock_.F64(field("inhibition_free"), {3, shape[1]}),
         .lengths       = stock_.I64(field("inhibition_lengths"), {3}),
         .log_h_start   = stock_.F64(field("inhibition_start"), {3}),
@@ -329,6 +330,8 @@ auto FilmStockBundle::PrintMaterial(std::string_view id) const -> FilmPaperView 
       .status_axis_range = stock_.F64(field("status_axis_range"), {3}),
       .curves            = ReadCurves(stock_, field, id),
       .xyz_scale         = stock_.F64(field("xyz_scale"), {})[0],
+      .clear_luminance   = stock_.F64(field("clear_luminance"), {})[0],
+      .surround_exponent = stock_.F64(field("surround_exponent"), {})[0],
   };
 }
 

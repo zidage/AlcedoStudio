@@ -438,12 +438,37 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     state->pending_document_sequence.erase(sequence);
     return true;
   }
-  const auto restore_before = [&] { return RestoreDocumentFields(*state, {recorded}, error); };
+  std::vector<HistoryWorkingState::DocumentFieldEdit> recorded_fields{recorded};
+  const auto restore_before = [&] { return RestoreDocumentFields(*state, recorded_fields, error); };
+  // An input sequence that is open on the saturation keeps its value.
+  if (patch.field_key == "odt" && !state->pending_document_sequence.contains("saturation")) {
+    auto reset_target = FilmPrintEntrySaturationTarget(
+        state->document->Document(), recorded.before_model_json, recorded.after_model_json);
+    if (reset_target.has_value()) {
+      HistoryWorkingState::DocumentFieldEdit reset;
+      reset.target = std::move(*reset_target);
+      if (!ReadEditorParameterJson(state->document->Document(), reset.target,
+                                   &reset.before_model_json, error) ||
+          !ApplyEditorParameterPatch(state->document->Document(), reset.target,
+                                     {{"saturation", alcedo::kFilmPrintEntrySaturation}}, error) ||
+          !ReadEditorParameterJson(state->document->Document(), reset.target,
+                                   &reset.after_model_json, error)) {
+        (void)restore_before();
+        return false;
+      }
+      recorded_fields.push_back(std::move(reset));
+    }
+  }
   PipelineEditBatch batch;
   try {
     batch = MakeSetParameterBatch(
         locked_target, recorded.before_model_json, recorded.after_model_json, true, true,
         NodeDisplayName(state->document->Document(), locked_target.node_id));
+    for (std::size_t index = 1; index < recorded_fields.size(); ++index) {
+      AppendSetParameterChange(batch, recorded_fields[index].target,
+                               recorded_fields[index].before_model_json,
+                               recorded_fields[index].after_model_json);
+    }
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     (void)restore_before();

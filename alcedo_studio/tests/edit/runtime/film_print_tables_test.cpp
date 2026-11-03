@@ -27,6 +27,7 @@
 #include "edit/graph/film_print_model.hpp"
 #include "edit/runtime/film/film_array_file.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
+#include "edit/runtime/film/film_print_math.h"
 #include "edit/runtime/film/film_stock_bundle.hpp"
 #include "edit/runtime/film/film_tables.hpp"
 #include "utils/hash/sha256.hpp"
@@ -159,7 +160,7 @@ auto Flat(double value) -> std::vector<double> {
 
 /// Small resources with two negatives, two papers, and two scene lights. The values have no
 /// physical meaning. Each one is distinct, so that a wrong index gives a wrong table.
-void WriteSyntheticResources(const fs::path& directory) {
+void WriteSyntheticResources(const fs::path& directory, double surround_exponent = 1.0) {
   fs::create_directories(directory);
   std::map<std::string, ArrayValues> stock;
   stock["common/wavelengths_nm"] = F64Array({kWavelengths}, Flat(500.0));
@@ -208,6 +209,8 @@ void WriteSyntheticResources(const fs::path& directory) {
   // neg_b has no inhibition, as a stock with no modulation transfer data.
   stock["negative/neg_a/inhibition_k"] =
       F64Array({3, 3}, {0.1, 0.02, 0.03, 0.04, 0.2, 0.05, 0.06, 0.07, 0.3});
+  stock["negative/neg_a/inhibition_image_k"] =
+      F64Array({3, 3}, {0.05, 0.02, 0.03, 0.0, 0.0, 0.0, 0.06, 0.07, 0.3});
   stock["negative/neg_a/inhibition_free"] =
       F64Array({3, 3}, {0.1, 0.6, 1.1, 0.2, 0.7, 1.2, 0.3, 0.8, 0.8});
   stock["negative/neg_a/inhibition_lengths"] =
@@ -228,6 +231,8 @@ void WriteSyntheticResources(const fs::path& directory) {
     stock[name("status_axis_start")] = F64Array({3}, {0.1, 0.1, 0.1});
     stock[name("status_axis_range")] = F64Array({3}, {2.0, 2.0, 2.0});
     stock[name("xyz_scale")]         = F64Array({}, {10.0 * scale});
+    stock[name("clear_luminance")]   = F64Array({}, {100.0});
+    stock[name("surround_exponent")] = F64Array({}, {surround_exponent});
     stock[name("curve_density")]     = F64Array(
         {3, 5}, {0.1, 0.5, 1.0, 1.6, 2.1, 0.1, 0.6, 1.1, 1.7, 2.1, 0.1, 0.4, 0.9, 1.5, 1.5});
     stock[name("curve_lengths")]     = ArrayValues{"i8", {3}, ToBytes<std::int64_t>({5, 5, 4})};
@@ -503,6 +508,26 @@ TEST_F(FilmPrintTablesTest, PrintRgbaHasRedVaryingFastestAndKeepsTheValues) {
   }
 }
 
+TEST_F(FilmPrintTablesTest, DarkSurroundMovesLuminanceAndKeepsChromaticity) {
+  constexpr double kExponent = 0.5;
+  WriteSyntheticResources(root_ / "dark_surround", kExponent);
+  FilmPrintTables plain_tables(FilmStockBundle::Open(Resources()));
+  FilmPrintTables dark_tables(FilmStockBundle::Open(root_ / "dark_surround"));
+  const auto      plain = plain_tables.Resolve("neg_a", "paper_a", "reference");
+  const auto      dark  = dark_tables.Resolve("neg_a", "paper_a", "reference");
+  ASSERT_EQ(plain->print_cube_root_xyz.size(), dark->print_cube_root_xyz.size());
+  for (const std::size_t node : {std::size_t{0}, std::size_t{4000}, std::size_t{100000}}) {
+    SCOPED_TRACE(node);
+    const auto* before = plain->print_cube_root_xyz.data() + node * 3;
+    const auto* after  = dark->print_cube_root_xyz.data() + node * 3;
+    const auto  cube   = [](double value) { return value * value * value; };
+    // The synthetic clear print has Y = 100.
+    EXPECT_NEAR(cube(after[1]) / 100.0, std::pow(cube(before[1]) / 100.0, kExponent), 1e-9);
+    EXPECT_NEAR(after[0] / after[1], before[0] / before[1], 1e-12);
+    EXPECT_NEAR(after[2] / after[1], before[2] / before[1], 1e-12);
+  }
+}
+
 TEST_F(FilmPrintTablesTest, KernelValuesFollowTheLayoutOfTheNegative) {
   const auto      bundle = FilmStockBundle::Open(Resources());
   FilmPrintTables tables(bundle);
@@ -534,6 +559,26 @@ TEST_F(FilmPrintTablesTest, KernelValuesFollowTheLayoutOfTheNegative) {
   const auto other_light = tables.Resolve("neg_a", "paper_a", "daylight");
   EXPECT_EQ(with_inhibition->kernel_key, other_paper->kernel_key);
   EXPECT_NE(with_inhibition->kernel_key, other_light->kernel_key);
+}
+
+TEST_F(FilmPrintTablesTest, KernelParamsSplitTheInhibitionIntoAnImagePartAndAPointPart) {
+  const auto       bundle = FilmStockBundle::Open(Resources());
+  FilmKernelParams params{};
+  film_print_kernel_tables::FillParams(*bundle, "neg_a", "paper_a", "reference", 3, params);
+  EXPECT_EQ(params.inhibition_k[0], 0.1f);
+  EXPECT_EQ(params.inhibition_image_k[0], 0.05f);
+  EXPECT_FLOAT_EQ(params.inhibition_point_k[0], 0.05f);
+  EXPECT_EQ(params.inhibition_image_k[4], 0.0f);
+  EXPECT_FLOAT_EQ(params.inhibition_point_k[4], 0.2f);
+  EXPECT_EQ(params.inhibition_point_k[8], 0.0f);
+  EXPECT_EQ(params.inhibition_has_image, 1U);
+  EXPECT_EQ(params.inhibition_has_point, 1U);
+
+  // neg_b has no inhibition.
+  FilmKernelParams none{};
+  film_print_kernel_tables::FillParams(*bundle, "neg_b", "paper_a", "reference", 3, none);
+  EXPECT_EQ(none.inhibition_has_image, 0U);
+  EXPECT_EQ(none.inhibition_has_point, 0U);
 }
 
 TEST_F(FilmPrintTablesTest, StageTablesAreReused) {

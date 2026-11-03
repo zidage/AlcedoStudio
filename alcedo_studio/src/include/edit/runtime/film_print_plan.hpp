@@ -136,14 +136,15 @@ struct FilmPrintImagePlan {
  * @brief Make the plan of the image-plane steps. Backend-neutral; computed on the CPU per render.
  *
  * @param layer_spread_um The spread lengths of the negative.
- * @param has_inhibition False for a negative with no inhibition. The plan then has no inhibitor.
+ * @param has_inhibitor_blur False for a negative with no image part of its inhibition. The plan then
+ *        has no inhibitor.
  * @throws std::runtime_error when a blur needs more than @ref kFilmBlurMaxRadius taps. The message
  *         states the sigma. There is no substitute blur.
  */
 [[nodiscard]] auto MakeFilmPrintImagePlan(const ResolvedRenderGeometry&  geometry,
                                           const FilmImagePlaneConstants& constants,
                                           std::span<const double>        layer_spread_um,
-                                          bool has_inhibition, const FilmPrintParams& film)
+                                          bool has_inhibitor_blur, const FilmPrintParams& film)
     -> FilmPrintImagePlan;
 
 }  // namespace alcedo

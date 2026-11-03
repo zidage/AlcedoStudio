@@ -25,6 +25,7 @@ namespace {
 constexpr double       kPaperAxisPower    = 2.0;
 constexpr int          kSolveIterations   = 16;
 constexpr double       kSolveReachedLimit = 1e-4;
+constexpr double       kSmallestRelativeLuminance = 1e-12;
 constexpr std::int64_t kTableNodes =
     kFilmPrintTableEdge * kFilmPrintTableEdge * kFilmPrintTableEdge;
 constexpr auto          kTableValues = static_cast<std::size_t>(kTableNodes * film_tables::kLayers);
@@ -110,6 +111,24 @@ auto PackPrintRgba(std::span<const double> cube_root_xyz) -> std::vector<std::by
     }
   }
   return packed;
+}
+
+/// Lab rule dark_surround_on_display: luminance relative to the clear print takes the exponent,
+/// and the chromaticity stays. The table holds the cube root of XYZ.
+void ApplyDarkSurround(const FilmPaperView& paper, std::vector<double>& cube_root_xyz) {
+  if (paper.surround_exponent == 1.0) {
+    return;
+  }
+  const double power = (paper.surround_exponent - 1.0) / 3.0;
+  for (std::size_t node = 0; node + 2 < cube_root_xyz.size(); node += film_tables::kLayers) {
+    const double y = cube_root_xyz[node + 1];
+    const double relative =
+        std::max(y * y * y / paper.clear_luminance, kSmallestRelativeLuminance);
+    const double scale = std::pow(relative, power);
+    for (std::size_t k = 0; k < film_tables::kLayers; ++k) {
+      cube_root_xyz[node + k] *= scale;
+    }
+  }
 }
 
 auto AllFinite(std::span<const double> values) -> bool {
@@ -340,6 +359,7 @@ auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_
         negative_stage->paper_log.data(), kTableNodes, controls, curves, StatusAxes(paper),
         paper_stage->cube_root_xyz.data(), paper_stage->not_reached.data(),
         result->print_cube_root_xyz.data());
+    ApplyDarkSurround(paper, result->print_cube_root_xyz);
     result->outside_curve     = counts.outside_curve;
     result->print_not_reached = counts.print_not_reached;
     ++stats_.compose_builds;

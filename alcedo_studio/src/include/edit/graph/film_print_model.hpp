@@ -100,7 +100,7 @@ inline constexpr std::array<std::string_view, 11> kFilmSceneLightIds = {
  */
 struct FilmPrintParams {
   std::string negative       = "kodak_5207";
-  std::string print_material = "kodak_2383";
+  std::string print_material = "kodak_endura_premier";
   std::string scene_light    = "reference";
   float       light_spread   = 1.0f;
   float       halation       = 1.0f;
