@@ -359,13 +359,14 @@ if(ALCEDO_OPENCL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_display_to_ap1_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_drt_params.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_drt_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_film_print_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_frame_presenter.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_local_tone_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_ai_mask_coverage.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_mask_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_primary_grade_pass.cpp
         PUBLIC_DEPS EditRuntime EditInput RawProcessorOp OpenClDemosaicNet OpenClContext OpenClProgramLibrary OpenCL::OpenCL
-        PRIVATE_DEPS EditRuntimeLens EditScope OpenClGeometryUtils PreviewPerformance
+        PRIVATE_DEPS EditRuntimeFilm EditRuntimeLens EditScope OpenClGeometryUtils PreviewPerformance
     )
     target_compile_definitions(EditRuntimeOpenCl PUBLIC HAVE_OPENCL)
 endif()

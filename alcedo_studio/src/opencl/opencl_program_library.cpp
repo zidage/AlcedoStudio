@@ -74,19 +74,17 @@ auto RelativeOpenClSourcePath(const std::filesystem::path& path) -> std::filesys
   return {};
 }
 
-auto IsDirectory(const std::filesystem::path& path) -> bool {
-  std::error_code ec;
-  return std::filesystem::is_directory(path, ec) && !ec;
-}
+/// The install writes this inventory into the packaged shader root, and only the install does.
+constexpr const char* kPackagedAssetInventory = "runtime-assets.sha256";
 
 /**
  * @brief Map a compile-time OpenCL source path to the file the process must load.
  *
- * When the packaged shader root exists next to the executable,
- * the packaged copy is authoritative, even if it is missing: the program build then
- * fails with the packaged path instead of silently reading the build machine's
- * source checkout. Build trees have no packaged shader directories and read
- * @p path directly.
+ * A packaged shader root is an `opencl/` directory next to the executable that holds the GPU asset
+ * inventory of the install. The packaged copy is then authoritative, even if it is missing: the
+ * program build fails with the packaged path instead of silently reading the build machine's source
+ * checkout. A build tree has a CMake-generated `opencl/` directory beside alcedo_main, with no
+ * inventory, so it reads @p path directly.
  */
 auto ResolveOpenClSourcePath(const std::filesystem::path& path) -> std::filesystem::path {
   const auto rel     = RelativeOpenClSourcePath(path);
@@ -101,7 +99,7 @@ auto ResolveOpenClSourcePath(const std::filesystem::path& path) -> std::filesyst
   };
   for (const auto& packaged_root : packaged_roots) {
     const auto packaged_path = packaged_root / rel;
-    if (IsDirectory(packaged_root)) {
+    if (IsRegularFile(packaged_root / kPackagedAssetInventory)) {
       return packaged_path;
     }
   }

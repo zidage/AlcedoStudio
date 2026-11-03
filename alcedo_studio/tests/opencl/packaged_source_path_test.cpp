@@ -34,6 +34,12 @@ class PackagedOpenClPathTest : public ::testing::Test {
     ASSERT_TRUE(std::filesystem::is_regular_file(source));
   }
 
+  /// The install inventory, which only an installed shader root has.
+  void WriteInventory() const {
+    std::filesystem::create_directories(root);
+    std::ofstream(root / "runtime-assets.sha256") << "\n";
+  }
+
   void TearDown() override {
     if (owns_root) {
       std::filesystem::remove_all(root);
@@ -45,19 +51,28 @@ TEST_F(PackagedOpenClPathTest, BuildTreeWithoutPackagedRootUsesConfiguredSource)
   EXPECT_EQ(detail::ResolveOpenClSourcePath(source), source);
 }
 
+TEST_F(PackagedOpenClPathTest, BuildTreeOpenClDirectoryWithoutInventoryUsesConfiguredSource) {
+  // The build tree has the CMake binary directory of the OpenCL libraries beside alcedo_main.
+  std::filesystem::create_directories(root / "CMakeFiles");
+  std::filesystem::create_directories((root / relative).parent_path());
+  EXPECT_EQ(detail::ResolveOpenClSourcePath(source), source);
+}
+
 TEST_F(PackagedOpenClPathTest, ExistingPackagedFileTakesPrecedenceOverCheckout) {
+  WriteInventory();
   std::filesystem::create_directories((root / relative).parent_path());
   std::ofstream(root / relative) << "// packaged copy\n";
   EXPECT_EQ(detail::ResolveOpenClSourcePath(source), root / relative);
 }
 
 TEST_F(PackagedOpenClPathTest, MissingPackagedFileDoesNotReadCheckout) {
+  WriteInventory();
   std::filesystem::create_directories((root / relative).parent_path());
   EXPECT_EQ(detail::ResolveOpenClSourcePath(source), root / relative);
 }
 
 TEST_F(PackagedOpenClPathTest, MissingPackagedSubdirectoryDoesNotReadCheckout) {
-  std::filesystem::create_directory(root);
+  WriteInventory();
   EXPECT_EQ(detail::ResolveOpenClSourcePath(source), root / relative);
 }
 

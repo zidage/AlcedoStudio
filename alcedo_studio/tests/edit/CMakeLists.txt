@@ -680,14 +680,28 @@ if(ALCEDO_OPENCL_ENABLED)
   add_executable(GpuDagOpenClGradeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_diffusion_filter_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_print_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_lut_resource_test.cpp)
   target_include_directories(GpuDagOpenClGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClGradeTest PRIVATE
-    GTest::gtest_main EditRuntimeOpenCl EditInput OpenClProgramLibrary)
+    GTest::gtest_main EditRuntimeOpenCl EditRuntimeFilm EditInput OpenClProgramLibrary)
   target_compile_definitions(GpuDagOpenClGradeTest PRIVATE
     ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}")
+  # The film print cases read the resources from config/film_print next to the executable, as the
+  # product does. They are not in Git, so with no resource directory these cases skip.
+  if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+    add_custom_command(TARGET GpuDagOpenClGradeTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+        "$<TARGET_FILE_DIR:GpuDagOpenClGradeTest>/config/film_print"
+      VERBATIM)
+  endif()
+  if(ALCEDO_FILM_PRINT_EXPECTED_DIR)
+    target_compile_definitions(GpuDagOpenClGradeTest PRIVATE
+      ALCEDO_FILM_PRINT_EXPECTED_DIR="${ALCEDO_FILM_PRINT_EXPECTED_DIR}")
+  endif()
   gtest_discover_tests(GpuDagOpenClGradeTest TEST_PREFIX "GpuDagOpenClGradeTest."
     PROPERTIES LABELS "gpu;edit;runtime;opencl")
   alcedo_register_test_target(GpuDagOpenClGradeTest gpu)
@@ -730,6 +744,14 @@ if(ALCEDO_OPENCL_ENABLED)
   if(ALCEDO_CUDA_ENABLED)
     target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE EditRuntimeCuda)
     target_compile_definitions(GpuDagOpenClDrtProductTest PRIVATE HAVE_CUDA)
+  endif()
+  target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE EditRuntimeFilm)
+  if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+    add_custom_command(TARGET GpuDagOpenClDrtProductTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+        "$<TARGET_FILE_DIR:GpuDagOpenClDrtProductTest>/config/film_print"
+      VERBATIM)
   endif()
   gtest_discover_tests(GpuDagOpenClDrtProductTest TEST_PREFIX "GpuDagOpenClDrtProductTest."
     PROPERTIES LABELS "gpu;edit;runtime;opencl;product")

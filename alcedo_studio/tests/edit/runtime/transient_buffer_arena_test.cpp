@@ -129,6 +129,32 @@ TEST(TransientBufferArena, TransientBudgetRejectsAnotherSlabWithoutMovingLivePoi
   }
 }
 
+TEST(TransientBufferArena, GrowingRequestDropsSmallerIdleSlabsAndKeepsSlabsThatHoldIt) {
+  RecordingBackend                       backend;
+  TransientBufferArena<RecordingBackend> arena(backend);
+  constexpr std::size_t                  kSmall = 64ull << 20;
+  constexpr std::size_t                  kLarge = 128ull << 20;
+  (void)arena.Allocate(kSmall);
+  (void)arena.Allocate(kSmall);
+  arena.Reset();
+
+  // A slab of the requested size or more stays, with the smaller idle slabs.
+  arena.ReleaseIdleSlabsWhenNoneHolds(kSmall);
+  EXPECT_EQ(arena.slab_count(), 2U);
+
+  // A slab with an allocation since the reset stays, because queued work can use it.
+  void* live = arena.Allocate(1024);
+  arena.ReleaseIdleSlabsWhenNoneHolds(kLarge);
+  EXPECT_EQ(arena.slab_count(), 1U);
+  EXPECT_EQ(arena.capacity_bytes(), kSmall);
+  EXPECT_EQ(live, arena.base());
+
+  (void)arena.Allocate(kLarge);
+  arena.Reset();
+  arena.ReleaseIdleSlabsWhenNoneHolds(kLarge);
+  EXPECT_EQ(arena.slab_count(), 2U);
+}
+
 TEST(TransientBufferArena, ScopeRewindsLocalSlabOffsetsWithoutFreeing) {
   RecordingBackend backend;
   TransientBufferArena<RecordingBackend> arena(backend);

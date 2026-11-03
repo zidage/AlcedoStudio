@@ -623,6 +623,10 @@ TEST_F(OpenClWorkspaceFixture, OpenClProgramManifestCanLoadFromInstalledResource
   const auto installed =
       TestExecutableDir() / "opencl" / "edit" / "runtime" / "opencl" / "shader" / file_name;
   std::filesystem::create_directories(installed.parent_path());
+  // Only an installed shader root has the inventory, and only such a root is authoritative.
+  const auto inventory      = TestExecutableDir() / "opencl" / "runtime-assets.sha256";
+  const bool owns_inventory = !std::filesystem::exists(inventory);
+  if (owns_inventory) std::ofstream(inventory) << "\n";
   {
     std::ofstream source(installed, std::ios::binary);
     ASSERT_TRUE(source.is_open());
@@ -639,6 +643,7 @@ TEST_F(OpenClWorkspaceFixture, OpenClProgramManifestCanLoadFromInstalledResource
   EXPECT_NO_THROW((void)OpenClProgramLibrary::Instance().GetProgram(program_name));
   EXPECT_TRUE(OpenClProgramLibrary::Instance().IsProgramBuilt(program_name));
   std::filesystem::remove(installed);
+  if (owns_inventory) std::filesystem::remove(inventory);
   // An empty packaged root is still authoritative. Do not leave the layout
   // created by this test beside a later test that must read build-tree sources.
   for (auto directory = installed.parent_path(); directory != TestExecutableDir();

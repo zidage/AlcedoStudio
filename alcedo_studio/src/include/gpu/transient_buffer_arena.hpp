@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <limits>
@@ -240,6 +241,27 @@ class TransientBufferArena {
       slabs_.erase(it);
       return;
     }
+  }
+
+  /**
+   * @brief Before a pass that needs slabs of @p bytes: when no idle slab holds that size, destroy
+   *        the idle slabs.
+   *
+   * With a render size that grows, each new size otherwise adds slabs that nothing can use, and the
+   * sum of all sizes stays on the device until the budget of @ref AppendSlab stops a render. A slab
+   * is idle when it has no allocation since the last @ref Reset. The caller must know that the
+   * earlier renders have completed or that the backend keeps a slab alive for its queued work.
+   */
+  void ReleaseIdleSlabsWhenNoneHolds(std::size_t bytes) noexcept {
+    const auto idle_holds = [bytes](const SlabEntry& entry) {
+      return entry.offset == 0 && entry.size >= bytes;
+    };
+    if (std::any_of(slabs_.begin(), slabs_.end(), idle_holds)) {
+      return;
+    }
+    slabs_.erase(std::remove_if(slabs_.begin(), slabs_.end(),
+                                [](const SlabEntry& entry) { return entry.offset == 0; }),
+                 slabs_.end());
   }
 
   /**

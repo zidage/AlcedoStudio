@@ -18,6 +18,8 @@ inline constexpr const char* kDrtProgramName                  = "opencl_dag_drt"
 inline constexpr const char* kDisplayToAp1ProgramName         = "opencl_dag_display_to_ap1";
 /// SM8.3: Feather and Expand of AI Mask coverage (ai_mask_coverage.cl).
 inline constexpr const char* kAiMaskCoverageProgramName       = "opencl_dag_ai_mask_coverage";
+/// F6 of the Film Print DRT Plan: the film print display transform (film_print.cl).
+inline constexpr const char* kFilmPrintProgramName            = "opencl_dag_film_print";
 
 inline constexpr const char* kGeometryResampleKernelName      = "geometry_resample_rgba32f";
 inline constexpr const char* kCameraColorKernelName           = "camera_color_acescc";
@@ -69,6 +71,36 @@ inline constexpr const char* kDiffusionFilterUpsampleAccumulateKernelName =
     "diffusion_filter_upsample_accumulate";
 inline constexpr const char* kDiffusionFilterMixSceneKernelName =
     "diffusion_filter_mix_scene_rgba32f";
+inline constexpr const char* kFilmPrintExposureKernelName =
+    "film_print_exposure";
+inline constexpr const char* kFilmPrintFirstAmountsKernelName =
+    "film_print_first_amounts";
+inline constexpr const char* kFilmPrintHalationFirstAmountsKernelName =
+    "film_print_halation_first_amounts";
+inline constexpr const char* kFilmPrintReducedFirstAmountsKernelName =
+    "film_print_reduced_first_amounts";
+inline constexpr const char* kFilmPrintStepHalfSizeKernelName =
+    "film_print_step_half_size";
+inline constexpr const char* kFilmPrintStepToReducedKernelName =
+    "film_print_step_to_reduced";
+inline constexpr const char* kFilmPrintStepVerticalKernelName =
+    "film_print_step_vertical";
+inline constexpr const char* kFilmPrintBlurHorizontalKernelName =
+    "film_print_blur_horizontal";
+inline constexpr const char* kFilmPrintBlurVerticalKernelName =
+    "film_print_blur_vertical";
+inline constexpr const char* kFilmPrintBlurVerticalToImageKernelName =
+    "film_print_blur_vertical_to_image";
+inline constexpr const char* kFilmPrintSpreadVerticalKernelName =
+    "film_print_spread_vertical";
+inline constexpr const char* kFilmPrintBoxReduceKernelName =
+    "film_print_box_reduce";
+inline constexpr const char* kFilmPrintCanvasReduceKernelName =
+    "film_print_canvas_reduce";
+inline constexpr const char* kFilmPrintAmountsReduceKernelName =
+    "film_print_amounts_reduce";
+inline constexpr const char* kFilmPrintDisplayKernelName =
+    "film_print_display";
 
 }  // namespace alcedo::OpenCL::GpuDag
 

@@ -1097,16 +1097,31 @@ auto OpenClBackend::AcquireLut(ContentKey key, std::span<const std::byte> packed
   if (key.Empty() || edge <= 1 || packed_rgba.empty()) {
     return DummyLut();
   }
+  const auto binding    = AcquireCachedBuffer(key, packed_rgba, edge, command_context);
+  last_lut_resource_id_ = binding.resource_id;
+  return binding;
+}
+
+auto OpenClBackend::AcquireKeyedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                       CommandContext& command_context) -> OpenClLutBinding {
+  if (key.Empty() || bytes.empty()) {
+    throw std::runtime_error("OpenClBackend::AcquireKeyedBuffer: empty key or table");
+  }
+  return AcquireCachedBuffer(key, bytes, 0, command_context);
+}
+
+auto OpenClBackend::AcquireCachedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                        std::uint32_t edge, CommandContext& command_context)
+    -> OpenClLutBinding {
   for (auto& entry : lut_cache_) {
     if (entry.key == key && entry.edge_size == edge) {
       entry.lru_tick             = ++lut_lru_clock_;
       entry.last_used_submission = command_context.SubmissionId();
-      last_lut_resource_id_      = entry.buffer.ResourceId();
       return OpenClLutBinding{entry.buffer.Native(), entry.buffer.ResourceId(), entry.edge_size};
     }
   }
-  if (lut_byte_budget_ > 0 && lut_cache_bytes_ + packed_rgba.size() > lut_byte_budget_) {
-    while (!lut_cache_.empty() && lut_cache_bytes_ + packed_rgba.size() > lut_byte_budget_) {
+  if (lut_byte_budget_ > 0 && lut_cache_bytes_ + bytes.size() > lut_byte_budget_) {
+    while (!lut_cache_.empty() && lut_cache_bytes_ + bytes.size() > lut_byte_budget_) {
       std::size_t victim_index = lut_cache_.size();
       auto        oldest       = (std::numeric_limits<std::uint64_t>::max)();
       for (std::size_t index = 0; index < lut_cache_.size(); ++index) {
@@ -1124,20 +1139,20 @@ auto OpenClBackend::AcquireLut(ContentKey key, std::span<const std::byte> packed
       lut_cache_.erase(lut_cache_.begin() + static_cast<std::ptrdiff_t>(victim_index));
     }
   }
-  auto buffer = CreateBuffer(packed_rgba.size());
-  UploadBufferRange(buffer, 0, packed_rgba, command_context);
-  lut_upload_bytes_ += packed_rgba.size();
-  last_lut_resource_id_ = buffer.ResourceId();
+  auto buffer = CreateBuffer(bytes.size());
+  UploadBufferRange(buffer, 0, bytes, command_context);
+  lut_upload_bytes_ += bytes.size();
+  const auto    resource_id = buffer.ResourceId();
   LutCacheEntry entry;
   entry.key                  = key;
   entry.edge_size            = edge;
-  entry.bytes                = packed_rgba.size();
+  entry.bytes                = bytes.size();
   entry.lru_tick             = ++lut_lru_clock_;
   entry.last_used_submission = command_context.SubmissionId();
   entry.buffer               = std::move(buffer);
   lut_cache_bytes_ += entry.bytes;
   lut_cache_.push_back(std::move(entry));
-  return OpenClLutBinding{lut_cache_.back().buffer.Native(), last_lut_resource_id_, edge};
+  return OpenClLutBinding{lut_cache_.back().buffer.Native(), resource_id, edge};
 }
 
 auto OpenClBackend::DummyLut() -> OpenClLutBinding {
