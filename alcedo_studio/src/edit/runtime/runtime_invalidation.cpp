@@ -239,12 +239,21 @@ void RuntimeInvalidationState::CollectDrtChanges(
     origins.push_back(DiffusionScatterId(plan.drt.node_id));
     last_diffusion_revision_ = diffusion_revision;
   }
-  const auto film_print_revision =
-      drt->Params().FieldsRevision(DirtyFieldMask{DrtDirty::FilmPrint});
-  if (film_print_revision != last_film_print_revision_) {
+  // The Halation result is the blurred exposure, and the flare result is the blurred transmittance
+  // of the amounts after Halation. Each strength scales its result later, at the mix and in the
+  // display stage, so a change of Enlarger flare changes neither result.
+  const auto film_exposure_revision =
+      drt->Params().FieldsRevision(DirtyFieldMask{DrtDirty::FilmExposure});
+  if (film_exposure_revision != last_film_exposure_revision_) {
     origins.push_back(FilmHalationResultId(plan.drt.node_id));
     origins.push_back(FilmFlareResultId(plan.drt.node_id));
-    last_film_print_revision_ = film_print_revision;
+    last_film_exposure_revision_ = film_exposure_revision;
+  }
+  const auto film_halation_revision =
+      drt->Params().FieldsRevision(DirtyFieldMask{DrtDirty::FilmHalation});
+  if (film_halation_revision != last_film_halation_revision_) {
+    origins.push_back(FilmFlareResultId(plan.drt.node_id));
+    last_film_halation_revision_ = film_halation_revision;
   }
   for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
     const AdjustmentKey key{drt->Id(), drt->AdjustmentIdAt(index)};
@@ -380,7 +389,8 @@ void RuntimeInvalidationState::ClearLastSeenRevisions() {
   last_white_balance_revision_ = kNoParameterRevision;
   last_drt_revision_           = kNoParameterRevision;
   last_diffusion_revision_     = kNoParameterRevision;
-  last_film_print_revision_    = kNoParameterRevision;
+  last_film_exposure_revision_ = kNoParameterRevision;
+  last_film_halation_revision_ = kNoParameterRevision;
 }
 
 void RuntimeInvalidationState::Clear() {

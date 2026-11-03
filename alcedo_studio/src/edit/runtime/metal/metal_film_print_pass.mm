@@ -32,6 +32,8 @@ namespace {
 
 // film_print.metal has the same values, and a different size stops the build of its library.
 static_assert(kFilmBlurMaxRadius == 128 && sizeof(FilmBlurKernel) == 1552);
+/// FILM_SLIDE of film_print.metal: the outputs of one thread of a blur pass.
+constexpr std::uint32_t kSlide = 8;
 static_assert(kFilmNarrowSpreadMaxRadius == 2 && sizeof(FilmNarrowKernel) == 76);
 static_assert(sizeof(FilmKernelParams) == 392);
 static_assert(sizeof(Matrix3x3) == 36);
@@ -60,7 +62,31 @@ struct DisplayArguments {
 };
 static_assert(sizeof(DisplayArguments) == 60);
 
-/// One image between the steps: 3 floats per pixel, in the transient arena of the render.
+/// `FilmBlurWeights` of film_print.metal: one tap of the three layers in one float4. The last
+/// chunk of a blur loop reads up to kSlide - 1 taps past the radius, which hold 0.
+struct BlurWeights {
+  std::uint32_t radius = 0;
+  std::uint32_t unused[3]{};
+  float         w[kFilmBlurMaxRadius + kSlide][4]{};
+};
+static_assert(sizeof(BlurWeights) == 2192);
+
+auto MakeWeights(const FilmBlurKernel& kernel) -> BlurWeights {
+  BlurWeights weights;
+  weights.radius = kernel.radius;
+  for (std::uint32_t tap = 0; tap <= kernel.radius; ++tap) {
+    for (int layer = 0; layer < 3; ++layer) weights.w[tap][layer] = kernel.weights[layer][tap];
+  }
+  return weights;
+}
+
+/// The texel forms of film_print.metal. See its header comment for the images of each form.
+enum class PlaneForm : std::uint32_t {
+  Float = 12,  ///< packed_float3
+  Half  = 8,   ///< half4
+};
+
+/// One image between the steps, in the transient arena of the render.
 struct Plane {
   MTL::Buffer*  native = nullptr;
   std::uint32_t offset = 0;  ///< In bytes from the start of @ref native
@@ -133,24 +159,53 @@ class Dispatch {
     return *this;
   }
 
+  /// One thread for each pixel of @p width x @p height.
   void Run(std::uint32_t width, std::uint32_t height) {
     const auto thread_width = std::max<NS::UInteger>(1, pipeline_->threadExecutionWidth());
     const auto thread_height =
         std::max<NS::UInteger>(1, pipeline_->maxTotalThreadsPerThreadgroup() / thread_width);
+    Encode(width, height, thread_width, thread_height);
+  }
+
+  /// A vertical blur pass: one thread for kSlide rows of a column.
+  void RunDown(std::uint32_t width, std::uint32_t height) {
+    RunBlur(width, (height + kSlide - 1) / kSlide);
+  }
+
+  /// A horizontal blur pass: one thread for kSlide columns of a row.
+  void RunAcross(std::uint32_t width, std::uint32_t height) {
+    RunBlur((width + kSlide - 1) / kSlide, height);
+  }
+
+ private:
+  /// Blur passes hold a window in registers, so they use groups of 8 SIMD rows.
+  void RunBlur(std::uint32_t width, std::uint32_t height) {
+    const auto thread_width = std::max<NS::UInteger>(1, pipeline_->threadExecutionWidth());
+    const auto thread_height =
+        std::clamp<NS::UInteger>(pipeline_->maxTotalThreadsPerThreadgroup() / thread_width, 1, 8);
+    Encode(width, height, thread_width, thread_height);
+  }
+
+  void Encode(std::uint32_t width, std::uint32_t height, NS::UInteger thread_width,
+              NS::UInteger thread_height) {
     encoder_->dispatchThreads(MTL::Size{width, height, 1},
                               MTL::Size{thread_width, thread_height, 1});
     device_.Workspace().Device().NoteComputeDispatch(device_.CommandContext());
   }
 
- private:
   MetalRenderDevice&                       device_;
   NS::SharedPtr<MTL::ComputePipelineState> pipeline_;
   MTL::ComputeCommandEncoder*              encoder_ = nullptr;
 };
 
-auto AllocatePlane(MetalRenderDevice& device, std::uint32_t width, std::uint32_t height) -> Plane {
+auto PlaneBytes(std::uint32_t width, std::uint32_t height, PlaneForm form) -> std::size_t {
+  return static_cast<std::size_t>(width) * height * static_cast<std::uint32_t>(form);
+}
+
+auto AllocatePlane(MetalRenderDevice& device, std::uint32_t width, std::uint32_t height,
+                   PlaneForm form) -> Plane {
   auto&      workspace = device.Workspace();
-  const auto bytes     = static_cast<std::size_t>(width) * height * 3U * sizeof(float);
+  const auto bytes     = PlaneBytes(width, height, form);
   void*      memory    = workspace.TransientBuffers().Allocate(bytes);
   if (memory == nullptr) {
     throw std::runtime_error("RecordMetalFilmPrint: transient allocation failed");
@@ -164,52 +219,60 @@ struct Recording {
   MetalRenderDevice& device;
 };
 
-void BlurHorizontal(const Recording& r, const Plane& src, const Plane& dst, Size size,
-                    const FilmBlurKernel& taps) {
-  Dispatch(r.device, "film_print_blur_horizontal")
+auto FormName(PlaneForm form) -> const char* { return form == PlaneForm::Float ? "float" : "half"; }
+
+/// The name of a blur kernel from @p source to @p destination.
+auto BlurName(const char* function, PlaneForm source, PlaneForm destination) -> std::string {
+  return std::string{function} + "_" + FormName(source) + "_" + FormName(destination);
+}
+
+void BlurHorizontal(const Recording& r, PlaneForm source, PlaneForm destination, const Plane& src,
+                    const Plane& dst, Size size, const FilmBlurKernel& taps) {
+  Dispatch(r.device, BlurName("film_print_blur_horizontal", source, destination).c_str())
       .Buffer(0, src)
       .Buffer(1, dst)
       .Bytes(2, size)
-      .Bytes(3, taps)
-      .Run(size.width, size.height);
+      .Bytes(3, MakeWeights(taps))
+      .RunAcross(size.width, size.height);
 }
 
-void BlurVertical(const Recording& r, const Plane& src, const Plane& dst, Size size,
+void BlurVertical(const Recording& r, PlaneForm form, const Plane& src, const Plane& dst, Size size,
                   const FilmBlurKernel& taps, float weight, bool accumulate) {
   const std::int32_t add = accumulate ? 1 : 0;
-  Dispatch(r.device, "film_print_blur_vertical")
+  Dispatch(r.device, BlurName("film_print_blur_vertical", form, form).c_str())
       .Buffer(0, src)
       .Buffer(1, dst)
       .Bytes(2, size)
-      .Bytes(3, taps)
+      .Bytes(3, MakeWeights(taps))
       .Bytes(4, weight)
       .Bytes(5, add)
-      .Run(size.width, size.height);
+      .RunDown(size.width, size.height);
 }
 
+/// The last pass of a canonical result, from a half image.
 void BlurVerticalToTexture(const Recording& r, const Plane& src, MTL::Texture* dst, Size size,
                            const FilmBlurKernel& taps) {
   Dispatch(r.device, "film_print_blur_vertical_to_texture")
       .Buffer(0, src)
       .Bytes(1, size)
-      .Bytes(2, taps)
+      .Bytes(2, MakeWeights(taps))
       .Texture(0, dst)
-      .Run(size.width, size.height);
+      .RunDown(size.width, size.height);
 }
 
+/// The Halation form reads exposure; the flare form reads amounts and writes transmittance.
 void CanvasReduce(const Recording& r, const Plane& src, Size size, const Plane& dst,
                   ImageExtent extent, const Matrix3x3& canvas_to_render, std::uint32_t samples,
                   bool transmittance) {
-  const auto         samples_value      = static_cast<std::int32_t>(samples);
-  const std::int32_t transmittance_flag = transmittance ? 1 : 0;
-  Dispatch(r.device, "film_print_canvas_reduce")
+  const auto samples_value = static_cast<std::int32_t>(samples);
+  Dispatch(r.device, transmittance ? "film_print_canvas_reduce_transmittance"
+                                   : "film_print_canvas_reduce_exposure")
       .Buffer(0, src)
       .Buffer(1, dst)
       .Bytes(2, size)
       .Bytes(3, MakeSize(extent))
       .Bytes(4, canvas_to_render)
       .Bytes(5, samples_value)
-      .Bytes(6, transmittance_flag)
       .Run(extent.width, extent.height);
 }
 
@@ -301,8 +364,8 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   const bool inhibitor_blur = image.image_plane && params.inhibition_has_image != 0U;
 
   // The previous render has completed (BeginRender), so an idle slab has no queued work.
-  workspace.TransientBuffers().ReleaseIdleSlabsWhenNoneHolds(static_cast<std::size_t>(width) *
-                                                             height * 3U * sizeof(float));
+  workspace.TransientBuffers().ReleaseIdleSlabsWhenNoneHolds(
+      PlaneBytes(width, height, PlaneForm::Float));
   const Recording recording{device};
   const Size      size        = MakeSize(width, height);
   void*           values      = table.native;
@@ -312,14 +375,18 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   MTL::Texture*   unused      = Native(scene_image);
   PassNames       names(pass_names);
 
-  // FP1.
-  Plane           q = AllocatePlane(device, width, height);
+  // FP1. The alpha mark: see film_print_display.
+  Plane               q          = AllocatePlane(device, width, height, PlaneForm::Float);
+  const Plane         alpha_mark = AllocatePlane(device, 1, 1, PlaneForm::Float);
+  const std::uint32_t stamp = static_cast<std::uint32_t>(device.CommandContext().SubmissionId());
   Dispatch(device, "film_print_exposure")
       .Texture(0, Native(scene_image))
       .Buffer(0, q)
       .Buffer(1, values)
       .Bytes(2, params)
       .Bytes(3, size)
+      .Buffer(4, alpha_mark)
+      .Bytes(5, stamp)
       .Run(width, height);
   names.Mark("FP1 exposure");
 
@@ -327,26 +394,29 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   std::optional<Plane> scratch;
   Plane                a{};
   if (image.spread_passes != 0U) {
-    const Plane spread = AllocatePlane(device, width, height);
-    scratch.emplace(AllocatePlane(device, width, height));
+    const Plane spread = AllocatePlane(device, width, height, PlaneForm::Float);
+    // The middle image of FP2. The inhibitor blur at full size uses it again for its middle image.
+    scratch.emplace(AllocatePlane(device, width, height, PlaneForm::Float));
     if (image.spread_narrow_fused && !separate_narrow_spread) {
-      BlurHorizontal(recording, q, *scratch, size, image.spread_x[1]);
+      BlurHorizontal(recording, PlaneForm::Float, PlaneForm::Float, q, *scratch, size,
+                     image.spread_x[1]);
       names.Mark("FP2 wide horizontal");
       Dispatch(device, "film_print_spread_vertical")
           .Buffer(0, *scratch)
           .Buffer(1, q)
           .Buffer(2, spread)
           .Bytes(3, size)
-          .Bytes(4, image.spread_y[1])
+          .Bytes(4, MakeWeights(image.spread_y[1]))
           .Bytes(5, image.spread_weight[1])
           .Bytes(6, image.spread_narrow)
           .Bytes(7, image.spread_weight[0])
-          .Run(width, height);
+          .RunDown(width, height);
       names.Mark("FP2 vertical, with the narrow Gaussian");
     } else {
       for (std::uint32_t pass = 0; pass < image.spread_passes; ++pass) {
-        BlurHorizontal(recording, q, *scratch, size, image.spread_x[pass]);
-        BlurVertical(recording, *scratch, spread, size, image.spread_y[pass],
+        BlurHorizontal(recording, PlaneForm::Float, PlaneForm::Float, q, *scratch, size,
+                       image.spread_x[pass]);
+        BlurVertical(recording, PlaneForm::Float, *scratch, spread, size, image.spread_y[pass],
                      image.spread_weight[pass], pass != 0U);
       }
       names.Mark("FP2 spread, 2 separate passes");
@@ -354,7 +424,7 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
     a = q;
     q = spread;
   } else {
-    a = AllocatePlane(device, width, height);
+    a = AllocatePlane(device, width, height, PlaneForm::Float);
   }
 
   const auto           long_edge   = (std::max)(width, height);
@@ -369,11 +439,12 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
     halation = ReadOrBuildCanvasResult(
         device, plan, FilmHalationResultId(plan.drt.node_id), canvas, long_edge, temporary_halation,
         [&](MTL::Texture* target) {
-          const Plane reduced = AllocatePlane(device, canvas.width, canvas.height);
-          const Plane middle  = AllocatePlane(device, canvas.width, canvas.height);
+          const Plane reduced = AllocatePlane(device, canvas.width, canvas.height, PlaneForm::Half);
+          const Plane middle  = AllocatePlane(device, canvas.width, canvas.height, PlaneForm::Half);
           CanvasReduce(recording, q, size, reduced, canvas, image.canvas_to_render,
                        image.canvas_samples, false);
-          BlurHorizontal(recording, reduced, middle, canvas_size, image.halation_x);
+          BlurHorizontal(recording, PlaneForm::Half, PlaneForm::Half, reduced, middle, canvas_size,
+                         image.halation_x);
           BlurVerticalToTexture(recording, middle, target, canvas_size, image.halation_y);
         });
     names.Mark("FP3 canvas");
@@ -389,8 +460,8 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
     // box mean directly.
     const auto         extent     = image.inhibitor_extent;
     const Size         cells      = MakeSize(extent);
-    const Plane        reduced    = AllocatePlane(device, extent.width, extent.height);
-    const Plane        middle     = AllocatePlane(device, extent.width, extent.height);
+    const Plane reduced = AllocatePlane(device, extent.width, extent.height, PlaneForm::Half);
+    const Plane middle  = AllocatePlane(device, extent.width, extent.height, PlaneForm::Half);
     const std::int32_t has_canvas = image.halation_active ? 1 : 0;
     Dispatch(device, "film_print_reduced_first_amounts")
         .Buffer(0, q)
@@ -405,8 +476,10 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
         .Texture(0, halation)
         .Run(extent.width, extent.height);
     names.Mark("FP3 mix and FP4 first amounts, to half size");
-    BlurHorizontal(recording, reduced, middle, cells, image.inhibitor_x);
-    BlurVertical(recording, middle, reduced, cells, image.inhibitor_y, 1.0f, false);
+    BlurHorizontal(recording, PlaneForm::Half, PlaneForm::Half, reduced, middle, cells,
+                   image.inhibitor_x);
+    BlurVertical(recording, PlaneForm::Half, middle, reduced, cells, image.inhibitor_y, 1.0f,
+                 false);
     names.Mark("FP4 inhibitor blur");
     Dispatch(device, "film_print_step_to_reduced")
         .Buffer(0, q)
@@ -418,8 +491,10 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
         .Bytes(6, cells)
         .Run(extent.width, extent.height);
     names.Mark("FP5 first step, to half size");
-    BlurHorizontal(recording, middle, reduced, cells, image.inhibitor_x);
-    BlurVertical(recording, reduced, middle, cells, image.inhibitor_y, 1.0f, false);
+    BlurHorizontal(recording, PlaneForm::Half, PlaneForm::Half, middle, reduced, cells,
+                   image.inhibitor_x);
+    BlurVertical(recording, PlaneForm::Half, reduced, middle, cells, image.inhibitor_y, 1.0f,
+                 false);
     names.Mark("FP4 inhibitor blur");
     Dispatch(device, "film_print_step_half_size")
         .Buffer(0, q)
@@ -432,10 +507,15 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
         .Run(width, height);
     names.Mark("FP5 last step");
   } else {
+    // With the blur, the amounts before the last step are only the input of the next blur, so they
+    // are half. The last step writes the float amounts of the later stages.
+    const PlaneForm first_form = inhibitor_blur ? PlaneForm::Half : PlaneForm::Float;
+    const Plane first = inhibitor_blur ? AllocatePlane(device, width, height, PlaneForm::Half) : a;
+    const std::string form_suffix = std::string{"_"} + FormName(first_form);
     if (image.halation_active) {
-      Dispatch(device, "film_print_halation_first_amounts")
+      Dispatch(device, ("film_print_halation_first_amounts" + form_suffix).c_str())
           .Buffer(0, q)
-          .Buffer(1, a)
+          .Buffer(1, first)
           .Buffer(2, values)
           .Bytes(3, params)
           .Bytes(4, size)
@@ -446,9 +526,9 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
           .Run(width, height);
       names.Mark("FP3 mix and FP4 amounts");
     } else {
-      Dispatch(device, "film_print_first_amounts")
+      Dispatch(device, ("film_print_first_amounts" + form_suffix).c_str())
           .Buffer(0, q)
-          .Buffer(1, a)
+          .Buffer(1, first)
           .Buffer(2, values)
           .Bytes(3, params)
           .Bytes(4, size)
@@ -457,19 +537,23 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
       names.Mark("FP4 amounts");
     }
     if (inhibitor_blur) {
-      if (!scratch.has_value()) scratch.emplace(AllocatePlane(device, width, height));
+      if (!scratch.has_value()) {
+        scratch.emplace(AllocatePlane(device, width, height, PlaneForm::Half));
+      }
       for (int step = 0; step < 2; ++step) {
-        BlurHorizontal(recording, a, *scratch, size, image.inhibitor_x);
+        const bool last = step == 1;
+        BlurHorizontal(recording, PlaneForm::Half, PlaneForm::Half, first, *scratch, size,
+                       image.inhibitor_x);
         names.Mark("FP4 inhibitor horizontal");
-        Dispatch(device, "film_print_step_vertical")
+        Dispatch(device, last ? "film_print_step_vertical_float" : "film_print_step_vertical_half")
             .Buffer(0, *scratch)
             .Buffer(1, q)
-            .Buffer(2, a)
+            .Buffer(2, last ? a : first)
             .Buffer(3, values)
             .Bytes(4, params)
             .Bytes(5, size)
-            .Bytes(6, image.inhibitor_y)
-            .Run(width, height);
+            .Bytes(6, MakeWeights(image.inhibitor_y))
+            .RunDown(width, height);
         names.Mark("FP4 vertical and FP5 inhibited step");
       }
     }
@@ -480,21 +564,24 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   if (image.image_plane && params.negative_grade != 0U) {
     const auto extent = image.inhibitor_extent;
     const Size cells  = MakeSize(extent);
-    Plane      source = a;
+    Plane      source      = a;
+    PlaneForm  source_form = PlaneForm::Float;
     if (image.inhibitor_half_size) {
-      const Plane reduced = AllocatePlane(device, extent.width, extent.height);
+      const Plane reduced = AllocatePlane(device, extent.width, extent.height, PlaneForm::Half);
       Dispatch(device, "film_print_amounts_reduce")
           .Buffer(0, a)
           .Buffer(1, reduced)
           .Bytes(2, size)
           .Bytes(3, cells)
           .Run(extent.width, extent.height);
-      source = reduced;
+      source      = reduced;
+      source_form = PlaneForm::Half;
     }
-    const Plane middle = AllocatePlane(device, extent.width, extent.height);
-    soft.emplace(AllocatePlane(device, extent.width, extent.height));
-    BlurHorizontal(recording, source, middle, cells, image.inhibitor_x);
-    BlurVertical(recording, middle, *soft, cells, image.inhibitor_y, 1.0f, false);
+    const Plane middle = AllocatePlane(device, extent.width, extent.height, PlaneForm::Half);
+    soft.emplace(AllocatePlane(device, extent.width, extent.height, PlaneForm::Half));
+    BlurHorizontal(recording, source_form, PlaneForm::Half, source, middle, cells,
+                   image.inhibitor_x);
+    BlurVertical(recording, PlaneForm::Half, middle, *soft, cells, image.inhibitor_y, 1.0f, false);
     names.Mark("FP6 blurred amounts of the negative grade");
   }
 
@@ -507,14 +594,14 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
     flare             = ReadOrBuildCanvasResult(
         device, plan, FilmFlareResultId(plan.drt.node_id), extent, long_edge, temporary_flare,
         [&](MTL::Texture* target) {
-          const Plane reduced = AllocatePlane(device, canvas.width, canvas.height);
+          const Plane reduced = AllocatePlane(device, canvas.width, canvas.height, PlaneForm::Half);
           CanvasReduce(recording, a, size, reduced, canvas, image.canvas_to_render,
                                    image.canvas_samples, true);
-          const Plane middle = AllocatePlane(device, extent.width, extent.height);
+          const Plane middle = AllocatePlane(device, extent.width, extent.height, PlaneForm::Half);
           // A canvas with a small flare sigma has no second reduction.
           Plane       source = reduced;
           if (extent.width != canvas.width || extent.height != canvas.height) {
-            source = AllocatePlane(device, extent.width, extent.height);
+            source = AllocatePlane(device, extent.width, extent.height, PlaneForm::Half);
             Dispatch(device, "film_print_box_reduce")
                 .Buffer(0, reduced)
                 .Buffer(1, source)
@@ -522,7 +609,8 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
                 .Bytes(3, cells)
                 .Run(extent.width, extent.height);
           }
-          BlurHorizontal(recording, source, middle, cells, image.flare_x);
+          BlurHorizontal(recording, PlaneForm::Half, PlaneForm::Half, source, middle, cells,
+                                     image.flare_x);
           BlurVerticalToTexture(recording, middle, target, cells, image.flare_y);
         });
     names.Mark("FP6 flare canvas");
@@ -544,6 +632,8 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
       .Texture(0, Native(scene_image))
       .Texture(1, Native(MetalSceneTexture(device, display)))
       .Texture(2, flare)
+      .Buffer(6, alpha_mark)
+      .Bytes(7, stamp)
       .Run(width, height);
   names.Mark("FP6 display");
 }

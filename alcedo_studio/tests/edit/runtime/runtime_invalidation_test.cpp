@@ -110,7 +110,7 @@ TEST(RuntimeInvalidation, FirstCollectAssignsRequiredRevisionsAheadOfCompleted) 
             harness.Completed(harness.plan.display_output));
 }
 
-TEST(RuntimeInvalidation, FilmPrintSliderInvalidatesItsResultsAndDisplayAndKeepsTheScene) {
+TEST(RuntimeInvalidation, FilmPrintSliderInvalidatesTheResultsThatReadItAndKeepsTheScene) {
   ValidityHarness harness;
   harness.PublishCurrent();
   const auto drt_id   = harness.plan.drt.node_id;
@@ -119,22 +119,41 @@ TEST(RuntimeInvalidation, FilmPrintSliderInvalidatesItsResultsAndDisplayAndKeeps
   EXPECT_NE(halation, flare);
   EXPECT_GT(harness.Required(halation), 0U);
   EXPECT_GT(harness.Required(flare), 0U);
-  const auto         halation_before = harness.Required(halation);
-  const auto         flare_before    = harness.Required(flare);
-  const auto         display_before  = harness.Required(harness.plan.display_output);
-  const auto         scatter_before  = harness.Required(DiffusionScatterId(drt_id));
-  const auto         scene_before    = harness.Required(harness.Primary().scene_output);
 
-  DrtParameterUpdate update;
-  update.film_halation = 2.0f;
-  harness.document.Drt()->Params().ApplyUpdate(update);
-  harness.Collect();
-
-  EXPECT_GT(harness.Required(halation), halation_before);
-  EXPECT_GT(harness.Required(flare), flare_before);
-  EXPECT_GT(harness.Required(harness.plan.display_output), display_before);
-  EXPECT_EQ(harness.Required(DiffusionScatterId(drt_id)), scatter_before);
-  EXPECT_EQ(harness.Required(harness.Primary().scene_output), scene_before);
+  // Each change invalidates the display. The Halation result is the blurred exposure, so only
+  // Light spread changes it of the three sliders. The flare result reads the amounts after
+  // Halation. Each strength scales its result later.
+  const auto expect_invalidates = [&](bool halation_changes, bool flare_changes, auto&& change) {
+    const auto         halation_before = harness.Required(halation);
+    const auto         flare_before    = harness.Required(flare);
+    const auto         display_before  = harness.Required(harness.plan.display_output);
+    const auto         scatter_before  = harness.Required(DiffusionScatterId(drt_id));
+    const auto         scene_before    = harness.Required(harness.Primary().scene_output);
+    DrtParameterUpdate update;
+    change(update);
+    harness.document.Drt()->Params().ApplyUpdate(update);
+    harness.Collect();
+    if (halation_changes) {
+      EXPECT_GT(harness.Required(halation), halation_before);
+    } else {
+      EXPECT_EQ(harness.Required(halation), halation_before);
+    }
+    if (flare_changes) {
+      EXPECT_GT(harness.Required(flare), flare_before);
+    } else {
+      EXPECT_EQ(harness.Required(flare), flare_before);
+    }
+    EXPECT_GT(harness.Required(harness.plan.display_output), display_before);
+    EXPECT_EQ(harness.Required(DiffusionScatterId(drt_id)), scatter_before);
+    EXPECT_EQ(harness.Required(harness.Primary().scene_output), scene_before);
+  };
+  expect_invalidates(false, true, [](DrtParameterUpdate& update) { update.film_halation = 2.0f; });
+  expect_invalidates(false, false,
+                     [](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.02f; });
+  expect_invalidates(true, true,
+                     [](DrtParameterUpdate& update) { update.film_light_spread = 2.0f; });
+  expect_invalidates(true, true,
+                     [](DrtParameterUpdate& update) { update.film_negative = "fuji_c200"; });
 }
 
 TEST(RuntimeInvalidation, DiffusionAndSceneChangesInvalidateFilmPrintResults) {

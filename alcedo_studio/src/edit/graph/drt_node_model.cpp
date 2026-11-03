@@ -516,29 +516,29 @@ void DrtParamsModel::ApplyUpdate(DrtParameterUpdate update) {
     auto& film = payload.film_print;
     if (update.film_negative.has_value() && film.negative != *update.film_negative) {
       film.negative = std::move(*update.film_negative);
-      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+      changed |= DirtyFieldMask{DrtDirty::FilmExposure};
     }
     if (update.film_print_material.has_value() &&
         film.print_material != *update.film_print_material) {
       film.print_material = std::move(*update.film_print_material);
-      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+      changed |= DirtyFieldMask{DrtDirty::FilmExposure};
     }
     if (update.film_scene_light.has_value() && film.scene_light != *update.film_scene_light) {
       film.scene_light = std::move(*update.film_scene_light);
-      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+      changed |= DirtyFieldMask{DrtDirty::FilmExposure};
     }
     if (update.film_light_spread.has_value() && film.light_spread != *update.film_light_spread) {
       film.light_spread = *update.film_light_spread;
-      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+      changed |= DirtyFieldMask{DrtDirty::FilmExposure};
     }
     if (update.film_halation.has_value() && film.halation != *update.film_halation) {
       film.halation = *update.film_halation;
-      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+      changed |= DirtyFieldMask{DrtDirty::FilmHalation};
     }
     if (update.film_enlarger_flare.has_value() &&
         film.enlarger_flare != *update.film_enlarger_flare) {
       film.enlarger_flare = *update.film_enlarger_flare;
-      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+      changed |= DirtyFieldMask{DrtDirty::FilmFlare};
     }
     return changed;
   });

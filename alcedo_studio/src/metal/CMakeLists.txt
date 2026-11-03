@@ -343,7 +343,7 @@ if(ALCEDO_METAL_ENABLED)
                 ${ALCEDO_METAL_COMMON_COMPILE_FLAGS}
                 ${ALCEDO_METAL_PLATFORM_COMPILE_FLAGS}
                 ${ALCEDO_METAL_CONFIG_COMPILE_FLAGS}
-                -fno-fast-math
+                -ffast-math
                 -fmodules-cache-path="${ALCEDO_METAL_MODULE_CACHE_DIR}"
                 -MF "${METAL_FILM_PRINT_AIR}.d"
                 -c "${METAL_FILM_PRINT_SRC}"

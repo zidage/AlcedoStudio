@@ -282,6 +282,20 @@ TEST_F(MetalFilmPrintFixture, FilmPrintKeepsTheAlphaOfTheScene) {
   for (const auto& pixel : RenderView(FilmPrintDocument(), field, false)) {
     ASSERT_EQ(pixel.a, 0.75f);
   }
+  // One pixel with an alpha other than 1 makes the display read the alpha of each pixel. The next
+  // render, with each alpha 1, finds the mark of the earlier render.
+  auto mixed = field;
+  for (auto& pixel : mixed) pixel.a = 1.0f;
+  const std::size_t odd = static_cast<std::size_t>(37) * kWidth + 45;
+  mixed[odd].a          = 0.25f;
+  const auto with_odd   = RenderView(FilmPrintDocument(), mixed, false);
+  for (std::size_t index = 0; index < with_odd.size(); ++index) {
+    ASSERT_EQ(with_odd[index].a, index == odd ? 0.25f : 1.0f) << index;
+  }
+  mixed[odd].a = 1.0f;
+  for (const auto& pixel : RenderView(FilmPrintDocument(), mixed, false)) {
+    ASSERT_EQ(pixel.a, 1.0f);
+  }
 }
 
 TEST_F(MetalFilmPrintFixture, FilmPrintReadsASceneWorkImageAndWritesAWorkImage) {
@@ -442,6 +456,40 @@ TEST_F(MetalFilmPrintFixture, FilmPrintViewportKeepsCanvas) {
   EXPECT_EQ(device_->PassStats().film_canvas_rebuild, 0U);
   const auto index = static_cast<std::size_t>(98 - kRoiY) * kRoiSize;
   EXPECT_GT(std::abs(detail[index].r - plain[index].r), 1.0f / 255.0f);
+}
+
+TEST_F(MetalFilmPrintFixture, FilmPrintStrengthSlidersKeepTheCanvasesThatDoNotReadThem) {
+  constexpr std::uint32_t kSize    = 128;
+  const auto              field    = PatchField(kSize, kSize, 40, 40, 16);
+  auto                    document = FilmPrintDocument("kodak_gold_200");
+  SetView({kSize, kSize}, {kSize, kSize}, Matrix3x3::Identity());
+  (void)RenderView(document, field, true);
+  EXPECT_EQ(device_->PassStats().film_canvas_rebuild, 2U);
+
+  const auto render_after = [&](auto&& change, std::uint64_t rebuilds) {
+    DrtParameterUpdate update;
+    change(update);
+    document.Drt()->Params().ApplyUpdate(update);
+    auto pixels = RenderView(document, field, true);
+    EXPECT_EQ(device_->PassStats().film_canvas_rebuild, rebuilds);
+    EXPECT_EQ(device_->PassStats().film_canvas_sample, 2U - rebuilds);
+    return pixels;
+  };
+  // Halation scales the Halation canvas at the mix, and changes the amounts that the flare canvas
+  // blurs. Enlarger flare scales the flare canvas in the display stage.
+  (void)render_after([](DrtParameterUpdate& update) { update.film_halation = 3.0f; }, 1U);
+  const auto kept =
+      render_after([](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.05f; }, 0U);
+  // Light spread changes the exposure, so a change and a change back build both canvases again.
+  (void)render_after([](DrtParameterUpdate& update) { update.film_light_spread = 2.0f; }, 2U);
+  const auto rebuilt =
+      render_after([](DrtParameterUpdate& update) { update.film_light_spread = 1.0f; }, 2U);
+  ASSERT_EQ(kept.size(), rebuilt.size());
+  for (std::size_t index = 0; index < kept.size(); ++index) {
+    ASSERT_EQ(kept[index].r, rebuilt[index].r) << index;
+    ASSERT_EQ(kept[index].g, rebuilt[index].g) << index;
+    ASSERT_EQ(kept[index].b, rebuilt[index].b) << index;
+  }
 }
 
 TEST_F(MetalFilmPrintFixture, FilmPrintRoiWithNoPublishedResultPublishesNone) {
@@ -948,36 +996,44 @@ TEST_F(MetalFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
                              static_cast<float>(reference_height) / static_cast<float>(height)));
     auto render_size_result =
         device_->Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
-    auto                document = FilmPrintDocument();
-    float               halation = 1.0f;
-    std::vector<double> times;
-    for (int run = 0; run < 10; ++run) {
-      halation = halation >= 7.0f ? 1.0f : halation + 0.5f;
-      DrtParameterUpdate update;
-      update.film_halation = halation;
-      document.Drt()->Params().ApplyUpdate(update);
-      device_->BeginRender();
-      auto& workspace = device_->Workspace();
-      workspace.PrepareResultValidity(plan_, document, input_);
-      auto& scene =
-          workspace.AcquireImageForWrite(scene_id, {width, height, TextureFormat::Rgba32f});
-      workspace.Device().UploadTexture2D(scene.Texture(), std::as_bytes(std::span(input)),
-                                         device_->CommandContext());
-      workspace.Device().SynchronizeRecordedWork(device_->CommandContext());
-      const auto start = std::chrono::steady_clock::now();
-      (void)ExecuteMetalDrt(*device_, plan_, document, FrameSceneBinding::CachedImage(scene_id));
-      workspace.Device().SynchronizeRecordedWork(device_->CommandContext());
-      const std::chrono::duration<double, std::milli> elapsed =
-          std::chrono::steady_clock::now() - start;
-      if (run != 0) times.push_back(elapsed.count());
-      device_->EndRender();
-      device_->WaitIdle();
-      device_->PublishResults();
+    // Halation keeps the Halation canvas; Light spread changes the exposure, so the render builds
+    // both canvases again.
+    for (const bool exposure_change : {false, true}) {
+      auto                document = FilmPrintDocument();
+      std::vector<double> times;
+      for (int run = 0; run < 10; ++run) {
+        // Light spread stays near 1, so each render has the blur sizes of the default.
+        DrtParameterUpdate update;
+        if (exposure_change) {
+          update.film_light_spread = run % 2 == 0 ? 1.05f : 1.0f;
+        } else {
+          update.film_halation = 1.0f + 0.5f * static_cast<float>(run % 12);
+        }
+        document.Drt()->Params().ApplyUpdate(update);
+        device_->BeginRender();
+        auto& workspace = device_->Workspace();
+        workspace.PrepareResultValidity(plan_, document, input_);
+        auto& scene =
+            workspace.AcquireImageForWrite(scene_id, {width, height, TextureFormat::Rgba32f});
+        workspace.Device().UploadTexture2D(scene.Texture(), std::as_bytes(std::span(input)),
+                                           device_->CommandContext());
+        workspace.Device().SynchronizeRecordedWork(device_->CommandContext());
+        const auto start = std::chrono::steady_clock::now();
+        (void)ExecuteMetalDrt(*device_, plan_, document, FrameSceneBinding::CachedImage(scene_id));
+        workspace.Device().SynchronizeRecordedWork(device_->CommandContext());
+        const std::chrono::duration<double, std::milli> elapsed =
+            std::chrono::steady_clock::now() - start;
+        if (run != 0) times.push_back(elapsed.count());
+        device_->EndRender();
+        device_->WaitIdle();
+        device_->PublishResults();
+      }
+      std::sort(times.begin(), times.end());
+      std::cout << width << " x " << height << ", "
+                << (exposure_change ? "Light spread" : "Halation")
+                << " change: " << times[times.size() / 2] << " ms; transient capacity "
+                << device_->Workspace().TransientBuffers().capacity_bytes() / (1 << 20) << " MiB\n";
     }
-    std::sort(times.begin(), times.end());
-    std::cout << width << " x " << height << ", slider change: " << times[times.size() / 2]
-              << " ms; transient capacity "
-              << device_->Workspace().TransientBuffers().capacity_bytes() / (1 << 20) << " MiB\n";
   }
 }
 
