@@ -117,6 +117,7 @@ def_library(EditInput
 set(EDIT_RUNTIME_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/adjustment_runtime.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/diffusion_filter_plan.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/film_print_plan.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/grade_lut.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/lut_bake.cpp

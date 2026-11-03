@@ -12,6 +12,7 @@
 #define FILM_KERNEL_INLINE static inline
 #define FILM_KERNEL_LOG10  log10
 #define FILM_KERNEL_POW    pow
+#define FILM_KERNEL_EXP    exp
 #define FILM_KERNEL_VALUES __global const
 #define FILM_KERNEL_PARAMS __global const
 #define FILM_KERNEL_UINT   uint
@@ -19,6 +20,7 @@
 #define FILM_KERNEL_INLINE static inline
 #define FILM_KERNEL_LOG10  log10
 #define FILM_KERNEL_POW    pow
+#define FILM_KERNEL_EXP    exp
 #define FILM_KERNEL_VALUES const device
 #define FILM_KERNEL_PARAMS constant
 #define FILM_KERNEL_UINT   uint
@@ -36,9 +38,11 @@
 #ifdef FILM_KERNEL_DOUBLE
 #define FILM_KERNEL_LOG10 log10
 #define FILM_KERNEL_POW   pow
+#define FILM_KERNEL_EXP   exp
 #else
 #define FILM_KERNEL_LOG10 log10f
 #define FILM_KERNEL_POW   powf
+#define FILM_KERNEL_EXP   expf
 #endif
 #endif
 
@@ -68,6 +72,7 @@ typedef struct {
   FilmKernelReal   ap1_to_xyz[9];
   FilmKernelReal   locus_white[2];
   FilmKernelReal   locus_keep;   // 1 - the inset of the hull
+  FilmKernelReal   locus_inner_squared;  // Squared radius of a circle at the white inside the hull
   FilmKernelReal   uv_scale[2];  // (uv_nodes - 1) / uv_max
   FilmKernelReal   layer_gain[3];
   FilmKernelReal   curve_offset[3];  // Criterion log H - the log H of the first curve value
@@ -157,10 +162,13 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelLayerExposure(
   FILM_KERNEL_VALUES FilmKernelReal* normals = values + params->normals_offset;
   FILM_KERNEL_VALUES FilmKernelReal* room    = values + params->room_offset;
   FilmKernelReal                     t       = FILM_KERNEL_REAL(1.0);
-  for (FILM_KERNEL_UINT facet = 0U; facet < params->locus_facets; ++facet) {
-    const FilmKernelReal rate = dx * normals[2U * facet] + dz * normals[2U * facet + 1U];
-    if (rate > FILM_KERNEL_REAL(0.0)) {
-      t = FilmKernelMin(t, room[facet] * params->locus_keep * y / rate);
+  // Inside the circle that the hull holds, no facet moves the colour, so most pixels skip the loop.
+  if (dx * dx + dz * dz > params->locus_inner_squared * y * y) {
+    for (FILM_KERNEL_UINT facet = 0U; facet < params->locus_facets; ++facet) {
+      const FilmKernelReal rate = dx * normals[2U * facet] + dz * normals[2U * facet + 1U];
+      if (rate > FILM_KERNEL_REAL(0.0)) {
+        t = FilmKernelMin(t, room[facet] * params->locus_keep * y / rate);
+      }
     }
   }
   const FilmKernelReal   px    = wx + t * dx;
@@ -288,6 +296,25 @@ FilmKernelPrintDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params,
                            m[6] * xyz[0] + m[7] * xyz[1] + m[8] * xyz[2]);
 }
 
+/** Transmittance of a dye amount, for the Enlarger flare: 10^-a. */
+FILM_KERNEL_INLINE FilmKernelReal FilmKernelTransmittance(FilmKernelReal amount) {
+  return FILM_KERNEL_EXP(FILM_KERNEL_REAL(-2.302585092994046) * amount);
+}
+
+/**
+ * FP6, Enlarger flare: the amounts that give the transmittance
+ * (1 - flare) T + flare * blurred, where @p blurred is a blurred transmittance.
+ */
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelFlareAmounts(FilmKernelRgb  amounts,
+                                                        FilmKernelRgb  blurred,
+                                                        FilmKernelReal flare) {
+  const FilmKernelReal keep = FILM_KERNEL_REAL(1.0) - flare;
+  return FilmKernelMakeRgb(
+      -FILM_KERNEL_LOG10(keep * FilmKernelTransmittance(amounts.r) + flare * blurred.r),
+      -FILM_KERNEL_LOG10(keep * FilmKernelTransmittance(amounts.g) + flare * blurred.g),
+      -FILM_KERNEL_LOG10(keep * FilmKernelTransmittance(amounts.b) + flare * blurred.b));
+}
+
 /** Distance of a channel from the largest channel, after rule 'rgc_style_display_compression'. */
 FILM_KERNEL_INLINE FilmKernelReal FilmKernelCompressedDistance(FilmKernelReal distance,
                                                                FilmKernelReal threshold,
@@ -325,6 +352,7 @@ FilmKernelFinishDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params, FilmKernelR
 #undef FILM_KERNEL_INLINE
 #undef FILM_KERNEL_LOG10
 #undef FILM_KERNEL_POW
+#undef FILM_KERNEL_EXP
 #undef FILM_KERNEL_REAL
 #undef FILM_KERNEL_VALUES
 #undef FILM_KERNEL_PARAMS

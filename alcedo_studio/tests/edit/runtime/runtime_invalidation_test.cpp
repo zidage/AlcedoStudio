@@ -159,6 +159,18 @@ TEST(RuntimeInvalidation, DiffusionAndSceneChangesInvalidateFilmPrintResults) {
   EXPECT_EQ(harness.Required(flare), harness.Required(halation));
 }
 
+TEST(RuntimeInvalidation, FilmPrintResultsFollowANewDrtInput) {
+  ValidityHarness harness;
+  harness.Collect();
+  const auto halation = FilmHalationResultId(harness.plan.drt.node_id);
+  const auto flare    = FilmFlareResultId(harness.plan.drt.node_id);
+  const auto required = harness.Required(halation);
+  harness.plan.grade_nodes.clear();
+  harness.Collect();
+  EXPECT_GT(harness.Required(halation), required);
+  EXPECT_EQ(harness.Required(flare), harness.Required(halation));
+}
+
 TEST(RuntimeInvalidation, FilmPrintResultsUseTheCanonicalIdentityOfTheScatterImage) {
   ValidityHarness harness;
   harness.Collect();

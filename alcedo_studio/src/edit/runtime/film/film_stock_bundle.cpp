@@ -185,6 +185,14 @@ void FilmStockBundle::ReadCommonValues() {
   print_contrast_ = stock_.F64("common/print_contrast", {})[0];
   print_flash_    = stock_.F64("common/print_flash", {})[0];
   viewing_flare_  = stock_.F64("common/viewing_flare", {})[0];
+  image_plane_constants_ = {
+      .halation_strength   = stock_.F64("common/halation_strength", {3}),
+      .spread_gaussians    = stock_.F64("common/spread_gaussians", {2, 2}),
+      .frame_mm            = stock_.F64("common/frame_mm", {})[0],
+      .halation_um         = stock_.F64("common/halation_um", {})[0],
+      .inhibition_um       = stock_.F64("common/inhibition_um", {})[0],
+      .enlarger_flare_size = stock_.F64("common/enlarger_flare_size", {})[0],
+  };
   const auto normals = stock_.Shape("common/locus_normals");
   if (normals.size() != 2 || normals[1] != 2 || normals[0] < 1) {
     throw std::runtime_error("Film print resource: the locus normals do not have the shape (n, 2)");
@@ -301,6 +309,7 @@ auto FilmStockBundle::Negative(std::string_view id) const -> FilmNegativeView {
       .density_grid_start = stock_.F64(field("density_grid_start"), {3}),
       .density_grid_stop  = stock_.F64(field("density_grid_stop"), {3}),
       .criterion_log_h    = stock_.F64(field("criterion_log_h"), {3}),
+      .layer_spread_um    = stock_.F64(field("layer_spread_um"), {3}),
       .curves             = ReadCurves(stock_, field, id),
       .inhibition         = inhibition,
   };

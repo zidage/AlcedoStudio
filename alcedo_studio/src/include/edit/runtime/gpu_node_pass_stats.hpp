@@ -34,6 +34,10 @@ struct GpuNodePassStats {
   std::uint64_t diffusion_scatter_sample  = 0;
   /// Active diffusion encodes that built the scatter image from the current render.
   std::uint64_t diffusion_scatter_rebuild = 0;
+  /// Film print canonical results (Halation, Enlarger flare) that the render sampled as published.
+  std::uint64_t film_canvas_sample           = 0;
+  /// Film print canonical results that the render built from its own pixels.
+  std::uint64_t film_canvas_rebuild          = 0;
   std::uint64_t drt_execute            = 0;
   std::uint64_t drt_skip               = 0;
   std::uint64_t source_h2d_count       = 0;

@@ -175,6 +175,12 @@ void WriteSyntheticResources(const fs::path& directory) {
   stock["common/gamut_threshold"] = F64Array({3}, {0.815, 0.803, 0.88});
   stock["common/gamut_limit"]     = F64Array({3}, {1.4, 1.3, 1.312});
   stock["common/gamut_power"]     = F64Array({}, {1.2});
+  stock["common/halation_strength"]   = F64Array({3}, {0.03, 0.008, 0.0});
+  stock["common/spread_gaussians"]    = F64Array({2, 2}, {0.25, 0.4, 0.75, 1.4});
+  stock["common/frame_mm"]            = F64Array({}, {36.0});
+  stock["common/halation_um"]         = F64Array({}, {120.0});
+  stock["common/inhibition_um"]       = F64Array({}, {35.0});
+  stock["common/enlarger_flare_size"] = F64Array({}, {0.1});
   stock["light/flat/spectrum"]   = F64Array({kWavelengths}, Flat(1.0));
   stock["light/ramp/spectrum"]   = F64Array({kWavelengths}, {0.5, 0.75, 1.0, 1.25, 1.5, 1.75});
   for (const auto& stock_entry : std::map<std::string, double>{{"neg_a", 1.0}, {"neg_b", 1.2}}) {
@@ -192,6 +198,7 @@ void WriteSyntheticResources(const fs::path& directory) {
     stock[name("density_grid_start")] = F64Array({3}, {0.0, 0.01, 0.02});
     stock[name("density_grid_stop")]  = F64Array({3}, {2.0 * scale, 2.5 * scale, 3.0 * scale});
     stock[name("criterion_log_h")]    = F64Array({3}, {-1.0, -1.1, -1.2});
+    stock[name("layer_spread_um")]    = F64Array({3}, {5.0, 3.0, 3.0});
     stock[name("curve_density")]      = F64Array(
         {3, 4}, {0.1, 0.4 * scale, 0.9, 1.5, 0.1, 0.5, 1.0, 1.6, 0.1, 0.3, 0.8, 0.8});
     stock[name("curve_lengths")]     = ArrayValues{"i8", {3}, ToBytes<std::int64_t>({4, 4, 3})};

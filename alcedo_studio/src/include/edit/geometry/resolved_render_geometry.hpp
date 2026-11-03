@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -83,6 +84,25 @@ struct ResolvedRenderGeometry {
   return top_left.x <= kPixel && top_left.y <= kPixel &&
          bottom_right.x >= static_cast<float>(geometry.edit_extent.width) - kPixel &&
          bottom_right.y >= static_cast<float>(geometry.edit_extent.height) - kPixel;
+}
+
+/**
+ * @brief Render pixels per reference pixel along one render axis.
+ *
+ * Sizes in reference pixels become sizes in render pixels with this value. It is at most 1, so a
+ * zoom above 1:1 keeps the size of a reference pixel.
+ */
+[[nodiscard]] inline auto RenderAxisScale(const ResolvedRenderGeometry& geometry, bool horizontal)
+    -> float {
+  const auto& matrix                            = geometry.render_to_reference.m;
+  const float dx                                = horizontal ? matrix[0] : matrix[1];
+  const float dy                                = horizontal ? matrix[3] : matrix[4];
+  const float reference_pixels_per_render_pixel = std::hypot(dx, dy);
+  if (!(reference_pixels_per_render_pixel > 0.0f) ||
+      !std::isfinite(reference_pixels_per_render_pixel)) {
+    return 1.0f;
+  }
+  return std::clamp(1.0f / reference_pixels_per_render_pixel, 1.0e-4f, 1.0f);
 }
 
 }  // namespace alcedo

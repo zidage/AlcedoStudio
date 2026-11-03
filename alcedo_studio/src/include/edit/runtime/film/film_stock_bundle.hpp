@@ -52,6 +52,7 @@ struct FilmNegativeView {
   std::span<const double> density_grid_start;  ///< (3): first node of each print table axis
   std::span<const double> density_grid_stop;   ///< (3): last node of each print table axis
   std::span<const double> criterion_log_h;     ///< (3): log H of a layer exposure of 1
+  std::span<const double> layer_spread_um;     ///< (3): 0 for a negative with no transfer data
   FilmCurveView           curves;              ///< Dye amounts on log H
   FilmInhibitionView      inhibition;
 };
@@ -68,6 +69,17 @@ struct FilmPointConstants {
   std::span<const double> gamut_limit;      ///< (3)
   double                  locus_inset = 0.0;
   double                  gamut_power = 0.0;
+};
+
+/// Values of the image-plane steps that are the same for all stocks. Lab rules 'layer_spread',
+/// 'development_inhibition', and the options of Halation and Enlarger flare.
+struct FilmImagePlaneConstants {
+  std::span<const double> halation_strength;          ///< (3): strength of each layer at slider 1
+  std::span<const double> spread_gaussians;           ///< (2, 2): (weight, sigma / spread length)
+  double                  frame_mm            = 0.0;  ///< Long side of the frame
+  double                  halation_um         = 0.0;
+  double                  inhibition_um       = 0.0;
+  double                  enlarger_flare_size = 0.0;  ///< Sigma, as a share of the long side
 };
 
 /// Values of one print material and its viewing light. Spans are (3, wavelengths) unless a comment
@@ -166,6 +178,9 @@ class FilmStockBundle {
   [[nodiscard]] auto PointConstants() const -> const FilmPointConstants& {
     return point_constants_;
   }
+  [[nodiscard]] auto ImagePlaneConstants() const -> const FilmImagePlaneConstants& {
+    return image_plane_constants_;
+  }
 
  private:
   FilmStockBundle(FilmArrayFile stock, FilmArrayFile setup, const FilmArrayFile& reflectance,
@@ -193,6 +208,7 @@ class FilmStockBundle {
   double                     print_flash_                  = 0.0;
   double                     viewing_flare_                = 0.0;
   FilmPointConstants         point_constants_;
+  FilmImagePlaneConstants    image_plane_constants_;
 };
 
 }  // namespace alcedo

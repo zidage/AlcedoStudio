@@ -321,6 +321,8 @@ void RuntimeInvalidationState::CollectStructureChanges(const ExecutionPlan& plan
   const auto drt_input = plan.SceneInputForDrt();
   if (last_drt_input_ != drt_input) {
     origins.push_back(DiffusionScatterId(plan.drt.node_id));
+    origins.push_back(FilmHalationResultId(plan.drt.node_id));
+    origins.push_back(FilmFlareResultId(plan.drt.node_id));
     origins.push_back(plan.display_output);
     last_drt_input_ = drt_input;
   }
