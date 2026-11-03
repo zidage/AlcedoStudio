@@ -74,6 +74,15 @@ void RegisterOpenClGpuDagPrograms() {
                     .build_options = "-cl-std=CL1.2",
                     .required_at_startup = false,
                 },
+                OpenClProgramDescriptor{
+                    .name                = OpenCL::GpuDag::kFilmPrintProgramName,
+                    .source_paths        = {ALCEDO_OPENCL_COLOR_ENCODING_MATH_H,
+                                            ALCEDO_OPENCL_ACES_RGC_H,
+                                            ALCEDO_OPENCL_FILM_PRINT_MATH_H,
+                                            ALCEDO_OPENCL_DAG_FILM_PRINT_CL},
+                    .build_options       = "-cl-std=CL1.2",
+                    .required_at_startup = false,
+                },
             },
     });
   });

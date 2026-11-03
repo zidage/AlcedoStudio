@@ -23,6 +23,7 @@
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_drt_gpu_params.hpp"
 #include "edit/runtime/opencl/opencl_drt_params.hpp"
+#include "edit/runtime/opencl/opencl_film_print_pass.hpp"
 #include "edit/runtime/opencl/opencl_neighbor_dispatch.hpp"
 #include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "edit/runtime/parameter_arena.hpp"
@@ -106,8 +107,7 @@ struct OpenClDrtOps {
   using LutBinding        = OpenClLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteOpenClDrt";
-  /// A film print stops with an error until the kernels of this backend exist.
-  static constexpr bool        kImplementsFilmPrint = false;
+  static constexpr bool        kImplementsFilmPrint = true;
 
   /// Post neighborhood parameters travel in the command, not in an arena slot.
   static void RefreshNeighborhoodAdjustment(OpenClRenderDevice&, const IOperatorModel&,
@@ -187,6 +187,13 @@ struct OpenClDrtOps {
     const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
     const auto&            binding = arena.Binding(key);
     DispatchDrtScene(device, scene, display, arena.DeviceBuffer(), binding.offset, width, height);
+  }
+
+  static void DispatchFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                                const DrtNodeModel& drt, const FrameSceneBinding& scene,
+                                const FrameSceneBinding& display, std::uint32_t width,
+                                std::uint32_t height) {
+    RecordOpenClFilmPrint(device, plan, drt, scene, display, width, height);
   }
 
   static void CheckAfterEncode(OpenClRenderDevice&) {}

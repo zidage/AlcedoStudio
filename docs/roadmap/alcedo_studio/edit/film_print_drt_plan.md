@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 have not started.
+Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 is complete (2026-11-02). F7 has not started.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -850,7 +850,43 @@ On 5207 + 2383, the range of b\* for L\* 15 to 88 goes from 13.7 to 7.2, and of 
 8. **Tests.** The cases of F3 and F4 in `GpuDagOpenClGradeTest`, against the same host reference. An unavailable device is unverified support, not a pass.
 9. **Exit criteria.** Pass on the development GPU, with the same limits.
 10. **Expected diff.** 1500 lines.
-11. **Completion record.** Pending.
+11. **Completion record.** See below.
+
+#### F6 completion record (2026-11-02)
+
+**Call chain.** `DrtPostExecutor::Execute -> OpenClDrtOps::DispatchFilmPrint -> RecordOpenClFilmPrint -> film_print.cl`. The program `opencl_dag_film_print` loads `color_encoding_math.h`, `aces_reference_gamut_compression.h`, `film_print_math.h`, and `film_print.cl`.
+
+**Changes from the plan, and details that the plan does not state.**
+
+- The images between the steps are transient buffers, with 3 floats per pixel. A pool image of OpenCL is an image object: a kernel cannot read and write it, and it has 16 bytes per pixel. So an image for FP4 in place would need a second image. Only the two canonical results are images, because they have a place in the result cache. The scene and the display keep the dual-storage binding.
+- The fixed values go in one upload per render, and not in the kernel arguments. A `FilmBlurKernel` has 1552 bytes, and OpenCL 1.2 requires only 1024 bytes for `CL_DEVICE_MAX_PARAMETER_SIZE`. An AMD device can have this limit.
+- The kernels read a blur image and read the full-size images with explicit offsets, because the transient allocations share slabs. The half-size images have their own allocations.
+- `TransientBufferArena::ReleaseIdleSlabsWhenNoneHolds` is new. Without it, each larger render size adds slabs that nothing can use: 1936 MiB after 2560, 4096, and 6000 pixels, against 1232 MiB with it. The slabs stay for later renders of the same size or a smaller size, and they stay on the device after the method changes, until the binding is released.
+- `WarmUpPlan` does not build this program, because an `ExecutionPlan` has no DRT method. The first film print render builds it on the render thread.
+- `film_print_math.h` is in `ALCEDO_OPENCL_PACKAGED_HEADERS`. Without this, the installed application cannot open the header.
+- The cost record measures wall time to the end of the GPU work, because the queue may have no profiling. The pass names of the test replace `FilmPrintPassTime`.
+
+**Tests.** All on the NVIDIA GeForce RTX 3080 Laptop GPU, on a debug host build.
+
+| Check | Result |
+| --- | --- |
+| `GpuDagOpenClGradeTest`, `OpenClFilmPrintFixture` | 18 of 18 pass, with the limits of CUDA |
+| Ramp against the lab | largest 0.0005 codes (limit 0.5) |
+| Chart against the reference | largest 0.016 codes (limit 1) |
+| 6000 x 4006 image against the lab | p99.9 up to 0.57, largest up to 1.54 codes (limits 1 and 4) |
+| Viewport ROI inside the reach of the blurs | largest 0.036 codes (limit 0.1) |
+| `FilmPrintMatchesCudaReferenceWithinTolerance` | pass: below 1 code against CUDA on 3 negatives and 2 print materials |
+| `TransientBufferArena` cases | pass |
+
+The other cases of `GpuDagOpenClGradeTest` and `GpuDagOpenClDrtProductTest` pass, except 6 cases of `OpenClMultiGradeFixture`, known as #496. They fail in the same way with this change removed. In `GpuDagOpenClWorkspaceTest`, three queued upload cases time out on most runs, with or without this change: #648.
+
+**Cost.** Slider change, on the GPU above: 6.1 / 13.9 / 19.0 ms at 2560 / 4096 / 6000 (CUDA: 5.8 / 14.1 / 20.7 ms).
+
+**AMD.** The program builds with no error on drivers 26.10.2, 26.6.2, and 26.6.1, on gfx1030, gfx1100, gfx1103, and gfx1201, and on gfx1010 with the legacy runtime. The 19 programs, read from the installer copy, had 342 builds with no failure on 26.10.2 and 26.6.2, with code pages UTF-8 and GBK. The first build found one error that NVIDIA would also report: `kernel` is a keyword of OpenCL C.
+
+**Package.** `package_windows.ps1` ran to the end, with the install tree check. From the extracted NSIS file in a path with Chinese characters and a space, and with a clean `PATH`: `alcedo-gpu-check --opencl` builds 19 programs and 118 kernels, of which `opencl_dag_film_print` has 15, and `alcedo_main --verify-qml-imports` passes. The film print cases also pass with a test executable that reads only the `opencl/` and `config/film_print/` directories of the extracted file.
+
+**Not verified.** A run on an AMD GPU: AMD support here means that the driver compiler builds the program. Polaris, Vega, and Ryzen APUs with Vega graphics: the legacy runtime cannot build for them offline. A render in the running application on OpenCL. An Intel GPU. The full test suite did not run.
 
 ### F7: Metal passes
 

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <future>
 #include <memory>
 #include <opencv2/core.hpp>
@@ -33,6 +34,7 @@
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
 #include "edit/runtime/executor_role.hpp"
+#include "edit/runtime/film/film_print_resources.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/opencl/opencl_renderer.hpp"
 #include "edit/scope/detail/scope_opencl_shared.hpp"
@@ -311,19 +313,47 @@ class OpenClDrtFixture : public ::testing::Test {
   std::unique_ptr<OpenClRenderDevice> device_;
 };
 
-TEST_F(OpenClDrtFixture, FilmPrintRenderStopsWithNamedErrorUntilItsKernelsExist) {
-  DrtParameterUpdate update;
-  update.method = DrtMethod::FilmPrint;
-  document_.Drt()->Params().ApplyUpdate(update);
-  plan_ = GraphCompiler::Compile(document_, input_.CompileSource(), RenderRequest{});
-  try {
-    (void)Render();
-    FAIL() << "the film print rendered on a backend with no film print kernels";
-  } catch (const std::runtime_error& error) {
-    EXPECT_NE(std::string{error.what()}.find("film print is not implemented on this backend"),
-              std::string::npos)
-        << error.what();
+TEST_F(OpenClDrtFixture, FilmPrintMatchesCudaReferenceWithinTolerance) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA reference is not enabled in this build.";
+#else
+  if (!HasCudaDevice()) {
+    GTEST_SKIP() << "No CUDA device available for the reference render.";
   }
+  if (!std::filesystem::exists(FilmPrintResourceDirectory() / "manifest.json")) {
+    GTEST_SKIP() << "No film print resources at " << FilmPrintResourceDirectory().string()
+                 << ". Configure with ALCEDO_FILM_PRINT_RESOURCE_DIR. This is not a pass.";
+  }
+  constexpr std::uint32_t kWidth  = 1024;
+  constexpr std::uint32_t kHeight = 768;
+  input_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(kWidth, kHeight),
+                                         gpu_dag_test::FullSensor(kWidth, kHeight));
+  // A tungsten stock on Cine Look has a negative grade, and a daylight stock has neither step.
+  for (const auto* negative : {"kodak_5207", "kodak_5219", "kodak_portra_400"}) {
+    for (const auto* material : {"kodak_2383", "cine_look"}) {
+      SCOPED_TRACE(std::string{negative} + " on " + material);
+      auto               document = CreateDefaultPipelineDocument();
+      gpu_dag_test::EnsureTestCameraProfile(document);
+      DrtParameterUpdate update;
+      update.method              = DrtMethod::FilmPrint;
+      update.encoding_space      = DrtColorSpace::Rec709;
+      update.encoding_eotf       = DrtEotf::SrgbPiecewise;
+      update.film_negative       = negative;
+      update.film_print_material = material;
+      update.film_light_spread   = 2.5f;
+      update.film_halation       = 4.0f;
+      update.film_enlarger_flare = 0.05f;
+      document.Drt()->Params().ApplyUpdate(update);
+      const auto plan   = GraphCompiler::Compile(document, input_.CompileSource(), RenderRequest{});
+      const auto opencl = Download(*device_, device_->Execute(plan, input_, document));
+      CudaRenderDevice cuda_device;
+      const auto       cuda = Download(cuda_device, cuda_device.Execute(plan, input_, document));
+      ASSERT_EQ(opencl.size(), cuda.size());
+      ASSERT_TRUE(AllFinite(opencl));
+      EXPECT_LT(MaxAbsError(opencl, cuda), 1.0f / 255.0f);
+    }
+  }
+#endif
 }
 
 TEST_F(OpenClDrtFixture, BothDrtMethodsKeepHighSaturationDarkNoiseBelowWhite) {

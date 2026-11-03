@@ -373,6 +373,14 @@ class OpenClBackend {
   [[nodiscard]] auto AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
                                 std::uint32_t edge, CommandContext& command_context)
       -> OpenClLutBinding;
+  /**
+   * @brief A device buffer of @p bytes in the byte budget and the cache of @ref AcquireLut.
+   *
+   * The film print reads its tables through this function. @p key names the bytes.
+   * @throws std::runtime_error for an empty key or table.
+   */
+  [[nodiscard]] auto AcquireKeyedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                        CommandContext& command_context) -> OpenClLutBinding;
   [[nodiscard]] auto DummyLut() -> OpenClLutBinding;
   /**
    * @brief 1x1 RGBA32F image bound to unused @c read_only image2d_t scene arguments.
@@ -499,6 +507,9 @@ class OpenClBackend {
   void NoteEventCreate() noexcept { ++event_create_count_; }
   void NoteEventRelease(std::size_t count = 1) noexcept { event_release_count_ += count; }
   void UnregisterBuffer(cl_mem native) noexcept;
+  [[nodiscard]] auto AcquireCachedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                         std::uint32_t edge, CommandContext& command_context)
+      -> OpenClLutBinding;
   void TrackEnqueueEvent(CommandContext& command_context, cl_event event);
   auto EnqueueMarker(CommandContext& command_context) -> cl_event;
   void FlushQueue();
