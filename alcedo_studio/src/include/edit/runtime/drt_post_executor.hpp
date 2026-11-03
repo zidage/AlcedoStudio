@@ -54,7 +54,8 @@ class DrtPostExecutor {
    * the free scene-work member. Parameter slots are uploaded before any GPU start.
    * A failed dispatch throws after Ops::CheckAfterEncode. A film print on a backend with no film
    * print kernels throws before any GPU start; an encoding that the film print does not support
-   * reports its own error first.
+   * reports its own error first. On a backend with these kernels, Ops::DispatchFilmPrint replaces
+   * the display parameter bind and the display transform dispatch.
    */
   static auto Execute(Device& device, const ExecutionPlan& plan, const PipelineDocument& document,
                       const FrameSceneBinding& scene) -> DrtPostExecutionResult {
@@ -112,7 +113,10 @@ class DrtPostExecutor {
       works.push_back(std::move(work));
     }
 
-    Ops::BindDisplayParams(device, plan, *drt);
+    const bool film_print = method == DrtMethod::FilmPrint;
+    if (!film_print) {
+      Ops::BindDisplayParams(device, plan, *drt);
+    }
     workspace.Parameters().UploadDirty(device.CommandContext());
     Ops::PrepareNeighborCommands(device, drt->Id(), command_offsets);
 
@@ -138,7 +142,15 @@ class DrtPostExecutor {
     for (std::size_t index = 0; index < sequence.size(); ++index) {
       const auto dest = MakeDest(sequence[index]);
       if (index == 0) {
-        Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), width, height);
+        if constexpr (Ops::kImplementsFilmPrint) {
+          if (film_print) {
+            Ops::DispatchFilmPrint(device, plan, *drt, current, dest, width, height);
+          } else {
+            Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), width, height);
+          }
+        } else {
+          Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), width, height);
+        }
       } else {
         const auto lut = Ops::NeighborLut(device);
         NeighborExecutor<Ops>::Execute(device, current, dest, current, lut, works[index - 1], 1.0f,

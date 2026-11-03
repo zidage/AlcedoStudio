@@ -32,6 +32,18 @@ struct FilmCurveView {
   double                        log_h_step    = 0.0;
 };
 
+/// Rule 'development_inhibition' of a negative. A negative with no modulation transfer data has none.
+struct FilmInhibitionView {
+  std::span<const double>       k;            ///< (3, 3), row major
+  std::span<const double>       free_values;  ///< (3, stored_length): F_i on one uniform log H step
+  std::span<const std::int64_t> lengths;      ///< (3)
+  std::span<const double>       log_h_start;  ///< (3)
+  std::int64_t                  stored_length = 0;
+  double                        log_h_step    = 0.0;
+
+  [[nodiscard]] auto            Present() const -> bool { return stored_length != 0; }
+};
+
 /// Values of one negative. All spans are (3, wavelengths) unless a comment states otherwise.
 struct FilmNegativeView {
   std::span<const double> base;  ///< (wavelengths): density with no dye
@@ -39,6 +51,23 @@ struct FilmNegativeView {
   std::span<const double> exposure_weights;    ///< Layer exposure: radiance @ weights^T
   std::span<const double> density_grid_start;  ///< (3): first node of each print table axis
   std::span<const double> density_grid_stop;   ///< (3): last node of each print table axis
+  std::span<const double> criterion_log_h;     ///< (3): log H of a layer exposure of 1
+  FilmCurveView           curves;              ///< Dye amounts on log H
+  FilmInhibitionView      inhibition;
+};
+
+/// Values of the point stages that are the same for all stocks. Lab rules
+/// 'spectral_locus_projection' and 'rgc_style_display_compression'.
+struct FilmPointConstants {
+  std::span<const double> ap1_to_xyz;     ///< (3, 3), row major
+  std::span<const double> locus_normals;  ///< (facets, 2)
+  std::span<const double> locus_room;     ///< (facets)
+  std::span<const double> locus_white;    ///< (2): X / Y and Z / Y of the white
+  std::span<const double> uv_max;         ///< (2): u' and v' of the last table node
+  std::span<const double> gamut_threshold;  ///< (3)
+  std::span<const double> gamut_limit;      ///< (3)
+  double                  locus_inset = 0.0;
+  double                  gamut_power = 0.0;
 };
 
 /// Values of one print material and its viewing light. Spans are (3, wavelengths) unless a comment
@@ -134,6 +163,9 @@ class FilmStockBundle {
   [[nodiscard]] auto PrintContrast() const -> double { return print_contrast_; }
   [[nodiscard]] auto PrintFlash() const -> double { return print_flash_; }
   [[nodiscard]] auto ViewingFlare() const -> double { return viewing_flare_; }
+  [[nodiscard]] auto PointConstants() const -> const FilmPointConstants& {
+    return point_constants_;
+  }
 
  private:
   FilmStockBundle(FilmArrayFile stock, FilmArrayFile setup, const FilmArrayFile& reflectance,
@@ -160,6 +192,7 @@ class FilmStockBundle {
   double                     print_contrast_               = 0.0;
   double                     print_flash_                  = 0.0;
   double                     viewing_flare_                = 0.0;
+  FilmPointConstants         point_constants_;
 };
 
 }  // namespace alcedo

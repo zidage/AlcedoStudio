@@ -70,6 +70,11 @@ class FilmArrayFile {
   [[nodiscard]] auto U8(std::string_view name, ShapeList shape) const
       -> std::span<const std::uint8_t>;
 
+  /// True when the file holds an array of this name.
+  [[nodiscard]] auto Contains(std::string_view name) const -> bool {
+    return arrays_.find(name) != arrays_.end();
+  }
+
   /**
    * @brief The shape of an array.
    * @throws std::runtime_error that names the file and the array when the array is missing.
