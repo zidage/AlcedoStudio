@@ -14,11 +14,15 @@
 //   its precision, and the print table reads the amounts directly, so they keep float32.
 // - Images that only a blur or a bilinear read uses (the amounts before the last step of the
 //   inhibitor, the middle image and the half-size cells of the inhibitor, the blurred amounts of
-//   the negative grade, and the Halation and flare canvases before their blur) are half4, 8 bytes.
-//   They hold densities of a few units, a transmittance in 0 to 1, or the exposure that Halation
-//   scales by its strength, and the blur averages their rounding.
-// The canonical Halation and flare results are RGBA32F textures, because they have a place in the
-// result cache. The scene and the display are scene textures.
+//   the negative grade, and the Halation, flare, and loupe flare canvases before their blur) are
+//   half4, 8 bytes. They hold densities of a few units, a transmittance in 0 to 1, the linear
+//   display light of a light table in 0 to about 1, or the exposure that Halation scales by its
+//   strength, and the blur averages their rounding.
+// The canonical Halation, flare, and loupe flare results are RGBA32F textures, because they have a
+// place in the result cache. The scene and the display are scene textures.
+//
+// A colour reversal film (`params.light_table`) has the same FP1 to FP5. Its FP6 reads the light
+// table in place of the print table, and adds the loupe flare and the surround in display light.
 //
 // A blur pass gives each thread FILM_SLIDE outputs along the blur. A window of FILM_SLIDE values in
 // registers moves one tap at a time, so a pass loads 2 R + FILM_SLIDE values for FILM_SLIDE outputs
@@ -634,13 +638,37 @@ kernel void film_print_box_reduce(const device half4* src [[buffer(0)]],
   FilmStore3(dst, uint(i * cells.width + j), sum / float((y1 - y0) * (x1 - x0)));
 }
 
+/// The value of a canvas texel: the exposure, for Halation.
+struct FilmCanvasExposure {
+  float3 operator()(float3 value) const { return value; }
+};
+
+/// 10^-a of the amounts, for the Enlarger flare of a print.
+struct FilmCanvasTransmittance {
+  float3 operator()(float3 value) const {
+    return float3(FilmKernelTransmittance(value.x), FilmKernelTransmittance(value.y),
+                  FilmKernelTransmittance(value.z));
+  }
+};
+
+/// The linear display light of the light table, for the loupe flare of a colour reversal film: FP6
+/// to the display matrix, the same value that film_print_display mixes with the blurred canvas.
+struct FilmCanvasDisplayLight {
+  constant FilmKernelParams* params;
+  const device float*        print_rgba;
+  float3                     operator()(float3 value) const {
+    const FilmKernelRgb light =
+        FilmKernelPrintDisplay(params, print_rgba, FilmKernelMakeRgb(value.x, value.y, value.z));
+    return float3(light.r, light.g, light.b);
+  }
+};
+
 /// Canvas from the render: the mean of @p samples x @p samples render pixels in the footprint of
-/// one texel. The Halation form reads the exposure; the flare form reads the amounts and takes the
-/// mean of 10^-a.
-template <typename Source, typename Texel>
+/// one texel, of the value that @p texel_value gives for a source pixel.
+template <typename Source, typename Texel, typename Value>
 static inline void FilmCanvasReduce(const device Source* src, device Texel* dst, FilmSize size,
                                     FilmSize dst_size, constant FilmMatrix& canvas_to_render,
-                                    int samples, bool transmittance, uint2 gid) {
+                                    int samples, Value texel_value, uint2 gid) {
   const int x = int(gid.x);
   const int y = int(gid.y);
   if (x >= dst_size.width || y >= dst_size.height) return;
@@ -653,13 +681,7 @@ static inline void FilmCanvasReduce(const device Source* src, device Texel* dst,
       const float2 render = FilmTransform(canvas_to_render, cx, cy);
       const int    sx     = min(max(int(floor(render.x)), 0), size.width - 1);
       const int    sy     = min(max(int(floor(render.y)), 0), size.height - 1);
-      const float3 value  = FilmLoad3(src, uint(sy * size.width + sx));
-      if (transmittance) {
-        sum += float3(FilmKernelTransmittance(value.x), FilmKernelTransmittance(value.y),
-                      FilmKernelTransmittance(value.z));
-      } else {
-        sum += value;
-      }
+      sum += texel_value(FilmLoad3(src, uint(sy * size.width + sx)));
     }
   }
   // The texels are half. An exposure above the largest finite half keeps that value, so the blur
@@ -674,7 +696,7 @@ kernel void film_print_canvas_reduce_exposure(const device packed_float3* src [[
                                               constant FilmMatrix& canvas_to_render [[buffer(4)]],
                                               constant int&        samples [[buffer(5)]],
                                               uint2 gid [[thread_position_in_grid]]) {
-  FilmCanvasReduce(src, dst, size, dst_size, canvas_to_render, samples, false, gid);
+  FilmCanvasReduce(src, dst, size, dst_size, canvas_to_render, samples, FilmCanvasExposure{}, gid);
 }
 
 kernel void film_print_canvas_reduce_transmittance(
@@ -682,7 +704,19 @@ kernel void film_print_canvas_reduce_transmittance(
     constant FilmSize& size [[buffer(2)]], constant FilmSize& dst_size [[buffer(3)]],
     constant FilmMatrix& canvas_to_render [[buffer(4)]], constant int& samples [[buffer(5)]],
     uint2 gid [[thread_position_in_grid]]) {
-  FilmCanvasReduce(src, dst, size, dst_size, canvas_to_render, samples, true, gid);
+  FilmCanvasReduce(src, dst, size, dst_size, canvas_to_render, samples, FilmCanvasTransmittance{},
+                   gid);
+}
+
+/// The loupe flare canvas of a colour reversal film. @p print_rgba is the light table.
+kernel void film_print_canvas_reduce_display_light(
+    const device packed_float3* src [[buffer(0)]], device half4* dst [[buffer(1)]],
+    constant FilmSize& size [[buffer(2)]], constant FilmSize& dst_size [[buffer(3)]],
+    constant FilmMatrix& canvas_to_render [[buffer(4)]], constant int& samples [[buffer(5)]],
+    const device float* print_rgba [[buffer(6)]], constant FilmKernelParams& params [[buffer(7)]],
+    uint2 gid [[thread_position_in_grid]]) {
+  FilmCanvasReduce(src, dst, size, dst_size, canvas_to_render, samples,
+                   FilmCanvasDisplayLight{&params, print_rgba}, gid);
 }
 
 /// Rule 'negative_show_grade': the box mean of the amounts on the half-size image. One thread covers
@@ -710,26 +744,19 @@ kernel void film_print_amounts_reduce(const device packed_float3* amounts [[buff
 struct FilmDisplayArguments {
   FilmMatrix render_to_flare;
   float      flare_strength;
-  int        has_flare;       ///< 0: the Enlarger flare is off
+  int        has_flare;       ///< 0: the Enlarger flare, or the loupe flare, is off
   int        has_soft;        ///< 0: no image plane; the graded record reads itself
   int        soft_half_size;  ///< Not 0: @p soft has the half-size cells of the inhibitor
   FilmSize   soft_cells;
 };
 static_assert(sizeof(FilmDisplayArguments) == 60, "FilmDisplayArguments differs from the host");
 
-/// FP6, fused. Alpha comes from the scene.
-kernel void film_print_display(
-    const device packed_float3* amounts [[buffer(0)]], const device float* print_rgba [[buffer(1)]],
-    const device half4* soft [[buffer(2)]], constant FilmKernelParams& params [[buffer(3)]],
-    constant FilmSize& size [[buffer(4)]], constant FilmDisplayArguments& arguments [[buffer(5)]],
-    texture2d<float, access::read>  scene [[texture(0)]],
-    texture2d<float, access::write> display [[texture(1)]],
-    texture2d<float, access::read>  flare [[texture(2)]],
-    const device uint* alpha_mark [[buffer(6)]], constant uint& stamp [[buffer(7)]],
-    uint2 gid [[thread_position_in_grid]]) {
-  if (int(gid.x) >= size.width || int(gid.y) >= size.height) return;
-  const uint    index       = gid.y * uint(size.width) + gid.x;
-  FilmKernelRgb record      = FilmLoad(amounts, index);
+/// FP6 of a print: the Enlarger flare in density, the negative grade, the print table, the display
+/// compression, and the cinema look. Linear Rec. 709 in 0 to 1.
+static inline FilmKernelRgb FilmPrintFinishedLinear(
+    constant FilmKernelParams& params, FilmKernelRgb record, uint2 gid, uint index,
+    const device float* print_rgba, const device half4* soft,
+    constant FilmDisplayArguments& arguments, texture2d<float, access::read> flare) {
   FilmKernelRgb soft_record = record;
   if (params.negative_grade != 0U && arguments.has_soft != 0) {
     soft_record = arguments.soft_half_size != 0
@@ -750,8 +777,39 @@ kernel void film_print_display(
   }
   const FilmKernelRgb finished =
       FilmKernelFinishDisplay(&params, FilmKernelPrintDisplay(&params, print_rgba, record));
-  const FilmKernelRgb linear = params.cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
-  const int           tf     = int(params.display_encoding);
+  return params.cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
+}
+
+/// FP6, fused. Alpha comes from the scene. On a light table, @p print_rgba is the light table,
+/// @p flare is the blurred display light of the loupe flare, and @p soft is not read.
+kernel void film_print_display(
+    const device packed_float3* amounts [[buffer(0)]], const device float* print_rgba [[buffer(1)]],
+    const device half4* soft [[buffer(2)]], constant FilmKernelParams& params [[buffer(3)]],
+    constant FilmSize& size [[buffer(4)]], constant FilmDisplayArguments& arguments [[buffer(5)]],
+    texture2d<float, access::read>  scene [[texture(0)]],
+    texture2d<float, access::write> display [[texture(1)]],
+    texture2d<float, access::read>  flare [[texture(2)]],
+    const device uint* alpha_mark [[buffer(6)]], constant uint& stamp [[buffer(7)]],
+    uint2 gid [[thread_position_in_grid]]) {
+  if (int(gid.x) >= size.width || int(gid.y) >= size.height) return;
+  const uint          index  = gid.y * uint(size.width) + gid.x;
+  const FilmKernelRgb record = FilmLoad(amounts, index);
+  FilmKernelRgb       linear;
+  if (params.light_table != 0U) {
+    // Lab rules 'light_table_view', 'loupe_flare', and 'dark_surround_on_display' in display light.
+    FilmKernelRgb light = FilmKernelPrintDisplay(&params, print_rgba, record);
+    if (arguments.has_flare != 0) {
+      const float2 position =
+          FilmTransform(arguments.render_to_flare, float(gid.x) + 0.5f, float(gid.y) + 0.5f);
+      light = FilmKernelLoupeFlare(light, FilmReadBilinearTexture(flare, position.x, position.y),
+                                   arguments.flare_strength);
+    }
+    linear = FilmKernelFinishDisplay(&params, FilmKernelDisplaySurround(&params, light));
+  } else {
+    linear =
+        FilmPrintFinishedLinear(params, record, gid, index, print_rgba, soft, arguments, flare);
+  }
+  const int tf = int(params.display_encoding);
   // FP1 writes the stamp of this render to the mark when a pixel has an alpha other than 1. A mark
   // with a different value means that each alpha is 1, so the scene, 16 bytes a pixel, is not read
   // again. The mark is not cleared: when old memory holds the stamp, the stage reads the scene,

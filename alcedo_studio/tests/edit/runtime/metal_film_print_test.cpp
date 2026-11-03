@@ -222,8 +222,11 @@ TEST_F(MetalFilmPrintFixture, FilmPrintOutputIsFinite) {
       {1.0e-30f, 1.0f, -1.0f, 1.0f},   {1.0f, 1.0e-30f, 1.0e-30f, 1.0f},
       {4.0f, 0.001f, 4.0f, 1.0f},      {0.001f, 4.0f, 4.0f, 1.0f},
   };
-  // kodak_gold_200 has no inhibition; the others have it.
-  for (const auto* negative : {"kodak_5207", "kodak_portra_400", "kodak_gold_200"}) {
+  // kodak_gold_200 has no inhibition; the others have it. The reversal films have the light table
+  // form: Astia 100F has no spread and no inhibition, and E100 has no inhibition.
+  for (const auto* negative :
+       {"kodak_5207", "kodak_portra_400", "kodak_gold_200", "fuji_velvia_50", "fuji_velvia_100",
+        "fuji_provia_100f", "fuji_astia_100f", "kodak_ektachrome_e100"}) {
     SCOPED_TRACE(negative);
     const auto pixels = RenderDrt(FilmPrintDocument(negative), ap1);
     ASSERT_EQ(pixels.size(), ap1.size());
@@ -236,38 +239,6 @@ TEST_F(MetalFilmPrintFixture, FilmPrintOutputIsFinite) {
       EXPECT_EQ(pixels[index].a, 1.0f);
     }
   }
-}
-
-TEST_F(MetalFilmPrintFixture, ReversalFilmStopsWithTheNamedErrorUntilMetalHasTheLightTablePasses) {
-  // Issue #655 adds the light table form on Metal. Until then a reversal film stops with an error
-  // that names it, and there is no substitute form.
-  const std::vector<Rgba> ap1(16, Rgba{0.18f, 0.18f, 0.18f, 1.0f});
-  plan_.geometry.full_reference_extent = {16, 1};
-  plan_.geometry.edit_extent           = {16, 1};
-  plan_.geometry.render_extent         = {16, 1};
-  for (const auto film : kFilmReversalIds) {
-    SCOPED_TRACE(std::string{film});
-    const auto document = FilmPrintDocument(std::string{film});
-    device_->BeginRender();
-    auto& workspace = device_->Workspace();
-    workspace.PrepareResultValidity(plan_, document, input_);
-    const GraphValueId scene_id{NodeId{"grade.primary"}, PortId{"image"}};
-    auto& lease = workspace.AcquireImageForWrite(scene_id, {16, 1, TextureFormat::Rgba32f});
-    workspace.Device().UploadTexture2D(lease.Texture(), std::as_bytes(std::span(ap1)),
-                                       device_->CommandContext());
-    try {
-      (void)ExecuteMetalDrt(*device_, plan_, document, FrameSceneBinding::CachedImage(scene_id));
-      ADD_FAILURE() << "a reversal film rendered on Metal";
-    } catch (const std::runtime_error& error) {
-      EXPECT_NE(std::string(error.what()).find(std::string{film}), std::string::npos)
-          << error.what();
-    }
-    device_->CancelRender();
-  }
-  // The device renders a negative after the error.
-  const auto pixels = RenderDrt(FilmPrintDocument(), ap1);
-  ASSERT_EQ(pixels.size(), ap1.size());
-  EXPECT_TRUE(std::isfinite(pixels[0].g));
 }
 
 TEST_F(MetalFilmPrintFixture, FilmPrintRendersThroughTheCompiledPlanAndUploadsTablesOnce) {
@@ -540,6 +511,76 @@ TEST_F(MetalFilmPrintFixture, FilmPrintRoiWithNoPublishedResultPublishesNone) {
   EXPECT_EQ(device_->PassStats().film_canvas_sample, 0U);
 }
 
+TEST_F(MetalFilmPrintFixture, ReversalFilmPublishesTheLoupeFlareResultAndNotThePrintFlare) {
+  const auto field    = PatchField(128, 96, 40, 40, 8);
+  auto       document = FilmPrintDocument("fuji_velvia_50");
+  SetView({128, 96}, {128, 96}, Matrix3x3::Identity());
+  const auto pixels = RenderView(document, field, true);
+  EXPECT_EQ(device_->PassStats().film_canvas_rebuild, 2U);
+  auto& images = device_->Workspace().Images();
+  EXPECT_NE(images.PublishedLastWriter(FilmHalationResultId(plan_.drt.node_id)), 0U);
+  EXPECT_NE(images.PublishedLastWriter(FilmLoupeFlareResultId(plan_.drt.node_id)), 0U);
+  EXPECT_EQ(images.PublishedLastWriter(FilmFlareResultId(plan_.drt.node_id)), 0U);
+  for (const auto& pixel : pixels) {
+    ASSERT_TRUE(std::isfinite(pixel.r) && std::isfinite(pixel.g) && std::isfinite(pixel.b));
+    ASSERT_EQ(pixel.a, 0.75f);
+  }
+
+  // The print material is not read: another one gives the same pixels and reads the results.
+  DrtParameterUpdate material;
+  material.film_print_material = "cine_look";
+  document.Drt()->Params().ApplyUpdate(material);
+  const auto same = RenderView(document, field, false);
+  for (std::size_t index = 0; index < pixels.size(); ++index) {
+    ASSERT_EQ(same[index].r, pixels[index].r) << index;
+    ASSERT_EQ(same[index].g, pixels[index].g) << index;
+    ASSERT_EQ(same[index].b, pixels[index].b) << index;
+  }
+
+  // The loupe flare acts on the image.
+  DrtParameterUpdate off;
+  off.film_enlarger_flare = 0.0f;
+  document.Drt()->Params().ApplyUpdate(off);
+  const auto plain   = RenderView(document, field, false);
+  const auto largest = LargestCodeDifference(
+      plain, plain.size(), [&pixels](std::size_t index) { return pixels[index]; });
+  EXPECT_GT(largest, 0.5);
+}
+
+TEST_F(MetalFilmPrintFixture, LoupeFlareChangeKeepsTheCanvasesThatDoNotReadIt) {
+  constexpr std::uint32_t kSize    = 128;
+  const auto              field    = PatchField(kSize, kSize, 40, 40, 16);
+  auto                    document = FilmPrintDocument("fuji_velvia_50");
+  SetView({kSize, kSize}, {kSize, kSize}, Matrix3x3::Identity());
+  (void)RenderView(document, field, true);
+  EXPECT_EQ(device_->PassStats().film_canvas_rebuild, 2U);
+
+  const auto render_after = [&](auto&& change, std::uint64_t rebuilds) {
+    DrtParameterUpdate update;
+    change(update);
+    document.Drt()->Params().ApplyUpdate(update);
+    auto pixels = RenderView(document, field, true);
+    EXPECT_EQ(device_->PassStats().film_canvas_rebuild, rebuilds);
+    EXPECT_EQ(device_->PassStats().film_canvas_sample, 2U - rebuilds);
+    return pixels;
+  };
+  // Halation changes the amounts, so the display light that the loupe flare blurs. Loupe flare
+  // scales its canvas in the display stage.
+  (void)render_after([](DrtParameterUpdate& update) { update.film_halation = 3.0f; }, 1U);
+  const auto kept =
+      render_after([](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.05f; }, 0U);
+  // Light spread changes the exposure, so a change and a change back build both canvases again.
+  (void)render_after([](DrtParameterUpdate& update) { update.film_light_spread = 2.0f; }, 2U);
+  const auto rebuilt =
+      render_after([](DrtParameterUpdate& update) { update.film_light_spread = 1.0f; }, 2U);
+  ASSERT_EQ(kept.size(), rebuilt.size());
+  for (std::size_t index = 0; index < kept.size(); ++index) {
+    ASSERT_EQ(kept[index].r, rebuilt[index].r) << index;
+    ASSERT_EQ(kept[index].g, rebuilt[index].g) << index;
+    ASSERT_EQ(kept[index].b, rebuilt[index].b) << index;
+  }
+}
+
 TEST_F(MetalFilmPrintFixture, FilmPrintSliderBuildsNoTable) {
   // At this size the spread of slider 2.5 has a sigma of about 0.5 pixels, so it has taps.
   const auto field    = PatchField(1024, 768, 400, 400, 8);
@@ -775,9 +816,13 @@ auto DisplaySelections() -> std::vector<DisplaySelection> {
   for (const auto& entry : fs::directory_iterator(directory)) {
     auto       file     = FilmArrayFile::Parse(ReadFilmResourceBytes(entry.path()), entry.path());
     const auto metadata = file.Metadata();
-    // The values of a reversal film are for the light table form, which Metal does not have before
-    // issue #655. ReversalFilmStopsWithTheNamedErrorUntilMetalHasTheLightTablePasses holds it.
-    if (metadata.contains("reversal")) continue;
+    if (metadata.contains("reversal")) {
+      // A colour reversal film has no print material. The document keeps its default one.
+      selections.push_back({std::move(file), metadata.at("reversal").get<std::string>(),
+                            FilmPrintParams{}.print_material,
+                            metadata.at("scene_light").get<std::string>()});
+      continue;
+    }
     selections.push_back({std::move(file), metadata.at("negative").get<std::string>(),
                           metadata.at("print_material").get<std::string>(),
                           metadata.at("scene_light").get<std::string>()});
@@ -907,14 +952,15 @@ TEST_F(MetalFilmPrintFixture, FilmPrintImageMatchesLab) {
     if (entry.path().filename() == "ap1.bin") continue;
     auto       file     = FilmArrayFile::Parse(ReadFilmResourceBytes(entry.path()), entry.path());
     const auto metadata = file.Metadata();
-    // Metal has no light table form before issue #655.
-    if (metadata.contains("reversal")) continue;
-    const auto negative = metadata.at("negative").get<std::string>();
+    // A colour reversal film has no print material, so its file names none.
+    const bool reversal = metadata.contains("reversal");
+    const auto negative = metadata.at(reversal ? "reversal" : "negative").get<std::string>();
+    const auto material = reversal ? FilmPrintParams{}.print_material
+                                   : metadata.at("print_material").get<std::string>();
     SCOPED_TRACE(negative);
-    const auto pixels =
-        RenderView(FilmPrintDocument(negative, metadata.at("print_material").get<std::string>(),
-                                     metadata.at("scene_light").get<std::string>()),
-                   ap1, false);
+    const auto pixels = RenderView(
+        FilmPrintDocument(negative, material, metadata.at("scene_light").get<std::string>()), ap1,
+        false);
     const auto difference = DifferenceFromLab(
         pixels,
         file.F32("srgb", {static_cast<std::int64_t>(height), static_cast<std::int64_t>(width), 3}));
@@ -925,62 +971,82 @@ TEST_F(MetalFilmPrintFixture, FilmPrintImageMatchesLab) {
     EXPECT_LE(difference.largest, 4.0);
     ++compared;
   }
-  EXPECT_EQ(compared, 5);
+  // 5 selections of the negatives, and the 5 reversal films.
+  EXPECT_EQ(compared, 10);
 }
 
 TEST_F(MetalFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs) {
   if (!fs::exists(ImageExpectedDirectory() / "ap1.bin")) {
     GTEST_SKIP() << "No lab image. Run build_image_expected.py. This is not a pass.";
   }
-  std::uint32_t           width    = 0;
-  std::uint32_t           height   = 0;
-  const auto              ap1      = ReadLabAp1(width, height);
+  std::uint32_t           width  = 0;
+  std::uint32_t           height = 0;
+  const auto              ap1    = ReadLabAp1(width, height);
   // The light spread at slider 1 reaches 5 pixels, and each of the 2 inhibitor blurs 2 * 11 pixels.
-  constexpr std::uint32_t kReach   = 5 + 2 * 2 * 11;
-  constexpr std::uint32_t kRoiW    = 1600;
-  constexpr std::uint32_t kRoiH    = 1200;
-  const std::uint32_t     roi_x    = (width - kRoiW) / 2;
-  const std::uint32_t     roi_y    = (height - kRoiH) / 2;
-  const auto              document = FilmPrintDocument();
+  constexpr std::uint32_t kReach = 5 + 2 * 2 * 11;
+  constexpr std::uint32_t kRoiW  = 1600;
+  constexpr std::uint32_t kRoiH  = 1200;
+  const std::uint32_t     roi_x  = (width - kRoiW) / 2;
+  // The middle row of this frame is odd, so the half-size cells of the inhibitor in the ROI have
+  // another phase than in the full frame. One row up, the cells are the same.
+  const std::uint32_t     odd_y  = (height - kRoiH) / 2;
+  ASSERT_EQ(odd_y % 2U, 1U);
+  // A negative, and a reversal film with the light table and the loupe flare.
+  for (const auto* film : {"kodak_5207", "fuji_velvia_50"}) {
+    SCOPED_TRACE(film);
+    const bool reversal = IsFilmReversalIdentifier(film);
+    const auto document = FilmPrintDocument(film);
+    SetView({width, height}, {width, height}, Matrix3x3::Identity());
+    const auto full = RenderView(document, ap1, true);
+    for (const std::uint32_t roi_y : {odd_y, odd_y - 1U}) {
+      const bool same_cells = roi_y % 2U == 0U;
+      SCOPED_TRACE(same_cells ? "ROI on the cells of the frame" : "ROI with other cells");
+      const auto crop = CropField(ap1, width, roi_x, roi_y, kRoiW, kRoiH);
+      SetView({width, height}, {kRoiW, kRoiH},
+              Matrix3x3::Translate(static_cast<float>(roi_x), static_cast<float>(roi_y)));
+      const auto detail = RenderView(document, crop, false);
+      EXPECT_EQ(device_->PassStats().film_canvas_sample, 2U);
 
-  SetView({width, height}, {width, height}, Matrix3x3::Identity());
-  const auto full = RenderView(document, ap1, true);
-  const auto crop = CropField(ap1, width, roi_x, roi_y, kRoiW, kRoiH);
-  SetView({width, height}, {kRoiW, kRoiH},
-          Matrix3x3::Translate(static_cast<float>(roi_x), static_cast<float>(roi_y)));
-  const auto detail = RenderView(document, crop, false);
-  EXPECT_EQ(device_->PassStats().film_canvas_sample, 2U);
-
-  std::vector<float> edge;
-  double             interior = 0.0;
-  for (std::uint32_t y = 0; y < kRoiH; ++y) {
-    for (std::uint32_t x = 0; x < kRoiW; ++x) {
-      const auto&  got        = detail[static_cast<std::size_t>(y) * kRoiW + x];
-      const auto&  want       = full[static_cast<std::size_t>(y + roi_y) * width + x + roi_x];
-      const double difference = (std::max)({std::abs(got.r - want.r), std::abs(got.g - want.g),
-                                            std::abs(got.b - want.b)}) *
-                                255.0;
-      const bool inside = x >= kReach && y >= kReach && x < kRoiW - kReach && y < kRoiH - kReach;
-      if (inside) {
-        interior = (std::max)(interior, difference);
-      } else {
-        edge.push_back(static_cast<float>(difference));
+      std::vector<float> edge;
+      double             interior = 0.0;
+      for (std::uint32_t y = 0; y < kRoiH; ++y) {
+        for (std::uint32_t x = 0; x < kRoiW; ++x) {
+          const auto&  got        = detail[static_cast<std::size_t>(y) * kRoiW + x];
+          const auto&  want       = full[static_cast<std::size_t>(y + roi_y) * width + x + roi_x];
+          const double difference = (std::max)({std::abs(got.r - want.r), std::abs(got.g - want.g),
+                                                std::abs(got.b - want.b)}) *
+                                    255.0;
+          const bool inside =
+              x >= kReach && y >= kReach && x < kRoiW - kReach && y < kRoiH - kReach;
+          if (inside) {
+            interior = (std::max)(interior, difference);
+          } else {
+            edge.push_back(static_cast<float>(difference));
+          }
+        }
       }
+      std::sort(edge.begin(), edge.end());
+      double sum = 0.0;
+      for (const float value : edge) sum += value;
+      const double p99 =
+          edge[static_cast<std::size_t>(0.99 * static_cast<double>(edge.size() - 1))];
+      const double p999 =
+          edge[static_cast<std::size_t>(0.999 * static_cast<double>(edge.size() - 1))];
+      std::cout << film << ", ROI at row " << roi_y << " against the full frame, edge band of "
+                << kReach << " pixels: mean " << sum / static_cast<double>(edge.size()) << ", p99 "
+                << p99 << ", p99.9 " << p999 << ", largest " << edge.back()
+                << " codes; inside the band, largest " << interior << " codes\n";
+      // Inside the band only the phase of the half-size inhibitor grid differs. A slide has a
+      // steeper display response than a print, so that phase gives it more codes: the plan record
+      // of F8 and issue #636 hold the value.
+      if (same_cells || !reversal) {
+        EXPECT_LE(interior, 0.1);
+      }
+      // A real outside neighbor can differ a lot at one pixel. The largest value is in the plan
+      // record.
+      EXPECT_LE(p99, 4.0);
     }
   }
-  std::sort(edge.begin(), edge.end());
-  double sum = 0.0;
-  for (const float value : edge) sum += value;
-  const double p99  = edge[static_cast<std::size_t>(0.99 * static_cast<double>(edge.size() - 1))];
-  const double p999 = edge[static_cast<std::size_t>(0.999 * static_cast<double>(edge.size() - 1))];
-  std::cout << "ROI against the full frame, edge band of " << kReach << " pixels: mean "
-            << sum / static_cast<double>(edge.size()) << ", p99 " << p99 << ", p99.9 " << p999
-            << ", largest " << edge.back() << " codes; inside the band, largest " << interior
-            << " codes\n";
-  // Inside the band only the phase of the half-size inhibitor grid differs.
-  EXPECT_LE(interior, 0.1);
-  // A real outside neighbor can differ a lot at one pixel. The largest value is in the plan record.
-  EXPECT_LE(p99, 4.0);
 }
 
 /// One array of the lab, box-reduced to @p width x @p height.
@@ -1035,42 +1101,47 @@ TEST_F(MetalFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
     auto render_size_result =
         device_->Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
     // Halation keeps the Halation canvas; Light spread changes the exposure, so the render builds
-    // both canvases again.
-    for (const bool exposure_change : {false, true}) {
-      auto                document = FilmPrintDocument();
-      std::vector<double> times;
-      for (int run = 0; run < 10; ++run) {
-        // Light spread stays near 1, so each render has the blur sizes of the default.
-        DrtParameterUpdate update;
-        if (exposure_change) {
-          update.film_light_spread = run % 2 == 0 ? 1.05f : 1.0f;
-        } else {
-          update.film_halation = 1.0f + 0.5f * static_cast<float>(run % 12);
+    // both canvases again. The print form, and the light table form of two reversal films: E100
+    // has no inhibition.
+    for (const auto* film : {"kodak_5207", "fuji_velvia_50", "kodak_ektachrome_e100"}) {
+      for (const bool exposure_change : {false, true}) {
+        auto                document = FilmPrintDocument(film);
+        std::vector<double> times;
+        for (int run = 0; run < 10; ++run) {
+          // Light spread stays near 1, so each render has the blur sizes of the default.
+          DrtParameterUpdate update;
+          if (exposure_change) {
+            update.film_light_spread = run % 2 == 0 ? 1.05f : 1.0f;
+          } else {
+            update.film_halation = 1.0f + 0.5f * static_cast<float>(run % 12);
+          }
+          document.Drt()->Params().ApplyUpdate(update);
+          device_->BeginRender();
+          auto& workspace = device_->Workspace();
+          workspace.PrepareResultValidity(plan_, document, input_);
+          auto& scene =
+              workspace.AcquireImageForWrite(scene_id, {width, height, TextureFormat::Rgba32f});
+          workspace.Device().UploadTexture2D(scene.Texture(), std::as_bytes(std::span(input)),
+                                             device_->CommandContext());
+          workspace.Device().SynchronizeRecordedWork(device_->CommandContext());
+          const auto start = std::chrono::steady_clock::now();
+          (void)ExecuteMetalDrt(*device_, plan_, document,
+                                FrameSceneBinding::CachedImage(scene_id));
+          workspace.Device().SynchronizeRecordedWork(device_->CommandContext());
+          const std::chrono::duration<double, std::milli> elapsed =
+              std::chrono::steady_clock::now() - start;
+          if (run != 0) times.push_back(elapsed.count());
+          device_->EndRender();
+          device_->WaitIdle();
+          device_->PublishResults();
         }
-        document.Drt()->Params().ApplyUpdate(update);
-        device_->BeginRender();
-        auto& workspace = device_->Workspace();
-        workspace.PrepareResultValidity(plan_, document, input_);
-        auto& scene =
-            workspace.AcquireImageForWrite(scene_id, {width, height, TextureFormat::Rgba32f});
-        workspace.Device().UploadTexture2D(scene.Texture(), std::as_bytes(std::span(input)),
-                                           device_->CommandContext());
-        workspace.Device().SynchronizeRecordedWork(device_->CommandContext());
-        const auto start = std::chrono::steady_clock::now();
-        (void)ExecuteMetalDrt(*device_, plan_, document, FrameSceneBinding::CachedImage(scene_id));
-        workspace.Device().SynchronizeRecordedWork(device_->CommandContext());
-        const std::chrono::duration<double, std::milli> elapsed =
-            std::chrono::steady_clock::now() - start;
-        if (run != 0) times.push_back(elapsed.count());
-        device_->EndRender();
-        device_->WaitIdle();
-        device_->PublishResults();
+        std::sort(times.begin(), times.end());
+        std::cout << width << " x " << height << ", " << film << ", "
+                  << (exposure_change ? "Light spread" : "Halation")
+                  << " change: " << times[times.size() / 2] << " ms; transient capacity "
+                  << device_->Workspace().TransientBuffers().capacity_bytes() / (1 << 20)
+                  << " MiB\n";
       }
-      std::sort(times.begin(), times.end());
-      std::cout << width << " x " << height << ", "
-                << (exposure_change ? "Light spread" : "Halation")
-                << " change: " << times[times.size() / 2] << " ms; transient capacity "
-                << device_->Workspace().TransientBuffers().capacity_bytes() / (1 << 20) << " MiB\n";
     }
   }
 }

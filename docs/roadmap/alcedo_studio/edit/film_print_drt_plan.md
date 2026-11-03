@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02). F8 is complete on CUDA and OpenCL (2026-11-03). F9, the reversal films on Metal, is open.
+Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02). F8 is complete on CUDA and OpenCL (2026-11-03). F9, the reversal films on Metal, is complete (2026-11-03).
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -1052,6 +1052,45 @@ GPU time of each pass after a Light spread change at 2560, in ms, with one commi
 2. **Inputs.** F7, F8; a macOS machine.
 3. **Tests.** The reversal cases of F8 in `GpuDagMetalDrtTest`, against the same host reference and limits. The stop case `ReversalFilmStopsWithTheNamedErrorUntilMetalHasTheLightTablePasses` goes, and the lab cases read the reversal files.
 4. **Tracking.** [#655](https://github.com/zidage/AlcedoStudio/issues/655).
+
+#### F9 completion record (2026-11-03)
+
+**Call chain.** `DrtPostExecutor::Execute -> MetalDrtOps::DispatchFilmPrint -> RecordMetalFilmPrint`. FP1 to FP5 are the kernels of F7, with the values of the reversal film. Then `film_print_canvas_reduce_display_light`, `film_print_box_reduce` when the flare canvas is smaller, the two canvas blurs, the published result `film.loupe_flare.0`, and `film_print_display`: `FilmKernelPrintDisplay -> FilmKernelLoupeFlare -> FilmKernelDisplaySurround -> FilmKernelFinishDisplay -> encoding`, from `film_print_math.h`.
+
+**Changes from the plan, and details that the plan does not state.**
+
+- `RecordMetalFilmPrint` no longer stops on a reversal film. The light table is the print table of the selection (`FilmPrintTables::Resolve`), so the Metal pass binds it in the same buffer as a print table.
+- The canvas reduce of `film_print.metal` takes the value of a texel from a function object: `FilmCanvasExposure`, `FilmCanvasTransmittance`, and `FilmCanvasDisplayLight`. The display light form computes FP6 to the display matrix for each source pixel, as `CanvasReduceKernel` of CUDA does, and it is its own kernel, `film_print_canvas_reduce_display_light`, with the light table at buffer 6 and the fixed values at buffer 7. The two kernels of F7 keep their arguments.
+- The display light canvas before its blur is `half4`, as the transmittance canvas of a print. The display light of a light table is 0 to about 1, the same range as a transmittance. The cases below hold their limits with this form, so no other form was measured.
+- In `film_print_display` the print form is the helper `FilmPrintFinishedLinear`, as in `film_print.cl`. The light table form reads no soft image and no negative grade.
+- The Metal cases of F8 are the cases of the CUDA and OpenCL fixtures: the five reversal films in `FilmPrintOutputIsFinite`, `ReversalFilmPublishesTheLoupeFlareResultAndNotThePrintFlare`, `LoupeFlareChangeKeepsTheCanvasesThatDoNotReadIt`, the reversal lab files in the ramp, chart, and image cases (10 images), the ROI case on `kodak_5207` and `fuji_velvia_50` at the odd and the even row, and the cost record on `kodak_5207`, `fuji_velvia_50`, and `kodak_ektachrome_e100`. `ReversalFilmStopsWithTheNamedErrorUntilMetalHasTheLightTablePasses` is removed.
+
+**Tests.** Apple M4 (8-core GPU), macOS, Debug host build (`build/macos-debug`), with the resources of schema 6 and the lab values of the F8 record. This build also compiled the size checks of F8 (`FilmKernelParams` of 412 bytes) for the first time.
+
+| Check | Result |
+| --- | --- |
+| `GpuDagMetalDrtTest`, `MetalFilmPrintFixture` | 21 of 21 pass, with the limits of CUDA |
+| Ramp against the lab, 13 selections (8 of the negatives, 5 of the reversal films) | largest 0.0005 codes (limit 0.5) |
+| Chart against the reference | largest 0.027 codes (limit 1); Velvia 50 0.027, Provia 100F 0.021, E100 0.020 |
+| 6000 x 4006 image against the lab, 10 images | p99.9 up to 0.57, largest up to 1.73 codes (limits 1 and 4); Velvia 50 0.548 / 1.725, Velvia 100 0.541 / 1.656, Provia 100F 0.442 / 1.255, Astia 100F 0.510 / 1.572, E100 0.426 / 1.116 |
+| Viewport ROI inside the reach of the blurs, `kodak_5207` odd / even row | 0.037 / 0.005 codes (limit 0.1) |
+| Viewport ROI inside the reach of the blurs, `fuji_velvia_50` odd / even row | 0.133 / 0.019 codes (limit 0.1 at the even row; the odd row is the grid phase of the F8 record and #636) |
+| `ReversalFilmPublishesTheLoupeFlareResultAndNotThePrintFlare`, `LoupeFlareChangeKeepsTheCanvasesThatDoNotReadIt` | pass |
+| Negative and print cases of F7 | pass, with the values of F7 |
+| Other cases of `GpuDagMetalDrtTest` | 14 of 14 pass |
+
+**Cost.** Wall time in ms to the end of the GPU work after a slider change, median of 9 renders, on the Apple M4 (`DISABLED_DrtCostRecordAtEditorSizes`, Debug host build, as in F7). Each cell is Halation change / Light spread change.
+
+| Long edge | Print form, `kodak_5207` | Light table, Velvia 50 | Light table, E100 |
+| --- | --- | --- | --- |
+| 2560 | 14.5 / 17.1 | 16.4 / 19.1 | 11.3 / 14.0 |
+| 4096 | 35.4 / 38.9 | 39.1 / 42.7 | 25.4 / 28.8 |
+| 6000 | 62.5 / 67.4 | 64.5 / 69.8 | 62.2 / 67.4 |
+
+- The light table form costs at most 3.8 ms more than the print form at the same size. The display light canvas computes FP6 to the display matrix for each source pixel.
+- E100 has no inhibition, so it has no inhibitor blur. At 2560 and 4096 it costs less than the print form. At 6000 the inhibitor of the print form runs at half size, so the two costs are almost the same.
+
+**Not verified.** A Release build, the packaged application, and a render in the running application on macOS. The user review of the five films. The full test suite did not run.
 
 ---
 
