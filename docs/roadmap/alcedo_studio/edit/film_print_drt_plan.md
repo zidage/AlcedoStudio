@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 is complete (2026-11-02). F7 has not started.
+Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02).
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -900,7 +900,64 @@ The other cases of `GpuDagOpenClGradeTest` and `GpuDagOpenClDrtProductTest` pass
 8. **Tests.** The cases of F3 and F4 in `GpuDagMetalDrtTest`, against the same host reference. A build with no device is unverified support, not a pass.
 9. **Exit criteria.** Pass on a macOS machine, with the same limits.
 10. **Expected diff.** 1500 lines.
-11. **Completion record.** Pending.
+11. **Completion record.** See below.
+
+#### F7 completion record (2026-11-02)
+
+**Call chain.** `DrtPostExecutor::Execute -> MetalDrtOps::DispatchFilmPrint -> RecordMetalFilmPrint -> film_print.metal`. Each dispatch binds its pipeline state from `metal::ComputePipelineCache` on the compute encoder of the frame (`EnsureComputeCommandEncoder`), and `NoteComputeDispatch` orders the next dispatch after its writes. A missing function or pipeline state throws with its name. A command buffer error reaches `MetalBackend::Wait`, which throws the error of Metal.
+
+**Changes from the plan, and details that the plan does not state.**
+
+- `film_print.metal` has its own AIR file, compiled with `-ffast-math` as `drt.metal`, and the DRT metallib links it with `drt.air` (argument `LINK_AIR` of `alcedo_add_metal_library`). Fast math changes FP6 display from 3.6 to 2.0 ms at 2560, and the pixels stay inside the same limits as with precise arithmetic.
+- The kernels are not the CUDA kernels in another language. On the M4 most passes are limited by the bytes that they move, and a blur by the work for each tap, so the form of each image and each blur follows that (header comment of `film_print.metal`):
+  - The images between the steps are transient buffers, as on OpenCL: a pool image of Metal is a texture with 16 bytes per pixel. `setBuffer` takes the offset of each allocation. Q, the spread Q, log Q, and the final amounts are `packed_float3` (12 bytes). The images that only a blur or a bilinear read uses are `half4` (8 bytes): the amounts before the last step of a full-size inhibitor, the middle image and the half-size cells of the inhibitor, the blurred amounts of the negative grade, and the Halation and flare canvases before their blur. The Halation canvas keeps exposures up to the largest finite half (65504), more than 16 stops above the criterion of the curves.
+  - A blur thread computes 8 outputs along its line (`FILM_SLIDE`). The pure blur passes take the taps in chunks of 8 from two register banks with fixed indices (`FilmBlurLine`); the two kernels that do a step after their blur (`film_print_step_vertical`, `film_print_spread_vertical`) move one window of 8 values one tap at a time (`FilmBlurSlide`), which uses fewer registers. A window of half texels stays half in registers; the tap sums are float.
+  - The display stage reads the alpha of the scene only when FP1 marked a pixel with an alpha other than 1, so a frame with opaque alpha does not read the scene twice. FP1 writes the submission id of the render to a 4-byte mark; an older value in the mark means opaque alpha, and a value that matches by chance only reads the scene again.
+  - The two canonical results are `Rgba32f` textures, because they have a place in the result cache. The scene and the display are scene textures.
+- The dirty field `DrtDirty::FilmPrint` is now three fields (`edit/graph/drt_node_model.hpp`). `FilmExposure` is the negative, the print material, the scene light, and Light spread; it invalidates both canonical results. `FilmHalation` invalidates only the flare result, because the Halation result is the blurred exposure and the strength scales it at the mix. `FilmFlare` invalidates neither result, because the display stage scales the flare result. This is the same on CUDA and OpenCL. `FilmPrintStrengthSlidersKeepTheCanvasesThatDoNotReadThem` shows that a render with kept results gives the same pixels as a render that builds both again.
+- The fixed values (`FilmKernelParams`) and each blur kernel are `constant` arguments from `setBytes`, which allows 4 KB, so a render uploads nothing for them. A texture argument that a dispatch does not read gets the scene texture.
+- `MetalBackend::AcquireKeyedBuffer` is new. It keeps the kernel values in the cache and the byte limit of `AcquireLut`, as on CUDA and OpenCL. A new cache entry now counts as an upload for the test hooks `FailNextUpload` and `FailUploadAfter`, as the upload of a new entry does on OpenCL.
+- `WarmUpMetalDagPlan` does not add the 15 film print pipelines, because an `ExecutionPlan` has no DRT method. The first film print render creates them from the cache.
+- `FilmPrintLargerRenderDoesNotKeepTheSlabsOfASmallerRender` counts only the buffers that the DRT pass creates. `BufferCreateCount` of Metal also counts the shared staging pages of the upload and the download of the test.
+- The OpenCL case for a scene-work buffer is `FilmPrintReadsASceneWorkImageAndWritesAWorkImage` on Metal, because a Metal scene-work member is a texture only.
+
+**Tests.** Apple M4 (8-core GPU), macOS, Debug host build (`build/macos-debug`), with the resources and the lab values of the F1 and F4 records.
+
+| Check | Result |
+| --- | --- |
+| `GpuDagMetalDrtTest`, `MetalFilmPrintFixture` | 19 of 19 pass, with the limits of CUDA |
+| Ramp against the lab | largest 0.0005 codes (limit 0.5) |
+| Chart against the reference | largest 0.016 codes (limit 1) |
+| 6000 x 4006 image against the lab, 5 selections | p99.9 up to 0.57, largest up to 1.54 codes (limits 1 and 4) |
+| Viewport ROI inside the reach of the blurs | largest 0.037 codes (limit 0.1) |
+| Fused spread against separate passes | largest 0.0001 codes (limit 0.01) |
+| Allocation failure at each allocation of the render | 4 failures, nothing published |
+| Half amounts before the last full-size step, against float, lab image at 1600, 2560, and 4096, 3 negatives | largest 0.023 codes |
+| Other cases of `GpuDagMetalDrtTest` | 14 of 14 pass |
+| `GpuDagModelGraphTest`, `GpuDagRawInputTest` (dirty fields, invalidation) | 169 of 169 and 213 of 213 pass, 5 skipped for camera files that are not on the Mac |
+| `GpuDagMetalWorkspaceTest` | 11 of 11 pass |
+
+In `GpuDagMetalGradeTest`, 11 cases fail in the same way with this change removed: 5 are #497 and 6 are the Metal form of #496. In `GpuDagMetalRendererTest`, `InteractiveQualityBaseInteractiveReuses2560PixelResults` fails in the same way with this change removed: #650. The 15 other cases pass, among them the upload failure cases.
+
+**Cost.** Wall time in ms to the end of the GPU work after a slider change, median of 9 renders, on the Apple M4 (`DISABLED_DrtCostRecordAtEditorSizes`). The host is a Debug build. The Metal compiler optimizes the shaders in this configuration (only `-gline-tables-only` is added). A Halation change keeps the Halation result. A Light spread change, as any change of the scene, builds both canonical results again. The first port had 31.8, 79.8, and 102.8 ms for a Halation change.
+
+| Long edge | ACES 2.0 | OpenDRT | Film print, Halation change | Film print, Light spread change |
+| --- | --- | --- | --- | --- |
+| 2560 | 6.7 | 3.6 | 14.5 | 17.5 |
+| 4096 | 11.3 | 7.9 | 35.5 | 39.1 |
+| 6000 | 22.8 | 17.5 | 62.1 | 67.2 |
+
+GPU time of each pass after a Light spread change at 2560, in ms, with one commit and wait for each pass (sum 16.5):
+
+| FP1 | FP2 horizontal | FP2 vertical | FP3 canvas | FP3 mix, FP4 | FP4 horizontal, 2 passes | FP4 vertical and FP5, 2 passes | FP6 flare canvas | FP6 display |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1.24 | 1.11 | 1.96 | 2.62 | 1.76 | 1.88 | 2.72 | 1.20 | 2.00 |
+
+- All values are below the target of 150 ms of F4. At 2560 the film print is 3 times the CUDA value on the RTX 3080 Laptop (5.8 ms, before the change of the dirty fields). 4096 runs the inhibitor blur at full size, as on CUDA (sigma 3.98, under the half-size limit of 4).
+- The M4 moves about 93 GB/s in these passes. FP1 and the FP2 horizontal pass take the time that their bytes take; the FP2 vertical pass, the mix of FP3, and the two steps of FP5 take 15 to 35 % more. The blurs with more taps (FP3 canvas, the FP4 horizontal passes at 4096) are limited by the work for each tap.
+- Measured and not kept: Q, spread Q, and log Q as half (chart 2.3 codes, limit 1; ramp 0.09 codes); final amounts as half (chart 14.8 codes); `RGBA16F` textures for the images between the steps, and `float4` buffers (no gain or slower); blur tiles in threadgroup memory (fewer threads in flight, slower); a lane shuffle form of the horizontal blur (3 to 5 times slower); chunked blur loops in the two kernels with a step after the blur (slower than the window of one bank); one `float4` read per node of the print table in FP6 display (no change).
+
+**Not verified.** A Release build, the packaged application, and a render in the running application on macOS. A Mac with an Intel CPU or an AMD GPU. The full test suite did not run.
 
 ---
 

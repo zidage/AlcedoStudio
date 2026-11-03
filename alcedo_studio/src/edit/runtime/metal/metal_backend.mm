@@ -982,35 +982,53 @@ auto MetalBackend::AcquireLut(ContentKey key, std::span<const std::byte> packed_
   if (key.Empty() || edge <= 1 || packed_rgba.empty()) {
     return DummyLut();
   }
+  const auto binding    = AcquireCachedBuffer(key, packed_rgba, edge);
+  last_lut_resource_id_ = binding.resource_id;
+  return binding;
+}
+
+auto MetalBackend::AcquireKeyedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                      CommandContext&) -> MetalLutBinding {
+  if (key.Empty() || bytes.empty()) {
+    throw std::runtime_error("MetalBackend::AcquireKeyedBuffer: empty key or table");
+  }
+  return AcquireCachedBuffer(key, bytes, 0);
+}
+
+auto MetalBackend::AcquireCachedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                       std::uint32_t edge) -> MetalLutBinding {
   for (auto& entry : lut_cache_) {
     if (entry.key == key && entry.edge_size == edge) {
-      last_lut_resource_id_ = entry.buffer.ResourceId();
       return MetalLutBinding{entry.buffer.Native(), entry.buffer.ResourceId(), entry.edge_size};
     }
   }
-  if (lut_byte_budget_ > 0 && lut_cache_bytes_ + packed_rgba.size() > lut_byte_budget_) {
-    while (!lut_cache_.empty() && lut_cache_bytes_ + packed_rgba.size() > lut_byte_budget_) {
+  // A new entry is a host-to-device write, as on CUDA and OpenCL, so the upload test hook covers it.
+  if (ConsumeInjectedUploadFailure()) {
+    throw std::runtime_error("MetalBackend::AcquireLut: injected failure");
+  }
+  if (lut_byte_budget_ > 0 && lut_cache_bytes_ + bytes.size() > lut_byte_budget_) {
+    while (!lut_cache_.empty() && lut_cache_bytes_ + bytes.size() > lut_byte_budget_) {
       lut_cache_bytes_ -= lut_cache_.front().bytes;
       lut_cache_.erase(lut_cache_.begin());
     }
   }
-  auto buffer = CreateBuffer(packed_rgba.size());
+  auto buffer = CreateBuffer(bytes.size());
   if (buffer.Empty() || buffer.DevicePointer() == nullptr) {
     throw std::runtime_error("MetalBackend::AcquireLut: failed to allocate LUT buffer");
   }
-  std::memcpy(buffer.DevicePointer(), packed_rgba.data(), packed_rgba.size());
+  std::memcpy(buffer.DevicePointer(), bytes.data(), bytes.size());
   MetalBackendImpl::MarkDidModifyIfManaged(static_cast<MTL::Buffer*>(buffer.Native()), 0,
-                                           packed_rgba.size());
-  lut_upload_bytes_ += packed_rgba.size();
-  last_lut_resource_id_ = buffer.ResourceId();
+                                           bytes.size());
+  lut_upload_bytes_ += bytes.size();
+  const auto    resource_id = buffer.ResourceId();
   LutCacheEntry entry;
   entry.key       = key;
   entry.edge_size = edge;
-  entry.bytes     = packed_rgba.size();
+  entry.bytes     = bytes.size();
   entry.buffer    = std::move(buffer);
   lut_cache_bytes_ += entry.bytes;
   lut_cache_.push_back(std::move(entry));
-  return MetalLutBinding{lut_cache_.back().buffer.Native(), last_lut_resource_id_, edge};
+  return MetalLutBinding{lut_cache_.back().buffer.Native(), resource_id, edge};
 }
 
 auto MetalBackend::DummyLut() -> MetalLutBinding {

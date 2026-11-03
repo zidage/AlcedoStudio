@@ -229,7 +229,8 @@ class RuntimeInvalidationState {
   ParameterRevision last_white_balance_revision_                          = kNoParameterRevision;
   ParameterRevision last_drt_revision_                                    = kNoParameterRevision;
   ParameterRevision last_diffusion_revision_                              = kNoParameterRevision;
-  ParameterRevision last_film_print_revision_                             = kNoParameterRevision;
+  ParameterRevision last_film_exposure_revision_                          = kNoParameterRevision;
+  ParameterRevision last_film_halation_revision_                          = kNoParameterRevision;
   std::map<NodeId, GradeBindState>                  last_grade_bind_;
   GraphValueId                                      last_drt_input_{};
   StaticPlanKey                                     bound_plan_{};

@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -244,30 +246,47 @@ TEST(DrtFilmPrintModelTest, UpdateRejectsInvalidValuesAndChangesNoField) {
   }
 }
 
-TEST(DrtFilmPrintModelTest, FieldChangeMarksOnlyTheFilmPrintField) {
+TEST(DrtFilmPrintModelTest, FieldChangeMarksOnlyItsFilmPrintField) {
   DrtParamsModel params;
   const auto     other_fields = DirtyFieldMask{static_cast<std::uint64_t>(DrtDirty::Method) |
                                            static_cast<std::uint64_t>(DrtDirty::Encoding) |
                                            static_cast<std::uint64_t>(DrtDirty::OpenDrt) |
                                            static_cast<std::uint64_t>(DrtDirty::Diffusion)};
   const auto     other_before = params.FieldsRevision(other_fields);
-  auto           film_before  = params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmPrint});
+  const std::array<DrtDirty, 3> film_fields{DrtDirty::FilmExposure, DrtDirty::FilmHalation,
+                                            DrtDirty::FilmFlare};
 
-  const auto     expect_marks = [&](auto&& change) {
+  // Each change marks its own Film Print field and no other field.
+  const auto                    expect_marks = [&](DrtDirty marked, auto&& change) {
+    std::array<ParameterRevision, 3> before{};
+    for (std::size_t index = 0; index < film_fields.size(); ++index) {
+      before[index] = params.FieldsRevision(DirtyFieldMask{film_fields[index]});
+    }
     DrtParameterUpdate update;
     change(update);
     params.ApplyUpdate(update);
-    const auto film_after = params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmPrint});
-    EXPECT_GT(film_after, film_before);
+    for (std::size_t index = 0; index < film_fields.size(); ++index) {
+      const auto after = params.FieldsRevision(DirtyFieldMask{film_fields[index]});
+      if (film_fields[index] == marked) {
+        EXPECT_GT(after, before[index]);
+      } else {
+        EXPECT_EQ(after, before[index]);
+      }
+    }
     EXPECT_EQ(params.FieldsRevision(other_fields), other_before);
-    film_before = film_after;
   };
-  expect_marks([](DrtParameterUpdate& update) { update.film_light_spread = 2.0f; });
-  expect_marks([](DrtParameterUpdate& update) { update.film_halation = 2.0f; });
-  expect_marks([](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.02f; });
-  expect_marks([](DrtParameterUpdate& update) { update.film_negative = "fuji_c200"; });
-  expect_marks([](DrtParameterUpdate& update) { update.film_print_material = "kodak_2393"; });
-  expect_marks([](DrtParameterUpdate& update) { update.film_scene_light = "led"; });
+  expect_marks(DrtDirty::FilmExposure,
+               [](DrtParameterUpdate& update) { update.film_light_spread = 2.0f; });
+  expect_marks(DrtDirty::FilmHalation,
+               [](DrtParameterUpdate& update) { update.film_halation = 2.0f; });
+  expect_marks(DrtDirty::FilmFlare,
+               [](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.02f; });
+  expect_marks(DrtDirty::FilmExposure,
+               [](DrtParameterUpdate& update) { update.film_negative = "fuji_c200"; });
+  expect_marks(DrtDirty::FilmExposure,
+               [](DrtParameterUpdate& update) { update.film_print_material = "kodak_2393"; });
+  expect_marks(DrtDirty::FilmExposure,
+               [](DrtParameterUpdate& update) { update.film_scene_light = "led"; });
 }
 
 TEST(DrtFilmPrintModelTest, EqualValuesKeepTheRevision) {

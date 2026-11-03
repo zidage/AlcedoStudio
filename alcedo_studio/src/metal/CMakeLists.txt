@@ -76,6 +76,8 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_DRT_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/drt.air")
     set(METAL_DRT_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/drt.metallib"
         CACHE INTERNAL "Metal DAG DRT metallib path" FORCE)
+    set(METAL_FILM_PRINT_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/film_print.metal")
+    set(METAL_FILM_PRINT_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/film_print.air")
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -143,7 +145,7 @@ if(ALCEDO_METAL_ENABLED)
              link_comment)
         set(options)
         set(oneValueArgs)
-        set(multiValueArgs DEPENDS COMPILE_FLAGS)
+        set(multiValueArgs DEPENDS COMPILE_FLAGS LINK_AIR)
         cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
         get_filename_component(_air_dir "${air_file}" DIRECTORY)
@@ -171,8 +173,8 @@ if(ALCEDO_METAL_ENABLED)
         )
         add_custom_command(
             OUTPUT "${metallib_file}"
-            COMMAND ${ALCEDO_METALLIB_EXECUTABLE} "${air_file}" -o "${metallib_file}"
-            DEPENDS "${air_file}"
+            COMMAND ${ALCEDO_METALLIB_EXECUTABLE} "${air_file}" ${ARG_LINK_AIR} -o "${metallib_file}"
+            DEPENDS "${air_file}" ${ARG_LINK_AIR}
             COMMENT "${link_comment}"
             VERBATIM
         )
@@ -330,6 +332,33 @@ if(ALCEDO_METAL_ENABLED)
                 "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/oklab_math.h"
     )
 
+    # The film print has its own AIR file with no fast math, as its CUDA and OpenCL programs have.
+    # The DRT metallib links it, so the DRT passes read one library.
+    get_filename_component(_film_print_air_dir "${METAL_FILM_PRINT_AIR}" DIRECTORY)
+    add_custom_command(
+        OUTPUT "${METAL_FILM_PRINT_AIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_film_print_air_dir}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_METAL_MODULE_CACHE_DIR}"
+        COMMAND ${ALCEDO_METAL_EXECUTABLE}
+                ${ALCEDO_METAL_COMMON_COMPILE_FLAGS}
+                ${ALCEDO_METAL_PLATFORM_COMPILE_FLAGS}
+                ${ALCEDO_METAL_CONFIG_COMPILE_FLAGS}
+                -ffast-math
+                -fmodules-cache-path="${ALCEDO_METAL_MODULE_CACHE_DIR}"
+                -MF "${METAL_FILM_PRINT_AIR}.d"
+                -c "${METAL_FILM_PRINT_SRC}"
+                -o "${METAL_FILM_PRINT_AIR}"
+        DEPENDS "${METAL_FILM_PRINT_SRC}"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_print_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
+                "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+        DEPFILE "${METAL_FILM_PRINT_AIR}.d"
+        BYPRODUCTS "${METAL_FILM_PRINT_AIR}.d"
+        COMMENT "Compiling Metal DAG film print shader"
+        VERBATIM
+        COMMAND_EXPAND_LISTS
+    )
+
     alcedo_add_metal_library(
         GpuDagDrtShaders
         "${METAL_DRT_SRC}"
@@ -344,6 +373,7 @@ if(ALCEDO_METAL_ENABLED)
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/prng.metal"
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
             "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+        LINK_AIR "${METAL_FILM_PRINT_AIR}"
     )
 
     # The ACES 2.0 inverse is checked against OpenColorIO within 1e-3; fast math is off.

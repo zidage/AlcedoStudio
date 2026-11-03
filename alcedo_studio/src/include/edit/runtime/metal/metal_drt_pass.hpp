@@ -23,7 +23,7 @@ struct MetalDrtResult {
 };
 
 /**
- * @brief Run ACES 2.0 or OpenDRT, then display-referred DRT/Post operations.
+ * @brief Run ACES 2.0, OpenDRT, or the film print, then display-referred DRT/Post operations.
  *
  * Input is the linear AP1 output of the DiffusionFilter pass. The display transform runs first,
  * and

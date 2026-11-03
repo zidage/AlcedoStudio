@@ -135,13 +135,17 @@ struct DrtPayload {
 };
 
 enum class DrtDirty : std::uint32_t {
-  None      = 0,
-  Method    = 1U << 0,
-  Encoding  = 1U << 1,
-  OpenDrt   = 1U << 2,
-  Diffusion = 1U << 3,
-  FilmPrint = 1U << 4,
-  All       = Method | Encoding | OpenDrt | Diffusion | FilmPrint,
+  None         = 0,
+  Method       = 1U << 0,
+  Encoding     = 1U << 1,
+  OpenDrt      = 1U << 2,
+  Diffusion    = 1U << 3,
+  /// The Film Print fields that change the exposure of the negative: the negative, the print
+  /// material, the scene light, and Light spread.
+  FilmExposure = 1U << 4,
+  FilmHalation = 1U << 5,  ///< Halation of Film Print.
+  FilmFlare    = 1U << 6,  ///< Enlarger flare of Film Print.
+  All          = Method | Encoding | OpenDrt | Diffusion | FilmExposure | FilmHalation | FilmFlare,
 };
 
 /**
