@@ -395,7 +395,8 @@ Item {
         id: filmEnlargerFlareModel
         objectName: "displayFilmEnlargerFlareModel"
         fieldKey: "odt"
-        label: qsTr("Enlarger Flare")
+        // A slide has no print, so this slider is the flare of the loupe on the light table.
+        label: root.isReversalFilm ? qsTr("Loupe Flare") : qsTr("Enlarger Flare")
         minimum: root.filmEnlargerFlareSpec.ui_min
         maximum: root.filmEnlargerFlareSpec.ui_max
         defaultValue: root.odtDefaults.enlarger_flare
@@ -416,6 +417,11 @@ Item {
     readonly property bool isOpenDrt: root.selectedMethodValue === "open_drt"
         || (root.selectedMethodValue.length === 0)
     readonly property bool isFilmPrint: root.selectedMethodValue === "film_print"
+    // A colour reversal film has no print material. The stored print material does not change.
+    readonly property bool isReversalFilm: {
+        var _dep = filmNegativeModel.currentIndex
+        return parameterCatalog.filmIsReversal(root.selectedValue(filmNegativeModel, "negative"))
+    }
 
     // Encoding space drives the EOTF option table (user select + snapshot load).
     Connections {
@@ -569,6 +575,7 @@ Item {
                     AdjustmentCombo {
                         objectName: "displayFilmPrintMaterialCombo"
                         Layout.fillWidth: true
+                        visible: !root.isReversalFilm
                         model: filmPrintMaterialModel
                     }
 

@@ -19,6 +19,7 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/film_print_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/input/raw_input_loader.hpp"
@@ -235,6 +236,38 @@ TEST_F(MetalFilmPrintFixture, FilmPrintOutputIsFinite) {
       EXPECT_EQ(pixels[index].a, 1.0f);
     }
   }
+}
+
+TEST_F(MetalFilmPrintFixture, ReversalFilmStopsWithTheNamedErrorUntilMetalHasTheLightTablePasses) {
+  // Issue #655 adds the light table form on Metal. Until then a reversal film stops with an error
+  // that names it, and there is no substitute form.
+  const std::vector<Rgba> ap1(16, Rgba{0.18f, 0.18f, 0.18f, 1.0f});
+  plan_.geometry.full_reference_extent = {16, 1};
+  plan_.geometry.edit_extent           = {16, 1};
+  plan_.geometry.render_extent         = {16, 1};
+  for (const auto film : kFilmReversalIds) {
+    SCOPED_TRACE(std::string{film});
+    const auto document = FilmPrintDocument(std::string{film});
+    device_->BeginRender();
+    auto& workspace = device_->Workspace();
+    workspace.PrepareResultValidity(plan_, document, input_);
+    const GraphValueId scene_id{NodeId{"grade.primary"}, PortId{"image"}};
+    auto& lease = workspace.AcquireImageForWrite(scene_id, {16, 1, TextureFormat::Rgba32f});
+    workspace.Device().UploadTexture2D(lease.Texture(), std::as_bytes(std::span(ap1)),
+                                       device_->CommandContext());
+    try {
+      (void)ExecuteMetalDrt(*device_, plan_, document, FrameSceneBinding::CachedImage(scene_id));
+      ADD_FAILURE() << "a reversal film rendered on Metal";
+    } catch (const std::runtime_error& error) {
+      EXPECT_NE(std::string(error.what()).find(std::string{film}), std::string::npos)
+          << error.what();
+    }
+    device_->CancelRender();
+  }
+  // The device renders a negative after the error.
+  const auto pixels = RenderDrt(FilmPrintDocument(), ap1);
+  ASSERT_EQ(pixels.size(), ap1.size());
+  EXPECT_TRUE(std::isfinite(pixels[0].g));
 }
 
 TEST_F(MetalFilmPrintFixture, FilmPrintRendersThroughTheCompiledPlanAndUploadsTablesOnce) {
@@ -742,6 +775,9 @@ auto DisplaySelections() -> std::vector<DisplaySelection> {
   for (const auto& entry : fs::directory_iterator(directory)) {
     auto       file     = FilmArrayFile::Parse(ReadFilmResourceBytes(entry.path()), entry.path());
     const auto metadata = file.Metadata();
+    // The values of a reversal film are for the light table form, which Metal does not have before
+    // issue #655. ReversalFilmStopsWithTheNamedErrorUntilMetalHasTheLightTablePasses holds it.
+    if (metadata.contains("reversal")) continue;
     selections.push_back({std::move(file), metadata.at("negative").get<std::string>(),
                           metadata.at("print_material").get<std::string>(),
                           metadata.at("scene_light").get<std::string>()});
@@ -871,6 +907,8 @@ TEST_F(MetalFilmPrintFixture, FilmPrintImageMatchesLab) {
     if (entry.path().filename() == "ap1.bin") continue;
     auto       file     = FilmArrayFile::Parse(ReadFilmResourceBytes(entry.path()), entry.path());
     const auto metadata = file.Metadata();
+    // Metal has no light table form before issue #655.
+    if (metadata.contains("reversal")) continue;
     const auto negative = metadata.at("negative").get<std::string>();
     SCOPED_TRACE(negative);
     const auto pixels =

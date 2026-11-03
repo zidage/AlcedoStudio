@@ -89,6 +89,8 @@ typedef struct {
   FilmKernelReal   gamut_scale[3];
   FilmKernelReal   gamut_power;
   FilmKernelReal   negative_grade_grey[3];  // Rule 'negative_show_grade': the record of an 18 % grey
+  FilmKernelReal   display_luminance[3];    // Light table form: Y of linear Rec. 709
+  FilmKernelReal   display_surround_power;  // Light table form: surround exponent - 1. 0: none
   FILM_KERNEL_UINT locus_facets;
   FILM_KERNEL_UINT uv_nodes;
   FILM_KERNEL_UINT curve_stored;
@@ -105,6 +107,10 @@ typedef struct {
   FILM_KERNEL_UINT display_encoding;  // CE_TF_* of the display curve. Read by the backend kernel.
   FILM_KERNEL_UINT cinema_look;       // 1: rule 'print_cinema_look'. Read by the backend kernel.
   FILM_KERNEL_UINT negative_grade;    // 1: rule 'negative_show_grade'. Read by the backend kernel.
+  // 1: a colour reversal film on a light table (lab rule 'light_table_view'). The print table is
+  // the light table, and FP6 has the loupe flare and the surround in display light. Read by the
+  // backend kernel.
+  FILM_KERNEL_UINT light_table;
 } FilmKernelParams;
 
 FILM_KERNEL_INLINE FilmKernelRgb FilmKernelMakeRgb(FilmKernelReal r, FilmKernelReal g,
@@ -369,6 +375,33 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelFlareAmounts(FilmKernelRgb  amounts,
       -FILM_KERNEL_LOG10(keep * FilmKernelTransmittance(amounts.r) + flare * blurred.r),
       -FILM_KERNEL_LOG10(keep * FilmKernelTransmittance(amounts.g) + flare * blurred.g),
       -FILM_KERNEL_LOG10(keep * FilmKernelTransmittance(amounts.b) + flare * blurred.b));
+}
+
+/**
+ * FP6 of a colour reversal film, rule 'loupe_flare': the veiling glare of the loupe in linear
+ * display light, (1 - flare) rgb + flare * blurred. @p blurred is a blurred image of the display
+ * light of the light table.
+ */
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelLoupeFlare(FilmKernelRgb rgb, FilmKernelRgb blurred,
+                                                      FilmKernelReal flare) {
+  const FilmKernelReal keep = FILM_KERNEL_REAL(1.0) - flare;
+  return FilmKernelMakeRgb(keep * rgb.r + flare * blurred.r, keep * rgb.g + flare * blurred.g,
+                           keep * rgb.b + flare * blurred.b);
+}
+
+/**
+ * FP6 of a colour reversal film, rule 'dark_surround_on_display' in linear display light, where
+ * the clear film has a luminance of 1: the luminance takes the exponent of the surround, and the
+ * chromaticity stays. A print has this rule in its print table.
+ */
+FILM_KERNEL_INLINE FilmKernelRgb
+FilmKernelDisplaySurround(FILM_KERNEL_PARAMS FilmKernelParams* params, FilmKernelRgb rgb) {
+  if (params->display_surround_power == FILM_KERNEL_REAL(0.0)) return rgb;
+  FILM_KERNEL_PARAMS FilmKernelReal* w = params->display_luminance;
+  const FilmKernelReal               y =
+      FilmKernelMax(w[0] * rgb.r + w[1] * rgb.g + w[2] * rgb.b, FILM_KERNEL_REAL(1e-12));
+  const FilmKernelReal scale = FILM_KERNEL_POW(y, params->display_surround_power);
+  return FilmKernelMakeRgb(rgb.r * scale, rgb.g * scale, rgb.b * scale);
 }
 
 /** Distance of a channel from the largest channel, after rule 'rgc_style_display_compression'. */

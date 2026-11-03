@@ -33,10 +33,20 @@ namespace alcedo {
   return {drt_id, PortId{"film.flare.0"}};
 }
 
+/**
+ * @brief Graph value for the canonical Loupe flare result of a colour reversal film.
+ *
+ * It holds the blurred linear display light of the light table, not the blurred transmittance of
+ * @ref FilmFlareResultId, so it has its own key. See @ref FilmHalationResultId.
+ */
+[[nodiscard]] inline auto FilmLoupeFlareResultId(const NodeId& drt_id) -> GraphValueId {
+  return {drt_id, PortId{"film.loupe_flare.0"}};
+}
+
 /// True when @p id is a canonical film print result.
 [[nodiscard]] inline auto IsFilmPrintResultPort(const GraphValueId& id) -> bool {
   const std::string_view port = id.output_port.Value();
-  return port == "film.halation.0" || port == "film.flare.0";
+  return port == "film.halation.0" || port == "film.flare.0" || port == "film.loupe_flare.0";
 }
 
 /// Largest tap distance of one blur pass. It holds the spread of the widest negative at slider 3

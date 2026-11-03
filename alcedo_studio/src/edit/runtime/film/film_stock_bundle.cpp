@@ -163,16 +163,34 @@ void FilmStockBundle::ReadLists() {
     return names;
   };
   try {
-    negatives_     = read_names("negatives");
-    papers_        = read_names("print_materials");
-    scene_lights_  = stock_.Metadata().at("scene_lights").get<std::vector<std::string>>();
-    scene_spectra_ = stock_.Metadata().at("scene_spectra").get<std::vector<std::string>>();
+    negatives_      = read_names("negatives");
+    papers_         = read_names("print_materials");
+    reversals_      = read_names("reversal_films");
+    reversal_order_ = stock_.Metadata().at("reversal_list_order").get<std::vector<std::string>>();
+    scene_lights_   = stock_.Metadata().at("scene_lights").get<std::vector<std::string>>();
+    scene_spectra_  = stock_.Metadata().at("scene_spectra").get<std::vector<std::string>>();
   } catch (const nlohmann::json::exception& error) {
     throw std::runtime_error(std::string("Film print resource: the stock lists are not valid: ") +
                              error.what());
   }
-  if (negatives_.empty() || papers_.empty() || scene_lights_.empty()) {
+  if (negatives_.empty() || papers_.empty() || reversals_.empty() || scene_lights_.empty()) {
     throw std::runtime_error("Film print resource: a stock list is empty");
+  }
+  // The setup indexes a film by its place in the list of identifiers, so the two lists must not
+  // share an identifier, and the list order must name each reversal film one time.
+  for (const auto& reversal : reversals_) {
+    if (std::ranges::any_of(negatives_, [&reversal](const FilmStockName& negative) {
+          return negative.id == reversal.id;
+        })) {
+      throw std::runtime_error("Film print resource: '" + reversal.id +
+                               "' is a negative and a reversal film");
+    }
+  }
+  auto order = reversal_order_;
+  std::ranges::sort(order);
+  if (!std::ranges::equal(order, reversals_, {}, {}, &FilmStockName::id)) {
+    throw std::runtime_error(
+        "Film print resource: the list order of the reversal films does not name each film once");
   }
 }
 
@@ -192,6 +210,12 @@ void FilmStockBundle::ReadCommonValues() {
       .halation_um         = stock_.F64("common/halation_um", {})[0],
       .inhibition_um       = stock_.F64("common/inhibition_um", {})[0],
       .enlarger_flare_size = stock_.F64("common/enlarger_flare_size", {})[0],
+  };
+  light_table_ = {
+      .viewing_weights   = stock_.F64("light_table/viewing_weights", {3, wavelengths_}),
+      .display_luminance = stock_.F64("light_table/display_luminance", {3}),
+      .xyz_scale         = stock_.F64("light_table/xyz_scale", {})[0],
+      .surround_exponent = stock_.F64("light_table/surround_exponent", {})[0],
   };
   const auto normals = stock_.Shape("common/locus_normals");
   if (normals.size() != 2 || normals[1] != 2 || normals[0] < 1) {
@@ -246,18 +270,25 @@ void FilmStockBundle::ReadReflectance(const FilmArrayFile& file) {
   }
 }
 
+void FilmStockBundle::CheckExposureBand(std::string_view        id,
+                                        std::span<const double> exposure_weights) const {
+  for (std::size_t index = 0; index < exposure_weights.size(); ++index) {
+    const auto wavelength = static_cast<std::int64_t>(index) % wavelengths_;
+    if (exposure_weights[index] != 0.0 &&
+        (wavelength < reflectance_first_wavelength_ ||
+         wavelength >= reflectance_first_wavelength_ + reflectance_wavelengths_)) {
+      throw std::runtime_error("Film print resource: the exposure weights of '" + std::string(id) +
+                               "' are outside the wavelength band of the reflectance table");
+    }
+  }
+}
+
 void FilmStockBundle::CheckShapes() const {
   for (const auto& negative : negatives_) {
-    const auto weights = Negative(negative.id).exposure_weights;
-    for (std::size_t index = 0; index < weights.size(); ++index) {
-      const auto wavelength = static_cast<std::int64_t>(index) % wavelengths_;
-      if (weights[index] != 0.0 &&
-          (wavelength < reflectance_first_wavelength_ ||
-           wavelength >= reflectance_first_wavelength_ + reflectance_wavelengths_)) {
-        throw std::runtime_error("Film print resource: the exposure weights of '" + negative.id +
-                                 "' are outside the wavelength band of the reflectance table");
-      }
-    }
+    CheckExposureBand(negative.id, Negative(negative.id).exposure_weights);
+  }
+  for (const auto& reversal : reversals_) {
+    CheckExposureBand(reversal.id, Reversal(reversal.id).record.exposure_weights);
   }
   for (const auto& paper : papers_) {
     (void)PrintMaterial(paper.id);
@@ -273,18 +304,69 @@ void FilmStockBundle::CheckShapes() const {
   (void)setup_.F64("printing_gain", {negatives, papers, 3});
   (void)setup_.F64("aim_log_h", {papers, 3});
   (void)setup_.F64("xyz_to_display", {papers, 3, 3});
-  const auto spectra        = setup_.I32("scene_spectrum_index", {negatives, lights});
+  const auto reversals = static_cast<std::int64_t>(reversals_.size());
+  (void)setup_.F64("reversal_layer_gain", {reversals, lights, 3});
+  (void)setup_.F64("reversal_xyz_to_display", {reversals, 3, 3});
   const auto spectrum_count = static_cast<std::int32_t>(scene_spectra_.size());
-  if (std::ranges::any_of(spectra, [spectrum_count](std::int32_t index) {
-        return index < 0 || index >= spectrum_count;
-      })) {
-    throw std::runtime_error("Film print resource: a scene spectrum index is outside its list");
+  for (const auto spectra : {setup_.I32("scene_spectrum_index", {negatives, lights}),
+                             setup_.I32("reversal_scene_spectrum_index", {reversals, lights})}) {
+    if (std::ranges::any_of(spectra, [spectrum_count](std::int32_t index) {
+          return index < 0 || index >= spectrum_count;
+        })) {
+      throw std::runtime_error("Film print resource: a scene spectrum index is outside its list");
+    }
   }
 }
 
 auto FilmStockBundle::Negative(std::string_view id) const -> FilmNegativeView {
   (void)IndexOf(negatives_, id, "negative");
-  const auto         field = [&](std::string_view name) { return ArrayName("negative", id, name); };
+  auto negative           = ReadFilmRecord("negative", id);
+  negative.negative_grade = stock_.F64(ArrayName("negative", id, "negative_grade"), {})[0] != 0.0;
+  return negative;
+}
+
+auto FilmStockBundle::IsReversal(std::string_view id) const -> bool {
+  return std::ranges::binary_search(
+      reversals_, id, {}, [](const FilmStockName& name) { return std::string_view(name.id); });
+}
+
+auto FilmStockBundle::Reversal(std::string_view id) const -> FilmReversalView {
+  (void)IndexOf(reversals_, id, "reversal film");
+  return {
+      .record          = ReadFilmRecord("reversal", id),
+      .dye_max         = stock_.F64(ArrayName("reversal", id, "dye_max"), {3}),
+      .clear_luminance = stock_.F64(ArrayName("reversal", id, "clear_luminance"), {})[0],
+  };
+}
+
+auto FilmStockBundle::Film(std::string_view id) const -> FilmNegativeView {
+  return IsReversal(id) ? Reversal(id).record : Negative(id);
+}
+
+auto FilmStockBundle::ReversalSelection(std::string_view reversal,
+                                        std::string_view scene_light) const -> FilmReversalSetup {
+  const auto r     = IndexOf(reversals_, reversal, "reversal film");
+  const auto light = std::find(scene_lights_.begin(), scene_lights_.end(), scene_light);
+  if (light == scene_lights_.end()) {
+    throw std::runtime_error("Film print: unknown scene light '" + std::string(scene_light) + "'");
+  }
+  const auto  l         = light - scene_lights_.begin();
+  const auto  reversals = static_cast<std::int64_t>(reversals_.size());
+  const auto  lights    = static_cast<std::int64_t>(scene_lights_.size());
+  const auto  gain      = setup_.F64("reversal_layer_gain", {reversals, lights, 3});
+  const auto  display   = setup_.F64("reversal_xyz_to_display", {reversals, 3, 3});
+  const auto  spectra   = setup_.I32("reversal_scene_spectrum_index", {reversals, lights});
+  const auto& spectrum  = scene_spectra_[static_cast<std::size_t>(spectra[r * lights + l])];
+  return {
+      .layer_gain     = CopyValues<3>(gain, (r * lights + l) * 3),
+      .xyz_to_display = CopyValues<9>(display, r * 9),
+      .scene_spectrum = stock_.F64(ArrayName("light", spectrum, "spectrum"), {wavelengths_}),
+  };
+}
+
+auto FilmStockBundle::ReadFilmRecord(std::string_view group, std::string_view id) const
+    -> FilmNegativeView {
+  const auto         field = [&](std::string_view name) { return ArrayName(group, id, name); };
   FilmInhibitionView inhibition;
   if (stock_.Contains(field("inhibition_free"))) {
     const auto shape = stock_.Shape(field("inhibition_free"));
@@ -313,7 +395,6 @@ auto FilmStockBundle::Negative(std::string_view id) const -> FilmNegativeView {
       .layer_spread_um    = stock_.F64(field("layer_spread_um"), {3}),
       .curves             = ReadCurves(stock_, field, id),
       .inhibition         = inhibition,
-      .negative_grade     = stock_.F64(field("negative_grade"), {})[0] != 0.0,
   };
 }
 

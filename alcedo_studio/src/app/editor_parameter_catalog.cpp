@@ -579,7 +579,23 @@ constexpr auto FilmOptions(const std::array<std::string_view, Count>& ids,
   return options;
 }
 
-constexpr auto kOdtFilmNegativeOptions = FilmOptions(kFilmNegativeIds, kFilmNegativeNames);
+/// The Film list: the negatives, then the colour reversal films (lab decision U86).
+constexpr auto FilmStockOptions()
+    -> std::array<EditorParameterOption, kFilmNegativeIds.size() + kFilmReversalIds.size()> {
+  std::array<EditorParameterOption, kFilmNegativeIds.size() + kFilmReversalIds.size()> options{};
+  const auto  negatives = FilmOptions(kFilmNegativeIds, kFilmNegativeNames);
+  const auto  reversals = FilmOptions(kFilmReversalIds, kFilmReversalNames);
+  std::size_t index     = 0;
+  for (const auto& option : negatives) {
+    options[index++] = option;
+  }
+  for (const auto& option : reversals) {
+    options[index++] = option;
+  }
+  return options;
+}
+
+constexpr auto kOdtFilmNegativeOptions = FilmStockOptions();
 constexpr auto kOdtFilmPrintMaterialOptions =
     FilmOptions(kFilmPrintMaterialIds, kFilmPrintMaterialNames);
 

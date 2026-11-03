@@ -351,13 +351,21 @@ __global__ void BoxReduceKernel(const float4* src, int src_width, int src_height
   dst[i * columns + j] = make_float4(r * scale, g * scale, b * scale, 1.0f);
 }
 
+/// What a canvas holds: the mean of the values, of their transmittance, or of their display light.
+enum class CanvasValue : int {
+  kValue         = 0,  ///< The exposure, for Halation
+  kTransmittance = 1,  ///< 10^-a of the amounts, for the Enlarger flare of a print
+  kDisplayLight  = 2,  ///< Linear display light of the light table, for the loupe flare
+};
+
 /**
  * Canvas from the render: the mean of @p samples x @p samples render pixels in the footprint of one
- * texel. With @p transmittance, the values are amounts and the mean is of 10^-a.
+ * texel, of the value that @p mode selects. Only kDisplayLight reads @p print_rgba and @p params.
  */
 __global__ void CanvasReduceKernel(const float3* src, int width, int height, float4* dst,
                                    int dst_width, int dst_height, Matrix3x3 canvas_to_render,
-                                   int samples, bool transmittance) {
+                                   int samples, CanvasValue mode, const float* print_rgba,
+                                   FilmKernelParams params) {
   const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
   if (x >= dst_width || y >= dst_height) return;
@@ -373,10 +381,16 @@ __global__ void CanvasReduceKernel(const float3* src, int width, int height, flo
       const int    sx     = min(max(static_cast<int>(floorf(render.x)), 0), width - 1);
       const int    sy     = min(max(static_cast<int>(floorf(render.y)), 0), height - 1);
       const float3 value  = src[static_cast<std::size_t>(sy) * width + sx];
-      if (transmittance) {
+      if (mode == CanvasValue::kTransmittance) {
         r += FilmKernelTransmittance(value.x);
         g += FilmKernelTransmittance(value.y);
         b += FilmKernelTransmittance(value.z);
+      } else if (mode == CanvasValue::kDisplayLight) {
+        const auto light = FilmKernelPrintDisplay(&params, print_rgba,
+                                                  FilmKernelMakeRgb(value.x, value.y, value.z));
+        r += light.r;
+        g += light.g;
+        b += light.b;
       } else {
         r += value.x;
         g += value.y;
@@ -479,9 +493,10 @@ __global__ void AmountsReduceKernel(const float3* amounts, int width, int height
   reduced[i * columns + j] = make_float3(r * scale, g * scale, b * scale);
 }
 
-/// FP6, fused. @p flare is null when the Enlarger flare is off. Alpha comes from @p scene. @p soft is
-/// the blurred amounts of rule 'negative_show_grade', null with no image plane, and half size when
-/// @p soft_half_size is true.
+/// FP6, fused. @p flare is null when the Enlarger flare is off. Alpha comes from @p scene. @p soft
+/// is the blurred amounts of rule 'negative_show_grade', null with no image plane, and half size
+/// when @p soft_half_size is true. On a light table, @p flare is the blurred display light of the
+/// loupe flare, and @p soft is not read.
 __global__ void DisplayKernel(const float3* amounts, const float4* scene, float4* output, int width,
                               int height, const float* print_rgba, const float4* flare,
                               int flare_width, int flare_height, Matrix3x3 render_to_flare,
@@ -493,6 +508,24 @@ __global__ void DisplayKernel(const float3* amounts, const float4* scene, float4
   const int     index  = y * width + x;
   const float3  a      = amounts[index];
   FilmKernelRgb record = FilmKernelMakeRgb(a.x, a.y, a.z);
+  const int     tf     = static_cast<int>(params.display_encoding);
+  if (params.light_table != 0U) {
+    // Lab rules 'light_table_view', 'loupe_flare', and 'dark_surround_on_display' in display light.
+    auto light = FilmKernelPrintDisplay(&params, print_rgba, record);
+    if (flare != nullptr) {
+      const float2 position =
+          Transform(render_to_flare, static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
+      const float3 blurred = ReadBilinear(flare, flare_width, flare_height, position.x, position.y);
+      light = FilmKernelLoupeFlare(light, FilmKernelMakeRgb(blurred.x, blurred.y, blurred.z),
+                                   flare_strength);
+    }
+    const auto finished =
+        FilmKernelFinishDisplay(&params, FilmKernelDisplaySurround(&params, light));
+    output[index] = make_float4(CeDisplayEncodeChannel(tf, finished.r, 1.0f),
+                                CeDisplayEncodeChannel(tf, finished.g, 1.0f),
+                                CeDisplayEncodeChannel(tf, finished.b, 1.0f), scene[index].w);
+    return;
+  }
   FilmKernelRgb soft_record = record;
   if (params.negative_grade != 0U && soft != nullptr) {
     const float3 s = soft_half_size
@@ -516,10 +549,9 @@ __global__ void DisplayKernel(const float3* amounts, const float4* scene, float4
   const auto finished =
       FilmKernelFinishDisplay(&params, FilmKernelPrintDisplay(&params, print_rgba, record));
   const auto linear = params.cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
-  const int tf  = static_cast<int>(params.display_encoding);
-  output[index] = make_float4(CeDisplayEncodeChannel(tf, linear.r, 1.0f),
-                              CeDisplayEncodeChannel(tf, linear.g, 1.0f),
-                              CeDisplayEncodeChannel(tf, linear.b, 1.0f), scene[index].w);
+  output[index]     = make_float4(CeDisplayEncodeChannel(tf, linear.r, 1.0f),
+                                  CeDisplayEncodeChannel(tf, linear.g, 1.0f),
+                                  CeDisplayEncodeChannel(tf, linear.b, 1.0f), scene[index].w);
 }
 
 using Lease = ResourceLease<CudaBackend>;
@@ -653,7 +685,7 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
                                        data->edge, params);
   params.display_encoding = static_cast<std::uint32_t>(resolved.eotf_);
 
-  const auto negative     = bundle.Negative(film.negative);
+  const auto negative     = bundle.Film(film.negative);
   const auto image =
       MakeFilmPrintImagePlan(plan.geometry, bundle.ImagePlaneConstants(), negative.layer_spread_um,
                              params.inhibition_has_image != 0U || params.negative_grade != 0U, film);
@@ -735,7 +767,7 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
           const auto ch      = static_cast<int>(canvas.height);
           CanvasReduceKernel<<<grid, image_block, 0, stream>>>(
               q, w, h, Pointer(reduced), cw, ch, image.canvas_to_render,
-              static_cast<int>(image.canvas_samples), false);
+              static_cast<int>(image.canvas_samples), CanvasValue::kValue, rgba, params);
           BlurHorizontalKernel<<<grid, image_block, 0, stream>>>(
               static_cast<const float4*>(Pointer(reduced)), Pointer(middle), cw, ch,
               image.halation_x);
@@ -837,20 +869,24 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
     clock.Mark("FP6 blurred amounts of the negative grade");
   }
 
-  // FP6: the canonical image of the blurred transmittance, then the fused point stages.
+  // FP6: the canonical image of the blurred transmittance, or on a light table of the blurred
+  // display light, then the fused point stages.
   std::optional<Lease> temporary_flare;
-  const float4*        flare = nullptr;
+  const float4*        flare       = nullptr;
+  const bool           light_table = params.light_table != 0U;
   if (image.flare_active) {
     const auto extent = image.flare_extent;
+    const auto id     = light_table ? FilmLoupeFlareResultId(plan.drt.node_id)
+                                    : FilmFlareResultId(plan.drt.node_id);
     flare             = ReadOrBuildCanvasResult(
-        device, plan, FilmFlareResultId(plan.drt.node_id), extent, long_edge, temporary_flare,
-        [&](float4* target) {
+        device, plan, id, extent, long_edge, temporary_flare, [&](float4* target) {
           auto       reduced = acquire(canvas.width, canvas.height);
           const auto cw      = static_cast<int>(canvas.width);
           const auto ch      = static_cast<int>(canvas.height);
           CanvasReduceKernel<<<GridFor(canvas.width, canvas.height), image_block, 0, stream>>>(
               a, w, h, Pointer(reduced), cw, ch, image.canvas_to_render,
-              static_cast<int>(image.canvas_samples), true);
+              static_cast<int>(image.canvas_samples),
+              light_table ? CanvasValue::kDisplayLight : CanvasValue::kTransmittance, rgba, params);
           const auto           columns = static_cast<int>(extent.width);
           const auto           rows    = static_cast<int>(extent.height);
           const auto           grid    = GridFor(extent.width, extent.height);

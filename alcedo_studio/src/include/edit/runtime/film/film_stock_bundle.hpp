@@ -60,6 +60,35 @@ struct FilmNegativeView {
   bool                    negative_grade = false;  ///< Lab rule negative_show_grade, on cine_look
 };
 
+/**
+ * @brief Values of one colour reversal film, lab rule 'removed_dye_record'.
+ *
+ * @ref record has the form of a negative: its curves give the removed dye, which rises with
+ * exposure, so the steps of a negative read it with no change. The dye amount of a pixel is
+ * `dye_max - record`. A reversal film has no negative grade.
+ */
+struct FilmReversalView {
+  FilmNegativeView        record;
+  std::span<const double> dye_max;                ///< (3)
+  double                  clear_luminance = 0.0;  ///< Y of the clear film on the light table
+};
+
+/// Values of lab rule 'light_table_view' and of the dark surround in display light. They are the
+/// same for all colour reversal films.
+struct FilmLightTableConstants {
+  std::span<const double> viewing_weights;    ///< (3, wavelengths): CIE 1931 under the table light
+  std::span<const double> display_luminance;  ///< (3): Y of linear Rec. 709
+  double                  xyz_scale         = 0.0;
+  double                  surround_exponent = 1.0;  ///< On luminance in linear display light
+};
+
+/// The fixed scalar values of one selection of colour reversal film and scene light.
+struct FilmReversalSetup {
+  std::array<double, 3>   layer_gain{};      ///< Lab rule 'daylight_reversal_balance'
+  std::array<double, 9>   xyz_to_display{};  ///< Row major. Lab rule 'clear_film_white'
+  std::span<const double> scene_spectrum;    ///< (wavelengths)
+};
+
 /// Values of the point stages that are the same for all stocks. Lab rules
 /// 'spectral_locus_projection' and 'rgc_style_display_compression'.
 struct FilmPointConstants {
@@ -142,6 +171,12 @@ class FilmStockBundle {
   [[nodiscard]] auto Negatives() const -> std::span<const FilmStockName> { return negatives_; }
   /// @copydoc Negatives
   [[nodiscard]] auto PrintMaterials() const -> std::span<const FilmStockName> { return papers_; }
+  /// @copydoc Negatives
+  [[nodiscard]] auto Reversals() const -> std::span<const FilmStockName> { return reversals_; }
+  /// The colour reversal film identifiers in the order of the lab list.
+  [[nodiscard]] auto ReversalListOrder() const -> std::span<const std::string> {
+    return reversal_order_;
+  }
   /// Scene light identifiers in the order of the catalog.
   [[nodiscard]] auto SceneLights() const -> std::span<const std::string> { return scene_lights_; }
 
@@ -155,6 +190,21 @@ class FilmStockBundle {
   /// @throws std::runtime_error that names the identifier when one of the three is unknown.
   [[nodiscard]] auto Selection(std::string_view negative, std::string_view print_material,
                                std::string_view scene_light) const -> FilmSelectionSetup;
+
+  /// True when @p id is a colour reversal film of this bundle.
+  [[nodiscard]] auto IsReversal(std::string_view id) const -> bool;
+  /// @throws std::runtime_error that names @p id when the reversal film is unknown.
+  [[nodiscard]] auto Reversal(std::string_view id) const -> FilmReversalView;
+  /// @throws std::runtime_error that names the identifier when one of the two is unknown.
+  [[nodiscard]] auto ReversalSelection(std::string_view reversal,
+                                       std::string_view scene_light) const -> FilmReversalSetup;
+  /**
+   * @brief The values of the steps FP1 to FP5 of a film: of a negative, or the record of a colour
+   * reversal film.
+   * @throws std::runtime_error that names @p id when the film is unknown.
+   */
+  [[nodiscard]] auto Film(std::string_view id) const -> FilmNegativeView;
+  [[nodiscard]] auto LightTable() const -> const FilmLightTableConstants& { return light_table_; }
 
   /**
    * @brief Reflectance shapes of the kept u'v' nodes: (kept nodes, reflectance wavelengths).
@@ -197,6 +247,10 @@ class FilmStockBundle {
   void                       ReadCommonValues();
   void                       ReadReflectance(const FilmArrayFile& file);
   void                       CheckShapes() const;
+  void CheckExposureBand(std::string_view id, std::span<const double> exposure_weights) const;
+  /// The values of group @p group ('negative' or 'reversal') with the form of a negative.
+  [[nodiscard]] auto ReadFilmRecord(std::string_view group, std::string_view id) const
+      -> FilmNegativeView;
 
   FilmArrayFile              stock_;
   FilmArrayFile              setup_;
@@ -204,6 +258,8 @@ class FilmStockBundle {
   std::vector<std::int32_t>  reflectance_nodes_;
   std::vector<FilmStockName> negatives_;
   std::vector<FilmStockName> papers_;
+  std::vector<FilmStockName> reversals_;
+  std::vector<std::string>   reversal_order_;
   std::vector<std::string>   scene_lights_;
   std::vector<std::string>   scene_spectra_;
   std::string                content_digest_;
@@ -216,6 +272,7 @@ class FilmStockBundle {
   double                     viewing_flare_                = 0.0;
   FilmPointConstants         point_constants_;
   FilmImagePlaneConstants    image_plane_constants_;
+  FilmLightTableConstants    light_table_;
 };
 
 }  // namespace alcedo

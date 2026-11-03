@@ -297,9 +297,10 @@ auto ReadFilmSlider(const nlohmann::json& film_print, const char* key, float fal
   return static_cast<float>(number);
 }
 
-template <std::size_t Count>
+/// @p is_known tells whether an identifier is a value of the field @p key.
+template <class IsKnown>
 auto ReadFilmIdentifier(const nlohmann::json& film_print, const char* key, std::string fallback,
-                        const std::array<std::string_view, Count>& ids) -> std::string {
+                        const IsKnown& is_known) -> std::string {
   if (!film_print.contains(key)) {
     return fallback;
   }
@@ -308,7 +309,7 @@ auto ReadFilmIdentifier(const nlohmann::json& film_print, const char* key, std::
     throw std::runtime_error(std::string{"DRT params: film_print."} + key + " must be a string");
   }
   auto id = value.get<std::string>();
-  if (!IsFilmIdentifier(ids, id)) {
+  if (!is_known(id)) {
     throw std::runtime_error(std::string{"DRT params: film_print."} + key +
                              " has the unknown identifier '" + id + "'");
   }
@@ -325,11 +326,14 @@ auto ReadFilmPrint(const nlohmann::json& json) -> FilmPrintParams {
   if (!object.is_object()) {
     throw std::runtime_error("DRT params: film_print must be an object");
   }
-  params.negative = ReadFilmIdentifier(object, "negative", params.negative, kFilmNegativeIds);
-  params.print_material =
-      ReadFilmIdentifier(object, "print_material", params.print_material, kFilmPrintMaterialIds);
-  params.scene_light =
-      ReadFilmIdentifier(object, "scene_light", params.scene_light, kFilmSceneLightIds);
+  // A colour reversal film is a value of the same field: it selects the light table form.
+  params.negative = ReadFilmIdentifier(object, "negative", params.negative, IsFilmStockIdentifier);
+  params.print_material = ReadFilmIdentifier(
+      object, "print_material", params.print_material,
+      [](std::string_view id) { return IsFilmIdentifier(kFilmPrintMaterialIds, id); });
+  params.scene_light = ReadFilmIdentifier(
+      object, "scene_light", params.scene_light,
+      [](std::string_view id) { return IsFilmIdentifier(kFilmSceneLightIds, id); });
   params.light_spread = ReadFilmSlider(object, "light_spread", params.light_spread,
                                        kFilmLightSpreadMin, kFilmLightSpreadMax);
   params.halation =
@@ -347,19 +351,23 @@ void RequireFilmSlider(const std::optional<float>& value, std::string_view name,
   }
 }
 
-template <std::size_t Count>
+template <class IsKnown>
 void RequireFilmIdentifier(const std::optional<std::string>& value, std::string_view name,
-                           const std::array<std::string_view, Count>& ids) {
-  if (value.has_value() && !IsFilmIdentifier(ids, *value)) {
+                           const IsKnown& is_known) {
+  if (value.has_value() && !is_known(*value)) {
     throw std::invalid_argument("film_print." + std::string{name} +
                                 " has the unknown identifier '" + *value + "'");
   }
 }
 
 void RequireValidFilmPrintUpdate(const DrtParameterUpdate& update) {
-  RequireFilmIdentifier(update.film_negative, "negative", kFilmNegativeIds);
-  RequireFilmIdentifier(update.film_print_material, "print_material", kFilmPrintMaterialIds);
-  RequireFilmIdentifier(update.film_scene_light, "scene_light", kFilmSceneLightIds);
+  RequireFilmIdentifier(update.film_negative, "negative", IsFilmStockIdentifier);
+  RequireFilmIdentifier(update.film_print_material, "print_material", [](std::string_view id) {
+    return IsFilmIdentifier(kFilmPrintMaterialIds, id);
+  });
+  RequireFilmIdentifier(update.film_scene_light, "scene_light", [](std::string_view id) {
+    return IsFilmIdentifier(kFilmSceneLightIds, id);
+  });
   RequireFilmSlider(update.film_light_spread, "light_spread", kFilmLightSpreadMin,
                     kFilmLightSpreadMax);
   RequireFilmSlider(update.film_halation, "halation", kFilmHalationMin, kFilmHalationMax);

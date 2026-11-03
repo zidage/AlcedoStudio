@@ -15,6 +15,7 @@
 #include <string>
 
 #include "app/editor_parameter_catalog.hpp"
+#include "edit/graph/film_print_model.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -105,6 +106,10 @@ QVariantList EditorParameterCatalogAdapter::odtEotfOptions(const QString& encodi
     result.push_back(map);
   }
   return result;
+}
+
+bool EditorParameterCatalogAdapter::filmIsReversal(const QString& film) const {
+  return IsFilmReversalIdentifier(film.toStdString());
 }
 
 QVariantMap EditorParameterCatalogAdapter::uiDefault(const QString& field) const {

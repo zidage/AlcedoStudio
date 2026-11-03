@@ -184,6 +184,7 @@ void FilmPrintTables::RemoveOldestAboveLimit() {
     };
     find_oldest(negative_stages_);
     find_oldest(paper_stages_);
+    find_oldest(light_tables_);
     find_oldest(results_);
     const auto remove_oldest = [&oldest, this](auto& kept) {
       for (auto entry = kept.begin(); entry != kept.end(); ++entry) {
@@ -196,6 +197,7 @@ void FilmPrintTables::RemoveOldestAboveLimit() {
     };
     remove_oldest(negative_stages_);
     remove_oldest(paper_stages_);
+    remove_oldest(light_tables_);
     remove_oldest(results_);
   }
 }
@@ -269,11 +271,143 @@ auto FilmPrintTables::PaperStageOf(std::string_view print_material)
   return stage;
 }
 
+auto FilmPrintTables::LightTableOf(std::string_view reversal)
+    -> std::shared_ptr<const LightTableStage> {
+  const auto key = ContentHash{}
+                       .MixU32(kTableImplementationVersion)
+                       .MixText("light table")
+                       .MixText(bundle_->ContentDigest())
+                       .MixText(reversal)
+                       .Key();
+  if (auto kept = Find(light_tables_, key)) {
+    return kept;
+  }
+  const auto  start = std::chrono::steady_clock::now();
+  const auto  film  = bundle_->Reversal(reversal);
+  const auto  view  = bundle_->LightTable();
+  const auto  band  = MakeBandOnSupport(film.record.base, film.record.dyes, view.viewing_weights);
+
+  // Lab rule 'removed_dye_record': the nodes are records of removed dye on numpy.linspace(0, top of
+  // the record), and the dye amount of a node is dye_max - record, not below 0.
+  const auto& grid_start = film.record.density_grid_start;
+  const auto& grid_stop  = film.record.density_grid_stop;
+  std::vector<double> amounts(kTableValues);
+  std::size_t         out = 0;
+  for (std::int64_t r = 0; r < kFilmPrintTableEdge; ++r) {
+    const auto red = GridNode(grid_start[0], grid_stop[0], r);
+    for (std::int64_t g = 0; g < kFilmPrintTableEdge; ++g) {
+      const auto green = GridNode(grid_start[1], grid_stop[1], g);
+      for (std::int64_t b = 0; b < kFilmPrintTableEdge; ++b) {
+        const auto blue = GridNode(grid_start[2], grid_stop[2], b);
+        amounts[out++]  = (std::max)(film.dye_max[0] - red, 0.0);
+        amounts[out++]  = (std::max)(film.dye_max[1] - green, 0.0);
+        amounts[out++]  = (std::max)(film.dye_max[2] - blue, 0.0);
+      }
+    }
+  }
+  auto stage = std::make_shared<LightTableStage>();
+  stage->key = key;
+  stage->cube_root_xyz.resize(kTableValues);
+  film_tables::CubeRootBandResponse(band.View(), view.xyz_scale, amounts.data(), kTableNodes,
+                                    stage->cube_root_xyz.data());
+  ++stats_.light_table_builds;
+  stats_.last_light_table_seconds = SecondsSince(start);
+  const auto bytes                = stage->cube_root_xyz.size() * sizeof(double);
+  Keep<LightTableStage>(light_tables_, key, stage, bytes);
+  return stage;
+}
+
+void FilmPrintTables::BuildUvTable(std::span<const double> exposure_weights,
+                                   std::span<const double> scene_spectrum,
+                                   FilmPrintTableData&     result) {
+  const auto          start      = std::chrono::steady_clock::now();
+  const auto          wavelength = static_cast<std::size_t>(bundle_->Wavelengths());
+  const auto          first      = static_cast<std::size_t>(bundle_->ReflectanceFirstWavelength());
+  const auto          band       = static_cast<std::size_t>(bundle_->ReflectanceWavelengths());
+  const auto          kept       = bundle_->ReflectanceNodes();
+  std::vector<double> weights(band * film_tables::kLayers);
+  for (std::size_t layer = 0; layer < film_tables::kLayers; ++layer) {
+    for (std::size_t w = 0; w < band; ++w) {
+      weights[layer * band + w] =
+          exposure_weights[layer * wavelength + first + w] * scene_spectrum[first + w];
+    }
+  }
+  std::vector<double> kept_exposure(kept.size() * film_tables::kLayers);
+  film_tables::TableBandIntegral(
+      bundle_->ReflectanceRows().data(), static_cast<std::int64_t>(kept.size()),
+      bundle_->ReflectanceWavelengths(), weights.data(), kept_exposure.data());
+  const auto nodes = result.uv_nodes * result.uv_nodes;
+  result.uv_exposure.assign(static_cast<std::size_t>(nodes) * film_tables::kLayers, 0.0);
+  for (std::size_t row = 0; row < kept.size(); ++row) {
+    const auto node = static_cast<std::size_t>(kept[row]) * film_tables::kLayers;
+    for (std::size_t layer = 0; layer < film_tables::kLayers; ++layer) {
+      result.uv_exposure[node + layer] = kept_exposure[row * film_tables::kLayers + layer];
+    }
+  }
+  ++stats_.uv_builds;
+  stats_.last_uv_seconds = SecondsSince(start);
+}
+
+auto FilmPrintTables::ResolveReversal(std::string_view reversal, std::string_view scene_light)
+    -> std::shared_ptr<const FilmPrintTableData> {
+  const auto result_key = ContentHash{}
+                              .MixU32(kTableImplementationVersion)
+                              .MixText("reversal selection")
+                              .MixText(bundle_->ContentDigest())
+                              .MixText(reversal)
+                              .MixText(scene_light)
+                              .Key();
+  if (auto kept = Find(results_, result_key)) {
+    return kept;
+  }
+  const auto setup    = bundle_->ReversalSelection(reversal, scene_light);
+  const auto film     = bundle_->Reversal(reversal);
+
+  auto       result   = std::make_shared<FilmPrintTableData>();
+  result->uv_nodes    = bundle_->UvNodes();
+  result->edge        = static_cast<std::uint32_t>(kFilmPrintTableEdge);
+  result->light_table = true;
+  result->uv_key      = ContentHash{}
+                       .MixU32(kTableImplementationVersion)
+                       .MixText("uv table")
+                       .MixText(bundle_->ContentDigest())
+                       .MixText(reversal)
+                       .MixText(scene_light)
+                       .Key();
+  result->kernel_key = ContentHash{}
+                           .MixU32(kTableImplementationVersion)
+                           .MixText("kernel values")
+                           .MixText(bundle_->ContentDigest())
+                           .MixText(reversal)
+                           .MixText(scene_light)
+                           .Key();
+  BuildUvTable(film.record.exposure_weights, setup.scene_spectrum, *result);
+
+  // The light table depends on the film only, so all scene lights share its GPU copy.
+  const auto light_table      = LightTableOf(reversal);
+  result->print_key           = light_table->key;
+  result->print_cube_root_xyz = light_table->cube_root_xyz;
+  if (!AllFinite(result->uv_exposure) || !AllFinite(result->print_cube_root_xyz)) {
+    throw std::runtime_error("Film print: a table of the reversal film " + std::string(reversal) +
+                             " under " + std::string(scene_light) +
+                             " has a value that is not finite");
+  }
+  result->print_rgba = PackPrintRgba(result->print_cube_root_xyz);
+  result->kernel_values =
+      film_print_kernel_tables::MakeValues<float>(*bundle_, reversal, result->uv_exposure);
+  const auto bytes = result->ByteSize();
+  Keep<FilmPrintTableData>(results_, result_key, result, bytes);
+  return result;
+}
+
 auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_material,
                               std::string_view scene_light)
     -> std::shared_ptr<const FilmPrintTableData> {
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto                  print_key = ContentHash{}
+  if (bundle_->IsReversal(negative)) {
+    return ResolveReversal(negative, scene_light);
+  }
+  const auto print_key = ContentHash{}
                              .MixU32(kTableImplementationVersion)
                              .MixText("print table")
                              .MixText(bundle_->ContentDigest())
@@ -288,7 +422,6 @@ auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_
   const auto selection  = bundle_->Selection(negative, print_material, scene_light);
   const auto stock      = bundle_->Negative(negative);
   const auto paper      = bundle_->PrintMaterial(print_material);
-  const auto wavelength = static_cast<std::size_t>(bundle_->Wavelengths());
 
   auto       result     = std::make_shared<FilmPrintTableData>();
   result->uv_nodes      = bundle_->UvNodes();
@@ -309,33 +442,7 @@ auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_
                            .MixText(scene_light)
                            .Key();
 
-  {
-    const auto          start = std::chrono::steady_clock::now();
-    const auto          first = static_cast<std::size_t>(bundle_->ReflectanceFirstWavelength());
-    const auto          band  = static_cast<std::size_t>(bundle_->ReflectanceWavelengths());
-    const auto          kept  = bundle_->ReflectanceNodes();
-    std::vector<double> weights(band * film_tables::kLayers);
-    for (std::size_t layer = 0; layer < film_tables::kLayers; ++layer) {
-      for (std::size_t w = 0; w < band; ++w) {
-        weights[layer * band + w] = stock.exposure_weights[layer * wavelength + first + w] *
-                                    selection.scene_spectrum[first + w];
-      }
-    }
-    std::vector<double> kept_exposure(kept.size() * film_tables::kLayers);
-    film_tables::TableBandIntegral(
-        bundle_->ReflectanceRows().data(), static_cast<std::int64_t>(kept.size()),
-        bundle_->ReflectanceWavelengths(), weights.data(), kept_exposure.data());
-    const auto nodes = result->uv_nodes * result->uv_nodes;
-    result->uv_exposure.assign(static_cast<std::size_t>(nodes) * film_tables::kLayers, 0.0);
-    for (std::size_t row = 0; row < kept.size(); ++row) {
-      const auto node = static_cast<std::size_t>(kept[row]) * film_tables::kLayers;
-      for (std::size_t layer = 0; layer < film_tables::kLayers; ++layer) {
-        result->uv_exposure[node + layer] = kept_exposure[row * film_tables::kLayers + layer];
-      }
-    }
-    ++stats_.uv_builds;
-    stats_.last_uv_seconds = SecondsSince(start);
-  }
+  BuildUvTable(stock.exposure_weights, selection.scene_spectrum, *result);
 
   const auto negative_stage = NegativeStageOf(negative, print_material);
   const auto paper_stage    = PaperStageOf(print_material);

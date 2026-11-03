@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -26,6 +27,11 @@ inline constexpr std::int64_t kFilmPrintTableEdge = 65;
  * Immutable and shared. The double-precision arrays are the host values. @ref print_rgba is the
  * form that `AcquireLut` of a GPU backend takes: RGBA32F, tightly packed, with the red axis varying
  * fastest and an alpha of 1. Node values are the cube root of print XYZ.
+ *
+ * For a colour reversal film the print table is the light table (lab rule 'light_table_view'): the
+ * cube root of the XYZ of the slide on the light table, over the record of removed dye. It depends
+ * on the film only, so @ref print_key does not change with the scene light. The print material is
+ * not read.
  */
 struct FilmPrintTableData {
   /// (uv_nodes, uv_nodes, 3), u varying slowest. A node that no read can reach holds 0.
@@ -41,6 +47,7 @@ struct FilmPrintTableData {
   ContentKey             kernel_key{};
   std::int64_t           outside_curve     = 0;  ///< Layer values outside the paper curve
   std::int64_t           print_not_reached = 0;  ///< Nodes where the paper dye solve did not reach
+  bool                   light_table       = false;  ///< True for a colour reversal film
 
   [[nodiscard]] auto     ByteSize() const -> std::size_t;
 };
@@ -51,10 +58,12 @@ struct FilmPrintTableStats {
   std::int64_t negative_stage_builds = 0;
   std::int64_t paper_stage_builds    = 0;
   std::int64_t compose_builds        = 0;
+  std::int64_t light_table_builds       = 0;
   double       last_uv_seconds       = 0.0;
   double       last_negative_seconds = 0.0;
   double       last_paper_seconds    = 0.0;
   double       last_compose_seconds  = 0.0;
+  double       last_light_table_seconds = 0.0;
   std::size_t  kept_bytes            = 0;
 };
 
@@ -86,6 +95,10 @@ class FilmPrintTables {
 
   /**
    * @brief The tables of a selection, from memory or from a new build.
+   *
+   * When @p negative is a colour reversal film, the result holds the light table, and
+   * @p print_material is not read.
+   *
    * @return Shared immutable data.
    * @throws std::runtime_error that names the identifier for an unknown selection, or that names
    *         the selection when a table has a value that is not finite. No result is kept then.
@@ -107,6 +120,10 @@ class FilmPrintTables {
     std::vector<double>       cube_root_xyz;  ///< (edge^3, 3)
     std::vector<std::uint8_t> not_reached;    ///< (edge^3)
   };
+  struct LightTableStage {
+    std::vector<double> cube_root_xyz;  ///< (edge^3, 3), red varying slowest
+    ContentKey          key{};
+  };
   template <class Table>
   struct KeptTable {
     std::shared_ptr<const Table> table;
@@ -120,6 +137,13 @@ class FilmPrintTables {
       -> std::shared_ptr<const NegativeStage>;
   [[nodiscard]] auto PaperStageOf(std::string_view print_material)
       -> std::shared_ptr<const PaperStage>;
+  [[nodiscard]] auto LightTableOf(std::string_view reversal)
+      -> std::shared_ptr<const LightTableStage>;
+  [[nodiscard]] auto ResolveReversal(std::string_view reversal, std::string_view scene_light)
+      -> std::shared_ptr<const FilmPrintTableData>;
+  /// The u'v' table of @p result, with the exposure weights of a film under a scene spectrum.
+  void BuildUvTable(std::span<const double> exposure_weights,
+                    std::span<const double> scene_spectrum, FilmPrintTableData& result);
   void RemoveOldestAboveLimit();
 
   template <class Table>
@@ -133,6 +157,7 @@ class FilmPrintTables {
   mutable std::mutex                     mutex_;
   KeptTables<NegativeStage>              negative_stages_;
   KeptTables<PaperStage>                 paper_stages_;
+  KeptTables<LightTableStage>            light_tables_;
   KeptTables<FilmPrintTableData>         results_;
   FilmPrintTableStats                    stats_;
   std::uint64_t                          lru_clock_ = 0;

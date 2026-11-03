@@ -153,6 +153,19 @@ void Log10BandResponse(const SpectralBand& band, const double* amounts, int64_t 
   });
 }
 
+void CubeRootBandResponse(const SpectralBand& band, double scale, const double* amounts,
+                          int64_t count, double* out, int threads) {
+  ParallelRanges(count, threads, [&](int64_t first, int64_t last) {
+    std::vector<double> t(band.wavelengths);
+    for (int64_t node = first; node < last; ++node) {
+      double total[kLayers];
+      Transmission(band, amounts + kLayers * node, t.data());
+      BandSums(band, t.data(), total);
+      for (int k = 0; k < kLayers; ++k) out[kLayers * node + k] = std::cbrt(scale * total[k]);
+    }
+  });
+}
+
 int64_t SolveDyeAmounts(const SpectralBand& status, const double* targets, int64_t count,
                         int iterations, double reached_limit, double* amounts, int threads) {
   double total[kLayers];

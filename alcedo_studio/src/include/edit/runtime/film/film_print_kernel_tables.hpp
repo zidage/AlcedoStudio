@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -38,7 +39,7 @@ struct Layout {
 
 [[nodiscard]] inline auto LayoutOf(const FilmStockBundle& bundle, std::string_view negative)
     -> Layout {
-  const auto stock = bundle.Negative(negative);
+  const auto stock = bundle.Film(negative);
   const auto nodes = static_cast<std::size_t>(bundle.UvNodes());
   return {nodes * nodes * 3, stock.curves.density.size(), stock.inhibition.free_values.size(),
           bundle.PointConstants().locus_room.size()};
@@ -57,7 +58,7 @@ template <class Real>
     throw std::runtime_error("Film print: the u'v' table of '" + std::string(negative) +
                              "' has an unexpected size");
   }
-  const auto        stock     = bundle.Negative(negative);
+  const auto        stock     = bundle.Film(negative);
   const auto        constants = bundle.PointConstants();
   std::vector<Real> values(layout.ValueCount());
   const auto        copy = [&values](std::span<const double> from, std::size_t offset) {
@@ -72,11 +73,42 @@ template <class Real>
   return values;
 }
 
+/// The scalar values of a selection that FillParams reads: a print, or a light table.
+struct SelectionValues {
+  std::array<double, 3> layer_gain{};
+  std::array<double, 9> xyz_to_display{};
+  std::array<double, 3> negative_grade_grey{};
+  bool                  cinema_look    = false;
+  bool                  negative_grade = false;
+  bool                  light_table    = false;
+};
+
+[[nodiscard]] inline auto SelectionValuesOf(const FilmStockBundle& bundle,
+                                            std::string_view       negative,
+                                            std::string_view       print_material,
+                                            std::string_view       scene_light) -> SelectionValues {
+  if (bundle.IsReversal(negative)) {
+    // A colour reversal film has no print, so the print material is not read.
+    const auto setup = bundle.ReversalSelection(negative, scene_light);
+    return {.layer_gain     = setup.layer_gain,
+            .xyz_to_display = setup.xyz_to_display,
+            .light_table    = true};
+  }
+  const auto setup     = bundle.Selection(negative, print_material, scene_light);
+  const bool cine_look = bundle.PrintMaterial(print_material).cinema_look;
+  return {.layer_gain          = setup.layer_gain,
+          .xyz_to_display      = setup.xyz_to_display,
+          .negative_grade_grey = setup.negative_grade_grey,
+          .cinema_look         = cine_look,
+          .negative_grade      = cine_look && bundle.Negative(negative).negative_grade};
+}
+
 /**
  * @brief The fixed values of a selection, for a `FilmKernelParams` of either form.
  *
  * The caller sets `display_encoding`, because the display curve belongs to the output and not to
- * the selection.
+ * the selection. For a colour reversal film @p print_material is not read, and the values are those
+ * of the light table form.
  *
  * @throws std::runtime_error that names the identifier for an unknown selection.
  */
@@ -86,8 +118,8 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
                 std::uint32_t print_edge, Params& params) {
   using Real           = std::remove_reference_t<decltype(params.gamut_power)>;
   const auto layout    = LayoutOf(bundle, negative);
-  const auto stock     = bundle.Negative(negative);
-  const auto setup     = bundle.Selection(negative, print_material, scene_light);
+  const auto stock     = bundle.Film(negative);
+  const auto setup     = SelectionValuesOf(bundle, negative, print_material, scene_light);
   const auto constants = bundle.PointConstants();
   const auto nodes     = bundle.UvNodes();
   const auto real      = [](double value) { return static_cast<Real>(value); };
@@ -146,12 +178,19 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
                              1.0 / constants.gamut_power));
   }
   params.gamut_power              = real(constants.gamut_power);
-  const bool cine_look            = bundle.PrintMaterial(print_material).cinema_look;
-  params.cinema_look              = cine_look ? 1U : 0U;
-  params.negative_grade           = cine_look && stock.negative_grade ? 1U : 0U;
+  params.cinema_look              = setup.cinema_look ? 1U : 0U;
+  params.negative_grade           = setup.negative_grade ? 1U : 0U;
+  params.light_table              = setup.light_table ? 1U : 0U;
+  const auto light_table          = bundle.LightTable();
   for (std::size_t k = 0; k < 3; ++k) {
     params.negative_grade_grey[k] = real(setup.negative_grade_grey[k]);
+    params.display_luminance[k] =
+        setup.light_table ? real(light_table.display_luminance[k]) : Real{};
   }
+  // Lab rule 'dark_surround_on_display' acts on the print table of a print, and in display light on
+  // a light table.
+  params.display_surround_power =
+      setup.light_table ? real(light_table.surround_exponent - 1.0) : Real{};
   params.inhibition_has_image     = has_image ? 1U : 0U;
   params.inhibition_has_point     = has_point ? 1U : 0U;
   params.locus_facets             = static_cast<std::uint32_t>(layout.facets);

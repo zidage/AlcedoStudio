@@ -134,6 +134,18 @@ inline constexpr std::array<std::string_view, 19> kFilmPrintMaterialNames = {
     "Kodak 5381",
     "Kodak EXR 5386"};
 
+/// Colour reversal films (slide films) on a light table, in the order of the lab list (lab decision
+/// U86). A document stores one of them in the field of @ref kFilmNegativeIds, and it selects the
+/// light table form of the method, which has no print material. See @ref kFilmNegativeIds.
+inline constexpr std::array<std::string_view, 5> kFilmReversalIds = {
+    "fuji_velvia_50", "fuji_velvia_100", "fuji_provia_100f", "fuji_astia_100f",
+    "kodak_ektachrome_e100"};
+
+/// Catalog names of @ref kFilmReversalIds, in the same order.
+inline constexpr std::array<std::string_view, 5> kFilmReversalNames = {
+    "Fujichrome Velvia 50", "Fujichrome Velvia 100", "Fujichrome Provia 100F",
+    "Fujichrome Astia 100F", "Kodak Ektachrome E100"};
+
 /// Scene light identifiers: the reference, 5 lights, and 5 scenes. See @ref kFilmNegativeIds.
 inline constexpr std::array<std::string_view, 11> kFilmSceneLightIds = {
     "reference",  "daylight",      "tungsten",       "fluorescent",
@@ -143,7 +155,9 @@ inline constexpr std::array<std::string_view, 11> kFilmSceneLightIds = {
 /**
  * @brief Stored fields of the film print display transform.
  *
- * All sliders act on the image. Only the three selections choose host tables.
+ * All sliders act on the image. Only the three selections choose host tables. A colour reversal
+ * film in @ref negative has no print, so it reads no @ref print_material, and @ref enlarger_flare
+ * is the flare of the loupe on the light table.
  */
 struct FilmPrintParams {
   std::string negative       = "kodak_5207";
@@ -159,6 +173,16 @@ template <std::size_t Count>
 [[nodiscard]] constexpr auto IsFilmIdentifier(const std::array<std::string_view, Count>& ids,
                                               std::string_view id) -> bool {
   return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+/// True when @p id is a colour reversal film, which has the light table form and no print.
+[[nodiscard]] constexpr auto IsFilmReversalIdentifier(std::string_view id) -> bool {
+  return IsFilmIdentifier(kFilmReversalIds, id);
+}
+
+/// True when @p id is a value of the field `negative`: a negative or a colour reversal film.
+[[nodiscard]] constexpr auto IsFilmStockIdentifier(std::string_view id) -> bool {
+  return IsFilmIdentifier(kFilmNegativeIds, id) || IsFilmReversalIdentifier(id);
 }
 
 }  // namespace alcedo

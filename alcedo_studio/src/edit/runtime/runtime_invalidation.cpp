@@ -116,7 +116,8 @@ void RuntimeInvalidationState::BindCompiledPlan(const ExecutionPlan& plan) {
   Ensure(scatter);
   // The canonical film print results read the scene after the diffusion filter.
   for (const auto& result :
-       {FilmHalationResultId(plan.drt.node_id), FilmFlareResultId(plan.drt.node_id)}) {
+       {FilmHalationResultId(plan.drt.node_id), FilmFlareResultId(plan.drt.node_id),
+        FilmLoupeFlareResultId(plan.drt.node_id)}) {
     AddEdge(plan.SceneInputForDrt(), result);
     AddEdge(scatter, result);
     AddEdge(result, plan.display_output);
@@ -239,20 +240,23 @@ void RuntimeInvalidationState::CollectDrtChanges(
     origins.push_back(DiffusionScatterId(plan.drt.node_id));
     last_diffusion_revision_ = diffusion_revision;
   }
-  // The Halation result is the blurred exposure, and the flare result is the blurred transmittance
-  // of the amounts after Halation. Each strength scales its result later, at the mix and in the
-  // display stage, so a change of Enlarger flare changes neither result.
+  // The Halation result is the blurred exposure. The flare result is the blurred transmittance of
+  // the amounts after Halation, and the loupe flare result of a reversal film is the blurred
+  // display light of these amounts. Each strength scales its result later, at the mix and in the
+  // display stage, so a change of the flare slider changes no result.
   const auto film_exposure_revision =
       drt->Params().FieldsRevision(DirtyFieldMask{DrtDirty::FilmExposure});
   if (film_exposure_revision != last_film_exposure_revision_) {
     origins.push_back(FilmHalationResultId(plan.drt.node_id));
     origins.push_back(FilmFlareResultId(plan.drt.node_id));
+    origins.push_back(FilmLoupeFlareResultId(plan.drt.node_id));
     last_film_exposure_revision_ = film_exposure_revision;
   }
   const auto film_halation_revision =
       drt->Params().FieldsRevision(DirtyFieldMask{DrtDirty::FilmHalation});
   if (film_halation_revision != last_film_halation_revision_) {
     origins.push_back(FilmFlareResultId(plan.drt.node_id));
+    origins.push_back(FilmLoupeFlareResultId(plan.drt.node_id));
     last_film_halation_revision_ = film_halation_revision;
   }
   for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
@@ -282,6 +286,7 @@ void RuntimeInvalidationState::CollectStructureChanges(const ExecutionPlan& plan
   collect_if_unassigned(DiffusionScatterId(plan.drt.node_id));
   collect_if_unassigned(FilmHalationResultId(plan.drt.node_id));
   collect_if_unassigned(FilmFlareResultId(plan.drt.node_id));
+  collect_if_unassigned(FilmLoupeFlareResultId(plan.drt.node_id));
 
   std::set<NodeId> current_grades;
   for (const auto& grade : plan.grade_nodes) {
@@ -332,6 +337,7 @@ void RuntimeInvalidationState::CollectStructureChanges(const ExecutionPlan& plan
     origins.push_back(DiffusionScatterId(plan.drt.node_id));
     origins.push_back(FilmHalationResultId(plan.drt.node_id));
     origins.push_back(FilmFlareResultId(plan.drt.node_id));
+    origins.push_back(FilmLoupeFlareResultId(plan.drt.node_id));
     origins.push_back(plan.display_output);
     last_drt_input_ = drt_input;
   }

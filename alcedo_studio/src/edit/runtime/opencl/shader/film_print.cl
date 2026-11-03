@@ -39,7 +39,7 @@ typedef struct {
 // the same values in its static_assert declarations.
 typedef char FilmBlurKernelSizeCheck[sizeof(FilmBlurKernel) == 1552 ? 1 : -1];
 typedef char FilmNarrowKernelSizeCheck[sizeof(FilmNarrowKernel) == 76 ? 1 : -1];
-typedef char FilmKernelParamsSizeCheck[sizeof(FilmKernelParams) == 392 ? 1 : -1];
+typedef char FilmKernelParamsSizeCheck[sizeof(FilmKernelParams) == 412 ? 1 : -1];
 
 __constant sampler_t kFilmNearestClamp =
     CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
@@ -466,12 +466,20 @@ __kernel void film_print_box_reduce(__global const float* src, uint src_offset, 
             FilmKernelMakeRgb(r * scale, g * scale, b * scale));
 }
 
+// The values of `mode` of film_print_canvas_reduce. The same as CanvasValue of
+// opencl_film_print_pass.cpp.
+#define FILM_CANVAS_VALUE         0  // The exposure, for Halation
+#define FILM_CANVAS_TRANSMITTANCE 1  // 10^-a of the amounts, for the Enlarger flare of a print
+#define FILM_CANVAS_DISPLAY_LIGHT 2  // Linear display light of the light table, for the loupe flare
+
 /// Canvas from the render: the mean of @p samples x @p samples render pixels in the footprint of one
-/// texel. With @p transmittance, the values are amounts and the mean is of 10^-a.
+/// texel, of the value that @p mode selects. Only FILM_CANVAS_DISPLAY_LIGHT reads @p print_rgba and
+/// the fixed values.
 __kernel void film_print_canvas_reduce(__global const float* src, uint src_offset, int width,
                                        int height, __global float* dst, uint dst_offset,
                                        int dst_width, int dst_height, FilmMatrix canvas_to_render,
-                                       int samples, int transmittance) {
+                                       int samples, int mode, __global const float* print_rgba,
+                                       __global const uchar* data, uint params_offset) {
   const int x = (int)get_global_id(0);
   const int y = (int)get_global_id(1);
   if (x >= dst_width || y >= dst_height) return;
@@ -487,10 +495,16 @@ __kernel void film_print_canvas_reduce(__global const float* src, uint src_offse
       const int           sx     = min(max((int)floor(render.x), 0), width - 1);
       const int           sy     = min(max((int)floor(render.y), 0), height - 1);
       const FilmKernelRgb value  = FilmLoad(src, src_offset, (uint)sy * (uint)width + (uint)sx);
-      if (transmittance != 0) {
+      if (mode == FILM_CANVAS_TRANSMITTANCE) {
         r += FilmKernelTransmittance(value.r);
         g += FilmKernelTransmittance(value.g);
         b += FilmKernelTransmittance(value.b);
+      } else if (mode == FILM_CANVAS_DISPLAY_LIGHT) {
+        const FilmKernelRgb light =
+            FilmKernelPrintDisplay(FilmParams(data, params_offset), print_rgba, value);
+        r += light.r;
+        g += light.g;
+        b += light.b;
       } else {
         r += value.r;
         g += value.g;
@@ -531,24 +545,14 @@ __kernel void film_print_amounts_reduce(__global const float* amounts, uint amou
             FilmKernelMakeRgb(r * scale, g * scale, b * scale));
 }
 
-/// FP6, fused. @p has_flare is 0 when the Enlarger flare is off. Alpha comes from the scene.
-/// @p has_soft is 0 with no image plane; then the graded record reads itself. @p soft is half size
-/// when @p soft_half_size is not 0.
-__kernel void film_print_display(
-    __global const float* amounts, uint amounts_offset, __read_only image2d_t scene_image,
-    __global const float4* scene_buffer, int scene_is_buffer, __write_only image2d_t dst_image,
-    __global float4* dst_buffer, int dst_is_buffer, int width, int height,
+/// FP6 of a print: the Enlarger flare in density, the negative grade, the print table, the display
+/// compression, and the cinema look. Linear Rec. 709 in 0 to 1.
+static inline FilmKernelRgb FilmPrintFinishedLinear(
+    __global const FilmKernelParams* params, FilmKernelRgb record, int x, int y, uint index,
     __global const float* print_rgba, __read_only image2d_t flare, int has_flare, int flare_width,
     int flare_height, FilmMatrix render_to_flare, float flare_strength, __global const float* soft,
-    uint soft_offset, int has_soft, int soft_columns, int soft_rows, int soft_half_size,
-    __global const uchar* data, uint params_offset) {
-  const int x = (int)get_global_id(0);
-  const int y = (int)get_global_id(1);
-  if (x >= width || y >= height) return;
-  __global const FilmKernelParams* params = FilmParams(data, params_offset);
-  const uint                       index  = (uint)y * (uint)width + (uint)x;
-  FilmKernelRgb                    record = FilmLoad(amounts, amounts_offset, index);
-  FilmKernelRgb                    soft_record = record;
+    uint soft_offset, int has_soft, int soft_columns, int soft_rows, int soft_half_size) {
+  FilmKernelRgb soft_record = record;
   if (params->negative_grade != 0U && has_soft != 0) {
     soft_record = soft_half_size != 0
                       ? FilmReadBilinear(soft, soft_offset, soft_columns, soft_rows,
@@ -567,8 +571,44 @@ __kernel void film_print_display(
   }
   const FilmKernelRgb finished =
       FilmKernelFinishDisplay(params, FilmKernelPrintDisplay(params, print_rgba, record));
-  const FilmKernelRgb linear =
-      params->cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
+  return params->cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
+}
+
+/// FP6, fused. @p has_flare is 0 when the Enlarger flare is off. Alpha comes from the scene.
+/// @p has_soft is 0 with no image plane; then the graded record reads itself. @p soft is half size
+/// when @p soft_half_size is not 0. On a light table, @p flare is the blurred display light of the
+/// loupe flare, and @p soft is not read.
+__kernel void film_print_display(
+    __global const float* amounts, uint amounts_offset, __read_only image2d_t scene_image,
+    __global const float4* scene_buffer, int scene_is_buffer, __write_only image2d_t dst_image,
+    __global float4* dst_buffer, int dst_is_buffer, int width, int height,
+    __global const float* print_rgba, __read_only image2d_t flare, int has_flare, int flare_width,
+    int flare_height, FilmMatrix render_to_flare, float flare_strength, __global const float* soft,
+    uint soft_offset, int has_soft, int soft_columns, int soft_rows, int soft_half_size,
+    __global const uchar* data, uint params_offset) {
+  const int x = (int)get_global_id(0);
+  const int y = (int)get_global_id(1);
+  if (x >= width || y >= height) return;
+  __global const FilmKernelParams* params = FilmParams(data, params_offset);
+  const uint                       index  = (uint)y * (uint)width + (uint)x;
+  FilmKernelRgb                    record = FilmLoad(amounts, amounts_offset, index);
+  FilmKernelRgb                    linear;
+  if (params->light_table != 0U) {
+    // Lab rules 'light_table_view', 'loupe_flare', and 'dark_surround_on_display' in display light.
+    FilmKernelRgb light = FilmKernelPrintDisplay(params, print_rgba, record);
+    if (has_flare != 0) {
+      const float2 position = FilmTransform(render_to_flare, (float)x + 0.5f, (float)y + 0.5f);
+      light                 = FilmKernelLoupeFlare(
+          light, FilmReadBilinearImage(flare, flare_width, flare_height, position.x, position.y),
+          flare_strength);
+    }
+    linear = FilmKernelFinishDisplay(params, FilmKernelDisplaySurround(params, light));
+  } else {
+    linear = FilmPrintFinishedLinear(params, record, x, y, index, print_rgba, flare, has_flare,
+                                     flare_width, flare_height, render_to_flare, flare_strength,
+                                     soft, soft_offset, has_soft, soft_columns, soft_rows,
+                                     soft_half_size);
+  }
   const float alpha  = scene_is_buffer != 0
                            ? scene_buffer[index].w
                            : read_imagef(scene_image, kFilmNearestClamp, (int2)(x, y)).w;

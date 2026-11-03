@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02).
+Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02). F8 is complete on CUDA and OpenCL (2026-11-03). F9, the reversal films on Metal, is open.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -136,6 +136,22 @@ Halation and Enlarger flare read published canonical results, as `DiffusionScatt
 change them. They are `film.halation.0` and `film.flare.0`. FP2 and FP4 run on the pixels of the render, with a size in pixels
 from the frame and `RenderAxisScale`. So the visible effect of a light spread is smaller in a fit-to-window preview than at full size, as on film. This is an inference from the sizes of section 3.1. The record of phase F4 holds the audit: an ROI edge needs a margin of 49 pixels at slider 1, the source has no ROI margin, and FP2 and FP4 use the boundary rule reflect at the ROI edge.
 
+### 3.3 Reversal form (phase F8)
+
+A colour reversal film (slide film) is the final image, so its chain has no print material (lab decision U86, [P9 report](https://github.com/zidage/alcedo-film-lab/blob/feature/p7-product-resources/docs/exploration/p9_reversal_light_table.md), sections 4.2 and 6). FP1 to FP5 are the same kernels, with the values of the reversal film. FP6 has a second form:
+
+| Step | Reversal film |
+| --- | --- |
+| FP1 to FP3 | No change: the u'v' table of the film, layer gain, spread, Halation. Astia 100F has no modulation transfer curve, so it has no spread. |
+| FP4, FP5 | No change in the kernels. The record is the removed dye `s = a_max - a` (lab rule `removed_dye_record`), so the curves F and K of the film rise with exposure, as on a negative. E100 and Astia 100F have no inhibition. |
+| FP6, reversal form | Light table (65^3 over the record, cube root of XYZ under CIE D50, lab rule `light_table_view`), cube, display matrix with the clear film as white (rule `clear_film_white`). Then the loupe flare in linear display light (rule `loupe_flare`: `(1 - f) * rgb + f * Gaussian(rgb)`), then the dark surround on luminance (`rgb * Y^(e - 1)`, e = 0.525 / 0.59, Y of linear Rec. 709), then the gamut compression and the encoding. |
+
+- There is no printer balance, no printing gain, no print table composition, no negative grade, and no Cine Look on this form.
+- The loupe flare acts on linear display light, not on the transmittance of FP6. So its canonical result `film.loupe_flare.0` has its own key, and a reversal film does not read `film.flare.0`.
+- Each film has its grey anchor at D55 (lab rule `daylight_reversal_balance`). A scene light other than `reference` keeps its cast, because a slide has no printer lights.
+- The film identifier stays in the key `params.film_print.negative`. A reversal identifier selects this form. There is no new JSON key, and the stored print material does not change.
+- The Film list has the reversal films after the negatives, in the lab order: Velvia 50, Velvia 100, Provia 100F, Astia 100F, E100. With a reversal film the panel hides Print Material, and the slider Enlarger Flare has the label "Loupe Flare", with the same range and default.
+
 ---
 
 ## 4. Resources
@@ -152,6 +168,9 @@ calculates them; the product does not need the logic of `_camera_filter`, `_prin
 | Stage A | Negative to paper exposure (65^3) | 6.6 MB, in memory | `film_tables` |
 | Stage B | Paper Status A to XYZ (65^3, axis power 2) | 6.6 MB, in memory | `film_tables` |
 | Print table | Composed from A and B; RGBA32F for the GPU | 4.4 MB | `film_tables`, `AcquireLut` |
+| Light table (reversal film) | 65^3 over the record of removed dye: the cube root of XYZ under the light of the table. One per film, for all scene lights | 6.6 MB, in memory; 4.4 MB on the GPU | `film_tables::CubeRootBandResponse`, `AcquireLut` |
+
+Resource schema 6 (phase F8) adds the reversal films. The stock bundle has the group `reversal/<film>/` in the form of `negative/<film>/`, with the record of rule `removed_dye_record` and `dye_max`, and the group `light_table/` with the D50 viewing weights, the XYZ scale, the exponent of the dark surround, and the luminance weights of linear Rec. 709. Its metadata has `reversal_films` and `reversal_list_order`. The print setup has `reversal_layer_gain` (films, scene lights, 3), `reversal_xyz_to_display` (films, 3, 3), and `reversal_scene_spectrum_index` (films, scene lights). The compact reflectance table keeps its form.
 
 - No table except the shipped resources goes to disk (lab U68).
 - All three sliders act on the image, so a slider change builds no table. A new film, print material, or scene light takes about 1 s on the host
@@ -215,6 +234,8 @@ Limits for the numeric phases: the 8 bit difference of final sRGB against the la
 | F5 | Editor controls and user review | 700 lines | UI only |
 | F6 | OpenCL passes | 1500 lines | One backend per phase |
 | F7 | Metal passes | 1500 lines | One backend per phase |
+| F8 | Reversal films on a light table, on CUDA and OpenCL (section 3.3) | 1500 lines | New resource content and a second form of FP6 |
+| F9 | Reversal films on Metal | 600 lines | One backend per phase |
 
 Commands for all phases, from the repository root:
 
@@ -959,6 +980,79 @@ GPU time of each pass after a Light spread change at 2560, in ms, with one commi
 
 **Not verified.** A Release build, the packaged application, and a render in the running application on macOS. A Mac with an Intel CPU or an AMD GPU. The full test suite did not run.
 
+### F8: reversal films on CUDA and OpenCL
+
+1. **Objective.** The five reversal films of lab decision U86 in the film print method, with the reversal form of section 3.3, on CUDA and OpenCL.
+2. **Inputs.** F6; resources of schema 6 from the lab (`build_product_resources.py`, lab commit 851cf59).
+3. **Modules.** `include/edit/graph/film_print_model.hpp`, `edit/runtime/film/`, `film_print_math.h`, the CUDA and OpenCL film print passes, `runtime_invalidation.cpp`, `editor_parameter_catalog.cpp`, `EditorDisplayTransformPanel.qml`.
+4. **Data rules.** FP1 to FP5 do not change. A reversal film reads no print material and no `film.flare.0`. The film identifier stays in `params.film_print.negative`.
+5. **Steps.** (a) Read schema 6. (b) Build the light table and the values of a reversal selection on the host. (c) Add the reversal form of FP6 and the loupe flare result to CUDA and OpenCL. (d) Add the films to the Film list and change the panel. (e) Stop on Metal with a named error until F9.
+6. **Success chain.** A reversal film renders on CUDA and OpenCL; a Loupe Flare change builds no table and no canonical result.
+7. **Failure chain.** A missing or wrong resource array stops `FilmStockBundle::Open` with its name. On Metal a reversal film stops with a named error. There is no change of backend and no change of form.
+8. **Tests.** Section "Tests" of the record below.
+9. **Exit criteria.** The limits of F3 and F4 on the five films, on CUDA and OpenCL.
+10. **Expected diff.** 1500 lines.
+11. **Completion record.** See below.
+
+#### F8 completion record (2026-11-03)
+
+**Call chain.** Host: `FilmPrintTables::Resolve -> ResolveReversal -> LightTableOf -> film_tables::CubeRootBandResponse`, and `film_print_kernel_tables::FillParams -> SelectionValuesOf -> FilmStockBundle::ReversalSelection`. CUDA: `DrtPostExecutor::Execute -> CudaDrtOps::DispatchFilmPrint -> RecordCudaFilmPrint`; FP1 to FP5 are unchanged; then `CanvasReduceKernel` with `CanvasValue::kDisplayLight`, the canvas blur, the published result `film.loupe_flare.0`, and `DisplayKernel`: `FilmKernelPrintDisplay -> FilmKernelLoupeFlare -> FilmKernelDisplaySurround -> FilmKernelFinishDisplay -> encoding`. OpenCL: `OpenClDrtOps::DispatchFilmPrint -> RecordOpenClFilmPrint -> film_print_canvas_reduce (FILM_CANVAS_DISPLAY_LIGHT) -> film_print_display`, with the same functions of `film_print_math.h`.
+
+**Changes from the plan, and details that the plan does not state.**
+
+- `FilmKernelParams` has three new members: `display_luminance` (the luminance weights of linear Rec. 709 from the resources), `display_surround_power` (e - 1; 0 for a print, so the print form skips the step), and `light_table`. The size is 412 bytes. The static checks of CUDA, OpenCL, and Metal have this size.
+- The light table depends on the film only, so its key has no scene light, and the 11 scene lights of a film share one table and one GPU copy. The selection, the u'v' table, and the kernel values have keys with the film and the scene light, in the form of the negatives. The key of a reversal selection does not read the print material, so a change of the hidden print material builds no table.
+- The flare canvas of a reversal film is display light: `CanvasReduceKernel` (and `film_print_canvas_reduce`) computes FP6 to the display matrix for each source pixel, before the box reduction. So the canvas has the same value as the linear display light that the display stage mixes with it. The print form keeps the transmittance canvas.
+- The dirty fields of F7 are the same. `FilmExposure` and `FilmHalation` invalidate `film.loupe_flare.0` (the display light reads the exposure and Halation); `FilmFlare` invalidates nothing. `LoupeFlareChangeKeepsTheCanvasesThatDoNotReadIt` shows the same pixels as a render that builds all canonical results again.
+- `kFilmPrintImplementationVersion` does not change: the pixels of a negative and a print do not change, and the reversal identifiers had no result before this phase.
+- In `film_print.cl` the end of the print form is the helper `FilmPrintFinishedLinear`, so the two forms of `film_print_display` share the encoding code.
+- The Film list is `kFilmNegativeIds` and then `kFilmReversalIds`. The panel calls `EditorParameterCatalogAdapter::filmIsReversal` to hide Print Material and to change the label to "Loupe Flare". A write from the panel keeps the stored print material.
+- Metal: `RecordMetalFilmPrint` throws `the colour reversal film '<id>' needs the light table passes, which the Metal backend does not have` before it reads a table. The Metal lab cases skip the reversal files. Issue #655 (F9) removes the stop.
+- `FilmPrintControlWritesItsField` of the panel test selected index 0 as `agfa_vista_100`. The list order of lab decision U83 (commit 9a08fee0e) made index 0 `kodak_5207`, so the test failed on `main` before this phase. The test now finds the index of the film.
+
+**ROI and the half-size inhibitor.** The ROI test of F4 has a limit of 0.1 codes inside the reach of the blurs. With Velvia 50 and the ROI at row 1403 it measures 0.131 codes. At row 1402 it measures 0.0006 codes (`kodak_5207`: 0.036 and 0.0003). So the difference comes from the phase of the half-size inhibitor grid: at an odd row the half-size cells of the ROI move by one pixel. A slide display is steeper than a print display, so the same phase gives a larger code difference. The test now runs both rows on `kodak_5207` and `fuji_velvia_50`. It applies the limit at the even row for both films and at the odd row for the negative, and it reports the odd row of the slide. The values are in a comment on issue #636, which holds the decision about the ROI edge.
+
+**Tests.** NVIDIA GeForce RTX 3080 Laptop GPU, Debug host build, with the resources of schema 6 and the lab values of the same lab commit.
+
+| Check | Result |
+| --- | --- |
+| `FilmPrintTablesTest` | 42 of 42 pass |
+| Light table against the lab, 5 films | relative difference up to 1.6e-15 |
+| Reversal setup against the lab arrays, 55 selections (5 films, 11 scene lights) | difference 0 |
+| Ramp against the lab, 5 films | largest 0.0005 codes (limit 0.5) |
+| Chart against the reference, CUDA / OpenCL | largest 0.015 / 0.027 codes (limit 1) |
+| 6000 x 4006 image against the lab, 5 films | p99.9 up to 0.55, largest up to 1.72 codes (limits 1 and 4); Velvia 50 0.547 / 1.719, Velvia 100 0.541 / 1.656, Provia 100F 0.442 / 1.256, Astia 100F 0.510 / 1.570, E100 0.426 / 1.117 |
+| Viewport ROI inside the reach of the blurs | see the ROI paragraph above |
+| `ReversalFilmPrintMatchesCudaReferenceWithinTolerance` | pass: largest 0.068, 0.218, 0.070, 0.180, 0.096 codes against CUDA (limit 1) |
+| Negative and print cases of F3 to F6 | pass, with the values of F4 and F6 |
+| `CudaFilmPrintFixture` / `OpenClFilmPrintFixture` | 18 of 18 / 20 of 20 pass |
+| `GpuDagModelGraphTest` / `GpuDagRawInputTest` | 170 of 170 / 217 of 217 pass |
+| `EditorParameterCatalogTest`, `EditorPanelProjectionTest`, `EditorPipelineCommandServiceTest`, `AdjustmentTransferCatalogTest`, `SimplifiedChineseCatalogTest` | 34, 11, 24, 9, 9 pass |
+| `EditorDisplayTransformSnapshotQmlTest` | 18 of 18 pass |
+
+**Cost.** Release build, RTX 3080 Laptop, after a Halation change (`DISABLED_DrtCostRecordAtEditorSizes`). A Halation change keeps the Halation result and builds the flare or loupe flare result again. CUDA is the median GPU time; OpenCL is the median wall time to the end of the GPU work. In ms:
+
+| Long edge | ACES 2.0 (CUDA) | Print form, `kodak_5207` CUDA / OpenCL | Light table, Velvia 50 CUDA / OpenCL | Light table, E100 CUDA / OpenCL |
+| --- | --- | --- | --- | --- |
+| 2560 | 2.1 | 4.2 / 4.4 | 5.1 / 5.6 | 3.3 / 3.5 |
+| 4096 | 5.0 | 11.9 / 12.1 | 14.3 / 14.5 | 7.9 / 7.5 |
+| 6000 | 10.9 | 17.8 / 16.6 | 19.9 / 18.9 | 19.5 / 14.8 |
+
+- The light table form costs at most 2.4 ms more than the print form at the same size. The display light canvas computes FP6 to the display matrix for each source pixel, and the display stage adds the loupe flare and the dark surround.
+- E100 has no inhibition, so it has no inhibitor blur; at 4096 its time is less than the print form.
+- A first render of a new reversal film, with the light table and the u'v' table on the host, takes about 129 ms at 2560. The host light table alone takes 0.18 s in the Debug build.
+
+**AMD.** `opencl_dag_film_print` builds with no error on drivers 26.10.2, 26.6.2, and 26.6.1, on gfx1030, gfx1100, gfx1103, and gfx1201, and on gfx1010 with the legacy runtime.
+
+**Not verified.** Metal (F9; the Metal source compiles only on a Mac, and it was not compiled). A render in the running application. A run on an AMD GPU. The packaged application with resources of schema 6. The user review of the five films. The full test suite did not run.
+
+### F9: reversal films on Metal
+
+1. **Objective.** The reversal form of F8 on Metal, with the light table, the display light canvas, and the result `film.loupe_flare.0`.
+2. **Inputs.** F7, F8; a macOS machine.
+3. **Tests.** The reversal cases of F8 in `GpuDagMetalDrtTest`, against the same host reference and limits. The stop case `ReversalFilmStopsWithTheNamedErrorUntilMetalHasTheLightTablePasses` goes, and the lab cases read the reversal files.
+4. **Tracking.** [#655](https://github.com/zidage/AlcedoStudio/issues/655).
+
 ---
 
 ## 7. Risks
@@ -983,3 +1077,5 @@ GPU time of each pass after a Light spread change at 2560, in ms, with one commi
 - F5: [#628](https://github.com/zidage/AlcedoStudio/issues/628)
 - F6: [#629](https://github.com/zidage/AlcedoStudio/issues/629)
 - F7: [#630](https://github.com/zidage/AlcedoStudio/issues/630)
+- F8: [#654](https://github.com/zidage/AlcedoStudio/issues/654)
+- F9: [#655](https://github.com/zidage/AlcedoStudio/issues/655)
