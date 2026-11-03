@@ -3070,6 +3070,62 @@ Original source files on disk will be kept.</source>
         <source>Color &amp; Encoding</source>
         <translation>颜色与编码</translation>
     </message>
+    <message>
+        <source>Negative</source>
+        <translation>负片</translation>
+    </message>
+    <message>
+        <source>Reversal</source>
+        <translation>反转片</translation>
+    </message>
+    <message>
+        <source>Print</source>
+        <translation>印片</translation>
+    </message>
+    <message>
+        <source>Search films</source>
+        <translation>搜索胶片</translation>
+    </message>
+    <message>
+        <source>No films match</source>
+        <translation>没有匹配的胶片</translation>
+    </message>
+    <message>
+        <source>Search print materials</source>
+        <translation>搜索印片材料</translation>
+    </message>
+    <message>
+        <source>No print materials match</source>
+        <translation>没有匹配的印片材料</translation>
+    </message>
+    <message>
+        <source>Photo</source>
+        <translation>摄影</translation>
+    </message>
+    <message>
+        <source>Cinema</source>
+        <translation>电影</translation>
+    </message>
+    <message>
+        <source>Classic Cinema</source>
+        <translation>经典电影</translation>
+    </message>
+    <message>
+        <source>Aerial</source>
+        <translation>航空</translation>
+    </message>
+    <message>
+        <source>Cinema Print</source>
+        <translation>电影拷贝</translation>
+    </message>
+    <message>
+        <source>Paper</source>
+        <translation>相纸</translation>
+    </message>
+    <message>
+        <source>Display</source>
+        <translation>展示</translation>
+    </message>
 </context>
 <context>
     <name>EditorEndpointNodeDelegate</name>
@@ -8821,6 +8877,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>The AI Mask session is closed.</source>
         <translation>AI 蒙版会话已关闭。</translation>
+    </message>
+</context>
+<context>
+    <name>FilmStockPicker</name>
+    <message>
+        <source>All</source>
+        <translation>全部</translation>
     </message>
 </context>
 </TS>

@@ -9,12 +9,15 @@
 #include <QJsonObject>
 #include <QtGlobal>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <json.hpp>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "app/editor_parameter_catalog.hpp"
+#include "app/film_stock_presentation.hpp"
 #include "edit/graph/film_print_model.hpp"
 
 namespace alcedo::ui {
@@ -28,6 +31,81 @@ auto ToJson(const QVariantMap& map) -> nlohmann::json {
 
 auto ToVariantMap(const nlohmann::json& json) -> QVariantMap {
   return QJsonDocument::fromJson(QByteArray::fromStdString(json.dump())).object().toVariantMap();
+}
+
+auto ToQString(std::string_view text) -> QString {
+  return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+auto ColorName(std::uint32_t rgb) -> QString {
+  return QStringLiteral("#%1").arg(rgb, 6, 16, QLatin1Char('0'));
+}
+
+/// Catalog name of film or print material @p id: the label of its menu entry.
+template <std::size_t Count>
+auto CatalogName(const std::array<std::string_view, Count>& ids,
+                 const std::array<std::string_view, Count>& names, std::string_view id)
+    -> std::string_view {
+  for (std::size_t i = 0; i < Count; ++i) {
+    if (ids[i] == id) {
+      return names[i];
+    }
+  }
+  return {};
+}
+
+auto FilmListName(FilmBrowserList list) -> QString {
+  switch (list) {
+    case FilmBrowserList::Negative:
+      return QStringLiteral("negative");
+    case FilmBrowserList::Reversal:
+      return QStringLiteral("reversal");
+    case FilmBrowserList::Print:
+      return QStringLiteral("print");
+  }
+  return {};
+}
+
+auto SwatchShapeName(FilmSwatchShape shape) -> QString {
+  switch (shape) {
+    case FilmSwatchShape::PhotoNegative:
+      return QStringLiteral("photo_negative");
+    case FilmSwatchShape::CinemaNegative:
+      return QStringLiteral("cinema_negative");
+    case FilmSwatchShape::Reversal:
+      return QStringLiteral("reversal");
+    case FilmSwatchShape::PrintPaper:
+      return QStringLiteral("print_paper");
+    case FilmSwatchShape::CinemaPrint:
+      return QStringLiteral("cinema_print");
+    case FilmSwatchShape::DisplayMaterial:
+      return QStringLiteral("display_material");
+  }
+  return {};
+}
+
+auto ToVariantMap(const FilmPresentation& entry) -> QVariantMap {
+  std::string_view label = CatalogName(kFilmNegativeIds, kFilmNegativeNames, entry.id);
+  if (label.empty()) {
+    label = CatalogName(kFilmReversalIds, kFilmReversalNames, entry.id);
+  }
+  if (label.empty()) {
+    label = CatalogName(kFilmPrintMaterialIds, kFilmPrintMaterialNames, entry.id);
+  }
+  QVariantList colors;
+  for (std::size_t i = 0; i < entry.color_count; ++i) {
+    colors.push_back(ColorName(entry.colors[i]));
+  }
+  QVariantMap map;
+  map.insert(QStringLiteral("value"), ToQString(entry.id));
+  map.insert(QStringLiteral("label"), ToQString(label));
+  map.insert(QStringLiteral("list"), FilmListName(entry.list));
+  map.insert(QStringLiteral("brand"), ToQString(entry.brand));
+  map.insert(QStringLiteral("family"), ToQString(entry.family));
+  map.insert(QStringLiteral("shortLabel"), ToQString(entry.short_label));
+  map.insert(QStringLiteral("shape"), SwatchShapeName(entry.shape));
+  map.insert(QStringLiteral("colors"), colors);
+  return map;
 }
 
 auto ToSource(int width, int height) -> EditorParameterSource {
@@ -110,6 +188,39 @@ QVariantList EditorParameterCatalogAdapter::odtEotfOptions(const QString& encodi
 
 bool EditorParameterCatalogAdapter::filmIsReversal(const QString& film) const {
   return IsFilmReversalIdentifier(film.toStdString());
+}
+
+QVariantList EditorParameterCatalogAdapter::filmBrowserEntries(const QString& list) const {
+  QVariantList result;
+  for (const auto& entry : kFilmPresentations) {
+    if (FilmListName(entry.list) == list) {
+      result.push_back(ToVariantMap(entry));
+    }
+  }
+  return result;
+}
+
+QVariantMap EditorParameterCatalogAdapter::filmBrowserEntry(const QString& id) const {
+  const auto entry = FindFilmPresentation(id.toStdString());
+  return entry ? ToVariantMap(*entry) : QVariantMap{};
+}
+
+QVariantList EditorParameterCatalogAdapter::filmBrands() const {
+  QVariantList result;
+  for (const auto& brand : kFilmBrands) {
+    QVariantMap map;
+    map.insert(QStringLiteral("name"), ToQString(brand.name));
+    map.insert(QStringLiteral("color"), ColorName(brand.color));
+    result.push_back(map);
+  }
+  return result;
+}
+
+QString EditorParameterCatalogAdapter::filmDefault(const QString& list) const {
+  if (list == QStringLiteral("reversal")) {
+    return ToQString(kFilmDefaultReversal);
+  }
+  return ToQString(kFilmDefaultNegative);
 }
 
 QVariantMap EditorParameterCatalogAdapter::uiDefault(const QString& field) const {

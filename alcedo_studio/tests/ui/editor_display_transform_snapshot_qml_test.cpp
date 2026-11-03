@@ -22,11 +22,13 @@
 #include <QTest>
 #include <QVariantMap>
 #include <QWheelEvent>
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -223,6 +225,39 @@ auto MakeFilmPrintSnapshot(double         halation = 2.5,
   odt_wrap.insert(QStringLiteral("odt"), inner);
   snapshot.insert(QStringLiteral("odt"), odt_wrap);
   return snapshot;
+}
+
+/// Values of the browser entries of a film print picker.
+auto PickerValues(QObject* picker) -> std::vector<std::string> {
+  std::vector<std::string> values;
+  for (const auto& entry : picker->property("entries").toList()) {
+    values.push_back(entry.toMap().value(QStringLiteral("value")).toString().toStdString());
+  }
+  return values;
+}
+
+/// Values of the entry rows that a film print picker shows (after the search and brand filter).
+auto PickerShownValues(QObject* picker) -> std::vector<std::string> {
+  std::vector<std::string> values;
+  for (const auto& row : picker->property("rows").toList()) {
+    const auto map = row.toMap();
+    if (map.value(QStringLiteral("kind")).toString() == QStringLiteral("entry")) {
+      values.push_back(map.value(QStringLiteral("entry"))
+                           .toMap()
+                           .value(QStringLiteral("value"))
+                           .toString()
+                           .toStdString());
+    }
+  }
+  return values;
+}
+
+/// The last film print write of the session, or null.
+auto LastDrtWrite(const DisplayTransformSession& session) -> const alcedo::DrtParameterUpdate* {
+  if (session.writes().empty()) {
+    return nullptr;
+  }
+  return std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
 }
 
 template <typename Predicate>
@@ -656,7 +691,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest,
   AdjustmentStackHarness  harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
   auto* material_combo =
-      harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintMaterialCombo"));
+      harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintMaterialPicker"));
   auto* material = harness.findModel<QObject>(QStringLiteral("displayFilmPrintMaterialModel"));
   auto* flare    = harness.findModel<EditorAdjustmentValueModel>(
       QStringLiteral("displayFilmEnlargerFlareModel"));
@@ -695,6 +730,138 @@ TEST(EditorDisplayTransformSnapshotQmlTest,
   session.setAdjustmentSnapshot(MakeFilmPrintSnapshot());
   ASSERT_TRUE(WaitFor([&] { return material_combo->isVisible(); }));
   EXPECT_EQ(flare->property("label").toString().toStdString(), "Enlarger Flare");
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest,
+     ProcessSwitchWritesOnlyTheFilmAndReturnsToTheLastFilmOfTheProcess) {
+  DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* process = harness.findModel<QQuickItem>(QStringLiteral("displayFilmProcessTrack"));
+  auto* film    = harness.findModel<QQuickItem>(QStringLiteral("displayFilmNegativePicker"));
+  auto* print   = harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintMaterialPicker"));
+  ASSERT_NE(process, nullptr);
+  ASSERT_NE(film, nullptr);
+  ASSERT_NE(print, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    return film->property("currentValue").toString() == QStringLiteral("kodak_portra_400");
+  }));
+  EXPECT_EQ(process->property("currentValue").toString().toStdString(), "negative");
+  EXPECT_TRUE(print->isVisible());
+
+  // Reversal: no reversal film was used in this session, so the default film is selected.
+  ASSERT_TRUE(QMetaObject::invokeMethod(process, "selected", Q_ARG(int, 1),
+                                        Q_ARG(QString, QStringLiteral("reversal"))));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  ASSERT_EQ(session.submitCount(), 1);
+  const auto* drt = LastDrtWrite(session);
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->film_negative.has_value());
+  EXPECT_EQ(*drt->film_negative, "fuji_provia_100f");
+  ASSERT_TRUE(drt->film_print_material.has_value());
+  EXPECT_EQ(*drt->film_print_material, "fuji_ca_maxima");
+  ASSERT_TRUE(WaitFor([&] { return !print->isVisible(); }));
+  EXPECT_EQ(process->property("currentValue").toString().toStdString(), "reversal");
+
+  // Negative again: the last negative of the session comes back.
+  ASSERT_TRUE(QMetaObject::invokeMethod(process, "selected", Q_ARG(int, 0),
+                                        Q_ARG(QString, QStringLiteral("negative"))));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  ASSERT_EQ(session.submitCount(), 2);
+  drt = LastDrtWrite(session);
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->film_negative.has_value());
+  EXPECT_EQ(*drt->film_negative, "kodak_portra_400");
+  EXPECT_EQ(*drt->film_print_material, "fuji_ca_maxima");
+  ASSERT_TRUE(WaitFor([&] { return print->isVisible(); }));
+
+  // A select of the current process writes nothing.
+  ASSERT_TRUE(QMetaObject::invokeMethod(process, "selected", Q_ARG(int, 0),
+                                        Q_ARG(QString, QStringLiteral("negative"))));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  EXPECT_EQ(session.submitCount(), 2);
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, FilmBrowserShowsOnlyTheFilmsOfTheProcess) {
+  DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* film  = harness.findModel<QQuickItem>(QStringLiteral("displayFilmNegativePicker"));
+  auto* print = harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintMaterialPicker"));
+  ASSERT_NE(film, nullptr);
+  ASSERT_NE(print, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    return film->property("currentValue").toString() == QStringLiteral("kodak_portra_400");
+  }));
+
+  auto values = PickerValues(film);
+  ASSERT_EQ(values.size(), 30U);
+  EXPECT_EQ(std::count(values.begin(), values.end(), "fuji_velvia_50"), 0);
+  EXPECT_EQ(std::count(values.begin(), values.end(), "agfa_vista_100"), 1);
+  EXPECT_TRUE(film->property("searchable").toBool());
+  EXPECT_EQ(PickerShownValues(film).size(), 30U);
+  EXPECT_EQ(PickerValues(print).size(), 19U);
+
+  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot(2.5, QStringLiteral("fuji_velvia_50")));
+  ASSERT_TRUE(WaitFor([&] {
+    return film->property("currentValue").toString() == QStringLiteral("fuji_velvia_50");
+  }));
+  values                                  = PickerValues(film);
+  const std::vector<std::string> reversal = {"fuji_velvia_50", "fuji_velvia_100",
+                                             "fuji_provia_100f", "fuji_astia_100f",
+                                             "kodak_ektachrome_e100"};
+  EXPECT_EQ(values, reversal);
+  // Five films: no search field and no brand chips.
+  EXPECT_FALSE(film->property("searchable").toBool());
+  // The rows have a heading for each brand, Fujifilm first.
+  const auto rows = film->property("rows").toList();
+  ASSERT_FALSE(rows.isEmpty());
+  EXPECT_EQ(rows.front().toMap().value(QStringLiteral("kind")).toString().toStdString(), "brand");
+  EXPECT_EQ(rows.front().toMap().value(QStringLiteral("text")).toString().toStdString(),
+            "FUJIFILM");
+  EXPECT_EQ(PickerShownValues(film), reversal);
+  EXPECT_FALSE(print->isVisible());
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, FilmBrowserFiltersByBrandAndSearchAndPicksAFilm) {
+  DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* film = harness.findModel<QQuickItem>(QStringLiteral("displayFilmNegativePicker"));
+  ASSERT_NE(film, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    return film->property("currentValue").toString() == QStringLiteral("kodak_portra_400");
+  }));
+
+  film->setProperty("expanded", true);
+  ASSERT_TRUE(film->setProperty("brandFilter", QStringLiteral("Fujifilm")));
+  auto shown = PickerShownValues(film);
+  ASSERT_EQ(shown.size(), 9U);
+  for (const auto& value : shown) {
+    EXPECT_EQ(value.rfind("fuji_", 0), 0U) << value;
+  }
+
+  film->setProperty("brandFilter", QString());
+  film->setProperty("query", QStringLiteral("portra"));
+  shown                                 = PickerShownValues(film);
+  const std::vector<std::string> portra = {"kodak_portra_400", "kodak_portra_160",
+                                           "kodak_portra_800"};
+  EXPECT_EQ(shown, portra);
+  film->setProperty("query", QStringLiteral("no such film"));
+  EXPECT_TRUE(PickerShownValues(film).empty());
+
+  // A pick writes the film and closes the browser.
+  film->setProperty("query", QString());
+  ASSERT_TRUE(QMetaObject::invokeMethod(film, "pickValue",
+                                        Q_ARG(QVariant, QStringLiteral("agfa_vista_100"))));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  ASSERT_GE(session.submitCount(), 1);
+  const auto* drt = LastDrtWrite(session);
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->film_negative.has_value());
+  EXPECT_EQ(*drt->film_negative, "agfa_vista_100");
+  EXPECT_FALSE(film->property("expanded").toBool());
+  EXPECT_EQ(film->property("currentValue").toString().toStdString(), "agfa_vista_100");
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest,

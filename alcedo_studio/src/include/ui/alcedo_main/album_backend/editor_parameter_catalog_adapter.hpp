@@ -42,6 +42,24 @@ class EditorParameterCatalogAdapter : public QObject {
   /// its flare slider is the flare of the loupe.
   Q_INVOKABLE bool         filmIsReversal(const QString& film) const;
 
+  /**
+   * @brief Entries of film print browser list @p list ("negative", "reversal", or "print"), in
+   *        browser order.
+   *
+   * Each entry is `{value, label, list, brand, family, shortLabel, shape, colors}`. `label` is the
+   * catalog name, `colors` holds 1 to 3 `#rrggbb` swatch colours. See FilmPresentation.
+   */
+  Q_INVOKABLE QVariantList filmBrowserEntries(const QString& list) const;
+
+  /// The browser entry of film or print material @p id, or an empty map.
+  Q_INVOKABLE QVariantMap  filmBrowserEntry(const QString& id) const;
+
+  /// The `{name, color}` brands of the film print browser, in browser order.
+  Q_INVOKABLE QVariantList filmBrands() const;
+
+  /// The film that a change to film list @p list ("negative" or "reversal") selects first.
+  Q_INVOKABLE QString      filmDefault(const QString& list) const;
+
   /// UI value of the default of object field @p field.
   Q_INVOKABLE QVariantMap  uiDefault(const QString& field) const;
 
