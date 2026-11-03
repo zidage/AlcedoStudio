@@ -257,6 +257,14 @@ class MetalBackend {
   [[nodiscard]] auto AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
                                 std::uint32_t edge, CommandContext& command_context)
       -> MetalLutBinding;
+  /**
+   * @brief A device buffer of @p bytes in the byte budget and the cache of @ref AcquireLut.
+   *
+   * The film print reads its tables through this function. @p key names the bytes.
+   * @throws std::runtime_error for an empty key or table, or when the buffer cannot be allocated.
+   */
+  [[nodiscard]] auto AcquireKeyedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                        CommandContext& command_context) -> MetalLutBinding;
   [[nodiscard]] auto DummyLut() -> MetalLutBinding;
   void               SetLutByteBudget(std::size_t bytes);
   /**
@@ -344,6 +352,9 @@ class MetalBackend {
   [[nodiscard]] auto ConsumeInjectedUploadFailure() -> bool {
     return ConsumeInjectedFailure(uploads_before_failure_);
   }
+  /// The cache entry of @p key and @p edge, or a new one with @p bytes. A keyed buffer has edge 0.
+  [[nodiscard]] auto AcquireCachedBuffer(ContentKey key, std::span<const std::byte> bytes,
+                                         std::uint32_t edge) -> MetalLutBinding;
 
   friend class Buffer;
   friend class Texture2D;

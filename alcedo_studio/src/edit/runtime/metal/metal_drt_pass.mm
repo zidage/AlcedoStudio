@@ -22,6 +22,7 @@
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/metal/metal_drt_gpu_params.hpp"
+#include "edit/runtime/metal/metal_film_print_pass.hpp"
 #include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -126,8 +127,7 @@ struct MetalDrtOps {
   using LutBinding        = MetalLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteMetalDrt";
-  /// A film print stops with an error until the kernels of this backend exist.
-  static constexpr bool kImplementsFilmPrint = false;
+  static constexpr bool kImplementsFilmPrint = true;
 
   static void RefreshNeighborhoodAdjustment(MetalRenderDevice& device, const IOperatorModel& model,
                                             const ParameterSlotKey& key,
@@ -208,6 +208,13 @@ struct MetalDrtOps {
     const auto             binding = arena.Binding(key);
     DispatchDrt(device, MetalSceneTexture(device, scene), MetalSceneTexture(device, display),
                 arena.DeviceBuffer(), binding.offset);
+  }
+
+  static void DispatchFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
+                                const DrtNodeModel& drt, const FrameSceneBinding& scene,
+                                const FrameSceneBinding& display, std::uint32_t width,
+                                std::uint32_t height) {
+    RecordMetalFilmPrint(device, plan, drt, scene, display, width, height);
   }
 
   static void CheckAfterEncode(MetalRenderDevice&) {}

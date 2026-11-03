@@ -275,12 +275,13 @@ if(ALCEDO_METAL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_display_to_ap1_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_params.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_pass.mm
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_film_print_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_frame_presenter.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_local_tone_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_mask_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_primary_grade_pass.mm
         PUBLIC_DEPS EditRuntime MetalContext alcedo::metal_cpp
-        PRIVATE_DEPS RawProcessorOp EditRuntimeLens EditScope MetalGeometryUtils MetalImage MetalDemosaicNetEntry PreviewPerformance
+        PRIVATE_DEPS RawProcessorOp EditRuntimeFilm EditRuntimeLens EditScope MetalGeometryUtils MetalImage MetalDemosaicNetEntry PreviewPerformance
     )
     target_compile_definitions(EditRuntimeMetal PUBLIC HAVE_METAL)
     target_compile_definitions(EditRuntimeMetal PRIVATE
@@ -306,6 +307,7 @@ if(ALCEDO_METAL_ENABLED)
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_diffusion_filter_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_display_to_ap1_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_pass.mm
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_film_print_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_frame_presenter.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_local_tone_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_mask_pass.mm

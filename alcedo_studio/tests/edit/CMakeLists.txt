@@ -590,14 +590,29 @@ if(ALCEDO_METAL_ENABLED)
 
   add_executable(GpuDagMetalDrtTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_drt_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_diffusion_filter_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_diffusion_filter_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_print_test.cpp)
   target_include_directories(GpuDagMetalDrtTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalDrtTest PRIVATE
-    GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry)
+    GTest::gtest_main EditRuntimeMetal EditRuntimeFilm EditInput RawProcessorOp
+    MetalDemosaicNetEntry)
   target_compile_definitions(GpuDagMetalDrtTest PRIVATE
     ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}"
     ALCEDO_DRT_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/drt")
   add_dependencies(GpuDagMetalDrtTest GpuDagMetalShaders)
+  # The film print cases read the resources from config/film_print next to the executable, as the
+  # product does. They are not in Git, so with no resource directory these cases skip.
+  if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+    add_custom_command(TARGET GpuDagMetalDrtTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+        "$<TARGET_FILE_DIR:GpuDagMetalDrtTest>/config/film_print"
+      VERBATIM)
+  endif()
+  if(ALCEDO_FILM_PRINT_EXPECTED_DIR)
+    target_compile_definitions(GpuDagMetalDrtTest PRIVATE
+      ALCEDO_FILM_PRINT_EXPECTED_DIR="${ALCEDO_FILM_PRINT_EXPECTED_DIR}")
+  endif()
   gtest_discover_tests(GpuDagMetalDrtTest TEST_PREFIX "GpuDagMetalDrtTest."
     PROPERTIES LABELS "gpu;edit;runtime;metal")
   alcedo_register_test_target(GpuDagMetalDrtTest gpu ci_metal)
