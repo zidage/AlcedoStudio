@@ -28,6 +28,9 @@ auto ToMethod(DrtMethod method, ColorUtils::ODTMethod* out) -> bool {
     case DrtMethod::OpenDrt:
       *out = ColorUtils::ODTMethod::OPEN_DRT;
       return true;
+    case DrtMethod::FilmPrint:
+      *out = ColorUtils::ODTMethod::FILM_PRINT;
+      return true;
   }
   return false;
 }
@@ -87,6 +90,28 @@ auto ExportSpaceToDrt(ColorUtils::ColorSpace space) -> ColorUtils::ColorSpace {
     default:
       return ColorUtils::ColorSpace::REC709;
   }
+}
+
+/**
+ * @brief The film print output is Rec. 709 SDR only.
+ *
+ * @p requested_space is the space before @ref ExportSpaceToDrt, so that an export to another space
+ * stops and does not encode as Rec. 709.
+ */
+auto CheckFilmPrintEncoding(ColorUtils::ColorSpace requested_space, ColorUtils::EOTF eotf,
+                            std::string* error) -> bool {
+  if (requested_space != ColorUtils::ColorSpace::REC709) {
+    SetError(error, "DrtOutputResolver: the film print encodes only Rec. 709, not " +
+                        ColorUtils::ColorSpaceToString(requested_space) + ".");
+    return false;
+  }
+  if (eotf == ColorUtils::EOTF::LINEAR || eotf == ColorUtils::EOTF::ST2084 ||
+      eotf == ColorUtils::EOTF::HLG) {
+    SetError(error, "DrtOutputResolver: the film print encodes only SDR display curves, not " +
+                        ColorUtils::EOTFToString(eotf) + ".");
+    return false;
+  }
+  return true;
 }
 
 auto ToOpenDrtDetail(const OpenDrtDetailedParams& p) -> odt_cpu::OpenDRTDetailedSettings {
@@ -196,6 +221,12 @@ auto DrtOutputResolver::Resolve(const DrtPayload&               payload,
       return false;
     }
   }
+  if (payload.method == DrtMethod::FilmPrint &&
+      !CheckFilmPrintEncoding(
+          export_encoding != nullptr ? export_encoding->encoding_space : encoding_space,
+          encoding_eotf, error)) {
+    return false;
+  }
   if (peak_luminance <= 0.0f) {
     SetError(error, "DrtOutputResolver: peak_luminance must be positive.");
     return false;
@@ -215,6 +246,9 @@ auto DrtOutputResolver::Resolve(const DrtPayload&               payload,
           ColorUtils::RGB_TO_XYZ_f33(limiting_space) * ColorUtils::XYZ_TO_RGB_f33(encoding_space);
       resolved.display_linear_scale_ =
           (encoding_eotf == ColorUtils::EOTF::ST2084) ? ColorUtils::ref_lum : 1.0f;
+    } else if (method == ColorUtils::ODTMethod::FILM_PRINT) {
+      resolved.limit_to_display_matx_ = cv::Matx33f::eye();
+      resolved.display_linear_scale_  = 1.0f;
     } else {
       resolved.open_drt_params_ = odt_cpu::ResolveOpenDRTRuntime(
           encoding_space, encoding_eotf, peak_luminance, ToOpenDrtSettings(payload));

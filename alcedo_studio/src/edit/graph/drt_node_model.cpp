@@ -5,8 +5,10 @@
 #include "edit/graph/drt_node_model.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -23,11 +25,25 @@ namespace alcedo {
 namespace {
 
 auto MethodToString(DrtMethod method) -> const char* {
-  return method == DrtMethod::Aces20 ? "aces_2_0" : "open_drt";
+  switch (method) {
+    case DrtMethod::Aces20:
+      return "aces_2_0";
+    case DrtMethod::FilmPrint:
+      return "film_print";
+    case DrtMethod::OpenDrt:
+    default:
+      return "open_drt";
+  }
 }
 
 auto MethodFromString(std::string_view text) -> DrtMethod {
-  return text == "aces_2_0" ? DrtMethod::Aces20 : DrtMethod::OpenDrt;
+  if (text == "aces_2_0") {
+    return DrtMethod::Aces20;
+  }
+  if (text == "film_print") {
+    return DrtMethod::FilmPrint;
+  }
+  return DrtMethod::OpenDrt;
 }
 
 auto SpaceToString(DrtColorSpace space) -> const char* {
@@ -261,6 +277,102 @@ auto ReadDiffusionStrength(const nlohmann::json& json) -> float {
   return static_cast<float>(strength);
 }
 
+/// A missing key reads as @p fallback. A present invalid value fails the load; it is not clamped.
+auto ReadFilmSlider(const nlohmann::json& film_print, const char* key, float fallback,
+                    float minimum, float maximum) -> float {
+  if (!film_print.contains(key)) {
+    return fallback;
+  }
+  const auto& value = film_print.at(key);
+  if (!value.is_number()) {
+    throw std::runtime_error(std::string{"DRT params: film_print."} + key + " must be a number");
+  }
+  const auto number = value.get<double>();
+  // Compare in double precision: a stored float limit such as 0.1f is above the decimal 0.1.
+  if (!std::isfinite(number) || number < static_cast<double>(minimum) ||
+      number > static_cast<double>(maximum)) {
+    throw std::runtime_error(std::string{"DRT params: film_print."} + key + " must be in [" +
+                             std::to_string(minimum) + ", " + std::to_string(maximum) + "]");
+  }
+  return static_cast<float>(number);
+}
+
+template <std::size_t Count>
+auto ReadFilmIdentifier(const nlohmann::json& film_print, const char* key, std::string fallback,
+                        const std::array<std::string_view, Count>& ids) -> std::string {
+  if (!film_print.contains(key)) {
+    return fallback;
+  }
+  const auto& value = film_print.at(key);
+  if (!value.is_string()) {
+    throw std::runtime_error(std::string{"DRT params: film_print."} + key + " must be a string");
+  }
+  auto id = value.get<std::string>();
+  if (!IsFilmIdentifier(ids, id)) {
+    throw std::runtime_error(std::string{"DRT params: film_print."} + key +
+                             " has the unknown identifier '" + id + "'");
+  }
+  return id;
+}
+
+/// A missing object reads as the default fields, so that a load replaces every field.
+auto ReadFilmPrint(const nlohmann::json& json) -> FilmPrintParams {
+  FilmPrintParams params;
+  if (!json.contains("film_print")) {
+    return params;
+  }
+  const auto& object = json.at("film_print");
+  if (!object.is_object()) {
+    throw std::runtime_error("DRT params: film_print must be an object");
+  }
+  params.negative = ReadFilmIdentifier(object, "negative", params.negative, kFilmNegativeIds);
+  params.print_material =
+      ReadFilmIdentifier(object, "print_material", params.print_material, kFilmPrintMaterialIds);
+  params.scene_light =
+      ReadFilmIdentifier(object, "scene_light", params.scene_light, kFilmSceneLightIds);
+  params.light_spread = ReadFilmSlider(object, "light_spread", params.light_spread,
+                                       kFilmLightSpreadMin, kFilmLightSpreadMax);
+  params.halation =
+      ReadFilmSlider(object, "halation", params.halation, kFilmHalationMin, kFilmHalationMax);
+  params.enlarger_flare = ReadFilmSlider(object, "enlarger_flare", params.enlarger_flare,
+                                         kFilmEnlargerFlareMin, kFilmEnlargerFlareMax);
+  return params;
+}
+
+void RequireFilmSlider(const std::optional<float>& value, std::string_view name, float minimum,
+                       float maximum) {
+  if (value.has_value() && (!std::isfinite(*value) || *value < minimum || *value > maximum)) {
+    throw std::invalid_argument("film_print." + std::string{name} + " must be in [" +
+                                std::to_string(minimum) + ", " + std::to_string(maximum) + "]");
+  }
+}
+
+template <std::size_t Count>
+void RequireFilmIdentifier(const std::optional<std::string>& value, std::string_view name,
+                           const std::array<std::string_view, Count>& ids) {
+  if (value.has_value() && !IsFilmIdentifier(ids, *value)) {
+    throw std::invalid_argument("film_print." + std::string{name} +
+                                " has the unknown identifier '" + *value + "'");
+  }
+}
+
+void RequireValidFilmPrintUpdate(const DrtParameterUpdate& update) {
+  RequireFilmIdentifier(update.film_negative, "negative", kFilmNegativeIds);
+  RequireFilmIdentifier(update.film_print_material, "print_material", kFilmPrintMaterialIds);
+  RequireFilmIdentifier(update.film_scene_light, "scene_light", kFilmSceneLightIds);
+  RequireFilmSlider(update.film_light_spread, "light_spread", kFilmLightSpreadMin,
+                    kFilmLightSpreadMax);
+  RequireFilmSlider(update.film_halation, "halation", kFilmHalationMin, kFilmHalationMax);
+  RequireFilmSlider(update.film_enlarger_flare, "enlarger_flare", kFilmEnlargerFlareMin,
+                    kFilmEnlargerFlareMax);
+}
+
+auto FilmPrintToJson(const FilmPrintParams& params) -> nlohmann::json {
+  return {{"negative", params.negative},       {"print_material", params.print_material},
+          {"scene_light", params.scene_light}, {"light_spread", params.light_spread},
+          {"halation", params.halation},       {"enlarger_flare", params.enlarger_flare}};
+}
+
 }  // namespace
 
 auto DrtParamsModel::IsDefault() const -> bool {
@@ -324,6 +436,10 @@ auto DrtParamsModel::DiffusionStrength() const -> float {
   return Read([](const DrtPayload& payload) { return payload.diffusion_strength; });
 }
 
+auto DrtParamsModel::FilmPrint() const -> FilmPrintParams {
+  return Read([](const DrtPayload& payload) { return payload.film_print; });
+}
+
 void DrtParamsModel::ApplyDiffusionStrength(float strength) {
   if (!std::isfinite(strength)) {
     throw std::invalid_argument("diffusion.strength must be finite");
@@ -339,6 +455,7 @@ void DrtParamsModel::ApplyDiffusionStrength(float strength) {
 }
 
 void DrtParamsModel::ApplyUpdate(DrtParameterUpdate update) {
+  RequireValidFilmPrintUpdate(update);
   MutateWithDirtyFields([update = std::move(update)](DrtPayload& payload) mutable {
     DirtyFieldMask changed;
     if (update.method.has_value() && payload.method != *update.method) {
@@ -396,6 +513,33 @@ void DrtParamsModel::ApplyUpdate(DrtParameterUpdate update) {
       payload.parameters = *update.parameters;
       changed |= DirtyFieldMask{DrtDirty::OpenDrt};
     }
+    auto& film = payload.film_print;
+    if (update.film_negative.has_value() && film.negative != *update.film_negative) {
+      film.negative = std::move(*update.film_negative);
+      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+    }
+    if (update.film_print_material.has_value() &&
+        film.print_material != *update.film_print_material) {
+      film.print_material = std::move(*update.film_print_material);
+      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+    }
+    if (update.film_scene_light.has_value() && film.scene_light != *update.film_scene_light) {
+      film.scene_light = std::move(*update.film_scene_light);
+      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+    }
+    if (update.film_light_spread.has_value() && film.light_spread != *update.film_light_spread) {
+      film.light_spread = *update.film_light_spread;
+      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+    }
+    if (update.film_halation.has_value() && film.halation != *update.film_halation) {
+      film.halation = *update.film_halation;
+      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+    }
+    if (update.film_enlarger_flare.has_value() &&
+        film.enlarger_flare != *update.film_enlarger_flare) {
+      film.enlarger_flare = *update.film_enlarger_flare;
+      changed |= DirtyFieldMask{DrtDirty::FilmPrint};
+    }
     return changed;
   });
 }
@@ -410,25 +554,32 @@ auto DrtParamsModel::ToJson() const -> nlohmann::json {
 }
 
 auto DrtParamsModel::OutputTransformJson() const -> nlohmann::json {
-  const auto payload = PayloadCopy();
-  return {{"method", MethodToString(payload.method)},
-          {"encoding_space", SpaceToString(payload.encoding_space)},
-          {"encoding_eotf", EotfToString(payload.encoding_eotf)},
-          {"limiting_space", SpaceToString(payload.limiting_space)},
-          {"peak_luminance", payload.peak_luminance},
-          {"open_drt",
-           {{"look_preset", payload.look_preset},
-            {"tonescale_preset", payload.tonescale_preset},
-            {"creative_white", payload.creative_white},
-            {"creative_white_limit", payload.creative_white_limit},
-            {"display_grey_luminance", payload.display_grey_luminance},
-            {"hdr_grey_boost", payload.hdr_grey_boost},
-            {"hdr_purity", payload.hdr_purity},
-            {"parameters", DetailedToJson(payload.parameters)}}}};
+  const auto     payload = PayloadCopy();
+  nlohmann::json json    = {{"method", MethodToString(payload.method)},
+                            {"encoding_space", SpaceToString(payload.encoding_space)},
+                            {"encoding_eotf", EotfToString(payload.encoding_eotf)},
+                            {"limiting_space", SpaceToString(payload.limiting_space)},
+                            {"peak_luminance", payload.peak_luminance},
+                            {"open_drt",
+                             {{"look_preset", payload.look_preset},
+                              {"tonescale_preset", payload.tonescale_preset},
+                              {"creative_white", payload.creative_white},
+                              {"creative_white_limit", payload.creative_white_limit},
+                              {"display_grey_luminance", payload.display_grey_luminance},
+                              {"hdr_grey_boost", payload.hdr_grey_boost},
+                              {"hdr_purity", payload.hdr_purity},
+                              {"parameters", DetailedToJson(payload.parameters)}}}};
+  if (payload.method == DrtMethod::FilmPrint) {
+    json["film_print"] = FilmPrintToJson(payload.film_print);
+  }
+  return json;
 }
 
 void DrtParamsModel::LoadJson(const nlohmann::json& json) {
-  Mutate(DrtDirty::All, [&json](DrtPayload& payload) {
+  // Read the validated groups first: a rejected document changes no field.
+  const auto diffusion_strength = ReadDiffusionStrength(json);
+  auto       film_print         = ReadFilmPrint(json);
+  Mutate(DrtDirty::All, [&](DrtPayload& payload) {
     payload.method = MethodFromString(json_util::ReadString(json, "method", "open_drt"));
     payload.encoding_space =
         SpaceFromString(json_util::ReadString(json, "encoding_space", "rec709"));
@@ -455,7 +606,8 @@ void DrtParamsModel::LoadJson(const nlohmann::json& json) {
         DetailedFromJson(open_drt["parameters"], payload.parameters);
       }
     }
-    payload.diffusion_strength = ReadDiffusionStrength(json);
+    payload.diffusion_strength = diffusion_strength;
+    payload.film_print         = std::move(film_print);
   });
 }
 

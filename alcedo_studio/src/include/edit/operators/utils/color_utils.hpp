@@ -33,8 +33,9 @@ enum class ColorSpace : int {
 };
 
 enum class ODTMethod : int {
-  ACES_2_0 = 0,
-  OPEN_DRT = 1,
+  ACES_2_0   = 0,
+  OPEN_DRT   = 1,
+  FILM_PRINT = 2,
 };
 
 enum class EOTF : int {
@@ -150,6 +151,9 @@ inline auto ODTMethodFromString(std::string_view method_str) -> ODTMethod {
   if (method_str == "aces_2_0") {
     return ODTMethod::ACES_2_0;
   }
+  if (method_str == "film_print") {
+    return ODTMethod::FILM_PRINT;
+  }
   return ODTMethod::OPEN_DRT;
 }
 
@@ -159,6 +163,8 @@ inline auto ODTMethodToString(ODTMethod method) -> std::string {
       return "aces_2_0";
     case ODTMethod::OPEN_DRT:
       return "open_drt";
+    case ODTMethod::FILM_PRINT:
+      return "film_print";
     default:
       return "open_drt";
   }

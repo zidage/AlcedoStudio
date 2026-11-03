@@ -162,6 +162,25 @@ auto MixDrtPost(ContentHash& hash, const DrtNodeModel& drt) -> void {
   }
 }
 
+auto FilmUvTableKey(const FilmPrintParams& film) -> ContentKey {
+  ContentHash hash;
+  hash.MixText("film_print.uv_table");
+  hash.MixText(film.negative);
+  hash.MixText(film.scene_light);
+  hash.MixU32(kFilmPrintImplementationVersion);
+  return hash.Key();
+}
+
+auto FilmPrintTableKey(const FilmPrintParams& film) -> ContentKey {
+  ContentHash hash;
+  hash.MixText("film_print.print_table");
+  hash.MixText(film.negative);
+  hash.MixText(film.print_material);
+  hash.MixText(film.scene_light);
+  hash.MixU32(kFilmPrintImplementationVersion);
+  return hash.Key();
+}
+
 auto MixGradeExcludingLocalToneValues(ContentHash& hash, const ColorGradeNodeModel& grade) -> void {
   hash.MixBool(grade.Enabled());
   hash.MixF32(grade.Mix());
@@ -618,6 +637,15 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
   if (document.Drt() != nullptr) {
     drt.MixText(document.Drt()->Params().ToJson().dump());
     MixDrtPost(drt, *document.Drt());
+    // Other methods keep their keys: only a film print mixes its table keys and version.
+    if (document.Drt()->Params().Method() == DrtMethod::FilmPrint) {
+      const auto film       = document.Drt()->Params().FilmPrint();
+      keys.film_uv_table    = FilmUvTableKey(film);
+      keys.film_print_table = FilmPrintTableKey(film);
+      drt.MixKey(keys.film_uv_table);
+      drt.MixKey(keys.film_print_table);
+      drt.MixU32(kFilmPrintImplementationVersion);
+    }
   }
   if (plan.output_color_override.has_value()) {
     drt.MixU32(static_cast<std::uint32_t>(plan.output_color_override->encoding_space));

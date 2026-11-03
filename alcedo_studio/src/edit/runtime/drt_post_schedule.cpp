@@ -6,11 +6,20 @@
 
 namespace alcedo {
 
-auto MakeDrtPostSchedule(std::span<const GradeNeighborParams> compiled_order) -> DrtPostSchedule {
+auto DrtPostNeighborhoodRuns(DrtMethod method, const GradeNeighborParams& neighbor) -> bool {
+  if (neighbor.enabled == 0U) {
+    return false;
+  }
+  return method != DrtMethod::FilmPrint ||
+         static_cast<AdjustmentBehavior>(neighbor.behavior) != AdjustmentBehavior::Halation;
+}
+
+auto MakeDrtPostSchedule(std::span<const GradeNeighborParams> compiled_order, DrtMethod method)
+    -> DrtPostSchedule {
   DrtPostSchedule schedule;
   schedule.enabled.reserve(compiled_order.size());
   for (const auto& neighbor : compiled_order) {
-    if (neighbor.enabled != 0U) {
+    if (DrtPostNeighborhoodRuns(method, neighbor)) {
       schedule.enabled.push_back(neighbor);
     }
   }

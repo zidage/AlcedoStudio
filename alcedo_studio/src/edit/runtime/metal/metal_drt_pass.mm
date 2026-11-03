@@ -126,6 +126,8 @@ struct MetalDrtOps {
   using LutBinding        = MetalLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteMetalDrt";
+  /// A film print stops with an error until the kernels of this backend exist.
+  static constexpr bool kImplementsFilmPrint = false;
 
   static void RefreshNeighborhoodAdjustment(MetalRenderDevice& device, const IOperatorModel& model,
                                             const ParameterSlotKey& key,

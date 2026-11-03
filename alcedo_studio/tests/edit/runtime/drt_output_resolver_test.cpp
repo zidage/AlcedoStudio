@@ -177,6 +177,111 @@ TEST(DrtOutputResolver, ExportEncodingReplacesPayloadEncodingButNotLimitingSpace
   EXPECT_EQ(output.encoding_space_, ColorUtils::ColorSpace::REC709);
 }
 
+auto FilmPrintPayload() -> DrtPayload {
+  DrtPayload payload;
+  payload.method         = DrtMethod::FilmPrint;
+  payload.encoding_space = DrtColorSpace::Rec709;
+  payload.encoding_eotf  = DrtEotf::Gamma22;
+  return payload;
+}
+
+TEST(DrtOutputResolver, FilmPrintResolvesRec709SdrEncodings) {
+  for (const auto [eotf, resolved_eotf] :
+       {std::tuple{DrtEotf::Gamma22, ColorUtils::EOTF::GAMMA_2_2},
+        std::tuple{DrtEotf::SrgbPiecewise, ColorUtils::EOTF::SRGB_PIECEWISE},
+        std::tuple{DrtEotf::Bt1886, ColorUtils::EOTF::BT1886},
+        std::tuple{DrtEotf::Gamma26, ColorUtils::EOTF::GAMMA_2_6},
+        std::tuple{DrtEotf::Gamma18, ColorUtils::EOTF::GAMMA_1_8}}) {
+    auto payload          = FilmPrintPayload();
+    payload.encoding_eotf = eotf;
+    ColorUtils::TO_OUTPUT_Params output;
+    std::string                  error;
+    ASSERT_TRUE(DrtOutputResolver::Resolve(payload, nullptr, &output, &error)) << error;
+    EXPECT_EQ(output.method_, ColorUtils::ODTMethod::FILM_PRINT);
+    EXPECT_EQ(output.encoding_space_, ColorUtils::ColorSpace::REC709);
+    EXPECT_EQ(output.eotf_, resolved_eotf);
+    EXPECT_EQ(output.display_linear_scale_, 1.0f);
+  }
+}
+
+TEST(DrtOutputResolver, FilmPrintRejectsHdrAndLinearEncodings) {
+  for (const auto [eotf, name] :
+       {std::tuple{DrtEotf::St2084, "st2084"}, std::tuple{DrtEotf::Hlg, "hlg"},
+        std::tuple{DrtEotf::Linear, "linear"}}) {
+    auto payload          = FilmPrintPayload();
+    payload.encoding_eotf = eotf;
+    auto        output    = SentinelOutput();
+    std::string error;
+    EXPECT_FALSE(DrtOutputResolver::Resolve(payload, nullptr, &output, &error));
+    EXPECT_EQ(error, std::string{"DrtOutputResolver: the film print encodes only SDR display "
+                                 "curves, not "} +
+                         name + ".");
+    ExpectUnchanged(output);
+  }
+}
+
+TEST(DrtOutputResolver, FilmPrintRejectsAnEncodingSpaceOtherThanRec709) {
+  for (const auto [space, name] : {std::tuple{DrtColorSpace::Rec2020, "rec2020"},
+                                   std::tuple{DrtColorSpace::P3D65, "p3_d65"}}) {
+    auto payload           = FilmPrintPayload();
+    payload.encoding_space = space;
+    auto        output     = SentinelOutput();
+    std::string error;
+    EXPECT_FALSE(DrtOutputResolver::Resolve(payload, nullptr, &output, &error));
+    EXPECT_EQ(error, std::string{"DrtOutputResolver: the film print encodes only Rec. 709, not "} +
+                         name + ".");
+    ExpectUnchanged(output);
+  }
+}
+
+TEST(DrtOutputResolver, FilmPrintExportOverrideFollowsTheSameRule) {
+  const auto                   payload = FilmPrintPayload();
+  std::string                  error;
+
+  ExportColorProfileConfig     sdr{ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::SRGB_PIECEWISE,
+                               100.0f};
+  ColorUtils::TO_OUTPUT_Params output;
+  ASSERT_TRUE(DrtOutputResolver::Resolve(payload, &sdr, &output, &error)) << error;
+  EXPECT_EQ(output.eotf_, ColorUtils::EOTF::SRGB_PIECEWISE);
+
+  const ExportColorProfileConfig rejected[] = {
+      {ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::ST2084, 1000.0f},
+      {ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::HLG, 1000.0f},
+      {ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::LINEAR, 100.0f},
+      {ColorUtils::ColorSpace::REC2020, ColorUtils::EOTF::GAMMA_2_2, 100.0f},
+      {ColorUtils::ColorSpace::P3_D65, ColorUtils::EOTF::GAMMA_2_2, 100.0f},
+      // Other methods encode this space as Rec. 709. The film print stops.
+      {ColorUtils::ColorSpace::PROPHOTO, ColorUtils::EOTF::GAMMA_2_2, 100.0f},
+  };
+  for (const auto& config : rejected) {
+    auto refused = SentinelOutput();
+    EXPECT_FALSE(DrtOutputResolver::Resolve(payload, &config, &refused, &error));
+    EXPECT_NE(error.find("the film print encodes only"), std::string::npos) << error;
+    ExpectUnchanged(refused);
+  }
+
+  // The override replaces the stored encoding: a stored HDR encoding does not stop an SDR export.
+  auto stored_hdr           = payload;
+  stored_hdr.encoding_space = DrtColorSpace::Rec2020;
+  stored_hdr.encoding_eotf  = DrtEotf::St2084;
+  EXPECT_TRUE(DrtOutputResolver::Resolve(stored_hdr, &sdr, &output, &error)) << error;
+}
+
+TEST(DrtOutputResolver, FilmPrintHdrThrowsFromResolveNode) {
+  auto node             = DrtNodeModel::MakeDefault(NodeId{"drt"});
+  auto payload          = FilmPrintPayload();
+  payload.encoding_eotf = DrtEotf::St2084;
+  node->Params().ReplaceParams(payload);
+  try {
+    (void)DrtOutputResolver::ResolveNode(*node, std::nullopt, "ExecuteTestDrt");
+    FAIL() << "ResolveNode accepted a film print with HDR";
+  } catch (const std::runtime_error& error) {
+    EXPECT_EQ(std::string(error.what()),
+              "ExecuteTestDrt: DrtOutputResolver: the film print encodes only SDR display curves, "
+              "not st2084.");
+  }
+}
+
 TEST(DrtOutputResolver, ResolveNodeThrowsWithCallerPrefixAndReadsNodeParameters) {
   auto node             = DrtNodeModel::MakeDefault(NodeId{"drt"});
   auto payload          = node->Params().Params();

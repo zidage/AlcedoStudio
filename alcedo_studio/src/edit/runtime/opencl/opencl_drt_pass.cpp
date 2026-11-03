@@ -106,6 +106,8 @@ struct OpenClDrtOps {
   using LutBinding        = OpenClLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteOpenClDrt";
+  /// A film print stops with an error until the kernels of this backend exist.
+  static constexpr bool        kImplementsFilmPrint = false;
 
   /// Post neighborhood parameters travel in the command, not in an arena slot.
   static void RefreshNeighborhoodAdjustment(OpenClRenderDevice&, const IOperatorModel&,

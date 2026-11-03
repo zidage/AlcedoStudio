@@ -34,7 +34,7 @@ auto Disabled() -> GradeNeighborParams {
 
 TEST(DrtPostSchedule, DisabledNeighborhoodsCopySceneThenDisplay) {
   const GradeNeighborParams order[] = {Disabled(), Disabled()};
-  const auto schedule = MakeDrtPostSchedule(order);
+  const auto                schedule = MakeDrtPostSchedule(order, DrtMethod::OpenDrt);
   const auto trace    = MakeDrtPostDecisionTrace(schedule);
   EXPECT_TRUE(trace.copy_scene_to_post);
   EXPECT_EQ(trace.enabled_neighborhood_count, 0U);
@@ -48,7 +48,7 @@ TEST(DrtPostSchedule, EnabledNeighborhoodsKeepCompilerOrderAndPingPongDestinatio
   const GradeNeighborParams order[] = {Disabled(), Enabled(AdjustmentBehavior::Sharpen),
                                        Enabled(AdjustmentBehavior::Clarity),
                                        Enabled(AdjustmentBehavior::FilmGrain)};
-  const auto schedule = MakeDrtPostSchedule(order);
+  const auto                schedule = MakeDrtPostSchedule(order, DrtMethod::OpenDrt);
   const auto trace    = MakeDrtPostDecisionTrace(schedule);
   EXPECT_FALSE(trace.copy_scene_to_post);
   ASSERT_EQ(trace.enabled_neighborhood_count, 3U);
@@ -62,6 +62,34 @@ TEST(DrtPostSchedule, EnabledNeighborhoodsKeepCompilerOrderAndPingPongDestinatio
   EXPECT_EQ(dests[1], DrtWriteTarget::Display);
   EXPECT_EQ(dests[2], DrtWriteTarget::FreeWorkMember);
   EXPECT_EQ(dests[3], DrtWriteTarget::Display);
+}
+
+TEST(DrtPostSchedule, FilmPrintScheduleHasNoHalationAndOtherMethodsKeepIt) {
+  const GradeNeighborParams order[] = {
+      Enabled(AdjustmentBehavior::Clarity), Enabled(AdjustmentBehavior::Sharpen),
+      Enabled(AdjustmentBehavior::Halation), Enabled(AdjustmentBehavior::FilmGrain)};
+
+  const auto film = MakeDrtPostSchedule(order, DrtMethod::FilmPrint);
+  ASSERT_EQ(film.enabled.size(), 3U);
+  EXPECT_EQ(static_cast<AdjustmentBehavior>(film.enabled[0].behavior), AdjustmentBehavior::Clarity);
+  EXPECT_EQ(static_cast<AdjustmentBehavior>(film.enabled[1].behavior), AdjustmentBehavior::Sharpen);
+  EXPECT_EQ(static_cast<AdjustmentBehavior>(film.enabled[2].behavior),
+            AdjustmentBehavior::FilmGrain);
+
+  for (const auto method : {DrtMethod::OpenDrt, DrtMethod::Aces20}) {
+    const auto other = MakeDrtPostSchedule(order, method);
+    ASSERT_EQ(other.enabled.size(), 4U);
+    EXPECT_EQ(static_cast<AdjustmentBehavior>(other.enabled[2].behavior),
+              AdjustmentBehavior::Halation);
+  }
+}
+
+TEST(DrtPostSchedule, FilmPrintWithOnlyHalationEnabledCopiesTheDisplayTransform) {
+  const GradeNeighborParams order[] = {Disabled(), Enabled(AdjustmentBehavior::Halation)};
+  const auto                film    = MakeDrtPostSchedule(order, DrtMethod::FilmPrint);
+  EXPECT_TRUE(film.enabled.empty());
+  EXPECT_TRUE(film.copy_scene_to_post);
+  EXPECT_FALSE(MakeDrtPostSchedule(order, DrtMethod::OpenDrt).copy_scene_to_post);
 }
 
 struct FakeNeighborTexture {};

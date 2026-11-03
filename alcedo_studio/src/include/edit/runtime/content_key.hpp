@@ -32,6 +32,8 @@ inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 2;
 /// applies the diffusion filter, built on the full-frame scatter canvas, before the display
 /// transform. Version 6 spreads the diffusion highlight boost over a log2 exposure range.
 inline constexpr std::uint32_t kDrtImplementationVersion           = 6;
+/// Bumped when film print pixel rules change. Other DRT methods do not mix this value.
+inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 1;
 /// Bumped when mask raster sampling or Union key structure changes. Version 3 is per-source Union.
 inline constexpr std::uint32_t kMaskImplementationVersion          = 3;
 

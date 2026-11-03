@@ -223,6 +223,7 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_snapshot_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/drt_diffusion_filter_model_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/drt_film_print_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/lmt_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_wheel_tone_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp

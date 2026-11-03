@@ -17,6 +17,7 @@
 #include "color/color_encoding_math.h"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/diffusion_filter_model.hpp"
+#include "edit/graph/film_print_model.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_model_base.hpp"
@@ -24,8 +25,9 @@
 namespace alcedo {
 
 enum class DrtMethod : int {
-  Aces20  = 0,
-  OpenDrt = 1,
+  Aces20    = 0,
+  OpenDrt   = 1,
+  FilmPrint = 2,
 };
 
 enum class DrtColorSpace : int {
@@ -128,6 +130,8 @@ struct DrtPayload {
   OpenDrtDetailedParams parameters{};
   /// Stored diffusion filter strength in [0, 1]. See @ref ResolveDiffusionFilterShape.
   float                 diffusion_strength = 0.0f;
+  /// Written only when @ref method is @ref DrtMethod::FilmPrint.
+  FilmPrintParams       film_print{};
 };
 
 enum class DrtDirty : std::uint32_t {
@@ -136,7 +140,8 @@ enum class DrtDirty : std::uint32_t {
   Encoding  = 1U << 1,
   OpenDrt   = 1U << 2,
   Diffusion = 1U << 3,
-  All       = Method | Encoding | OpenDrt | Diffusion,
+  FilmPrint = 1U << 4,
+  All       = Method | Encoding | OpenDrt | Diffusion | FilmPrint,
 };
 
 /**
@@ -159,6 +164,12 @@ struct DrtParameterUpdate {
   std::optional<float>                 hdr_grey_boost;
   std::optional<float>                 hdr_purity;
   std::optional<OpenDrtDetailedParams> parameters;
+  std::optional<std::string>           film_negative;
+  std::optional<std::string>           film_print_material;
+  std::optional<std::string>           film_scene_light;
+  std::optional<float>                 film_light_spread;
+  std::optional<float>                 film_halation;
+  std::optional<float>                 film_enlarger_flare;
 };
 
 class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload, DrtDirty> {
@@ -183,9 +194,13 @@ class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload
   [[nodiscard]] auto HdrGreyBoost() const -> float;
   [[nodiscard]] auto HdrPurity() const -> float;
   [[nodiscard]] auto DiffusionStrength() const -> float;
+  [[nodiscard]] auto FilmPrint() const -> FilmPrintParams;
 
   /**
    * @brief Apply validated DRT/ODT fields atomically and mark changed groups dirty.
+   *
+   * @throws std::invalid_argument that names the field for a non-finite value, a value outside its
+   *         range, or an unknown identifier of the film print. No field changes.
    */
   void               ApplyUpdate(DrtParameterUpdate update);
 
@@ -198,8 +213,9 @@ class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload
   void               ApplyDiffusionStrength(float strength);
 
   /**
-   * @brief Output-transform fields only (method, encoding, OpenDRT). Excludes the diffusion
-   *        filter, which the editor writes through its own `diffusion` field.
+   * @brief Output-transform fields only (method, encoding, OpenDRT, and `film_print` when the
+   *        method is the film print). Excludes the diffusion filter, which the editor writes
+   *        through its own `diffusion` field.
    */
   [[nodiscard]] auto OutputTransformJson() const -> nlohmann::json;
 
@@ -209,6 +225,10 @@ class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload
    * A document without the filter keeps its previous serialized bytes.
    */
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
+  /**
+   * @throws std::runtime_error that names the key for an invalid `diffusion` or `film_print` value.
+   *         No field changes. A missing object or key reads as its default.
+   */
   void               LoadJson(const nlohmann::json& json) override;
 
   [[nodiscard]] auto Params() const -> DrtPayload { return PayloadCopy(); }

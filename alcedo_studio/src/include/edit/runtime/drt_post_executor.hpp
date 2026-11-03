@@ -16,6 +16,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/drt_post_schedule.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
@@ -51,7 +52,9 @@ class DrtPostExecutor {
    *
    * The last write is always the existing display output. Intermediate Post writes use
    * the free scene-work member. Parameter slots are uploaded before any GPU start.
-   * A failed dispatch throws after Ops::CheckAfterEncode.
+   * A failed dispatch throws after Ops::CheckAfterEncode. A film print on a backend with no film
+   * print kernels throws before any GPU start; an encoding that the film print does not support
+   * reports its own error first.
    */
   static auto Execute(Device& device, const ExecutionPlan& plan, const PipelineDocument& document,
                       const FrameSceneBinding& scene) -> DrtPostExecutionResult {
@@ -62,6 +65,14 @@ class DrtPostExecutor {
     const auto* drt = document.Drt();
     if (drt == nullptr) {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": missing DRT endpoint");
+    }
+    const auto method = drt->Params().Method();
+    if constexpr (!Ops::kImplementsFilmPrint) {
+      if (method == DrtMethod::FilmPrint) {
+        (void)DrtOutputResolver::ResolveNode(*drt, plan.output_color_override, Ops::kErrorPrefix);
+        throw std::runtime_error(std::string{Ops::kErrorPrefix} +
+                                 ": the film print is not implemented on this backend");
+      }
     }
     const auto width  = Ops::BindingWidth(device, scene);
     const auto height = Ops::BindingHeight(device, scene);
@@ -87,7 +98,7 @@ class DrtPostExecutor {
       Ops::RefreshNeighborhoodAdjustment(device, *model, key, *behavior);
       auto neighbor = MakeGradeNeighborParams(*model, *behavior, plan.geometry);
       compiled_order.push_back(neighbor);
-      if (neighbor.enabled == 0U) {
+      if (!DrtPostNeighborhoodRuns(method, neighbor)) {
         continue;
       }
       NeighborWork work;
@@ -105,7 +116,7 @@ class DrtPostExecutor {
     workspace.Parameters().UploadDirty(device.CommandContext());
     Ops::PrepareNeighborCommands(device, drt->Id(), command_offsets);
 
-    const auto schedule = MakeDrtPostSchedule(compiled_order);
+    const auto             schedule = MakeDrtPostSchedule(compiled_order, method);
     DrtPostExecutionResult result;
     result.output                  = plan.display_output;
     result.display_post            = plan.display_output;

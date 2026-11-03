@@ -311,6 +311,21 @@ class OpenClDrtFixture : public ::testing::Test {
   std::unique_ptr<OpenClRenderDevice> device_;
 };
 
+TEST_F(OpenClDrtFixture, FilmPrintRenderStopsWithNamedErrorUntilItsKernelsExist) {
+  DrtParameterUpdate update;
+  update.method = DrtMethod::FilmPrint;
+  document_.Drt()->Params().ApplyUpdate(update);
+  plan_ = GraphCompiler::Compile(document_, input_.CompileSource(), RenderRequest{});
+  try {
+    (void)Render();
+    FAIL() << "the film print rendered on a backend with no film print kernels";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string{error.what()}.find("film print is not implemented on this backend"),
+              std::string::npos)
+        << error.what();
+  }
+}
+
 TEST_F(OpenClDrtFixture, BothDrtMethodsKeepHighSaturationDarkNoiseBelowWhite) {
   for (const auto method : {DrtMethod::Aces20, DrtMethod::OpenDrt}) {
     SCOPED_TRACE(method == DrtMethod::Aces20 ? "ACES 2.0" : "OpenDRT");

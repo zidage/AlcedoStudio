@@ -65,6 +65,8 @@ struct CudaDrtOps {
   using LutBinding        = CudaLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteCudaDrt";
+  /// A film print stops with an error until the kernels of this backend exist.
+  static constexpr bool        kImplementsFilmPrint = false;
 
   /// Post neighborhood parameters travel in the command, not in an arena slot.
   static void RefreshNeighborhoodAdjustment(CudaRenderDevice&, const IOperatorModel&,

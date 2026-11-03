@@ -9,6 +9,7 @@
 #include <span>
 #include <vector>
 
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/execution_plan.hpp"
 
@@ -37,13 +38,21 @@ struct DrtPostDecisionTrace {
 };
 
 /**
- * @brief Keep enabled neighborhood params in compiler order.
+ * @brief True when @p neighbor runs in the Post of a display transform of @p method.
  *
- * Disabled adjustments are skipped. An empty enabled list copies the display-transform result to
- * the final display output.
+ * A disabled adjustment does not run. The film print does not run the Halation operator, because
+ * the film model takes this colour from its layers. The Model keeps its stored value.
  */
-[[nodiscard]] auto MakeDrtPostSchedule(std::span<const GradeNeighborParams> compiled_order)
-    -> DrtPostSchedule;
+[[nodiscard]] auto DrtPostNeighborhoodRuns(DrtMethod method, const GradeNeighborParams& neighbor)
+    -> bool;
+
+/**
+ * @brief Keep the neighborhood params that @ref DrtPostNeighborhoodRuns selects, in compiler order.
+ *
+ * An empty enabled list copies the display-transform result to the final display output.
+ */
+[[nodiscard]] auto MakeDrtPostSchedule(std::span<const GradeNeighborParams> compiled_order,
+                                       DrtMethod method) -> DrtPostSchedule;
 
 /** @brief Record the comparable host decisions from @p schedule. */
 [[nodiscard]] auto MakeDrtPostDecisionTrace(const DrtPostSchedule& schedule) -> DrtPostDecisionTrace;

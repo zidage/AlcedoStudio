@@ -386,6 +386,83 @@ TEST(GpuDagResultContentKey, ClarityOnDrtChangesDisplayKeyNotGradeKey) {
   EXPECT_NE(edited.drt_display, base.drt_display);
 }
 
+TEST(GpuDagResultContentKey, FilmPrintSliderChangesDisplayKeyAndKeepsTableKeys) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  DrtParameterUpdate method;
+  method.method = DrtMethod::FilmPrint;
+  document.Drt()->Params().ApplyUpdate(method);
+  auto previous = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_FALSE(previous.film_uv_table.Empty());
+  EXPECT_FALSE(previous.film_print_table.Empty());
+
+  const auto expect_slider = [&](auto&& change) {
+    DrtParameterUpdate update;
+    change(update);
+    document.Drt()->Params().ApplyUpdate(update);
+    const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+    EXPECT_EQ(edited.film_uv_table, previous.film_uv_table);
+    EXPECT_EQ(edited.film_print_table, previous.film_print_table);
+    EXPECT_EQ(edited.primary_grade, previous.primary_grade);
+    EXPECT_NE(edited.drt_display, previous.drt_display);
+    previous = edited;
+  };
+  expect_slider([](DrtParameterUpdate& update) { update.film_light_spread = 2.0f; });
+  expect_slider([](DrtParameterUpdate& update) { update.film_halation = 2.0f; });
+  expect_slider([](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.05f; });
+}
+
+TEST(GpuDagResultContentKey, FilmPrintSelectionChangesTheTablesThatUseIt) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  DrtParameterUpdate method;
+  method.method = DrtMethod::FilmPrint;
+  document.Drt()->Params().ApplyUpdate(method);
+  const auto         base = BuildFrameResultContentKeys(plan, prepared, document);
+
+  DrtParameterUpdate negative;
+  negative.film_negative = "fuji_c200";
+  document.Drt()->Params().ApplyUpdate(negative);
+  const auto new_negative = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_NE(new_negative.film_uv_table, base.film_uv_table);
+  EXPECT_NE(new_negative.film_print_table, base.film_print_table);
+  EXPECT_NE(new_negative.drt_display, base.drt_display);
+
+  // The u'v' table holds no value of the print material.
+  DrtParameterUpdate paper;
+  paper.film_print_material = "kodak_2393";
+  document.Drt()->Params().ApplyUpdate(paper);
+  const auto new_paper = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(new_paper.film_uv_table, new_negative.film_uv_table);
+  EXPECT_NE(new_paper.film_print_table, new_negative.film_print_table);
+
+  DrtParameterUpdate light;
+  light.film_scene_light = "tungsten";
+  document.Drt()->Params().ApplyUpdate(light);
+  const auto new_light = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_NE(new_light.film_uv_table, new_paper.film_uv_table);
+  EXPECT_NE(new_light.film_print_table, new_paper.film_print_table);
+}
+
+TEST(GpuDagResultContentKey, OtherMethodsHaveNoTableKeysAndIgnoreStoredFilmPrintFields) {
+  auto       prepared = MakePrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  auto       plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base     = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_TRUE(base.film_uv_table.Empty());
+  EXPECT_TRUE(base.film_print_table.Empty());
+
+  DrtParameterUpdate update;
+  update.film_negative = "fuji_c200";
+  update.film_halation = 4.0f;
+  document.Drt()->Params().ApplyUpdate(update);
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.drt_display, base.drt_display);
+  EXPECT_TRUE(edited.film_print_table.Empty());
+}
+
 TEST(GpuDagResultContentKey, MiddleGradeEditReusesUpstreamResults) {
   auto prepared = MakePrepared();
   auto document = CreateDefaultPipelineDocument();
