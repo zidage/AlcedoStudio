@@ -212,6 +212,12 @@ shader sources under `bin/opencl/`, and (when OpenCL shared libraries are enable
 `OpenClContext.dll` / `OpenClProgramLibrary.dll`. The Khronos `OpenCL.dll` ICD loader
 is optional when the GPU driver already provides one.
 
+The film print resources (28 MB: reflectance table, stock bundle, and print setup) are not in Git.
+`build_product_resources.py` of [alcedo-film-lab](https://github.com/zidage/alcedo-film-lab) makes
+them. To ship them, pass `-FilmPrintResourceDir DIR` to `package_windows.ps1` or
+`--film-print-resource-dir DIR` to `package_macos.sh`. The installer holds an unchanged copy under
+`config/film_print/`, and the install tree check compares each file with the SHA-256 of the manifest.
+
 macOS:
 ```bash
 # Preferred full pipeline (configure + install + verify + CPack DMG/ZIP):

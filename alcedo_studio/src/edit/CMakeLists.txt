@@ -237,6 +237,17 @@ if(ALCEDO_OPENCL_ENABLED)
     target_link_libraries(EditScope PUBLIC OpenClContext PRIVATE OpenClProgramLibrary)
 endif()
 
+# Host tables of the film print DRT method: resources and spectral table stages. No GPU.
+def_library(EditRuntimeFilm
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_array_file.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_print_tables.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_stock_bundle.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_tables.cpp
+    PUBLIC_DEPS JSON
+    PRIVATE_DEPS Sha256Digest
+)
+
 # LUT reference resolution port shared by render runtimes and the application LUT library.
 def_library(EditLutResources
     SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/lut_resource_resolver.cpp

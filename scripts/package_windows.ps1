@@ -19,7 +19,10 @@ param(
     [string]$DuckDbFtsExtension = $env:ALCEDO_DUCKDB_FTS_EXTENSION,
     [bool]$RequireOpenCLAssets = $true,
     [ValidateRange(0, [long]::MaxValue)][long]$BuildNumber = 0,
-    [ValidateSet('stable','beta')][string]$Channel = 'stable'
+    [ValidateSet('stable','beta')][string]$Channel = 'stable',
+    # Output directory of build_product_resources.py of alcedo-film-lab. Empty: the package has no
+    # film print resources.
+    [string]$FilmPrintResourceDir = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -147,7 +150,7 @@ Write-Host ""
 # 1. Configure (re-run to pick up new packaging tools like WiX/NSIS)
 # ------------------------------------------------------------------
 Write-Host "Configuring CMake with preset '$Preset' ..." -ForegroundColor Yellow
-$configureCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --preset $Preset -B `"$BuildDir`" -DCMAKE_INSTALL_PREFIX=`"$repoRoot\build\install`" -DCMAKE_PREFIX_PATH=`"$QtPrefix`" -DALCEDO_DUCKDB_VSS_EXTENSION=`"$resolvedDuckDbVssExtension`" -DALCEDO_DUCKDB_FTS_EXTENSION=`"$resolvedDuckDbFtsExtension`" -DALCEDO_UPDATE_ALLOW_INSTALL=ON -DALCEDO_UPDATE_CHANNEL=$Channel -DALCEDO_BUILD_NUMBER=$resolvedBuildNumber"
+$configureCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --preset $Preset -B `"$BuildDir`" -DCMAKE_INSTALL_PREFIX=`"$repoRoot\build\install`" -DCMAKE_PREFIX_PATH=`"$QtPrefix`" -DALCEDO_DUCKDB_VSS_EXTENSION=`"$resolvedDuckDbVssExtension`" -DALCEDO_DUCKDB_FTS_EXTENSION=`"$resolvedDuckDbFtsExtension`" -DALCEDO_UPDATE_ALLOW_INSTALL=ON -DALCEDO_UPDATE_CHANNEL=$Channel -DALCEDO_BUILD_NUMBER=$resolvedBuildNumber -DALCEDO_FILM_PRINT_RESOURCE_DIR=`"$FilmPrintResourceDir`""
 Write-Host "> $configureCmd"
 Invoke-Expression $configureCmd
 if ($LASTEXITCODE -ne 0) {
@@ -190,6 +193,7 @@ function Invoke-InstallTreeVerification {
     param([string]$Directory)
     $verifyArgs = @('-ExecutionPolicy', 'Bypass', '-File', $verifyScript, '-InstallDir', $Directory)
     if (-not $RequireOpenCLAssets) { $verifyArgs += '-SkipOpenCLAssetCheck' }
+    if ($FilmPrintResourceDir) { $verifyArgs += '-RequireFilmPrintResources' }
     & powershell @verifyArgs
     if ($LASTEXITCODE -ne 0) { throw "Install tree verification failed: $Directory" }
 }
