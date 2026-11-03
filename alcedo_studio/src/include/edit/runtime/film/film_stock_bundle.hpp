@@ -32,7 +32,8 @@ struct FilmCurveView {
   double                        log_h_step    = 0.0;
 };
 
-/// Rule 'development_inhibition' of a negative. A negative with no modulation transfer data has none.
+/// Rule 'development_inhibition' of a negative. A negative with no modulation transfer data has
+/// none.
 struct FilmInhibitionView {
   std::span<const double>       k;            ///< (3, 3), row major: the total, which sets F_i
   std::span<const double>       image_k;      ///< (3, 3): the part of `k` with a blur of the image
@@ -61,11 +62,11 @@ struct FilmNegativeView {
 /// Values of the point stages that are the same for all stocks. Lab rules
 /// 'spectral_locus_projection' and 'rgc_style_display_compression'.
 struct FilmPointConstants {
-  std::span<const double> ap1_to_xyz;     ///< (3, 3), row major
-  std::span<const double> locus_normals;  ///< (facets, 2)
-  std::span<const double> locus_room;     ///< (facets)
-  std::span<const double> locus_white;    ///< (2): X / Y and Z / Y of the white
-  std::span<const double> uv_max;         ///< (2): u' and v' of the last table node
+  std::span<const double> ap1_to_xyz;       ///< (3, 3), row major
+  std::span<const double> locus_normals;    ///< (facets, 2)
+  std::span<const double> locus_room;       ///< (facets)
+  std::span<const double> locus_white;      ///< (2): X / Y and Z / Y of the white
+  std::span<const double> uv_max;           ///< (2): u' and v' of the last table node
   std::span<const double> gamut_threshold;  ///< (3)
   std::span<const double> gamut_limit;      ///< (3)
   double                  locus_inset = 0.0;
@@ -95,9 +96,10 @@ struct FilmPaperView {
   std::span<const double> status_axis_start;  ///< (3)
   std::span<const double> status_axis_range;  ///< (3)
   FilmCurveView           curves;
-  double                  xyz_scale         = 0.0;
-  double                  clear_luminance   = 0.0;  ///< Y of the clear print under the viewing light
-  double                  surround_exponent = 1.0;  ///< Lab rule dark_surround_on_display
+  double                  xyz_scale       = 0.0;
+  double                  clear_luminance = 0.0;  ///< Y of the clear print under the viewing light
+  double                  surround_exponent = 1.0;    ///< Lab rule dark_surround_on_display
+  bool                    cinema_look       = false;  ///< Lab rule print_cinema_look
 };
 
 /// The fixed scalar values of one selection of film, print material, and scene light.

@@ -146,6 +146,7 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
                              1.0 / constants.gamut_power));
   }
   params.gamut_power              = real(constants.gamut_power);
+  params.cinema_look              = bundle.PrintMaterial(print_material).cinema_look ? 1U : 0U;
   params.inhibition_has_image     = has_image ? 1U : 0U;
   params.inhibition_has_point     = has_point ? 1U : 0U;
   params.locus_facets             = static_cast<std::uint32_t>(layout.facets);

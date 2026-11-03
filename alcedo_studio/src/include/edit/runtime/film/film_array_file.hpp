@@ -19,7 +19,7 @@
 namespace alcedo {
 
 /// Version of the film print resource files. The manifest and each array file state it.
-inline constexpr int kFilmResourceSchemaVersion = 3;
+inline constexpr int kFilmResourceSchemaVersion = 4;
 
 /// Element type of an array in a @ref FilmArrayFile.
 enum class FilmArrayType { kF64, kF32, kI32, kI64, kU8 };

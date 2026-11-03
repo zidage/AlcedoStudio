@@ -818,6 +818,14 @@ On 5207 + 2383, the range of b\* for L\* 15 to 88 goes from 13.7 to 7.2, and of 
 
 **Change.** The default of a RAW document stays saturation 1.3. When an `odt` edit changes the method to `film_print`, `EditorHistoryMutation::CommitAdjustment` also writes 1.0 to the saturation of the Default Grade, in the same history batch, so one undo restores both. This applies only while the value is still the import default; a value that the user selected stays. Leaving the film print does not restore the value. K total equals the image part (lab rule `inhibition_total_from_image_part`), so `fuji_eterna_500` has no inhibition. Each negative on a cine print has `printing_gain` from lab rule `print_slope_match`, strength 0.5: a product choice, with no such step in a real printer. The entry of the CUDA film print has the reference gamut compression. Resource schema 3 does not change. `kFilmPrintImplementationVersion` is 9.
 
+##### Look of Kodak Vision 2383 (record, 2026-11-02)
+
+**Fault.** The user finds that 5207 on 2383 at midday looks thin and strange, and asks for a stylized look near La La Land (issue #645). Lab decision U81, section 5.13 of the P7 report.
+
+**Change.** The user selected candidate P6 of a local look study, and asked not to merge it with other candidates. Lab rule `print_cinema_look` is a fixed creative step on the sRGB code of the finished print. All its constants are creative choices, and it has no measurement. `FilmKernelCinemaLook` has the steps of `cinema_look.py` of the lab, after `FilmKernelFinishDisplay`. Only `kodak_2383` has it, through the value `paper/<id>/cinema_look` of the stock bundle, so a document with another print material does not change. Resource schema 4. `kFilmPrintImplementationVersion` is 10.
+
+**Not done.** The user review in the running application. The other negatives on 2383 take the same step with no review. A scan mode has no product path, because the user has not selected its look.
+
 ### F6: OpenCL passes
 
 1. **Objective.** The chain of F3 and F4 on OpenCL 1.2, with its program registration. Use the skill `opencl-program-registry`.

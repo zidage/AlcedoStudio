@@ -61,8 +61,9 @@ class FilmPrintPointReference {
     const auto q =
         FilmKernelLayerExposure(&params_, values_.data(), compressed.r, compressed.g, compressed.b);
     const auto a = FilmKernelPointAmounts(&params_, values_.data(), q);
-    const auto linear =
+    const auto finished =
         FilmKernelFinishDisplay(&params_, FilmKernelPrintDisplay(&params_, print_rgba_.data(), a));
+    const auto linear = params_.cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
     return {Encode(linear.r), Encode(linear.g), Encode(linear.b)};
   }
 
