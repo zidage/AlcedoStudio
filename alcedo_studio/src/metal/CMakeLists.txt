@@ -371,6 +371,7 @@ if(ALCEDO_METAL_ENABLED)
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_opendrt.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_neighbor.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/prng.metal"
+            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_math.h"
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
             "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
         LINK_AIR "${METAL_FILM_PRINT_AIR}"

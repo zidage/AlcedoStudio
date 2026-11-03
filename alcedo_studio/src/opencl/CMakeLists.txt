@@ -40,6 +40,7 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_DISPLAY_TO_AP1_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/display_to_ap1_math.h")
     set(OPENCL_RASTER_LINEARIZE_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/raster_linearize_math.h")
     set(OPENCL_FILM_PRINT_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_print_math.h")
+    set(OPENCL_FILM_GRAIN_MATH_H "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_math.h")
     set(ALCEDO_OPENCL_PACKAGED_HEADERS
         "${OPENCL_COLOR_ENCODING_MATH_H}"
         "${OPENCL_DNG_PROFILE_MATH_H}"
@@ -48,6 +49,7 @@ if(ALCEDO_OPENCL_ENABLED)
         "${OPENCL_DISPLAY_TO_AP1_MATH_H}"
         "${OPENCL_RASTER_LINEARIZE_MATH_H}"
         "${OPENCL_FILM_PRINT_MATH_H}"
+        "${OPENCL_FILM_GRAIN_MATH_H}"
         CACHE INTERNAL "Header sources of OpenCL programs that the install rules package.")
 
     # On Windows, first-party CUDA pipeline targets (RawProcessorOp, EditRuntimeLens,
@@ -146,6 +148,7 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_DAG_DRT_CL="${OPENCL_DAG_DRT_CL}"
         ALCEDO_OPENCL_DAG_FILM_PRINT_CL="${OPENCL_DAG_FILM_PRINT_CL}"
         ALCEDO_OPENCL_FILM_PRINT_MATH_H="${OPENCL_FILM_PRINT_MATH_H}"
+        ALCEDO_OPENCL_FILM_GRAIN_MATH_H="${OPENCL_FILM_GRAIN_MATH_H}"
         ALCEDO_OPENCL_DAG_DRT_PARAMS_CL="${OPENCL_DAG_DRT_PARAMS_CL}"
         ALCEDO_OPENCL_DAG_COMMON_CL="${OPENCL_DAG_COMMON_CL}"
         ALCEDO_OPENCL_DAG_CST_CL="${OPENCL_DAG_CST_CL}"

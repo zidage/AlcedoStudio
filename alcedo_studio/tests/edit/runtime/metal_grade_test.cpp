@@ -5,11 +5,13 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <ranges>
 #include <span>
@@ -39,6 +41,7 @@
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 #include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/parameter_binding.hpp"
+#include "film_grain_colour_statistics.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 #include "oklab_contrast_reference.hpp"
 
@@ -707,6 +710,58 @@ TEST_F(MetalGradeFixture, MetalFilmGrainStrengthScalesDeterministicDensityVariat
     EXPECT_FLOAT_EQ(high[index].b, high_again[index].b);
   }
   EXPECT_GT(high_energy, low_energy * 6.0);
+}
+
+TEST_F(MetalGradeFixture, MetalFilmGrainColourIsWarmCoolWithTheQuietestGreen) {
+  // film_grain_math.h: the channel mix and weights of real colour negative grain.
+  constexpr std::uint32_t width  = 128;
+  constexpr std::uint32_t height = 128;
+  UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
+  ModelByType<FilmGrainModel>(type_ids::FilmGrain()).SetValue(0.6f);
+  const auto output = Download(device_, RenderThroughDrtPost().display_post);
+  const auto colour =
+      film_grain_test::MeasureGrainResidualColour(last_display_base_pixels_, output);
+  EXPECT_LT(colour.correlation_rb, colour.correlation_rg - 0.08);
+  EXPECT_LT(colour.correlation_rb, colour.correlation_gb - 0.08);
+  EXPECT_GT(colour.warm_cool_share, 1.8 * colour.green_magenta_share);
+  EXPECT_LT(colour.std_dev[1], colour.std_dev[0]);
+  EXPECT_LT(colour.std_dev[1], colour.std_dev[2]);
+}
+
+/// Wall time of a full render at 6000 x 4000 with and without film grain, median of 9 renders. The
+/// difference is the cost of the film grain passes. Run it with --gtest_also_run_disabled_tests.
+TEST_F(MetalGradeFixture, DISABLED_FilmGrainCostRecordAt24Megapixels) {
+  constexpr std::uint32_t width  = 6000;
+  constexpr std::uint32_t height = 4000;
+  UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
+  auto&      grain    = ModelByType<FilmGrainModel>(type_ids::FilmGrain());
+  const auto frame_ms = [&]() {
+    const auto start = std::chrono::steady_clock::now();
+    device_.BeginRender();
+    ExecuteMetalDevelop(device_, plan_, prepared_, document_);
+    ExecuteMetalGeometryResample(device_, plan_);
+    ExecuteMetalCameraColor(device_, plan_, document_);
+    auto grade = ExecuteMetalPrimaryGrade(device_, plan_, prepared_, document_);
+    (void)ExecuteMetalDrt(device_, plan_, document_, grade.output_binding);
+    device_.EndRender();
+    device_.WaitIdle();
+    const std::chrono::duration<double, std::milli> elapsed =
+        std::chrono::steady_clock::now() - start;
+    return elapsed.count();
+  };
+  const auto median = [&](float value) {
+    grain.SetValue(value);
+    (void)frame_ms();
+    std::vector<double> runs;
+    for (int run = 0; run < 9; ++run) runs.push_back(frame_ms());
+    std::sort(runs.begin(), runs.end());
+    return runs[runs.size() / 2];
+  };
+  const double without_grain = median(0.0f);
+  const double with_grain    = median(0.6f);
+  std::cout << "Frame at " << width << " x " << height << ": without grain " << without_grain
+            << " ms, with grain " << with_grain << " ms, grain " << with_grain - without_grain
+            << " ms\n";
 }
 
 TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) {
