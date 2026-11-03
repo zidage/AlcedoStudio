@@ -16,6 +16,7 @@
 #include "edit/geometry/crop_frame.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/develop_raster_input.hpp"
+#include "edit/graph/film_print_model.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_tone.hpp"
 #include "edit/operators/models/curve_model.hpp"
@@ -485,6 +486,7 @@ auto SourceAspect(const EditorParameterSource& source) -> double {
 constexpr std::array kOdtMethodOptions = {
     EditorParameterOption{"aces_2_0", "ACES 2.0"},
     EditorParameterOption{"open_drt", "OpenDRT"},
+    EditorParameterOption{"film_print", "Film Print"},
 };
 
 // The DrtColorSpace values of the display transform Model (ParseDrtColorSpace).
@@ -565,6 +567,38 @@ constexpr std::array kOdtCreativeWhiteOptions = {
     EditorParameterOption{"d50", "D50"},
 };
 
+/// Menu entries of a list of film identifiers and their catalog names.
+template <std::size_t Count>
+constexpr auto FilmOptions(const std::array<std::string_view, Count>& ids,
+                           const std::array<std::string_view, Count>& names)
+    -> std::array<EditorParameterOption, Count> {
+  std::array<EditorParameterOption, Count> options{};
+  for (std::size_t i = 0; i < Count; ++i) {
+    options[i] = EditorParameterOption{ids[i], names[i]};
+  }
+  return options;
+}
+
+constexpr auto kOdtFilmNegativeOptions = FilmOptions(kFilmNegativeIds, kFilmNegativeNames);
+constexpr auto kOdtFilmPrintMaterialOptions =
+    FilmOptions(kFilmPrintMaterialIds, kFilmPrintMaterialNames);
+
+constexpr std::array<EditorParameterOption, kFilmSceneLightIds.size()> kOdtFilmSceneLightOptions = {
+    EditorParameterOption{"reference", "Reference"},
+    EditorParameterOption{"daylight", "Daylight"},
+    EditorParameterOption{"tungsten", "Tungsten"},
+    EditorParameterOption{"fluorescent", "Fluorescent"},
+    EditorParameterOption{"led", "LED"},
+    EditorParameterOption{"sodium", "Sodium"},
+    EditorParameterOption{"street_mixed", "Street Mixed"},
+    EditorParameterOption{"street_sodium", "Street Sodium"},
+    EditorParameterOption{"street_led", "Street LED"},
+    EditorParameterOption{"interior_warm", "Interior Warm"},
+    EditorParameterOption{"interior_office", "Interior Office"},
+};
+
+constexpr double kOdtFilmEnlargerFlareUiMax = 0.1;
+
 constexpr std::array kOdtProperties = {
     EditorParameterProperty{"method", PropertyType::Option, kOdtMethodOptions},
     EditorParameterProperty{"encoding_space", PropertyType::Option, kOdtEncodingSpaceOptions},
@@ -574,13 +608,35 @@ constexpr std::array kOdtProperties = {
     EditorParameterProperty{"look_preset", PropertyType::Option, kOdtLookOptions},
     EditorParameterProperty{"tonescale_preset", PropertyType::Option, kOdtTonescaleOptions},
     EditorParameterProperty{"creative_white", PropertyType::Option, kOdtCreativeWhiteOptions},
+    EditorParameterProperty{"negative", PropertyType::Option, kOdtFilmNegativeOptions},
+    EditorParameterProperty{"print_material", PropertyType::Option, kOdtFilmPrintMaterialOptions},
+    EditorParameterProperty{"scene_light", PropertyType::Option, kOdtFilmSceneLightOptions},
+    EditorParameterProperty{"light_spread", PropertyType::Number, {},
+                            static_cast<double>(kFilmLightSpreadMin),
+                            static_cast<double>(kFilmLightSpreadMax), 0.01, 2},
+    EditorParameterProperty{"halation", PropertyType::Number, {},
+                            static_cast<double>(kFilmHalationMin),
+                            static_cast<double>(kFilmHalationMax), 0.01, 2},
+    EditorParameterProperty{"enlarger_flare", PropertyType::Number, {},
+                            static_cast<double>(kFilmEnlargerFlareMin),
+                            kOdtFilmEnlargerFlareUiMax, 0.001, 3},
 };
 
 /// OpenDRT preset properties: the Model holds them under `open_drt`.
 constexpr std::array<const char*, 3> kOdtOpenDrtKeys = {"look_preset", "tonescale_preset",
                                                         "creative_white"};
 
+/// Film print properties: the Model holds them under `film_print`.
+constexpr std::array<const char*, 3> kOdtFilmSelectionKeys = {"negative", "print_material",
+                                                              "scene_light"};
+constexpr std::array<const char*, 3> kOdtFilmSliderKeys    = {"light_spread", "halation",
+                                                              "enlarger_flare"};
+
+constexpr const char* kOdtFilmPrintEncodingSpace = "rec709";
+constexpr double      kOdtFilmPrintPeakLuminance = 100.0;
+
 auto OdtUiDefault() -> json {
+  const FilmPrintParams film_print;
   return {{"method", "open_drt"},
           {"encoding_space", "rec709"},
           {"encoding_eotf", "gamma_2_2"},
@@ -588,7 +644,29 @@ auto OdtUiDefault() -> json {
           {"limiting_space", "rec709"},
           {"look_preset", "standard"},
           {"tonescale_preset", "use_look_preset"},
-          {"creative_white", "use_look_preset"}};
+          {"creative_white", "use_look_preset"},
+          {"negative", film_print.negative},
+          {"print_material", film_print.print_material},
+          {"scene_light", film_print.scene_light},
+          {"light_spread", static_cast<double>(film_print.light_spread)},
+          {"halation", static_cast<double>(film_print.halation)},
+          {"enlarger_flare", 0.01}};
+}
+
+auto OptionsText(std::span<const EditorParameterOption> options) -> std::string {
+  std::string text;
+  for (const auto& option : options) {
+    if (!text.empty()) {
+      text += ", ";
+    }
+    text += option.value;
+  }
+  return text;
+}
+
+auto HasOption(std::span<const EditorParameterOption> options, std::string_view value) -> bool {
+  return std::any_of(options.begin(), options.end(),
+                     [value](const EditorParameterOption& option) { return option.value == value; });
 }
 
 auto OdtModelToUi(const json& model_json, std::string* error) -> std::optional<json> {
@@ -624,10 +702,58 @@ auto OdtModelToUi(const json& model_json, std::string* error) -> std::optional<j
     }
     ui[key] = value;
   }
+  const auto  film_it    = odt.find("film_print");
+  const json& film_print = film_it != odt.end() ? *film_it : kEmpty;
+  if (!RequireObject(film_print, "odt.film_print", error)) {
+    return std::nullopt;
+  }
+  for (const char* key : kOdtFilmSelectionKeys) {
+    std::string value;
+    if (!ReadString(film_print, key, defaults.at(key).get<std::string>(), "odt", &value, error)) {
+      return std::nullopt;
+    }
+    ui[key] = value;
+  }
+  for (const char* key : kOdtFilmSliderKeys) {
+    double value = 0.0;
+    if (!ReadNumber(film_print, key, defaults.at(key).get<double>(), "odt", &value, error)) {
+      return std::nullopt;
+    }
+    ui[key] = value;
+  }
+  // The Model stores a float, and the float of the decimal limit 0.1 is above that limit.
+  ui["enlarger_flare"] =
+      std::min(ui.at("enlarger_flare").get<double>(), kOdtFilmEnlargerFlareUiMax);
   return ui;
 }
 
+/// The film print has Rec. 709 SDR output only: an EOTF of Rec. 709 stays, another EOTF reads as
+/// the default.
+auto OdtFilmPrintEotf(const json& ui_value) -> std::string {
+  const auto& eotf = ui_value.at("encoding_eotf").get_ref<const std::string&>();
+  return HasOption(EditorParameterCatalog::OdtEotfOptions(kOdtFilmPrintEncodingSpace), eotf)
+             ? eotf
+             : OdtUiDefault().at("encoding_eotf").get<std::string>();
+}
+
 auto OdtUiToModel(const json& ui_value) -> json {
+  if (ui_value.at("method").get_ref<const std::string&>() == "film_print") {
+    // The panel hides the encoding controls, so a selection in an HDR or P3 document writes the
+    // only output of this method. Undo restores the earlier encoding through the history value.
+    json film_print = json::object();
+    for (const char* key : kOdtFilmSelectionKeys) {
+      film_print[key] = ui_value.at(key);
+    }
+    for (const char* key : kOdtFilmSliderKeys) {
+      film_print[key] = ui_value.at(key);
+    }
+    return {{"odt",
+             {{"method", "film_print"},
+              {"encoding_space", kOdtFilmPrintEncodingSpace},
+              {"encoding_eotf", OdtFilmPrintEotf(ui_value)},
+              {"peak_luminance", kOdtFilmPrintPeakLuminance},
+              {"film_print", std::move(film_print)}}}};
+  }
   // The panel writes the controls of the selected method only.
   json odt = {{"method", ui_value.at("method")},
               {"encoding_space", ui_value.at("encoding_space")},
@@ -645,22 +771,6 @@ auto OdtUiToModel(const json& ui_value) -> json {
   return {{"odt", std::move(odt)}};
 }
 
-auto OptionsText(std::span<const EditorParameterOption> options) -> std::string {
-  std::string text;
-  for (const auto& option : options) {
-    if (!text.empty()) {
-      text += ", ";
-    }
-    text += option.value;
-  }
-  return text;
-}
-
-auto HasOption(std::span<const EditorParameterOption> options, std::string_view value) -> bool {
-  return std::any_of(options.begin(), options.end(),
-                     [value](const EditorParameterOption& option) { return option.value == value; });
-}
-
 /// True when @p ui_change sets @p key to a value other than the current one.
 auto ChangesValue(const json& ui_change, const json& current_ui, const char* key) -> bool {
   const auto it = ui_change.find(key);
@@ -671,7 +781,24 @@ auto OdtConstrain(const json& merged_ui, const json& ui_change, const json& curr
                   const EditorParameterSource& source, std::string* error)
     -> std::optional<json> {
   static_cast<void>(source);
-  json        ui    = merged_ui;
+  json ui = merged_ui;
+  if (ui.at("method").get_ref<const std::string&>() == "film_print") {
+    if (ChangesValue(ui_change, current_ui, "encoding_space") &&
+        ui_change.at("encoding_space") != kOdtFilmPrintEncodingSpace) {
+      SetError(error, "odt.encoding_space must be rec709 with method film_print");
+      return std::nullopt;
+    }
+    if (ChangesValue(ui_change, current_ui, "peak_luminance") &&
+        ui_change.at("peak_luminance") != kOdtFilmPrintPeakLuminance) {
+      SetError(error, "odt.peak_luminance must be 100 with method film_print");
+      return std::nullopt;
+    }
+    ui["encoding_space"] = kOdtFilmPrintEncodingSpace;
+    ui["peak_luminance"] = kOdtFilmPrintPeakLuminance;
+    if (!ChangesValue(ui_change, current_ui, "encoding_eotf")) {
+      ui["encoding_eotf"] = OdtFilmPrintEotf(ui);
+    }
+  }
   const auto& space = ui.at("encoding_space").get_ref<const std::string&>();
   const auto  eotfs = EditorParameterCatalog::OdtEotfOptions(space);
   if (!HasOption(eotfs, ui.at("encoding_eotf").get_ref<const std::string&>())) {
@@ -696,6 +823,16 @@ auto OdtConstrain(const json& merged_ui, const json& ui_change, const json& curr
       if (ChangesValue(ui_change, current_ui, key)) {
         SetError(error, std::string{"odt."} + key + " needs method open_drt");
         return std::nullopt;
+      }
+    }
+  }
+  if (method != "film_print") {
+    for (const auto& keys : {kOdtFilmSelectionKeys, kOdtFilmSliderKeys}) {
+      for (const char* key : keys) {
+        if (ChangesValue(ui_change, current_ui, key)) {
+          SetError(error, std::string{"odt."} + key + " needs method film_print");
+          return std::nullopt;
+        }
       }
     }
   }

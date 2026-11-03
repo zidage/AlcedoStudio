@@ -2723,6 +2723,78 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorDisplayTransformPanel</name>
     <message>
+        <source>Film Print</source>
+        <translation>胶片印片</translation>
+    </message>
+    <message>
+        <source>Film</source>
+        <translation>胶片</translation>
+    </message>
+    <message>
+        <source>Print Material</source>
+        <translation>印片材料</translation>
+    </message>
+    <message>
+        <source>Scene Light</source>
+        <translation>场景光</translation>
+    </message>
+    <message>
+        <source>Light Spread</source>
+        <translation>光扩散</translation>
+    </message>
+    <message>
+        <source>Halation</source>
+        <translation>光晕</translation>
+    </message>
+    <message>
+        <source>Enlarger Flare</source>
+        <translation>放大机眩光</translation>
+    </message>
+    <message>
+        <source>Reference</source>
+        <translation>参考</translation>
+    </message>
+    <message>
+        <source>Daylight</source>
+        <translation>日光</translation>
+    </message>
+    <message>
+        <source>Tungsten</source>
+        <translation>钨丝灯</translation>
+    </message>
+    <message>
+        <source>Fluorescent</source>
+        <translation>荧光灯</translation>
+    </message>
+    <message>
+        <source>LED</source>
+        <translation>LED</translation>
+    </message>
+    <message>
+        <source>Sodium</source>
+        <translation>钠灯</translation>
+    </message>
+    <message>
+        <source>Street Mixed</source>
+        <translation>街道混合光</translation>
+    </message>
+    <message>
+        <source>Street Sodium</source>
+        <translation>街道钠灯</translation>
+    </message>
+    <message>
+        <source>Street LED</source>
+        <translation>街道 LED</translation>
+    </message>
+    <message>
+        <source>Interior Warm</source>
+        <translation>暖色室内</translation>
+    </message>
+    <message>
+        <source>Interior Office</source>
+        <translation>办公室内</translation>
+    </message>
+    <message>
         <location filename="../qml/EditorDisplayTransformPanel.qml" line="+30"/>
         <source>BT.1886</source>
         <translation>BT.1886</translation>

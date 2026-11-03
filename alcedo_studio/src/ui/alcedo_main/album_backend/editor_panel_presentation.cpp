@@ -120,6 +120,14 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           open_drt.insert(QStringLiteral("look_preset"), String(value.look_preset));
           open_drt.insert(QStringLiteral("tonescale_preset"), String(value.tonescale_preset));
           open_drt.insert(QStringLiteral("creative_white"), String(value.creative_white));
+          QVariantMap film_print;
+          film_print.insert(QStringLiteral("negative"), String(value.film_print.negative));
+          film_print.insert(QStringLiteral("print_material"),
+                            String(value.film_print.print_material));
+          film_print.insert(QStringLiteral("scene_light"), String(value.film_print.scene_light));
+          film_print.insert(QStringLiteral("light_spread"), value.film_print.light_spread);
+          film_print.insert(QStringLiteral("halation"), value.film_print.halation);
+          film_print.insert(QStringLiteral("enlarger_flare"), value.film_print.enlarger_flare);
           QVariantMap odt;
           odt.insert(QStringLiteral("method"), String(value.method));
           odt.insert(QStringLiteral("encoding_space"), String(value.encoding_space));
@@ -127,6 +135,7 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           odt.insert(QStringLiteral("limiting_space"), String(value.limiting_space));
           odt.insert(QStringLiteral("peak_luminance"), value.peak_luminance);
           odt.insert(QStringLiteral("open_drt"), open_drt);
+          odt.insert(QStringLiteral("film_print"), film_print);
           map.insert(QStringLiteral("odt"), odt);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelLensValue>) {
           QVariantMap lens;

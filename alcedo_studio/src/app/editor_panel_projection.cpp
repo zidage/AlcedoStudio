@@ -367,6 +367,7 @@ auto ReadOdt(const PipelineDocument& document, const EditorParameterTarget& targ
   value.look_preset      = params.LookPreset();
   value.tonescale_preset = params.TonescalePreset();
   value.creative_white   = params.CreativeWhite();
+  value.film_print       = params.FilmPrint();
   return FinishField(target, std::move(value), out);
 }
 

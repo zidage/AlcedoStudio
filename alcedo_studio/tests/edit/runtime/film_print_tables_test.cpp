@@ -803,6 +803,17 @@ TEST_F(FilmPrintTablesLabTest, ShippedListsMatchTheIdentifiersOfTheDocumentModel
   }
 }
 
+TEST_F(FilmPrintTablesLabTest, ShippedNamesMatchTheNamesOfTheDocumentModel) {
+  for (std::size_t i = 0; i < kFilmNegativeIds.size(); ++i) {
+    EXPECT_EQ(bundle_->Negatives()[i].id, kFilmNegativeIds[i]);
+    EXPECT_EQ(bundle_->Negatives()[i].display_name, kFilmNegativeNames[i]);
+  }
+  for (std::size_t i = 0; i < kFilmPrintMaterialIds.size(); ++i) {
+    EXPECT_EQ(bundle_->PrintMaterials()[i].id, kFilmPrintMaterialIds[i]);
+    EXPECT_EQ(bundle_->PrintMaterials()[i].display_name, kFilmPrintMaterialNames[i]);
+  }
+}
+
 TEST_F(FilmPrintTablesLabTest, RecordsTheHostTimeOfEachStage) {
   const auto opened = std::chrono::steady_clock::now();
   const auto bundle = FilmStockBundle::Open(fs::path(ALCEDO_FILM_PRINT_RESOURCE_DIR));

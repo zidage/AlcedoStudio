@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). F5 to F7 have not started.
+Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 have not started.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -651,7 +651,65 @@ Suite totals, Debug: `GpuDagCudaDrtProductTest` 98, `GpuDagRawInputTest` 216, `G
 9. **User review.** RAW files by day and by night, against the lab viewer. The review confirms that the entry has no reference gamut compression. Record it as user-confirmed manual verification.
 10. **Exit criteria.** All tests pass and the user accepts the review of item 9.
 11. **Expected diff.** 700 lines.
-12. **Completion record.** Pending.
+12. **Completion record.** See below.
+
+##### Phase F5 implementation record (2026-11-01)
+
+**Status:** the controls are implemented on CUDA. **The phase is not complete:** item 9, the user review, is pending, and issue [#636](https://github.com/zidage/AlcedoStudio/issues/636) closes with it.
+
+**Primary success call chain:**
+
+```text
+EditorAdjustmentEnumModel or EditorAdjustmentValueModel (fieldKey odt)
+  -> EditorDisplayTransformPanel.buildOdtParams -> EditorParameterCatalog::UiStateToModelJson -> OdtUiToModel
+  -> submitPatch -> ParseEditorParameterWrite -> ParseDrtUpdate
+  -> DrtParamsModel::ApplyUpdate -> render
+  -> ReadOdt -> PanelProjectionToVariantMap -> AdjustmentSnapshotChanged
+  -> EditorAdjustmentStack.loadFromSnapshot -> display panel and Post Processing panel
+```
+
+**Primary failure call chains:**
+
+```text
+A value outside its range or an unknown identifier -> ParseEditorParameterWrite or ApplyUpdate reports the error -> no field changes
+editor.set with another encoding on a film print -> OdtConstrain reports the error -> no field changes
+A missing resource or an unsupported backend -> the render stops with the named error -> the existing editor error path; the controls keep their values
+```
+
+**Decisions that the plan did not specify:**
+
+- Selecting the film print writes Rec. 709, 100 nits, and the current EOTF when Rec. 709 has it, else gamma 2.2. `OdtUiToModel` holds this rule, so both the panel state and `editor.set` follow it. The earlier encoding comes back with undo. Another method keeps Rec. 709 after a selection; the user can change it.
+- `editor.set` rejects another encoding space or peak luminance with the film print, and rejects a film print field with another method, as it does for the fields of OpenDRT and ACES.
+- The lists come from new constants `kFilmNegativeNames` and `kFilmPrintMaterialNames`, next to the identifier constants of phase F2. The catalog reads no resource file, because opening the bundle reads and hashes 28 MB and a missing resource must stop a render, not the panel. `ShippedNamesMatchTheNamesOfTheDocumentModel` compares them with the shipped bundle.
+- The scene light names are new text of the catalog, because the bundle holds only identifiers.
+- Labels use the title case of this panel (`Print Material`, `Scene Light`, `Light Spread`, `Enlarger Flare`), not the sentence case of section 2.1.
+- The Model stores a float, and the float of 0.1 is above the decimal limit of the catalog, so `OdtModelToUi` limits the read of `enlarger_flare`. Without this, each write at the top of this slider fails.
+- A history row of a film print states the method, selection, or slider that changed.
+- `ALCEDO_FILM_PRINT_RESOURCE_DIR` also copies the resources next to `alcedo_main`, as the CUDA tests do, so a development build can run the method. The package scripts stop when no directory is given, and the variable of the same name in the environment gives the directory.
+- The item stays in the list on OpenCL and Metal, and a render stops with the named error until F6 and F7. `Auto` selects OpenCL first on Windows, so the review needs the CUDA accelerator in Settings.
+
+**What was proven (executed tests, Debug):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| Each field reaches the model, and undo restores it: `FilmPrintFieldsReachTheModelAndTheHistoryValueRestoresThem` | `EditorPipelineCommandServiceTest` | PASS |
+| The panel reads the values: `FilmPrintFieldsProjectFromTheModel`, `FilmPrintSnapshotLoadsItsFieldsAndShowsOnlyItsControls` | `EditorPanelProjectionTest`, `EditorDisplayTransformSnapshotQmlTest` | PASS |
+| The Halation slider hides and returns: `PostHalationSliderHidesForFilmPrintAndReturnsWithItsValue` | `EditorDisplayTransformSnapshotQmlTest` | PASS |
+| Selection over an HDR document: `SelectingFilmPrintWritesRec709SdrOverAnHdrDocument` | `EditorDisplayTransformSnapshotQmlTest` | PASS |
+| Catalog rules: `FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput`, `FilmPrintRejectsAnotherOutputAndFieldsOfOtherMethods`, `FilmPrintStoredFlareLimitReadsInsideTheUiRange`, `FilmPrintOptionsAreTheIdentifiersOfTheDocumentModel` | `EditorParameterCatalogTest` | PASS |
+| Lists against the shipped bundle: `ShippedNamesMatchTheNamesOfTheDocumentModel` | `FilmPrintTablesTest` | PASS |
+| New documents keep OpenDRT: `FilmPrintOptionsAreTheIdentifiersOfTheDocumentModel`, `MethodModelDefaultIsOpenDrt` | The same targets | PASS |
+
+Caller suites, Debug: `AdjustmentTransferCatalogTest` 9, `EditorPanelProjectionTest` 11, `EditorParameterCatalogTest` 33, `EditorPipelineCommandServiceTest` 24, `FilmPrintTablesTest` 30, `EditorDisplayTransformSnapshotQmlTest` 17, and `SimplifiedChineseCatalogTest` 9 pass. `DocumentTransferTest.TransferPackageCarriesOnlyOwnedDevelopKeysAndNoCaches` fails as in issues #484 and #554. `EditorSessionHistoryPortTest.CheckoutAndPasteHashesAreUnchanged` fails with the hashes of issue #555; the other 115 tests of that target pass.
+
+**End-to-end run (Release, CUDA, headless `alcedo-cli`):** `_DSC4049.ARW` (day) and `_DSC8148.ARW` (night). `editor.set` selected the film print, then the sliders and selections, and `render.preview` wrote each result. Each change had a visible result. Two `editor.undo` calls restored the earlier field values and OpenDRT. This run does not replace item 9.
+
+**Not verified:**
+
+- User review of item 9: RAW files by day and by night, against the lab viewer, and the absence of reference gamut compression at the entry.
+- The panel in a window. The QML tests load the panel with no real input.
+- A complete package, and any build on macOS.
+- The full test suite did not run.
 
 ### F6: OpenCL passes
 

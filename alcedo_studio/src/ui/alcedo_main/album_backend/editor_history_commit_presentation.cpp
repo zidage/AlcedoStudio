@@ -570,7 +570,43 @@ auto SummarizeLut(const nlohmann::json& after, const nlohmann::json& before) -> 
                                 : QStringLiteral("%1 \u2192 %2").arg(before_text, after_text)};
 }
 
+/// Summary of a film print write: the method, a selection, or a slider that changed. No value when
+/// none of them changed.
+auto SummarizeFilmPrint(const nlohmann::json& after, const nlohmann::json& before)
+    -> std::optional<CommitSummary> {
+  const auto method     = JsonStringAtPath(after, {"odt", "method"});
+  const auto old_method = JsonStringAtPath(before, {"odt", "method"});
+  if (method != QStringLiteral("film_print")) {
+    return std::nullopt;
+  }
+  const auto changed = [](const QString& before_text, const QString& after_text) {
+    return CommitSummary{before_text, after_text,
+                         QStringLiteral("%1 \u2192 %2").arg(before_text, after_text)};
+  };
+  if (old_method != method) {
+    return changed(PrettyToken(old_method.value_or(QString())), QStringLiteral("Film Print"));
+  }
+  for (const char* key : {"negative", "print_material", "scene_light"}) {
+    const auto value     = JsonStringAtPath(after, {"odt", "film_print", key});
+    const auto old_value = JsonStringAtPath(before, {"odt", "film_print", key});
+    if (value.has_value() && value != old_value) {
+      return changed(PrettyToken(old_value.value_or(QString())), PrettyToken(*value));
+    }
+  }
+  for (const char* key : {"light_spread", "halation", "enlarger_flare"}) {
+    const auto value     = JsonNumberAtPath(after, {"odt", "film_print", key});
+    const auto old_value = JsonNumberAtPath(before, {"odt", "film_print", key});
+    if (value.has_value() && old_value.has_value() && std::fabs(*value - *old_value) > 1e-6) {
+      return changed(FormatNumber(*old_value), FormatNumber(*value));
+    }
+  }
+  return std::nullopt;
+}
+
 auto SummarizeOdt(const nlohmann::json& after, const nlohmann::json& before) -> CommitSummary {
+  if (auto film_print = SummarizeFilmPrint(after, before); film_print.has_value()) {
+    return *film_print;
+  }
   const auto    peak       = JsonNumberAtPath(after, {"odt", "peak_luminance"});
   const auto    old_peak   = JsonNumberAtPath(before, {"odt", "peak_luminance"});
   const QString target     = OdtTargetLabel(after);

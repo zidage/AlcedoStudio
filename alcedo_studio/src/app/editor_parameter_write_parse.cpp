@@ -639,6 +639,9 @@ auto ParseDrtMethod(std::string_view value) -> DrtMethod {
   if (value == "open_drt") {
     return DrtMethod::OpenDrt;
   }
+  if (value == "film_print") {
+    return DrtMethod::FilmPrint;
+  }
   throw std::invalid_argument("Unknown odt.method: " + std::string{value});
 }
 
@@ -746,10 +749,10 @@ auto ParseDetailedDrtParameters(const nlohmann::json& value) -> OpenDrtDetailedP
 
 auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
   const auto& object = UnwrapObject(params, {"odt"}, "odt");
-  RejectUnknownKeys(
-      object,
-      {"method", "encoding_space", "encoding_eotf", "limiting_space", "peak_luminance", "open_drt"},
-      "odt");
+  RejectUnknownKeys(object,
+                    {"method", "encoding_space", "encoding_eotf", "limiting_space",
+                     "peak_luminance", "open_drt", "film_print"},
+                    "odt");
   DrtParameterUpdate update;
   if (const auto value = ReadOptionalString(object, {"method"}, "odt"); value.has_value()) {
     update.method = ParseDrtMethod(*value);
@@ -782,6 +785,21 @@ auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
     if (open_drt.contains("parameters")) {
       update.parameters = ParseDetailedDrtParameters(open_drt.at("parameters"));
     }
+  }
+  if (object.contains("film_print")) {
+    const auto& film_print = RequireObject(object.at("film_print"), "odt.film_print");
+    RejectUnknownKeys(
+        film_print,
+        {"negative", "print_material", "scene_light", "light_spread", "halation", "enlarger_flare"},
+        "odt.film_print");
+    update.film_negative = ReadOptionalString(film_print, {"negative"}, "odt.film_print");
+    update.film_print_material =
+        ReadOptionalString(film_print, {"print_material"}, "odt.film_print");
+    update.film_scene_light  = ReadOptionalString(film_print, {"scene_light"}, "odt.film_print");
+    update.film_light_spread = ReadOptionalFloat(film_print, {"light_spread"}, "odt.film_print");
+    update.film_halation     = ReadOptionalFloat(film_print, {"halation"}, "odt.film_print");
+    update.film_enlarger_flare =
+        ReadOptionalFloat(film_print, {"enlarger_flare"}, "odt.film_print");
   }
   return update;
 }

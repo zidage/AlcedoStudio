@@ -362,6 +362,82 @@ TEST(EditorPipelineCommandServiceTest, DevelopAndOdtPatchesUseTypedOwnerFields) 
   EXPECT_NE(drt->Params().Revision(), drt_revision);
 }
 
+TEST(EditorPipelineCommandServiceTest, FilmPrintFieldsReachTheModelAndTheHistoryValueRestoresThem) {
+  auto  document = CreateDefaultPipelineDocument();
+  auto* drt      = document.Drt();
+  ASSERT_NE(drt, nullptr);
+  EditorParameterTarget odt;
+  odt.owner_kind = EditorParameterOwnerKind::DrtPost;
+  odt.node_id    = drt->Id();
+  odt.field_key  = "odt";
+  std::string error;
+
+  // A Display P3 document, so that the history value holds an encoding the film print changes.
+  ASSERT_TRUE(ApplyEditorParameterPatch(
+      document, odt,
+      {{"odt",
+        {{"method", "open_drt"}, {"encoding_space", "p3_d65"}, {"encoding_eotf", "gamma_2_2"}}}},
+      &error))
+      << error;
+  nlohmann::json before;
+  ASSERT_TRUE(ReadEditorParameterJson(document, odt, &before, &error)) << error;
+  EXPECT_FALSE(before.contains("film_print"));
+
+  const nlohmann::json film_write = {{"odt",
+                                      {{"method", "film_print"},
+                                       {"encoding_space", "rec709"},
+                                       {"encoding_eotf", "gamma_2_2"},
+                                       {"peak_luminance", 100.0},
+                                       {"film_print",
+                                        {{"negative", "kodak_portra_400"},
+                                         {"print_material", "fuji_ca_maxima"},
+                                         {"scene_light", "tungsten"},
+                                         {"light_spread", 0.5},
+                                         {"halation", 3.0},
+                                         {"enlarger_flare", 0.05}}}}}};
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, odt, film_write, &error)) << error;
+  EXPECT_EQ(drt->Params().Method(), DrtMethod::FilmPrint);
+  EXPECT_EQ(drt->Params().EncodingSpace(), DrtColorSpace::Rec709);
+  const auto film = drt->Params().FilmPrint();
+  EXPECT_EQ(film.negative, "kodak_portra_400");
+  EXPECT_EQ(film.print_material, "fuji_ca_maxima");
+  EXPECT_EQ(film.scene_light, "tungsten");
+  EXPECT_FLOAT_EQ(film.light_spread, 0.5f);
+  EXPECT_FLOAT_EQ(film.halation, 3.0f);
+  EXPECT_FLOAT_EQ(film.enlarger_flare, 0.05f);
+
+  // Each history value of a film print holds the fields. A slider change, and its undo.
+  nlohmann::json first;
+  ASSERT_TRUE(ReadEditorParameterJson(document, odt, &first, &error)) << error;
+  EXPECT_EQ(first.at("film_print").at("negative"), "kodak_portra_400");
+  auto slider_write                      = first;
+  slider_write["film_print"]["negative"] = "fuji_c200";
+  slider_write["film_print"]["halation"] = 1.5;
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, odt, slider_write, &error)) << error;
+  EXPECT_EQ(drt->Params().FilmPrint().negative, "fuji_c200");
+  EXPECT_FLOAT_EQ(drt->Params().FilmPrint().halation, 1.5f);
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, odt, first, &error)) << error;
+  EXPECT_EQ(drt->Params().FilmPrint().negative, "kodak_portra_400");
+  EXPECT_FLOAT_EQ(drt->Params().FilmPrint().halation, 3.0f);
+
+  // Undo of the selection restores the method and the encoding.
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, odt, before, &error)) << error;
+  EXPECT_EQ(drt->Params().Method(), DrtMethod::OpenDrt);
+  EXPECT_EQ(drt->Params().EncodingSpace(), DrtColorSpace::P3D65);
+
+  // A value outside its range or an unknown identifier reports the error and changes nothing.
+  auto invalid                      = first;
+  invalid["film_print"]["halation"] = 9.0;
+  EXPECT_FALSE(ApplyEditorParameterPatch(document, odt, invalid, &error));
+  EXPECT_NE(error.find("halation"), std::string::npos) << error;
+  invalid                           = first;
+  invalid["film_print"]["negative"] = "no_such_film";
+  EXPECT_FALSE(ApplyEditorParameterPatch(document, odt, invalid, &error));
+  EXPECT_NE(error.find("no_such_film"), std::string::npos) << error;
+  EXPECT_EQ(drt->Params().Method(), DrtMethod::OpenDrt);
+  EXPECT_FLOAT_EQ(drt->Params().FilmPrint().halation, 3.0f);
+}
+
 TEST(EditorPipelineCommandServiceTest, FullDevelopHistoryJsonUpdatesOnlySelectedOwnerFields) {
   auto  document = CreateDefaultPipelineDocument();
   auto* develop  = document.Develop();

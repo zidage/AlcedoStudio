@@ -1155,6 +1155,18 @@ add_custom_command(TARGET alcedo_main POST_BUILD
     VERBATIM
 )
 
+# The film print reads its resources from config/film_print next to the executable. They are not in
+# Git, so a build with no resource directory stops a film print render with the error that names
+# the file.
+if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+    add_custom_command(TARGET alcedo_main POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+            "$<TARGET_FILE_DIR:alcedo_main>/config/film_print"
+        VERBATIM
+    )
+endif()
+
 if(WIN32 AND TARGET puerhlab_lensfun)
     add_custom_command(TARGET alcedo_main POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

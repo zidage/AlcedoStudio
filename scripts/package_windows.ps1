@@ -20,12 +20,15 @@ param(
     [bool]$RequireOpenCLAssets = $true,
     [ValidateRange(0, [long]::MaxValue)][long]$BuildNumber = 0,
     [ValidateSet('stable','beta')][string]$Channel = 'stable',
-    # Output directory of build_product_resources.py of alcedo-film-lab. Empty: the package has no
-    # film print resources.
-    [string]$FilmPrintResourceDir = ""
+    # Output directory of build_product_resources.py of alcedo-film-lab. Required: the editor can
+    # select the film print, and a render stops with an error when the resources are missing.
+    [string]$FilmPrintResourceDir = $env:ALCEDO_FILM_PRINT_RESOURCE_DIR
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $FilmPrintResourceDir) {
+    throw "Film print resources are required: pass -FilmPrintResourceDir DIR or set ALCEDO_FILM_PRINT_RESOURCE_DIR. build_product_resources.py of alcedo-film-lab makes the directory."
+}
 $repoRoot = Resolve-Path "$PSScriptRoot\.."
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $PackageOutDir = [IO.Path]::GetFullPath($PackageOutDir)
@@ -193,7 +196,7 @@ function Invoke-InstallTreeVerification {
     param([string]$Directory)
     $verifyArgs = @('-ExecutionPolicy', 'Bypass', '-File', $verifyScript, '-InstallDir', $Directory)
     if (-not $RequireOpenCLAssets) { $verifyArgs += '-SkipOpenCLAssetCheck' }
-    if ($FilmPrintResourceDir) { $verifyArgs += '-RequireFilmPrintResources' }
+    $verifyArgs += '-RequireFilmPrintResources'
     & powershell @verifyArgs
     if ($LASTEXITCODE -ne 0) { throw "Install tree verification failed: $Directory" }
 }

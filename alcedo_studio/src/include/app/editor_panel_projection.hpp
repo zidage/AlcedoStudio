@@ -15,6 +15,7 @@
 
 #include "app/editor_adjustment_types.hpp"
 #include "edit/geometry/types.hpp"
+#include "edit/graph/film_print_model.hpp"
 #include "edit/graph/image_geometry_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/curve_model.hpp"
@@ -95,6 +96,7 @@ struct EditorPanelOdtValue {
   std::string look_preset      = "standard";
   std::string tonescale_preset = "use_look_preset";
   std::string creative_white   = "use_look_preset";
+  FilmPrintParams film_print{};
 };
 
 struct EditorPanelLensValue {

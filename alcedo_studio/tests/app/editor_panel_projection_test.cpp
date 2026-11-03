@@ -191,6 +191,33 @@ TEST(EditorPanelProjectionTest, FilmPrintMethodProjectsItsOwnName) {
   EXPECT_EQ(odt_value->method, "film_print");
 }
 
+TEST(EditorPanelProjectionTest, FilmPrintFieldsProjectFromTheModel) {
+  auto               document = CreateDefaultPipelineDocument();
+  DrtParameterUpdate update;
+  update.method              = DrtMethod::FilmPrint;
+  update.film_negative       = "kodak_portra_400";
+  update.film_print_material = "fuji_ca_maxima";
+  update.film_scene_light    = "tungsten";
+  update.film_light_spread   = 0.5f;
+  update.film_halation       = 3.0f;
+  update.film_enlarger_flare = 0.05f;
+  document.Drt()->Params().ApplyUpdate(update);
+
+  EditorPanelProjection projection;
+  std::string           error;
+  ASSERT_TRUE(ProjectCurrentPanelFields(document, 1, &projection, &error)) << error;
+  const auto* odt = FindField(projection, "odt");
+  ASSERT_NE(odt, nullptr);
+  const auto* odt_value = std::get_if<EditorPanelOdtValue>(&odt->value);
+  ASSERT_NE(odt_value, nullptr);
+  EXPECT_EQ(odt_value->film_print.negative, "kodak_portra_400");
+  EXPECT_EQ(odt_value->film_print.print_material, "fuji_ca_maxima");
+  EXPECT_EQ(odt_value->film_print.scene_light, "tungsten");
+  EXPECT_FLOAT_EQ(odt_value->film_print.light_spread, 0.5f);
+  EXPECT_FLOAT_EQ(odt_value->film_print.halation, 3.0f);
+  EXPECT_FLOAT_EQ(odt_value->film_print.enlarger_flare, 0.05f);
+}
+
 TEST(EditorPanelProjectionTest, ProjectsToneLookLutRawOdtAndGeometryFromExplicitInstances) {
   auto document = CreateDefaultPipelineDocument();
   SetOwnedScalars(document);

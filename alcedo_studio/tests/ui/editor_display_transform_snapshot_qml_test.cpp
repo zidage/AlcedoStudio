@@ -50,6 +50,11 @@ class DisplayTransformSession final : public QObject, public IEditorAdjustmentSu
       : snapshot_(std::move(snapshot)), revision_(revision) {}
 
   auto adjustmentSnapshot() const -> QVariantMap { return snapshot_; }
+  void setAdjustmentSnapshot(QVariantMap snapshot) {
+    snapshot_ = std::move(snapshot);
+    ++revision_;
+    emit AdjustmentSnapshotChanged();
+  }
   auto snapshotRevision() const -> quint64 { return revision_; }
   auto activeAdjustmentPanel() const -> QString { return active_panel_; }
   void setActiveAdjustmentPanel(const QString& panel) {
@@ -198,6 +203,37 @@ auto MakeOpenDrtSnapshot(double         peak           = 100.0,
   return snapshot;
 }
 
+/// The projection form of a film print document, as PanelProjectionToVariantMap writes it.
+auto MakeFilmPrintSnapshot(double halation = 2.5) -> QVariantMap {
+  QVariantMap film_print;
+  film_print.insert(QStringLiteral("negative"), QStringLiteral("kodak_portra_400"));
+  film_print.insert(QStringLiteral("print_material"), QStringLiteral("fuji_ca_maxima"));
+  film_print.insert(QStringLiteral("scene_light"), QStringLiteral("tungsten"));
+  film_print.insert(QStringLiteral("light_spread"), 0.5);
+  film_print.insert(QStringLiteral("halation"), halation);
+  film_print.insert(QStringLiteral("enlarger_flare"), 0.05);
+
+  auto snapshot = MakeOpenDrtSnapshot();
+  auto odt_wrap = snapshot.value(QStringLiteral("odt")).toMap();
+  auto inner    = odt_wrap.value(QStringLiteral("odt")).toMap();
+  inner.insert(QStringLiteral("method"), QStringLiteral("film_print"));
+  inner.insert(QStringLiteral("film_print"), film_print);
+  odt_wrap.insert(QStringLiteral("odt"), inner);
+  snapshot.insert(QStringLiteral("odt"), odt_wrap);
+  return snapshot;
+}
+
+template <typename Predicate>
+auto WaitFor(Predicate predicate) -> bool {
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    if (predicate()) {
+      return true;
+    }
+    QTest::qWait(10);
+  }
+  return predicate();
+}
+
 }  // namespace
 
 // Panel loads via EditorAdjustmentStack and models are accessible.
@@ -234,11 +270,12 @@ TEST(EditorDisplayTransformSnapshotQmlTest, MethodModelDefaultIsOpenDrt) {
   // defaultIndex is 1 (open_drt)
   EXPECT_EQ(methodModel->property("defaultIndex").toInt(), 1);
 
-  // Entries have 2 values: aces_2_0, open_drt
+  // Entries in the order of the catalog.
   auto entries = methodModel->property("entries").toList();
-  ASSERT_EQ(entries.size(), 2);
+  ASSERT_EQ(entries.size(), 3);
   EXPECT_EQ(entries[0].toMap().value("value").toString().toStdString(), "aces_2_0");
   EXPECT_EQ(entries[1].toMap().value("value").toString().toStdString(), "open_drt");
+  EXPECT_EQ(entries[2].toMap().value("value").toString().toStdString(), "film_print");
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, EncodingSpaceListsTheModelSpaces) {
@@ -497,6 +534,146 @@ TEST(EditorDisplayTransformSnapshotQmlTest,
     for (int step = 0; step < 30; ++step) wheel({}, QPoint(0, 120));
     EXPECT_NEAR(scroll->property("contentY").toReal(), 0.0, 1.0);
   }
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest,
+     FilmPrintSnapshotLoadsItsFieldsAndShowsOnlyItsControls) {
+  DisplayTransformSession session(MakeOpenDrtSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* film_controls = harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintControls"));
+  auto* encoding      = harness.findModel<QQuickItem>(
+      QStringLiteral("editorAdjustmentGroupShell_display_color_encoding"));
+  auto* look_combo = harness.findModel<QQuickItem>(QStringLiteral("displayOpenDrtLookCombo"));
+  auto* limit_combo =
+      harness.findModel<QQuickItem>(QStringLiteral("displayAcesLimitingSpaceCombo"));
+  ASSERT_NE(film_controls, nullptr);
+  ASSERT_NE(encoding, nullptr);
+  ASSERT_NE(look_combo, nullptr);
+  ASSERT_NE(limit_combo, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return encoding->isVisible(); }));
+  EXPECT_FALSE(film_controls->isVisible());
+  EXPECT_TRUE(look_combo->isVisible());
+
+  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot());
+  ASSERT_TRUE(WaitFor([&] { return film_controls->isVisible(); }));
+  EXPECT_FALSE(encoding->isVisible());
+  EXPECT_FALSE(look_combo->isVisible());
+  EXPECT_FALSE(limit_combo->isVisible());
+
+  const auto current = [&](const QString& name) {
+    return harness.findModel<QObject>(name)->property("currentValue").toString().toStdString();
+  };
+  const auto value = [&](const QString& name) {
+    return harness.findModel<QObject>(name)->property("value").toDouble();
+  };
+  EXPECT_EQ(current(QStringLiteral("displayFilmNegativeModel")), "kodak_portra_400");
+  EXPECT_EQ(current(QStringLiteral("displayFilmPrintMaterialModel")), "fuji_ca_maxima");
+  EXPECT_EQ(current(QStringLiteral("displayFilmSceneLightModel")), "tungsten");
+  EXPECT_DOUBLE_EQ(value(QStringLiteral("displayFilmLightSpreadModel")), 0.5);
+  EXPECT_DOUBLE_EQ(value(QStringLiteral("displayFilmHalationModel")), 2.5);
+  EXPECT_DOUBLE_EQ(value(QStringLiteral("displayFilmEnlargerFlareModel")), 0.05);
+
+  session.setAdjustmentSnapshot(MakeOpenDrtSnapshot());
+  ASSERT_TRUE(WaitFor([&] { return encoding->isVisible(); }));
+  EXPECT_FALSE(film_controls->isVisible());
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, SelectingFilmPrintWritesRec709SdrOverAnHdrDocument) {
+  DisplayTransformSession session(
+      MakeOpenDrtSnapshot(1000.0, QStringLiteral("rec2020"), QStringLiteral("st2084")), 0);
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* method = harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayMethodModel"));
+  ASSERT_NE(method, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    return harness.findModel<QObject>(QStringLiteral("displayEncodingSpaceModel"))
+               ->property("currentValue")
+               .toString() == QStringLiteral("rec2020");
+  }));
+
+  method->selectIndex(2);  // film_print
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+
+  ASSERT_GE(session.submitCount(), 1);
+  const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->method.has_value());
+  EXPECT_EQ(*drt->method, alcedo::DrtMethod::FilmPrint);
+  ASSERT_TRUE(drt->encoding_space.has_value());
+  EXPECT_EQ(*drt->encoding_space, alcedo::DrtColorSpace::Rec709);
+  ASSERT_TRUE(drt->encoding_eotf.has_value());
+  EXPECT_EQ(*drt->encoding_eotf, alcedo::DrtEotf::Gamma22);
+  ASSERT_TRUE(drt->film_negative.has_value());
+  EXPECT_EQ(*drt->film_negative, "kodak_5207");
+  ASSERT_TRUE(drt->film_enlarger_flare.has_value());
+  EXPECT_FLOAT_EQ(*drt->film_enlarger_flare, 0.01f);
+  EXPECT_FALSE(drt->look_preset.has_value());
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintControlWritesItsField) {
+  DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* negative =
+      harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayFilmNegativeModel"));
+  auto* halation =
+      harness.findModel<EditorAdjustmentValueModel>(QStringLiteral("displayFilmHalationModel"));
+  ASSERT_NE(negative, nullptr);
+  ASSERT_NE(halation, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    return negative->property("currentValue").toString() == QStringLiteral("kodak_portra_400");
+  }));
+
+  negative->selectIndex(0);  // agfa_vista_100
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  ASSERT_GE(session.submitCount(), 1);
+  const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->film_negative.has_value());
+  EXPECT_EQ(*drt->film_negative, "agfa_vista_100");
+  ASSERT_TRUE(drt->film_halation.has_value());
+  EXPECT_FLOAT_EQ(*drt->film_halation, 2.5f);
+  ASSERT_TRUE(drt->film_scene_light.has_value());
+  EXPECT_EQ(*drt->film_scene_light, "tungsten");
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest,
+     PostHalationSliderHidesForFilmPrintAndReturnsWithItsValue) {
+  auto        open_drt = MakeOpenDrtSnapshot();
+  QVariantMap halation_inner;
+  halation_inner.insert(QStringLiteral("strength"), 0.25);
+  QVariantMap halation_wrap;
+  halation_wrap.insert(QStringLiteral("halation"), halation_inner);
+  open_drt.insert(QStringLiteral("halation"), halation_wrap);
+
+  DisplayTransformSession session(open_drt, 0);
+  session.setActiveAdjustmentPanel(QStringLiteral("post"));
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* slider = harness.findModel<QQuickItem>(QStringLiteral("postHalationSlider"));
+  auto* model  = harness.findModel<QObject>(QStringLiteral("postHalationModel"));
+  auto* grain  = harness.findModel<QQuickItem>(QStringLiteral("postFilmGrainSlider"));
+  ASSERT_NE(slider, nullptr);
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(grain, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return slider->isVisible(); }));
+  const double stored = model->property("value").toDouble();
+  EXPECT_NE(stored, 0.0);
+
+  auto film_print = MakeFilmPrintSnapshot();
+  film_print.insert(QStringLiteral("halation"), halation_wrap);
+  session.setAdjustmentSnapshot(film_print);
+  ASSERT_TRUE(WaitFor([&] { return !slider->isVisible(); }));
+  EXPECT_TRUE(grain->isVisible());
+  EXPECT_DOUBLE_EQ(model->property("value").toDouble(), stored);
+  EXPECT_EQ(session.submitCount(), 0);
+
+  session.setAdjustmentSnapshot(open_drt);
+  ASSERT_TRUE(WaitFor([&] { return slider->isVisible(); }));
+  EXPECT_DOUBLE_EQ(model->property("value").toDouble(), stored);
+  EXPECT_EQ(session.submitCount(), 0);
 }
 
 }  // namespace alcedo::ui::test

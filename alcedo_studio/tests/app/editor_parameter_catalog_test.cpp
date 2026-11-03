@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <json.hpp>
@@ -705,6 +706,124 @@ TEST(EditorParameterCatalogTest, OdtWriteHoldsTheControlsOfTheSelectedMethod) {
                   nlohmann::json{}, &error)
                   .has_value())
       << error;
+}
+
+TEST(EditorParameterCatalogTest, FilmPrintOptionsAreTheIdentifiersOfTheDocumentModel) {
+  const auto* entry = EditorParameterCatalog::Find("odt");
+  ASSERT_NE(entry, nullptr);
+  const auto expect_ids = [&](std::string_view name, const auto& ids) {
+    const auto property =
+        std::find_if(entry->properties.begin(), entry->properties.end(),
+                     [&](const EditorParameterProperty& item) { return item.name == name; });
+    ASSERT_NE(property, entry->properties.end()) << name;
+    ASSERT_EQ(property->options.size(), ids.size()) << name;
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+      EXPECT_EQ(property->options[i].value, ids[i]);
+      EXPECT_FALSE(property->options[i].label.empty()) << ids[i];
+    }
+  };
+  expect_ids("negative", kFilmNegativeIds);
+  expect_ids("print_material", kFilmPrintMaterialIds);
+  expect_ids("scene_light", kFilmSceneLightIds);
+  EXPECT_EQ(EditorParameterCatalog::UiDefault(*entry).at("method"), "open_drt");
+}
+
+TEST(EditorParameterCatalogTest, FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput) {
+  std::string          error;
+  // A Display P3 document, and an HDR document: the panel has no encoding controls.
+  const nlohmann::json p3    = {{"odt",
+                                 {{"method", "open_drt"},
+                                  {"encoding_space", "p3_d65"},
+                                  {"encoding_eotf", "srgb_piecewise"}}}};
+  auto                 model = EditorParameterCatalog::ToModelJson(
+      "odt", {{"method", "film_print"}, {"negative", "kodak_portra_400"}, {"halation", 2.5}}, p3,
+      &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(*model, (nlohmann::json{{"odt",
+                                     {{"method", "film_print"},
+                                      {"encoding_space", "rec709"},
+                                      {"encoding_eotf", "srgb_piecewise"},
+                                      {"peak_luminance", 100.0},
+                                      {"film_print",
+                                       {{"negative", "kodak_portra_400"},
+                                        {"print_material", "kodak_2383"},
+                                        {"scene_light", "reference"},
+                                        {"light_spread", 1.0},
+                                        {"halation", 2.5},
+                                        {"enlarger_flare", 0.01}}}}}}));
+  const nlohmann::json hdr = {{"odt",
+                               {{"method", "aces_2_0"},
+                                {"encoding_space", "rec2020"},
+                                {"encoding_eotf", "st2084"},
+                                {"peak_luminance", 1000.0}}}};
+  model = EditorParameterCatalog::ToModelJson("odt", {{"method", "film_print"}}, hdr, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(model->at("odt").at("encoding_space"), "rec709");
+  EXPECT_EQ(model->at("odt").at("encoding_eotf"), "gamma_2_2");
+  EXPECT_EQ(model->at("odt").at("peak_luminance"), 100.0);
+
+  // The complete state of the panel, before the echo of the first write reaches it.
+  auto state              = EditorParameterCatalog::UiDefault(*EditorParameterCatalog::Find("odt"));
+  state["method"]         = "film_print";
+  state["encoding_space"] = "rec2020";
+  state["encoding_eotf"]  = "hlg";
+  state["peak_luminance"] = 1000.0;
+  model                   = EditorParameterCatalog::UiStateToModelJson("odt", state, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(model->at("odt").at("encoding_space"), "rec709");
+  EXPECT_EQ(model->at("odt").at("encoding_eotf"), "gamma_2_2");
+  EXPECT_EQ(model->at("odt").at("peak_luminance"), 100.0);
+  EXPECT_FALSE(model->at("odt").contains("open_drt"));
+  EXPECT_FALSE(model->at("odt").contains("limiting_space"));
+
+  // Another method writes no film print fields.
+  state["method"] = "open_drt";
+  model           = EditorParameterCatalog::UiStateToModelJson("odt", state, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_FALSE(model->at("odt").contains("film_print"));
+}
+
+TEST(EditorParameterCatalogTest, FilmPrintRejectsAnotherOutputAndFieldsOfOtherMethods) {
+  std::string error;
+  EXPECT_FALSE(
+      EditorParameterCatalog::ToModelJson(
+          "odt", {{"method", "film_print"}, {"encoding_space", "p3_d65"}}, nlohmann::json{}, &error)
+          .has_value());
+  EXPECT_EQ(error, "odt.encoding_space must be rec709 with method film_print");
+  EXPECT_FALSE(
+      EditorParameterCatalog::ToModelJson(
+          "odt", {{"method", "film_print"}, {"encoding_eotf", "st2084"}}, nlohmann::json{}, &error)
+          .has_value());
+  EXPECT_FALSE(
+      EditorParameterCatalog::ToModelJson(
+          "odt", {{"method", "film_print"}, {"peak_luminance", 1000.0}}, nlohmann::json{}, &error)
+          .has_value());
+  EXPECT_EQ(error, "odt.peak_luminance must be 100 with method film_print");
+  EXPECT_FALSE(
+      EditorParameterCatalog::ToModelJson("odt", {{"halation", 2.0}}, nlohmann::json{}, &error)
+          .has_value());
+  EXPECT_EQ(error, "odt.halation needs method film_print");
+  EXPECT_FALSE(
+      EditorParameterCatalog::ToModelJson(
+          "odt", {{"method", "film_print"}, {"negative", "no_such_film"}}, nlohmann::json{}, &error)
+          .has_value());
+  EXPECT_FALSE(
+      EditorParameterCatalog::ToModelJson("odt", {{"method", "film_print"}, {"light_spread", 3.5}},
+                                          nlohmann::json{}, &error)
+          .has_value());
+}
+
+TEST(EditorParameterCatalogTest, FilmPrintStoredFlareLimitReadsInsideTheUiRange) {
+  // The Model stores a float: 0.1f is 0.100000001 after it widens. A later write of the panel
+  // sends this value back, so the read must stay inside the range of the write.
+  std::string          error;
+  const nlohmann::json stored = {
+      {"odt",
+       {{"method", "film_print"}, {"film_print", {{"enlarger_flare", kFilmEnlargerFlareMax}}}}}};
+  const auto ui = EditorParameterCatalog::ToUiValue("odt", stored, &error);
+  ASSERT_TRUE(ui.has_value()) << error;
+  EXPECT_LE(ui->at("enlarger_flare").get<double>(), 0.1);
+  EXPECT_TRUE(EditorParameterCatalog::ToModelJson("odt", *ui, stored, &error).has_value()) << error;
 }
 
 TEST(EditorParameterCatalogTest, ColorTempKelvinRoundTripsThroughSliderPivot) {
