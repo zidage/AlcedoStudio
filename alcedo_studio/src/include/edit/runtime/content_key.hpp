@@ -35,7 +35,8 @@ inline constexpr std::uint32_t kDrtImplementationVersion           = 6;
 /// Bumped when film print pixel rules change. Other DRT methods do not mix this value.
 /// Version 2 adds the point kernels on CUDA. Before it, a film print stopped with an error.
 /// Version 4 keeps the half-size cells of the inhibitor on their pixels at an odd size.
-inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 4;
+/// Version 5 reads the reflectance table with the lab rule foliage_spectra.
+inline constexpr std::uint32_t kFilmPrintImplementationVersion     = 5;
 /// Bumped when mask raster sampling or Union key structure changes. Version 3 is per-source Union.
 inline constexpr std::uint32_t kMaskImplementationVersion          = 3;
 
