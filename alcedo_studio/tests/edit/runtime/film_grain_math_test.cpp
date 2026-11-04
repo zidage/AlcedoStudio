@@ -71,11 +71,19 @@ TEST(FilmGrainMath, DyeCloudChangeScalesLinearlyWithAmountBelowTheHighlights) {
 }
 
 TEST(FilmGrainMath, DyeCloudChannelCorrelationIsTheMeasuredLayerMix) {
-  // The mix is the square root of the target correlation, so independent fields come out with it.
+  // The mix is the square root of the 5207 correlation, so independent fields come out with it.
   const auto colour = ResidualColourAtGrey(0.35f);
-  EXPECT_NEAR(colour.correlation_rg, 0.4231, 0.02);
-  EXPECT_NEAR(colour.correlation_gb, 0.4231, 0.02);
-  EXPECT_NEAR(colour.correlation_rb, 0.2322, 0.02);
+  EXPECT_NEAR(colour.correlation_rg, 0.661, 0.02);
+  EXPECT_NEAR(colour.correlation_gb, 0.41, 0.02);
+  EXPECT_NEAR(colour.correlation_rb, 0.246, 0.02);
+}
+
+TEST(FilmGrainMath, DyeCloudsThatDarkenAreCoolAndCyanGrainIsNotBright) {
+  // Real colour negative grain: a cloud that brightens is warm, one that darkens is cool. The mix
+  // with rg 0.42 had the opposite sign (-0.06 to -0.16), so cyan grain was brighter than the grey.
+  for (const float grey : {0.2f, 0.35f, 0.4613f, 0.5f, 0.65f, 0.75f}) {
+    EXPECT_GT(ResidualColourAtGrey(grey).lightness_warmth_correlation, 0.05) << grey;
+  }
 }
 
 TEST(FilmGrainMath, DyeCloudChromaIsMostlyWarmCoolAndGreenIsTheQuietestChannel) {
@@ -92,9 +100,9 @@ TEST(FilmGrainMath, DyeCloudChromaIsMostlyWarmCoolAndGreenIsTheQuietestChannel) 
 }
 
 TEST(FilmGrainMath, DyeCloudsKeepTheirColourNearWhite) {
-  // The previous mix made the grain 0.9 neutral at a grey of 0.9. Real grain keeps its colour.
+  // The mix before #660 made the grain 0.91 neutral at a grey of 0.9. Real grain keeps its colour.
   const auto colour = ResidualColourAtGrey(0.88f);
-  EXPECT_LT(colour.neutral_share, 0.7);
+  EXPECT_LT(colour.neutral_share, 0.8);
   EXPECT_GT(colour.warm_cool_share, colour.green_magenta_share);
 }
 

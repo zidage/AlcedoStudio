@@ -1083,6 +1083,8 @@ TEST_F(OpenClGradeFixture, OpenClFilmGrainColourIsWarmCoolWithTheQuietestGreen) 
   EXPECT_GT(colour.warm_cool_share, 1.8 * colour.green_magenta_share);
   EXPECT_LT(colour.std_dev[1], colour.std_dev[0]);
   EXPECT_LT(colour.std_dev[1], colour.std_dev[2]);
+  // Grain that darkens is cool, so cyan grain is not brighter than its surround.
+  EXPECT_GT(colour.lightness_warmth_correlation, 0.05);
 }
 
 /// GPU time of the DRT/Post passes with and without film grain at 6000 x 4000, median of 9 renders.

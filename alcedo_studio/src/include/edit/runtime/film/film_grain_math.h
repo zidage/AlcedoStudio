@@ -15,12 +15,15 @@
 //
 // Colour of the grain. The fields are made unit variance, mixed by a fixed 3x3 matrix, and scaled
 // by the datasheet granularity of each layer and a fixed weight of each channel:
-// - The mix gives the channel correlation of a grain whose variance is 57 % on the neutral axis,
-//   27 % on the warm-cool axis (r - b), and 16 % on the green-magenta axis (2g - r - b).
+// - The mix gives the channel correlation of the Kodak 5207 grain: rg 0.661, gb 0.41, rb 0.246.
 // - The channel weights set the mid-grey amplitude to about r:g:b = 1.2 : 1 : 1.4.
 // Both values come from measurements of real colour negative grain: a Flextight scan of Kodak 5207
 // and lab scans of Kodak Pro Image 100, on flat areas, with scanner white noise excluded. Both
-// films have the warm-cool axis as the main chroma axis and the smallest grain in green.
+// films have the warm-cool axis as the main chroma axis and the smallest grain in green. In both,
+// a grain cloud that brightens is warm and one that darkens is cool: cyan grain is darker than its
+// surround. The strong red-green correlation gives that; with rg 0.42 the cyan grain was brighter.
+// At mid grey the variance is about 60 % neutral, 29 % warm-cool (r - b), and 11 % green-magenta
+// (2g - r - b), and the chroma std is about 0.72 of the Oklab lightness std, as in the scans.
 // The grain keeps its colour up to white; only the brightening half of the grain gets smaller in
 // the highlights, so the grain does not push a highlight past white.
 //
@@ -130,12 +133,13 @@ FILM_GRAIN_INLINE float FilmGrainUnitField(float probability, float coverage) {
 /**
  * Applies the dye clouds to a display value. @p amount is the Film Grain value / 3.
  *
- * Mix: the symmetric square root of the channel correlation [[1, 0.4231, 0.2322], [0.4231, 1,
- * 0.4231], [0.2322, 0.4231, 1]], so no channel is the primary one. Each row has unit norm, so each
- * channel keeps the variance of its own field.
+ * Mix: the symmetric square root of the channel correlation [[1, 0.661, 0.246], [0.661, 1, 0.41],
+ * [0.246, 0.41, 1]], so no channel is the primary one. Each row has unit norm, so each channel
+ * keeps the variance of its own field.
  *
- * Channel scale: 0.80100 (the per-channel amplitude of the previous neutral/chroma mix, so the
- * slider strength stays) times the channel weights 1.3463, 0.8639, 0.9026.
+ * Channel scale: 0.80100 (the per-channel amplitude of the previous neutral/chroma mix) times the
+ * channel weights 1.4416, 0.8606, 0.7902. The weights give r:g:b = 1.2 : 1 : 1.4 at mid grey and
+ * keep the neutral grain of a slider value.
  */
 FILM_GRAIN_INLINE FilmGrainRgb FilmGrainDyeClouds(FilmGrainRgb source, FilmGrainRgb coverage,
                                                   float amount) {
@@ -146,16 +150,16 @@ FILM_GRAIN_INLINE FilmGrainRgb FilmGrainDyeClouds(FilmGrainRgb source, FilmGrain
   const float ug      = FilmGrainUnitField(pg, coverage.g);
   const float ub      = FilmGrainUnitField(pb, coverage.b);
 
-  const float mixed_r = 0.97312296f * ur + 0.20890844f * ug + 0.09689667f * ub;
-  const float mixed_g = 0.20890844f * ur + 0.95536094f * ug + 0.20890844f * ub;
-  const float mixed_b = 0.09689667f * ur + 0.20890844f * ug + 0.97312296f * ub;
+  const float mixed_r = 0.93312710f * ur + 0.34743662f * ug + 0.09252900f * ub;
+  const float mixed_g = 0.34743662f * ur + 0.91618165f * ug + 0.19974728f * ub;
+  const float mixed_b = 0.09252900f * ur + 0.19974728f * ug + 0.97546881f * ub;
 
   float       error_r = mixed_r * FILM_GRAIN_SQRT(pr * (1.0f - pr)) *
-                  FilmGrainGranularityScale(source.r, 0) * (0.80099938f * 1.3463f);
+                  FilmGrainGranularityScale(source.r, 0) * (0.80099938f * 1.44164737f);
   float error_g = mixed_g * FILM_GRAIN_SQRT(pg * (1.0f - pg)) *
-                  FilmGrainGranularityScale(source.g, 1) * (0.80099938f * 0.8639f);
+                  FilmGrainGranularityScale(source.g, 1) * (0.80099938f * 0.86058351f);
   float error_b = mixed_b * FILM_GRAIN_SQRT(pb * (1.0f - pb)) *
-                  FilmGrainGranularityScale(source.b, 2) * (0.80099938f * 0.9026f);
+                  FilmGrainGranularityScale(source.b, 2) * (0.80099938f * 0.79021457f);
 
   // A negative density error brightens. Near white it gets smaller, so a highlight stays below
   // white; the grain keeps its colour.

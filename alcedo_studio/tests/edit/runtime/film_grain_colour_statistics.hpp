@@ -16,14 +16,19 @@ namespace alcedo::film_grain_test {
 
 struct GrainResidualColour {
   std::array<double, 3> std_dev{};  ///< r, g, b
-  double                correlation_rg      = 0.0;
-  double                correlation_gb      = 0.0;
-  double                correlation_rb      = 0.0;
+  double                correlation_rg               = 0.0;
+  double                correlation_gb               = 0.0;
+  double                correlation_rb               = 0.0;
   /// Shares of the residual variance on the neutral (1, 1, 1), warm-cool (1, 0, -1), and
   /// green-magenta (-1, 2, -1) axes. They add up to 1.
-  double                neutral_share       = 0.0;
-  double                warm_cool_share     = 0.0;
-  double                green_magenta_share = 0.0;
+  double                neutral_share                = 0.0;
+  double                warm_cool_share              = 0.0;
+  double                green_magenta_share          = 0.0;
+  /// Correlation of the luminance residual (Rec. 709 weights) with the warm-cool residual
+  /// r - (g + b) / 2. Positive: grain that brightens is warm and grain that darkens is cool, as in
+  /// real colour negative film. Near a neutral grey the encoded and the linear residual give the
+  /// same value.
+  double                lightness_warmth_correlation = 0.0;
 };
 
 /// @p input and @p output hold pixels with members r, g, b, in the same order.
@@ -68,6 +73,17 @@ auto MeasureGrainResidualColour(const std::vector<Pixel>& input, const std::vect
   result.neutral_share       = share(1.0, 1.0, 1.0) / trace;
   result.warm_cool_share     = share(1.0, 0.0, -1.0) / trace;
   result.green_magenta_share = share(-1.0, 2.0, -1.0) / trace;
+  const double luminance[3]  = {0.2126, 0.7152, 0.0722};
+  const double warmth[3]     = {1.0, -0.5, -0.5};
+  double       cov_lw = 0.0, var_l = 0.0, var_w = 0.0;
+  for (int a = 0; a < 3; ++a) {
+    for (int b = 0; b < 3; ++b) {
+      cov_lw += luminance[a] * c[a][b] * warmth[b];
+      var_l += luminance[a] * c[a][b] * luminance[b];
+      var_w += warmth[a] * c[a][b] * warmth[b];
+    }
+  }
+  result.lightness_warmth_correlation = cov_lw / std::sqrt(var_l * var_w);
   return result;
 }
 
