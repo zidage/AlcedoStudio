@@ -37,6 +37,7 @@
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
+#include "film_grain_colour_statistics.hpp"
 #include "oklab_contrast_reference.hpp"
 
 namespace alcedo {
@@ -120,13 +121,11 @@ struct NeighborGradeCase {
   const char* expected_file;
   float       sharpen_amount;
   float       clarity;
-  float       film_grain;
 };
 
 constexpr NeighborGradeCase kNeighborGradeCases[] = {
-    {"cuda_neighbor_sharpen_amount80_radius2_expected_display_rgba32f.bin", 80.0f, 0.0f, 0.0f},
-    {"cuda_neighbor_clarity60_expected_display_rgba32f.bin", 0.0f, 60.0f, 0.0f},
-    {"cuda_neighbor_film_grain060_expected_display_rgba32f.bin", 0.0f, 0.0f, 0.6f},
+    {"cuda_neighbor_sharpen_amount80_radius2_expected_display_rgba32f.bin", 80.0f, 0.0f},
+    {"cuda_neighbor_clarity60_expected_display_rgba32f.bin", 0.0f, 60.0f},
 };
 
 auto ReadExpectedPixelBytes(const std::filesystem::path& path) -> std::vector<std::byte> {
@@ -371,9 +370,7 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
     sharpen.SetRadius(2.0f);
     sharpen.SetThreshold(0.0f);
     ModelByType<ClarityModel>(type_ids::Clarity()).SetValue(grade_case.clarity);
-    ModelByType<FilmGrainModel>(type_ids::FilmGrain()).SetValue(grade_case.film_grain);
-    const bool any_neighbor_grade = grade_case.sharpen_amount != 0.0f ||
-                                    grade_case.clarity != 0.0f || grade_case.film_grain != 0.0f;
+    const bool any_neighbor_grade = grade_case.sharpen_amount != 0.0f || grade_case.clarity != 0.0f;
     const auto result = RenderThroughDrtPost();
     EXPECT_EQ(result.post_neighborhood_count, any_neighbor_grade ? 1U : 0U)
         << grade_case.expected_file;
@@ -710,6 +707,24 @@ TEST_F(CudaPrimaryGradeFixture, CudaFilmGrainStrengthScalesDeterministicDensityV
     EXPECT_FLOAT_EQ(high[index].b, high_again[index].b);
   }
   EXPECT_GT(high_energy, low_energy * 6.0);
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaFilmGrainColourIsWarmCoolWithTheQuietestGreen) {
+  // film_grain_math.h: the channel mix and weights of real colour negative grain.
+  constexpr std::uint32_t width  = 128;
+  constexpr std::uint32_t height = 128;
+  UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
+  ModelByType<FilmGrainModel>(type_ids::FilmGrain()).SetValue(0.6f);
+  const auto output = Download(RenderThroughDrtPost().display_post);
+  const auto input  = Download(plan_.drt.scene_output);
+  const auto colour = film_grain_test::MeasureGrainResidualColour(input, output);
+  EXPECT_LT(colour.correlation_rb, colour.correlation_rg - 0.08);
+  EXPECT_LT(colour.correlation_rb, colour.correlation_gb - 0.08);
+  EXPECT_GT(colour.warm_cool_share, 1.8 * colour.green_magenta_share);
+  EXPECT_LT(colour.std_dev[1], colour.std_dev[0]);
+  EXPECT_LT(colour.std_dev[1], colour.std_dev[2]);
+  // Grain that darkens is cool, so cyan grain is not brighter than its surround.
+  EXPECT_GT(colour.lightness_warmth_correlation, 0.05);
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaNeighborStagesReuseWorkspaceTexturesAfterFirstRender) {
@@ -1083,12 +1098,13 @@ TEST(GpuDagCudaPrimaryGrade, ExecuteCudaCameraColorRejectsMissingCameraMatrices)
 }
 
 }  // namespace
-TEST_F(CudaPrimaryGradeFixture, CudaNeighborGradeDetailAndGrainPixelsAreUnchanged) {
+TEST_F(CudaPrimaryGradeFixture, CudaNeighborGradeDetailPixelsAreUnchanged) {
   // Each file holds the DRT Post display pixels (RGBA float32, row-major, 64x48) rendered before
-  // G10.6 moved the detail and film grain device helpers out of GPU_kernels. Film grain uses the
-  // fixed runtime seed, so every case must match bit for bit.
+  // G10.6 moved the detail device helpers out of GPU_kernels. Every case must match bit for bit.
+  // Film grain has no stored case: its colour changed on purpose, and
+  // CudaFilmGrainColourIsWarmCoolWithTheQuietestGreen tests it.
   const auto directory = std::filesystem::path(ALCEDO_NEIGHBOR_GRADE_EXPECTED_PIXEL_DIR);
-  const auto identity  = RenderNeighborGradeCase({"identity", 0.0f, 0.0f, 0.0f});
+  const auto identity  = RenderNeighborGradeCase({"identity", 0.0f, 0.0f});
   for (const auto& grade_case : kNeighborGradeCases) {
     const auto pixels   = RenderNeighborGradeCase(grade_case);
     const auto expected = ReadExpectedPixelBytes(directory / grade_case.expected_file);

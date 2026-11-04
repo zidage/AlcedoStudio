@@ -2,8 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Device helpers for the film grain neighborhood pass: reference coordinates, dye-density model,
-// seeded grain samples, and the 7-tap Gaussian. They read only their arguments.
+// Device helpers for the film grain neighborhood pass: reference coordinates, seeded grain samples,
+// the 7-tap Gaussian, and the dye clouds of film_grain_math.h. They read only their arguments.
 
 #pragma once
 
@@ -13,6 +13,7 @@
 #include <cstdint>
 
 #include "cuda/prng.hpp"
+#include "edit/runtime/film/film_grain_math.h"
 
 namespace alcedo {
 namespace CUDA {
@@ -50,121 +51,12 @@ __device__ __forceinline__ float FilmGrainClampProbability(float value) {
   return fminf(fmaxf(value, 0.0f), 1.0f);
 }
 
-__device__ __forceinline__ float FilmGrainLerp(float a, float b, float t) {
-  return a + (b - a) * t;
-}
-
-__device__ __forceinline__ float FilmGrainEvalDensitySigma(float density, const float* density_lut,
-                                                           const float* sigma_lut, int count) {
-  if (density <= density_lut[0]) {
-    return sigma_lut[0];
-  }
-  for (int i = 0; i < count - 1; ++i) {
-    const float lo = density_lut[i];
-    const float hi = density_lut[i + 1];
-    if (density <= hi) {
-      const float t = (density - lo) / fmaxf(hi - lo, 1.0e-6f);
-      return FilmGrainLerp(sigma_lut[i], sigma_lut[i + 1], t);
-    }
-  }
-  return sigma_lut[count - 1];
-}
-
-__device__ __forceinline__ float FilmGrainLayerDensity(float signal, int channel) {
-  const float u = FilmGrainClampProbability(signal);
-  if (channel == 0) {
-    return FilmGrainLerp(0.22f, 2.52f, u);
-  }
-  if (channel == 1) {
-    return FilmGrainLerp(0.59f, 2.69f, u);
-  }
-  return FilmGrainLerp(1.00f, 3.00f, u);
-}
-
-__device__ __forceinline__ float FilmGrainDatasheetSigmaD(float density, int channel) {
-  constexpr int   kCount              = 11;
-  constexpr float kRedDensity[kCount] = {0.22f, 0.22f, 0.25f, 0.42f, 0.78f, 1.19f,
-                                         1.58f, 1.94f, 2.26f, 2.45f, 2.52f};
-  constexpr float kRedSigma[kCount]   = {0.00594f, 0.00565f, 0.00524f, 0.01085f, 0.00844f, 0.00531f,
-                                         0.00486f, 0.00486f, 0.00445f, 0.00440f, 0.00474f};
-  constexpr float kGreenDensity[kCount] = {0.59f, 0.61f, 0.66f, 0.94f, 1.36f, 1.76f,
-                                           2.18f, 2.49f, 2.61f, 2.67f, 2.69f};
-  constexpr float kGreenSigma[kCount] = {0.00517f, 0.00524f, 0.00625f, 0.01085f, 0.00823f, 0.00617f,
-                                         0.00625f, 0.00691f, 0.00602f, 0.00524f, 0.00445f};
-  constexpr float kBlueDensity[kCount] = {1.00f, 1.03f, 1.10f, 1.32f, 1.51f, 1.78f,
-                                          2.05f, 2.38f, 2.68f, 2.91f, 3.00f};
-  constexpr float kBlueSigma[kCount] = {0.01185f, 0.01261f, 0.01485f, 0.01581f, 0.01200f, 0.01099f,
-                                        0.01127f, 0.01058f, 0.00844f, 0.00641f, 0.00418f};
-
-  if (channel == 0) {
-    return FilmGrainEvalDensitySigma(density, kRedDensity, kRedSigma, kCount);
-  }
-  if (channel == 1) {
-    return FilmGrainEvalDensitySigma(density, kGreenDensity, kGreenSigma, kCount);
-  }
-  return FilmGrainEvalDensitySigma(density, kBlueDensity, kBlueSigma, kCount);
-}
-
-__device__ __forceinline__ float FilmGrainDatasheetGranularityScale(float signal, int channel) {
-  constexpr float kReferenceSigmaD = 0.0075f;
-  const float     density          = FilmGrainLayerDensity(signal, channel);
-  const float     sigma            = FilmGrainDatasheetSigmaD(density, channel);
-  return fminf(fmaxf(sigma / kReferenceSigmaD, 0.55f), 2.15f);
-}
-
-__device__ __forceinline__ float FilmGrainDyeDensityError(float transmittance, float layer_coverage,
-                                                          int channel) {
-  const float expected_coverage = FilmGrainClampProbability(transmittance);
-  const float density_error     = (layer_coverage - expected_coverage) *
-                              FilmGrainDatasheetGranularityScale(transmittance, channel);
-  return density_error;
-}
-
-__device__ __forceinline__ float FilmGrainApplyDyeDensity(float transmittance, float density_error,
-                                                          float strength) {
-  return transmittance - transmittance * strength * density_error;
-}
-
-__device__ __forceinline__ float FilmGrainSmoothstep(float edge0, float edge1, float value) {
-  const float t = fminf(fmaxf((value - edge0) / fmaxf(edge1 - edge0, 1.0e-6f), 0.0f), 1.0f);
-  return t * t * (3.0f - 2.0f * t);
-}
-
-__device__ __forceinline__ float FilmGrainCompressHighlightBrightening(float density_error,
-                                                                       float highlight_weight) {
-  const float brighten_scale = FilmGrainLerp(1.0f, 0.12f, highlight_weight);
-  return density_error < 0.0f ? density_error * brighten_scale : density_error;
-}
-
 __device__ __forceinline__ float4 FilmGrainApplyDyeClouds(float4 transmittance,
                                                           float4 layer_coverage, float strength) {
-  constexpr float kColorDyeChroma     = 0.68f;
-  constexpr float kDyeDensityBoost    = 1.35f;
-  constexpr float kHighlightDyeChroma = 0.18f;
-
-  const float     red_density     = FilmGrainDyeDensityError(transmittance.x, layer_coverage.x, 0);
-  const float     green_density   = FilmGrainDyeDensityError(transmittance.y, layer_coverage.y, 1);
-  const float     blue_density    = FilmGrainDyeDensityError(transmittance.z, layer_coverage.z, 2);
-  const float     neutral_density = (red_density + green_density + blue_density) * (1.0f / 3.0f);
-  const float     highlight_signal =
-      (FilmGrainClampProbability(transmittance.x) + FilmGrainClampProbability(transmittance.y) +
-       FilmGrainClampProbability(transmittance.z)) *
-      (1.0f / 3.0f);
-  const float highlight_weight = FilmGrainSmoothstep(0.72f, 0.96f, highlight_signal);
-  const float color_chroma = FilmGrainLerp(kColorDyeChroma, kHighlightDyeChroma, highlight_weight);
-
-  const float red_balanced = FilmGrainCompressHighlightBrightening(
-      neutral_density + color_chroma * (red_density - neutral_density), highlight_weight);
-  const float green_balanced = FilmGrainCompressHighlightBrightening(
-      neutral_density + color_chroma * (green_density - neutral_density), highlight_weight);
-  const float blue_balanced = FilmGrainCompressHighlightBrightening(
-      neutral_density + color_chroma * (blue_density - neutral_density), highlight_weight);
-  const float boosted_strength = strength * kDyeDensityBoost;
-
-  return make_float4(FilmGrainApplyDyeDensity(transmittance.x, red_balanced, boosted_strength),
-                     FilmGrainApplyDyeDensity(transmittance.y, green_balanced, boosted_strength),
-                     FilmGrainApplyDyeDensity(transmittance.z, blue_balanced, boosted_strength),
-                     transmittance.w);
+  const FilmGrainRgb source{transmittance.x, transmittance.y, transmittance.z};
+  const FilmGrainRgb coverage{layer_coverage.x, layer_coverage.y, layer_coverage.z};
+  const FilmGrainRgb result = FilmGrainDyeClouds(source, coverage, strength);
+  return make_float4(result.r, result.g, result.b, transmittance.w);
 }
 
 __device__ __forceinline__ float FilmGrainSample(float probability, int ref_x, int ref_y,

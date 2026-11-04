@@ -160,67 +160,19 @@ static inline float4 GradeFilmVertical(__local const float4* tile, int center, i
   return blur;
 }
 
-static inline float GradeFilmLerp(float a, float b, float t) { return a + (b - a) * t; }
-
-static inline float GradeFilmEvalSigma(float density, const float density_lut[11],
-                                       const float sigma_lut[11]) {
-  if (density <= density_lut[0]) return sigma_lut[0];
-  for (int i = 0; i < 10; ++i) {
-    if (density <= density_lut[i + 1]) {
-      const float t =
-          (density - density_lut[i]) / fmax(density_lut[i + 1] - density_lut[i], 1.0e-6f);
-      return GradeFilmLerp(sigma_lut[i], sigma_lut[i + 1], t);
-    }
-  }
-  return sigma_lut[10];
-}
-
-static inline float GradeFilmGranularity(float signal, int channel) {
-  const float red_density[11]   = {0.22f, 0.22f, 0.25f, 0.42f, 0.78f, 1.19f,
-                                   1.58f, 1.94f, 2.26f, 2.45f, 2.52f};
-  const float red_sigma[11]     = {0.00594f, 0.00565f, 0.00524f, 0.01085f, 0.00844f, 0.00531f,
-                                   0.00486f, 0.00486f, 0.00445f, 0.00440f, 0.00474f};
-  const float green_density[11] = {0.59f, 0.61f, 0.66f, 0.94f, 1.36f, 1.76f,
-                                   2.18f, 2.49f, 2.61f, 2.67f, 2.69f};
-  const float green_sigma[11]   = {0.00517f, 0.00524f, 0.00625f, 0.01085f, 0.00823f, 0.00617f,
-                                   0.00625f, 0.00691f, 0.00602f, 0.00524f, 0.00445f};
-  const float blue_density[11]  = {1.00f, 1.03f, 1.10f, 1.32f, 1.51f, 1.78f,
-                                   2.05f, 2.38f, 2.68f, 2.91f, 3.00f};
-  const float blue_sigma[11]    = {0.01185f, 0.01261f, 0.01485f, 0.01581f, 0.01200f, 0.01099f,
-                                   0.01127f, 0.01058f, 0.00844f, 0.00641f, 0.00418f};
-  const float u                 = clamp(signal, 0.0f, 1.0f);
-  const float density           = channel == 0   ? GradeFilmLerp(0.22f, 2.52f, u)
-                                  : channel == 1 ? GradeFilmLerp(0.59f, 2.69f, u)
-                                                 : GradeFilmLerp(1.00f, 3.00f, u);
-  const float sigma             = channel == 0 ? GradeFilmEvalSigma(density, red_density, red_sigma)
-                                  : channel == 1 ? GradeFilmEvalSigma(density, green_density, green_sigma)
-                                                 : GradeFilmEvalSigma(density, blue_density, blue_sigma);
-  return clamp(sigma / 0.0075f, 0.55f, 2.15f);
-}
-
-static inline float GradeFilmDensityError(float signal, float coverage, int channel) {
-  return (coverage - clamp(signal, 0.0f, 1.0f)) * GradeFilmGranularity(signal, channel);
-}
-
+// The dye clouds are FilmGrainDyeClouds of film_grain_math.h, which the program lists before this
+// file.
 static inline float4 GradeFilmApply(float4 source, float4 coverage, float amount) {
-  float3      density = (float3)(GradeFilmDensityError(source.x, coverage.x, 0),
-                            GradeFilmDensityError(source.y, coverage.y, 1),
-                            GradeFilmDensityError(source.z, coverage.z, 2));
-  const float neutral = (density.x + density.y + density.z) * (1.0f / 3.0f);
-  const float highlight_signal =
-      (clamp(source.x, 0.0f, 1.0f) + clamp(source.y, 0.0f, 1.0f) + clamp(source.z, 0.0f, 1.0f)) *
-      (1.0f / 3.0f);
-  const float highlight      = GradeNeighborSmoothstep(0.72f, 0.96f, highlight_signal);
-  const float chroma         = GradeFilmLerp(0.68f, 0.18f, highlight);
-  density                    = (float3)(neutral) + chroma * (density - (float3)(neutral));
-  const float brighten_scale = GradeFilmLerp(1.0f, 0.12f, highlight);
-  density.x                  = density.x < 0.0f ? density.x * brighten_scale : density.x;
-  density.y                  = density.y < 0.0f ? density.y * brighten_scale : density.y;
-  density.z                  = density.z < 0.0f ? density.z * brighten_scale : density.z;
-  const float strength       = amount * 1.35f;
-  return (float4)(source.x - source.x * strength * density.x,
-                  source.y - source.y * strength * density.y,
-                  source.z - source.z * strength * density.z, source.w);
+  FilmGrainRgb source_rgb;
+  source_rgb.r = source.x;
+  source_rgb.g = source.y;
+  source_rgb.b = source.z;
+  FilmGrainRgb coverage_rgb;
+  coverage_rgb.r            = coverage.x;
+  coverage_rgb.g            = coverage.y;
+  coverage_rgb.b            = coverage.z;
+  const FilmGrainRgb result = FilmGrainDyeClouds(source_rgb, coverage_rgb, amount);
+  return (float4)(result.r, result.g, result.b, source.w);
 }
 
 static inline int GradeVerticalRadius(const GradeNeighborParams* params) {

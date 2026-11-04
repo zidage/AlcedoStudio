@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <ranges>
 #include <span>
@@ -42,6 +44,7 @@
 #include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/result_content_key.hpp"
+#include "film_grain_colour_statistics.hpp"
 #include "gpu/transient_buffer_arena.hpp"
 #include "oklab_contrast_reference.hpp"
 #include "opencl/opencl_runtime.hpp"
@@ -1064,6 +1067,63 @@ TEST_F(OpenClGradeFixture, OpenClFilmGrainStrengthScalesDeterministicDensityVari
     EXPECT_FLOAT_EQ(high[index].b, high_again[index].b);
   }
   EXPECT_GT(high_energy, low_energy * 6.0);
+}
+
+TEST_F(OpenClGradeFixture, OpenClFilmGrainColourIsWarmCoolWithTheQuietestGreen) {
+  // film_grain_math.h: the channel mix and weights of real colour negative grain.
+  constexpr std::uint32_t width  = 128;
+  constexpr std::uint32_t height = 128;
+  UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
+  ModelByType<FilmGrainModel>(type_ids::FilmGrain()).SetValue(0.6f);
+  (void)RenderThroughDrtPost();
+  const auto colour =
+      film_grain_test::MeasureGrainResidualColour(last_display_base_pixels_, last_output_pixels_);
+  EXPECT_LT(colour.correlation_rb, colour.correlation_rg - 0.08);
+  EXPECT_LT(colour.correlation_rb, colour.correlation_gb - 0.08);
+  EXPECT_GT(colour.warm_cool_share, 1.8 * colour.green_magenta_share);
+  EXPECT_LT(colour.std_dev[1], colour.std_dev[0]);
+  EXPECT_LT(colour.std_dev[1], colour.std_dev[2]);
+  // Grain that darkens is cool, so cyan grain is not brighter than its surround.
+  EXPECT_GT(colour.lightness_warmth_correlation, 0.05);
+}
+
+/// GPU time of the DRT/Post passes with and without film grain at 6000 x 4000, median of 9 renders.
+/// Run it with --gtest_also_run_disabled_tests. The OpenCL driver compiles the kernels with its
+/// own optimization, so a Debug host build gives the kernel time.
+TEST_F(OpenClGradeFixture, DISABLED_FilmGrainCostRecordAt24Megapixels) {
+  constexpr std::uint32_t width  = 6000;
+  constexpr std::uint32_t height = 4000;
+  UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
+  auto&      grain  = ModelByType<FilmGrainModel>(type_ids::FilmGrain());
+  const auto drt_ms = [&]() {
+    device_->BeginRender();
+    ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
+    ExecuteOpenClGeometryResample(*device_, plan_);
+    ExecuteOpenClCameraColor(*device_, plan_, document_);
+    auto grade = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_);
+    device_->WaitIdle();
+    const auto start = std::chrono::steady_clock::now();
+    (void)ExecuteOpenClDrt(*device_, plan_, document_, grade.output_binding);
+    device_->WaitIdle();
+    const std::chrono::duration<double, std::milli> elapsed =
+        std::chrono::steady_clock::now() - start;
+    device_->EndRender();
+    device_->PublishResults();
+    return elapsed.count();
+  };
+  const auto median = [&](float value) {
+    grain.SetValue(value);
+    (void)drt_ms();
+    std::vector<double> runs;
+    for (int run = 0; run < 9; ++run) runs.push_back(drt_ms());
+    std::sort(runs.begin(), runs.end());
+    return runs[runs.size() / 2];
+  };
+  const double without_grain = median(0.0f);
+  const double with_grain    = median(0.6f);
+  std::cout << "DRT/Post at " << width << " x " << height << ": without grain " << without_grain
+            << " ms, with grain " << with_grain << " ms, grain " << with_grain - without_grain
+            << " ms\n";
 }
 
 TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance) {
