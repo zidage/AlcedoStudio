@@ -29,7 +29,8 @@ struct Rgb {
  * @brief Double-precision form of the point stages, from the same math as the kernels.
  *
  * It runs on the host tables of one selection, with no blur and no Enlarger flare: the entry gamut
- * compression, FP1, FP4, the two steps of FP5, and FP6, then the sRGB curve.
+ * compression, FP1, FP4, the two steps of FP5, and FP6, then the sRGB curve. A colour reversal film
+ * has the light table form of FP6.
  */
 class FilmPrintPointReference {
  public:
@@ -61,6 +62,14 @@ class FilmPrintPointReference {
     const auto q =
         FilmKernelLayerExposure(&params_, values_.data(), compressed.r, compressed.g, compressed.b);
     auto a = FilmKernelPointAmounts(&params_, values_.data(), q);
+    if (params_.light_table != 0U) {
+      // A colour reversal film: the light table, and the surround in display light. A ramp has no
+      // image plane, so it has no loupe flare.
+      const auto light = FilmKernelPrintDisplay(&params_, print_rgba_.data(), a);
+      const auto finished =
+          FilmKernelFinishDisplay(&params_, FilmKernelDisplaySurround(&params_, light));
+      return {Encode(finished.r), Encode(finished.g), Encode(finished.b)};
+    }
     if (params_.negative_grade != 0U) a = FilmKernelNegativeGrade(&params_, a, a);
     const auto finished =
         FilmKernelFinishDisplay(&params_, FilmKernelPrintDisplay(&params_, print_rgba_.data(), a));

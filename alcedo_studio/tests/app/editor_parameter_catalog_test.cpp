@@ -22,6 +22,7 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "app/editor_adjustment_context.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
@@ -29,6 +30,7 @@
 #include "edit/geometry/crop_frame.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_print_model.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/color_wheel_tone.hpp"
@@ -722,10 +724,32 @@ TEST(EditorParameterCatalogTest, FilmPrintOptionsAreTheIdentifiersOfTheDocumentM
       EXPECT_FALSE(property->options[i].label.empty()) << ids[i];
     }
   };
-  expect_ids("negative", kFilmNegativeIds);
+  // The Film list has the negatives, then the reversal films in the order of the lab list.
+  std::vector<std::string_view> films(kFilmNegativeIds.begin(), kFilmNegativeIds.end());
+  films.insert(films.end(), kFilmReversalIds.begin(), kFilmReversalIds.end());
+  expect_ids("negative", films);
   expect_ids("print_material", kFilmPrintMaterialIds);
   expect_ids("scene_light", kFilmSceneLightIds);
   EXPECT_EQ(EditorParameterCatalog::UiDefault(*entry).at("method"), "open_drt");
+}
+
+TEST(EditorParameterCatalogTest, FilmPrintWriteOfAReversalFilmKeepsThePrintMaterial) {
+  std::string error;
+  const auto  model = EditorParameterCatalog::ToModelJson("odt",
+                                                          {{"method", "film_print"},
+                                                           {"negative", "fuji_velvia_50"},
+                                                           {"print_material", "kodak_2383"},
+                                                           {"enlarger_flare", 0.02}},
+                                                          nlohmann::json{}, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  const auto& film_print = model->at("odt").at("film_print");
+  EXPECT_EQ(film_print.at("negative"), "fuji_velvia_50");
+  EXPECT_EQ(film_print.at("print_material"), "kodak_2383");
+  EXPECT_DOUBLE_EQ(film_print.at("enlarger_flare").get<double>(), 0.02);
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "odt", {{"method", "film_print"}, {"negative", "fuji_velvia_9999"}},
+                   nlohmann::json{}, &error)
+                   .has_value());
 }
 
 TEST(EditorParameterCatalogTest, FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput) {

@@ -71,6 +71,12 @@ struct ComposeCounts {
 void Log10BandResponse(const SpectralBand& band, const double* amounts, int64_t count, double* out,
                        int threads = 0);
 
+// cbrt(scale * sum over wavelengths of T * weight) for each band, with T = 10^-(base + amounts @
+// dyes): the light table of a colour reversal film (lab rule 'light_table_view'). amounts: (count,
+// 3). out: (count, 3).
+void          CubeRootBandResponse(const SpectralBand& band, double scale, const double* amounts,
+                                   int64_t count, double* out, int threads = 0);
+
 // Projected Newton: amounts >= 0 with band density(base + amounts @ dyes) = targets. iterations and
 // the stop rule are those of the host evaluator. targets, amounts: (count, 3). Returns the count
 // with a largest residual above reached_limit.

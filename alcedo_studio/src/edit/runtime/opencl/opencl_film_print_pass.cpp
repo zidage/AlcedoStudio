@@ -36,7 +36,7 @@ namespace {
 // film_print.cl has the same values, and a different size stops the build of its program.
 static_assert(kFilmBlurMaxRadius == 128 && sizeof(FilmBlurKernel) == 1552);
 static_assert(kFilmNarrowSpreadMaxRadius == 2 && sizeof(FilmNarrowKernel) == 76);
-static_assert(sizeof(FilmKernelParams) == 392);
+static_assert(sizeof(FilmKernelParams) == 412);
 static_assert(sizeof(Matrix3x3) == 36);
 static_assert(sizeof(FilmKernelRgb) == 12);
 
@@ -185,9 +185,18 @@ void BlurVerticalToImage(const Recording& r, const Plane& src, cl_mem dst, std::
   Dispatch(r.device, kernel, width, height, "RecordOpenClFilmPrint: blur to image enqueue");
 }
 
+/// What a canvas holds. The same values as FILM_CANVAS_* of film_print.cl.
+enum class CanvasValue : cl_int {
+  kValue         = 0,  ///< The exposure, for Halation
+  kTransmittance = 1,  ///< 10^-a of the amounts, for the Enlarger flare of a print
+  kDisplayLight  = 2,  ///< Linear display light of the light table, for the loupe flare
+};
+
+/// @p print_rgba and @p params_offset are read only for CanvasValue::kDisplayLight.
 void CanvasReduce(const Recording& r, const Plane& src, std::uint32_t width, std::uint32_t height,
                   const Plane& dst, ImageExtent extent, const Matrix3x3& canvas_to_render,
-                  std::uint32_t samples, bool transmittance) {
+                  std::uint32_t samples, CanvasValue mode, cl_mem print_rgba,
+                  cl_uint params_offset) {
   auto kernel = Kernel(OpenCL::GpuDag::kFilmPrintCanvasReduceKernelName);
   Arguments(kernel, "RecordOpenClFilmPrint: canvas reduce")
       .Add(src)
@@ -198,7 +207,10 @@ void CanvasReduce(const Recording& r, const Plane& src, std::uint32_t width, std
       .Add(static_cast<cl_int>(extent.height))
       .Add(canvas_to_render)
       .Add(static_cast<cl_int>(samples))
-      .Add(static_cast<cl_int>(transmittance ? 1 : 0));
+      .Add(static_cast<cl_int>(mode))
+      .Add(print_rgba)
+      .Add(r.data.native)
+      .Add(params_offset);
   Dispatch(r.device, kernel, extent.width, extent.height,
            "RecordOpenClFilmPrint: canvas reduce enqueue");
 }
@@ -285,7 +297,7 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
   uploaded.params.display_encoding = static_cast<std::uint32_t>(resolved.eotf_);
   const auto& params               = uploaded.params;
 
-  const auto  negative             = bundle.Negative(film.negative);
+  const auto  negative             = bundle.Film(film.negative);
   const auto  image                = MakeFilmPrintImagePlan(
       plan.geometry, bundle.ImagePlaneConstants(), negative.layer_spread_um,
       params.inhibition_has_image != 0U || params.negative_grade != 0U, film);
@@ -395,7 +407,7 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
           const Plane reduced = AllocatePlane(device, canvas.width, canvas.height);
           const Plane middle  = AllocatePlane(device, canvas.width, canvas.height);
           CanvasReduce(recording, q, width, height, reduced, canvas, image.canvas_to_render,
-                       image.canvas_samples, false);
+                       image.canvas_samples, CanvasValue::kValue, print_rgba, params_offset);
           BlurHorizontal(recording, reduced, middle, canvas.width, canvas.height,
                          offsetof(FilmPrintDeviceData, halation_x));
           BlurVerticalToImage(recording, middle, target, canvas.width, canvas.height,
@@ -568,17 +580,22 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
     names.Mark("FP6 blurred amounts of the negative grade");
   }
 
-  // FP6: the canonical image of the blurred transmittance, then the fused point stages.
+  // FP6: the canonical image of the blurred transmittance, or on a light table of the blurred
+  // display light, then the fused point stages.
   std::optional<Lease> temporary_flare;
-  cl_mem               flare = unused_image;
+  cl_mem               flare       = unused_image;
+  const bool           light_table = params.light_table != 0U;
   if (image.flare_active) {
     const auto extent = image.flare_extent;
+    const auto id     = light_table ? FilmLoupeFlareResultId(plan.drt.node_id)
+                                    : FilmFlareResultId(plan.drt.node_id);
     flare             = ReadOrBuildCanvasResult(
-        device, plan, FilmFlareResultId(plan.drt.node_id), extent, long_edge, temporary_flare,
-        [&](cl_mem target) {
+        device, plan, id, extent, long_edge, temporary_flare, [&](cl_mem target) {
           const Plane reduced = AllocatePlane(device, canvas.width, canvas.height);
           CanvasReduce(recording, a, width, height, reduced, canvas, image.canvas_to_render,
-                                   image.canvas_samples, true);
+                                   image.canvas_samples,
+                       light_table ? CanvasValue::kDisplayLight : CanvasValue::kTransmittance,
+                                   print_rgba, params_offset);
           const Plane middle = AllocatePlane(device, extent.width, extent.height);
           // A canvas with a small flare sigma has no second reduction.
           Plane       source = reduced;

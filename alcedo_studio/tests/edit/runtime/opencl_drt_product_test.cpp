@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <iostream>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <span>
@@ -25,9 +26,9 @@
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #endif
 
-#include "support/render_snapshot_source.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/film_print_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
@@ -44,6 +45,7 @@
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_runtime.hpp"
+#include "support/render_snapshot_source.hpp"
 
 namespace alcedo {
 namespace {
@@ -352,6 +354,49 @@ TEST_F(OpenClDrtFixture, FilmPrintMatchesCudaReferenceWithinTolerance) {
       ASSERT_TRUE(AllFinite(opencl));
       EXPECT_LT(MaxAbsError(opencl, cuda), 1.0f / 255.0f);
     }
+  }
+#endif
+}
+
+TEST_F(OpenClDrtFixture, ReversalFilmPrintMatchesCudaReferenceWithinTolerance) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA reference is not enabled in this build.";
+#else
+  if (!HasCudaDevice()) {
+    GTEST_SKIP() << "No CUDA device available for the reference render.";
+  }
+  if (!std::filesystem::exists(FilmPrintResourceDirectory() / "manifest.json")) {
+    GTEST_SKIP() << "No film print resources at " << FilmPrintResourceDirectory().string()
+                 << ". Configure with ALCEDO_FILM_PRINT_RESOURCE_DIR. This is not a pass.";
+  }
+  constexpr std::uint32_t kWidth  = 1024;
+  constexpr std::uint32_t kHeight = 768;
+  input_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(kWidth, kHeight),
+                                         gpu_dag_test::FullSensor(kWidth, kHeight));
+  // The light table form, with the loupe flare and a scene light that keeps its cast.
+  for (const auto film : kFilmReversalIds) {
+    SCOPED_TRACE(std::string{film});
+    auto document = CreateDefaultPipelineDocument();
+    gpu_dag_test::EnsureTestCameraProfile(document);
+    DrtParameterUpdate update;
+    update.method              = DrtMethod::FilmPrint;
+    update.encoding_space      = DrtColorSpace::Rec709;
+    update.encoding_eotf       = DrtEotf::SrgbPiecewise;
+    update.film_negative       = std::string{film};
+    update.film_scene_light    = "tungsten";
+    update.film_light_spread   = 2.5f;
+    update.film_halation       = 4.0f;
+    update.film_enlarger_flare = 0.05f;
+    document.Drt()->Params().ApplyUpdate(update);
+    const auto plan   = GraphCompiler::Compile(document, input_.CompileSource(), RenderRequest{});
+    const auto opencl = Download(*device_, device_->Execute(plan, input_, document));
+    CudaRenderDevice cuda_device;
+    const auto       cuda = Download(cuda_device, cuda_device.Execute(plan, input_, document));
+    ASSERT_EQ(opencl.size(), cuda.size());
+    ASSERT_TRUE(AllFinite(opencl));
+    const auto largest = MaxAbsError(opencl, cuda);
+    std::cout << film << ": OpenCL against CUDA, largest " << largest * 255.0f << " codes\n";
+    EXPECT_LT(largest, 1.0f / 255.0f);
   }
 #endif
 }

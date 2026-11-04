@@ -241,9 +241,38 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
     stock[name("curve_log_h_start")] = F64Array({3}, {-3.0, -3.0, -3.0});
     stock[name("curve_log_h_step")]  = F64Array({}, {1.5});
   }
+  // One colour reversal film with no inhibition, and the values of the light table.
+  {
+    const auto name     = [](const char* field) { return std::string("reversal/rev_a/") + field; };
+    stock[name("base")] = F64Array({kWavelengths}, Flat(0.08));
+    stock[name("dyes")] = F64Array({3, kWavelengths}, BandRows(0.9, 0.02));
+    auto exposure_weights = BandRows(0.25, 0.0);
+    for (std::size_t row = 1; row <= 3; ++row) {
+      exposure_weights[row * kWavelengths - 1] = 0.0;
+    }
+    stock[name("exposure_weights")]   = F64Array({3, kWavelengths}, exposure_weights);
+    stock[name("density_grid_start")] = F64Array({3}, {0.0, 0.0, 0.0});
+    stock[name("density_grid_stop")]  = F64Array({3}, {2.8, 3.0, 3.2});
+    stock[name("dye_max")]            = F64Array({3}, {2.9, 3.1, 3.2});
+    stock[name("clear_luminance")]    = F64Array({}, {85.0});
+    stock[name("criterion_log_h")]    = F64Array({3}, {-1.5, -1.6, -1.7});
+    stock[name("layer_spread_um")]    = F64Array({3}, {4.0, 4.0, 3.0});
+    stock[name("curve_density")] =
+        F64Array({3, 4}, {0.0, 0.7, 2.0, 2.8, 0.0, 0.8, 2.2, 3.0, 0.0, 0.9, 2.4, 3.2});
+    stock[name("curve_lengths")]     = ArrayValues{"i8", {3}, ToBytes<std::int64_t>({4, 4, 4})};
+    stock[name("curve_log_h_start")] = F64Array({3}, {-3.5, -3.4, -3.3});
+    stock[name("curve_log_h_step")]  = F64Array({}, {0.6});
+  }
+  stock["light_table/viewing_weights"]   = F64Array({3, kWavelengths}, BandRows(0.6, 0.05));
+  stock["light_table/display_luminance"] = F64Array({3}, {0.2126, 0.7152, 0.0722});
+  stock["light_table/xyz_scale"]         = F64Array({}, {12.5});
+  stock["light_table/surround_exponent"] = F64Array({}, {0.89});
+  stock["light_table/viewing_cct_k"]     = F64Array({}, {5000.0});
   const nlohmann::json metadata{
       {"negatives", {{"neg_a", {{"name", "Negative A"}}}, {"neg_b", {{"name", "Negative B"}}}}},
       {"print_materials", {{"paper_a", {{"name", "Paper A"}}}, {"paper_b", {{"name", "Paper B"}}}}},
+      {"reversal_films", {{"rev_a", {{"name", "Reversal A"}}}}},
+      {"reversal_list_order", {"rev_a"}},
       {"scene_lights", {"reference", "daylight"}},
       {"scene_spectra", {"flat", "ramp"}}};
   WriteArrayFile(directory / "film_stock_bundle.bin", stock, metadata);
@@ -262,6 +291,12 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
   setup["negative_grade_grey"]  = F64Array({2, 2, 3}, std::vector<double>(12, 0.0));
   setup["xyz_to_display"]       = F64Array({2, 3, 3}, std::vector<double>(18, 0.01));
   setup["scene_spectrum_index"] = ArrayValues{"i4", {2, 2}, ToBytes<std::int32_t>({0, 1, 1, 0})};
+  setup["reversal_layer_gain"]  = F64Array({1, 2, 3}, {0.7, 0.8, 0.9, 1.7, 1.8, 1.9});
+  setup["reversal_xyz_to_display"] =
+      F64Array({1, 3, 3}, {3.2, -1.5, -0.5, -0.9, 1.9, 0.04, 0.05, -0.2, 1.06});
+  // Under 'reference' the reversal film reads the spectrum 'ramp', as a film with a daylight
+  // balance.
+  setup["reversal_scene_spectrum_index"] = ArrayValues{"i4", {1, 2}, ToBytes<std::int32_t>({1, 0})};
   WriteArrayFile(directory / "film_print_setup.bin", setup, nlohmann::json::object());
 
   WriteReflectance(directory / "film_reflectance_table.bin", KeptNodes(), 0, kWavelengths - 1);
@@ -584,6 +619,137 @@ TEST_F(FilmPrintTablesTest, KernelParamsSplitTheInhibitionIntoAnImagePartAndAPoi
   EXPECT_EQ(none.inhibition_has_point, 0U);
 }
 
+TEST_F(FilmPrintTablesTest, ReversalSelectionReadsTheValuesOfItsFilmAndLight) {
+  const auto bundle = FilmStockBundle::Open(Resources());
+  ASSERT_EQ(bundle->Reversals().size(), 1u);
+  EXPECT_EQ(bundle->Reversals()[0].display_name, "Reversal A");
+  ASSERT_EQ(bundle->ReversalListOrder().size(), 1u);
+  EXPECT_TRUE(bundle->IsReversal("rev_a"));
+  EXPECT_FALSE(bundle->IsReversal("neg_a"));
+
+  const auto daylight = bundle->ReversalSelection("rev_a", "daylight");
+  EXPECT_EQ(daylight.layer_gain, (std::array<double, 3>{1.7, 1.8, 1.9}));
+  EXPECT_EQ(daylight.xyz_to_display[1], -1.5);
+  EXPECT_EQ(daylight.scene_spectrum[0], 1.0);                                         // 'flat'
+  EXPECT_EQ(bundle->ReversalSelection("rev_a", "reference").scene_spectrum[0], 0.5);  // 'ramp'
+
+  const auto film = bundle->Reversal("rev_a");
+  EXPECT_EQ(film.dye_max[2], 3.2);
+  EXPECT_EQ(film.clear_luminance, 85.0);
+  EXPECT_FALSE(film.record.inhibition.Present());
+  EXPECT_FALSE(film.record.negative_grade);
+  // The steps FP1 to FP5 read the record of the reversal film in the form of a negative.
+  EXPECT_EQ(bundle->Film("rev_a").curves.density.data(), film.record.curves.density.data());
+  EXPECT_EQ(bundle->Film("neg_a").curves.density.data(),
+            bundle->Negative("neg_a").curves.density.data());
+  EXPECT_EQ(bundle->LightTable().xyz_scale, 12.5);
+  EXPECT_EQ(bundle->LightTable().surround_exponent, 0.89);
+
+  EXPECT_THROW((void)bundle->Reversal("neg_a"), std::runtime_error);
+  EXPECT_THROW((void)bundle->ReversalSelection("rev_a", "no_light"), std::runtime_error);
+  EXPECT_THROW((void)bundle->Film("no_film"), std::runtime_error);
+}
+
+TEST_F(FilmPrintTablesTest, LightTableIsTheTransmittanceOfTheRemovedDyeUnderTheTableLight) {
+  const auto      bundle = FilmStockBundle::Open(Resources());
+  FilmPrintTables tables(bundle);
+  const auto      result = tables.Resolve("rev_a", "paper_a", "reference");
+  ASSERT_TRUE(result->light_table);
+  const auto     film  = bundle->Reversal("rev_a");
+  const auto     view  = bundle->LightTable();
+  constexpr auto kEdge = static_cast<std::size_t>(kFilmPrintTableEdge);
+  ASSERT_EQ(result->print_cube_root_xyz.size(), kEdge * kEdge * kEdge * 3);
+  for (const auto& [r, g, b] :
+       {std::array<std::size_t, 3>{0, 0, 0}, std::array<std::size_t, 3>{64, 64, 64},
+        std::array<std::size_t, 3>{7, 30, 63}, std::array<std::size_t, 3>{64, 0, 12}}) {
+    SCOPED_TRACE(std::to_string(r) + ", " + std::to_string(g) + ", " + std::to_string(b));
+    const std::array<std::size_t, 3> node{r, g, b};
+    std::array<double, 3>            amounts{};
+    for (std::size_t k = 0; k < 3; ++k) {
+      const double record = film.record.density_grid_stop[k] * static_cast<double>(node[k]) /
+                            static_cast<double>(kEdge - 1);
+      amounts[k] = (std::max)(film.dye_max[k] - record, 0.0);
+    }
+    for (std::size_t k = 0; k < 3; ++k) {
+      double sum = 0.0;
+      for (std::int64_t w = 0; w < kWavelengths; ++w) {
+        const auto   index   = static_cast<std::size_t>(w);
+        const double density = film.record.base[index] + amounts[0] * film.record.dyes[index] +
+                               amounts[1] * film.record.dyes[kWavelengths + index] +
+                               amounts[2] * film.record.dyes[2 * kWavelengths + index];
+        sum += std::pow(10.0, -density) * view.viewing_weights[k * kWavelengths + index];
+      }
+      const auto value = result->print_cube_root_xyz[((r * kEdge + g) * kEdge + b) * 3 + k];
+      EXPECT_NEAR(value, std::cbrt(view.xyz_scale * sum), 1e-12);
+    }
+  }
+}
+
+TEST_F(FilmPrintTablesTest, ReversalReadsNoPrintMaterialAndSharesItsLightTableAcrossLights) {
+  FilmPrintTables tables(FilmStockBundle::Open(Resources()));
+  const auto      reference = tables.Resolve("rev_a", "paper_a", "reference");
+  // The print material is not read: another one gives the same data with no build.
+  EXPECT_EQ(tables.Resolve("rev_a", "paper_b", "reference").get(), reference.get());
+  EXPECT_EQ(tables.Resolve("rev_a", "no_paper", "reference").get(), reference.get());
+  const auto daylight = tables.Resolve("rev_a", "paper_a", "daylight");
+  EXPECT_NE(daylight.get(), reference.get());
+  EXPECT_NE(daylight->uv_key, reference->uv_key);
+  EXPECT_NE(daylight->kernel_key, reference->kernel_key);
+  // The light table depends on the film only.
+  EXPECT_EQ(daylight->print_key, reference->print_key);
+  EXPECT_EQ(daylight->print_cube_root_xyz, reference->print_cube_root_xyz);
+  const auto stats = tables.Stats();
+  EXPECT_EQ(stats.light_table_builds, 1);
+  EXPECT_EQ(stats.uv_builds, 2);
+  EXPECT_EQ(stats.negative_stage_builds, 0);
+  EXPECT_EQ(stats.paper_stage_builds, 0);
+  EXPECT_EQ(stats.compose_builds, 0);
+  // A negative has another print key.
+  EXPECT_NE(tables.Resolve("neg_a", "paper_a", "reference")->print_key, reference->print_key);
+}
+
+TEST_F(FilmPrintTablesTest, ReversalKernelParamsHaveTheLightTableForm) {
+  const auto       bundle = FilmStockBundle::Open(Resources());
+  FilmKernelParams params{};
+  film_print_kernel_tables::FillParams(*bundle, "rev_a", "no_paper", "daylight", 65, params);
+  EXPECT_EQ(params.light_table, 1U);
+  EXPECT_EQ(params.cinema_look, 0U);
+  EXPECT_EQ(params.negative_grade, 0U);
+  EXPECT_EQ(params.inhibition_stored, 0U);
+  EXPECT_FLOAT_EQ(params.layer_gain[2], 1.9f);
+  EXPECT_FLOAT_EQ(params.xyz_to_display[0], 3.2f);
+  EXPECT_FLOAT_EQ(params.display_surround_power, 0.89f - 1.0f);
+  EXPECT_FLOAT_EQ(params.display_luminance[1], 0.7152f);
+  EXPECT_FLOAT_EQ(params.print_start[0], 0.0f);
+  EXPECT_FLOAT_EQ(params.print_step[2], 3.2f / 64.0f);
+
+  // A print has the surround in its print table, so its params have none.
+  FilmKernelParams print{};
+  film_print_kernel_tables::FillParams(*bundle, "neg_a", "paper_a", "daylight", 65, print);
+  EXPECT_EQ(print.light_table, 0U);
+  EXPECT_EQ(print.display_surround_power, 0.0f);
+}
+
+TEST_F(FilmPrintTablesTest, DisplaySurroundMovesLuminanceAndKeepsChromaticity) {
+  FilmKernelParams params{};
+  params.display_luminance[0]   = 0.2126f;
+  params.display_luminance[1]   = 0.7152f;
+  params.display_luminance[2]   = 0.0722f;
+  params.display_surround_power = 0.89f - 1.0f;
+  const auto  rgb               = FilmKernelMakeRgb(0.3f, 0.2f, 0.1f);
+  const auto  out               = FilmKernelDisplaySurround(&params, rgb);
+  const float y                 = 0.2126f * 0.3f + 0.7152f * 0.2f + 0.0722f * 0.1f;
+  const float y2                = 0.2126f * out.r + 0.7152f * out.g + 0.0722f * out.b;
+  EXPECT_NEAR(y2, std::pow(y, 0.89f), 1e-6f);
+  EXPECT_NEAR(out.r / out.g, rgb.r / rgb.g, 1e-6f);
+  EXPECT_NEAR(out.b / out.g, rgb.b / rgb.g, 1e-6f);
+  // The clear film has a luminance of 1 and stays white.
+  const auto white = FilmKernelDisplaySurround(&params, FilmKernelMakeRgb(1.0f, 1.0f, 1.0f));
+  EXPECT_NEAR(white.g, 1.0f, 1e-6f);
+  params.display_surround_power = 0.0f;
+  EXPECT_EQ(FilmKernelDisplaySurround(&params, rgb).r, rgb.r);
+}
+
 TEST_F(FilmPrintTablesTest, StageTablesAreReused) {
   FilmPrintTables tables(FilmStockBundle::Open(Resources()));
   (void)tables.Resolve("neg_a", "paper_a", "reference");
@@ -719,11 +885,14 @@ auto LargestRelativeDifference(std::span<const double> values, std::span<const d
   return largest;
 }
 
+/// One file of the lab values. A file of a colour reversal film names the film in `reversal`, has
+/// no print material, and holds the light table in place of the print table.
 struct LabSelection {
   fs::path    path;
   std::string negative;
   std::string print_material;
   std::string scene_light;
+  bool        reversal = false;
 };
 
 auto LabSelections() -> std::vector<LabSelection> {
@@ -733,10 +902,27 @@ auto LabSelections() -> std::vector<LabSelection> {
     if (!entry.is_regular_file()) continue;
     const auto file     = FilmArrayFile::Parse(ReadBytes(entry.path()), entry.path());
     const auto metadata = file.Metadata();
+    if (metadata.contains("reversal")) {
+      selections.push_back({entry.path(), metadata.at("reversal").get<std::string>(), "",
+                            metadata.at("scene_light").get<std::string>(), true});
+      continue;
+    }
     selections.push_back({entry.path(), metadata.at("negative").get<std::string>(),
                           metadata.at("print_material").get<std::string>(),
                           metadata.at("scene_light").get<std::string>()});
   }
+  return selections;
+}
+
+auto PrintSelections() -> std::vector<LabSelection> {
+  auto selections = LabSelections();
+  std::erase_if(selections, [](const LabSelection& selection) { return selection.reversal; });
+  return selections;
+}
+
+auto ReversalSelections() -> std::vector<LabSelection> {
+  auto selections = LabSelections();
+  std::erase_if(selections, [](const LabSelection& selection) { return !selection.reversal; });
   return selections;
 }
 
@@ -757,7 +943,7 @@ class FilmPrintTablesLabTest : public ::testing::Test {
 };
 
 TEST_F(FilmPrintTablesLabTest, PrintTableMatchesLab) {
-  const auto selections = LabSelections();
+  const auto selections = PrintSelections();
   ASSERT_GE(selections.size(), 3u);
   for (const auto& selection : selections) {
     SCOPED_TRACE(selection.negative + " on " + selection.print_material + " under " +
@@ -777,9 +963,82 @@ TEST_F(FilmPrintTablesLabTest, PrintTableMatchesLab) {
   }
 }
 
+TEST_F(FilmPrintTablesLabTest, LightTableMatchesLab) {
+  const auto selections = ReversalSelections();
+  ASSERT_GE(selections.size(), 3u);
+  for (const auto& selection : selections) {
+    SCOPED_TRACE(selection.negative + " under " + selection.scene_light);
+    const auto result = tables_->Resolve(selection.negative, "", selection.scene_light);
+    ASSERT_TRUE(result->light_table);
+    const auto file  = FilmArrayFile::Parse(ReadBytes(selection.path), selection.path);
+    const auto table = file.F64("light_table", {65, 65, 65, 3});
+    ASSERT_EQ(result->print_cube_root_xyz.size(), table.size());
+    EXPECT_TRUE(std::ranges::all_of(result->print_cube_root_xyz,
+                                    [](double value) { return std::isfinite(value); }));
+    const auto largest = LargestRelativeDifference(result->print_cube_root_xyz, table);
+    std::cout << "reversal " << selection.negative << " under " << selection.scene_light
+              << ": light table largest relative difference " << largest << "\n";
+    EXPECT_LE(largest, kLabRelativeLimit);
+  }
+}
+
+TEST_F(FilmPrintTablesLabTest, ReversalSetupOfEachFilmAndLightMatchesTheLabArrays) {
+  // The lab writes the setup with the films in the order of their identifiers, and the lights in
+  // the order of the catalog. Each value that the product reads must be the value of the lab.
+  const auto path       = fs::path(ALCEDO_FILM_PRINT_RESOURCE_DIR) / "film_print_setup.bin";
+  const auto setup      = FilmArrayFile::Parse(ReadBytes(path), path);
+  const auto stock_path = fs::path(ALCEDO_FILM_PRINT_RESOURCE_DIR) / "film_stock_bundle.bin";
+  const auto stock      = FilmArrayFile::Parse(ReadBytes(stock_path), stock_path);
+  std::vector<std::string> films;
+  for (const auto& [id, entry] : stock.Metadata().at("reversal_films").items()) {
+    films.push_back(id);
+  }
+  std::ranges::sort(films);
+  const auto lights  = stock.Metadata().at("scene_lights").get<std::vector<std::string>>();
+  const auto spectra = stock.Metadata().at("scene_spectra").get<std::vector<std::string>>();
+  const auto r_count = static_cast<std::int64_t>(films.size());
+  const auto l_count = static_cast<std::int64_t>(lights.size());
+  const auto gain    = setup.F64("reversal_layer_gain", {r_count, l_count, 3});
+  const auto display = setup.F64("reversal_xyz_to_display", {r_count, 3, 3});
+  const auto index   = setup.I32("reversal_scene_spectrum_index", {r_count, l_count});
+  ASSERT_EQ(films.size(), kFilmReversalIds.size());
+  double largest = 0.0;
+  int    checked = 0;
+  for (std::size_t r = 0; r < films.size(); ++r) {
+    for (std::size_t l = 0; l < lights.size(); ++l) {
+      SCOPED_TRACE(films[r] + " under " + lights[l]);
+      const auto values = bundle_->ReversalSelection(films[r], lights[l]);
+      for (std::size_t k = 0; k < 3; ++k) {
+        largest = (std::max)(
+            largest, std::abs(values.layer_gain[k] - gain[(r * lights.size() + l) * 3 + k]));
+      }
+      for (std::size_t k = 0; k < 9; ++k) {
+        largest = (std::max)(largest, std::abs(values.xyz_to_display[k] - display[r * 9 + k]));
+      }
+      const auto spectrum = stock.F64(
+          "light/" + spectra[static_cast<std::size_t>(index[r * lights.size() + l])] + "/spectrum",
+          {bundle_->Wavelengths()});
+      for (std::size_t w = 0; w < spectrum.size(); ++w) {
+        largest = (std::max)(largest, std::abs(values.scene_spectrum[w] - spectrum[w]));
+      }
+      // The kernel values of this selection have the same layer gain and display matrix.
+      FilmKernelParams params{};
+      film_print_kernel_tables::FillParams(*bundle_, films[r], "", lights[l], 65, params);
+      EXPECT_EQ(params.light_table, 1U);
+      EXPECT_EQ(params.layer_gain[1], static_cast<float>(values.layer_gain[1]));
+      EXPECT_EQ(params.xyz_to_display[4], static_cast<float>(values.xyz_to_display[4]));
+      ++checked;
+    }
+  }
+  std::cout << "reversal setup of " << checked << " selections: largest absolute difference "
+            << largest << "\n";
+  EXPECT_EQ(checked, 5 * 11);
+  EXPECT_LE(largest, 1e-9);
+}
+
 TEST_F(FilmPrintTablesLabTest, UvTableMatchesLab) {
   const auto selections = LabSelections();
-  ASSERT_GE(selections.size(), 3u);
+  ASSERT_GE(selections.size(), 6u);
   for (const auto& selection : selections) {
     SCOPED_TRACE(selection.negative + " under " + selection.scene_light);
     const auto result =
@@ -831,6 +1090,7 @@ TEST_F(FilmPrintTablesLabTest, ShippedReflectanceHoldsOnlyTheNodesThatAReadCanRe
 TEST_F(FilmPrintTablesLabTest, ShippedListsHoldTheStocksOfThePlan) {
   EXPECT_EQ(bundle_->Negatives().size(), 30u);
   EXPECT_EQ(bundle_->PrintMaterials().size(), 19u);
+  EXPECT_EQ(bundle_->Reversals().size(), 5u);
   EXPECT_EQ(bundle_->SceneLights().size(), 11u);
   EXPECT_EQ(bundle_->SceneLights()[0], "reference");
   EXPECT_NO_THROW((void)bundle_->Selection("kodak_5207", "kodak_2383", "reference"));
@@ -868,6 +1128,13 @@ TEST_F(FilmPrintTablesLabTest, ShippedListsMatchTheIdentifiersOfTheDocumentModel
   for (const auto& light : bundle_->SceneLights()) {
     EXPECT_TRUE(IsFilmIdentifier(kFilmSceneLightIds, light)) << light;
   }
+  // The editor list has the reversal films in the order of the lab list.
+  ASSERT_EQ(bundle_->ReversalListOrder().size(), kFilmReversalIds.size());
+  for (std::size_t index = 0; index < kFilmReversalIds.size(); ++index) {
+    EXPECT_EQ(bundle_->ReversalListOrder()[index], kFilmReversalIds[index]);
+    EXPECT_TRUE(bundle_->IsReversal(kFilmReversalIds[index]));
+    EXPECT_FALSE(IsFilmIdentifier(kFilmNegativeIds, kFilmReversalIds[index]));
+  }
 }
 
 TEST_F(FilmPrintTablesLabTest, ShippedNamesMatchTheNamesOfTheDocumentModel) {
@@ -880,6 +1147,22 @@ TEST_F(FilmPrintTablesLabTest, ShippedNamesMatchTheNamesOfTheDocumentModel) {
   };
   expect_names(bundle_->Negatives(), kFilmNegativeIds, kFilmNegativeNames);
   expect_names(bundle_->PrintMaterials(), kFilmPrintMaterialIds, kFilmPrintMaterialNames);
+  expect_names(bundle_->Reversals(), kFilmReversalIds, kFilmReversalNames);
+}
+
+TEST_F(FilmPrintTablesLabTest, ReversalFilmsWithNoTransferDataHaveNoSpreadOrInhibition) {
+  // Astia 100F has no modulation transfer curve, and the chart of E100 has no rise above 1.
+  const auto astia = bundle_->Reversal("fuji_astia_100f").record;
+  EXPECT_TRUE(std::ranges::all_of(astia.layer_spread_um, [](double v) { return v == 0.0; }));
+  EXPECT_FALSE(astia.inhibition.Present());
+  const auto e100 = bundle_->Reversal("kodak_ektachrome_e100").record;
+  EXPECT_TRUE(std::ranges::all_of(e100.layer_spread_um, [](double v) { return v > 0.0; }));
+  FilmKernelParams params{};
+  film_print_kernel_tables::FillParams(*bundle_, "kodak_ektachrome_e100", "", "reference", 65,
+                                       params);
+  EXPECT_EQ(params.inhibition_has_image, 0U);
+  EXPECT_EQ(params.inhibition_has_point, 0U);
+  EXPECT_TRUE(bundle_->Reversal("fuji_velvia_50").record.inhibition.Present());
 }
 
 TEST_F(FilmPrintTablesLabTest, RecordsTheHostTimeOfEachStage) {
@@ -899,6 +1182,11 @@ TEST_F(FilmPrintTablesLabTest, RecordsTheHostTimeOfEachStage) {
   EXPECT_GT(first.last_negative_seconds, 0.0);
   EXPECT_GT(first.last_paper_seconds, 0.0);
   EXPECT_GT(first.last_compose_seconds, 0.0);
+  (void)tables.Resolve("fuji_velvia_50", "", "reference");
+  const auto reversal = tables.Stats();
+  std::cout << "reversal u'v' table: " << reversal.last_uv_seconds
+            << " s; light table: " << reversal.last_light_table_seconds << " s\n";
+  EXPECT_GT(reversal.last_light_table_seconds, 0.0);
 }
 
 #else

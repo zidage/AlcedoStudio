@@ -116,16 +116,21 @@ TEST(RuntimeInvalidation, FilmPrintSliderInvalidatesTheResultsThatReadItAndKeeps
   const auto drt_id   = harness.plan.drt.node_id;
   const auto halation = FilmHalationResultId(drt_id);
   const auto flare    = FilmFlareResultId(drt_id);
+  const auto loupe    = FilmLoupeFlareResultId(drt_id);
   EXPECT_NE(halation, flare);
+  EXPECT_NE(loupe, flare);
   EXPECT_GT(harness.Required(halation), 0U);
   EXPECT_GT(harness.Required(flare), 0U);
+  EXPECT_GT(harness.Required(loupe), 0U);
 
   // Each change invalidates the display. The Halation result is the blurred exposure, so only
   // Light spread changes it of the three sliders. The flare result reads the amounts after
-  // Halation. Each strength scales its result later.
+  // Halation, and the loupe flare result of a reversal film reads their display light. Each
+  // strength scales its result later.
   const auto expect_invalidates = [&](bool halation_changes, bool flare_changes, auto&& change) {
     const auto         halation_before = harness.Required(halation);
     const auto         flare_before    = harness.Required(flare);
+    const auto         loupe_before    = harness.Required(loupe);
     const auto         display_before  = harness.Required(harness.plan.display_output);
     const auto         scatter_before  = harness.Required(DiffusionScatterId(drt_id));
     const auto         scene_before    = harness.Required(harness.Primary().scene_output);
@@ -140,8 +145,10 @@ TEST(RuntimeInvalidation, FilmPrintSliderInvalidatesTheResultsThatReadItAndKeeps
     }
     if (flare_changes) {
       EXPECT_GT(harness.Required(flare), flare_before);
+      EXPECT_GT(harness.Required(loupe), loupe_before);
     } else {
       EXPECT_EQ(harness.Required(flare), flare_before);
+      EXPECT_EQ(harness.Required(loupe), loupe_before);
     }
     EXPECT_GT(harness.Required(harness.plan.display_output), display_before);
     EXPECT_EQ(harness.Required(DiffusionScatterId(drt_id)), scatter_before);
@@ -154,6 +161,11 @@ TEST(RuntimeInvalidation, FilmPrintSliderInvalidatesTheResultsThatReadItAndKeeps
                      [](DrtParameterUpdate& update) { update.film_light_spread = 2.0f; });
   expect_invalidates(true, true,
                      [](DrtParameterUpdate& update) { update.film_negative = "fuji_c200"; });
+  expect_invalidates(true, true,
+                     [](DrtParameterUpdate& update) { update.film_negative = "fuji_velvia_50"; });
+  expect_invalidates(false, true, [](DrtParameterUpdate& update) { update.film_halation = 3.0f; });
+  expect_invalidates(false, false,
+                     [](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.03f; });
 }
 
 TEST(RuntimeInvalidation, DiffusionAndSceneChangesInvalidateFilmPrintResults) {
@@ -167,6 +179,8 @@ TEST(RuntimeInvalidation, DiffusionAndSceneChangesInvalidateFilmPrintResults) {
   harness.Collect();
   EXPECT_GT(harness.Required(halation), required);
   EXPECT_EQ(harness.Required(flare), harness.Required(halation));
+  EXPECT_EQ(harness.Required(FilmLoupeFlareResultId(harness.plan.drt.node_id)),
+            harness.Required(halation));
 
   required       = harness.Required(halation);
   auto* exposure = dynamic_cast<ExposureModel*>(
@@ -188,6 +202,8 @@ TEST(RuntimeInvalidation, FilmPrintResultsFollowANewDrtInput) {
   harness.Collect();
   EXPECT_GT(harness.Required(halation), required);
   EXPECT_EQ(harness.Required(flare), harness.Required(halation));
+  EXPECT_EQ(harness.Required(FilmLoupeFlareResultId(harness.plan.drt.node_id)),
+            harness.Required(halation));
 }
 
 TEST(RuntimeInvalidation, FilmPrintResultsUseTheCanonicalIdentityOfTheScatterImage) {
@@ -196,8 +212,9 @@ TEST(RuntimeInvalidation, FilmPrintResultsUseTheCanonicalIdentityOfTheScatterIma
   const ImageExtent extent{16, 12};
   const auto        scatter = harness.invalidation.MakeImageRepresentation(
       DiffusionScatterId(harness.plan.drt.node_id), extent, TextureFormat::Rgba32f);
-  for (const auto& id : {FilmHalationResultId(harness.plan.drt.node_id),
-                         FilmFlareResultId(harness.plan.drt.node_id)}) {
+  for (const auto& id :
+       {FilmHalationResultId(harness.plan.drt.node_id), FilmFlareResultId(harness.plan.drt.node_id),
+        FilmLoupeFlareResultId(harness.plan.drt.node_id)}) {
     EXPECT_TRUE(IsFilmPrintResultPort(id));
     EXPECT_EQ(
         harness.invalidation.MakeImageRepresentation(id, extent, TextureFormat::Rgba32f).identity,

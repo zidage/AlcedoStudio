@@ -38,6 +38,10 @@ class EditorParameterCatalogAdapter : public QObject {
   /// The `{value, label}` EOTF choices of the display transform for @p encodingSpace.
   Q_INVOKABLE QVariantList odtEotfOptions(const QString& encodingSpace) const;
 
+  /// True when @p film is a colour reversal film: the film print then has no print material, and
+  /// its flare slider is the flare of the loupe.
+  Q_INVOKABLE bool         filmIsReversal(const QString& film) const;
+
   /// UI value of the default of object field @p field.
   Q_INVOKABLE QVariantMap  uiDefault(const QString& field) const;
 

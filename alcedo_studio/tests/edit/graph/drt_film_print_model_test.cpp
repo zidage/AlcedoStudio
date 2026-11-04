@@ -80,6 +80,37 @@ TEST(DrtFilmPrintModelTest, FieldsRoundTripThroughDocumentJson) {
   EXPECT_FALSE(restored.Drt()->Params().IsDefault());
 }
 
+TEST(DrtFilmPrintModelTest, ReversalFilmIsAValueOfTheNegativeKeyAndKeepsThePrintMaterial) {
+  // The lab list order (U86), and no identifier in both lists.
+  EXPECT_EQ(kFilmReversalIds.front(), "fuji_velvia_50");
+  EXPECT_EQ(kFilmReversalIds.back(), "kodak_ektachrome_e100");
+  for (const auto id : kFilmReversalIds) {
+    EXPECT_TRUE(IsFilmReversalIdentifier(id)) << id;
+    EXPECT_TRUE(IsFilmStockIdentifier(id)) << id;
+    EXPECT_FALSE(IsFilmIdentifier(kFilmNegativeIds, id)) << id;
+  }
+  EXPECT_FALSE(IsFilmReversalIdentifier("kodak_5207"));
+  EXPECT_TRUE(IsFilmStockIdentifier("kodak_5207"));
+
+  for (const auto id : kFilmReversalIds) {
+    SCOPED_TRACE(std::string{id});
+    auto document        = CreateDefaultPipelineDocument();
+    auto update          = FilmPrintUpdate();
+    update.film_negative = std::string{id};
+    document.Drt()->Params().ApplyUpdate(update);
+    const auto json = document.Drt()->Params().ToJson();
+    // The same key holds the reversal film. There is no new key, and the print material stays.
+    EXPECT_EQ(json.at("film_print").at("negative"), std::string{id});
+    EXPECT_EQ(json.at("film_print").at("print_material"), "fuji_ca_dpII");
+    EXPECT_EQ(json.at("film_print").size(), 6u);
+
+    const auto restored = PipelineDocument::FromJson(document.ToJson());
+    EXPECT_EQ(restored.Drt()->Params().FilmPrint().negative, id);
+    EXPECT_EQ(restored.Drt()->Params().FilmPrint().print_material, "fuji_ca_dpII");
+    EXPECT_EQ(restored.Drt()->Params().ToJson().dump(), json.dump());
+  }
+}
+
 TEST(DrtFilmPrintModelTest, UpperRangeValuesRoundTrip) {
   DrtParamsModel     params;
   DrtParameterUpdate update;
@@ -287,6 +318,12 @@ TEST(DrtFilmPrintModelTest, FieldChangeMarksOnlyItsFilmPrintField) {
                [](DrtParameterUpdate& update) { update.film_print_material = "kodak_2393"; });
   expect_marks(DrtDirty::FilmExposure,
                [](DrtParameterUpdate& update) { update.film_scene_light = "led"; });
+  // A reversal film is a new film, so its exposure and all its results change.
+  expect_marks(DrtDirty::FilmExposure,
+               [](DrtParameterUpdate& update) { update.film_negative = "fuji_velvia_50"; });
+  // The Loupe flare of a reversal film is the stored Enlarger flare.
+  expect_marks(DrtDirty::FilmFlare,
+               [](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.04f; });
 }
 
 TEST(DrtFilmPrintModelTest, EqualValuesKeepTheRevision) {

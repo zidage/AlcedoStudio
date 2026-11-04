@@ -2751,6 +2751,10 @@ Original source files on disk will be kept.</source>
         <translation>放大机眩光</translation>
     </message>
     <message>
+        <source>Loupe Flare</source>
+        <translation>放大镜眩光</translation>
+    </message>
+    <message>
         <source>Reference</source>
         <translation>参考</translation>
     </message>

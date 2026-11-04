@@ -28,8 +28,12 @@ struct FilmPrintPassTime {
  * Resolves the tables of the selection on this thread, so a new selection takes about 0.5 s here.
  * Does not wait for the GPU, unless @p pass_times is set.
  *
+ * A colour reversal film has the light table form of FP6: the light table in place of the print
+ * table, then the loupe flare and the surround in linear display light.
+ *
  * Halation and Enlarger flare read the canonical results of `FilmHalationResultId` and
- * `FilmFlareResultId`: a render that covers the full edit space builds and publishes them, and a
+ * `FilmFlareResultId`, and the loupe flare of a reversal film reads `FilmLoupeFlareResultId`: a
+ * render that covers the full edit space builds and publishes them, and a
  * viewport ROI render samples the published images. An ROI with no valid published image builds a
  * temporary image from its own pixels and publishes nothing.
  *

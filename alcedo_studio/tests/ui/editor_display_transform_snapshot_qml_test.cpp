@@ -204,9 +204,11 @@ auto MakeOpenDrtSnapshot(double         peak           = 100.0,
 }
 
 /// The projection form of a film print document, as PanelProjectionToVariantMap writes it.
-auto MakeFilmPrintSnapshot(double halation = 2.5) -> QVariantMap {
+auto MakeFilmPrintSnapshot(double         halation = 2.5,
+                           const QString& negative = QStringLiteral("kodak_portra_400"))
+    -> QVariantMap {
   QVariantMap film_print;
-  film_print.insert(QStringLiteral("negative"), QStringLiteral("kodak_portra_400"));
+  film_print.insert(QStringLiteral("negative"), negative);
   film_print.insert(QStringLiteral("print_material"), QStringLiteral("fuji_ca_maxima"));
   film_print.insert(QStringLiteral("scene_light"), QStringLiteral("tungsten"));
   film_print.insert(QStringLiteral("light_spread"), 0.5);
@@ -626,7 +628,16 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintControlWritesItsField) {
     return negative->property("currentValue").toString() == QStringLiteral("kodak_portra_400");
   }));
 
-  negative->selectIndex(0);  // agfa_vista_100
+  // The Film list is in lab order (lab decision U83), so the test finds the index of the film.
+  const auto entries = negative->property("entries").toList();
+  int        agfa    = -1;
+  for (int index = 0; index < entries.size(); ++index) {
+    if (entries[index].toMap().value("value").toString() == QStringLiteral("agfa_vista_100")) {
+      agfa = index;
+    }
+  }
+  ASSERT_GE(agfa, 0);
+  negative->selectIndex(agfa);
   QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
   ASSERT_GE(session.submitCount(), 1);
   const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
@@ -637,6 +648,53 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintControlWritesItsField) {
   EXPECT_FLOAT_EQ(*drt->film_halation, 2.5f);
   ASSERT_TRUE(drt->film_scene_light.has_value());
   EXPECT_EQ(*drt->film_scene_light, "tungsten");
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest,
+     ReversalFilmHidesPrintMaterialKeepsItsValueAndNamesTheLoupeFlare) {
+  DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* material_combo =
+      harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintMaterialCombo"));
+  auto* material = harness.findModel<QObject>(QStringLiteral("displayFilmPrintMaterialModel"));
+  auto* flare    = harness.findModel<EditorAdjustmentValueModel>(
+      QStringLiteral("displayFilmEnlargerFlareModel"));
+  auto* negative =
+      harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayFilmNegativeModel"));
+  ASSERT_NE(material_combo, nullptr);
+  ASSERT_NE(material, nullptr);
+  ASSERT_NE(flare, nullptr);
+  ASSERT_NE(negative, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return material_combo->isVisible(); }));
+  EXPECT_EQ(flare->property("label").toString().toStdString(), "Enlarger Flare");
+
+  // The Film list has the reversal films after the negatives.
+  const auto entries = negative->property("entries").toList();
+  ASSERT_GE(entries.size(), 35);
+  EXPECT_EQ(entries[30].toMap().value("value").toString().toStdString(), "fuji_velvia_50");
+  EXPECT_EQ(entries[34].toMap().value("value").toString().toStdString(), "kodak_ektachrome_e100");
+
+  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot(2.5, QStringLiteral("fuji_velvia_50")));
+  ASSERT_TRUE(WaitFor([&] { return !material_combo->isVisible(); }));
+  EXPECT_EQ(flare->property("label").toString().toStdString(), "Loupe Flare");
+  EXPECT_EQ(material->property("currentValue").toString().toStdString(), "fuji_ca_maxima");
+
+  // A write of the loupe flare keeps the stored print material.
+  flare->editValue(0.03);
+  flare->commitImmediately();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  ASSERT_GE(session.submitCount(), 1);
+  const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->film_negative.has_value());
+  EXPECT_EQ(*drt->film_negative, "fuji_velvia_50");
+  ASSERT_TRUE(drt->film_print_material.has_value());
+  EXPECT_EQ(*drt->film_print_material, "fuji_ca_maxima");
+
+  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot());
+  ASSERT_TRUE(WaitFor([&] { return material_combo->isVisible(); }));
+  EXPECT_EQ(flare->property("label").toString().toStdString(), "Enlarger Flare");
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest,
