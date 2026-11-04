@@ -206,12 +206,13 @@ auto MakeOpenDrtSnapshot(double         peak           = 100.0,
 }
 
 /// The projection form of a film print document, as PanelProjectionToVariantMap writes it.
-auto MakeFilmPrintSnapshot(double         halation = 2.5,
-                           const QString& negative = QStringLiteral("kodak_portra_400"))
+auto MakeFilmPrintSnapshot(double         halation       = 2.5,
+                           const QString& negative       = QStringLiteral("kodak_portra_400"),
+                           const QString& print_material = QStringLiteral("fuji_ca_maxima"))
     -> QVariantMap {
   QVariantMap film_print;
   film_print.insert(QStringLiteral("negative"), negative);
-  film_print.insert(QStringLiteral("print_material"), QStringLiteral("fuji_ca_maxima"));
+  film_print.insert(QStringLiteral("print_material"), print_material);
   film_print.insert(QStringLiteral("scene_light"), QStringLiteral("tungsten"));
   film_print.insert(QStringLiteral("light_spread"), 0.5);
   film_print.insert(QStringLiteral("halation"), halation);
@@ -685,6 +686,63 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintControlWritesItsField) {
   EXPECT_EQ(*drt->film_scene_light, "tungsten");
 }
 
+TEST(EditorDisplayTransformSnapshotQmlTest, LabScanHidesTheEnlargerFlareAndKeepsItsValue) {
+  DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* flare_slider =
+      harness.findModel<QQuickItem>(QStringLiteral("displayFilmEnlargerFlareSlider"));
+  auto* halation_slider =
+      harness.findModel<QQuickItem>(QStringLiteral("displayFilmHalationSlider"));
+  auto* material_picker =
+      harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintMaterialPicker"));
+  auto* material = harness.findModel<EditorAdjustmentEnumModel>(
+      QStringLiteral("displayFilmPrintMaterialModel"));
+  auto* halation =
+      harness.findModel<EditorAdjustmentValueModel>(QStringLiteral("displayFilmHalationModel"));
+  ASSERT_NE(flare_slider, nullptr);
+  ASSERT_NE(halation_slider, nullptr);
+  ASSERT_NE(material_picker, nullptr);
+  ASSERT_NE(material, nullptr);
+  ASSERT_NE(halation, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return flare_slider->isVisible(); }));
+
+  // The Print material list has Lab Scan first, before Cine Look.
+  const auto entries = material->property("entries").toList();
+  ASSERT_GE(entries.size(), 2);
+  EXPECT_EQ(entries[0].toMap().value("value").toString().toStdString(), "lab_scan");
+  EXPECT_EQ(entries[0].toMap().value("label").toString().toStdString(), "Lab Scan");
+  EXPECT_EQ(entries[1].toMap().value("value").toString().toStdString(), "cine_look");
+  const auto browser = PickerValues(material_picker);
+  ASSERT_FALSE(browser.empty());
+  EXPECT_EQ(browser.front(), "lab_scan");
+
+  session.setAdjustmentSnapshot(
+      MakeFilmPrintSnapshot(2.5, QStringLiteral("kodak_portra_400"), QStringLiteral("lab_scan")));
+  ASSERT_TRUE(WaitFor([&] { return !flare_slider->isVisible(); }));
+  EXPECT_TRUE(halation_slider->isVisible());
+  EXPECT_TRUE(material_picker->isVisible());
+
+  // A write of another slider keeps the stored Enlarger flare.
+  halation->editValue(3.0);
+  halation->commitImmediately();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  ASSERT_GE(session.submitCount(), 1);
+  const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->film_print_material.has_value());
+  EXPECT_EQ(*drt->film_print_material, "lab_scan");
+  ASSERT_TRUE(drt->film_enlarger_flare.has_value());
+  EXPECT_FLOAT_EQ(*drt->film_enlarger_flare, 0.05f);
+
+  // A reversal film hides the print material, and its loupe flare shows with a stored Lab Scan.
+  session.setAdjustmentSnapshot(
+      MakeFilmPrintSnapshot(2.5, QStringLiteral("fuji_velvia_50"), QStringLiteral("lab_scan")));
+  ASSERT_TRUE(WaitFor([&] { return !material_picker->isVisible(); }));
+  EXPECT_TRUE(flare_slider->isVisible());
+  EXPECT_EQ(material->property("currentValue").toString().toStdString(), "lab_scan");
+}
+
 TEST(EditorDisplayTransformSnapshotQmlTest,
      ReversalFilmHidesPrintMaterialKeepsItsValueAndNamesTheLoupeFlare) {
   DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
@@ -800,7 +858,8 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmBrowserShowsOnlyTheFilmsOfThePro
   EXPECT_EQ(std::count(values.begin(), values.end(), "agfa_vista_100"), 1);
   EXPECT_TRUE(film->property("searchable").toBool());
   EXPECT_EQ(PickerShownValues(film).size(), 30U);
-  EXPECT_EQ(PickerValues(print).size(), 19U);
+  // Lab Scan and the 19 print materials of the bundle.
+  EXPECT_EQ(PickerValues(print).size(), 20U);
 
   session.setAdjustmentSnapshot(MakeFilmPrintSnapshot(2.5, QStringLiteral("fuji_velvia_50")));
   ASSERT_TRUE(WaitFor([&] {

@@ -82,6 +82,26 @@ struct FilmLightTableConstants {
   double                  surround_exponent = 1.0;  ///< On luminance in linear display light
 };
 
+/// Values of Lab Scan that are the same for all negatives: lab rules 'scan_light' with scanner
+/// 'status_m' and 'scan_log_curve'.
+struct FilmScanConstants {
+  std::span<const double> status_m_weights;  ///< (3, wavelengths): the Status M weights
+  double                  log_curve_s0 = 0.0;  ///< Stops of the middle of the curve from the grey
+  double                  log_curve_w  = 0.0;  ///< Width of the curve, in stops
+};
+
+/// The fixed scalar values of one selection of negative and scene light on Lab Scan.
+struct FilmScanSetup {
+  std::array<double, 3> layer_gain{};  ///< The layer gain of the print form of the same selection
+  /// Lab rule 'chart_straight_line': Status M density per stop of the grey scale.
+  std::array<double, 3> slope{};
+  /// Status M density of an 18 % grey, with the scan timing of the lab.
+  std::array<double, 3> grey{};
+  /// Row major: from the equivalent exposure to linear Rec. 709. Lab rule 'film_sensitivity_matrix'.
+  std::array<double, 9> rec709_matrix{};
+  std::span<const double> scene_spectrum;  ///< (wavelengths)
+};
+
 /// The fixed scalar values of one selection of colour reversal film and scene light.
 struct FilmReversalSetup {
   std::array<double, 3>   layer_gain{};      ///< Lab rule 'daylight_reversal_balance'
@@ -206,6 +226,16 @@ class FilmStockBundle {
   [[nodiscard]] auto Film(std::string_view id) const -> FilmNegativeView;
   [[nodiscard]] auto LightTable() const -> const FilmLightTableConstants& { return light_table_; }
 
+  /// Print material Lab Scan: its identifier and name from the metadata `lab_scan`. It is not in
+  /// @ref PrintMaterials, because it has no print.
+  [[nodiscard]] auto LabScan() const -> const FilmStockName& { return lab_scan_; }
+  /// True when @p id is the print material @ref LabScan.
+  [[nodiscard]] auto IsLabScan(std::string_view id) const -> bool { return id == lab_scan_.id; }
+  [[nodiscard]] auto ScanConstants() const -> const FilmScanConstants& { return scan_constants_; }
+  /// @throws std::runtime_error that names the identifier when one of the two is unknown.
+  [[nodiscard]] auto ScanSelection(std::string_view negative, std::string_view scene_light) const
+      -> FilmScanSetup;
+
   /**
    * @brief Reflectance shapes of the kept u'v' nodes: (kept nodes, reflectance wavelengths).
    *
@@ -262,6 +292,7 @@ class FilmStockBundle {
   std::vector<std::string>   reversal_order_;
   std::vector<std::string>   scene_lights_;
   std::vector<std::string>   scene_spectra_;
+  FilmStockName              lab_scan_;
   std::string                content_digest_;
   std::int64_t               reflectance_first_wavelength_ = 0;
   std::int64_t               reflectance_wavelengths_      = 0;
@@ -273,6 +304,7 @@ class FilmStockBundle {
   FilmPointConstants         point_constants_;
   FilmImagePlaneConstants    image_plane_constants_;
   FilmLightTableConstants    light_table_;
+  FilmScanConstants          scan_constants_;
 };
 
 }  // namespace alcedo

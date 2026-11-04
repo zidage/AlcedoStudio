@@ -32,6 +32,11 @@ inline constexpr std::int64_t kFilmPrintTableEdge = 65;
  * cube root of the XYZ of the slide on the light table, over the record of removed dye. It depends
  * on the film only, so @ref print_key does not change with the scene light. The print material is
  * not read.
+ *
+ * For print material Lab Scan the print table is the Status M density of the negative over the
+ * record (lab rule 'scan_light', scanner 'status_m'): log10 of the sum of the weights minus log10 of
+ * the weighted transmittance, with no cube root. It depends on the negative only. @ref print_rgba
+ * has the same form.
  */
 struct FilmPrintTableData {
   /// (uv_nodes, uv_nodes, 3), u varying slowest. A node that no read can reach holds 0.
@@ -48,6 +53,7 @@ struct FilmPrintTableData {
   std::int64_t           outside_curve     = 0;  ///< Layer values outside the paper curve
   std::int64_t           print_not_reached = 0;  ///< Nodes where the paper dye solve did not reach
   bool                   light_table       = false;  ///< True for a colour reversal film
+  bool                   scan              = false;  ///< True for print material Lab Scan
 
   [[nodiscard]] auto     ByteSize() const -> std::size_t;
 };
@@ -59,11 +65,13 @@ struct FilmPrintTableStats {
   std::int64_t paper_stage_builds    = 0;
   std::int64_t compose_builds        = 0;
   std::int64_t light_table_builds       = 0;
+  std::int64_t scan_table_builds        = 0;
   double       last_uv_seconds       = 0.0;
   double       last_negative_seconds = 0.0;
   double       last_paper_seconds    = 0.0;
   double       last_compose_seconds  = 0.0;
   double       last_light_table_seconds = 0.0;
+  double       last_scan_table_seconds  = 0.0;
   std::size_t  kept_bytes            = 0;
 };
 
@@ -97,7 +105,8 @@ class FilmPrintTables {
    * @brief The tables of a selection, from memory or from a new build.
    *
    * When @p negative is a colour reversal film, the result holds the light table, and
-   * @p print_material is not read.
+   * @p print_material is not read. When @p print_material is Lab Scan, the result holds the Status
+   * M table of the negative.
    *
    * @return Shared immutable data.
    * @throws std::runtime_error that names the identifier for an unknown selection, or that names
@@ -120,8 +129,10 @@ class FilmPrintTables {
     std::vector<double>       cube_root_xyz;  ///< (edge^3, 3)
     std::vector<std::uint8_t> not_reached;    ///< (edge^3)
   };
-  struct LightTableStage {
-    std::vector<double> cube_root_xyz;  ///< (edge^3, 3), red varying slowest
+  struct RecordTableStage {
+    /// (edge^3, 3), red varying slowest: the cube root of XYZ of a light table, or the Status M
+    /// density of a scan table.
+    std::vector<double> values;
     ContentKey          key{};
   };
   template <class Table>
@@ -138,8 +149,13 @@ class FilmPrintTables {
   [[nodiscard]] auto PaperStageOf(std::string_view print_material)
       -> std::shared_ptr<const PaperStage>;
   [[nodiscard]] auto LightTableOf(std::string_view reversal)
-      -> std::shared_ptr<const LightTableStage>;
+      -> std::shared_ptr<const RecordTableStage>;
   [[nodiscard]] auto ResolveReversal(std::string_view reversal, std::string_view scene_light)
+      -> std::shared_ptr<const FilmPrintTableData>;
+  /// The Status M table of a negative, as a light table stage: (edge^3, 3), red varying slowest.
+  [[nodiscard]] auto ScanTableOf(std::string_view negative)
+      -> std::shared_ptr<const RecordTableStage>;
+  [[nodiscard]] auto ResolveScan(std::string_view negative, std::string_view scene_light)
       -> std::shared_ptr<const FilmPrintTableData>;
   /// The u'v' table of @p result, with the exposure weights of a film under a scene spectrum.
   void BuildUvTable(std::span<const double> exposure_weights,
@@ -157,7 +173,8 @@ class FilmPrintTables {
   mutable std::mutex                     mutex_;
   KeptTables<NegativeStage>              negative_stages_;
   KeptTables<PaperStage>                 paper_stages_;
-  KeptTables<LightTableStage>            light_tables_;
+  KeptTables<RecordTableStage>            light_tables_;
+  KeptTables<RecordTableStage>            scan_tables_;
   KeptTables<FilmPrintTableData>         results_;
   FilmPrintTableStats                    stats_;
   std::uint64_t                          lru_clock_ = 0;

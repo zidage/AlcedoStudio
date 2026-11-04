@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <json.hpp>
 #include <optional>
 #include <set>
@@ -765,8 +766,8 @@ TEST(EditorParameterCatalogTest, FilmBrowserHasOneEntryForEachFilmAndPrintMateri
     for (std::size_t i = 0; i < entry.color_count; ++i) {
       EXPECT_LE(entry.colors[i], 0xFFFFFFU) << entry.id;
     }
-    // Only Cine Look is above the brand groups.
-    if (entry.id == "cine_look") {
+    // Only Lab Scan and Cine Look are above the brand groups.
+    if (entry.id == "cine_look" || entry.id == kFilmLabScanId) {
       EXPECT_TRUE(entry.brand.empty());
     } else {
       EXPECT_TRUE(brands.contains(entry.brand)) << entry.id;
@@ -789,6 +790,15 @@ TEST(EditorParameterCatalogTest, FilmBrowserHasOneEntryForEachFilmAndPrintMateri
     std::set<std::string_view> seen(order.begin(), order.end());
     EXPECT_EQ(seen.size(), order.size()) << "a brand is in two groups";
   }
+
+  // Lab Scan is first in the print list, with its own swatch shape.
+  const auto first_print = std::find_if(
+      kFilmPresentations.begin(), kFilmPresentations.end(),
+      [](const FilmPresentation& entry) { return entry.list == FilmBrowserList::Print; });
+  ASSERT_NE(first_print, kFilmPresentations.end());
+  EXPECT_EQ(first_print->id, kFilmLabScanId);
+  EXPECT_EQ(first_print->shape, FilmSwatchShape::Scan);
+  EXPECT_EQ(std::next(first_print)->id, "cine_look");
 
   // A change of process selects these films first.
   EXPECT_EQ(FindFilmPresentation(kFilmDefaultNegative)->list, FilmBrowserList::Negative);
@@ -818,6 +828,21 @@ TEST(EditorParameterCatalogTest, FilmPrintWriteOfAReversalFilmKeepsThePrintMater
                    "odt", {{"method", "film_print"}, {"negative", "fuji_velvia_9999"}},
                    nlohmann::json{}, &error)
                    .has_value());
+}
+
+TEST(EditorParameterCatalogTest, FilmPrintWriteOfLabScanKeepsTheStoredFlare) {
+  std::string error;
+  const auto  model = EditorParameterCatalog::ToModelJson("odt",
+                                                          {{"method", "film_print"},
+                                                           {"negative", "kodak_5207"},
+                                                           {"print_material", "lab_scan"},
+                                                           {"enlarger_flare", 0.02}},
+                                                          nlohmann::json{}, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  const auto& film_print = model->at("odt").at("film_print");
+  EXPECT_EQ(film_print.at("print_material"), "lab_scan");
+  // Lab Scan reads no Enlarger flare, and the panel keeps the stored value.
+  EXPECT_DOUBLE_EQ(film_print.at("enlarger_flare").get<double>(), 0.02);
 }
 
 TEST(EditorParameterCatalogTest, FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput) {

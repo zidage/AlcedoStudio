@@ -73,20 +73,33 @@ template <class Real>
   return values;
 }
 
-/// The scalar values of a selection that FillParams reads: a print, or a light table.
+/// The scalar values of a selection that FillParams reads: a print, a light table, or a scan.
 struct SelectionValues {
   std::array<double, 3> layer_gain{};
+  /// XYZ to linear Rec. 709. On Lab Scan: the equivalent exposure to linear Rec. 709.
   std::array<double, 9> xyz_to_display{};
   std::array<double, 3> negative_grade_grey{};
+  std::array<double, 3> scan_grey{};
+  std::array<double, 3> scan_slope{};
   bool                  cinema_look    = false;
   bool                  negative_grade = false;
   bool                  light_table    = false;
+  bool                  scan           = false;
 };
 
 [[nodiscard]] inline auto SelectionValuesOf(const FilmStockBundle& bundle,
                                             std::string_view       negative,
                                             std::string_view       print_material,
                                             std::string_view       scene_light) -> SelectionValues {
+  if (!bundle.IsReversal(negative) && bundle.IsLabScan(print_material)) {
+    // Lab Scan has no print: no printer balance, no print table, no negative grade.
+    const auto setup = bundle.ScanSelection(negative, scene_light);
+    return {.layer_gain     = setup.layer_gain,
+            .xyz_to_display = setup.rec709_matrix,
+            .scan_grey      = setup.grey,
+            .scan_slope     = setup.slope,
+            .scan           = true};
+  }
   if (bundle.IsReversal(negative)) {
     // A colour reversal film has no print, so the print material is not read.
     const auto setup = bundle.ReversalSelection(negative, scene_light);
@@ -108,7 +121,7 @@ struct SelectionValues {
  *
  * The caller sets `display_encoding`, because the display curve belongs to the output and not to
  * the selection. For a colour reversal film @p print_material is not read, and the values are those
- * of the light table form.
+ * of the light table form. For print material Lab Scan the values are those of the scan form.
  *
  * @throws std::runtime_error that names the identifier for an unknown selection.
  */
@@ -181,8 +194,14 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
   params.cinema_look              = setup.cinema_look ? 1U : 0U;
   params.negative_grade           = setup.negative_grade ? 1U : 0U;
   params.light_table              = setup.light_table ? 1U : 0U;
+  params.scan                     = setup.scan ? 1U : 0U;
   const auto light_table          = bundle.LightTable();
+  const auto scan                 = bundle.ScanConstants();
+  params.scan_log_s0              = setup.scan ? real(scan.log_curve_s0) : Real{};
+  params.scan_log_w               = setup.scan ? real(scan.log_curve_w) : Real{1};
   for (std::size_t k = 0; k < 3; ++k) {
+    params.scan_grey[k]           = real(setup.scan_grey[k]);
+    params.scan_slope[k]          = setup.scan ? real(setup.scan_slope[k]) : Real{1};
     params.negative_grade_grey[k] = real(setup.negative_grade_grey[k]);
     params.display_luminance[k] =
         setup.light_table ? real(light_table.display_luminance[k]) : Real{};

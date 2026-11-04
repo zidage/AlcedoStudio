@@ -30,7 +30,8 @@ struct Rgb {
  *
  * It runs on the host tables of one selection, with no blur and no Enlarger flare: the entry gamut
  * compression, FP1, FP4, the two steps of FP5, and FP6, then the sRGB curve. A colour reversal film
- * has the light table form of FP6.
+ * has the light table form of FP6, and print material Lab Scan has the scan form with no entry
+ * gamut compression.
  */
 class FilmPrintPointReference {
  public:
@@ -58,6 +59,13 @@ class FilmPrintPointReference {
 
   /// Linear AP1 to final sRGB.
   [[nodiscard]] auto Srgb(float r, float g, float b) const -> Rgb {
+    if (params_.scan != 0U) {
+      // Lab Scan: no entry gamut compression, and the scan form of FP6 on the Status M table.
+      const auto q      = FilmKernelLayerExposure(&params_, values_.data(), r, g, b);
+      const auto a      = FilmKernelPointAmounts(&params_, values_.data(), q);
+      const auto linear = FilmKernelScanDisplay(&params_, print_rgba_.data(), a);
+      return {Encode(linear.r), Encode(linear.g), Encode(linear.b)};
+    }
     const auto compressed = AcesReferenceGamutCompress(r, g, b);
     const auto q =
         FilmKernelLayerExposure(&params_, values_.data(), compressed.r, compressed.g, compressed.b);

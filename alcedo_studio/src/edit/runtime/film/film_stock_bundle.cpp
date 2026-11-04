@@ -169,12 +169,22 @@ void FilmStockBundle::ReadLists() {
     reversal_order_ = stock_.Metadata().at("reversal_list_order").get<std::vector<std::string>>();
     scene_lights_   = stock_.Metadata().at("scene_lights").get<std::vector<std::string>>();
     scene_spectra_  = stock_.Metadata().at("scene_spectra").get<std::vector<std::string>>();
+    const auto& lab_scan = stock_.Metadata().at("lab_scan");
+    lab_scan_ = {lab_scan.at("id").get<std::string>(), lab_scan.at("name").get<std::string>()};
   } catch (const nlohmann::json::exception& error) {
     throw std::runtime_error(std::string("Film print resource: the stock lists are not valid: ") +
                              error.what());
   }
   if (negatives_.empty() || papers_.empty() || reversals_.empty() || scene_lights_.empty()) {
     throw std::runtime_error("Film print resource: a stock list is empty");
+  }
+  // Lab Scan is a value of the field of the print materials, so it must not name one of them.
+  if (lab_scan_.id.empty() ||
+      std::ranges::any_of(papers_, [this](const FilmStockName& paper) {
+        return paper.id == lab_scan_.id;
+      })) {
+    throw std::runtime_error("Film print resource: the identifier of Lab Scan '" + lab_scan_.id +
+                             "' is empty or names a print material");
   }
   // The setup indexes a film by its place in the list of identifiers, so the two lists must not
   // share an identifier, and the list order must name each reversal film one time.
@@ -217,6 +227,15 @@ void FilmStockBundle::ReadCommonValues() {
       .xyz_scale         = stock_.F64("light_table/xyz_scale", {})[0],
       .surround_exponent = stock_.F64("light_table/surround_exponent", {})[0],
   };
+  const auto log_curve = stock_.F64("common/scan_log_curve", {2});
+  scan_constants_      = {
+           .status_m_weights = stock_.F64("common/scan_status_m_weights", {3, wavelengths_}),
+           .log_curve_s0     = log_curve[0],
+           .log_curve_w      = log_curve[1],
+  };
+  if (!(scan_constants_.log_curve_w > 0.0)) {
+    throw std::runtime_error("Film print resource: the width of the scan log curve is not above 0");
+  }
   const auto normals = stock_.Shape("common/locus_normals");
   if (normals.size() != 2 || normals[1] != 2 || normals[0] < 1) {
     throw std::runtime_error("Film print resource: the locus normals do not have the shape (n, 2)");
@@ -307,6 +326,13 @@ void FilmStockBundle::CheckShapes() const {
   const auto reversals = static_cast<std::int64_t>(reversals_.size());
   (void)setup_.F64("reversal_layer_gain", {reversals, lights, 3});
   (void)setup_.F64("reversal_xyz_to_display", {reversals, 3, 3});
+  // A slope of 0 has no inverse, so the straight line of the scan needs one above 0 on each layer.
+  const auto slope = setup_.F64("scan_slope", {negatives, lights, 3});
+  if (std::ranges::any_of(slope, [](double value) { return !(value > 0.0); })) {
+    throw std::runtime_error("Film print resource: a slope of the scan grey scale is not above 0");
+  }
+  (void)setup_.F64("scan_grey", {negatives, lights, 3});
+  (void)setup_.F64("scan_rec709_matrix", {negatives, lights, 3, 3});
   const auto spectrum_count = static_cast<std::int32_t>(scene_spectra_.size());
   for (const auto spectra : {setup_.I32("scene_spectrum_index", {negatives, lights}),
                              setup_.I32("reversal_scene_spectrum_index", {reversals, lights})}) {
@@ -446,6 +472,31 @@ auto FilmStockBundle::Selection(std::string_view negative, std::string_view prin
       .aim_log_h             = CopyValues<3>(aim, p * 3),
       .xyz_to_display        = CopyValues<9>(display, p * 9),
       .scene_spectrum        = stock_.F64(ArrayName("light", spectrum, "spectrum"), {wavelengths_}),
+  };
+}
+
+auto FilmStockBundle::ScanSelection(std::string_view negative, std::string_view scene_light) const
+    -> FilmScanSetup {
+  const auto n     = IndexOf(negatives_, negative, "negative");
+  const auto light = std::find(scene_lights_.begin(), scene_lights_.end(), scene_light);
+  if (light == scene_lights_.end()) {
+    throw std::runtime_error("Film print: unknown scene light '" + std::string(scene_light) + "'");
+  }
+  const auto  l         = light - scene_lights_.begin();
+  const auto  negatives = static_cast<std::int64_t>(negatives_.size());
+  const auto  lights    = static_cast<std::int64_t>(scene_lights_.size());
+  const auto  gain      = setup_.F64("layer_gain", {negatives, lights, 3});
+  const auto  slope     = setup_.F64("scan_slope", {negatives, lights, 3});
+  const auto  grey      = setup_.F64("scan_grey", {negatives, lights, 3});
+  const auto  matrix    = setup_.F64("scan_rec709_matrix", {negatives, lights, 3, 3});
+  const auto  spectra   = setup_.I32("scene_spectrum_index", {negatives, lights});
+  const auto& spectrum  = scene_spectra_[static_cast<std::size_t>(spectra[n * lights + l])];
+  return {
+      .layer_gain     = CopyValues<3>(gain, (n * lights + l) * 3),
+      .slope          = CopyValues<3>(slope, (n * lights + l) * 3),
+      .grey           = CopyValues<3>(grey, (n * lights + l) * 3),
+      .rec709_matrix  = CopyValues<9>(matrix, (n * lights + l) * 9),
+      .scene_spectrum = stock_.F64(ArrayName("light", spectrum, "spectrum"), {wavelengths_}),
   };
 }
 

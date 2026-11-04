@@ -80,6 +80,8 @@ auto SwatchShapeName(FilmSwatchShape shape) -> QString {
       return QStringLiteral("cinema_print");
     case FilmSwatchShape::DisplayMaterial:
       return QStringLiteral("display_material");
+    case FilmSwatchShape::Scan:
+      return QStringLiteral("scan");
   }
   return {};
 }
@@ -188,6 +190,11 @@ QVariantList EditorParameterCatalogAdapter::odtEotfOptions(const QString& encodi
 
 bool EditorParameterCatalogAdapter::filmIsReversal(const QString& film) const {
   return IsFilmReversalIdentifier(film.toStdString());
+}
+
+bool EditorParameterCatalogAdapter::filmIsLabScan(const QString& film,
+                                                  const QString& printMaterial) const {
+  return IsFilmLabScan(film.toStdString(), printMaterial.toStdString());
 }
 
 QVariantList EditorParameterCatalogAdapter::filmBrowserEntries(const QString& list) const {

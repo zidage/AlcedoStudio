@@ -15,6 +15,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../graph/test_camera_profile.hpp"
@@ -220,12 +221,18 @@ TEST_F(OpenClFilmPrintFixture, FilmPrintOutputIsFinite) {
       {4.0f, 0.001f, 4.0f, 1.0f},      {0.001f, 4.0f, 4.0f, 1.0f},
   };
   // kodak_gold_200 has no inhibition; the others have it. The reversal films have the light table
-  // form: Astia 100F has no spread and no inhibition, and E100 has no inhibition.
-  for (const auto* negative :
-       {"kodak_5207", "kodak_portra_400", "kodak_gold_200", "fuji_velvia_50", "fuji_velvia_100",
-        "fuji_provia_100f", "fuji_astia_100f", "kodak_ektachrome_e100"}) {
-    SCOPED_TRACE(negative);
-    const auto pixels = RenderDrt(FilmPrintDocument(negative), ap1);
+  // form: Astia 100F has no spread and no inhibition, and E100 has no inhibition. Lab Scan has the
+  // scan form, with no entry gamut compression.
+  const std::string                                      print = "kodak_2383";
+  const std::string                                      scan{kFilmLabScanId};
+  const std::vector<std::pair<std::string, std::string>> selections = {
+      {"kodak_5207", print},       {"kodak_portra_400", print},      {"kodak_gold_200", print},
+      {"fuji_velvia_50", print},   {"fuji_velvia_100", print},       {"fuji_provia_100f", print},
+      {"fuji_astia_100f", print},  {"kodak_ektachrome_e100", print}, {"kodak_5207", scan},
+      {"kodak_gold_200", scan},    {"kodak_5219", scan},             {"kodak_portra_400", scan}};
+  for (const auto& [negative, material] : selections) {
+    SCOPED_TRACE(negative + " on " + material);
+    const auto pixels = RenderDrt(FilmPrintDocument(negative, material), ap1);
     ASSERT_EQ(pixels.size(), ap1.size());
     for (std::size_t index = 0; index < pixels.size(); ++index) {
       SCOPED_TRACE(index);
@@ -512,6 +519,88 @@ TEST_F(OpenClFilmPrintFixture, LoupeFlareChangeKeepsTheCanvasesThatDoNotReadIt) 
     ASSERT_EQ(kept[index].g, rebuilt[index].g) << index;
     ASSERT_EQ(kept[index].b, rebuilt[index].b) << index;
   }
+}
+
+TEST_F(OpenClFilmPrintFixture, LabScanBuildsNoFlareCanvasAndReadsNoEnlargerFlare) {
+  const auto         field    = PatchField(128, 96, 40, 40, 8);
+  auto               document = FilmPrintDocument("kodak_5207", std::string{kFilmLabScanId});
+  DrtParameterUpdate strong;
+  strong.film_enlarger_flare = 0.1f;
+  document.Drt()->Params().ApplyUpdate(strong);
+  SetView({128, 96}, {128, 96}, Matrix3x3::Identity());
+  const auto pixels = RenderView(document, field, true);
+  // Lab Scan has no enlarger, so only the Halation canvas is built.
+  EXPECT_EQ(device_->PassStats().film_canvas_rebuild, 1U);
+  auto& images = device_->Workspace().Images();
+  EXPECT_NE(images.PublishedLastWriter(FilmHalationResultId(plan_.drt.node_id)), 0U);
+  EXPECT_EQ(images.PublishedLastWriter(FilmFlareResultId(plan_.drt.node_id)), 0U);
+  EXPECT_EQ(images.PublishedLastWriter(FilmLoupeFlareResultId(plan_.drt.node_id)), 0U);
+  for (const auto& pixel : pixels) {
+    ASSERT_TRUE(std::isfinite(pixel.r) && std::isfinite(pixel.g) && std::isfinite(pixel.b));
+    ASSERT_GE((std::min)({pixel.r, pixel.g, pixel.b}), 0.0f);
+    ASSERT_LE((std::max)({pixel.r, pixel.g, pixel.b}), 1.0f + 1e-6f);
+    ASSERT_EQ(pixel.a, 0.75f);
+  }
+
+  // The stored Enlarger flare has no effect, and a change of it builds no canvas.
+  DrtParameterUpdate off;
+  off.film_enlarger_flare = 0.0f;
+  document.Drt()->Params().ApplyUpdate(off);
+  const auto same = RenderView(document, field, true);
+  EXPECT_EQ(device_->PassStats().film_canvas_rebuild, 0U);
+  EXPECT_EQ(device_->PassStats().film_canvas_sample, 1U);
+  for (std::size_t index = 0; index < pixels.size(); ++index) {
+    ASSERT_EQ(same[index].r, pixels[index].r) << index;
+    ASSERT_EQ(same[index].g, pixels[index].g) << index;
+    ASSERT_EQ(same[index].b, pixels[index].b) << index;
+  }
+
+  // A print of the same negative is another image.
+  DrtParameterUpdate material;
+  material.film_print_material = "kodak_2383";
+  document.Drt()->Params().ApplyUpdate(material);
+  const auto printed = RenderView(document, field, false);
+  EXPECT_GT(LargestCodeDifference(printed, printed.size(),
+                                  [&pixels](std::size_t index) { return pixels[index]; }),
+            4.0);
+}
+
+TEST_F(OpenClFilmPrintFixture, LabScanAndAPrintMaterialChangeKeepTheResultsOfEachOther) {
+  constexpr std::uint32_t kSize    = 128;
+  const auto              field    = PatchField(kSize, kSize, 40, 40, 16);
+  auto                    document = FilmPrintDocument("kodak_portra_400", "kodak_endura_premier");
+  SetView({kSize, kSize}, {kSize, kSize}, Matrix3x3::Identity());
+  const auto select = [&document](const std::string& material) {
+    DrtParameterUpdate update;
+    update.film_print_material = material;
+    document.Drt()->Params().ApplyUpdate(update);
+  };
+  const auto print = RenderView(document, field, true);
+  select(std::string{kFilmLabScanId});
+  const auto scan     = RenderView(document, field, true);
+  const auto uploaded = device_->Workspace().Device().LutUploadBytes();
+  const auto stats    = SharedFilmPrintTables().Stats();
+  // A change back and forth gives the same images: FP1 to FP5 read the same values in both forms,
+  // and no result of one form stays in the other.
+  select("kodak_endura_premier");
+  const auto print_again = RenderView(document, field, true);
+  select(std::string{kFilmLabScanId});
+  const auto scan_again = RenderView(document, field, true);
+  ASSERT_EQ(print.size(), print_again.size());
+  for (std::size_t index = 0; index < print.size(); ++index) {
+    ASSERT_EQ(print_again[index].r, print[index].r) << index;
+    ASSERT_EQ(print_again[index].g, print[index].g) << index;
+    ASSERT_EQ(print_again[index].b, print[index].b) << index;
+    ASSERT_EQ(scan_again[index].r, scan[index].r) << index;
+    ASSERT_EQ(scan_again[index].g, scan[index].g) << index;
+    ASSERT_EQ(scan_again[index].b, scan[index].b) << index;
+  }
+  // The device keeps the print table and the Status M table, and the host builds no table again.
+  EXPECT_EQ(device_->Workspace().Device().LutUploadBytes(), uploaded);
+  const auto after = SharedFilmPrintTables().Stats();
+  EXPECT_EQ(after.scan_table_builds, stats.scan_table_builds);
+  EXPECT_EQ(after.compose_builds, stats.compose_builds);
+  EXPECT_EQ(after.uv_builds, stats.uv_builds);
 }
 
 TEST_F(OpenClFilmPrintFixture, FilmPrintSliderBuildsNoTable) {
@@ -905,8 +994,8 @@ TEST_F(OpenClFilmPrintFixture, FilmPrintImageMatchesLab) {
     EXPECT_LE(difference.largest, 4.0);
     ++compared;
   }
-  // 5 selections of the negatives, and the 5 reversal films.
-  EXPECT_EQ(compared, 10);
+  // 5 selections of the negatives, the 5 reversal films, and 4 selections of Lab Scan.
+  EXPECT_EQ(compared, 14);
 }
 
 TEST_F(OpenClFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs) {
@@ -925,11 +1014,17 @@ TEST_F(OpenClFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlu
   // another phase than in the full frame. One row up, the cells are the same.
   const std::uint32_t     odd_y  = (height - kRoiH) / 2;
   ASSERT_EQ(odd_y % 2U, 1U);
-  // A negative, and a reversal film with the light table and the loupe flare.
-  for (const auto* film : {"kodak_5207", "fuji_velvia_50"}) {
-    SCOPED_TRACE(film);
+  // A negative, a reversal film with the light table and the loupe flare, and Lab Scan, which has
+  // only the Halation canvas.
+  const std::string scan{kFilmLabScanId};
+  for (const auto& [film, material] :
+       std::vector<std::pair<std::string, std::string>>{{"kodak_5207", "kodak_2383"},
+                                                        {"fuji_velvia_50", "kodak_2383"},
+                                                        {"kodak_5207", scan}}) {
+    SCOPED_TRACE(film + " on " + material);
     const bool reversal = IsFilmReversalIdentifier(film);
-    const auto document = FilmPrintDocument(film);
+    const auto canvases = IsFilmLabScan(film, material) ? 1U : 2U;
+    const auto document = FilmPrintDocument(film, material);
     SetView({width, height}, {width, height}, Matrix3x3::Identity());
     const auto full = RenderView(document, ap1, true);
     for (const std::uint32_t roi_y : {odd_y, odd_y - 1U}) {
@@ -939,7 +1034,7 @@ TEST_F(OpenClFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlu
       SetView({width, height}, {kRoiW, kRoiH},
               Matrix3x3::Translate(static_cast<float>(roi_x), static_cast<float>(roi_y)));
       const auto detail = RenderView(document, crop, false);
-      EXPECT_EQ(device_->PassStats().film_canvas_sample, 2U);
+      EXPECT_EQ(device_->PassStats().film_canvas_sample, canvases);
 
       std::vector<float> edge;
       double             interior = 0.0;
@@ -966,7 +1061,7 @@ TEST_F(OpenClFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlu
           edge[static_cast<std::size_t>(0.99 * static_cast<double>(edge.size() - 1))];
       const double p999 =
           edge[static_cast<std::size_t>(0.999 * static_cast<double>(edge.size() - 1))];
-      std::cout << film << ", ROI at row " << roi_y << " against the full frame, edge band of "
+      std::cout << film << " on " << material << ", ROI at row " << roi_y << " against the full frame, edge band of "
                 << kReach << " pixels: mean " << sum / static_cast<double>(edge.size()) << ", p99 "
                 << p99 << ", p99.9 " << p999 << ", largest " << edge.back()
                 << " codes; inside the band, largest " << interior << " codes\n";
@@ -1033,9 +1128,16 @@ TEST_F(OpenClFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
                              static_cast<float>(reference_height) / static_cast<float>(height)));
     auto render_size_result =
         device_->Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
-    // The print form, and the light table form of a reversal film.
-    for (const auto* film : {"kodak_5207", "fuji_velvia_50", "kodak_ektachrome_e100"}) {
-      auto                document = FilmPrintDocument(film);
+    // The print form, the light table form of a reversal film, and the scan form.
+    const std::string scan{kFilmLabScanId};
+    for (const auto& [film, material] : std::vector<std::pair<std::string, std::string>>{
+             {"kodak_5207", "kodak_2383"},
+             {"fuji_velvia_50", "kodak_2383"},
+             {"kodak_ektachrome_e100", "kodak_2383"},
+             {"kodak_5207", scan},
+             {"fuji_eterna_500", "kodak_2383"},
+             {"fuji_eterna_500", scan}}) {
+      auto                document = FilmPrintDocument(film, material);
       float               halation = 1.0f;
       std::vector<double> times;
       for (int run = 0; run < 10; ++run) {
@@ -1062,7 +1164,7 @@ TEST_F(OpenClFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
         device_->PublishResults();
       }
       std::sort(times.begin(), times.end());
-      std::cout << width << " x " << height << ", " << film
+      std::cout << width << " x " << height << ", " << film << " on " << material
                 << ", slider change: " << times[times.size() / 2] << " ms; transient capacity "
                 << device_->Workspace().TransientBuffers().capacity_bytes() / (1 << 20) << " MiB\n";
     }

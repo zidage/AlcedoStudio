@@ -36,7 +36,7 @@ namespace {
 // film_print.cl has the same values, and a different size stops the build of its program.
 static_assert(kFilmBlurMaxRadius == 128 && sizeof(FilmBlurKernel) == 1552);
 static_assert(kFilmNarrowSpreadMaxRadius == 2 && sizeof(FilmNarrowKernel) == 76);
-static_assert(sizeof(FilmKernelParams) == 412);
+static_assert(sizeof(FilmKernelParams) == 448);
 static_assert(sizeof(Matrix3x3) == 36);
 static_assert(sizeof(FilmKernelRgb) == 12);
 

@@ -42,6 +42,10 @@ class EditorParameterCatalogAdapter : public QObject {
   /// its flare slider is the flare of the loupe.
   Q_INVOKABLE bool         filmIsReversal(const QString& film) const;
 
+  /// True when @p film on @p printMaterial has the scan form (print material Lab Scan with a
+  /// negative): the film print then has no enlarger, so it reads no Enlarger flare.
+  Q_INVOKABLE bool         filmIsLabScan(const QString& film, const QString& printMaterial) const;
+
   /**
    * @brief Entries of film print browser list @p list ("negative", "reversal", or "print"), in
    *        browser order.

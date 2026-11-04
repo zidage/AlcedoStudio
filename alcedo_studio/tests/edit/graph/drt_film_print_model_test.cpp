@@ -37,9 +37,11 @@ auto FilmPrintUpdate() -> DrtParameterUpdate {
 void ExpectDefaultFilmPrint(const FilmPrintParams& film) {
   EXPECT_EQ(film.negative, "kodak_5207");
   EXPECT_EQ(film.print_material, "kodak_endura_premier");
-  // The lists of the editor put Cine Look and the most common negative first. The defaults stay.
-  EXPECT_EQ(kFilmPrintMaterialIds.front(), "cine_look");
-  EXPECT_EQ(kFilmPrintMaterialNames.front(), "Cine Look (2383)");
+  // The lists of the editor put Lab Scan, Cine Look, and the most common negative first (issue
+  // #661). The defaults stay.
+  EXPECT_EQ(kFilmPrintMaterialIds[0], kFilmLabScanId);
+  EXPECT_EQ(kFilmPrintMaterialIds[1], "cine_look");
+  EXPECT_EQ(kFilmPrintMaterialNames[1], "Cine Look (2383)");
   EXPECT_EQ(kFilmNegativeIds.front(), "kodak_5207");
   EXPECT_TRUE(IsFilmIdentifier(kFilmPrintMaterialIds, "kodak_2383"));
   EXPECT_EQ(film.scene_light, "reference");
@@ -109,6 +111,38 @@ TEST(DrtFilmPrintModelTest, ReversalFilmIsAValueOfTheNegativeKeyAndKeepsThePrint
     EXPECT_EQ(restored.Drt()->Params().FilmPrint().print_material, "fuji_ca_dpII");
     EXPECT_EQ(restored.Drt()->Params().ToJson().dump(), json.dump());
   }
+}
+
+TEST(DrtFilmPrintModelTest, LabScanIsAValueOfThePrintMaterialKeyAndKeepsTheFlare) {
+  // Lab Scan is first in the list, before Cine Look, and it is no film.
+  EXPECT_EQ(kFilmPrintMaterialIds.front(), kFilmLabScanId);
+  EXPECT_EQ(kFilmPrintMaterialNames.front(), "Lab Scan");
+  EXPECT_EQ(kFilmPrintMaterialIds[1], "cine_look");
+  EXPECT_FALSE(IsFilmStockIdentifier(kFilmLabScanId));
+  EXPECT_TRUE(IsFilmLabScan("kodak_5207", kFilmLabScanId));
+  EXPECT_FALSE(IsFilmLabScan("kodak_5207", "kodak_2383"));
+  // A colour reversal film reads no print material.
+  EXPECT_FALSE(IsFilmLabScan("fuji_velvia_50", kFilmLabScanId));
+
+  auto document               = CreateDefaultPipelineDocument();
+  auto update                 = FilmPrintUpdate();
+  update.film_print_material  = std::string{kFilmLabScanId};
+  document.Drt()->Params().ApplyUpdate(update);
+  const auto json = document.Drt()->Params().ToJson();
+  // The same key holds Lab Scan. There is no new key, and the stored flare stays.
+  EXPECT_EQ(json.at("film_print").at("print_material"), "lab_scan");
+  EXPECT_EQ(json.at("film_print").size(), 6u);
+  EXPECT_FLOAT_EQ(json.at("film_print").at("enlarger_flare").get<float>(), 0.05f);
+  const auto restored = PipelineDocument::FromJson(document.ToJson());
+  EXPECT_EQ(restored.Drt()->Params().FilmPrint().print_material, kFilmLabScanId);
+  EXPECT_FLOAT_EQ(restored.Drt()->Params().FilmPrint().enlarger_flare, 0.05f);
+  EXPECT_EQ(restored.Drt()->Params().ToJson().dump(), json.dump());
+
+  // A reversal film with a stored Lab Scan keeps it, as it keeps any print material.
+  DrtParameterUpdate slide;
+  slide.film_negative = "fuji_velvia_50";
+  document.Drt()->Params().ApplyUpdate(slide);
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().print_material, kFilmLabScanId);
 }
 
 TEST(DrtFilmPrintModelTest, UpperRangeValuesRoundTrip) {
@@ -324,6 +358,9 @@ TEST(DrtFilmPrintModelTest, FieldChangeMarksOnlyItsFilmPrintField) {
   // The Loupe flare of a reversal film is the stored Enlarger flare.
   expect_marks(DrtDirty::FilmFlare,
                [](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.04f; });
+  // Lab Scan has no entry gamut compression, so the exposure and all its results change.
+  expect_marks(DrtDirty::FilmExposure,
+               [](DrtParameterUpdate& update) { update.film_print_material = "lab_scan"; });
 }
 
 TEST(DrtFilmPrintModelTest, EqualValuesKeepTheRevision) {

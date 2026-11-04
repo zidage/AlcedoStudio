@@ -11,6 +11,7 @@ import QtQuick
 //   print_paper       white sheet with a coloured edge
 //   cinema_print      clear strip with perforations
 //   display_material  glossy sheet
+//   scan              negative frame on a scanner bed, with a light bar
 Item {
     id: root
 
@@ -121,6 +122,24 @@ Item {
                 ctx.fillStyle = root.colorAt(0)
                 ctx.fillRect(w * 0.38, 0, w * 0.62, h)
                 perforations(ctx, w, h, Qt.rgba(1, 1, 1, 0.30))
+            } else if (root.shape === "scan") {
+                // Dark scanner bed, the frame of a colour negative, and the light bar of the scan.
+                ctx.fillStyle = "#26282b"
+                ctx.fillRect(0, 0, w, h)
+                const fx = w * 0.14
+                const fy = h * 0.2
+                const fw = w * 0.72
+                const fh = h * 0.6
+                ctx.fillStyle = root.colorAt(0)
+                ctx.fillRect(fx, fy, fw, fh)
+                ctx.fillStyle = Qt.rgba(0, 0, 0, 0.22)
+                ctx.fillRect(fx, fy + fh * 0.82, fw, fh * 0.18)
+                const bar = ctx.createLinearGradient(w * 0.5, 0, w * 0.68, 0)
+                bar.addColorStop(0, Qt.rgba(1, 1, 1, 0))
+                bar.addColorStop(0.5, root.colorAt(1))
+                bar.addColorStop(1, Qt.rgba(1, 1, 1, 0))
+                ctx.fillStyle = bar
+                ctx.fillRect(w * 0.5, 0, w * 0.18, h)
             } else if (root.shape === "print_paper") {
                 ctx.fillStyle = "#f1eee6"
                 ctx.fillRect(0, 0, w, h)

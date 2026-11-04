@@ -56,8 +56,15 @@ inline constexpr std::array<std::string_view, 30> kFilmNegativeIds = {
     "kodak_aerocolor",
     "agfa_vista_100"};
 
-/// Print material identifiers. See @ref kFilmNegativeIds.
-inline constexpr std::array<std::string_view, 19> kFilmPrintMaterialIds = {
+/// Print material `lab_scan` (lab decisions U87, U88): no print. It selects the scan form of FP6, a
+/// scan of the negative with an inversion that a chart on the stock calibrates. The stock bundle
+/// names it in its metadata `lab_scan`, not in its list of print materials.
+inline constexpr std::string_view kFilmLabScanId = "lab_scan";
+
+/// Print material identifiers. The first is @ref kFilmLabScanId; the others are the print
+/// materials of the stock bundle. See @ref kFilmNegativeIds.
+inline constexpr std::array<std::string_view, 20> kFilmPrintMaterialIds = {
+    kFilmLabScanId,
     "cine_look",
     "kodak_2383",
     "kodak_endura_premier",
@@ -113,7 +120,8 @@ inline constexpr std::array<std::string_view, 30> kFilmNegativeNames = {
     "Agfa Vista 100"};
 
 /// Catalog names of @ref kFilmPrintMaterialIds, in the same order.
-inline constexpr std::array<std::string_view, 19> kFilmPrintMaterialNames = {
+inline constexpr std::array<std::string_view, 20> kFilmPrintMaterialNames = {
+    "Lab Scan",
     "Cine Look (2383)",
     "Kodak Vision 2383",
     "Kodak Endura Premier Paper",
@@ -157,7 +165,8 @@ inline constexpr std::array<std::string_view, 11> kFilmSceneLightIds = {
  *
  * All sliders act on the image. Only the three selections choose host tables. A colour reversal
  * film in @ref negative has no print, so it reads no @ref print_material, and @ref enlarger_flare
- * is the flare of the loupe on the light table.
+ * is the flare of the loupe on the light table. Print material @ref kFilmLabScanId has no enlarger,
+ * so it reads no @ref enlarger_flare, and the stored value stays.
  */
 struct FilmPrintParams {
   std::string negative       = "kodak_5207";
@@ -183,6 +192,16 @@ template <std::size_t Count>
 /// True when @p id is a value of the field `negative`: a negative or a colour reversal film.
 [[nodiscard]] constexpr auto IsFilmStockIdentifier(std::string_view id) -> bool {
   return IsFilmIdentifier(kFilmNegativeIds, id) || IsFilmReversalIdentifier(id);
+}
+
+/**
+ * True when @p negative on @p print_material has the scan form of FP6: print material
+ * @ref kFilmLabScanId with a negative.
+ * A colour reversal film reads no print material, so a stored `lab_scan` has no effect on it.
+ */
+[[nodiscard]] constexpr auto IsFilmLabScan(std::string_view negative,
+                                           std::string_view print_material) -> bool {
+  return print_material == kFilmLabScanId && !IsFilmReversalIdentifier(negative);
 }
 
 }  // namespace alcedo

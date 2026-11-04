@@ -5,7 +5,7 @@
 #define ALCEDO_FILM_PRINT_MATH_H
 
 // Point stages of the film print, shared by the host, CUDA, OpenCL C, and Metal. Plan: Film Print
-// DRT Plan, section 3, steps FP1, FP4, FP5, and FP6. The stages are those of `fast_kernels.py` of
+// DRT Plan, section 3, steps FP1, FP4, FP5, and FP6 (the print, light table, and scan forms). The stages are those of `fast_kernels.py` of
 // alcedo-film-lab. The product arithmetic is float32. A host file can define FILM_KERNEL_DOUBLE
 // before the first include, inside its own namespace, for a double-precision form of the same math.
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
@@ -13,6 +13,8 @@
 #define FILM_KERNEL_LOG10  log10
 #define FILM_KERNEL_POW    pow
 #define FILM_KERNEL_EXP    exp
+#define FILM_KERNEL_EXP2   exp2
+#define FILM_KERNEL_LOG2   log2
 #define FILM_KERNEL_VALUES __global const
 #define FILM_KERNEL_PARAMS __global const
 #define FILM_KERNEL_UINT   uint
@@ -21,6 +23,8 @@
 #define FILM_KERNEL_LOG10  log10
 #define FILM_KERNEL_POW    pow
 #define FILM_KERNEL_EXP    exp
+#define FILM_KERNEL_EXP2   exp2
+#define FILM_KERNEL_LOG2   log2
 #define FILM_KERNEL_VALUES const device
 #define FILM_KERNEL_PARAMS constant
 #define FILM_KERNEL_UINT   uint
@@ -39,10 +43,14 @@
 #define FILM_KERNEL_LOG10 log10
 #define FILM_KERNEL_POW   pow
 #define FILM_KERNEL_EXP   exp
+#define FILM_KERNEL_EXP2  exp2
+#define FILM_KERNEL_LOG2  log2
 #else
 #define FILM_KERNEL_LOG10 log10f
 #define FILM_KERNEL_POW   powf
 #define FILM_KERNEL_EXP   expf
+#define FILM_KERNEL_EXP2  exp2f
+#define FILM_KERNEL_LOG2  log2f
 #endif
 #endif
 
@@ -91,6 +99,10 @@ typedef struct {
   FilmKernelReal   negative_grade_grey[3];  // Rule 'negative_show_grade': the record of an 18 % grey
   FilmKernelReal   display_luminance[3];    // Light table form: Y of linear Rec. 709
   FilmKernelReal   display_surround_power;  // Light table form: surround exponent - 1. 0: none
+  FilmKernelReal   scan_grey[3];   // Scan form: Status M density of an 18 % grey
+  FilmKernelReal   scan_slope[3];  // Scan form: Status M density per stop of the grey scale
+  FilmKernelReal   scan_log_s0;    // Scan form: rule 'scan_log_curve', the middle in stops
+  FilmKernelReal   scan_log_w;     // Scan form: rule 'scan_log_curve', the width in stops
   FILM_KERNEL_UINT locus_facets;
   FILM_KERNEL_UINT uv_nodes;
   FILM_KERNEL_UINT curve_stored;
@@ -111,6 +123,10 @@ typedef struct {
   // the light table, and FP6 has the loupe flare and the surround in display light. Read by the
   // backend kernel.
   FILM_KERNEL_UINT light_table;
+  // 1: print material Lab Scan (lab decisions U87, U88). The print table is the Status M density of
+  // the negative over the record, and `xyz_to_display` is the matrix from the equivalent exposure to
+  // linear Rec. 709. FP6 has the scan form, with no enlarger flare. Read by the backend kernel.
+  FILM_KERNEL_UINT scan;
 } FilmKernelParams;
 
 FILM_KERNEL_INLINE FilmKernelRgb FilmKernelMakeRgb(FilmKernelReal r, FilmKernelReal g,
@@ -309,12 +325,12 @@ FilmKernelFirstAmountsWithPointPart(FILM_KERNEL_PARAMS FilmKernelParams* params,
 }
 
 /**
- * FP6, first part: dye amounts to linear display RGB: a trilinear read of the print table, the
- * cube, and the display matrix. @p print_rgba has 4 values per node, with red varying fastest.
+ * A trilinear read of a table over the record of the negative, on the grid of the print table.
+ * @p table has 4 values per node, with red varying fastest. Outside the grid, the edge value.
  */
-FILM_KERNEL_INLINE FilmKernelRgb
-FilmKernelPrintDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params,
-                       FILM_KERNEL_VALUES FilmKernelReal* print_rgba, FilmKernelRgb amounts) {
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelReadRecordTable(
+    FILM_KERNEL_PARAMS FilmKernelParams* params, FILM_KERNEL_VALUES FilmKernelReal* table,
+    FilmKernelRgb amounts) {
   const FILM_KERNEL_UINT edge = params->print_edge;
   const FilmKernelReal   top  = (FilmKernelReal)(edge - 1U);
   const FilmKernelReal   cr =
@@ -337,11 +353,11 @@ FilmKernelPrintDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params,
   const FilmKernelReal               fb   = cb - (FilmKernelReal)ib;
   const FILM_KERNEL_UINT             row  = edge * 4U;
   const FILM_KERNEL_UINT             lay  = edge * row;
-  FILM_KERNEL_VALUES FilmKernelReal* c000 = print_rgba + (ib * edge + ig) * row + ir * 4U;
+  FILM_KERNEL_VALUES FilmKernelReal* c000 = table + (ib * edge + ig) * row + ir * 4U;
   FILM_KERNEL_VALUES FilmKernelReal* c010 = c000 + row;
   FILM_KERNEL_VALUES FilmKernelReal* c001 = c000 + lay;
   FILM_KERNEL_VALUES FilmKernelReal* c011 = c001 + row;
-  FilmKernelReal                     xyz[3];
+  FilmKernelReal                     v[3];
   for (FILM_KERNEL_UINT k = 0U; k < 3U; ++k) {
     const FilmKernelReal v00 = c000[k] + fr * (c000[4U + k] - c000[k]);
     const FilmKernelReal v10 = c010[k] + fr * (c010[4U + k] - c010[k]);
@@ -349,13 +365,25 @@ FilmKernelPrintDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params,
     const FilmKernelReal v11 = c011[k] + fr * (c011[4U + k] - c011[k]);
     const FilmKernelReal v0  = v00 + fg * (v10 - v00);
     const FilmKernelReal v1  = v01 + fg * (v11 - v01);
-    const FilmKernelReal v   = v0 + fb * (v1 - v0);
-    xyz[k]                   = v * v * v;
+    v[k]                     = v0 + fb * (v1 - v0);
   }
+  return FilmKernelMakeRgb(v[0], v[1], v[2]);
+}
+
+/**
+ * FP6, first part: dye amounts to linear display RGB: a trilinear read of the print table, the
+ * cube, and the display matrix. @p print_rgba has 4 values per node, with red varying fastest.
+ */
+FILM_KERNEL_INLINE FilmKernelRgb
+FilmKernelPrintDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params,
+                       FILM_KERNEL_VALUES FilmKernelReal* print_rgba, FilmKernelRgb amounts) {
+  const FilmKernelRgb                v = FilmKernelReadRecordTable(params, print_rgba, amounts);
+  const FilmKernelReal               x = v.r * v.r * v.r;
+  const FilmKernelReal               y = v.g * v.g * v.g;
+  const FilmKernelReal               z = v.b * v.b * v.b;
   FILM_KERNEL_PARAMS FilmKernelReal* m = params->xyz_to_display;
-  return FilmKernelMakeRgb(m[0] * xyz[0] + m[1] * xyz[1] + m[2] * xyz[2],
-                           m[3] * xyz[0] + m[4] * xyz[1] + m[5] * xyz[2],
-                           m[6] * xyz[0] + m[7] * xyz[1] + m[8] * xyz[2]);
+  return FilmKernelMakeRgb(m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z,
+                           m[6] * x + m[7] * y + m[8] * z);
 }
 
 /** Transmittance of a dye amount, for the Enlarger flare: 10^-a. */
@@ -420,9 +448,12 @@ FILM_KERNEL_INLINE FilmKernelReal FilmKernelClipUnit(FilmKernelReal value) {
   return FilmKernelMin(FilmKernelMax(value, FILM_KERNEL_REAL(0.0)), FILM_KERNEL_REAL(1.0));
 }
 
-/** FP6, second part: rule 'rgc_style_display_compression' on linear Rec. 709, then the clip. */
+/**
+ * Rule 'rgc_style_display_compression' on linear Rec. 709, with no clip: the largest channel stays,
+ * and the distance of each other channel from it is compressed. 0 when no channel is above 0.
+ */
 FILM_KERNEL_INLINE FilmKernelRgb
-FilmKernelFinishDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params, FilmKernelRgb rgb) {
+FilmKernelCompressDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params, FilmKernelRgb rgb) {
   const FilmKernelReal a = FilmKernelMax(rgb.r, FilmKernelMax(rgb.g, rgb.b));
   if (!(a > FILM_KERNEL_REAL(0.0))) {
     return FilmKernelMakeRgb(FILM_KERNEL_REAL(0.0), FILM_KERNEL_REAL(0.0), FILM_KERNEL_REAL(0.0));
@@ -434,8 +465,15 @@ FilmKernelFinishDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params, FilmKernelR
       (a - rgb.g) / a, params->gamut_threshold[1], params->gamut_scale[1], power);
   const FilmKernelReal db = FilmKernelCompressedDistance(
       (a - rgb.b) / a, params->gamut_threshold[2], params->gamut_scale[2], power);
-  return FilmKernelMakeRgb(FilmKernelClipUnit(a - dr * a), FilmKernelClipUnit(a - dg * a),
-                           FilmKernelClipUnit(a - db * a));
+  return FilmKernelMakeRgb(a - dr * a, a - dg * a, a - db * a);
+}
+
+/** FP6, second part: rule 'rgc_style_display_compression' on linear Rec. 709, then the clip. */
+FILM_KERNEL_INLINE FilmKernelRgb
+FilmKernelFinishDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params, FilmKernelRgb rgb) {
+  const FilmKernelRgb compressed = FilmKernelCompressDisplay(params, rgb);
+  return FilmKernelMakeRgb(FilmKernelClipUnit(compressed.r), FilmKernelClipUnit(compressed.g),
+                           FilmKernelClipUnit(compressed.b));
 }
 
 /** Smoothstep from 0 at @p low to 1 at @p high. */
@@ -626,10 +664,59 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelCinemaLook(FilmKernelRgb linear) {
                                               FILM_KERNEL_REAL(0.14) * green4)));
 }
 
+/**
+ * Rule 'scan_log_curve' of one channel: a logistic in stops on the display code,
+ * code = 1 / (1 + exp(-(s - s0) / w)) with s = log2(value / 0.18).
+ */
+FILM_KERNEL_INLINE FilmKernelReal FilmKernelScanLogCurve(FILM_KERNEL_PARAMS FilmKernelParams* params,
+                                                         FilmKernelReal value) {
+  const FilmKernelReal stops =
+      FILM_KERNEL_LOG2(FilmKernelMax(value, FILM_KERNEL_REAL(1e-12)) / FILM_KERNEL_REAL(0.18));
+  return FILM_KERNEL_REAL(1.0) /
+         (FILM_KERNEL_REAL(1.0) +
+          FILM_KERNEL_EXP(-(stops - params->scan_log_s0) / params->scan_log_w));
+}
+
+/**
+ * FP6 of print material Lab Scan (lab decisions U87, U88; `ChartScanPreview` of `chart_scan.py` with
+ * `SELECTED_FORM`): the negative read with Status M densitometry, and an inversion that a chart and
+ * a grey scale on the same stock calibrate. The steps:
+ * 1. Rule 'scan_light' with scanner 'status_m': D, a trilinear read of @p status_m over the record.
+ * 2. Rules 'chart_straight_line' and 'chart_equivalent_exposure': e = 0.18 * 2^((D - grey) / slope).
+ * 3. Rule 'film_sensitivity_matrix', with AP1 to Rec. 709 folded in: linear Rec. 709 = M e.
+ * 4. Rule 'rgc_style_display_compression' with the values of the print display, and no clip.
+ * 5. Rule 'scan_log_curve' per channel, which gives the display code.
+ *
+ * @param status_m The Status M density of the negative over the record, 4 values per node.
+ * @param amounts Dye amounts of the negative after FP5.
+ * @return The display code as linear Rec. 709 in 0 to 1, for the display encoding of the output.
+ */
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelScanDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params,
+                                                       FILM_KERNEL_VALUES FilmKernelReal* status_m,
+                                                       FilmKernelRgb amounts) {
+  const FilmKernelRgb  d   = FilmKernelReadRecordTable(params, status_m, amounts);
+  const FilmKernelReal e_r = FILM_KERNEL_REAL(0.18) *
+                             FILM_KERNEL_EXP2((d.r - params->scan_grey[0]) / params->scan_slope[0]);
+  const FilmKernelReal e_g = FILM_KERNEL_REAL(0.18) *
+                             FILM_KERNEL_EXP2((d.g - params->scan_grey[1]) / params->scan_slope[1]);
+  const FilmKernelReal e_b = FILM_KERNEL_REAL(0.18) *
+                             FILM_KERNEL_EXP2((d.b - params->scan_grey[2]) / params->scan_slope[2]);
+  FILM_KERNEL_PARAMS FilmKernelReal* m          = params->xyz_to_display;
+  const FilmKernelRgb                compressed = FilmKernelCompressDisplay(
+      params, FilmKernelMakeRgb(m[0] * e_r + m[1] * e_g + m[2] * e_b,
+                                m[3] * e_r + m[4] * e_g + m[5] * e_b,
+                                m[6] * e_r + m[7] * e_g + m[8] * e_b));
+  return FilmKernelMakeRgb(FilmKernelSrgbDecode(FilmKernelScanLogCurve(params, compressed.r)),
+                           FilmKernelSrgbDecode(FilmKernelScanLogCurve(params, compressed.g)),
+                           FilmKernelSrgbDecode(FilmKernelScanLogCurve(params, compressed.b)));
+}
+
 #undef FILM_KERNEL_INLINE
 #undef FILM_KERNEL_LOG10
 #undef FILM_KERNEL_POW
 #undef FILM_KERNEL_EXP
+#undef FILM_KERNEL_EXP2
+#undef FILM_KERNEL_LOG2
 #undef FILM_KERNEL_REAL
 #undef FILM_KERNEL_VALUES
 #undef FILM_KERNEL_PARAMS

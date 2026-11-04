@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02). F8 is complete on CUDA and OpenCL (2026-11-03). F9, the reversal films on Metal, is complete (2026-11-03).
+Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02). F8 is complete on CUDA and OpenCL (2026-11-03). F9, the reversal films on Metal, is complete (2026-11-03). F10, print material Lab Scan, is complete on CUDA and OpenCL (2026-11-04); F11 adds it to Metal.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -152,6 +152,22 @@ A colour reversal film (slide film) is the final image, so its chain has no prin
 - The film identifier stays in the key `params.film_print.negative`. A reversal identifier selects this form. There is no new JSON key, and the stored print material does not change.
 - The Film list has the reversal films after the negatives, in the lab order: Velvia 50, Velvia 100, Provia 100F, Astia 100F, E100. With a reversal film the panel hides Print Material, and the slider Enlarger Flare has the label "Loupe Flare", with the same range and default.
 
+### 3.4 Scan form (phase F10)
+
+Print material `lab_scan`, "Lab Scan", is a scan of the negative in place of a print (lab decisions U87 to U89, [P10 report](https://github.com/zidage/alcedo-film-lab/blob/feature/p7-product-resources/docs/exploration/p10_chart_scan.md), sections 7 to 13). A lab photographs a chart and a grey scale on the stock under the balance light of the stock, scans the negative, and calibrates the inversion of its scan program from them. The lab simulates this, so the inversion comes from the data of the stock and not from statistics of a frame. Lab source: `ChartScanPreview` of `chart_scan.py` with `SELECTED_FORM`, method `chart_scan` of the lab viewer with its default slope `fixed`.
+
+| Step | Scan form |
+| --- | --- |
+| Entry | No reference gamut compression (the lab method has `entry_gamut_compress = False`). |
+| FP1 to FP5 | No change: the u'v' table, layer gain, spread, Halation, and inhibition of the negative, with the values of the print form. |
+| FP6, scan form | On the record `a` after FP5: (1) Status M density `D = T(a)`, a trilinear read of a 65^3 table over the record (rule `scan_light`, scanner `status_m`), with no cube root; (2) `e_k = 0.18 * 2^((D_k - g_k) / m_k)` (rules `chart_straight_line`, `fixed_scan_slope`, and `chart_equivalent_exposure`); (3) `rgb = M e`, linear Rec. 709 (rule `film_sensitivity_matrix`, AP1 to Rec. 709 folded in); (4) rule `rgc_style_display_compression` with the values of the print display and no clip; (5) per channel the log curve `code = 1 / (1 + exp(-(log2(max(rgb, 1e-12) / 0.18) - s0) / w))` (rule `scan_log_curve`); (6) the code as linear Rec. 709 (`FilmKernelSrgbDecode`), then the display encoding. |
+
+- `T(a) = log10(sum w) - log10(sum w 10^-(base + dyes a))` with the Status M weights `w`, on the record nodes of the print table. It depends on the negative only, so the 11 scene lights share one table and one GPU copy.
+- There is no enlarger flare, no printer balance, no print table, no negative grade, no Cine Look, and no dark surround on this form. The flare canvas is not built, and `film.flare.0` is not published.
+- The grey `g` is the Status M density of an 18 % grey under the scene light, with the scan timing of the lab (1, the print timing). The matrix `M` comes from the balance light of the stock, which depends on the scene light, so `g` and `M` are values per negative and scene light. The slope `m` is one Status M slope per channel for all stocks (lab rule `fixed_scan_slope`, U89: 0.160868, 0.170611, 0.181802 per stop), not the slope of the grey scale of the stock: with one log curve, the slope of each stock gave every stock the same tone and took away the differences of contrast and of the gammas of the layers. The resources store `m` per negative and scene light, so the formula does not depend on this choice. A scene cast that the timing leaves stays (lab U36).
+- The identifier stays in the key `params.film_print.print_material`; there is no new JSON key. A reversal film reads no print material, so a stored `lab_scan` has no effect on it. With Lab Scan the panel hides the slider Enlarger Flare, and its stored value does not change. The Print list has Lab Scan first, before Cine Look, with its own swatch (a negative frame under the light bar of a scanner).
+- Metal has no scan form until phase F11: `RecordMetalFilmPrint` stops with a named error.
+
 ---
 
 ## 4. Resources
@@ -169,6 +185,8 @@ calculates them; the product does not need the logic of `_camera_filter`, `_prin
 | Stage B | Paper Status A to XYZ (65^3, axis power 2) | 6.6 MB, in memory | `film_tables` |
 | Print table | Composed from A and B; RGBA32F for the GPU | 4.4 MB | `film_tables`, `AcquireLut` |
 | Light table (reversal film) | 65^3 over the record of removed dye: the cube root of XYZ under the light of the table. One per film, for all scene lights | 6.6 MB, in memory; 4.4 MB on the GPU | `film_tables::CubeRootBandResponse`, `AcquireLut` |
+
+Resource schema 7 (phase F10) adds Lab Scan. The print setup has per negative and scene light `scan_slope` (3), `scan_grey` (3), and `scan_rec709_matrix` (3, 3). The stock bundle has `common/scan_status_m_weights` (3, on `common/wavelengths_nm`), `common/scan_log_curve` (s0, w), and the metadata `lab_scan` (id and name); Lab Scan is not in the list `print_materials`. The Status M tables are those of python-colormath (BSD-3-Clause, `THIRD_PARTY_NOTICE.txt` section E). The tables of SMPTE ST 2065-2 (APD) do not ship; the lab chose Status M for this reason, with the same result within 1 Delta E (P10 report, section 10). The Status M table of a negative (65^3 over the record, 6.6 MB in memory, 4.4 MB on the GPU) is built on the host by `film_tables::Log10BandResponse`.
 
 Resource schema 6 (phase F8) adds the reversal films. The stock bundle has the group `reversal/<film>/` in the form of `negative/<film>/`, with the record of rule `removed_dye_record` and `dye_max`, and the group `light_table/` with the D50 viewing weights, the XYZ scale, the exponent of the dark surround, and the luminance weights of linear Rec. 709. Its metadata has `reversal_films` and `reversal_list_order`. The print setup has `reversal_layer_gain` (films, scene lights, 3), `reversal_xyz_to_display` (films, 3, 3), and `reversal_scene_spectrum_index` (films, scene lights). The compact reflectance table keeps its form.
 
@@ -236,6 +254,8 @@ Limits for the numeric phases: the 8 bit difference of final sRGB against the la
 | F7 | Metal passes | 1500 lines | One backend per phase |
 | F8 | Reversal films on a light table, on CUDA and OpenCL (section 3.3) | 1500 lines | New resource content and a second form of FP6 |
 | F9 | Reversal films on Metal | 600 lines | One backend per phase |
+| F10 | Print material Lab Scan, on CUDA and OpenCL (section 3.4) | 1200 lines | New resource content and a third form of FP6 |
+| F11 | Lab Scan on Metal | 400 lines | One backend per phase |
 
 Commands for all phases, from the repository root:
 
@@ -1092,6 +1112,69 @@ GPU time of each pass after a Light spread change at 2560, in ms, with one commi
 
 **Not verified.** A Release build, the packaged application, and a render in the running application on macOS. The user review of the five films. The full test suite did not run.
 
+### F10: Lab Scan on CUDA and OpenCL
+
+1. **Objective.** Print material Lab Scan of lab decisions U87 to U89 in the film print method, with the scan form of section 3.4, on CUDA and OpenCL.
+2. **Inputs.** F8; resources of schema 7 from the lab (`build_product_resources.py`, lab commit 10c159b, record 6ad6198). The first resources of schema 7 (lab commit 9bb4284) had the slope of the grey scale of each stock; U89 replaced it with the fixed slope in the same layout, so only `film_print_setup.bin` changed.
+3. **Modules.** `include/edit/graph/film_print_model.hpp`, `edit/runtime/film/`, `film_print_math.h`, `film_print_plan.cpp`, the CUDA and OpenCL film print passes, the Metal pass (named stop), `app/film_stock_presentation.hpp`, `EditorDisplayTransformPanel.qml`, `FilmSwatch.qml`.
+4. **Data rules.** FP1 to FP5 do not change. Lab Scan reads no Enlarger flare and builds no flare canvas. The identifier stays in `params.film_print.print_material`.
+5. **Steps.** (a) Read schema 7. (b) Build the Status M table and the values of a scan selection on the host. (c) Add the scan form of FP6 to the shared math, CUDA, and OpenCL. (d) Add Lab Scan to the Print list and change the panel. (e) Stop on Metal with a named error until F11.
+6. **Success chain.** Lab Scan renders on CUDA and OpenCL; a slider change builds no table; a change between Lab Scan and a print material keeps the tables of both on the device.
+7. **Failure chain.** A missing or wrong resource array stops `FilmStockBundle::Open` with its name. On Metal Lab Scan stops with a named error. There is no change of backend and no change of form.
+8. **Tests.** Section "Tests" of the record below.
+9. **Exit criteria.** The limits of F3 and F4 on the four scan selections of the lab, on CUDA and OpenCL; the scan form costs no more than the print form.
+10. **Expected diff.** 1200 lines.
+11. **Completion record.** See below.
+
+#### F10 completion record (2026-11-04)
+
+**Call chain.** Host: `FilmPrintTables::Resolve -> ResolveScan -> ScanTableOf -> film_tables::Log10BandResponse`, and `film_print_kernel_tables::FillParams -> SelectionValuesOf -> FilmStockBundle::ScanSelection`. CUDA: `DrtPostExecutor::Execute -> CudaDrtOps::DispatchFilmPrint -> RecordCudaFilmPrint`; `ExposureKernel` with no entry gamut compression; FP2 to FP5 are unchanged; no flare canvas; `DisplayKernel`: `FilmKernelScanDisplay -> FilmKernelReadRecordTable -> FilmKernelCompressDisplay -> FilmKernelScanLogCurve -> FilmKernelSrgbDecode -> encoding`. OpenCL: `OpenClDrtOps::DispatchFilmPrint -> RecordOpenClFilmPrint -> film_print_exposure -> ... -> film_print_display`, with the same functions of `film_print_math.h`. Metal: `RecordMetalFilmPrint` throws `Film print: print material Lab Scan is not available on Metal yet (issue #662)` before it reads a table.
+
+**Changes from the plan, and details that the plan does not state.**
+
+- `FilmKernelParams` has the members `scan_grey`, `scan_slope`, `scan_log_s0`, `scan_log_w`, and `scan`; the size is 448 bytes, in the static checks of CUDA, OpenCL, and Metal. The scan form keeps the matrix from the equivalent exposure to linear Rec. 709 in `xyz_to_display`, as the light table form keeps its own matrix there.
+- The trilinear read of the print table is `FilmKernelReadRecordTable`, shared by `FilmKernelPrintDisplay` and `FilmKernelScanDisplay`. The compression of `FilmKernelFinishDisplay` is `FilmKernelCompressDisplay`, which the scan form calls with no clip. The arithmetic of the print and light table forms does not change: their ramp, chart, image, and ROI values are those of the F8 record.
+- The Status M table is the print table of a scan selection (`print_cube_root_xyz` and `print_rgba` hold the density, with no cube root), so the GPU passes bind it as a print table. It is kept by negative (`scan table` key), so the 11 scene lights share one GPU copy. The u'v' table and the kernel values have the keys of a print of the same negative and light, so a change between Lab Scan and a print material uploads nothing new once both are on the device. The kept stage of the light table and the Status M table is `RecordTableStage`.
+- `FilmStockBundle::Open` reads `lab_scan` from the metadata and stops when its identifier is empty or names a print material, or when a slope of the grey scale is not above 0.
+- `kFilmPrintMaterialIds` has `lab_scan` first; the shipped list of print materials is that list without it. `IsFilmLabScan(negative, print_material)` is the one rule of the form: the plan, the Metal stop, and the panel (`EditorParameterCatalogAdapter::filmIsLabScan`) call it.
+- A change of print material marks `FilmExposure`, as before. This is right for Lab Scan, because its entry has no gamut compression, so FP1 reads other values for a colour outside AP1. `LabScanAndAPrintMaterialChangeKeepTheResultsOfEachOther` renders a print, Lab Scan, the print, and Lab Scan again, and gets the same pixels each time.
+- `kFilmPrintImplementationVersion` does not change: the pixels of the other forms do not change, and `lab_scan` had no result before this phase.
+- The Metal lab cases skip the scan files, and `LabScanStopsWithTheNamedErrorUntilMetalHasTheScanForm` checks the stop. F11 (#662) removes both.
+- The header of `RecordCudaFilmPrint` said that the entry has no reference gamut compression. That was wrong since lab U80; it now states the compression and the exception of Lab Scan.
+- Lab values: `build_image_expected.py --scan-only` keeps the files of an earlier run, and those had schema 6, so the image cases stopped on `ap1.bin`. The full script (4 minutes) wrote all 14 files with schema 7.
+- The swatch of Lab Scan is the new shape `scan` of `FilmSwatch.qml`: the orange mask of a colour negative on a dark scanner bed, under a light bar.
+
+**Tests.** NVIDIA GeForce RTX 3080 Laptop GPU, Debug host build, resources of schema 7 (lab commit 10c159b, the fixed slope of U89) and the lab values of the same commit. The GPU fixtures read the copy in `config/film_print` next to the executable, which the post-build step writes only when the executable links again; after new resources with no code change, copy the resource directory there by hand.
+
+| Check | Result |
+| --- | --- |
+| `FilmPrintTablesTest` | 52 of 52 pass |
+| Status M table against the lab, 4 selections | relative difference 0 |
+| Scan setup against the lab arrays, 330 selections (30 negatives, 11 scene lights) | difference 0 |
+| Ramp against the lab, 4 scan selections, CUDA / OpenCL | largest 0.00034 / 0.00033 codes (limit 0.5) |
+| Chart against the reference, CUDA / OpenCL | largest 0.0187 / 0.0187 codes (limit 1); reference against the lab 0.0023 codes |
+| 6000 x 4006 image against the lab, CUDA | p99.9 / largest: 5207 0.328 / 0.891, Portra 400 0.391 / 0.962, Ektar 100 0.450 / 1.257, 5219 daylight 0.367 / 0.947 codes (limits 1 and 4); OpenCL within 0.0001 codes of these |
+| Viewport ROI inside the reach of the blurs, `kodak_5207` on Lab Scan, odd / even row | 0.029 / 0.0003 codes (limit 0.1), CUDA and OpenCL |
+| `LabScanFilmPrintMatchesCudaReferenceWithinTolerance` | pass: 5207 0.120, Gold 200 0.141, 5219 daylight 0.118 codes against CUDA (limit 1) |
+| Print and reversal cases of F3 to F8 | pass, with the values of the F8 record |
+| `CudaFilmPrintFixture` / `OpenClFilmPrintFixture` | 20 of 20 / 22 of 22 pass |
+| `GpuDagModelGraphTest` / `GpuDagRawInputTest` / `EditorParameterCatalogTest` | 171 / 226 / 36 pass |
+| `EditorDisplayTransformSnapshotQmlTest` | 22 of 22 pass |
+| AMD: `amd_opencl_check.py check --program opencl_dag_film_print` | builds on drivers 26.10.2, 26.6.2, 26.6.1 (gfx1030, gfx1100, gfx1103, gfx1201, gfx1010 legacy) |
+
+**Cost.** Release build, RTX 3080 Laptop, after a Halation change (`DISABLED_DrtCostRecordAtEditorSizes`). CUDA is the median GPU time; OpenCL is the median wall time to the end of the GPU work. Measured with the resources of lab commit 9bb4284; the fixed slope of U89 changes three values of the setup and not the work per pixel, so the cost was not measured again. In ms, print form / Lab Scan of the same negative:
+
+| Long edge | `kodak_5207` CUDA | `kodak_5207` OpenCL | `fuji_eterna_500` CUDA | `fuji_eterna_500` OpenCL | `kodak_ultramax_400` CUDA |
+| --- | --- | --- | --- | --- | --- |
+| 2560 | 4.24 / 3.77 | 4.44 / 3.96 | 2.68 / 2.19 | 2.65 / 2.04 | 4.23 / 3.77 |
+| 4096 | 12.86 / 11.62 | 12.21 / 11.80 | 6.41 / 5.50 | 5.51 / 4.84 | 13.18 / 11.36 |
+| 6000 | 18.24 / 17.29 | 17.30 / 16.23 | 18.42 / 17.25 | 13.72 / 11.93 | 18.35 / 16.98 |
+
+- Lab Scan costs less than the print form in each case: it has no flare canvas, and its display stage reads one table with no cube.
+- A first render of a new scan selection, with the Status M table and the u'v' table on the host, takes about 104 to 129 ms. The host Status M table alone takes 0.19 s in the Debug build.
+
+**Not verified.** Metal (F11; the Metal sources with the new size checks and the stop compile only on a Mac, and they were not compiled). After the resources of U89, only `FilmPrintTablesTest`, `CudaFilmPrintFixture`, `OpenClFilmPrintFixture`, and the film print cases of `GpuDagOpenClDrtProductTest` ran again; the other tests of the table read no scan values, and the code did not change. A render in the running application. A run on an AMD GPU. The packaged application with resources of schema 7. The user review of Lab Scan in the product. The full test suite did not run.
+
 ---
 
 ## 7. Risks
@@ -1118,3 +1201,5 @@ GPU time of each pass after a Light spread change at 2560, in ms, with one commi
 - F7: [#630](https://github.com/zidage/AlcedoStudio/issues/630)
 - F8: [#654](https://github.com/zidage/AlcedoStudio/issues/654)
 - F9: [#655](https://github.com/zidage/AlcedoStudio/issues/655)
+- F10: [#661](https://github.com/zidage/AlcedoStudio/issues/661)
+- F11: [#662](https://github.com/zidage/AlcedoStudio/issues/662)

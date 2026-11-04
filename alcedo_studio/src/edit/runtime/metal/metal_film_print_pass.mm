@@ -15,6 +15,7 @@
 
 #include <alcedo/metal/Metal.hpp>
 
+#include "edit/graph/film_print_model.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
@@ -35,7 +36,7 @@ static_assert(kFilmBlurMaxRadius == 128 && sizeof(FilmBlurKernel) == 1552);
 /// FILM_SLIDE of film_print.metal: the outputs of one thread of a blur pass.
 constexpr std::uint32_t kSlide = 8;
 static_assert(kFilmNarrowSpreadMaxRadius == 2 && sizeof(FilmNarrowKernel) == 76);
-static_assert(sizeof(FilmKernelParams) == 412);
+static_assert(sizeof(FilmKernelParams) == 448);
 static_assert(sizeof(Matrix3x3) == 36);
 static_assert(sizeof(FilmKernelRgb) == 12);
 
@@ -350,6 +351,11 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteMetalDrt");
   const auto  film        = drt.Params().FilmPrint();
+  // The scan form of FP6 has no Metal kernel yet: phase F11, issue #662. There is no substitute.
+  if (IsFilmLabScan(film.negative, film.print_material)) {
+    throw std::runtime_error(
+        "Film print: print material Lab Scan is not available on Metal yet (issue #662)");
+  }
   auto&       tables      = SharedFilmPrintTables();
   const auto  tables_data = tables.Resolve(film.negative, film.print_material, film.scene_light);
   const auto& bundle      = tables.Bundle();

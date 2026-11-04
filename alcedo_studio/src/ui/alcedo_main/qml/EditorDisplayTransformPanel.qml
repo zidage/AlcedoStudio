@@ -467,6 +467,9 @@ Item {
         var _dep = filmPrintMaterialModel.currentIndex
         return root.selectedValue(filmPrintMaterialModel, "print_material")
     }
+    // Lab Scan has no enlarger: the Enlarger Flare slider hides, and its stored value stays.
+    readonly property bool isLabScan: parameterCatalog.filmIsLabScan(root.selectedFilmValue,
+                                                                     root.selectedPrintMaterialValue)
 
     Connections {
         target: filmNegativeModel
@@ -724,6 +727,7 @@ Item {
                     AdjustmentSlider {
                         objectName: "displayFilmEnlargerFlareSlider"
                         Layout.fillWidth: true
+                        visible: !root.isLabScan
                         model: filmEnlargerFlareModel
                         flickable: displayScroll
                     }

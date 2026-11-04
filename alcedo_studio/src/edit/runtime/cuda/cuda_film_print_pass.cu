@@ -139,8 +139,14 @@ __global__ void ExposureKernel(const float4* input, float3* output, std::uint32_
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixels) return;
   const float4 source = input[index];
-  // Input is linear AP1. The final colour space is not known here, so a colour that a grade moved
-  // out of AP1 comes back at this point, as in DrtKernel.
+  // Input is linear AP1. The final colour space of a print is not known here, so a colour that a
+  // grade moved out of AP1 comes back at this point, as in DrtKernel (lab rule
+  // 'entry_reference_gamut_compression'). Lab Scan has no such step.
+  if (params.scan != 0U) {
+    const auto q  = FilmKernelLayerExposure(&params, values, source.x, source.y, source.z);
+    output[index] = make_float3(q.r, q.g, q.b);
+    return;
+  }
   const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const auto q = FilmKernelLayerExposure(&params, values, compressed.r, compressed.g, compressed.b);
   output[index]       = make_float3(q.r, q.g, q.b);
@@ -493,7 +499,8 @@ __global__ void AmountsReduceKernel(const float3* amounts, int width, int height
   reduced[i * columns + j] = make_float3(r * scale, g * scale, b * scale);
 }
 
-/// FP6, fused. @p flare is null when the Enlarger flare is off. Alpha comes from @p scene. @p soft
+/// FP6, fused. @p flare is null when the Enlarger flare is off, and always on Lab Scan. Alpha comes
+/// from @p scene. @p soft
 /// is the blurred amounts of rule 'negative_show_grade', null with no image plane, and half size
 /// when @p soft_half_size is true. On a light table, @p flare is the blurred display light of the
 /// loupe flare, and @p soft is not read.
@@ -509,6 +516,14 @@ __global__ void DisplayKernel(const float3* amounts, const float4* scene, float4
   const float3  a      = amounts[index];
   FilmKernelRgb record = FilmKernelMakeRgb(a.x, a.y, a.z);
   const int     tf     = static_cast<int>(params.display_encoding);
+  if (params.scan != 0U) {
+    // Lab Scan: @p print_rgba is the Status M table, and there is no flare and no grade.
+    const auto linear = FilmKernelScanDisplay(&params, print_rgba, record);
+    output[index]     = make_float4(CeDisplayEncodeChannel(tf, linear.r, 1.0f),
+                                    CeDisplayEncodeChannel(tf, linear.g, 1.0f),
+                                    CeDisplayEncodeChannel(tf, linear.b, 1.0f), scene[index].w);
+    return;
+  }
   if (params.light_table != 0U) {
     // Lab rules 'light_table_view', 'loupe_flare', and 'dark_surround_on_display' in display light.
     auto light = FilmKernelPrintDisplay(&params, print_rgba, record);

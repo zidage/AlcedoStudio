@@ -24,12 +24,14 @@ struct FilmPrintPassTime {
 /**
  * @brief Record the film print display transform of @p drt: @p scene (linear AP1) to @p display.
  *
- * Steps FP1 to FP6 of the Film Print DRT Plan. The entry has no reference gamut compression.
- * Resolves the tables of the selection on this thread, so a new selection takes about 0.5 s here.
- * Does not wait for the GPU, unless @p pass_times is set.
+ * Steps FP1 to FP6 of the Film Print DRT Plan. The entry has the ACES reference gamut compression,
+ * except on Lab Scan. Resolves the tables of the selection on this thread, so a new selection takes
+ * about 0.5 s here. Does not wait for the GPU, unless @p pass_times is set.
  *
  * A colour reversal film has the light table form of FP6: the light table in place of the print
- * table, then the loupe flare and the surround in linear display light.
+ * table, then the loupe flare and the surround in linear display light. Print material Lab Scan
+ * has the scan form of FP6: the Status M table in place of the print table, the inversion of the
+ * chart scan, and the log curve, with no Enlarger flare.
  *
  * Halation and Enlarger flare read the canonical results of `FilmHalationResultId` and
  * `FilmFlareResultId`, and the loupe flare of a reversal film reads `FilmLoupeFlareResultId`: a

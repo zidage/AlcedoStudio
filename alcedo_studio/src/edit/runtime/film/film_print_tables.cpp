@@ -185,6 +185,7 @@ void FilmPrintTables::RemoveOldestAboveLimit() {
     find_oldest(negative_stages_);
     find_oldest(paper_stages_);
     find_oldest(light_tables_);
+    find_oldest(scan_tables_);
     find_oldest(results_);
     const auto remove_oldest = [&oldest, this](auto& kept) {
       for (auto entry = kept.begin(); entry != kept.end(); ++entry) {
@@ -198,6 +199,7 @@ void FilmPrintTables::RemoveOldestAboveLimit() {
     remove_oldest(negative_stages_);
     remove_oldest(paper_stages_);
     remove_oldest(light_tables_);
+    remove_oldest(scan_tables_);
     remove_oldest(results_);
   }
 }
@@ -272,7 +274,7 @@ auto FilmPrintTables::PaperStageOf(std::string_view print_material)
 }
 
 auto FilmPrintTables::LightTableOf(std::string_view reversal)
-    -> std::shared_ptr<const LightTableStage> {
+    -> std::shared_ptr<const RecordTableStage> {
   const auto key = ContentHash{}
                        .MixU32(kTableImplementationVersion)
                        .MixText("light table")
@@ -305,15 +307,76 @@ auto FilmPrintTables::LightTableOf(std::string_view reversal)
       }
     }
   }
-  auto stage = std::make_shared<LightTableStage>();
+  auto stage = std::make_shared<RecordTableStage>();
   stage->key = key;
-  stage->cube_root_xyz.resize(kTableValues);
+  stage->values.resize(kTableValues);
   film_tables::CubeRootBandResponse(band.View(), view.xyz_scale, amounts.data(), kTableNodes,
-                                    stage->cube_root_xyz.data());
+                                    stage->values.data());
   ++stats_.light_table_builds;
   stats_.last_light_table_seconds = SecondsSince(start);
-  const auto bytes                = stage->cube_root_xyz.size() * sizeof(double);
-  Keep<LightTableStage>(light_tables_, key, stage, bytes);
+  const auto bytes                = stage->values.size() * sizeof(double);
+  Keep<RecordTableStage>(light_tables_, key, stage, bytes);
+  return stage;
+}
+
+auto FilmPrintTables::ScanTableOf(std::string_view negative)
+    -> std::shared_ptr<const RecordTableStage> {
+  const auto key = ContentHash{}
+                       .MixU32(kTableImplementationVersion)
+                       .MixText("scan table")
+                       .MixText(bundle_->ContentDigest())
+                       .MixText(negative)
+                       .Key();
+  if (auto kept = Find(scan_tables_, key)) {
+    return kept;
+  }
+  const auto  start   = std::chrono::steady_clock::now();
+  const auto  stock   = bundle_->Negative(negative);
+  const auto  weights = bundle_->ScanConstants().status_m_weights;
+  const auto  band    = MakeBandOnSupport(stock.base, stock.dyes, weights);
+
+  // With rule 'dye_amount_curves' of the lab, the nodes of the negative record are the dye amounts,
+  // as in the negative stage of the print table.
+  std::vector<double> amounts(kTableValues);
+  std::size_t         out = 0;
+  for (std::int64_t r = 0; r < kFilmPrintTableEdge; ++r) {
+    const auto red = GridNode(stock.density_grid_start[0], stock.density_grid_stop[0], r);
+    for (std::int64_t g = 0; g < kFilmPrintTableEdge; ++g) {
+      const auto green = GridNode(stock.density_grid_start[1], stock.density_grid_stop[1], g);
+      for (std::int64_t b = 0; b < kFilmPrintTableEdge; ++b) {
+        amounts[out++] = red;
+        amounts[out++] = green;
+        amounts[out++] = GridNode(stock.density_grid_start[2], stock.density_grid_stop[2], b);
+      }
+    }
+  }
+  // Lab rule 'scan_light' (equation 1 of ST 2065-2 with the Status M weights):
+  // D = log10(sum w) - log10(sum w 10^-(base + dyes a)).
+  const auto            wavelengths = static_cast<std::size_t>(bundle_->Wavelengths());
+  std::array<double, 3> log_weight_sum{};
+  for (std::size_t k = 0; k < film_tables::kLayers; ++k) {
+    double sum = 0.0;
+    for (std::size_t w = 0; w < wavelengths; ++w) {
+      sum += weights[k * wavelengths + w];
+    }
+    if (!(sum > 0.0)) {
+      throw std::runtime_error("Film print resource: a Status M weight of the scan has no sum");
+    }
+    log_weight_sum[k] = std::log10(sum);
+  }
+  auto stage = std::make_shared<RecordTableStage>();
+  stage->key = key;
+  stage->values.resize(kTableValues);
+  film_tables::Log10BandResponse(band.View(), amounts.data(), kTableNodes,
+                                 stage->values.data());
+  for (std::size_t index = 0; index < stage->values.size(); ++index) {
+    stage->values[index] =
+        log_weight_sum[index % film_tables::kLayers] - stage->values[index];
+  }
+  ++stats_.scan_table_builds;
+  stats_.last_scan_table_seconds = SecondsSince(start);
+  const auto bytes               = stage->values.size() * sizeof(double);
+  Keep<RecordTableStage>(scan_tables_, key, stage, bytes);
   return stage;
 }
 
@@ -386,7 +449,7 @@ auto FilmPrintTables::ResolveReversal(std::string_view reversal, std::string_vie
   // The light table depends on the film only, so all scene lights share its GPU copy.
   const auto light_table      = LightTableOf(reversal);
   result->print_key           = light_table->key;
-  result->print_cube_root_xyz = light_table->cube_root_xyz;
+  result->print_cube_root_xyz = light_table->values;
   if (!AllFinite(result->uv_exposure) || !AllFinite(result->print_cube_root_xyz)) {
     throw std::runtime_error("Film print: a table of the reversal film " + std::string(reversal) +
                              " under " + std::string(scene_light) +
@@ -400,12 +463,69 @@ auto FilmPrintTables::ResolveReversal(std::string_view reversal, std::string_vie
   return result;
 }
 
+auto FilmPrintTables::ResolveScan(std::string_view negative, std::string_view scene_light)
+    -> std::shared_ptr<const FilmPrintTableData> {
+  const auto result_key = ContentHash{}
+                              .MixU32(kTableImplementationVersion)
+                              .MixText("scan selection")
+                              .MixText(bundle_->ContentDigest())
+                              .MixText(negative)
+                              .MixText(scene_light)
+                              .Key();
+  if (auto kept = Find(results_, result_key)) {
+    return kept;
+  }
+  const auto setup  = bundle_->ScanSelection(negative, scene_light);
+  const auto stock  = bundle_->Negative(negative);
+
+  auto       result = std::make_shared<FilmPrintTableData>();
+  result->uv_nodes  = bundle_->UvNodes();
+  result->edge      = static_cast<std::uint32_t>(kFilmPrintTableEdge);
+  result->scan      = true;
+  // The u'v' table and the kernel values are those of a print of the same negative and light, so
+  // a change between Lab Scan and a print material keeps their GPU copies.
+  result->uv_key    = ContentHash{}
+                       .MixU32(kTableImplementationVersion)
+                       .MixText("uv table")
+                       .MixText(bundle_->ContentDigest())
+                       .MixText(negative)
+                       .MixText(scene_light)
+                       .Key();
+  result->kernel_key = ContentHash{}
+                           .MixU32(kTableImplementationVersion)
+                           .MixText("kernel values")
+                           .MixText(bundle_->ContentDigest())
+                           .MixText(negative)
+                           .MixText(scene_light)
+                           .Key();
+  BuildUvTable(stock.exposure_weights, setup.scene_spectrum, *result);
+
+  // The Status M table depends on the negative only, so all scene lights share its GPU copy.
+  const auto scan_table       = ScanTableOf(negative);
+  result->print_key           = scan_table->key;
+  result->print_cube_root_xyz = scan_table->values;
+  if (!AllFinite(result->uv_exposure) || !AllFinite(result->print_cube_root_xyz)) {
+    throw std::runtime_error("Film print: a table of the scan of " + std::string(negative) +
+                             " under " + std::string(scene_light) +
+                             " has a value that is not finite");
+  }
+  result->print_rgba = PackPrintRgba(result->print_cube_root_xyz);
+  result->kernel_values =
+      film_print_kernel_tables::MakeValues<float>(*bundle_, negative, result->uv_exposure);
+  const auto bytes = result->ByteSize();
+  Keep<FilmPrintTableData>(results_, result_key, result, bytes);
+  return result;
+}
+
 auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_material,
                               std::string_view scene_light)
     -> std::shared_ptr<const FilmPrintTableData> {
   std::lock_guard<std::mutex> lock(mutex_);
   if (bundle_->IsReversal(negative)) {
     return ResolveReversal(negative, scene_light);
+  }
+  if (bundle_->IsLabScan(print_material)) {
+    return ResolveScan(negative, scene_light);
   }
   const auto print_key = ContentHash{}
                              .MixU32(kTableImplementationVersion)
