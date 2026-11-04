@@ -15,7 +15,6 @@
 
 #include <alcedo/metal/Metal.hpp>
 
-#include "edit/graph/film_print_model.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
@@ -261,20 +260,31 @@ void BlurVerticalToTexture(const Recording& r, const Plane& src, MTL::Texture* d
       .RunDown(size.width, size.height);
 }
 
-/// The Halation form reads exposure; the flare form reads amounts and writes transmittance.
+/// What a canvas holds. The same values as CanvasValue of the CUDA and OpenCL passes.
+enum class CanvasValue {
+  kValue,          ///< The exposure, for Halation
+  kTransmittance,  ///< 10^-a of the amounts, for the Enlarger flare of a print
+  kDisplayLight,   ///< Linear display light of the light table, for the loupe flare
+};
+
+/// @p print_rgba and @p params are read only for CanvasValue::kDisplayLight.
 void CanvasReduce(const Recording& r, const Plane& src, Size size, const Plane& dst,
                   ImageExtent extent, const Matrix3x3& canvas_to_render, std::uint32_t samples,
-                  bool transmittance) {
-  const auto samples_value = static_cast<std::int32_t>(samples);
-  Dispatch(r.device, transmittance ? "film_print_canvas_reduce_transmittance"
-                                   : "film_print_canvas_reduce_exposure")
-      .Buffer(0, src)
+                  CanvasValue value, void* print_rgba, const FilmKernelParams& params) {
+  const auto  samples_value = static_cast<std::int32_t>(samples);
+  const char* function =
+      value == CanvasValue::kTransmittance  ? "film_print_canvas_reduce_transmittance"
+      : value == CanvasValue::kDisplayLight ? "film_print_canvas_reduce_display_light"
+                                            : "film_print_canvas_reduce_exposure";
+  Dispatch dispatch(r.device, function);
+  dispatch.Buffer(0, src)
       .Buffer(1, dst)
       .Bytes(2, size)
       .Bytes(3, MakeSize(extent))
       .Bytes(4, canvas_to_render)
-      .Bytes(5, samples_value)
-      .Run(extent.width, extent.height);
+      .Bytes(5, samples_value);
+  if (value == CanvasValue::kDisplayLight) dispatch.Buffer(6, print_rgba).Bytes(7, params);
+  dispatch.Run(extent.width, extent.height);
 }
 
 using Lease = ResourceLease<MetalBackend>;
@@ -340,12 +350,6 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteMetalDrt");
   const auto  film        = drt.Params().FilmPrint();
-  // The light table form of FP6 has no Metal passes yet (issue #655). There is no substitute form.
-  if (IsFilmReversalIdentifier(film.negative)) {
-    throw std::runtime_error("RecordMetalFilmPrint: the colour reversal film '" + film.negative +
-                             "' needs the light table passes, which the Metal backend does not "
-                             "have");
-  }
   auto&       tables      = SharedFilmPrintTables();
   const auto  tables_data = tables.Resolve(film.negative, film.print_material, film.scene_light);
   const auto& bundle      = tables.Bundle();
@@ -373,14 +377,14 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   // The previous render has completed (BeginRender), so an idle slab has no queued work.
   workspace.TransientBuffers().ReleaseIdleSlabsWhenNoneHolds(
       PlaneBytes(width, height, PlaneForm::Float));
-  const Recording recording{device};
-  const Size      size        = MakeSize(width, height);
-  void*           values      = table.native;
-  void*           print_rgba  = print.native;
-  auto&           scene_image = MetalSceneTexture(device, scene);
+  const Recording     recording{device};
+  const Size          size        = MakeSize(width, height);
+  void*               values      = table.native;
+  void*               print_rgba  = print.native;
+  auto&               scene_image = MetalSceneTexture(device, scene);
   // A texture argument that a dispatch does not read gets the scene, which it may read.
-  MTL::Texture*   unused      = Native(scene_image);
-  PassNames       names(pass_names);
+  MTL::Texture*       unused      = Native(scene_image);
+  PassNames           names(pass_names);
 
   // FP1. The alpha mark: see film_print_display.
   Plane               q          = AllocatePlane(device, width, height, PlaneForm::Float);
@@ -449,7 +453,7 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
           const Plane reduced = AllocatePlane(device, canvas.width, canvas.height, PlaneForm::Half);
           const Plane middle  = AllocatePlane(device, canvas.width, canvas.height, PlaneForm::Half);
           CanvasReduce(recording, q, size, reduced, canvas, image.canvas_to_render,
-                       image.canvas_samples, false);
+                       image.canvas_samples, CanvasValue::kValue, print_rgba, params);
           BlurHorizontal(recording, PlaneForm::Half, PlaneForm::Half, reduced, middle, canvas_size,
                          image.halation_x);
           BlurVerticalToTexture(recording, middle, target, canvas_size, image.halation_y);
@@ -465,8 +469,8 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   if (inhibitor_blur && image.inhibitor_half_size) {
     // Only the last step writes full-size amounts. The first amounts and the first step write the
     // box mean directly.
-    const auto         extent     = image.inhibitor_extent;
-    const Size         cells      = MakeSize(extent);
+    const auto  extent  = image.inhibitor_extent;
+    const Size  cells   = MakeSize(extent);
     const Plane reduced = AllocatePlane(device, extent.width, extent.height, PlaneForm::Half);
     const Plane middle  = AllocatePlane(device, extent.width, extent.height, PlaneForm::Half);
     const std::int32_t has_canvas = image.halation_active ? 1 : 0;
@@ -569,8 +573,8 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   // Rule 'negative_show_grade': the blurred amounts, before the flare of FP6.
   std::optional<Plane> soft;
   if (image.image_plane && params.negative_grade != 0U) {
-    const auto extent = image.inhibitor_extent;
-    const Size cells  = MakeSize(extent);
+    const auto extent      = image.inhibitor_extent;
+    const Size cells       = MakeSize(extent);
     Plane      source      = a;
     PlaneForm  source_form = PlaneForm::Float;
     if (image.inhibitor_half_size) {
@@ -592,18 +596,23 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
     names.Mark("FP6 blurred amounts of the negative grade");
   }
 
-  // FP6: the canonical texture of the blurred transmittance, then the fused point stages.
+  // FP6: the canonical texture of the blurred transmittance, or on a light table of the blurred
+  // display light, then the fused point stages.
   std::optional<Lease> temporary_flare;
-  MTL::Texture*        flare = unused;
+  MTL::Texture*        flare       = unused;
+  const bool           light_table = params.light_table != 0U;
   if (image.flare_active) {
     const auto extent = image.flare_extent;
     const Size cells  = MakeSize(extent);
+    const auto id     = light_table ? FilmLoupeFlareResultId(plan.drt.node_id)
+                                    : FilmFlareResultId(plan.drt.node_id);
     flare             = ReadOrBuildCanvasResult(
-        device, plan, FilmFlareResultId(plan.drt.node_id), extent, long_edge, temporary_flare,
-        [&](MTL::Texture* target) {
+        device, plan, id, extent, long_edge, temporary_flare, [&](MTL::Texture* target) {
           const Plane reduced = AllocatePlane(device, canvas.width, canvas.height, PlaneForm::Half);
           CanvasReduce(recording, a, size, reduced, canvas, image.canvas_to_render,
-                                   image.canvas_samples, true);
+                                   image.canvas_samples,
+                       light_table ? CanvasValue::kDisplayLight : CanvasValue::kTransmittance,
+                                   print_rgba, params);
           const Plane middle = AllocatePlane(device, extent.width, extent.height, PlaneForm::Half);
           // A canvas with a small flare sigma has no second reduction.
           Plane       source = reduced;
