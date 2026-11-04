@@ -6,9 +6,9 @@ import Alcedo.Main 1.0
 // Phase 6E Display Transform panel: output color-space selection, CST/ODT,
 // ACES tone mapping, transfer function (EOTF), peak luminance, and HDR
 // display intent. Method-specific controls for ACES 2.0 (limiting space) and
-// OpenDRT (look/tonescale/creative-white presets), and the film print (film,
-// print material, scene light, three sliders; Rec. 709 SDR output, so its page
-// has no encoding controls). All models share fieldKey
+// OpenDRT (look/tonescale/creative-white presets), and the film print (process
+// switch, film and print material browsers, scene light, three sliders; Rec. 709
+// SDR output, so its page has no encoding controls). All models share fieldKey
 // "odt" with a panel-level paramsBuilder that collects the complete state so
 // every partial edit carries the full ODT JSON. The option lists, the EOTF
 // choices of each encoding space, the peak range, and the parameter object
@@ -50,6 +50,41 @@ Item {
 
     function catalogEntries(name) {
         return root.translatedEntries(parameterCatalog.options("odt", name))
+    }
+
+    // ── Film print browser data (issue #657) ─────────────────────────────────
+    readonly property var filmBrands: parameterCatalog.filmBrands()
+    readonly property var negativeBrowserEntries: parameterCatalog.filmBrowserEntries("negative")
+    readonly property var reversalBrowserEntries: parameterCatalog.filmBrowserEntries("reversal")
+    readonly property var printBrowserEntries: parameterCatalog.filmBrowserEntries("print")
+    /// The last film of each process in this panel session. A change of process selects it.
+    property var lastFilmOfProcess: ({ negative: "", reversal: "" })
+
+    /// Translated family caption of the film print browser.
+    function filmFamilyText(family) {
+        return qsTr(String(family))
+    }
+
+    /// Select film @p value through the Film model (one write of the complete ODT state).
+    function selectFilm(value) {
+        const index = root.indexOfValue(filmNegativeModel.entries, value)
+        if (index >= 0 && index !== filmNegativeModel.currentIndex)
+            filmNegativeModel.selectIndex(index)
+    }
+
+    function selectPrintMaterial(value) {
+        const index = root.indexOfValue(filmPrintMaterialModel.entries, value)
+        if (index >= 0 && index !== filmPrintMaterialModel.currentIndex)
+            filmPrintMaterialModel.selectIndex(index)
+    }
+
+    /// A change of process selects the last film of that process, else its default film. The
+    /// stored print material does not change.
+    function selectFilmProcess(process) {
+        if (process === root.filmProcess)
+            return
+        const last = String(root.lastFilmOfProcess[process] || "")
+        root.selectFilm(last.length > 0 ? last : parameterCatalog.filmDefault(process))
     }
 
     /// EOTF choices of the display transform for an encoding space.
@@ -422,6 +457,24 @@ Item {
         var _dep = filmNegativeModel.currentIndex
         return parameterCatalog.filmIsReversal(root.selectedValue(filmNegativeModel, "negative"))
     }
+    /// Process of the stored film. The document does not store it.
+    readonly property string filmProcess: root.isReversalFilm ? "reversal" : "negative"
+    readonly property string selectedFilmValue: {
+        var _dep = filmNegativeModel.currentIndex
+        return root.selectedValue(filmNegativeModel, "negative")
+    }
+    readonly property string selectedPrintMaterialValue: {
+        var _dep = filmPrintMaterialModel.currentIndex
+        return root.selectedValue(filmPrintMaterialModel, "print_material")
+    }
+
+    Connections {
+        target: filmNegativeModel
+        function onCurrentIndexChanged() {
+            const film = root.selectedValue(filmNegativeModel, "negative")
+            root.lastFilmOfProcess[parameterCatalog.filmIsReversal(film) ? "reversal" : "negative"] = film
+        }
+    }
 
     // Encoding space drives the EOTF option table (user select + snapshot load).
     Connections {
@@ -566,17 +619,86 @@ Item {
                     spacing: appTheme.spaceSm
                     visible: root.isFilmPrint
 
-                    AdjustmentCombo {
-                        objectName: "displayFilmNegativeCombo"
+                    // Process: derived from the stored film, not stored.
+                    SegmentedCardSwitcher {
+                        objectName: "displayFilmProcessTrack"
                         Layout.fillWidth: true
-                        model: filmNegativeModel
+                        entries: [
+                            { value: "negative", label: qsTr("Negative"),
+                              shape: "photo_negative", colors: ["#c9772f", "#7a3a17"] },
+                            { value: "reversal", label: qsTr("Reversal"),
+                              shape: "reversal", colors: ["#2d6fd6", "#8edcf0"] }
+                        ]
+                        currentValue: root.filmProcess
+                        enabled: root.controlsEnabled
+                        trackColor: root.colBase
+                        trackBorderColor: root.colCardBorder
+                        textColor: root.colText
+                        hoverColor: root.colHover
+                        segmentDecoration: Component {
+                            FilmSwatch {
+                                readonly property var segmentEntry: parent ? parent.entry : null
+                                readonly property bool slide: segmentEntry !== null
+                                                              && segmentEntry.shape === "reversal"
+                                width: slide ? 13 : 16
+                                height: slide ? 13 : 11
+                                cornerRadius: 2
+                                shape: segmentEntry ? segmentEntry.shape : ""
+                                colors: segmentEntry ? segmentEntry.colors : []
+                            }
+                        }
+                        onSelected: function(index, value) { root.selectFilmProcess(value) }
                     }
 
-                    AdjustmentCombo {
-                        objectName: "displayFilmPrintMaterialCombo"
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.topMargin: appTheme.spaceXs
+                        text: qsTr("Film")
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeCaption
+                        font.weight: appTheme.fontWeightStrong
+                    }
+
+                    FilmStockPicker {
+                        objectName: "displayFilmNegativePicker"
+                        Layout.fillWidth: true
+                        entries: root.isReversalFilm ? root.reversalBrowserEntries
+                                                     : root.negativeBrowserEntries
+                        brands: root.filmBrands
+                        currentValue: root.selectedFilmValue
+                        controlsEnabled: root.controlsEnabled
+                        accessibleName: qsTr("Film")
+                        searchPlaceholder: qsTr("Search films")
+                        emptyText: qsTr("No films match")
+                        familyText: root.filmFamilyText
+                        onPicked: function(value) { root.selectFilm(value) }
+                    }
+
+                    // A colour reversal film has no print: the page has no print section.
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.topMargin: appTheme.spaceXs
+                        visible: !root.isReversalFilm
+                        text: qsTr("Print")
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeCaption
+                        font.weight: appTheme.fontWeightStrong
+                    }
+
+                    FilmStockPicker {
+                        objectName: "displayFilmPrintMaterialPicker"
                         Layout.fillWidth: true
                         visible: !root.isReversalFilm
-                        model: filmPrintMaterialModel
+                        entries: root.printBrowserEntries
+                        brands: root.filmBrands
+                        currentValue: root.selectedPrintMaterialValue
+                        controlsEnabled: root.controlsEnabled
+                        showFamilyOnCard: true
+                        accessibleName: qsTr("Print Material")
+                        searchPlaceholder: qsTr("Search print materials")
+                        emptyText: qsTr("No print materials match")
+                        familyText: root.filmFamilyText
+                        onPicked: function(value) { root.selectPrintMaterial(value) }
                     }
 
                     AdjustmentCombo {

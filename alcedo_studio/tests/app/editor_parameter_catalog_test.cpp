@@ -27,6 +27,7 @@
 #include "app/editor_adjustment_context.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_parameter_write.hpp"
+#include "app/film_stock_presentation.hpp"
 #include "edit/geometry/crop_frame.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/drt_node_model.hpp"
@@ -731,6 +732,73 @@ TEST(EditorParameterCatalogTest, FilmPrintOptionsAreTheIdentifiersOfTheDocumentM
   expect_ids("print_material", kFilmPrintMaterialIds);
   expect_ids("scene_light", kFilmSceneLightIds);
   EXPECT_EQ(EditorParameterCatalog::UiDefault(*entry).at("method"), "open_drt");
+}
+
+TEST(EditorParameterCatalogTest, FilmBrowserHasOneEntryForEachFilmAndPrintMaterial) {
+  const auto expect_list = [](const auto& ids, FilmBrowserList list) {
+    for (const auto id : ids) {
+      const auto count =
+          std::count_if(kFilmPresentations.begin(), kFilmPresentations.end(),
+                        [&](const FilmPresentation& entry) { return entry.id == id; });
+      EXPECT_EQ(count, 1) << id;
+      const auto entry = FindFilmPresentation(id);
+      ASSERT_TRUE(entry.has_value()) << id;
+      EXPECT_EQ(entry->list, list) << id;
+    }
+  };
+  expect_list(kFilmNegativeIds, FilmBrowserList::Negative);
+  expect_list(kFilmReversalIds, FilmBrowserList::Reversal);
+  expect_list(kFilmPrintMaterialIds, FilmBrowserList::Print);
+  EXPECT_EQ(kFilmPresentations.size(),
+            kFilmNegativeIds.size() + kFilmReversalIds.size() + kFilmPrintMaterialIds.size());
+
+  // The browser text has no middle dot (U+00B7), by user decision.
+  constexpr std::string_view kMiddleDot = "\xC2\xB7";
+  std::set<std::string_view> brands;
+  for (const auto& brand : kFilmBrands) {
+    brands.insert(brand.name);
+  }
+  for (const auto& entry : kFilmPresentations) {
+    EXPECT_FALSE(entry.short_label.empty()) << entry.id;
+    EXPECT_GE(entry.color_count, 1U) << entry.id;
+    EXPECT_LE(entry.color_count, entry.colors.size()) << entry.id;
+    for (std::size_t i = 0; i < entry.color_count; ++i) {
+      EXPECT_LE(entry.colors[i], 0xFFFFFFU) << entry.id;
+    }
+    // Only Cine Look is above the brand groups.
+    if (entry.id == "cine_look") {
+      EXPECT_TRUE(entry.brand.empty());
+    } else {
+      EXPECT_TRUE(brands.contains(entry.brand)) << entry.id;
+    }
+    EXPECT_EQ(entry.shape == FilmSwatchShape::Reversal, entry.list == FilmBrowserList::Reversal)
+        << entry.id;
+    EXPECT_EQ(entry.short_label.find(kMiddleDot), std::string_view::npos) << entry.id;
+    EXPECT_EQ(entry.family.find(kMiddleDot), std::string_view::npos) << entry.id;
+  }
+
+  // In each list, the entries of one brand are together, in the order of kFilmBrands.
+  for (const auto list :
+       {FilmBrowserList::Negative, FilmBrowserList::Reversal, FilmBrowserList::Print}) {
+    std::vector<std::string_view> order;
+    for (const auto& entry : kFilmPresentations) {
+      if (entry.list == list && (order.empty() || order.back() != entry.brand)) {
+        order.push_back(entry.brand);
+      }
+    }
+    std::set<std::string_view> seen(order.begin(), order.end());
+    EXPECT_EQ(seen.size(), order.size()) << "a brand is in two groups";
+  }
+
+  // A change of process selects these films first.
+  EXPECT_EQ(FindFilmPresentation(kFilmDefaultNegative)->list, FilmBrowserList::Negative);
+  EXPECT_EQ(FindFilmPresentation(kFilmDefaultReversal)->list, FilmBrowserList::Reversal);
+  EXPECT_EQ(kFilmDefaultNegative, FilmPrintParams{}.negative);
+  // All Portra films have the same colours.
+  EXPECT_EQ(FindFilmPresentation("kodak_portra_400")->colors,
+            FindFilmPresentation("kodak_portra_160")->colors);
+  EXPECT_EQ(FindFilmPresentation("kodak_portra_400")->colors,
+            FindFilmPresentation("kodak_portra_800")->colors);
 }
 
 TEST(EditorParameterCatalogTest, FilmPrintWriteOfAReversalFilmKeepsThePrintMaterial) {
