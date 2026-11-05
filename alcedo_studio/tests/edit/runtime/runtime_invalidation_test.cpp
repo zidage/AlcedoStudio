@@ -192,6 +192,49 @@ TEST(RuntimeInvalidation, DiffusionAndSceneChangesInvalidateFilmPrintResults) {
   EXPECT_EQ(harness.Required(flare), harness.Required(halation));
 }
 
+TEST(RuntimeInvalidation, ScanPrescanFollowsTheAmountsAndTheScannerAndNoRenderingSetting) {
+  // The prescan of Negative Scan (issue 664) is the scan density of the amounts after Halation: the
+  // exposure fields, Halation, and the scanner change it; a rendering setting of the scan and the
+  // Enlarger flare do not.
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto prescan = FilmScanPrescanResultId(harness.plan.drt.node_id);
+  EXPECT_TRUE(IsFilmPrintResultPort(prescan));
+  EXPECT_GT(harness.Required(prescan), 0U);
+  const auto expect_invalidates = [&](bool changes, auto&& change) {
+    const auto         before  = harness.Required(prescan);
+    const auto         display = harness.Required(harness.plan.display_output);
+    DrtParameterUpdate update;
+    change(update);
+    harness.document.Drt()->Params().ApplyUpdate(update);
+    harness.Collect();
+    if (changes) {
+      EXPECT_GT(harness.Required(prescan), before);
+    } else {
+      EXPECT_EQ(harness.Required(prescan), before);
+    }
+    EXPECT_GT(harness.Required(harness.plan.display_output), display);
+  };
+  expect_invalidates(true, [](DrtParameterUpdate& update) {
+    update.film_print_material = std::string{kFilmNegativeScanId};
+  });
+  expect_invalidates(true, [](DrtParameterUpdate& update) { update.film_halation = 2.0f; });
+  expect_invalidates(true, [](DrtParameterUpdate& update) { update.film_light_spread = 2.0f; });
+  expect_invalidates(true,
+                     [](DrtParameterUpdate& update) { update.film_scanner_red_nm = 630.0f; });
+  expect_invalidates(true, [](DrtParameterUpdate& update) {
+    update.film_scanner_light = std::string{"equal_energy"};
+  });
+  expect_invalidates(false, [](DrtParameterUpdate& update) {
+    update.film_scan_auto = std::string{"neutral"};
+  });
+  expect_invalidates(false, [](DrtParameterUpdate& update) { update.film_scan_contrast = 1.2f; });
+  expect_invalidates(false, [](DrtParameterUpdate& update) { update.film_scan_cyan = 0.05f; });
+  expect_invalidates(false, [](DrtParameterUpdate& update) { update.film_scan_black = 0.5f; });
+  expect_invalidates(false,
+                     [](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.02f; });
+}
+
 TEST(RuntimeInvalidation, FilmPrintResultsFollowANewDrtInput) {
   ValidityHarness harness;
   harness.Collect();
@@ -214,7 +257,8 @@ TEST(RuntimeInvalidation, FilmPrintResultsUseTheCanonicalIdentityOfTheScatterIma
       DiffusionScatterId(harness.plan.drt.node_id), extent, TextureFormat::Rgba32f);
   for (const auto& id :
        {FilmHalationResultId(harness.plan.drt.node_id), FilmFlareResultId(harness.plan.drt.node_id),
-        FilmLoupeFlareResultId(harness.plan.drt.node_id)}) {
+        FilmLoupeFlareResultId(harness.plan.drt.node_id),
+        FilmScanPrescanResultId(harness.plan.drt.node_id)}) {
     EXPECT_TRUE(IsFilmPrintResultPort(id));
     EXPECT_EQ(
         harness.invalidation.MakeImageRepresentation(id, extent, TextureFormat::Rgba32f).identity,

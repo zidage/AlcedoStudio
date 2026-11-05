@@ -23,10 +23,12 @@ namespace alcedo {
  *
  * Steps FP1 to FP6 of the Film Print DRT Plan, with the rules of `RecordCudaFilmPrint`. The images
  * between the steps are allocations in the transient arena of the render, with 3 floats per pixel.
- * Resolves the tables of the selection on this thread. Does not wait for the GPU.
+ * Resolves the tables of the selection on this thread. Does not wait for the GPU, except on
+ * Negative Scan with auto colour, which reads the prescan on the host.
  *
- * Print material Negative Scan has no OpenCL pass yet (issue 664): it stops with a named error
- * before any GPU work.
+ * Print material Negative Scan (issue 664) has its FP6 in the DRT program
+ * (`film_print_scan_display`), because it applies the OpenDRT of that program to its linear AP1.
+ * The prescan of its auto colour is two kernels of the film print program.
  *
  * @param raw_cct The colour temperature of the RAW decode for scene light As Shot, or none for an
  *        input with no RAW white balance. See `FilmSceneRawCct`.
@@ -34,11 +36,11 @@ namespace alcedo {
  *        The render path passes null.
  * @param separate_narrow_spread True runs the narrow Gaussian of FP2 as its own two passes, as the
  *        render does when that Gaussian is too wide for one dispatch. A test compares both forms.
- * @throws std::runtime_error for print material Negative Scan, for an output that the film print
- *         does not support, for a missing or damaged resource, for an upload, an allocation, or an
- *         enqueue failure, for a program
- *         build failure, and for a blur beyond the tap limit. Nothing is published then; the caller
- *         cancels the render. There is no change of backend.
+ * @throws std::runtime_error for an output that the film print does not support, for a missing or
+ *         damaged resource, for an upload, an allocation, an enqueue, or a read failure, for a
+ *         program build failure, for a blur beyond the tap limit, and for the stops of Negative
+ *         Scan of `RecordCudaFilmPrint`. Nothing is published then; the caller cancels the render.
+ *         There is no change of backend.
  */
 void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan,
                            const DrtNodeModel& drt, std::optional<double> raw_cct,

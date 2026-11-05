@@ -101,6 +101,13 @@ inline constexpr const char* kFilmPrintAmountsReduceKernelName =
     "film_print_amounts_reduce";
 inline constexpr const char* kFilmPrintDisplayKernelName =
     "film_print_display";
+/// The prescan of rule 'frame_auto_colour' of Negative Scan: the two passes of the area reduction.
+inline constexpr const char* kFilmPrintScanPrescanRowsKernelName = "film_print_scan_prescan_rows";
+inline constexpr const char* kFilmPrintScanPrescanColumnsKernelName =
+    "film_print_scan_prescan_columns";
+/// FP6 of print material Negative Scan. It is a kernel of @ref kDrtProgramName, because it applies
+/// the display transform of that program.
+inline constexpr const char* kFilmPrintScanDisplayKernelName = "film_print_scan_display";
 
 }  // namespace alcedo::OpenCL::GpuDag
 

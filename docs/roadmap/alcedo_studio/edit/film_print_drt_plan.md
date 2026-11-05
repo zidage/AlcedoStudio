@@ -175,7 +175,7 @@ Print material `negative_scan`, "Negative Scan", is a scan of the negative in pl
 - There is no enlarger flare, no printer balance, no print table, no negative grade, no Cine Look, and no dark surround. Negative Scan has all the settings of method OpenDRT, with HDR; `DrtOutputResolver` resolves it as OpenDRT and does not call `CheckFilmPrintEncoding`.
 - The identifier stays in the key `params.film_print.print_material`. The settings are the keys `auto`, `auto_strength`, `auto_density`, `scan_contrast`, `scan_exposure_stops`, `cyan`, `magenta`, `yellow`, `black`, `scanner_red_nm`, `scanner_green_nm`, `scanner_blue_nm`, `scanner_width_nm`, and `scanner_light` of `params.film_print`. A key at its default is not written, so a document with the defaults has the bytes and the root id of a document of before. A reversal film reads no print material, so a stored `negative_scan` has no effect on it.
 - With Negative Scan the panel hides the slider Enlarger Flare (its stored value does not change) and shows the groups "Negative Scan" (Auto Color, Auto Color Strength, Auto Density, Scan Contrast, Scan Exposure, Cyan, Magenta, Yellow, Black at Film Base) and "Scanner" (the three band centres, the band width, the scanner light), the OpenDRT presets, and the section Color & Encoding. The Print list has Negative Scan first, before Cine Look, with its own swatch.
-- GPU: phase 2 of F10 (issue #664) has the CUDA and OpenCL passes, and F11 (issue #662) the Metal pass. Until then `RecordCudaFilmPrint`, `RecordOpenClFilmPrint`, and `RecordMetalFilmPrint` stop with a named error before any GPU work.
+- GPU: phase 2 of F10 (issue #664) has the CUDA and OpenCL passes, and F11 (issue #662) the Metal pass; until F11 `RecordMetalFilmPrint` stops with a named error before any GPU work. With auto colour on, the GPU reduces the scan density T of the full frame to the prescan (a canonical result, `film.scan_prescan.0`), the host reads it and computes the shift, and the display kernel applies it. With auto colour off no prescan is built or read. See the record of phase 2.
 
 #### Scene light As Shot
 
@@ -1188,6 +1188,61 @@ The first pull request of this phase had an ADX scan named Lab Scan (PR #663, co
 
 **Not verified.** Metal (the sources with the new size checks and the named stop compile only on a Mac). A render of Negative Scan, which needs phase 2. The application with the panel on screen. An AMD GPU. The full test suite did not run.
 
+### F10: Negative Scan, phase 2: CUDA and OpenCL passes
+
+1. **Objective.** The GPU passes of Negative Scan (section 3.4) on CUDA and OpenCL, with rule `frame_auto_colour` on the GPU, and no named stop. Metal is F11 (issue #662).
+2. **Inputs.** F10 phase 1; the resources of schema 10 and the lab values of lab commit fb785ef.
+3. **Modules.** `cuda_film_print_pass.cu`, `opencl_film_print_pass.cpp`, `film_print.cl`, the new `film_print_scan.cl` (DRT program), `film_negative_scan` (prescan windows and plan, auto colour of a density prescan), `film_print_plan.hpp` (result id), `runtime_invalidation.cpp`, `drt_node_model` (dirty field `FilmScanner`), `gpu_node_pass_stats.hpp`, `execution_plan.hpp` (tests-only flag).
+4. **Tests.** Section "Tests" of the record below.
+5. **Tracking.** [#664](https://github.com/zidage/AlcedoStudio/issues/664).
+
+#### F10 phase 2 completion record (2026-11-05)
+
+**Call chain.**
+
+- CUDA: `RecordCudaFilmPrint` -> `FilmPrintTables::ResolveNegativeScan(negative, light, ScannerOf(scan))` -> FP1 (`ExposureKernel`, no entry gamut compression) to FP5 as the print form -> with auto colour: `ReadOrBuildCanvasResult(FilmScanPrescanResultId)` -> `ScanPrescanRowsKernel`, `ScanPrescanColumnsKernel` -> a read of the prescan -> `film_negative_scan::AutoColourOfDensityPrescan` -> `MakeRenderTerms` -> `ScanDisplayKernel`: `FilmKernelReadRecordTable` -> `FilmKernelNegativeScanPixel` -> `CUDA::DrtDisplayPixel`.
+- OpenCL: `RecordOpenClFilmPrint` -> the same host steps -> `film_print_scan_prescan_rows`, `film_print_scan_prescan_columns` (film print program) -> `clEnqueueReadImage` of the prescan -> `film_print_scan_display` (DRT program, `film_print_scan.cl`) -> `DrtDisplayPixel` of drt.cl.
+- Invalidation: `CollectDrtChanges` invalidates `film.scan_prescan.0` on `FilmExposure`, `FilmHalation`, and `FilmScanner`; `FilmScan` (the rendering settings) invalidates only the display.
+
+**Decisions.**
+
+- The GPU reduces the scan density T, not x. x of the prescan is `slope T + offset` (`MakePrescanTerms`), and the area mean of an affine map is the map of the mean, so the host maps the mean in double precision. The prescan then does not read the contrast, and a rendering setting reads the kept prescan.
+- The cast estimate runs on the host after a read of the prescan only (96 x 64 texels at 6000 x 4006), with the CPU rule of phase 1 (`AutoColourShift`). The read waits for FP1 to FP5 of the render. Auto colour off builds no prescan, reads nothing, and computes the terms before any GPU work, so a black at or above the grey (issue #666) stops before the GPU work.
+- The prescan is a canonical result, `film.scan_prescan.0`, with the rule of the other film print results: a full-edit render builds and publishes it, a viewport ROI samples it, an ROI with no valid published prescan builds a temporary one from its own pixels. Its shape is `PrescanShape` of the edit frame, and the windows are those of the pixels of the render that builds it (`film_negative_scan::PrescanPlanOf`), so a preview and a full-size render name the same result. The editor renders the full frame before the detail patch, so a zoom has the shift of the full frame.
+- The window form: Pillow BOX has weight 1 or 0 per input pixel, so each output pixel of a pass is the mean of a window of adjacent pixels (`PrescanAxisOf`). Each pass stores float32, as Pillow. The horizontal pass gives one warp (CUDA) or one work group of 32 (OpenCL) to each window, so the reads of the group are adjacent; this took the pass from 5.9 ms to 3.2 ms at 6000 on CUDA.
+- The scanner settings have their own dirty field `DrtDirty::FilmScanner`, because the prescan reads them and the rendering settings do not.
+- The test of linear AP1 before the display transform uses `ExecutionPlan::film_scan_linear_output` (tests only; a render never sets it). `GpuNodePassStats` has `film_scan_prescan_reads` and `film_scan_auto_shift` for the tests.
+- The GPU tests measure "a rendering setting builds no table" by the LUT upload bytes of the device: the film print tables of the pass live in the GPU library, and the test executable has its own copy of `SharedFilmPrintTables`, so its `Stats` read another object.
+
+**Tests.** Debug host build, NVIDIA GeForce RTX 3080 Laptop GPU, resources of schema 10, lab values of lab commit fb785ef.
+
+| Check | Result |
+| --- | --- |
+| Ramp, linear AP1 against the lab, 32 files (4 negatives, reference / daylight / 3100 K / 5650 K, auto off and Neutral) | CUDA at most 2.0e-5 stops, OpenCL 2.0e-5 (limit 0.005); shift at most 5.8e-7 (limit 1e-4) |
+| Chart, the same 32 files | CUDA at most 0.0021 stops, OpenCL below it (5219 at most 0.00075) (limit 0.01), with the relative floor of issue #667; with no relative floor CUDA 0.045 at one value far outside AP1 (2 files), OpenCL 0.001 |
+| Image 6000 x 4006, 32 files | p99.9 0.0148 to 0.0197 stops (limit 0.02); largest 0.080 to 0.147 stops (limit 0.1, not met in 14 files: issue #668; the test has 0.2); shift 3.6e-6 to 2.6e-4 (limit 1e-4, not met in 11 of 16: issue #668; the test has 5e-4); OpenCL gives the same values to 1e-5 |
+| Viewport ROI inside the reach of the blurs, `kodak_5207`, Neutral | odd row 7.3e-4, even row 1.4e-5 stops (limit 0.002); the shift equals that of the full frame |
+| Display: Negative Scan against method OpenDRT on its linear AP1, SDR and HDR, auto off and Neutral | 0 codes on CUDA and OpenCL (limit 0.1) |
+| OpenCL against CUDA (`NegativeScanFilmPrintMatchesCudaReferenceWithinTolerance`, 5 cases with As Shot, another scanner, HDR) | largest 0.30 codes (limit 1) |
+| Prescan window form against `ReduceFrame`, 7 frame shapes | largest 2.4e-7 |
+| `CudaFilmPrintFixture` / `OpenClFilmPrintFixture` | 25 of 25 / 27 of 27 pass; print, reversal, and OpenDRT cases unchanged |
+| `FilmPrintTablesTest` / `GpuDagModelGraphTest` / `GpuDagRawInputTest` (invalidation, film print) / `GpuDagOpenClDrtProductTest` (film print) | 67 / 173 / 45 / 3 pass |
+
+**Cost.** Release build, RTX 3080 Laptop. CUDA: median GPU time after a change; OpenCL: median wall time to the end of the GPU work. Halation change (the prescan is built again) / Scan Contrast change (the prescan is kept). In ms:
+
+| Long edge | Print form CUDA / OpenCL | Negative Scan auto off, CUDA / OpenCL | Negative Scan Neutral, CUDA / OpenCL | Prescan pass + read and host rule, CUDA |
+| --- | --- | --- | --- | --- |
+| 2560 | 4.2 / 4.5 | 3.8 / 4.9 (Scan Contrast 3.7 / 4.9) | 4.9 / 6.3 (Scan Contrast 4.6 / 5.7) | 1.4 + 0.9 |
+| 4096 | 12.0 / 11.9 | 11.5 / 13.7 (11.5 / 13.8) | 13.2 / 15.9 (12.2 / 14.7) | 3.1 + 0.8 |
+| 6000 | 17.8 / 16.7 | 16.9 / 20.8 (16.8 / 20.9) | 19.1 / 23.6 (17.9 / 21.9) | 3.2 + 0.8 |
+
+- On CUDA auto off costs less than the print form at each size. On OpenCL it costs more (4.1 ms at 6000): the OpenDRT call of the scan display kernel costs 5.4 ms at 24 MP on OpenCL, and method OpenDRT on OpenCL has the same cost (issue #669).
+- With Neutral the read of the prescan and the host rule cost about 0.8 ms; a rendering setting keeps the prescan, so it costs only the read.
+
+**AMD.** `opencl_dag_film_print` and `opencl_dag_drt` build with no error on drivers 26.10.2, 26.6.2, and 26.6.1, on gfx1030, gfx1100, gfx1103, and gfx1201, and on gfx1010 with the legacy runtime.
+
+**Not verified.** Metal (F11, issue #662). A render in the running application. An AMD GPU. The packaged application. The full test suite did not run.
+
 ---
 
 ## 7. Risks
@@ -1214,5 +1269,5 @@ The first pull request of this phase had an ADX scan named Lab Scan (PR #663, co
 - F7: [#630](https://github.com/zidage/AlcedoStudio/issues/630)
 - F8: [#654](https://github.com/zidage/AlcedoStudio/issues/654)
 - F9: [#655](https://github.com/zidage/AlcedoStudio/issues/655)
-- F10: [#661](https://github.com/zidage/AlcedoStudio/issues/661) (phase 1, model layer), [#664](https://github.com/zidage/AlcedoStudio/issues/664) (phase 2, CUDA and OpenCL)
+- F10: [#661](https://github.com/zidage/AlcedoStudio/issues/661) (phase 1, model layer), [#664](https://github.com/zidage/AlcedoStudio/issues/664) (phase 2, CUDA and OpenCL); found in phase 2: [#667](https://github.com/zidage/AlcedoStudio/issues/667), [#668](https://github.com/zidage/AlcedoStudio/issues/668), [#669](https://github.com/zidage/AlcedoStudio/issues/669)
 - F11: [#662](https://github.com/zidage/AlcedoStudio/issues/662)

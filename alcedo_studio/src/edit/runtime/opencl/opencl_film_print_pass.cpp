@@ -17,11 +17,14 @@
 
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
+#include "edit/runtime/film/film_negative_scan.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
 #include "edit/runtime/film/film_print_math.h"
 #include "edit/runtime/film/film_print_resources.hpp"
 #include "edit/runtime/film_print_plan.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_drt_gpu_params.hpp"
+#include "edit/runtime/opencl/opencl_drt_params.hpp"
 #include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -279,16 +282,23 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteOpenClDrt");
   const auto  film        = drt.Params().FilmPrint();
-  // Print material Negative Scan has the model layer of issue 661; its GPU pass is issue 664. There
-  // is no other form to substitute for it.
-  if (IsFilmNegativeScan(film.negative, film.print_material)) {
-    throw std::runtime_error(
-        "RecordOpenClFilmPrint: print material Negative Scan has no OpenCL pass yet (issue 664)");
-  }
   auto&       tables      = SharedFilmPrintTables();
   const auto& bundle      = tables.Bundle();
   const auto  light       = bundle.SceneLightMix(film.scene_light, raw_cct);
-  const auto  tables_data = tables.Resolve(film.negative, film.print_material, light);
+  // Negative Scan reads the scanner table of the scanner of the document. A rendering setting reads
+  // the kept table.
+  const bool  scan        = IsFilmNegativeScan(film.negative, film.print_material);
+  const auto  tables_data =
+      scan ? tables.ResolveNegativeScan(film.negative, light,
+                                        film_negative_scan::ScannerOf(film.scan))
+           : tables.Resolve(film.negative, film.print_material, light);
+  // With auto colour off the terms are known now, so a black at or above the grey stops the render
+  // before any GPU work.
+  const bool  auto_colour = scan && film.scan.auto_colour != kFilmScanAutoIds[0];
+  std::optional<film_negative_scan::RenderTerms> scan_terms;
+  if (scan && !auto_colour) {
+    scan_terms = film_negative_scan::MakeRenderTerms(tables_data->negative_scan, film.scan, {});
+  }
 
   auto&       workspace   = device.Workspace();
   auto&       backend     = workspace.Device();
@@ -625,6 +635,117 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
                                           offsetof(FilmPrintDeviceData, flare_y));
         });
     names.Mark("FP6 flare canvas");
+  }
+  if (params.scan != 0U) {
+    if (auto_colour) {
+      // Rule 'frame_auto_colour': the prescan of the full frame, a canonical result. The host reads
+      // only the prescan and computes the shift, as the lab does; the per-pixel pass applies it.
+      const auto&          frame        = plan.geometry.edit_extent;
+      const auto           prescan_plan = film_negative_scan::PrescanPlanOf(frame.height, frame.width,
+                                                                            height, width);
+      const ImageExtent    extent{static_cast<std::uint32_t>(prescan_plan.columns),
+                                  static_cast<std::uint32_t>(prescan_plan.rows)};
+      const auto           columns      = static_cast<cl_int>(extent.width);
+      const auto           rows         = static_cast<cl_int>(extent.height);
+      std::optional<Lease> temporary_prescan;
+      const cl_mem         prescan      = ReadOrBuildCanvasResult(
+          device, plan, FilmScanPrescanResultId(plan.drt.node_id), extent, long_edge,
+          temporary_prescan, [&](cl_mem target) {
+            const auto windows =
+                backend.AcquireKeyedBuffer(prescan_plan.windows_key,
+                                           std::as_bytes(std::span(prescan_plan.windows)), context);
+            const Plane middle = AllocatePlane(device, extent.width, height);
+            {
+              auto kernel = Kernel(OpenCL::GpuDag::kFilmPrintScanPrescanRowsKernelName);
+              Arguments(kernel, "RecordOpenClFilmPrint: scan prescan rows")
+                  .Add(a)
+                  .Add(w)
+                  .Add(h)
+                  .Add(print_rgba)
+                  .Add(windows.native)
+                  .Add(columns)
+                  .Add(middle)
+                  .Add(data.native)
+                  .Add(params_offset);
+              // One work group of FILM_PRESCAN_LANES (film_print.cl) per window.
+              constexpr std::size_t kLanes     = 32;
+              const std::size_t     local[2]   = {kLanes, 1};
+              const std::size_t     global[2]  = {kLanes * extent.width, height};
+              cl_event              event      = nullptr;
+              CheckOpenCl(clEnqueueNDRangeKernel(backend.NativeQueue(), kernel, 2, nullptr, global,
+                                                 local, 0, nullptr, &event),
+                          "RecordOpenClFilmPrint: scan prescan rows enqueue");
+              NoteOpenClEnqueueNdRange();
+              backend.TrackKernelEvent(context, event);
+            }
+            auto kernel = Kernel(OpenCL::GpuDag::kFilmPrintScanPrescanColumnsKernelName);
+            Arguments(kernel, "RecordOpenClFilmPrint: scan prescan columns")
+                .Add(middle)
+                .Add(columns)
+                .Add(h)
+                .Add(windows.native)
+                .Add(rows)
+                .Add(target);
+            Dispatch(device, kernel, extent.width, extent.height,
+                     "RecordOpenClFilmPrint: scan prescan columns enqueue");
+          });
+      names.Mark("FP6 prescan");
+      std::vector<float> texels(static_cast<std::size_t>(extent.width) * extent.height * 4U);
+      const std::size_t  origin[3] = {0, 0, 0};
+      const std::size_t  region[3] = {extent.width, extent.height, 1};
+      CheckOpenCl(clEnqueueReadImage(backend.NativeQueue(), prescan, CL_TRUE, origin, region, 0, 0,
+                                     texels.data(), 0, nullptr, nullptr),
+                  "RecordOpenClFilmPrint: prescan read");
+      const auto result = film_negative_scan::AutoColourOfDensityPrescan(
+          texels, extent.height, extent.width, tables_data->negative_scan, film.scan);
+      ++device.PassStats().film_scan_prescan_reads;
+      device.PassStats().film_scan_auto_shift = result.shift;
+      scan_terms =
+          film_negative_scan::MakeRenderTerms(tables_data->negative_scan, film.scan, result.shift);
+      names.Mark("FP6 prescan read and auto colour on the host");
+    }
+    FilmKernelNegativeScan terms{};
+    for (std::size_t k = 0; k < 3; ++k) {
+      terms.slope[k]  = static_cast<float>(scan_terms->slope[k]);
+      terms.offset[k] = static_cast<float>(scan_terms->offset[k]);
+      terms.scale[k]  = static_cast<float>(scan_terms->scale[k]);
+      terms.floor[k]  = static_cast<float>(scan_terms->floor[k]);
+    }
+    const auto upload = [&](std::span<const std::byte> bytes) {
+      void* memory = workspace.TransientBuffers().Allocate(bytes.size());
+      if (memory == nullptr) {
+        throw std::runtime_error("RecordOpenClFilmPrint: transient allocation failed");
+      }
+      backend.UploadDeviceMemory(memory, bytes, context);
+      return backend.ResolveDeviceMemory(memory, bytes.size());
+    };
+    const auto terms_location =
+        upload(std::as_bytes(std::span<const FilmKernelNegativeScan>(&terms, 1)));
+    // The form ends in linear AP1: the OpenDRT of the document shows it, with the kernel of the DRT
+    // program. The resolver gives Negative Scan the transform of method OpenDRT.
+    const auto drt_params   = PackOpenClDrtParams(resolved);
+    const auto drt_location = upload(std::as_bytes(
+        std::span<const OpenCL::Pipeline::OpenClToOutputParams>(&drt_params, 1)));
+    auto       kernel       = OpenClKernelCache::Instance().GetKernel(
+        OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kFilmPrintScanDisplayKernelName);
+    const auto display_view = OpenClBindScene(device, display);
+    Arguments(kernel, "RecordOpenClFilmPrint: scan display")
+        .Add(a)
+        .AddSceneView(scene_view, backend, OpenClSceneArgAccess::Read)
+        .AddSceneView(display_view, backend, OpenClSceneArgAccess::Write)
+        .Add(static_cast<cl_uint>(width))
+        .Add(static_cast<cl_uint>(height))
+        .Add(print_rgba)
+        .Add(data.native)
+        .Add(params_offset)
+        .Add(terms_location.first)
+        .Add(static_cast<cl_uint>(terms_location.second))
+        .Add(drt_location.first)
+        .Add(static_cast<cl_uint>(drt_location.second))
+        .Add(static_cast<cl_int>(plan.film_scan_linear_output ? 1 : 0));
+    Dispatch(device, kernel, width, height, "RecordOpenClFilmPrint: scan display enqueue");
+    names.Mark("FP6 scan and display transform");
+    return;
   }
   {
     auto       kernel       = Kernel(OpenCL::GpuDag::kFilmPrintDisplayKernelName);

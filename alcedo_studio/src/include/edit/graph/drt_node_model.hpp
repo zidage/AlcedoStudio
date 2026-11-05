@@ -145,11 +145,14 @@ enum class DrtDirty : std::uint32_t {
   FilmExposure = 1U << 4,
   FilmHalation = 1U << 5,  ///< Halation of Film Print.
   FilmFlare    = 1U << 6,  ///< Enlarger flare of Film Print.
-  /// The settings of Negative Scan. They act only in FP6, so no canonical film print result reads
-  /// them.
+  /// The rendering settings of Negative Scan (auto colour, contrast, exposure, keys, black). They
+  /// act only in FP6, so no canonical film print result reads them.
   FilmScan     = 1U << 7,
-  All =
-      Method | Encoding | OpenDrt | Diffusion | FilmExposure | FilmHalation | FilmFlare | FilmScan,
+  /// The scanner settings of Negative Scan (band centres, width, light). They choose the scanner
+  /// table, so the prescan of rule 'frame_auto_colour' (`FilmScanPrescanResultId`) reads them.
+  FilmScanner  = 1U << 8,
+  All          = Method | Encoding | OpenDrt | Diffusion | FilmExposure | FilmHalation | FilmFlare |
+        FilmScan | FilmScanner,
 };
 
 /**

@@ -55,10 +55,24 @@ class PipelineDocument;
   return {drt_id, PortId{"film.loupe_flare.0"}};
 }
 
+/**
+ * @brief Graph value for the canonical prescan of print material Negative Scan (issue 664).
+ *
+ * Rule 'frame_auto_colour' reads a prescan of the frame: the scan density T of the full frame,
+ * reduced by area to a long edge of 96 pixels (`film_negative_scan::PrescanPlanOf`). A full-edit
+ * render publishes it; a viewport ROI render samples it, so the auto colour of a zoom or a pan is
+ * that of the full frame. It reads the negative and the scanner, not the rendering settings. See
+ * @ref FilmHalationResultId.
+ */
+[[nodiscard]] inline auto FilmScanPrescanResultId(const NodeId& drt_id) -> GraphValueId {
+  return {drt_id, PortId{"film.scan_prescan.0"}};
+}
+
 /// True when @p id is a canonical film print result.
 [[nodiscard]] inline auto IsFilmPrintResultPort(const GraphValueId& id) -> bool {
   const std::string_view port = id.output_port.Value();
-  return port == "film.halation.0" || port == "film.flare.0" || port == "film.loupe_flare.0";
+  return port == "film.halation.0" || port == "film.flare.0" || port == "film.loupe_flare.0" ||
+         port == "film.scan_prescan.0";
 }
 
 /// Largest tap distance of one blur pass. It holds the spread of the widest negative at slider 3

@@ -369,7 +369,9 @@ TEST(DrtFilmPrintModelTest, FieldChangeMarksOnlyItsFilmPrintField) {
   });
 
   // Each setting of Negative Scan changes only the scan: its own field, and no field of the
-  // canvases. The scanner settings build the scanner table again; the others act after the scan.
+  // canvases. The scanner settings (changes 9 to 13) mark FilmScanner: they build the scanner table
+  // again, and the prescan of the auto colour reads them. The others mark FilmScan and act after
+  // the scan.
   std::vector<DrtParameterUpdate> scan_changes(14);
   scan_changes[0].film_scan_auto           = std::string{"neutral"};
   scan_changes[1].film_scan_auto_strength  = 0.5f;
@@ -387,13 +389,18 @@ TEST(DrtFilmPrintModelTest, FieldChangeMarksOnlyItsFilmPrintField) {
   scan_changes[13].film_scanner_light      = std::string{"equal_energy"};
   for (std::size_t change = 0; change < scan_changes.size(); ++change) {
     SCOPED_TRACE(change);
-    const auto scan_before = params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmScan});
+    const bool scanner     = change >= 9;
+    const auto own         = scanner ? DrtDirty::FilmScanner : DrtDirty::FilmScan;
+    const auto other       = scanner ? DrtDirty::FilmScan : DrtDirty::FilmScanner;
+    const auto scan_before = params.FieldsRevision(DirtyFieldMask{own});
+    const auto other_scan  = params.FieldsRevision(DirtyFieldMask{other});
     std::array<ParameterRevision, 3> canvas_before{};
     for (std::size_t index = 0; index < film_fields.size(); ++index) {
       canvas_before[index] = params.FieldsRevision(DirtyFieldMask{film_fields[index]});
     }
     params.ApplyUpdate(scan_changes[change]);
-    EXPECT_GT(params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmScan}), scan_before);
+    EXPECT_GT(params.FieldsRevision(DirtyFieldMask{own}), scan_before);
+    EXPECT_EQ(params.FieldsRevision(DirtyFieldMask{other}), other_scan);
     for (std::size_t index = 0; index < film_fields.size(); ++index) {
       EXPECT_EQ(params.FieldsRevision(DirtyFieldMask{film_fields[index]}), canvas_before[index]);
     }

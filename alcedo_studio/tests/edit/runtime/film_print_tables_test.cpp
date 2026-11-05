@@ -2224,6 +2224,96 @@ TEST_F(FilmPrintTablesLabTest, NegativeScanPointFormMatchesTheLab) {
   EXPECT_LE(largest_chart, 0.01);
 }
 
+TEST(FilmNegativeScanPrescanTest, PlanHasTheShapeOfTheFrameAndTheWindowsOfTheRender) {
+  // A full frame of the lab: 6000 x 4006 to 96 x 64.
+  const auto full = film_negative_scan::PrescanPlanOf(4006, 6000, 4006, 6000);
+  EXPECT_EQ(full.columns, 96);
+  EXPECT_EQ(full.rows, 64);
+  ASSERT_EQ(full.windows.size(), 2U * 96U + 2U * 64U);
+  std::int64_t covered = 0;
+  for (std::size_t j = 0; j < 96; ++j) covered += full.windows[96 + j];
+  EXPECT_EQ(covered, 6000);
+  EXPECT_EQ(full.windows[0], 0);
+  // A preview of the same frame names the same prescan, with the windows of its own pixels.
+  const auto preview = film_negative_scan::PrescanPlanOf(4006, 6000, 1709, 2560);
+  EXPECT_EQ(preview.columns, full.columns);
+  EXPECT_EQ(preview.rows, full.rows);
+  EXPECT_NE(preview.windows_key, full.windows_key);
+  covered = 0;
+  for (std::size_t j = 0; j < 96; ++j) covered += preview.windows[96 + j];
+  EXPECT_EQ(covered, 2560);
+  // A frame of one row, as the ramps of the lab.
+  const auto row = film_negative_scan::PrescanPlanOf(1, 241, 1, 241);
+  EXPECT_EQ(row.columns, 96);
+  EXPECT_EQ(row.rows, 1);
+  EXPECT_THROW((void)film_negative_scan::PrescanPlanOf(0, 241, 1, 241), std::invalid_argument);
+}
+
+TEST(FilmNegativeScanPrescanTest, WindowFormOfTheGpuMatchesReduceFrame) {
+  // The GPU form of the prescan (issue 664): per axis the mean over the windows of PrescanAxisOf, a
+  // horizontal pass and a vertical pass, each with a float32 sum and a float32 store, against
+  // ReduceFrame (Pillow BOX) on random frames. Both lab frames of one row, a frame no larger than
+  // the prescan, and frames with a short edge that rounds both ways.
+  std::mt19937                           random(664);
+  std::uniform_real_distribution<double> uniform(-2.0, 1.0);
+  const std::array<std::array<std::int64_t, 2>, 7> shapes{{{1001, 1500},
+                                                            {1500, 1001},
+                                                            {1, 241},
+                                                            {1, 4096},
+                                                            {64, 48},
+                                                            {97, 300},
+                                                            {301, 97}}};
+  for (const auto& [rows, columns] : shapes) {
+    SCOPED_TRACE(std::to_string(rows) + " x " + std::to_string(columns));
+    film_negative_scan::Frame frame{{}, rows, columns};
+    frame.values.resize(static_cast<std::size_t>(rows * columns * 3));
+    // Float32 values, as the scan density of the GPU.
+    for (auto& value : frame.values) value = static_cast<float>(uniform(random));
+    const auto expected = film_negative_scan::ReduceFrame(frame);
+    const auto shape    = film_negative_scan::PrescanShape(rows, columns);
+    ASSERT_EQ(expected.rows, shape[0]);
+    ASSERT_EQ(expected.columns, shape[1]);
+    const auto across = film_negative_scan::PrescanAxisOf(columns, shape[1]);
+    const auto down   = film_negative_scan::PrescanAxisOf(rows, shape[0]);
+    std::vector<float> middle(static_cast<std::size_t>(rows * shape[1] * 3));
+    for (std::int64_t y = 0; y < rows; ++y) {
+      for (std::int64_t j = 0; j < shape[1]; ++j) {
+        for (std::size_t k = 0; k < 3; ++k) {
+          float sum = 0.0f;
+          for (std::int32_t i = 0; i < across.count[static_cast<std::size_t>(j)]; ++i) {
+            const auto x = across.first[static_cast<std::size_t>(j)] + i;
+            sum += static_cast<float>(frame.values[static_cast<std::size_t>((y * columns + x) * 3) + k]);
+          }
+          middle[static_cast<std::size_t>((y * shape[1] + j) * 3) + k] =
+              sum * (1.0f / static_cast<float>(across.count[static_cast<std::size_t>(j)]));
+        }
+      }
+    }
+    double largest = 0.0;
+    for (std::int64_t i = 0; i < shape[0]; ++i) {
+      for (std::int64_t j = 0; j < shape[1]; ++j) {
+        for (std::size_t k = 0; k < 3; ++k) {
+          float sum = 0.0f;
+          for (std::int32_t n = 0; n < down.count[static_cast<std::size_t>(i)]; ++n) {
+            const auto y = down.first[static_cast<std::size_t>(i)] + n;
+            sum += middle[static_cast<std::size_t>((y * shape[1] + j) * 3) + k];
+          }
+          const float value =
+              sum * (1.0f / static_cast<float>(down.count[static_cast<std::size_t>(i)]));
+          largest = (std::max)(
+              largest, std::abs(static_cast<double>(value) -
+                                expected.values[static_cast<std::size_t>((i * shape[1] + j) * 3) + k]));
+        }
+      }
+    }
+    std::cout << rows << " x " << columns << " to " << shape[0] << " x " << shape[1]
+              << ": largest difference " << largest << "\n";
+    // The float32 sums of up to 63 values of about 1 against the double sums of Pillow.
+    EXPECT_LE(largest, 2e-6);
+  }
+  EXPECT_THROW((void)film_negative_scan::PrescanAxisOf(0, 1), std::invalid_argument);
+}
+
 TEST_F(FilmPrintTablesLabTest, UvTableMatchesLab) {
   const auto selections = TableSelections();
   ASSERT_GE(selections.size(), 6u);
