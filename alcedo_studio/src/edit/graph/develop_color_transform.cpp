@@ -676,6 +676,14 @@ void BindRgbWorkingSpaceCameraProfile(DevelopPayload& payload) {
   BindDevelopCameraProfile(payload, imported);
 }
 
+auto RawWhiteBalanceCct(const DevelopPayload& develop) -> std::optional<double> {
+  if (develop.input.has_value() || !ResolveDevelopColorTransform(develop).ok) {
+    return std::nullopt;
+  }
+  return static_cast<double>(IsCustomWbMode(develop.wb_mode) ? develop.custom_cct
+                                                             : develop.as_shot_cct);
+}
+
 auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransformResult {
   cv::Matx33d cm1;
   cv::Matx33d cm2;

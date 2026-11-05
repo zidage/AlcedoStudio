@@ -67,6 +67,10 @@ class EditorAdjustmentModelBase : public QObject {
   void enabledChanged();
   void submitterChanged();
   void paramsBuilderChanged();
+  /// Emitted after the submitter accepted a settled write of a user edit, after
+  /// onSettledWriteAccepted. A panel that keeps state outside the pipeline document for the
+  /// written value (for example, the remembered film print settings) reads it here.
+  void settledWriteAccepted();
 
  protected:
   /// Default params JSON shapes (used when paramsBuilder is unset).

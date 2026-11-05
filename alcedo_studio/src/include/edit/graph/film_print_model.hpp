@@ -158,7 +158,8 @@ inline constexpr std::array<std::string_view, 5> kFilmReversalNames = {
 
 /// Scene light `as_shot` (lab decision U92): the light of the colour temperature of the RAW decode.
 /// The stock bundle holds no light of this name: the host blends two lights of its colour
-/// temperature grid. An input with no RAW white balance reads it as `reference`.
+/// temperature grid. An input with no RAW white balance reads it as `reference`. It is the default
+/// scene light of every form (issue 672).
 inline constexpr std::string_view                 kFilmAsShotLightId = "as_shot";
 
 /// Scene light identifiers: the reference, As Shot, 5 lights, and 5 scenes. See
@@ -239,7 +240,7 @@ struct FilmNegativeScanParams {
 struct FilmPrintParams {
   std::string            negative       = "kodak_5207";
   std::string            print_material = "kodak_endura_premier";
-  std::string            scene_light    = "reference";
+  std::string            scene_light    = std::string{kFilmAsShotLightId};
   float                  light_spread   = 1.0f;
   float                  halation       = 1.0f;
   float                  enlarger_flare = 0.01f;

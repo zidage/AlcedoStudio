@@ -14,6 +14,7 @@
 #include <utility>
 #include <variant>
 
+#include "../edit/graph/test_camera_profile.hpp"
 #include "app/editor_parameter_write.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
@@ -216,6 +217,29 @@ TEST(EditorPanelProjectionTest, FilmPrintFieldsProjectFromTheModel) {
   EXPECT_FLOAT_EQ(odt_value->film_print.light_spread, 0.5f);
   EXPECT_FLOAT_EQ(odt_value->film_print.halation, 3.0f);
   EXPECT_FLOAT_EQ(odt_value->film_print.enlarger_flare, 0.05f);
+}
+
+TEST(EditorPanelProjectionTest, AsShotIsAvailableOnlyForARawWhiteBalanceThatResolves) {
+  const auto available = [](const PipelineDocument& document) {
+    EditorPanelProjection projection;
+    std::string           error;
+    EXPECT_TRUE(ProjectCurrentPanelFields(document, 1, &projection, &error)) << error;
+    const auto* odt = FindField(projection, "odt");
+    EXPECT_NE(odt, nullptr);
+    const auto* value = odt ? std::get_if<EditorPanelOdtValue>(&odt->value) : nullptr;
+    EXPECT_NE(value, nullptr);
+    return value != nullptr && value->film_as_shot_available;
+  };
+  // The default document has no camera matrices, so its as-shot temperature is not solved.
+  auto document = CreateDefaultPipelineDocument();
+  EXPECT_FALSE(available(document));
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  EXPECT_TRUE(available(document));
+  // A raster input has no RAW white balance (issue 672).
+  auto payload  = document.Develop()->Params().Params();
+  payload.input = DevelopRasterInput{};
+  document.Develop()->Params().ReplaceParams(std::move(payload));
+  EXPECT_FALSE(available(document));
 }
 
 TEST(EditorPanelProjectionTest, ProjectsToneLookLutRawOdtAndGeometryFromExplicitInstances) {

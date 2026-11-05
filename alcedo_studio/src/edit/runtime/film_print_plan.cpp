@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
@@ -20,12 +21,7 @@ auto FilmSceneRawCct(const PipelineDocument& document) -> std::optional<double> 
   if (develop == nullptr) {
     return std::nullopt;
   }
-  const auto payload = develop->Params().Params();
-  if (payload.input.has_value()) {
-    return std::nullopt;
-  }
-  return static_cast<double>(payload.wb_mode == "custom" ? payload.custom_cct
-                                                         : payload.as_shot_cct);
+  return RawWhiteBalanceCct(develop->Params().Params());
 }
 
 namespace {

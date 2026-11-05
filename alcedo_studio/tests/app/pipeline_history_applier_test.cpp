@@ -185,7 +185,10 @@ TEST(PipelineHistoryApplierTest, NegativeScanChangesUndoAndRedoToEachStoredValue
   ASSERT_TRUE(ApplyEditorParameterPatch(
       document, *odt,
       {{"method", "film_print"},
-       {"film_print", {{"negative", "kodak_5207"}, {"print_material", "kodak_2383"}}}},
+       {"film_print",
+        {{"negative", "kodak_5207"},
+         {"print_material", "kodak_2383"},
+         {"scene_light", "reference"}}}},
       &error))
       << error;
   std::vector<std::string>       states{CanonicalPipelineDocumentJson(document)};

@@ -19,6 +19,8 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSettings>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QVariantMap>
 #include <QWheelEvent>
@@ -40,6 +42,7 @@
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
+#include "ui/alcedo_main/album_backend/editor_behavior_preferences.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 
 namespace alcedo::ui::test {
@@ -690,6 +693,169 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintControlWritesItsField) {
   EXPECT_FLOAT_EQ(*drt->film_halation, 2.5f);
   ASSERT_TRUE(drt->film_scene_light.has_value());
   EXPECT_EQ(*drt->film_scene_light, "tungsten");
+}
+
+/// Index of the entry @p value in the entries of the enum model @p model, or -1.
+auto EntryIndex(const QObject* model, const QString& value) -> int {
+  const auto entries = model->property("entries").toList();
+  for (int index = 0; index < entries.size(); ++index) {
+    if (entries[index].toMap().value(QStringLiteral("value")).toString() == value) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest,
+     SelectingFilmPrintAppliesTheFilmPrintSettingsOfTheLastSettledFilmPrintWrite) {
+  // The remembered settings live in QSettings: keep them in a temporary directory.
+  QTemporaryDir settings_dir;
+  ASSERT_TRUE(settings_dir.isValid());
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings_dir.path());
+  QSettings{}.remove(QLatin1String(EditorBehaviorPreferences::kFilmPrintSettingsKey));
+  EditorBehaviorPreferences preferences;
+
+  DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* panel  = harness.findModel<QQuickItem>(QStringLiteral("editorAdjustmentPanel_display"));
+  auto* method = harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayMethodModel"));
+  auto* negative =
+      harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayFilmNegativeModel"));
+  ASSERT_NE(panel, nullptr);
+  ASSERT_NE(method, nullptr);
+  ASSERT_NE(negative, nullptr);
+  panel->setProperty("editorBehavior", QVariant::fromValue(static_cast<QObject*>(&preferences)));
+  ASSERT_TRUE(WaitFor([&] {
+    return negative->property("currentValue").toString() == QStringLiteral("kodak_portra_400");
+  }));
+
+  // A settled film print write is remembered with every film print field of the panel.
+  const int agfa = EntryIndex(negative, QStringLiteral("agfa_vista_100"));
+  ASSERT_GE(agfa, 0);
+  negative->selectIndex(agfa);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  auto remembered = preferences.film_print_ui_value();
+  EXPECT_EQ(remembered.value("negative").toString(), QStringLiteral("agfa_vista_100"));
+  EXPECT_EQ(remembered.value("print_material").toString(), QStringLiteral("fuji_ca_maxima"));
+  EXPECT_EQ(remembered.value("scene_light").toString(), QStringLiteral("tungsten"));
+  EXPECT_DOUBLE_EQ(remembered.value("halation").toDouble(), 2.5);
+
+  // A write of another method does not change them.
+  method->selectIndex(EntryIndex(method, QStringLiteral("open_drt")));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  EXPECT_EQ(preferences.film_print_ui_value(), remembered);
+
+  // A document of another method shows the defaults of the film print.
+  session.setAdjustmentSnapshot(MakeOpenDrtSnapshot());
+  ASSERT_TRUE(WaitFor([&] {
+    return method->property("currentValue").toString() == QStringLiteral("open_drt") &&
+           negative->property("currentValue").toString() == QStringLiteral("kodak_5207");
+  }));
+
+  // Selecting Film Print writes the remembered settings in the same write.
+  const int film_print = EntryIndex(method, QStringLiteral("film_print"));
+  ASSERT_GE(film_print, 0);
+  const int writes = session.submitCount();
+  ASSERT_TRUE(QMetaObject::invokeMethod(panel, "selectMethod", Q_ARG(QVariant, film_print),
+                                        Q_ARG(QVariant, QStringLiteral("film_print"))));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  ASSERT_EQ(session.submitCount(), writes + 1);
+  const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->method.has_value());
+  EXPECT_EQ(*drt->method, alcedo::DrtMethod::FilmPrint);
+  ASSERT_TRUE(drt->film_negative.has_value());
+  EXPECT_EQ(*drt->film_negative, "agfa_vista_100");
+  ASSERT_TRUE(drt->film_print_material.has_value());
+  EXPECT_EQ(*drt->film_print_material, "fuji_ca_maxima");
+  ASSERT_TRUE(drt->film_scene_light.has_value());
+  EXPECT_EQ(*drt->film_scene_light, "tungsten");
+  ASSERT_TRUE(drt->film_light_spread.has_value());
+  EXPECT_FLOAT_EQ(*drt->film_light_spread, 0.5f);
+  ASSERT_TRUE(drt->film_halation.has_value());
+  EXPECT_FLOAT_EQ(*drt->film_halation, 2.5f);
+  ASSERT_TRUE(drt->film_enlarger_flare.has_value());
+  EXPECT_FLOAT_EQ(*drt->film_enlarger_flare, 0.05f);
+
+  // Without remembered settings the selection writes the defaults: As Shot (issue #672).
+  panel->setProperty("editorBehavior", QVariant::fromValue(static_cast<QObject*>(nullptr)));
+  session.setAdjustmentSnapshot(MakeOpenDrtSnapshot());
+  ASSERT_TRUE(WaitFor([&] {
+    return method->property("currentValue").toString() == QStringLiteral("open_drt") &&
+           negative->property("currentValue").toString() == QStringLiteral("kodak_5207");
+  }));
+  ASSERT_TRUE(QMetaObject::invokeMethod(panel, "selectMethod", Q_ARG(QVariant, film_print),
+                                        Q_ARG(QVariant, QStringLiteral("film_print"))));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->film_negative.has_value());
+  EXPECT_EQ(*drt->film_negative, "kodak_5207");
+  ASSERT_TRUE(drt->film_scene_light.has_value());
+  EXPECT_EQ(*drt->film_scene_light, "as_shot");
+  QSettings::setDefaultFormat(QSettings::NativeFormat);
+}
+
+/// MakeFilmPrintSnapshot with scene light @p scene_light and the projected As Shot availability.
+auto MakeFilmPrintSnapshotWithLight(const QString& scene_light, bool as_shot_available)
+    -> QVariantMap {
+  auto snapshot   = MakeFilmPrintSnapshot();
+  auto odt_wrap   = snapshot.value(QStringLiteral("odt")).toMap();
+  auto inner      = odt_wrap.value(QStringLiteral("odt")).toMap();
+  auto film_print = inner.value(QStringLiteral("film_print")).toMap();
+  film_print.insert(QStringLiteral("scene_light"), scene_light);
+  inner.insert(QStringLiteral("film_print"), film_print);
+  inner.insert(QStringLiteral("film_as_shot_available"), as_shot_available);
+  odt_wrap.insert(QStringLiteral("odt"), inner);
+  snapshot.insert(QStringLiteral("odt"), odt_wrap);
+  return snapshot;
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest,
+     AsShotIsHiddenWithNoRawWhiteBalanceAndAStoredAsShotStaysUntilTheUserPicksALight) {
+  DisplayTransformSession session(MakeFilmPrintSnapshotWithLight(QStringLiteral("as_shot"), false),
+                                  0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* light =
+      harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayFilmSceneLightModel"));
+  auto* negative =
+      harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayFilmNegativeModel"));
+  ASSERT_NE(light, nullptr);
+  ASSERT_NE(negative, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    return negative->property("currentValue").toString() == QStringLiteral("kodak_portra_400");
+  }));
+
+  // No RAW white balance: no As Shot entry, and the stored As Shot shows Reference, which it
+  // renders.
+  EXPECT_LT(EntryIndex(light, QStringLiteral("as_shot")), 0);
+  EXPECT_EQ(light->property("currentValue").toString(), QStringLiteral("reference"));
+
+  // Another film print write keeps the stored As Shot.
+  negative->selectIndex(EntryIndex(negative, QStringLiteral("agfa_vista_100")));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->film_scene_light.has_value());
+  EXPECT_EQ(*drt->film_scene_light, "as_shot");
+
+  // A light that the user picks is written.
+  light->selectIndex(EntryIndex(light, QStringLiteral("daylight")));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->film_scene_light.has_value());
+  EXPECT_EQ(*drt->film_scene_light, "daylight");
+
+  // A RAW whose as-shot temperature resolves shows As Shot.
+  session.setAdjustmentSnapshot(MakeFilmPrintSnapshotWithLight(QStringLiteral("as_shot"), true));
+  ASSERT_TRUE(WaitFor([&] {
+    return light->property("currentValue").toString() == QStringLiteral("as_shot");
+  }));
+  EXPECT_GE(EntryIndex(light, QStringLiteral("as_shot")), 0);
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanHidesTheEnlargerFlareAndKeepsItsValue) {

@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "../graph/test_camera_profile.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/film_print_model.hpp"
@@ -24,8 +25,11 @@
 /// print material Negative Scan with the lab before the display transform, in stops (issue 664).
 namespace alcedo::film_print_test {
 
-/// Develop mode As Shot, with @p kelvin as the solved temperature of the RAW file.
+/// Develop mode As Shot, with @p kelvin as the solved temperature of the RAW file. The test camera
+/// profile makes the colour transform of Develop resolve: with no resolved transform the document
+/// has no RAW white balance (issue 672).
 inline void SetRawAsShot(PipelineDocument& document, double kelvin) {
+  gpu_dag_test::EnsureTestCameraProfile(document);
   auto payload        = document.Develop()->Params().Params();
   payload.wb_mode     = "as_shot";
   payload.as_shot_cct = static_cast<float>(kelvin);
@@ -33,8 +37,9 @@ inline void SetRawAsShot(PipelineDocument& document, double kelvin) {
   document.Develop()->Params().ReplaceParams(std::move(payload));
 }
 
-/// Develop mode Custom with @p kelvin.
+/// Develop mode Custom with @p kelvin, with the test camera profile (see @ref SetRawAsShot).
 inline void SetRawCustom(PipelineDocument& document, double kelvin) {
+  gpu_dag_test::EnsureTestCameraProfile(document);
   DevelopColorTemperatureUpdate update;
   update.wb_mode    = std::string{"custom"};
   update.custom_cct = static_cast<float>(kelvin);

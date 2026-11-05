@@ -9,6 +9,7 @@
 
 #include "app/editor_pipeline_command_service.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -368,6 +369,9 @@ auto ReadOdt(const PipelineDocument& document, const EditorParameterTarget& targ
   value.tonescale_preset = params.TonescalePreset();
   value.creative_white   = params.CreativeWhite();
   value.film_print       = params.FilmPrint();
+  const auto* develop    = document.Develop();
+  value.film_as_shot_available =
+      develop != nullptr && RawWhiteBalanceCct(develop->Params().Params()).has_value();
   return FinishField(target, std::move(value), out);
 }
 
