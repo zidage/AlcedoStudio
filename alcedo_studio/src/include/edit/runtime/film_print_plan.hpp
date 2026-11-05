@@ -25,8 +25,9 @@ class PipelineDocument;
  * @brief The colour temperature of the RAW decode of @p document, for scene light As Shot.
  *
  * Develop mode Custom gives its Kelvin; the other modes give the solved as-shot temperature. The
- * tint is not read. A raster input (JPEG, PNG, TIFF, OpenEXR) or a document with no Develop has no
- * RAW white balance, so the result is none, and As Shot reads as the reference.
+ * tint is not read. A raster input (JPEG, PNG, TIFF, OpenEXR), a document with no Develop, or a
+ * RAW whose colour transform does not resolve has no RAW white balance, so the result is none, and
+ * As Shot reads as the reference. See `RawWhiteBalanceCct`.
  */
 [[nodiscard]] auto FilmSceneRawCct(const PipelineDocument& document) -> std::optional<double>;
 

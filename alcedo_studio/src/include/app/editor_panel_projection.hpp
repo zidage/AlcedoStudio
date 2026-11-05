@@ -97,6 +97,9 @@ struct EditorPanelOdtValue {
   std::string tonescale_preset = "use_look_preset";
   std::string creative_white   = "use_look_preset";
   FilmPrintParams film_print{};
+  /// True when the document has a RAW white balance for scene light As Shot (`RawWhiteBalanceCct`
+  /// has a value). The panel shows As Shot only then (issue 672). Not a Model field.
+  bool            film_as_shot_available = false;
 };
 
 struct EditorPanelLensValue {

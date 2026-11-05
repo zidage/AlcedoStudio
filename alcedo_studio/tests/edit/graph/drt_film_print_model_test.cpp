@@ -44,7 +44,8 @@ void ExpectDefaultFilmPrint(const FilmPrintParams& film) {
   EXPECT_EQ(kFilmPrintMaterialNames[1], "Cine Look (2383)");
   EXPECT_EQ(kFilmNegativeIds.front(), "kodak_5207");
   EXPECT_TRUE(IsFilmIdentifier(kFilmPrintMaterialIds, "kodak_2383"));
-  EXPECT_EQ(film.scene_light, "reference");
+  // The default scene light is As Shot for every form (issue #672).
+  EXPECT_EQ(film.scene_light, kFilmAsShotLightId);
   EXPECT_EQ(film.light_spread, 1.0f);
   EXPECT_EQ(film.halation, 1.0f);
   EXPECT_EQ(film.enlarger_flare, 0.01f);

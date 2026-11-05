@@ -113,6 +113,17 @@ void BindRgbWorkingSpaceCameraProfile(DevelopPayload& payload);
 
 [[nodiscard]] auto ColorTransformErrorMessage(ColorTransformError error) -> std::string_view;
 
+/**
+ * @brief The colour temperature of the RAW white balance of @p develop: the light of scene light
+ *        As Shot of the film print.
+ *
+ * Mode Custom gives its Kelvin; the other modes give the solved as-shot temperature. None for a
+ * raster input, and when @ref ResolveDevelopColorTransform fails for @p develop: then the as-shot
+ * temperature was not solved (for example, no usable camera matrices or as-shot neutral), and the
+ * stored value is not the light of the shot (issue 672).
+ */
+[[nodiscard]] auto RawWhiteBalanceCct(const DevelopPayload& develop) -> std::optional<double>;
+
 /// White-balance CCT/tint ranges shared by RAW Custom WB and Color Grade CAT02 WB.
 inline constexpr double kWhiteBalanceCctMin  = 2000.0;
 inline constexpr double kWhiteBalanceCctMax  = 15000.0;

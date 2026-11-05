@@ -44,7 +44,7 @@ These are user decisions of 2026-10-31 and 2026-11-01.
 | Output | Rec. 709 SDR only. There is no HDR path. |
 | Existing Halation | The film print skips the existing Halation operator. The film model takes its colour from the film layers. |
 | Grade | The existing product grade stays in front of the method. |
-| Default scene light | `reference`. |
+| Default scene light | `as_shot` (user decision of 2026-11-05, issue #672). It was `reference` before. |
 | Default DRT of a new document | OpenDRT stays. A user selects the film print. |
 | Stock data | 13 stocks have rule `grey_anchor` from the repair of lab U71. The print setup resource holds the result. |
 | Reflectance table | Compact form in the installer, with no download (2026-11-01): only the used wavelengths, only the u'v' nodes that a read can reach, and 12 mantissa bits. The u'v' limit against the complete lab table is a relative difference of 2e-4, and the final difference is at most 0.5 of an 8 bit code. |
@@ -66,7 +66,7 @@ Display Transform
   Method          [Film Print      v]
   Film            [Kodak Vision3 250D 5207 v]
   Print material  [Kodak Endura Premier    v]
-  Scene light     [Reference       v]
+  Scene light     [As Shot         v]
   Light spread    ----o----------   1.00
   Halation        ---o-----------   1.00
   Enlarger flare  -o-------------   0.010
@@ -82,7 +82,7 @@ Display Transform
 | --- | --- | --- | --- |
 | Film | `negative` | `kodak_5207` | Identifier of the stock bundle |
 | Print material | `print_material` | `kodak_endura_premier` (user decision of 2026-11-01, lab U76) | Identifier of the stock bundle |
-| Scene light | `scene_light` | `reference` | `reference`, 5 lights, 5 scenes of the lab |
+| Scene light | `scene_light` | `as_shot` (issue #672) | `reference`, `as_shot`, 5 lights, 5 scenes of the lab |
 | Light spread | `light_spread` | 1.0 | 0 to 3 |
 | Halation | `halation` | 1.0 | 0 to 8 |
 | Enlarger flare | `enlarger_flare` | 0.01 | 0 to 0.1 |
@@ -1297,6 +1297,18 @@ The first pull request of this phase had an ADX scan named Lab Scan (PR #663, co
 
 **Not verified.** A Release build, the packaged application, and a render in the running application on macOS. The full test suite did not run.
 
+### Issue #672: default scene light As Shot, and remembered film print settings
+
+User request of 2026-11-05, stacked on F11 (PR #671).
+
+- **Default scene light.** `FilmPrintParams::scene_light` is `as_shot` (`kFilmAsShotLightId`) for every form: print, colour reversal film, and Negative Scan. `OdtUiDefault`, `CompleteFilmPrintUpdate`, and `ReadFilmPrint` read the default from the struct, so they follow. A document does not change: `FilmPrintToJson` always writes `scene_light` (since F2), and a document of another method writes no `film_print`. The rule of `OdtConstrain` stays: a write that selects Negative Scan on a print under another light selects As Shot. The scanner light (`halogen`) is a setting of the scanner, not a scene light, and does not change.
+- **As Shot only with a RAW white balance** (user request of the same day). `RawWhiteBalanceCct` (`develop_color_transform`) is the temperature of the RAW white balance: none for a raster input and when `ResolveDevelopColorTransform` fails for the Develop payload (no usable camera matrices or as-shot neutral). Before, a failed solve left the default `as_shot_cct` of 6500 K, which As Shot then rendered. `FilmSceneRawCct` reads it, so As Shot renders as the reference in both cases, as for a raster input in F10. `ReadOdt` of the panel projection sets `EditorPanelOdtValue::film_as_shot_available` (snapshot key `film_as_shot_available`, not a Model field). Without it the panel removes As Shot from the Scene Light list and shows a stored As Shot as Reference. A film print write then keeps `as_shot` (`filmSceneLightKeepsAsShot`), so the document and the remembered settings keep As Shot for a RAW input; a scene light that the user picks ends this.
+- **Remembered film print settings.** The owner is `EditorBehaviorPreferences` (`appModules.editorBehavior`), QSettings key `editor/filmPrint/lastSettings`: the JSON text of the `film_print` object in the form of `DrtParamsModel::ToJson`. `rememberFilmPrint` loads the object through `DrtParamsModel::LoadJson` and rejects an object that the Model rejects; a stored value that the Model does not load reads as no value. `filmPrintUiValue` is the `odt` UI value of the catalog (`ToUiValue`).
+  - Record: each ODT model of `EditorDisplayTransformPanel.qml` emits `settledWriteAccepted` (new signal of `EditorAdjustmentModelBase`, after the submitter accepted a settled user write). With method Film Print the panel passes `buildOdtParams()` to `rememberFilmPrint`. Interactive drag writes and automation writes do not reach it.
+  - Apply: the method switcher calls `selectMethod`. A selection of Film Print on another method loads the remembered fields into the film print models (`loadFilmValues`, no submit) and then selects the method: one write, one history entry. A document that already has method Film Print keeps its own settings. Reset and `alcedo-cli` writes use the defaults.
+- **Tests.** `GpuDagModelGraphTest` (`FilmPrintParams` default; `RawWhiteBalanceCctNeedsARawInputWithAResolvedColorTransform`), `EditorPanelProjectionTest` (`AsShotIsAvailableOnlyForARawWhiteBalanceThatResolves`), `EditorParameterCatalogTest` (UI default; Negative Scan on a print under daylight selects As Shot), `PipelineHistoryApplierTest`, `EditorNodeSelectionLayoutTest` (`EditorBehaviorPreferencesTest`: persistence, rejection, stored value that the Model does not load), `EditorDisplayTransformSnapshotQmlTest` (`SelectingFilmPrintAppliesTheFilmPrintSettingsOfTheLastSettledFilmPrintWrite`, `AsShotIsHiddenWithNoRawWhiteBalanceAndAStoredAsShotStaysUntilTheUserPicksALight`). The GPU helpers `SetRawAsShot` and `SetRawCustom` add the test camera profile, so their temperature resolves.
+- **Metal.** Apple M4, Debug host build: `GpuDagMetalDrtTest` 41 of 41 pass with the full-size image case excluded, `AsShotFollowsTheColourTemperatureOfTheRawDecode` included. The 10 print images of `FilmPrintImageMatchesLab` give the same values as F11 (the Negative Scan image values were not on the Mac, so the case fails its file count).
+
 ---
 
 ## 7. Risks
@@ -1325,3 +1337,4 @@ The first pull request of this phase had an ADX scan named Lab Scan (PR #663, co
 - F9: [#655](https://github.com/zidage/AlcedoStudio/issues/655)
 - F10: [#661](https://github.com/zidage/AlcedoStudio/issues/661) (phase 1, model layer), [#664](https://github.com/zidage/AlcedoStudio/issues/664) (phase 2, CUDA and OpenCL); found in phase 2: [#667](https://github.com/zidage/AlcedoStudio/issues/667), [#668](https://github.com/zidage/AlcedoStudio/issues/668), [#669](https://github.com/zidage/AlcedoStudio/issues/669)
 - F11: [#662](https://github.com/zidage/AlcedoStudio/issues/662)
+- Default As Shot and remembered film print settings: [#672](https://github.com/zidage/AlcedoStudio/issues/672)

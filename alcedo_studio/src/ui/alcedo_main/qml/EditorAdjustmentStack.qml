@@ -341,6 +341,9 @@ Item {
                         objectName: "editorAdjustmentPanel_display"
                         theme: root.theme
                         editorSession: root.editorSession
+                        editorBehavior: typeof appModules !== "undefined" && appModules
+                                        ? appModules.editorBehavior
+                                        : null
                         controlsEnabled: root.controlsEnabled
                     }
 

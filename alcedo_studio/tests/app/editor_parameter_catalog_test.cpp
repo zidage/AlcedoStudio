@@ -901,6 +901,8 @@ TEST(EditorParameterCatalogTest, NegativeScanPropertiesHaveTheRangesOfTheDocumen
   EXPECT_DOUBLE_EQ(defaults.at("scanner_red_nm").get<double>(), 650.0);
   EXPECT_DOUBLE_EQ(defaults.at("scanner_width_nm").get<double>(), 40.0);
   EXPECT_EQ(defaults.at("scanner_light"), "halogen");
+  // The default scene light is As Shot (issue #672).
+  EXPECT_EQ(defaults.at("scene_light"), "as_shot");
 }
 
 TEST(EditorParameterCatalogTest, NegativeScanWritesTheOpenDrtSettingsAndTheEncodingOfThePanel) {
@@ -983,6 +985,11 @@ TEST(EditorParameterCatalogTest, NegativeScanWritesTheOpenDrtSettingsAndTheEncod
   EXPECT_EQ(print->at("odt").at("film_print").at("scene_light"), "daylight");
   // A print keeps the scan settings of the document, which only Negative Scan reads.
   EXPECT_EQ(print->at("odt").at("film_print").at("auto"), "neutral");
+  // Selecting Negative Scan again on the print under daylight selects As Shot in the same write.
+  const auto rescan = EditorParameterCatalog::ToModelJson(
+      "odt", {{"print_material", "negative_scan"}}, *print, &error);
+  ASSERT_TRUE(rescan.has_value()) << error;
+  EXPECT_EQ(rescan->at("odt").at("film_print").at("scene_light"), "as_shot");
   EXPECT_FALSE(
       EditorParameterCatalog::ToModelJson("odt", {{"look_preset", "umbra"}}, *print, &error)
           .has_value());
@@ -1022,7 +1029,7 @@ TEST(EditorParameterCatalogTest, FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput)
                                       {"film_print",
                                        {{"negative", "kodak_portra_400"},
                                         {"print_material", "kodak_endura_premier"},
-                                        {"scene_light", "reference"},
+                                        {"scene_light", "as_shot"},
                                         {"light_spread", 1.0},
                                         {"halation", 2.5},
                                         {"enlarger_flare", 0.01},

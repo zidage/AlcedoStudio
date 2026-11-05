@@ -246,6 +246,33 @@ TEST(GpuDagModelGraph, DevelopColorTransformRejectsMissingOrSingularCameraMatric
   EXPECT_EQ(singular_result.error, ColorTransformError::SingularCameraMatrix);
 }
 
+TEST(GpuDagModelGraph, RawWhiteBalanceCctNeedsARawInputWithAResolvedColorTransform) {
+  // Scene light As Shot of the film print reads this temperature (issue 672).
+  auto custom = DualIlluminantPayload();
+  custom.custom_cct = 5650.0f;
+  EXPECT_EQ(RawWhiteBalanceCct(custom), std::optional<double>(5650.0));
+
+  auto as_shot        = DualIlluminantPayload();
+  as_shot.wb_mode     = "as_shot";
+  as_shot.as_shot_cct = 4321.0f;
+  EXPECT_EQ(RawWhiteBalanceCct(as_shot), std::optional<double>(4321.0));
+
+  // An as-shot neutral that does not solve, missing camera matrices, and a raster input have no
+  // RAW white balance: the stored temperature is not the light of the shot.
+  auto no_neutral                                 = as_shot;
+  no_neutral.camera_profile.as_shot_neutral_valid = false;
+  no_neutral.camera_profile.as_shot_neutral       = {};
+  // The solve falls back to cam_mul; a non-finite cam_mul leaves it no neutral.
+  no_neutral.camera_profile.cam_mul = {std::numeric_limits<float>::quiet_NaN(), 1.0f, 1.0f};
+  ASSERT_FALSE(ResolveDevelopColorTransform(no_neutral).ok);
+  EXPECT_EQ(RawWhiteBalanceCct(no_neutral), std::nullopt);
+  DevelopPayload missing;
+  EXPECT_EQ(RawWhiteBalanceCct(missing), std::nullopt);
+  auto raster  = custom;
+  raster.input = DevelopRasterInput{};
+  EXPECT_EQ(RawWhiteBalanceCct(raster), std::nullopt);
+}
+
 TEST(GpuDagModelGraph, DefaultPipelineDocumentStillRequiresBoundCameraProfile) {
   auto document = CreateDefaultPipelineDocument();
   ASSERT_NE(document.Develop(), nullptr);

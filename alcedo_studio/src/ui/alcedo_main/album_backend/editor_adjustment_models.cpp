@@ -157,7 +157,10 @@ auto EditorAdjustmentModelBase::submitNow(alcedo::EditorParameterWrite write, bo
     return false;
   }
   if (!submitter_->submitWrite(fieldKey_, std::move(write), settled)) return false;
-  if (settled) onSettledWriteAccepted();
+  if (settled) {
+    onSettledWriteAccepted();
+    emit settledWriteAccepted();
+  }
   return true;
 }
 

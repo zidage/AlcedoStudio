@@ -22,6 +22,17 @@ Item {
     property var theme: null
     property var editorSession: null
     property bool controlsEnabled: true
+    /// EditorBehaviorPreferences (appModules.editorBehavior): the remembered film print settings
+    /// (issue #672). Null in tests that do not set it; then the film print starts at the defaults.
+    property var editorBehavior: null
+    /// True when the document has a RAW white balance for scene light As Shot: a RAW input whose
+    /// as-shot temperature resolves (issue #672). Without it the Scene Light list has no As Shot,
+    /// and a stored As Shot shows Reference, the light that it renders.
+    property bool filmAsShotAvailable: false
+    /// True while the Scene Light shows Reference for a stored As Shot with no RAW white balance.
+    /// A write then keeps As Shot, so the document and the remembered settings keep it for a RAW
+    /// input. A selection of the user ends it.
+    property bool filmSceneLightKeepsAsShot: false
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -101,6 +112,47 @@ Item {
         root.selectFilm(last.length > 0 ? last : parameterCatalog.filmDefault(process))
     }
 
+    /// A selection of method Film Print on another method applies the remembered film print
+    /// settings in the same write (issue #672). The film print of a document is not written when
+    /// it has another method, so without them the selection starts at the defaults.
+    function selectMethod(index, value) {
+        if (String(value) === "film_print" && !root.isFilmPrint && root.editorBehavior) {
+            const remembered = root.editorBehavior.filmPrintUiValue
+            if (remembered && remembered.method === "film_print")
+                root.loadFilmValues(remembered)
+        }
+        methodModel.selectIndex(index)
+    }
+
+    /// Remember the film print settings after a settled user write with method Film Print.
+    function rememberFilmPrint() {
+        if (root.isFilmPrint && root.editorBehavior)
+            root.editorBehavior.rememberFilmPrint(root.buildOdtParams())
+    }
+
+    /// Scene Light entries: As Shot only when the document has a RAW white balance.
+    function sceneLightEntries(asShotAvailable) {
+        const all = root.catalogEntries("scene_light")
+        if (asShotAvailable)
+            return all
+        return all.filter(function(entry) { return entry.value !== "as_shot" })
+    }
+
+    /// The scene light that the panel shows for the value @p value: As Shot with no RAW white
+    /// balance renders as Reference.
+    function shownSceneLight(value) {
+        return String(value) === "as_shot" && !root.filmAsShotAvailable ? "reference" : value
+    }
+
+    /// The projected As Shot availability of the snapshot. A snapshot with no value has none.
+    function snapshotAsShotAvailable(snapshot) {
+        const wrap = snapshot ? snapshot["odt"] : undefined
+        if (wrap === undefined || wrap === null)
+            return false
+        const odt = wrap["odt"] !== undefined ? wrap["odt"] : wrap
+        return odt["film_as_shot_available"] === true
+    }
+
     /// EOTF choices of the display transform for an encoding space.
     function eotfOptionsForSpace(spaceValue) {
         return root.translatedEntries(parameterCatalog.odtEotfOptions(String(spaceValue)))
@@ -150,7 +202,8 @@ Item {
             creative_white: root.selectedValue(openDrtCreativeWhiteModel, "creative_white"),
             negative: root.selectedValue(filmNegativeModel, "negative"),
             print_material: root.selectedValue(filmPrintMaterialModel, "print_material"),
-            scene_light: root.selectedValue(filmSceneLightModel, "scene_light"),
+            scene_light: root.filmSceneLightKeepsAsShot
+                         ? "as_shot" : root.selectedValue(filmSceneLightModel, "scene_light"),
             light_spread: filmLightSpreadModel.value,
             halation: filmHalationModel.value,
             enlarger_flare: filmEnlargerFlareModel.value,
@@ -217,6 +270,7 @@ Item {
         filmNegativeModel.currentIndex = filmNegativeModel.defaultIndex
         filmPrintMaterialModel.currentIndex = filmPrintMaterialModel.defaultIndex
         filmSceneLightModel.currentIndex = filmSceneLightModel.defaultIndex
+        root.filmSceneLightKeepsAsShot = false
         filmLightSpreadModel.value = filmLightSpreadModel.defaultValue
         filmHalationModel.value = filmHalationModel.defaultValue
         filmEnlargerFlareModel.value = filmEnlargerFlareModel.defaultValue
@@ -271,6 +325,17 @@ Item {
 
     onControlsEnabledChanged: wireEnabled()
     Component.onCompleted: {
+        const odtModels = [methodModel, encodingSpaceModel, encodingEotfModel, peakLuminanceModel,
+            acesLimitingSpaceModel, openDrtLookModel, openDrtTonescaleModel,
+            openDrtCreativeWhiteModel, filmNegativeModel, filmPrintMaterialModel,
+            filmSceneLightModel, filmLightSpreadModel, filmHalationModel, filmEnlargerFlareModel,
+            filmScanAutoModel, filmScannerLightModel, filmScanAutoStrengthModel,
+            filmScanAutoDensityModel, filmScanContrastModel, filmScanExposureModel,
+            filmScanCyanModel, filmScanMagentaModel, filmScanYellowModel, filmScanBlackModel,
+            filmScannerRedModel, filmScannerGreenModel, filmScannerBlueModel,
+            filmScannerWidthModel]
+        for (var i = 0; i < odtModels.length; ++i)
+            odtModels[i].settledWriteAccepted.connect(root.rememberFilmPrint)
         wireEnabled()
         applyDeclaredDefaults()
         // Bootstrap when the stack has not yet projected.
@@ -289,6 +354,8 @@ Item {
         if (odt === null)
             return
 
+        // Before the film values: it chooses the Scene Light entries.
+        root.filmAsShotAvailable = root.snapshotAsShotAvailable(snapshot)
         setEnumFromSnapshot(methodModel, odt["method"])
         setEnumFromSnapshot(encodingSpaceModel, odt["encoding_space"])
 
@@ -302,9 +369,18 @@ Item {
         setEnumFromSnapshot(openDrtLookModel, odt["look_preset"])
         setEnumFromSnapshot(openDrtTonescaleModel, odt["tonescale_preset"])
         setEnumFromSnapshot(openDrtCreativeWhiteModel, odt["creative_white"])
+        loadFilmValues(odt)
+    }
+
+    /// Load the film print fields of the ODT UI value @p odt into the film print models. Loading
+    /// never submits.
+    function loadFilmValues(odt) {
         setEnumFromSnapshot(filmNegativeModel, odt["negative"])
         setEnumFromSnapshot(filmPrintMaterialModel, odt["print_material"])
-        setEnumFromSnapshot(filmSceneLightModel, odt["scene_light"])
+        if (odt["scene_light"] !== undefined)
+            root.filmSceneLightKeepsAsShot =
+                String(odt["scene_light"]) === "as_shot" && !root.filmAsShotAvailable
+        setEnumFromSnapshot(filmSceneLightModel, root.shownSceneLight(odt["scene_light"]))
         setValueFromSnapshot(filmLightSpreadModel, odt["light_spread"])
         setValueFromSnapshot(filmHalationModel, odt["halation"])
         setValueFromSnapshot(filmEnlargerFlareModel, odt["enlarger_flare"])
@@ -462,10 +538,15 @@ Item {
         objectName: "displayFilmSceneLightModel"
         fieldKey: "odt"
         label: qsTr("Scene Light")
-        entries: root.catalogEntries("scene_light")
+        entries: root.sceneLightEntries(root.filmAsShotAvailable)
+        // With no As Shot entry the default is the first entry, Reference.
         defaultIndex: root.defaultIndexOf(entries, "scene_light")
         submitter: root.editorSession
-        paramsBuilder: root.buildOdtParams
+        // A selection of the user replaces a stored As Shot that shows as Reference.
+        paramsBuilder: function() {
+            root.filmSceneLightKeepsAsShot = false
+            return root.buildOdtParams()
+        }
     }
 
     EditorAdjustmentValueModel {
@@ -837,7 +918,7 @@ Item {
                     trackBorderColor: root.colCardBorder
                     textColor: root.colText
                     hoverColor: root.colHover
-                    onSelected: function(index, value) { methodModel.selectIndex(index) }
+                    onSelected: function(index, value) { root.selectMethod(index, value) }
                 }
 
                 // Method-specific params (inline under the track).

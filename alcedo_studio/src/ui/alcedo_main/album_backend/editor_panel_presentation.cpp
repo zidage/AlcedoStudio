@@ -153,6 +153,7 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           odt.insert(QStringLiteral("peak_luminance"), value.peak_luminance);
           odt.insert(QStringLiteral("open_drt"), open_drt);
           odt.insert(QStringLiteral("film_print"), film_print);
+          odt.insert(QStringLiteral("film_as_shot_available"), value.film_as_shot_available);
           map.insert(QStringLiteral("odt"), odt);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelLensValue>) {
           QVariantMap lens;
