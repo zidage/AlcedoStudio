@@ -332,21 +332,22 @@ auto FilmPrintTables::LightTableOf(std::string_view reversal)
   return stage;
 }
 
-auto FilmPrintTables::ScanTableOf(std::string_view negative)
-    -> std::shared_ptr<const RecordTableStage> {
+auto FilmPrintTables::ScannerTableOf(std::string_view                          negative,
+                                     const film_negative_scan::ScannerWeights& weights,
+                                     ContentKey scanner_key) -> std::shared_ptr<const RecordTableStage> {
   const auto key = ContentHash{}
                        .MixU32(kTableImplementationVersion)
-                       .MixText("scan table")
+                       .MixText("scanner table")
                        .MixText(bundle_->ContentDigest())
                        .MixText(negative)
+                       .MixKey(scanner_key)
                        .Key();
   if (auto kept = Find(scan_tables_, key)) {
     return kept;
   }
-  const auto  start   = std::chrono::steady_clock::now();
-  const auto  stock   = bundle_->Negative(negative);
-  const auto          weights = bundle_->ScanConstants().printing_weights;
-  const auto  band    = MakeBandOnSupport(stock.base, stock.dyes, weights);
+  const auto start = std::chrono::steady_clock::now();
+  const auto stock = bundle_->Negative(negative);
+  const auto band  = MakeBandOnSupport(stock.base, stock.dyes, weights.weights);
 
   // With rule 'dye_amount_curves' of the lab, the nodes of the negative record are the dye amounts,
   // as in the negative stage of the print table.
@@ -363,28 +364,26 @@ auto FilmPrintTables::ScanTableOf(std::string_view negative)
       }
     }
   }
-  // Equation 1 of ST 2065-2 with the printing weights of the print material of the scan (lab
-  // ScanPreview with reading 'print2383'): D = log10(sum w) - log10(sum w 10^-(base + dyes a)).
+  // Lab rule 'ideal_scanner_bands' (ScanPreview.apd with the scanner weights):
+  // T = log10(sum w) - log10(sum w 10^-(base + dyes a)).
   const auto            wavelengths = static_cast<std::size_t>(bundle_->Wavelengths());
   std::array<double, 3> log_weight_sum{};
   for (std::size_t k = 0; k < film_tables::kLayers; ++k) {
     double sum = 0.0;
     for (std::size_t w = 0; w < wavelengths; ++w) {
-      sum += weights[k * wavelengths + w];
+      sum += weights.weights[k * wavelengths + w];
     }
     if (!(sum > 0.0)) {
-      throw std::runtime_error("Film print resource: a printing weight of the scan has no sum");
+      throw std::runtime_error("Film print: a band of the scanner of Negative Scan has no weight");
     }
     log_weight_sum[k] = std::log10(sum);
   }
   auto stage = std::make_shared<RecordTableStage>();
   stage->key = key;
   stage->values.resize(kTableValues);
-  film_tables::Log10BandResponse(band.View(), amounts.data(), kTableNodes,
-                                 stage->values.data());
+  film_tables::Log10BandResponse(band.View(), amounts.data(), kTableNodes, stage->values.data());
   for (std::size_t index = 0; index < stage->values.size(); ++index) {
-    stage->values[index] =
-        log_weight_sum[index % film_tables::kLayers] - stage->values[index];
+    stage->values[index] = log_weight_sum[index % film_tables::kLayers] - stage->values[index];
   }
   ++stats_.scan_table_builds;
   stats_.last_scan_table_seconds = SecondsSince(start);
@@ -477,33 +476,56 @@ auto FilmPrintTables::ResolveReversal(std::string_view         reversal,
   return result;
 }
 
-auto FilmPrintTables::ResolveScan(std::string_view negative, const FilmSceneLightMix& scene_light)
+auto FilmPrintTables::ResolveNegativeScan(std::string_view                   negative,
+                                          const FilmSceneLightMix&           scene_light,
+                                          const film_negative_scan::Scanner& scanner)
     -> std::shared_ptr<const FilmPrintTableData> {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return ResolveNegativeScanLocked(negative, scene_light, scanner);
+}
+
+auto FilmPrintTables::ResolveNegativeScanLocked(std::string_view                   negative,
+                                                const FilmSceneLightMix&           scene_light,
+                                                const film_negative_scan::Scanner& scanner)
+    -> std::shared_ptr<const FilmPrintTableData> {
+  const auto& constants   = bundle_->NegativeScanConstants();
+  const bool  default_one = scanner == film_negative_scan::DefaultScanner(constants);
+  const auto  scanner_key = ContentHash{}
+                               .MixText("scanner")
+                               .MixF64(scanner.centres_nm[0])
+                               .MixF64(scanner.centres_nm[1])
+                               .MixF64(scanner.centres_nm[2])
+                               .MixF64(scanner.width_nm)
+                               .MixU32(scanner.equal_energy ? 1U : 0U)
+                               .Key();
   const auto result_key = MixLight(ContentHash{}
                                        .MixU32(kTableImplementationVersion)
-                                       .MixText("scan selection")
+                                       .MixText("negative scan selection")
                                        .MixText(bundle_->ContentDigest())
-                                       .MixText(negative),
+                                       .MixText(negative)
+                                       .MixKey(scanner_key),
                                    scene_light)
                               .Key();
   if (auto kept = Find(results_, result_key)) {
     return kept;
   }
-  const auto setup  = bundle_->ScanSelection(negative, scene_light);
+  const auto setup  = bundle_->NegativeScanSelection(negative, scene_light);
   const auto stock  = bundle_->Negative(negative);
+  const auto weights =
+      film_negative_scan::MakeScannerWeights(scanner, constants, bundle_->WavelengthsNm());
 
-  auto       result = std::make_shared<FilmPrintTableData>();
-  result->uv_nodes  = bundle_->UvNodes();
-  result->edge      = static_cast<std::uint32_t>(kFilmPrintTableEdge);
-  result->scan      = true;
+  auto result      = std::make_shared<FilmPrintTableData>();
+  result->uv_nodes = bundle_->UvNodes();
+  result->edge     = static_cast<std::uint32_t>(kFilmPrintTableEdge);
+  result->scan     = true;
   // The u'v' table and the kernel values are those of a print of the same negative and light, so
-  // a change between Lab Scan and a print material keeps their GPU copies.
-  result->uv_key    = MixLight(ContentHash{}
-                                   .MixU32(kTableImplementationVersion)
-                                   .MixText("uv table")
-                                   .MixText(bundle_->ContentDigest())
-                                   .MixText(negative),
-                               scene_light)
+  // a change between Negative Scan and a print material keeps their GPU copies.
+  result->uv_key   = MixLight(ContentHash{}
+                                  .MixU32(kTableImplementationVersion)
+                                  .MixText("uv table")
+                                  .MixText(bundle_->ContentDigest())
+                                  .MixText(negative),
+                              scene_light)
                        .Key();
   result->kernel_key = MixLight(ContentHash{}
                                     .MixU32(kTableImplementationVersion)
@@ -514,13 +536,42 @@ auto FilmPrintTables::ResolveScan(std::string_view negative, const FilmSceneLigh
                            .Key();
   BuildUvTable(stock.exposure_weights, setup.scene_spectrum, *result);
 
-  // The printing density table depends on the negative only, so all scene lights share its GPU
-  // copy.
-  const auto scan_table       = ScanTableOf(negative);
+  // The scanner table depends on the negative and the scanner only, so all scene lights share its
+  // GPU copy.
+  const auto scan_table       = ScannerTableOf(negative, weights, scanner_key);
   result->print_key           = scan_table->key;
   result->print_cube_root_xyz = scan_table->values;
+  if (default_one) {
+    result->negative_scan = film_negative_scan::StoredSelectionValues(setup);
+  } else {
+    const auto& medium    = bundle_->ScanMedium(negative);
+    const auto  gamma_key = ContentHash{}
+                               .MixU32(kTableImplementationVersion)
+                               .MixText("scan gamma")
+                               .MixText(bundle_->ContentDigest())
+                               .MixText(medium.id)
+                               .MixKey(scanner_key)
+                               .Key();
+    auto gamma = derived_gamma_.find(gamma_key.hash);
+    if (gamma == derived_gamma_.end()) {
+      // The pool tables stay alive here while the derivation reads them.
+      std::vector<std::shared_ptr<const RecordTableStage>> held;
+      const auto table_of = [&](std::string_view stock_id) {
+        held.push_back(ScannerTableOf(stock_id, weights, scanner_key));
+        return film_negative_scan::ScannerTableView{held.back()->values, kFilmPrintTableEdge};
+      };
+      const auto derived =
+          film_negative_scan::DeriveMediumGamma(*bundle_, medium, weights, table_of);
+      gamma = derived_gamma_.emplace(gamma_key.hash, derived).first;
+      ++stats_.scan_gamma_derivations;
+    }
+    result->negative_scan = film_negative_scan::DeriveSelectionValues(
+        *bundle_, negative, setup, weights,
+        film_negative_scan::ScannerTableView{scan_table->values, kFilmPrintTableEdge},
+        gamma->second);
+  }
   if (!AllFinite(result->uv_exposure) || !AllFinite(result->print_cube_root_xyz)) {
-    throw std::runtime_error("Film print: a table of the scan of " + std::string(negative) +
+    throw std::runtime_error("Film print: a table of Negative Scan of " + std::string(negative) +
                              " under " + LightText(scene_light) +
                              " has a value that is not finite");
   }
@@ -546,8 +597,9 @@ auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_
   if (bundle_->IsReversal(negative)) {
     return ResolveReversal(negative, scene_light);
   }
-  if (bundle_->IsLabScan(print_material)) {
-    return ResolveScan(negative, scene_light);
+  if (bundle_->IsNegativeScan(print_material)) {
+    return ResolveNegativeScanLocked(
+        negative, scene_light, film_negative_scan::DefaultScanner(bundle_->NegativeScanConstants()));
   }
   const auto print_key = MixLight(ContentHash{}
                                       .MixU32(kTableImplementationVersion)

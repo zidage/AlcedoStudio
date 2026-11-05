@@ -187,13 +187,13 @@ TEST(FilmPrintImagePlan, SlidersAtZeroTurnOffTheirSteps) {
       0U);
 }
 
-TEST(FilmPrintImagePlan, LabScanHasNoFlareAndKeepsTheOtherSteps) {
+TEST(FilmPrintImagePlan, NegativeScanHasNoFlareAndKeepsTheOtherSteps) {
   FilmPrintParams scan;
-  scan.print_material = std::string{kFilmLabScanId};
+  scan.print_material = std::string{kFilmNegativeScanId};
   scan.enlarger_flare = 0.1f;
   const auto plan =
       MakeFilmPrintImagePlan(FullFrame(6000, 4000), Constants(), kLayerSpreadUm, true, scan);
-  // Lab Scan has no enlarger, so the stored flare builds no canvas.
+  // Negative Scan has no enlarger, so the stored flare builds no canvas.
   EXPECT_FALSE(plan.flare_active);
   EXPECT_EQ(plan.flare, 0.0f);
   // Light spread, Halation, and the inhibitor act as on a print.
@@ -207,7 +207,8 @@ TEST(FilmPrintImagePlan, LabScanHasNoFlareAndKeepsTheOtherSteps) {
   EXPECT_EQ(plan.inhibitor_half_size, printed.inhibitor_half_size);
   EXPECT_EQ(plan.halation_x.radius, printed.halation_x.radius);
 
-  // A colour reversal film reads no print material, so its loupe flare stays with a stored Lab Scan.
+  // A colour reversal film reads no print material, so its loupe flare stays with a stored
+  // Negative Scan.
   FilmPrintParams reversal = scan;
   reversal.negative        = "fuji_velvia_50";
   EXPECT_TRUE(

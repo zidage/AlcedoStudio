@@ -155,8 +155,9 @@ auto ApplySetParameter(PipelineDocument& document, const SetParameterChange& cha
   const auto target = ToEditorParameterTarget(change.target);
   const auto& value = direction == PipelineEditApplyDirection::Forward ? change.after_value
                                                                       : change.before_value;
-  // Write only owned keys so a head move never restores stale import-bound data.
-  return ApplyEditorParameterPatch(document, target,
+  // Write only owned keys so a head move never restores stale import-bound data. The stored value
+  // is complete: a key that the Model omits at its default reads as that default (issue 661).
+  return ApplyEditorParameterValue(document, target,
                                    FieldOwnedParameterJson(target.field_key, value), error);
 }
 

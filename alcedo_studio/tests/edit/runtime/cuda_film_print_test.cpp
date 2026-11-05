@@ -35,7 +35,7 @@
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "film_print_reference.hpp"
-#include "film_print_scan_test_support.hpp"
+#include "film_print_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -217,18 +217,12 @@ TEST_F(CudaFilmPrintFixture, FilmPrintOutputIsFinite) {
       {4.0f, 0.001f, 4.0f, 1.0f},      {0.001f, 4.0f, 4.0f, 1.0f},
   };
   // kodak_gold_200 has no inhibition; the others have it. The reversal films have the light table
-  // form: Astia 100F has no spread and no inhibition, and E100 has no inhibition. Lab Scan has the
-  // scan form, with no entry gamut compression.
-  const std::string                                      print = "kodak_2383";
-  const std::string                                      scan{kFilmLabScanId};
-  const std::vector<std::pair<std::string, std::string>> selections = {
-      {"kodak_5207", print},       {"kodak_portra_400", print},      {"kodak_gold_200", print},
-      {"fuji_velvia_50", print},   {"fuji_velvia_100", print},       {"fuji_provia_100f", print},
-      {"fuji_astia_100f", print},  {"kodak_ektachrome_e100", print}, {"kodak_5207", scan},
-      {"kodak_gold_200", scan},    {"kodak_5219", scan},             {"kodak_portra_400", scan}};
-  for (const auto& [negative, material] : selections) {
-    SCOPED_TRACE(negative + " on " + material);
-    const auto pixels = RenderDrt(FilmPrintDocument(negative, material), ap1);
+  // form: Astia 100F has no spread and no inhibition, and E100 has no inhibition.
+  for (const auto* negative :
+       {"kodak_5207", "kodak_portra_400", "kodak_gold_200", "fuji_velvia_50", "fuji_velvia_100",
+        "fuji_provia_100f", "fuji_astia_100f", "kodak_ektachrome_e100"}) {
+    SCOPED_TRACE(negative);
+    const auto pixels = RenderDrt(FilmPrintDocument(negative), ap1);
     ASSERT_EQ(pixels.size(), ap1.size());
     for (std::size_t index = 0; index < pixels.size(); ++index) {
       SCOPED_TRACE(index);
@@ -464,88 +458,6 @@ TEST_F(CudaFilmPrintFixture, LoupeFlareChangeKeepsTheCanvasesThatDoNotReadIt) {
   }
 }
 
-TEST_F(CudaFilmPrintFixture, LabScanBuildsNoFlareCanvasAndReadsNoEnlargerFlare) {
-  const auto         field    = PatchField(128, 96, 40, 40, 8);
-  auto               document = FilmPrintDocument("kodak_5207", std::string{kFilmLabScanId});
-  DrtParameterUpdate strong;
-  strong.film_enlarger_flare = 0.1f;
-  document.Drt()->Params().ApplyUpdate(strong);
-  SetView({128, 96}, {128, 96}, Matrix3x3::Identity());
-  const auto pixels = RenderView(document, field, true);
-  // Lab Scan has no enlarger, so only the Halation canvas is built.
-  EXPECT_EQ(device_.PassStats().film_canvas_rebuild, 1U);
-  auto& images = device_.Workspace().Images();
-  EXPECT_NE(images.PublishedLastWriter(FilmHalationResultId(plan_.drt.node_id)), 0U);
-  EXPECT_EQ(images.PublishedLastWriter(FilmFlareResultId(plan_.drt.node_id)), 0U);
-  EXPECT_EQ(images.PublishedLastWriter(FilmLoupeFlareResultId(plan_.drt.node_id)), 0U);
-  for (const auto& pixel : pixels) {
-    ASSERT_TRUE(std::isfinite(pixel.r) && std::isfinite(pixel.g) && std::isfinite(pixel.b));
-    ASSERT_GE((std::min)({pixel.r, pixel.g, pixel.b}), 0.0f);
-    ASSERT_LE((std::max)({pixel.r, pixel.g, pixel.b}), 1.0f + 1e-6f);
-    ASSERT_EQ(pixel.a, 0.75f);
-  }
-
-  // The stored Enlarger flare has no effect, and a change of it builds no canvas.
-  DrtParameterUpdate off;
-  off.film_enlarger_flare = 0.0f;
-  document.Drt()->Params().ApplyUpdate(off);
-  const auto same = RenderView(document, field, true);
-  EXPECT_EQ(device_.PassStats().film_canvas_rebuild, 0U);
-  EXPECT_EQ(device_.PassStats().film_canvas_sample, 1U);
-  for (std::size_t index = 0; index < pixels.size(); ++index) {
-    ASSERT_EQ(same[index].r, pixels[index].r) << index;
-    ASSERT_EQ(same[index].g, pixels[index].g) << index;
-    ASSERT_EQ(same[index].b, pixels[index].b) << index;
-  }
-
-  // A print of the same negative is another image.
-  DrtParameterUpdate material;
-  material.film_print_material = "kodak_2383";
-  document.Drt()->Params().ApplyUpdate(material);
-  const auto printed = RenderView(document, field, false);
-  EXPECT_GT(LargestCodeDifference(printed, printed.size(),
-                                  [&pixels](std::size_t index) { return pixels[index]; }),
-            4.0);
-}
-
-TEST_F(CudaFilmPrintFixture, LabScanAndAPrintMaterialChangeKeepTheResultsOfEachOther) {
-  constexpr std::uint32_t kSize    = 128;
-  const auto              field    = PatchField(kSize, kSize, 40, 40, 16);
-  auto                    document = FilmPrintDocument("kodak_portra_400", "kodak_endura_premier");
-  SetView({kSize, kSize}, {kSize, kSize}, Matrix3x3::Identity());
-  const auto select = [&document](const std::string& material) {
-    DrtParameterUpdate update;
-    update.film_print_material = material;
-    document.Drt()->Params().ApplyUpdate(update);
-  };
-  const auto print = RenderView(document, field, true);
-  select(std::string{kFilmLabScanId});
-  const auto scan     = RenderView(document, field, true);
-  const auto uploaded = device_.Workspace().Device().LutUploadBytes();
-  const auto stats    = SharedFilmPrintTables().Stats();
-  // A change back and forth gives the same images: FP1 to FP5 read the same values in both forms,
-  // and no result of one form stays in the other.
-  select("kodak_endura_premier");
-  const auto print_again = RenderView(document, field, true);
-  select(std::string{kFilmLabScanId});
-  const auto scan_again = RenderView(document, field, true);
-  ASSERT_EQ(print.size(), print_again.size());
-  for (std::size_t index = 0; index < print.size(); ++index) {
-    ASSERT_EQ(print_again[index].r, print[index].r) << index;
-    ASSERT_EQ(print_again[index].g, print[index].g) << index;
-    ASSERT_EQ(print_again[index].b, print[index].b) << index;
-    ASSERT_EQ(scan_again[index].r, scan[index].r) << index;
-    ASSERT_EQ(scan_again[index].g, scan[index].g) << index;
-    ASSERT_EQ(scan_again[index].b, scan[index].b) << index;
-  }
-  // The device keeps the print table and the printing density table, and the host builds no table again.
-  EXPECT_EQ(device_.Workspace().Device().LutUploadBytes(), uploaded);
-  const auto after = SharedFilmPrintTables().Stats();
-  EXPECT_EQ(after.scan_table_builds, stats.scan_table_builds);
-  EXPECT_EQ(after.compose_builds, stats.compose_builds);
-  EXPECT_EQ(after.uv_builds, stats.uv_builds);
-}
-
 TEST_F(CudaFilmPrintFixture, FilmPrintSliderBuildsNoTable) {
   // At this size the spread of slider 2.5 has a sigma of about 0.5 pixels, so it has taps.
   const auto field    = PatchField(1024, 768, 400, 400, 8);
@@ -761,9 +673,9 @@ TEST_F(CudaFilmPrintFixture, FilmPrintAllocationFailureReportsTheErrorAndPublish
   EXPECT_NE(images.PublishedLastWriter(flare), 0U);
 }
 
-/// Linear AP1 values for the display tests of Lab Scan: a neutral ramp of -8 to +8 stops and
-/// saturated colours, one row with no image plane.
-auto ScanTestValues() -> std::vector<Rgba> {
+/// Linear AP1 values of the As Shot test: a neutral ramp of -8 to +8 stops and saturated colours,
+/// one row with no image plane.
+auto RampAndColourValues() -> std::vector<Rgba> {
   std::vector<Rgba> values;
   for (int step = -32; step <= 32; ++step) {
     const float v = 0.18f * std::exp2(static_cast<float>(step) / 4.0f);
@@ -783,64 +695,22 @@ auto ScanTestValues() -> std::vector<Rgba> {
   return values;
 }
 
-TEST_F(CudaFilmPrintFixture, LabScanShowsItsSceneThroughTheOpenDrtOfTheDocument) {
-  // Lab Scan ends in a scene value. Method OpenDRT with the same settings on that value gives the
-  // same display codes, for an SDR and an HDR encoding.
-  const auto values = ScanTestValues();
-  struct Encoding {
-    const char*   name;
-    DrtColorSpace space;
-    DrtEotf       eotf;
-    float         peak;
-  };
-  for (const auto& encoding :
-       {Encoding{"Rec. 709 sRGB", DrtColorSpace::Rec709, DrtEotf::SrgbPiecewise, 100.0f},
-        Encoding{"Rec. 2020 PQ 1000 nits", DrtColorSpace::Rec2020, DrtEotf::St2084, 1000.0f}}) {
-    SCOPED_TRACE(encoding.name);
-    auto               scan = FilmPrintDocument("kodak_5219", std::string{kFilmLabScanId});
-    DrtParameterUpdate output;
-    output.encoding_space   = encoding.space;
-    output.encoding_eotf    = encoding.eotf;
-    output.peak_luminance   = encoding.peak;
-    output.look_preset      = std::string{"arriba"};
-    output.tonescale_preset = std::string{"use_look_preset"};
-    scan.Drt()->Params().ApplyUpdate(output);
-    plan_.film_scan_scene_output = true;
-    const auto scene             = RenderDrt(scan, values);
-    plan_.film_scan_scene_output = false;
-    const auto shown             = RenderDrt(scan, values);
-
-    auto       open_drt          = CreateDefaultPipelineDocument();
-    output.method                = DrtMethod::OpenDrt;
-    open_drt.Drt()->Params().ApplyUpdate(output);
-    const auto expected = RenderDrt(open_drt, scene);
-    const auto largest  = LargestCodeDifference(
-        shown, shown.size(), [&expected](std::size_t index) { return expected[index]; });
-    std::cout << "Lab Scan against method OpenDRT on its scene, " << encoding.name << ": largest "
-              << largest << " codes\n";
-    EXPECT_LE(largest, 0.1);
-    for (std::size_t index = 0; index < shown.size(); ++index) {
-      ASSERT_EQ(shown[index].a, 0.75f) << index;
-    }
-  }
-}
-
 TEST_F(CudaFilmPrintFixture, AsShotFollowsTheColourTemperatureOfTheRawDecode) {
-  const auto values  = ScanTestValues();
+  const auto values  = RampAndColourValues();
   const auto render  = [&](PipelineDocument& document) { return RenderDrt(document, values); };
   const auto differs = [](const std::vector<Rgba>& a, const std::vector<Rgba>& b) {
     return LargestCodeDifference(a, a.size(), [&b](std::size_t index) { return b[index]; });
   };
   auto& tables = SharedFilmPrintTables();
-  for (const std::string material : {std::string{kFilmLabScanId}, std::string{"kodak_2383"}}) {
-    SCOPED_TRACE(material);
+  {
+    const std::string material = "kodak_2383";
     auto document = FilmPrintDocument("kodak_5207", material, std::string{kFilmAsShotLightId});
     // A RAW file in mode As Shot uses its solved temperature: the same as mode Custom at it.
-    film_print_scan_test::SetRawAsShot(document, 5650.0);
+    film_print_test::SetRawAsShot(document, 5650.0);
     ASSERT_EQ(FilmSceneRawCct(document), std::optional<double>(5650.0));
     const auto as_shot = render(document);
     auto       custom  = FilmPrintDocument("kodak_5207", material, std::string{kFilmAsShotLightId});
-    film_print_scan_test::SetRawCustom(custom, 5650.0);
+    film_print_test::SetRawCustom(custom, 5650.0);
     ASSERT_EQ(FilmSceneRawCct(custom), std::optional<double>(5650.0));
     EXPECT_EQ(differs(as_shot, render(custom)), 0.0);
 
@@ -850,22 +720,22 @@ TEST_F(CudaFilmPrintFixture, AsShotFollowsTheColourTemperatureOfTheRawDecode) {
       return tables.Resolve("kodak_5207", material, light)->uv_key;
     };
     const auto warm_key = key_of(custom);
-    film_print_scan_test::SetRawCustom(custom, 3100.0);
+    film_print_test::SetRawCustom(custom, 3100.0);
     EXPECT_NE(key_of(custom), warm_key);
     EXPECT_GT(differs(as_shot, render(custom)), 1.0);
 
     // An input with no RAW white balance renders As Shot as the reference.
-    film_print_scan_test::SetRasterInput(document);
+    film_print_test::SetRasterInput(document);
     EXPECT_EQ(FilmSceneRawCct(document), std::nullopt);
     const auto raster    = render(document);
     auto       reference = FilmPrintDocument("kodak_5207", material, "reference");
-    film_print_scan_test::SetRasterInput(reference);
+    film_print_test::SetRasterInput(reference);
     EXPECT_EQ(differs(raster, render(reference)), 0.0);
   }
 
   // The as-shot neutral of a DNG: the solve of Develop gives the temperature of the scene light.
   auto document =
-      FilmPrintDocument("kodak_5219", std::string{kFilmLabScanId}, std::string{kFilmAsShotLightId});
+      FilmPrintDocument("kodak_5219", "kodak_2383", std::string{kFilmAsShotLightId});
   gpu_dag_test::EnsureTestCameraProfile(document);
   auto payload      = document.Develop()->Params().Params();
   payload.wb_mode   = "as_shot";
@@ -879,9 +749,50 @@ TEST_F(CudaFilmPrintFixture, AsShotFollowsTheColourTemperatureOfTheRawDecode) {
     ASSERT_TRUE(std::isfinite(pixel.r) && std::isfinite(pixel.g) && std::isfinite(pixel.b));
   }
   auto custom =
-      FilmPrintDocument("kodak_5219", std::string{kFilmLabScanId}, std::string{kFilmAsShotLightId});
-  film_print_scan_test::SetRawCustom(custom, solved.transform.resolved_cct);
+      FilmPrintDocument("kodak_5219", "kodak_2383", std::string{kFilmAsShotLightId});
+  film_print_test::SetRawCustom(custom, solved.transform.resolved_cct);
   EXPECT_EQ(differs(neutral, render(custom)), 0.0);
+}
+
+TEST_F(CudaFilmPrintFixture, NegativeScanStopsWithANamedErrorAndPublishesNoResult) {
+  // Print material Negative Scan has the model layer of issue 661; its CUDA pass is issue 664.
+  // There is no other form to substitute for it, so the render stops before any GPU work.
+  const auto field = PatchField(128, 96, 40, 40, 8);
+  SetView({128, 96}, {128, 96}, Matrix3x3::Identity());
+  auto&      images = device_.Workspace().Images();
+  const auto print  = RenderView(FilmPrintDocument("kodak_5207", "kodak_2383"), field, true);
+  const auto writer = images.PublishedLastWriter(plan_.display_output);
+  try {
+    (void)RenderView(FilmPrintDocument("kodak_5207", std::string{kFilmNegativeScanId}), field,
+                     true);
+    ADD_FAILURE() << "Negative Scan rendered with no CUDA pass";
+  } catch (const std::runtime_error& error) {
+    const std::string text = error.what();
+    EXPECT_NE(text.find("Negative Scan"), std::string::npos) << text;
+    EXPECT_NE(text.find("issue 664"), std::string::npos) << text;
+  }
+  device_.CancelRender();
+  device_.WaitIdle();
+  EXPECT_EQ(images.PublishedLastWriter(plan_.display_output), writer);
+  // The print renders again after the error, with the same image.
+  const auto again = RenderView(FilmPrintDocument("kodak_5207", "kodak_2383"), field, true);
+  ASSERT_EQ(again.size(), print.size());
+  for (std::size_t index = 0; index < print.size(); ++index) {
+    ASSERT_EQ(again[index].r, print[index].r) << index;
+    ASSERT_EQ(again[index].g, print[index].g) << index;
+    ASSERT_EQ(again[index].b, print[index].b) << index;
+  }
+  // A colour reversal film reads no print material, so a stored Negative Scan renders its light
+  // table.
+  const auto slide = RenderView(
+      FilmPrintDocument("fuji_velvia_50", std::string{kFilmNegativeScanId}), field, true);
+  const auto slide_print =
+      RenderView(FilmPrintDocument("fuji_velvia_50", "kodak_2383"), field, true);
+  for (std::size_t index = 0; index < slide.size(); ++index) {
+    ASSERT_EQ(slide[index].r, slide_print[index].r) << index;
+    ASSERT_EQ(slide[index].g, slide_print[index].g) << index;
+    ASSERT_EQ(slide[index].b, slide_print[index].b) << index;
+  }
 }
 
 // The lab values come from build_display_expected.py of alcedo-film-lab. They are not in Git, so a
@@ -892,37 +803,8 @@ struct DisplaySelection {
   FilmArrayFile file;
   std::string   negative;
   std::string   print_material;
-  /// A Lab Scan file names a colour temperature between grid nodes as cct<kelvin>.
   std::string   scene_light;
-  bool               lad_aim = false;
-
-  [[nodiscard]] auto Scan() const -> bool { return print_material == kFilmLabScanId; }
 };
-
-/// The document of a selection of the lab. A colour temperature is scene light As Shot with that
-/// temperature as the solved as-shot temperature of the RAW decode.
-auto SelectionDocument(const std::string& negative, const std::string& print_material,
-                       const std::string& scene_light, bool lad_aim) -> PipelineDocument {
-  if (print_material != kFilmLabScanId) {
-    return FilmPrintDocument(negative, print_material, scene_light);
-  }
-  auto document = FilmPrintDocument(negative, print_material);
-  film_print_scan_test::SetLabScan(document, scene_light, lad_aim);
-  return document;
-}
-
-auto SelectionDocument(const DisplaySelection& selection) -> PipelineDocument {
-  return SelectionDocument(selection.negative, selection.print_material, selection.scene_light,
-                           selection.lad_aim);
-}
-
-/// The scene light of a selection as lights of the bundle.
-auto SelectionLight(const FilmStockBundle& bundle, const std::string& scene_light)
-    -> FilmSceneLightMix {
-  const auto kelvin = film_print_scan_test::KelvinOfLabel(scene_light);
-  return kelvin.has_value() ? bundle.SceneLightMix(kFilmAsShotLightId, kelvin)
-                            : bundle.SceneLightMix(scene_light, std::nullopt);
-}
 
 auto DisplaySelections() -> std::vector<DisplaySelection> {
   std::vector<DisplaySelection> selections;
@@ -938,19 +820,17 @@ auto DisplaySelections() -> std::vector<DisplaySelection> {
                             metadata.at("scene_light").get<std::string>()});
       continue;
     }
+    // The files of Negative Scan are the expected values of its GPU pass (issue 664).
+    if (metadata.value("print_material", std::string{}) == kFilmNegativeScanId) continue;
     selections.push_back({std::move(file), metadata.at("negative").get<std::string>(),
                           metadata.at("print_material").get<std::string>(),
-                          metadata.at("scene_light").get<std::string>(),
-                          metadata.value("lad_aim", false)});
+                          metadata.at("scene_light").get<std::string>()});
   }
   return selections;
 }
 
 constexpr double kRampLimitCodes         = 0.5;
 constexpr double kChartLimitCodes        = 1.0;
-// Lab Scan in ACES2065-1 against the lab, in stops for values above 2^-10 (issue 661).
-constexpr double kScanRampLimitStops     = 0.005;
-constexpr double kScanChartLimitStops    = 0.01;
 /// The lab keeps its stages in float32, so the double-precision reference differs from it a little.
 constexpr double kReferenceLabLimitCodes = 1.0;
 
@@ -966,23 +846,12 @@ TEST_F(CudaFilmPrintFixture, FilmPrintRampMatchesLab) {
   for (const auto& selection : selections) {
     SCOPED_TRACE(selection.negative + " on " + selection.print_material + " under " +
                  selection.scene_light);
-    const auto count = selection.file.Shape("ramp_ap1")[0];
-    const auto ap1   = selection.file.F32("ramp_ap1", {count, 3});
-    if (selection.Scan()) {
-      // The scan form before the display transform, against the ACES2065-1 of the lab.
-      plan_.film_scan_scene_output = true;
-      const auto scene             = RenderDrt(SelectionDocument(selection), ToRgba(ap1));
-      plan_.film_scan_scene_output = false;
-      const auto stops             = film_print_scan_test::LargestStops(
-          scene, static_cast<std::size_t>(count), selection.file.F32("ramp_aces", {count, 3}));
-      std::cout << "ramp " << selection.negative << " on Lab Scan under " << selection.scene_light
-                << ", LAD aim " << (selection.lad_aim ? "on" : "off") << ": largest " << stops
-                << " stops\n";
-      EXPECT_LE(stops, kScanRampLimitStops);
-      continue;
-    }
+    const auto count  = selection.file.Shape("ramp_ap1")[0];
+    const auto ap1    = selection.file.F32("ramp_ap1", {count, 3});
     const auto lab    = selection.file.F32("ramp_srgb", {count, 3});
-    const auto pixels = RenderDrt(SelectionDocument(selection), ToRgba(ap1));
+    const auto pixels = RenderDrt(
+        FilmPrintDocument(selection.negative, selection.print_material, selection.scene_light),
+        ToRgba(ap1));
     const auto largest =
         LargestCodeDifference(pixels, static_cast<std::size_t>(count), [&lab](std::size_t index) {
           return Float3{lab[index * 3], lab[index * 3 + 1], lab[index * 3 + 2]};
@@ -1001,35 +870,6 @@ TEST_F(CudaFilmPrintFixture, FilmPrintChartMatchesReference) {
                  selection.scene_light);
     const auto count = selection.file.Shape("chart_ap1")[0];
     const auto ap1   = selection.file.F32("chart_ap1", {count, 3});
-    if (selection.Scan()) {
-      const auto light = SelectionLight(tables.Bundle(), selection.scene_light);
-      const auto data  = tables.Resolve(selection.negative, selection.print_material, light);
-      const film_print_reference::FilmPrintPointReference reference(
-          tables.Bundle(), *data, selection.negative, selection.print_material, light,
-          selection.lad_aim);
-      const auto lab                   = selection.file.F32("chart_aces", {count, 3});
-      double     reference_against_lab = 0.0;
-      for (std::size_t index = 0; index < static_cast<std::size_t>(count); ++index) {
-        const auto scene =
-            reference.SceneAp1(ap1[index * 3], ap1[index * 3 + 1], ap1[index * 3 + 2]);
-        reference_against_lab = (std::max)(
-            reference_against_lab, film_print_scan_test::StopsDifference(
-                                       film_print_scan_test::Aces(scene),
-                                       {lab[index * 3], lab[index * 3 + 1], lab[index * 3 + 2]}));
-      }
-      plan_.film_scan_scene_output = true;
-      const auto pixels            = RenderDrt(SelectionDocument(selection), ToRgba(ap1));
-      plan_.film_scan_scene_output = false;
-      const auto stops =
-          film_print_scan_test::LargestStops(pixels, static_cast<std::size_t>(count), lab);
-      std::cout << "chart " << selection.negative << " on Lab Scan under " << selection.scene_light
-                << ", LAD aim " << (selection.lad_aim ? "on" : "off") << ": largest " << stops
-                << " stops against the lab, double reference against the lab "
-                << reference_against_lab << " stops\n";
-      EXPECT_LE(stops, kScanChartLimitStops);
-      EXPECT_LE(reference_against_lab, kScanChartLimitStops);
-      continue;
-    }
     const auto lab   = selection.file.F32("chart_srgb", {count, 3});
     const auto data =
         tables.Resolve(selection.negative, selection.print_material, selection.scene_light);
@@ -1045,7 +885,9 @@ TEST_F(CudaFilmPrintFixture, FilmPrintChartMatchesReference) {
                       std::abs(expected[index].g - lab[index * 3 + 1]) * 255.0,
                       std::abs(expected[index].b - lab[index * 3 + 2]) * 255.0});
     }
-    const auto pixels  = RenderDrt(SelectionDocument(selection), ToRgba(ap1));
+    const auto pixels = RenderDrt(
+        FilmPrintDocument(selection.negative, selection.print_material, selection.scene_light),
+        ToRgba(ap1));
     const auto largest = LargestCodeDifference(
         pixels, expected.size(), [&expected](std::size_t index) { return expected[index]; });
     std::cout << "chart " << selection.negative << ": largest " << largest
@@ -1109,33 +951,17 @@ TEST_F(CudaFilmPrintFixture, FilmPrintImageMatchesLab) {
     if (entry.path().filename() == "ap1.bin") continue;
     auto       file     = FilmArrayFile::Parse(ReadFilmResourceBytes(entry.path()), entry.path());
     const auto metadata = file.Metadata();
+    // The files of Negative Scan are the expected values of its GPU pass (issue 664).
+    if (metadata.value("print_material", std::string{}) == kFilmNegativeScanId) continue;
     // A colour reversal film has no print material, so its file names none.
     const bool reversal = metadata.contains("reversal");
     const auto negative = metadata.at(reversal ? "reversal" : "negative").get<std::string>();
     const auto material = reversal ? FilmPrintParams{}.print_material
                                    : metadata.at("print_material").get<std::string>();
-    const auto light    = metadata.at("scene_light").get<std::string>();
-    SCOPED_TRACE(negative + " on " + material + " under " + light);
-    if (material == kFilmLabScanId) {
-      // The scan form before the display transform, against the ACES2065-1 of the lab.
-      const bool lad_aim           = metadata.value("lad_aim", false);
-      plan_.film_scan_scene_output = true;
-      const auto scene =
-          RenderView(SelectionDocument(negative, material, light, lad_aim), ap1, false);
-      plan_.film_scan_scene_output = false;
-      const auto stops             = film_print_scan_test::ImageStops(
-          scene, file.F32("aces", {static_cast<std::int64_t>(height),
-                                               static_cast<std::int64_t>(width), 3}));
-      std::cout << "image " << negative << " on Lab Scan under " << light << ", LAD aim "
-                << (lad_aim ? "on" : "off") << " (" << width << " x " << height << "): mean "
-                << stops.mean << ", p99.9 " << stops.p999 << ", largest " << stops.largest
-                << " stops\n";
-      EXPECT_LE(stops.p999, 0.02);
-      EXPECT_LE(stops.largest, 0.1);
-      ++compared;
-      continue;
-    }
-    const auto pixels     = RenderView(FilmPrintDocument(negative, material, light), ap1, false);
+    SCOPED_TRACE(negative);
+    const auto pixels = RenderView(
+        FilmPrintDocument(negative, material, metadata.at("scene_light").get<std::string>()), ap1,
+        false);
     const auto difference = DifferenceFromLab(
         pixels,
         file.F32("srgb", {static_cast<std::int64_t>(height), static_cast<std::int64_t>(width), 3}));
@@ -1146,10 +972,8 @@ TEST_F(CudaFilmPrintFixture, FilmPrintImageMatchesLab) {
     EXPECT_LE(difference.largest, 4.0);
     ++compared;
   }
-  // 5 selections of the negatives, the 5 reversal films, and 5 selections of Lab Scan: the 4 of
-  // the expected values with the LAD aim off, and 5219 at 5650 K (a blend of grid nodes) with the
-  // LAD aim on.
-  EXPECT_EQ(compared, 15);
+  // 5 selections of the negatives, and the 5 reversal films.
+  EXPECT_EQ(compared, 10);
 }
 
 TEST_F(CudaFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs) {
@@ -1168,20 +992,11 @@ TEST_F(CudaFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs
   // another phase than in the full frame. One row up, the cells are the same.
   const std::uint32_t     odd_y  = (height - kRoiH) / 2;
   ASSERT_EQ(odd_y % 2U, 1U);
-  // A negative, a reversal film with the light table and the loupe flare, and Lab Scan, which has
-  // only the Halation canvas.
-  const std::string lab_scan{kFilmLabScanId};
-  for (const auto& [film, material] :
-       std::vector<std::pair<std::string, std::string>>{{"kodak_5207", "kodak_2383"},
-                                                        {"fuji_velvia_50", "kodak_2383"},
-                                                        {"kodak_5207", lab_scan}}) {
-    SCOPED_TRACE(film + " on " + material);
+  // A negative, and a reversal film with the light table and the loupe flare.
+  for (const auto* film : {"kodak_5207", "fuji_velvia_50"}) {
+    SCOPED_TRACE(film);
     const bool reversal = IsFilmReversalIdentifier(film);
-    const bool scan              = IsFilmLabScan(film, material);
-    const auto canvases          = scan ? 1U : 2U;
-    const auto document = FilmPrintDocument(film, material);
-    // Lab Scan is compared before its display transform, in stops (issue 661).
-    plan_.film_scan_scene_output = scan;
+    const auto document = FilmPrintDocument(film);
     SetView({width, height}, {width, height}, Matrix3x3::Identity());
     const auto full = RenderView(document, ap1, true);
     for (const std::uint32_t roi_y : {odd_y, odd_y - 1U}) {
@@ -1191,7 +1006,7 @@ TEST_F(CudaFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs
       SetView({width, height}, {kRoiW, kRoiH},
               Matrix3x3::Translate(static_cast<float>(roi_x), static_cast<float>(roi_y)));
       const auto detail = RenderView(document, crop, false);
-      EXPECT_EQ(device_.PassStats().film_canvas_sample, canvases);
+      EXPECT_EQ(device_.PassStats().film_canvas_sample, 2U);
 
       std::vector<float> edge;
       double             interior = 0.0;
@@ -1199,12 +1014,9 @@ TEST_F(CudaFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs
         for (std::uint32_t x = 0; x < kRoiW; ++x) {
           const auto&  got        = detail[static_cast<std::size_t>(y) * kRoiW + x];
           const auto&  want       = full[static_cast<std::size_t>(y + roi_y) * width + x + roi_x];
-          const double difference =
-              scan ? film_print_scan_test::StopsDifference(film_print_scan_test::Aces(got),
-                                                           film_print_scan_test::Aces(want))
-                   : (std::max)({std::abs(got.r - want.r), std::abs(got.g - want.g),
-                                 std::abs(got.b - want.b)}) *
-                         255.0;
+          const double difference = (std::max)({std::abs(got.r - want.r), std::abs(got.g - want.g),
+                                                std::abs(got.b - want.b)}) *
+                                    255.0;
           const bool inside =
               x >= kReach && y >= kReach && x < kRoiW - kReach && y < kRoiH - kReach;
           if (inside) {
@@ -1221,15 +1033,10 @@ TEST_F(CudaFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs
           edge[static_cast<std::size_t>(0.99 * static_cast<double>(edge.size() - 1))];
       const double p999 =
           edge[static_cast<std::size_t>(0.999 * static_cast<double>(edge.size() - 1))];
-      std::cout << film << " on " << material << ", ROI at row " << roi_y
-                << " against the full frame, edge band of " << kReach << " pixels: mean "
-                << sum / static_cast<double>(edge.size()) << ", p99 " << p99 << ", p99.9 " << p999
-                << ", largest " << edge.back() << (scan ? " stops" : " codes")
-                << "; inside the band, largest " << interior << (scan ? " stops\n" : " codes\n");
-      if (scan) {
-        EXPECT_LE(interior, 0.002);
-        continue;
-      }
+      std::cout << film << ", ROI at row " << roi_y << " against the full frame, edge band of "
+                << kReach << " pixels: mean " << sum / static_cast<double>(edge.size()) << ", p99 "
+                << p99 << ", p99.9 " << p999 << ", largest " << edge.back()
+                << " codes; inside the band, largest " << interior << " codes\n";
       // Inside the band only the phase of the half-size inhibitor grid differs. A slide has a
       // steeper display response than a print, so that phase gives it more codes: the plan record
       // of F8 and issue #636 hold the value.
@@ -1240,7 +1047,6 @@ TEST_F(CudaFilmPrintFixture, FilmPrintRoiEdgeDiffersOnlyInsideTheReachOfItsBlurs
       // record.
       EXPECT_LE(p99, 4.0);
     }
-    plan_.film_scan_scene_output = false;
   }
 }
 
@@ -1382,13 +1188,6 @@ TEST_F(CudaFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
     record("light table, slider change, fuji_velvia_50", FilmPrintDocument("fuji_velvia_50"), true);
     record("light table, slider change, kodak_ektachrome_e100",
            FilmPrintDocument("kodak_ektachrome_e100"), true);
-    // The scan form, next to the print form of the same negatives above.
-    const std::string scan{kFilmLabScanId};
-    record("lab scan, slider change", FilmPrintDocument("kodak_5207", scan), true);
-    record("lab scan, slider change, fuji_eterna_500", FilmPrintDocument("fuji_eterna_500", scan),
-           true);
-    record("lab scan, slider change, kodak_ultramax_400",
-           FilmPrintDocument("kodak_ultramax_400", scan), true);
 
     // The passes of the film print, after a slider change.
     auto   document    = FilmPrintDocument();

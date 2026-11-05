@@ -243,6 +243,7 @@ def_library(EditRuntimeFilm
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_array_file.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_print_resources.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_negative_scan.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_print_tables.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_stock_bundle.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/film/film_tables.cpp

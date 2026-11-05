@@ -17,10 +17,8 @@
 #include "cuda/cuda_check.hpp"
 #include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/cuda/cuda_backend.hpp"
-#include "edit/runtime/cuda/cuda_drt_runtime_state.hpp"
 #include "edit/runtime/cuda/cuda_film_print_pass.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
-#include "edit/runtime/cuda/drt/drt_display_pixel.cuh"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
@@ -36,9 +34,6 @@ namespace {
 
 constexpr std::uint32_t kBlock      = 256;
 constexpr unsigned      kImageBlock = 16;
-
-// The scan display kernel takes both blocks by value, within the 4 KB of kernel arguments.
-static_assert(sizeof(FilmKernelParams) + sizeof(CudaDrtGpuParams) + 64 <= 4096);
 
 auto                    GridFor(std::uint32_t width, std::uint32_t height) -> dim3 {
   return dim3{(width + kImageBlock - 1) / kImageBlock, (height + kImageBlock - 1) / kImageBlock};
@@ -146,12 +141,7 @@ __global__ void ExposureKernel(const float4* input, float3* output, std::uint32_
   const float4 source = input[index];
   // Input is linear AP1. The final colour space of a print is not known here, so a colour that a
   // grade moved out of AP1 comes back at this point, as in DrtKernel (lab rule
-  // 'entry_reference_gamut_compression'). Lab Scan has no such step.
-  if (params.scan != 0U) {
-    const auto q  = FilmKernelLayerExposure(&params, values, source.x, source.y, source.z);
-    output[index] = make_float3(q.r, q.g, q.b);
-    return;
-  }
+  // 'entry_reference_gamut_compression').
   const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const auto q = FilmKernelLayerExposure(&params, values, compressed.r, compressed.g, compressed.b);
   output[index]       = make_float3(q.r, q.g, q.b);
@@ -504,30 +494,7 @@ __global__ void AmountsReduceKernel(const float3* amounts, int width, int height
   reduced[i * columns + j] = make_float3(r * scale, g * scale, b * scale);
 }
 
-/**
- * FP6 of print material Lab Scan: the scan form to linear AP1, then the display transform of the
- * document (`DrtDisplayPixel`, the arithmetic of `DrtKernel`). There is no flare and no grade. With
- * @p scene_output, the linear AP1 itself, for a test of the scan form. Alpha comes from @p scene.
- */
-__global__ void ScanDisplayKernel(const float3* amounts, const float4* scene, float4* output,
-                                  std::uint32_t pixels, const float* density,
-                                  FilmKernelParams params, CudaDrtGpuParams drt,
-                                  bool scene_output) {
-  const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (index >= pixels) return;
-  const float3 a     = amounts[index];
-  const auto   ap1   = FilmKernelScanSceneAp1(&params, density, FilmKernelMakeRgb(a.x, a.y, a.z));
-  const float  alpha = scene[index].w;
-  if (scene_output) {
-    output[index] = make_float4(ap1.r, ap1.g, ap1.b, alpha);
-    return;
-  }
-  const float3 encoded = CUDA::DrtDisplayPixel(make_float3(ap1.r, ap1.g, ap1.b), drt);
-  output[index]        = make_float4(encoded.x, encoded.y, encoded.z, alpha);
-}
-
-/// FP6, fused. @p flare is null when the Enlarger flare is off. Alpha comes
-/// from @p scene. @p soft
+/// FP6, fused. @p flare is null when the Enlarger flare is off. Alpha comes from @p scene. @p soft
 /// is the blurred amounts of rule 'negative_show_grade', null with no image plane, and half size
 /// when @p soft_half_size is true. On a light table, @p flare is the blurred display light of the
 /// loupe flare, and @p soft is not read.
@@ -703,6 +670,12 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteCudaDrt");
   const auto  film      = drt.Params().FilmPrint();
+  // Print material Negative Scan has the model layer of issue 661; its GPU pass is issue 664. There
+  // is no other form to substitute for it.
+  if (IsFilmNegativeScan(film.negative, film.print_material)) {
+    throw std::runtime_error(
+        "RecordCudaFilmPrint: print material Negative Scan has no CUDA pass yet (issue 664)");
+  }
   auto&       tables    = SharedFilmPrintTables();
   const auto& bundle    = tables.Bundle();
   const auto  light     = bundle.SceneLightMix(film.scene_light, raw_cct);
@@ -717,7 +690,7 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
 
   FilmKernelParams params{};
   film_print_kernel_tables::FillParams(bundle, film.negative, film.print_material, light,
-                                       film.lad_aim, data->edge, params);
+                                       data->edge, params);
   params.display_encoding = static_cast<std::uint32_t>(resolved.eotf_);
 
   const auto negative     = bundle.Film(film.negative);
@@ -944,21 +917,12 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
     clock.Mark("FP6 flare canvas");
   }
   auto* output = static_cast<float4*>(CudaSceneTexture(device, display).DevicePointer());
-  if (params.scan != 0U) {
-    // The scan form ends in a scene value: the OpenDRT of the document shows it. The resolver gives
-    // Lab Scan the transform of method OpenDRT.
-    const CudaDrtGpuParams drt_params = device.DrtRuntime().Pack(resolved);
-    ScanDisplayKernel<<<blocks, kBlock, 0, stream>>>(a, scene_pixels, output, pixels, rgba, params,
-                                                     drt_params, plan.film_scan_scene_output);
-    clock.Mark("FP6 scan and display transform");
-  } else {
-    DisplayKernel<<<image_grid, image_block, 0, stream>>>(
-        a, scene_pixels, output, w, h, rgba, flare, static_cast<int>(image.flare_extent.width),
-        static_cast<int>(image.flare_extent.height), image.render_to_flare, image.flare, soft,
-        static_cast<int>(image.inhibitor_extent.width),
-        static_cast<int>(image.inhibitor_extent.height), image.inhibitor_half_size, params);
-    clock.Mark("FP6 display");
-  }
+  DisplayKernel<<<image_grid, image_block, 0, stream>>>(
+      a, scene_pixels, output, w, h, rgba, flare, static_cast<int>(image.flare_extent.width),
+      static_cast<int>(image.flare_extent.height), image.render_to_flare, image.flare, soft,
+      static_cast<int>(image.inhibitor_extent.width),
+      static_cast<int>(image.inhibitor_extent.height), image.inhibitor_half_size, params);
+  clock.Mark("FP6 display");
   cuda::CheckCuda(::cudaGetLastError(), "RecordCudaFilmPrint: kernel launch");
   clock.Finish();
 }

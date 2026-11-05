@@ -83,39 +83,49 @@ struct FilmLightTableConstants {
   double                  surround_exponent = 1.0;  ///< On luminance in linear display light
 };
 
-/**
- * @brief Values of Lab Scan that are the same for all negatives (lab decisions U92, U93).
- *
- * The scan reads the record in the printing density of a print material, encodes ADX16 with lab
- * rule 'adx_slope_match', and applies the Academy ADX16 to ACES transform of aces-dev v1.3.1
- * (A.M.P.A.S. license). The matrices multiply row vectors, as in the CTL of aces-dev.
- */
-struct FilmScanConstants {
-  std::string             printing_paper;          ///< Print material of @ref printing_weights
-  std::span<const double> printing_weights;        ///< (3, wavelengths)
-  double                  code_per_density = 0.0;  ///< ADX16 code values per density
-  double                  code_base        = 0.0;  ///< ADX16 code of the film base
-  double                  lad_aim          = 0.0;  ///< ADX16 code of the LAD aim
-  double                  code_max         = 0.0;  ///< Largest ADX16 code
-  std::span<const double> cdd_to_cid;              ///< (3, 3)
-  std::span<const double> exp_to_aces;             ///< (3, 3)
-  std::span<const double> lut_cid;    ///< (n): the table of the transform below cid 0.6
-  std::span<const double> lut_log_e;  ///< (n)
-  double                  ref_pt = 0.0;
+/// One medium of rule 'generic_density_inversion' of Negative Scan (lab step P14).
+struct FilmScanMedium {
+  std::string              id;     ///< `photo` or `cine`
+  std::span<const double>  gamma;  ///< (3): gamma of the medium for the default scanner
+  /// The pool of the medium (lab rule 'generic_scan'), and the scene light of each pool stock: its
+  /// balance light. With another scanner, the host derives gamma again from these stocks.
+  std::vector<std::string> pool;
+  std::vector<std::string> pool_scene_lights;
 };
 
-/// The fixed scalar values of one selection of negative and scene light on Lab Scan.
-struct FilmScanSetup {
-  std::array<double, 3> layer_gain{};  ///< The layer gain of the print form of the same selection
-  /// Printing density of the negative base: the D-min of equation 2 of ST 2065-3.
-  std::array<double, 3> base_printing_density{};
-  /// Printing density of an 18 % grey under the scene light: the pivot of rule 'adx_slope_match'.
-  std::array<double, 3> grey_printing_density{};
-  /// Rule 'adx_slope_match': the scale of each channel, 0.92 times the slope of green over the
-  /// slope of the channel at the grey.
-  std::array<double, 3> channel_scale{};
-  /// ADX16 code of the grey with the scale of equation 2, with no offset.
-  std::array<double, 3> grey_code{};
+/**
+ * @brief Values of Negative Scan that are the same for all negatives (lab step P14).
+ *
+ * The default scanner of lab rule 'ideal_scanner_bands': a Gaussian band per channel with these
+ * centres and full width at half maximum, cut below @ref band_cut of its peak, under a Planckian
+ * lamp at @ref lamp_kelvin (`halogen`) or an equal-energy light.
+ */
+struct FilmNegativeScanConstants {
+  std::array<double, 3>       centres_nm{};  ///< R, G, B
+  double                      width_nm       = 0.0;
+  double                      band_cut       = 0.0;
+  double                      lamp_kelvin    = 0.0;
+  double                      planck_c2_nm_k = 0.0;  ///< c2 of the Planck law, in nm K
+  std::string                 default_light;         ///< `halogen` or `equal_energy`
+  /// Rule 'frame_auto_colour': the light axis is the change of a grey from the first light to the
+  /// second (T3200 to D65). Each one is a spectrum of the bundle.
+  std::array<std::string, 2>  axis_lights;
+  std::vector<FilmScanMedium> media;
+};
+
+/// The fixed values of one selection of negative and scene light on Negative Scan, for the
+/// default scanner.
+struct FilmNegativeScanSetup {
+  std::string           medium;         ///< The medium of the negative
+  std::string           balance_light;  ///< Spectrum name of the balance light of the stock
+  std::array<double, 3> layer_gain{};   ///< The layer gain of the print form of the same selection
+  /// D_base: the scan density of the unexposed film.
+  std::array<double, 3> base_density{};
+  /// D_aim (lab rule 'stock_balance'): D - D_base of an 18 % grey under the balance light.
+  std::array<double, 3> aim_density{};
+  /// Rule 'frame_auto_colour': the change of x of an 18 % grey from T3200 to D65, contrast 1.
+  std::array<double, 3> light_axis{};
+  std::array<double, 3> gamma{};         ///< The gamma of the medium
   std::vector<double>   scene_spectrum;  ///< (wavelengths)
 };
 
@@ -286,18 +296,36 @@ class FilmStockBundle {
   [[nodiscard]] auto Film(std::string_view id) const -> FilmNegativeView;
   [[nodiscard]] auto LightTable() const -> const FilmLightTableConstants& { return light_table_; }
 
-  /// Print material Lab Scan: its identifier and name from the metadata `lab_scan`. It is not in
-  /// @ref PrintMaterials, because it has no print.
-  [[nodiscard]] auto LabScan() const -> const FilmStockName& { return lab_scan_; }
-  /// True when @p id is the print material @ref LabScan.
-  [[nodiscard]] auto IsLabScan(std::string_view id) const -> bool { return id == lab_scan_.id; }
-  [[nodiscard]] auto ScanConstants() const -> const FilmScanConstants& { return scan_constants_; }
+  /// Print material Negative Scan: its identifier and name from the metadata `negative_scan`. It is
+  /// not in @ref PrintMaterials, because it has no print.
+  [[nodiscard]] auto NegativeScan() const -> const FilmStockName& { return negative_scan_; }
+  /// True when @p id is the print material @ref NegativeScan.
+  [[nodiscard]] auto IsNegativeScan(std::string_view id) const -> bool {
+    return id == negative_scan_.id;
+  }
+  [[nodiscard]] auto NegativeScanConstants() const -> const FilmNegativeScanConstants& {
+    return negative_scan_constants_;
+  }
+  /// The medium of @p id in @ref FilmNegativeScanConstants::media.
+  /// @throws std::runtime_error that names @p id when the negative or its medium is unknown.
+  [[nodiscard]] auto ScanMedium(std::string_view id) const -> const FilmScanMedium&;
+  /// The spectrum name of the balance light of @p id for Negative Scan (D55 or T3200).
+  /// @throws std::runtime_error that names @p id when the negative is unknown.
+  [[nodiscard]] auto ScanBalanceLight(std::string_view id) const -> const std::string&;
   /// @throws std::runtime_error that names the identifier when one of the two is unknown.
-  [[nodiscard]] auto ScanSelection(std::string_view negative, std::string_view scene_light) const
-      -> FilmScanSetup;
-  /// @copydoc ScanSelection
-  [[nodiscard]] auto ScanSelection(std::string_view         negative,
-                                   const FilmSceneLightMix& scene_light) const -> FilmScanSetup;
+  [[nodiscard]] auto NegativeScanSelection(std::string_view negative,
+                                           std::string_view scene_light) const
+      -> FilmNegativeScanSetup;
+  /// @copydoc NegativeScanSelection
+  [[nodiscard]] auto NegativeScanSelection(std::string_view         negative,
+                                           const FilmSceneLightMix& scene_light) const
+      -> FilmNegativeScanSetup;
+  /// The layer gain of @p negative under the named light @p scene_light.
+  [[nodiscard]] auto LayerGain(std::string_view negative, std::string_view scene_light) const
+      -> std::array<double, 3>;
+  /// The spectrum `light/<name>/spectrum` of the bundle (Y = 1).
+  /// @throws std::runtime_error that names @p name when the bundle has no such spectrum.
+  [[nodiscard]] auto LightSpectrum(std::string_view name) const -> std::span<const double>;
 
   /**
    * @brief Reflectance shapes of the kept u'v' nodes: (kept nodes, reflectance wavelengths).
@@ -321,6 +349,10 @@ class FilmStockBundle {
   }
   [[nodiscard]] auto UvNodes() const -> std::int64_t { return uv_nodes_; }
   [[nodiscard]] auto Wavelengths() const -> std::int64_t { return wavelengths_; }
+  /// The wavelengths of all spectral arrays, in nm.
+  [[nodiscard]] auto WavelengthsNm() const -> std::span<const double> {
+    return stock_.F64("common/wavelengths_nm", {wavelengths_});
+  }
 
   [[nodiscard]] auto PrintContrast() const -> double { return print_contrast_; }
   [[nodiscard]] auto PrintFlash() const -> double { return print_flash_; }
@@ -361,7 +393,10 @@ class FilmStockBundle {
   std::vector<std::string>   reversal_order_;
   std::vector<std::string>   scene_lights_;
   std::vector<std::string>   scene_spectra_;
-  FilmStockName              lab_scan_;
+  FilmStockName              negative_scan_;
+  /// Per negative, in the order of @ref negatives_: the medium and the balance light of the scan.
+  std::vector<std::string>   negative_media_;
+  std::vector<std::string>   negative_balance_lights_;
   std::string                content_digest_;
   std::int64_t               reflectance_first_wavelength_ = 0;
   std::int64_t               reflectance_wavelengths_      = 0;
@@ -373,7 +408,7 @@ class FilmStockBundle {
   FilmPointConstants         point_constants_;
   FilmImagePlaneConstants    image_plane_constants_;
   FilmLightTableConstants    light_table_;
-  FilmScanConstants          scan_constants_;
+  FilmNegativeScanConstants  negative_scan_constants_;
   FilmCctGrid                cct_grid_;
 };
 

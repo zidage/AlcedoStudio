@@ -161,8 +161,8 @@ void PlanHalation(const ResolvedRenderGeometry& geometry, const FilmImagePlaneCo
 
 void PlanFlare(const FilmImagePlaneConstants& constants, const FilmPrintParams& film,
                FilmPrintImagePlan& plan) {
-  // Lab Scan has no enlarger, so it reads no Enlarger flare and builds no canvas for it.
-  const bool scan   = IsFilmLabScan(film.negative, film.print_material);
+  // Negative Scan has no enlarger, so it reads no Enlarger flare and builds no canvas for it.
+  const bool scan   = IsFilmNegativeScan(film.negative, film.print_material);
   plan.flare        = scan ? 0.0f : film.enlarger_flare;
   plan.flare_active = plan.flare > 0.0f;
   if (!plan.flare_active) {

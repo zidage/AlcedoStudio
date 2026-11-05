@@ -17,7 +17,6 @@
 #include <type_traits>
 #include <vector>
 
-#include "color/color_encoding_catalog.hpp"
 #include "edit/runtime/film/film_stock_bundle.hpp"
 
 namespace alcedo::film_print_kernel_tables {
@@ -74,48 +73,29 @@ template <class Real>
   return values;
 }
 
-/// The scalar values of a selection that FillParams reads: a print, a light table, or a scan.
+/// The scalar values of a selection that FillParams reads: a print, a light table, or Negative
+/// Scan.
 struct SelectionValues {
   std::array<double, 3> layer_gain{};
-  /// XYZ to linear Rec. 709. Lab Scan has none.
+  /// XYZ to linear Rec. 709. Negative Scan has none.
   std::array<double, 9> xyz_to_display{};
   std::array<double, 3> negative_grade_grey{};
-  std::array<double, 3> scan_grey_density{};
-  /// ADX16 code of the grey with the LAD offset.
-  std::array<double, 3> scan_grey_code{};
-  std::array<double, 3> scan_channel_scale{};
   bool                  cinema_look    = false;
   bool                  negative_grade = false;
   bool                  light_table    = false;
   bool                  scan           = false;
 };
 
-/**
- * Lab Scan with the LAD aim on: the offset that puts the ADX16 code of the grey on the aim, per
- * channel. Off: 0, so the scan is untimed and the cast of the scene light stays (lab U92).
- */
-[[nodiscard]] inline auto ScanGreyCode(const FilmStockBundle& bundle, const FilmScanSetup& setup,
-                                       bool lad_aim) -> std::array<double, 3> {
-  if (!lad_aim) {
-    return setup.grey_code;
-  }
-  const auto aim = bundle.ScanConstants().lad_aim;
-  return {aim, aim, aim};
-}
-
 [[nodiscard]] inline auto SelectionValuesOf(const FilmStockBundle&   bundle,
                                             std::string_view         negative,
                                             std::string_view         print_material,
-                                            const FilmSceneLightMix& scene_light,
-                                            bool lad_aim = false) -> SelectionValues {
-  if (!bundle.IsReversal(negative) && bundle.IsLabScan(print_material)) {
-    // Lab Scan has no print: no printer balance, no print table, no negative grade.
-    const auto setup = bundle.ScanSelection(negative, scene_light);
-    return {.layer_gain         = setup.layer_gain,
-            .scan_grey_density  = setup.grey_printing_density,
-            .scan_grey_code     = ScanGreyCode(bundle, setup, lad_aim),
-            .scan_channel_scale = setup.channel_scale,
-            .scan               = true};
+                                            const FilmSceneLightMix& scene_light)
+    -> SelectionValues {
+  if (!bundle.IsReversal(negative) && bundle.IsNegativeScan(print_material)) {
+    // Negative Scan has no print: no printer balance, no print table, no negative grade. The values
+    // of FP6 are per render (film_negative_scan::RenderTerms).
+    const auto setup = bundle.NegativeScanSelection(negative, scene_light);
+    return {.layer_gain = setup.layer_gain, .scan = true};
   }
   if (bundle.IsReversal(negative)) {
     // A colour reversal film has no print, so the print material is not read.
@@ -133,45 +113,24 @@ struct SelectionValues {
           .negative_grade      = cine_look && bundle.Negative(negative).negative_grade};
 }
 
-/// The matrix from the exposure of the ADX to ACES transform to linear AP1, for row vectors:
-/// EXP_TO_ACES (row vectors), then ACES2065-1 to AP1.
-[[nodiscard]] inline auto ScanExposureToAp1(const FilmScanConstants& scan)
-    -> std::array<double, 9> {
-  const auto            ap1_to_xyz = color::RgbToXyzMatrix(color::ColorGamutId::Ap1);
-  const auto            ap0_to_ap1 = color::MultiplyMatrices(color::InvertMatrix(ap1_to_xyz),
-                                                             color::RgbToXyzMatrix(color::ColorGamutId::Ap0));
-  std::array<double, 9> out{};
-  for (std::size_t k = 0; k < 3; ++k) {
-    for (std::size_t j = 0; j < 3; ++j) {
-      double sum = 0.0;
-      for (std::size_t i = 0; i < 3; ++i) {
-        sum += scan.exp_to_aces[k * 3 + i] * ap0_to_ap1[j * 3 + i];
-      }
-      out[k * 3 + j] = sum;
-    }
-  }
-  return out;
-}
-
 /**
  * @brief The fixed values of a selection, for a `FilmKernelParams` of either form.
  *
  * The caller sets `display_encoding`, because the display curve belongs to the output and not to
  * the selection. For a colour reversal film @p print_material is not read, and the values are those
- * of the light table form. For print material Lab Scan the values are those of the scan form, and
- * @p lad_aim sets the LAD offset; the other forms do not read it.
+ * of the light table form. For print material Negative Scan only `scan` is set beyond FP1 to FP5:
+ * the values of its FP6 are per render (`FilmKernelNegativeScan`).
  *
- * @throws std::runtime_error that names the identifier for an unknown selection, and for a scan
- *         transform table of a size other than FILM_KERNEL_SCAN_LUT_NODES.
+ * @throws std::runtime_error that names the identifier for an unknown selection.
  */
 template <class Params>
 void FillParams(const FilmStockBundle& bundle, std::string_view negative,
-                std::string_view print_material, const FilmSceneLightMix& scene_light, bool lad_aim,
+                std::string_view print_material, const FilmSceneLightMix& scene_light,
                 std::uint32_t print_edge, Params& params) {
   using Real           = std::remove_reference_t<decltype(params.gamut_power)>;
   const auto layout    = LayoutOf(bundle, negative);
   const auto stock     = bundle.Film(negative);
-  const auto setup     = SelectionValuesOf(bundle, negative, print_material, scene_light, lad_aim);
+  const auto setup     = SelectionValuesOf(bundle, negative, print_material, scene_light);
   const auto constants = bundle.PointConstants();
   const auto nodes     = bundle.UvNodes();
   const auto real      = [](double value) { return static_cast<Real>(value); };
@@ -235,32 +194,7 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
   params.light_table              = setup.light_table ? 1U : 0U;
   params.scan                     = setup.scan ? 1U : 0U;
   const auto light_table          = bundle.LightTable();
-  const auto&    scan                 = bundle.ScanConstants();
-  constexpr auto kLutNodes            = std::extent_v<decltype(params.scan_lut_cid)>;
-  if (scan.lut_cid.size() != kLutNodes) {
-    throw std::runtime_error("Film print resource: the scan transform table has " +
-                             std::to_string(scan.lut_cid.size()) + " nodes, not " +
-                             std::to_string(kLutNodes));
-  }
-  // The scan values are those of every selection, so the kernel values of all forms have one
-  // layout, and only `scan` selects the form.
-  params.scan_code_base        = real(scan.code_base);
-  params.scan_code_max         = real(scan.code_max);
-  params.scan_code_per_density = real(scan.code_per_density);
-  params.scan_ref_pt           = real(scan.ref_pt);
-  const auto exposure_to_ap1   = ScanExposureToAp1(scan);
-  for (std::size_t k = 0; k < 9; ++k) {
-    params.scan_cdd_to_cid[k] = real(scan.cdd_to_cid[k]);
-    params.scan_exp_to_ap1[k] = real(exposure_to_ap1[k]);
-  }
-  for (std::size_t k = 0; k < kLutNodes; ++k) {
-    params.scan_lut_cid[k]   = real(scan.lut_cid[k]);
-    params.scan_lut_log_e[k] = real(scan.lut_log_e[k]);
-  }
   for (std::size_t k = 0; k < 3; ++k) {
-    params.scan_grey_density[k]   = real(setup.scan_grey_density[k]);
-    params.scan_grey_code[k]      = real(setup.scan_grey_code[k]);
-    params.scan_code_slope[k]     = real(scan.code_per_density * setup.scan_channel_scale[k]);
     params.negative_grade_grey[k] = real(setup.negative_grade_grey[k]);
     params.display_luminance[k] =
         setup.light_table ? real(light_table.display_luminance[k]) : Real{};
@@ -282,14 +216,14 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
   params.room_offset              = static_cast<std::uint32_t>(layout.RoomOffset());
 }
 
-/// @copydoc FillParams. A selection of one named scene light, with the LAD aim off.
+/// @copydoc FillParams. A selection of one named scene light.
 template <class Params>
 void FillParams(const FilmStockBundle& bundle, std::string_view negative,
                 std::string_view print_material, std::string_view scene_light,
                 std::uint32_t print_edge, Params& params) {
   FillParams(bundle, negative, print_material,
-             FilmSceneLightMix{std::string(scene_light), std::string(scene_light), 0.0}, false,
-             print_edge, params);
+             FilmSceneLightMix{std::string(scene_light), std::string(scene_light), 0.0}, print_edge,
+             params);
 }
 
 }  // namespace alcedo::film_print_kernel_tables

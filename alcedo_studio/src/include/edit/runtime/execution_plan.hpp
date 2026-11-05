@@ -315,10 +315,6 @@ struct ExecutionPlan {
   CompiledDrtNode                drt;
   GraphValueId                   display_output{NodeId{"drt"}, PortId{"display"}};
   std::optional<ExportColorProfileConfig> output_color_override;
-  /// Tests only: print material Lab Scan writes its linear AP1 scene before the display transform
-  /// to the display output, so a test can compare the scan form with the lab. A render never sets
-  /// it.
-  bool                                    film_scan_scene_output = false;
 
   [[nodiscard]] auto                      Contains(GpuPassKind kind) const -> bool {
     for (const auto& pass : passes) {

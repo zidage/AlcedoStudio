@@ -52,7 +52,7 @@ struct FilmBrand {
 struct FilmPresentation {
   std::string_view             id;
   FilmBrowserList              list;
-  /// Brand name of @ref kFilmBrands. Empty for an entry above the brand groups (Lab Scan, Cine
+  /// Brand name of @ref kFilmBrands. Empty for an entry above the brand groups (Negative Scan, Cine
   /// Look).
   std::string_view             brand;
   /// English family caption under the brand (the panel translates it). Can be empty.
@@ -164,9 +164,9 @@ inline constexpr auto kFilmPresentations = [] {
       Slide("fuji_provia_100f", "Fujifilm", "Provia 100F", {kFujichrome, 0x4B509A, 0}, 2),
       Slide("fuji_astia_100f", "Fujifilm", "Astia 100F", {kFujichrome, kVioletBlue, 0}, 2),
       Slide("kodak_ektachrome_e100", "Kodak", "Ektachrome E100", {0x0B2FB8, 0xE6AD58, 0}, 2),
-      // Print materials. Lab Scan and Cine Look are above the brand groups. Lab Scan shows the
-      // orange mask of a colour negative under the light of a scanner.
-      Print("lab_scan", "", "", "Lab Scan", S::Scan, 0xC8702C, 0xEAF4FF),
+      // Print materials. Negative Scan and Cine Look are above the brand groups. Negative Scan shows
+      // the orange mask of a colour negative under the light of a scanner.
+      Print("negative_scan", "", "", "Negative Scan", S::Scan, 0xC8702C, 0xEAF4FF),
       Print("cine_look", "", "", "Cine Look (2383)", S::CinemaPrint, kKodak, 0xE07A1F),
       Print("kodak_2383", "Kodak", "Cinema Print", "Vision 2383", S::CinemaPrint, kKodak, 0xE07A1F),
       Print("kodak_2393", "Kodak", "Cinema Print", "Vision Premier 2393", S::CinemaPrint, kKodak,

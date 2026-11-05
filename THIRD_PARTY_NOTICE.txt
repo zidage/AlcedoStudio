@@ -241,19 +241,7 @@ License: MIT
 License text file: third_party_licenses/c-ares-LICENSE.md
 The corresponding source archive is in the aria2 release above.
 
-E) Data tables in the bundled film print resources
-
-33) aces-dev v1.3.1, the Academy ADX to ACES transform (film print: Lab Scan)
-Upstream: https://github.com/ampas/aces-dev (transforms/ctl/csc/ACEScsc.Academy.ADX10_to_ACES.ctl and
-ACEScsc.Academy.ADX16_to_ACES.ctl, tag v1.3.1)
-License: Academy Color Encoding System Components License (custom permissive license by A.M.P.A.S.)
-License text file: third_party_licenses/aces-core-LICENSE.md (the same text as LICENSE.md of aces-dev v1.3.1)
-Usage note: the constants of the transform (the CDD_TO_CID and EXP_TO_ACES matrices, the table below
-cid 0.6, and the ADX16 encoding values) are stored as common/adx_* in
-config/film_print/film_stock_bundle.bin, which print material Lab Scan reads. The tables of
-SMPTE ST 2065-2 (APD) are not distributed: Lab Scan reads the printing density of Kodak 2383.
-
-F) Redistribution reminder
+E) Redistribution reminder
 
 - Keep this notice, the root LICENSE, the root NOTICE, and all files in third_party_licenses/ when redistributing source/binaries.
 - Preserve original copyright and license headers in source files.

@@ -110,14 +110,15 @@ void ProjectDocumentEdit(HistoryWorkingState&                          state,
   }
 }
 
-/// Restore local before-values in reverse order.
+/// Restore local before-values in reverse order. Each one is a complete stored Model value, so a
+/// key that the Model omits at its default reads as that default (issue 661).
 /// Report a restoration error and stop; never continue using a substitute pipeline.
 auto RestoreDocumentFields(HistoryWorkingState&                                       state,
                            const std::vector<HistoryWorkingState::DocumentFieldEdit>& fields,
                            std::string* error) -> bool {
   for (auto it = fields.rbegin(); it != fields.rend(); ++it) {
     std::string restore_error;
-    if (!ApplyEditorParameterPatch(state.document->Document(), it->target, it->before_model_json,
+    if (!ApplyEditorParameterValue(state.document->Document(), it->target, it->before_model_json,
                                    &restore_error)) {
       if (error) *error = "Document parameter restoration failed: " + restore_error;
       return false;
@@ -171,8 +172,9 @@ auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& com
                  "batch payload";
       return false;
     }
+    // The stored Model value is complete, so it restores every field.
     const auto& json = backward ? found->second.before_model_json : found->second.after_model_json;
-    if (!ApplyEditorParameterPatch(state.document->Document(), found->second.target, json, error)) {
+    if (!ApplyEditorParameterValue(state.document->Document(), found->second.target, json, error)) {
       return false;
     }
   }

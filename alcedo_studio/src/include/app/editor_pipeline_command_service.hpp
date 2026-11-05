@@ -35,6 +35,16 @@ auto ApplyEditorParameterPatch(PipelineDocument& document, const EditorParameter
                                const nlohmann::json& params, std::string* error) -> bool;
 
 /**
+ * @brief Apply a complete stored value of one field to the live document owner, as a history head
+ *        move restores it: @ref ParseEditorParameterValue, then the same write as
+ *        @ref ApplyEditorParameterPatch. Each field of @p value is set, and a key that @p value does
+ *        not have takes the default of the Model.
+ * @return false for an invalid target or parameter; no history or persistence is performed.
+ */
+auto ApplyEditorParameterValue(PipelineDocument& document, const EditorParameterTarget& target,
+                               const nlohmann::json& value, std::string* error) -> bool;
+
+/**
  * @brief Read the current model JSON for @p target at the persistence/history boundary.
  *
  * ApplyEditorParameterPatch does not use this function to update a live Model. It remains the

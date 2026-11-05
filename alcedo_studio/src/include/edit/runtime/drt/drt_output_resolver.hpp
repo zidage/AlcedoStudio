@@ -33,8 +33,8 @@ class DrtOutputResolver {
    *                        the payload encoding fields. The live Model is not changed.
    * @param output          Receives the resolved transform. Unchanged on failure.
    * @param error           Receives the failure message. May be null.
-   * Method Film Print with print material Lab Scan resolves as method OpenDRT, because the scan
-   * form ends in a scene value that the OpenDRT of the document shows. The other film print forms
+   * Method Film Print with print material Negative Scan resolves as method OpenDRT, because its
+   * form ends in linear AP1 that the OpenDRT of the document shows. The other film print forms
    * encode Rec. 709 SDR only.
    *
    * @return false when the method, a color space, or the EOTF is not a known enumerator, the

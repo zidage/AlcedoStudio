@@ -5,8 +5,8 @@ __constant sampler_t kNearestClamp =
     CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
 
 /// The display transform of one pixel of linear AP1, with the encoding of the output: the entry
-/// ACES reference gamut compression, then ACES 2.0 or OpenDRT. The DRT kernels and the scan form of
-/// the film print (film_print_scan.cl) call it, so both show a scene value with the same arithmetic.
+/// ACES reference gamut compression, then ACES 2.0 or OpenDRT. The DRT kernels call it. It is a
+/// function of its own, so that another kernel can show linear AP1 with the same arithmetic.
 static inline float3 DrtDisplayPixel(float3 ap1, __global const OpenClToOutputParams* params) {
   const AcesRgcRgb compressed = AcesReferenceGamutCompress(ap1.x, ap1.y, ap1.z);
   const float3     scene      = (float3)(compressed.r, compressed.g, compressed.b);

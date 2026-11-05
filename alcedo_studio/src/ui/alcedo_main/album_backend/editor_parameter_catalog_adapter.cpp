@@ -192,9 +192,9 @@ bool EditorParameterCatalogAdapter::filmIsReversal(const QString& film) const {
   return IsFilmReversalIdentifier(film.toStdString());
 }
 
-bool EditorParameterCatalogAdapter::filmIsLabScan(const QString& film,
+bool EditorParameterCatalogAdapter::filmIsNegativeScan(const QString& film,
                                                   const QString& printMaterial) const {
-  return IsFilmLabScan(film.toStdString(), printMaterial.toStdString());
+  return IsFilmNegativeScan(film.toStdString(), printMaterial.toStdString());
 }
 
 QVariantList EditorParameterCatalogAdapter::filmBrowserEntries(const QString& list) const {

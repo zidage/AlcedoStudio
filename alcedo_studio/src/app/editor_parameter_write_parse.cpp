@@ -747,6 +747,35 @@ auto ParseDetailedDrtParameters(const nlohmann::json& value) -> OpenDrtDetailedP
   return result;
 }
 
+/// Fills each film print field that @p update does not set with the default of the Model.
+void CompleteFilmPrintUpdate(DrtParameterUpdate& update) {
+  const FilmPrintParams defaults;
+  const auto&           scan = defaults.scan;
+  const auto            fill = [](auto& field, const auto& value) {
+    if (!field.has_value()) field = value;
+  };
+  fill(update.film_negative, defaults.negative);
+  fill(update.film_print_material, defaults.print_material);
+  fill(update.film_scene_light, defaults.scene_light);
+  fill(update.film_light_spread, defaults.light_spread);
+  fill(update.film_halation, defaults.halation);
+  fill(update.film_enlarger_flare, defaults.enlarger_flare);
+  fill(update.film_scan_auto, scan.auto_colour);
+  fill(update.film_scan_auto_strength, scan.auto_strength);
+  fill(update.film_scan_auto_density, scan.auto_density);
+  fill(update.film_scan_contrast, scan.contrast);
+  fill(update.film_scan_exposure_stops, scan.exposure_stops);
+  fill(update.film_scan_cyan, scan.cyan);
+  fill(update.film_scan_magenta, scan.magenta);
+  fill(update.film_scan_yellow, scan.yellow);
+  fill(update.film_scan_black, scan.black);
+  fill(update.film_scanner_red_nm, scan.scanner_red_nm);
+  fill(update.film_scanner_green_nm, scan.scanner_green_nm);
+  fill(update.film_scanner_blue_nm, scan.scanner_blue_nm);
+  fill(update.film_scanner_width_nm, scan.scanner_width_nm);
+  fill(update.film_scanner_light, scan.scanner_light);
+}
+
 auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
   const auto& object = UnwrapObject(params, {"odt"}, "odt");
   RejectUnknownKeys(object,
@@ -790,7 +819,10 @@ auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
     const auto& film_print = RequireObject(object.at("film_print"), "odt.film_print");
     RejectUnknownKeys(film_print,
                       {"negative", "print_material", "scene_light", "light_spread", "halation",
-                       "enlarger_flare", "lad_aim"},
+                       "enlarger_flare", "auto", "auto_strength", "auto_density", "scan_contrast",
+                       "scan_exposure_stops", "cyan", "magenta", "yellow", "black",
+                       "scanner_red_nm", "scanner_green_nm", "scanner_blue_nm",
+                       "scanner_width_nm", "scanner_light"},
                       "odt.film_print");
     update.film_negative = ReadOptionalString(film_print, {"negative"}, "odt.film_print");
     update.film_print_material =
@@ -800,12 +832,31 @@ auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
     update.film_halation     = ReadOptionalFloat(film_print, {"halation"}, "odt.film_print");
     update.film_enlarger_flare =
         ReadOptionalFloat(film_print, {"enlarger_flare"}, "odt.film_print");
-    update.film_lad_aim = ReadOptionalBool(film_print, {"lad_aim"}, "odt.film_print");
+    const auto number = [&film_print](const char* key) {
+      return ReadOptionalFloat(film_print, {key}, "odt.film_print");
+    };
+    update.film_scan_auto           = ReadOptionalString(film_print, {"auto"}, "odt.film_print");
+    update.film_scan_auto_strength  = number("auto_strength");
+    update.film_scan_auto_density   = number("auto_density");
+    update.film_scan_contrast       = number("scan_contrast");
+    update.film_scan_exposure_stops = number("scan_exposure_stops");
+    update.film_scan_cyan           = number("cyan");
+    update.film_scan_magenta        = number("magenta");
+    update.film_scan_yellow         = number("yellow");
+    update.film_scan_black          = number("black");
+    update.film_scanner_red_nm      = number("scanner_red_nm");
+    update.film_scanner_green_nm    = number("scanner_green_nm");
+    update.film_scanner_blue_nm     = number("scanner_blue_nm");
+    update.film_scanner_width_nm    = number("scanner_width_nm");
+    update.film_scanner_light = ReadOptionalString(film_print, {"scanner_light"}, "odt.film_print");
   }
   return update;
 }
 
-auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params)
+/// The form of a parse: a write sets only its keys; a complete value sets every field.
+enum class ParseForm { Write, Value };
+
+auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, ParseForm form)
     -> EditorParameterWrite {
   if (field == "exposure") {
     return ParseScalarWrite(params, field, "exposure_ev");
@@ -874,7 +925,13 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params)
     return ParseInputProfileUpdate(params);
   }
   if (field == "odt") {
-    return ParseDrtUpdate(params);
+    auto update = ParseDrtUpdate(params);
+    // The Model omits a film print key at its default (and the film print object of another
+    // method), so a complete value reads such a key as the default (issue 661).
+    if (form == ParseForm::Value) {
+      CompleteFilmPrintUpdate(update);
+    }
+    return update;
   }
   if (field == "crop_rotate") {
     return ParseGeometryUpdate(params);
@@ -899,7 +956,22 @@ auto ParseEditorParameterWrite(std::string_view field_key, const nlohmann::json&
     return std::nullopt;
   }
   try {
-    return ParseWriteOrThrow(field_key, object);
+    return ParseWriteOrThrow(field_key, object, ParseForm::Write);
+  } catch (const std::exception& ex) {
+    SetError(error, ex.what());
+    return std::nullopt;
+  }
+}
+
+auto ParseEditorParameterValue(std::string_view field_key, const nlohmann::json& value,
+                               std::string* error) -> std::optional<EditorParameterWrite> {
+  const nlohmann::json& object = value.is_null() ? nlohmann::json::object() : value;
+  if (!object.is_object()) {
+    SetError(error, "Editor parameter value must be a JSON object");
+    return std::nullopt;
+  }
+  try {
+    return ParseWriteOrThrow(field_key, object, ParseForm::Value);
   } catch (const std::exception& ex) {
     SetError(error, ex.what());
     return std::nullopt;

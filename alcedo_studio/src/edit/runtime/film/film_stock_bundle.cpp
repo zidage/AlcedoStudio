@@ -194,9 +194,28 @@ void FilmStockBundle::ReadLists() {
     reversal_order_ = stock_.Metadata().at("reversal_list_order").get<std::vector<std::string>>();
     scene_lights_   = stock_.Metadata().at("scene_lights").get<std::vector<std::string>>();
     scene_spectra_  = stock_.Metadata().at("scene_spectra").get<std::vector<std::string>>();
-    const auto& lab_scan = stock_.Metadata().at("lab_scan");
-    lab_scan_ = {lab_scan.at("id").get<std::string>(), lab_scan.at("name").get<std::string>()};
-    scan_constants_.printing_paper = lab_scan.at("printing_paper").get<std::string>();
+    for (const auto& negative : negatives_) {
+      const auto& entry = stock_.Metadata().at("negatives").at(negative.id);
+      negative_media_.push_back(entry.at("medium").get<std::string>());
+      negative_balance_lights_.push_back(entry.at("scan_balance_light").get<std::string>());
+    }
+    const auto& negative_scan = stock_.Metadata().at("negative_scan");
+    negative_scan_ = {negative_scan.at("id").get<std::string>(),
+                      negative_scan.at("name").get<std::string>()};
+    auto& constants         = negative_scan_constants_;
+    constants.default_light = negative_scan.at("light").get<std::string>();
+    const auto axis_lights  = negative_scan.at("axis_lights").get<std::vector<std::string>>();
+    if (axis_lights.size() != 2) {
+      throw std::runtime_error("Film print resource: Negative Scan does not have two axis lights");
+    }
+    constants.axis_lights = {axis_lights[0], axis_lights[1]};
+    for (const auto& [id, entry] : negative_scan.at("media").items()) {
+      FilmScanMedium medium;
+      medium.id                = id;
+      medium.pool              = entry.at("pool").get<std::vector<std::string>>();
+      medium.pool_scene_lights = entry.at("pool_scene_lights").get<std::vector<std::string>>();
+      constants.media.push_back(std::move(medium));
+    }
   } catch (const nlohmann::json::exception& error) {
     throw std::runtime_error(std::string("Film print resource: the stock lists are not valid: ") +
                              error.what());
@@ -204,19 +223,28 @@ void FilmStockBundle::ReadLists() {
   if (negatives_.empty() || papers_.empty() || reversals_.empty() || scene_lights_.empty()) {
     throw std::runtime_error("Film print resource: a stock list is empty");
   }
-  // Lab Scan is a value of the field of the print materials, so it must not name one of them.
-  if (lab_scan_.id.empty() ||
+  // Negative Scan is a value of the field of the print materials, so it must not name one of them.
+  if (negative_scan_.id.empty() ||
       std::ranges::any_of(papers_, [this](const FilmStockName& paper) {
-        return paper.id == lab_scan_.id;
+        return paper.id == negative_scan_.id;
       })) {
-    throw std::runtime_error("Film print resource: the identifier of Lab Scan '" + lab_scan_.id +
-                             "' is empty or names a print material");
+    throw std::runtime_error("Film print resource: the identifier of Negative Scan '" +
+                             negative_scan_.id + "' is empty or names a print material");
   }
-  if (!std::ranges::any_of(papers_, [this](const FilmStockName& paper) {
-        return paper.id == scan_constants_.printing_paper;
-      })) {
-    throw std::runtime_error("Film print resource: the printing paper of Lab Scan '" +
-                             scan_constants_.printing_paper + "' is not a print material");
+  const auto& media = negative_scan_constants_.media;
+  for (const auto& medium : media) {
+    if (medium.pool.empty() || medium.pool.size() != medium.pool_scene_lights.size()) {
+      throw std::runtime_error("Film print resource: the pool of the scan medium '" + medium.id +
+                               "' is empty or has a light list of another size");
+    }
+  }
+  for (std::size_t n = 0; n < negatives_.size(); ++n) {
+    if (std::ranges::none_of(media, [&](const FilmScanMedium& medium) {
+          return medium.id == negative_media_[n];
+        })) {
+      throw std::runtime_error("Film print resource: the medium '" + negative_media_[n] + "' of '" +
+                               negatives_[n].id + "' has no Negative Scan values");
+    }
   }
   // The setup indexes a film by its place in the list of identifiers, so the two lists must not
   // share an identifier, and the list order must name each reversal film one time.
@@ -259,30 +287,24 @@ void FilmStockBundle::ReadCommonValues() {
       .xyz_scale         = stock_.F64("light_table/xyz_scale", {})[0],
       .surround_exponent = stock_.F64("light_table/surround_exponent", {})[0],
   };
-  auto& scan = scan_constants_;
-  scan.printing_weights =
-      stock_.F64(ArrayName("paper", scan.printing_paper, "printing_weights"), {3, wavelengths_});
-  scan.code_per_density = stock_.F64("common/adx_code_per_density", {})[0];
-  scan.code_base        = stock_.F64("common/adx_code_base", {})[0];
-  scan.lad_aim          = stock_.F64("common/adx_lad_aim", {})[0];
-  scan.code_max         = stock_.F64("common/adx_code_max", {})[0];
-  scan.cdd_to_cid       = stock_.F64("common/adx_cdd_to_cid", {3, 3});
-  scan.exp_to_aces      = stock_.F64("common/adx_exp_to_aces", {3, 3});
-  const auto lut        = stock_.Shape("common/adx_lut_cid");
-  if (lut.size() != 1 || lut[0] < 2) {
-    throw std::runtime_error(
-        "Film print resource: the cid table of the scan does not have one axis");
+  auto& scan          = negative_scan_constants_;
+  const auto centres  = stock_.F64("common/negative_scan_centres_nm", {3});
+  scan.centres_nm     = {centres[0], centres[1], centres[2]};
+  scan.width_nm       = stock_.F64("common/negative_scan_width_nm", {})[0];
+  scan.band_cut       = stock_.F64("common/negative_scan_band_cut", {})[0];
+  scan.lamp_kelvin    = stock_.F64("common/negative_scan_lamp_kelvin", {})[0];
+  scan.planck_c2_nm_k = stock_.F64("common/negative_scan_planck_c2_nm_k", {})[0];
+  if (!(scan.width_nm > 0.0) || !(scan.band_cut > 0.0) || !(scan.lamp_kelvin > 0.0) ||
+      !(scan.planck_c2_nm_k > 0.0)) {
+    throw std::runtime_error("Film print resource: the scanner of Negative Scan is not valid");
   }
-  scan.lut_cid   = stock_.F64("common/adx_lut_cid", {lut[0]});
-  scan.lut_log_e = stock_.F64("common/adx_lut_log_e", {lut[0]});
-  scan.ref_pt    = stock_.F64("common/adx_ref_pt", {})[0];
-  for (std::size_t node = 1; node < scan.lut_cid.size(); ++node) {
-    if (!(scan.lut_cid[node] > scan.lut_cid[node - 1])) {
-      throw std::runtime_error("Film print resource: the cid table of the scan does not rise");
+  for (auto& medium : scan.media) {
+    medium.gamma = stock_.F64(ArrayName("scan_medium", medium.id, "gamma"), {3});
+    if (std::ranges::any_of(medium.gamma,
+                            [](double value) { return !(value > 0.0) || !std::isfinite(value); })) {
+      throw std::runtime_error("Film print resource: a gamma of the scan medium '" + medium.id +
+                               "' is not above 0");
     }
-  }
-  if (!(scan.code_per_density > 0.0) || !(scan.code_max > scan.code_base)) {
-    throw std::runtime_error("Film print resource: the ADX16 encoding of the scan is not valid");
   }
   const auto normals = stock_.Shape("common/locus_normals");
   if (normals.size() != 2 || normals[1] != 2 || normals[0] < 1) {
@@ -464,17 +486,22 @@ void FilmStockBundle::CheckShapes() const {
   const auto reversals = static_cast<std::int64_t>(reversals_.size());
   (void)setup_.F64("reversal_layer_gain", {reversals, lights, 3});
   (void)setup_.F64("reversal_xyz_to_display", {reversals, 3, 3});
-  // Rule 'adx_slope_match' divides by the slope of each channel, so a scale must be finite and
-  // above 0.
-  const auto scale = setup_.F64("adx_channel_scale", {negatives, lights, 3});
-  if (std::ranges::any_of(scale,
-                          [](double value) { return !(value > 0.0) || !std::isfinite(value); })) {
-    throw std::runtime_error("Film print resource: a channel scale of the scan is not above 0");
-  }
-  (void)setup_.F64("adx_grey_printing_density", {negatives, lights, 3});
-  (void)setup_.F64("adx_grey", {negatives, lights, 3});
+  (void)setup_.F64("negative_scan_aim_density", {negatives, lights, 3});
+  (void)setup_.F64("negative_scan_light_axis", {negatives, lights, 3});
   for (const auto& negative : negatives_) {
-    (void)stock_.F64(ArrayName("negative", negative.id, "adx_base_printing_density"), {3});
+    (void)stock_.F64(ArrayName("negative", negative.id, "scan_base_density"), {3});
+  }
+  for (const auto& light : negative_scan_constants_.axis_lights) {
+    (void)LightSpectrum(light);
+  }
+  for (const auto& light : negative_balance_lights_) {
+    (void)LightSpectrum(light);
+  }
+  for (const auto& medium : negative_scan_constants_.media) {
+    for (std::size_t k = 0; k < medium.pool.size(); ++k) {
+      (void)ScanMedium(medium.pool[k]);
+      (void)LightIndex(medium.pool_scene_lights[k]);
+    }
   }
   const auto spectrum_count = static_cast<std::int32_t>(scene_spectra_.size());
   for (const auto spectra : {setup_.I32("scene_spectrum_index", {negatives, lights}),
@@ -623,34 +650,71 @@ auto FilmStockBundle::Selection(std::string_view negative, std::string_view prin
   };
 }
 
-auto FilmStockBundle::ScanSelection(std::string_view negative, std::string_view scene_light) const
-    -> FilmScanSetup {
-  return ScanSelection(negative, SingleLight(scene_light));
+auto FilmStockBundle::ScanMedium(std::string_view id) const -> const FilmScanMedium& {
+  const auto  n      = static_cast<std::size_t>(IndexOf(negatives_, id, "negative"));
+  const auto& media  = negative_scan_constants_.media;
+  const auto  medium = std::ranges::find(media, negative_media_[n], &FilmScanMedium::id);
+  if (medium == media.end()) {
+    throw std::runtime_error("Film print: the negative '" + std::string(id) +
+                             "' has no medium of Negative Scan");
+  }
+  return *medium;
 }
 
-auto FilmStockBundle::ScanSelection(std::string_view         negative,
-                                    const FilmSceneLightMix& scene_light) const -> FilmScanSetup {
+auto FilmStockBundle::ScanBalanceLight(std::string_view id) const -> const std::string& {
+  return negative_balance_lights_[static_cast<std::size_t>(IndexOf(negatives_, id, "negative"))];
+}
+
+auto FilmStockBundle::LightSpectrum(std::string_view name) const -> std::span<const double> {
+  const auto key = ArrayName("light", name, "spectrum");
+  if (!stock_.Contains(key)) {
+    throw std::runtime_error("Film print resource: the bundle has no spectrum of the light '" +
+                             std::string(name) + "'");
+  }
+  return stock_.F64(key, {wavelengths_});
+}
+
+auto FilmStockBundle::LayerGain(std::string_view negative, std::string_view scene_light) const
+    -> std::array<double, 3> {
   const auto n         = IndexOf(negatives_, negative, "negative");
-  const auto a         = LightIndex(scene_light.first);
-  const auto b         = LightIndex(scene_light.second);
-  const auto share     = scene_light.share;
+  const auto l         = LightIndex(scene_light);
   const auto negatives = static_cast<std::int64_t>(negatives_.size());
   const auto lights    = static_cast<std::int64_t>(scene_lights_.size());
-  const auto gain      = setup_.F64("layer_gain", {negatives, lights, 3});
-  const auto pivot     = setup_.F64("adx_grey_printing_density", {negatives, lights, 3});
-  const auto scale     = setup_.F64("adx_channel_scale", {negatives, lights, 3});
-  const auto grey      = setup_.F64("adx_grey", {negatives, lights, 3});
-  const auto spectra   = setup_.I32("scene_spectrum_index", {negatives, lights});
-  // The lab form of a blend (scan_blend_model): the blended D_g, s, and ADX16 grey of the two
-  // lights, and the LAD offset from the blended grey.
+  return CopyValues<3>(setup_.F64("layer_gain", {negatives, lights, 3}), (n * lights + l) * 3);
+}
+
+auto FilmStockBundle::NegativeScanSelection(std::string_view negative,
+                                            std::string_view scene_light) const
+    -> FilmNegativeScanSetup {
+  return NegativeScanSelection(negative, SingleLight(scene_light));
+}
+
+auto FilmStockBundle::NegativeScanSelection(std::string_view         negative,
+                                            const FilmSceneLightMix& scene_light) const
+    -> FilmNegativeScanSetup {
+  const auto  n         = IndexOf(negatives_, negative, "negative");
+  const auto  a         = LightIndex(scene_light.first);
+  const auto  b         = LightIndex(scene_light.second);
+  const auto  share     = scene_light.share;
+  const auto  negatives = static_cast<std::int64_t>(negatives_.size());
+  const auto  lights    = static_cast<std::int64_t>(scene_lights_.size());
+  const auto  gain      = setup_.F64("layer_gain", {negatives, lights, 3});
+  const auto  aim       = setup_.F64("negative_scan_aim_density", {negatives, lights, 3});
+  const auto  axis      = setup_.F64("negative_scan_light_axis", {negatives, lights, 3});
+  const auto  spectra   = setup_.I32("scene_spectrum_index", {negatives, lights});
+  const auto& medium    = ScanMedium(negative);
+  // The lab form of a blend: the blended spectrum and layer gain, and the blend of the stored
+  // values of the two lights.
   return {
-      .layer_gain            = MixValues<3>(gain, n, lights, a, b, share),
-      .base_printing_density = CopyValues<3>(
-          stock_.F64(ArrayName("negative", negative, "adx_base_printing_density"), {3}), 0),
-      .grey_printing_density = MixValues<3>(pivot, n, lights, a, b, share),
-      .channel_scale         = MixValues<3>(scale, n, lights, a, b, share),
-      .grey_code             = MixValues<3>(grey, n, lights, a, b, share),
-      .scene_spectrum        = MixSpectrum(spectra, n, scene_light),
+      .medium         = medium.id,
+      .balance_light  = negative_balance_lights_[static_cast<std::size_t>(n)],
+      .layer_gain     = MixValues<3>(gain, n, lights, a, b, share),
+      .base_density   = CopyValues<3>(
+          stock_.F64(ArrayName("negative", negative, "scan_base_density"), {3}), 0),
+      .aim_density    = MixValues<3>(aim, n, lights, a, b, share),
+      .light_axis     = MixValues<3>(axis, n, lights, a, b, share),
+      .gamma          = CopyValues<3>(medium.gamma, 0),
+      .scene_spectrum = MixSpectrum(spectra, n, scene_light),
   };
 }
 

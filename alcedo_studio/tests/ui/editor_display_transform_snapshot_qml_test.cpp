@@ -23,8 +23,10 @@
 #include <QVariantMap>
 #include <QWheelEvent>
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,7 +34,11 @@
 #include <variant>
 #include <vector>
 
+#include "app/editor_panel_projection.hpp"
+#include "edit/graph/film_print_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
+#include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 
@@ -686,7 +692,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintControlWritesItsField) {
   EXPECT_EQ(*drt->film_scene_light, "tungsten");
 }
 
-TEST(EditorDisplayTransformSnapshotQmlTest, LabScanHidesTheEnlargerFlareAndKeepsItsValue) {
+TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanHidesTheEnlargerFlareAndKeepsItsValue) {
   DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
   AdjustmentStackHarness  harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
@@ -707,18 +713,18 @@ TEST(EditorDisplayTransformSnapshotQmlTest, LabScanHidesTheEnlargerFlareAndKeeps
   ASSERT_NE(halation, nullptr);
   ASSERT_TRUE(WaitFor([&] { return flare_slider->isVisible(); }));
 
-  // The Print material list has Lab Scan first, before Cine Look.
+  // The Print material list has Negative Scan first, before Cine Look.
   const auto entries = material->property("entries").toList();
   ASSERT_GE(entries.size(), 2);
-  EXPECT_EQ(entries[0].toMap().value("value").toString().toStdString(), "lab_scan");
-  EXPECT_EQ(entries[0].toMap().value("label").toString().toStdString(), "Lab Scan");
+  EXPECT_EQ(entries[0].toMap().value("value").toString().toStdString(), "negative_scan");
+  EXPECT_EQ(entries[0].toMap().value("label").toString().toStdString(), "Negative Scan");
   EXPECT_EQ(entries[1].toMap().value("value").toString().toStdString(), "cine_look");
   const auto browser = PickerValues(material_picker);
   ASSERT_FALSE(browser.empty());
-  EXPECT_EQ(browser.front(), "lab_scan");
+  EXPECT_EQ(browser.front(), "negative_scan");
 
-  session.setAdjustmentSnapshot(
-      MakeFilmPrintSnapshot(2.5, QStringLiteral("kodak_portra_400"), QStringLiteral("lab_scan")));
+  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot(2.5, QStringLiteral("kodak_portra_400"),
+                                                      QStringLiteral("negative_scan")));
   ASSERT_TRUE(WaitFor([&] { return !flare_slider->isVisible(); }));
   EXPECT_TRUE(halation_slider->isVisible());
   EXPECT_TRUE(material_picker->isVisible());
@@ -731,16 +737,17 @@ TEST(EditorDisplayTransformSnapshotQmlTest, LabScanHidesTheEnlargerFlareAndKeeps
   const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
   ASSERT_NE(drt, nullptr);
   ASSERT_TRUE(drt->film_print_material.has_value());
-  EXPECT_EQ(*drt->film_print_material, "lab_scan");
+  EXPECT_EQ(*drt->film_print_material, "negative_scan");
   ASSERT_TRUE(drt->film_enlarger_flare.has_value());
   EXPECT_FLOAT_EQ(*drt->film_enlarger_flare, 0.05f);
 
-  // A reversal film hides the print material, and its loupe flare shows with a stored Lab Scan.
-  session.setAdjustmentSnapshot(
-      MakeFilmPrintSnapshot(2.5, QStringLiteral("fuji_velvia_50"), QStringLiteral("lab_scan")));
+  // A reversal film hides the print material, and its loupe flare shows with a stored Negative
+  // Scan.
+  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot(2.5, QStringLiteral("fuji_velvia_50"),
+                                                      QStringLiteral("negative_scan")));
   ASSERT_TRUE(WaitFor([&] { return !material_picker->isVisible(); }));
   EXPECT_TRUE(flare_slider->isVisible());
-  EXPECT_EQ(material->property("currentValue").toString().toStdString(), "lab_scan");
+  EXPECT_EQ(material->property("currentValue").toString().toStdString(), "negative_scan");
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest,
@@ -858,7 +865,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmBrowserShowsOnlyTheFilmsOfThePro
   EXPECT_EQ(std::count(values.begin(), values.end(), "agfa_vista_100"), 1);
   EXPECT_TRUE(film->property("searchable").toBool());
   EXPECT_EQ(PickerShownValues(film).size(), 30U);
-  // Lab Scan and the 19 print materials of the bundle.
+  // Negative Scan and the 19 print materials of the bundle.
   EXPECT_EQ(PickerValues(print).size(), 20U);
 
   session.setAdjustmentSnapshot(MakeFilmPrintSnapshot(2.5, QStringLiteral("fuji_velvia_50")));
@@ -948,61 +955,246 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmBrowserFiltersByBrandAndSearchAn
   EXPECT_FALSE(film->property("expanded").toBool());
 }
 
-TEST(EditorDisplayTransformSnapshotQmlTest, LabScanShowsTheLadAimAndTheOpenDrtControls) {
+/// One setting of Negative Scan in the panel: its model, a value other than the default, and the
+/// field of the write.
+struct ScanControl {
+  const char* name;  ///< The part of `displayFilm<name>Model`
+  bool        option = false;
+  QVariant    value;
+  std::function<std::optional<QVariant>(const alcedo::DrtParameterUpdate&)> field;
+};
+
+auto ScanControls() -> std::vector<ScanControl> {
+  const auto number = [](auto member) {
+    return [member](const alcedo::DrtParameterUpdate& update) -> std::optional<QVariant> {
+      const auto& value = update.*member;
+      if (!value.has_value()) return std::nullopt;
+      return QVariant(static_cast<double>(*value));
+    };
+  };
+  const auto text = [](auto member) {
+    return [member](const alcedo::DrtParameterUpdate& update) -> std::optional<QVariant> {
+      const auto& value = update.*member;
+      if (!value.has_value()) return std::nullopt;
+      return QVariant(QString::fromStdString(*value));
+    };
+  };
+  using U = alcedo::DrtParameterUpdate;
+  return {
+      {"ScanAuto", true, QStringLiteral("warm"), text(&U::film_scan_auto)},
+      {"ScanAutoStrength", false, 0.5, number(&U::film_scan_auto_strength)},
+      {"ScanAutoDensity", false, 0.25, number(&U::film_scan_auto_density)},
+      {"ScanContrast", false, 1.25, number(&U::film_scan_contrast)},
+      {"ScanExposure", false, -0.75, number(&U::film_scan_exposure_stops)},
+      {"ScanCyan", false, 0.05, number(&U::film_scan_cyan)},
+      {"ScanMagenta", false, -0.03, number(&U::film_scan_magenta)},
+      {"ScanYellow", false, 0.12, number(&U::film_scan_yellow)},
+      {"ScanBlack", false, 0.5, number(&U::film_scan_black)},
+      {"ScannerRed", false, 630.0, number(&U::film_scanner_red_nm)},
+      {"ScannerGreen", false, 530.0, number(&U::film_scanner_green_nm)},
+      {"ScannerBlue", false, 460.0, number(&U::film_scanner_blue_nm)},
+      {"ScannerWidth", false, 60.0, number(&U::film_scanner_width_nm)},
+      {"ScannerLight", true, QStringLiteral("equal_energy"), text(&U::film_scanner_light)},
+  };
+}
+
+/// A Negative Scan document of kodak_5207 under As Shot, with @p scan.
+auto NegativeScanDocument(const alcedo::DrtParameterUpdate& scan) -> alcedo::PipelineDocument {
+  auto                       document = alcedo::CreateDefaultPipelineDocument();
+  alcedo::DrtParameterUpdate update;
+  update.method              = alcedo::DrtMethod::FilmPrint;
+  update.film_negative       = std::string{"kodak_5207"};
+  update.film_print_material = std::string{alcedo::kFilmNegativeScanId};
+  update.film_scene_light    = std::string{alcedo::kFilmAsShotLightId};
+  document.Drt()->Params().ApplyUpdate(update);
+  document.Drt()->Params().ApplyUpdate(scan);
+  return document;
+}
+
+/// The panel snapshot of @p document, from the projection of the editor (issue 661: the
+/// projection has every Negative Scan key, also at its default).
+auto ProjectedSnapshot(const alcedo::PipelineDocument& document) -> QVariantMap {
+  alcedo::EditorPanelProjection projection;
+  std::string                   error;
+  EXPECT_TRUE(alcedo::ProjectCurrentPanelFields(document, 0, &projection, &error)) << error;
+  return alcedo::ui::PanelProjectionToVariantMap(projection);
+}
+
+/// The value of a scan model of the panel: the value of an option, or the number.
+auto ScanModelValue(QObject* model, bool option) -> QVariant {
+  return option ? QVariant(model->property("currentValue").toString())
+                : QVariant(model->property("value").toDouble());
+}
+
+auto SameValue(const QVariant& a, const QVariant& b) -> bool {
+  if (a.typeId() == QMetaType::QString || b.typeId() == QMetaType::QString) {
+    return a.toString() == b.toString();
+  }
+  return std::abs(a.toDouble() - b.toDouble()) < 1e-4;
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanShowsItsSettingsAndTheOpenDrtControls) {
   DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
   AdjustmentStackHarness  harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
-  auto* lad_toggle = harness.findModel<QQuickItem>(QStringLiteral("displayFilmLadAimToggle"));
-  auto* open_drt   = harness.findModel<QQuickItem>(QStringLiteral("displayLabScanOpenDrtControls"));
+  auto* scan_controls =
+      harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanControls"));
+  auto* open_drt =
+      harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanOpenDrtControls"));
   auto* look_combo =
-      harness.findModel<QQuickItem>(QStringLiteral("displayLabScanOpenDrtLookCombo"));
-  auto* lad_aim =
-      harness.findModel<EditorAdjustmentToggleModel>(QStringLiteral("displayFilmLadAimModel"));
+      harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanOpenDrtLookCombo"));
   auto* encoding = harness.findModel<QQuickItem>(QStringLiteral("displayEncodingSpaceCombo"));
-  ASSERT_NE(lad_toggle, nullptr);
-  ASSERT_NE(open_drt, nullptr);
-  ASSERT_NE(look_combo, nullptr);
-  ASSERT_NE(lad_aim, nullptr);
-  ASSERT_NE(encoding, nullptr);
   auto* halation_slider =
       harness.findModel<QQuickItem>(QStringLiteral("displayFilmHalationSlider"));
+  ASSERT_NE(scan_controls, nullptr);
+  ASSERT_NE(open_drt, nullptr);
+  ASSERT_NE(look_combo, nullptr);
+  ASSERT_NE(encoding, nullptr);
   ASSERT_NE(halation_slider, nullptr);
-  // A print has no LAD aim, no OpenDRT settings, and no encodings.
+  // A print has no scan settings, no OpenDRT settings, and no encodings.
   ASSERT_TRUE(WaitFor([&] { return halation_slider->isVisible(); }));
-  EXPECT_FALSE(lad_toggle->isVisible());
+  EXPECT_FALSE(scan_controls->isVisible());
   EXPECT_FALSE(open_drt->isVisible());
   EXPECT_FALSE(encoding->isVisible());
 
-  auto scan = MakeFilmPrintSnapshot(2.5, QStringLiteral("kodak_5207"), QStringLiteral("lab_scan"));
-  session.setAdjustmentSnapshot(scan);
-  ASSERT_TRUE(WaitFor([&] { return lad_toggle->isVisible(); }));
+  session.setAdjustmentSnapshot(ProjectedSnapshot(NegativeScanDocument({})));
+  ASSERT_TRUE(WaitFor([&] { return scan_controls->isVisible(); }));
   ASSERT_TRUE(WaitFor([&] { return open_drt->isVisible() && look_combo->isVisible(); }));
   EXPECT_TRUE(encoding->isVisible());
-  EXPECT_FALSE(lad_aim->property("value").toBool());
+  // Each setting has its control in the group.
+  for (const auto& control : ScanControls()) {
+    const auto item = QStringLiteral("displayFilm%1%2")
+                          .arg(QString::fromLatin1(control.name),
+                               control.option ? QStringLiteral("Combo") : QStringLiteral("Slider"));
+    auto* shown = harness.findModel<QQuickItem>(item);
+    ASSERT_NE(shown, nullptr) << item.toStdString();
+    EXPECT_TRUE(shown->isVisible()) << item.toStdString();
+  }
 
-  // The toggle writes the LAD aim with the selection of the scan.
-  const auto before = session.submitCount();
-  lad_aim->commitValue(true);
-  ASSERT_TRUE(WaitFor([&] { return session.submitCount() > before; }));
+  // A print hides the controls again.
+  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot());
+  ASSERT_TRUE(WaitFor([&] { return !scan_controls->isVisible() && !open_drt->isVisible(); }));
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, EachNegativeScanControlWritesItsKeyWithTheSelection) {
+  DisplayTransformSession session(ProjectedSnapshot(NegativeScanDocument({})), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* scan_controls =
+      harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanControls"));
+  ASSERT_NE(scan_controls, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return scan_controls->isVisible(); }));
+  for (const auto& control : ScanControls()) {
+    SCOPED_TRACE(control.name);
+    const auto name  = QStringLiteral("displayFilm%1Model").arg(QString::fromLatin1(control.name));
+    const auto count = session.submitCount();
+    if (control.option) {
+      auto* model = harness.findModel<EditorAdjustmentEnumModel>(name);
+      ASSERT_NE(model, nullptr);
+      const auto entries = model->property("entries").toList();
+      int        index   = -1;
+      for (int i = 0; i < entries.size(); ++i) {
+        if (entries[i].toMap().value("value") == control.value) index = i;
+      }
+      ASSERT_GE(index, 0);
+      model->selectIndex(index);
+    } else {
+      auto* model = harness.findModel<EditorAdjustmentValueModel>(name);
+      ASSERT_NE(model, nullptr);
+      model->editValue(control.value.toDouble());
+      model->commitImmediately();
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    ASSERT_GT(session.submitCount(), count);
+    const auto* drt = LastDrtWrite(session);
+    ASSERT_NE(drt, nullptr);
+    const auto written = control.field(*drt);
+    ASSERT_TRUE(written.has_value());
+    EXPECT_TRUE(SameValue(*written, control.value)) << written->toString().toStdString();
+    ASSERT_TRUE(drt->film_print_material.has_value());
+    EXPECT_EQ(*drt->film_print_material, "negative_scan");
+    ASSERT_TRUE(drt->film_negative.has_value());
+    EXPECT_EQ(*drt->film_negative, "kodak_5207");
+  }
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanSettingsFollowTheProjectionOfEachDocument) {
+  // A document with every setting away from its default, then a document with the defaults (the
+  // undo of those settings): each control shows the value of its document, so a later Halation
+  // write carries the defaults. The projection omitted the keys before issue 661, and the panel
+  // then kept the values of the first document.
+  alcedo::DrtParameterUpdate scan;
+  scan.film_scan_auto           = std::string{"warm"};
+  scan.film_scan_auto_strength  = 0.5f;
+  scan.film_scan_auto_density   = 0.25f;
+  scan.film_scan_contrast       = 1.25f;
+  scan.film_scan_exposure_stops = -0.75f;
+  scan.film_scan_cyan           = 0.05f;
+  scan.film_scan_magenta        = -0.03f;
+  scan.film_scan_yellow         = 0.12f;
+  scan.film_scan_black          = 0.5f;
+  scan.film_scanner_red_nm      = 630.0f;
+  scan.film_scanner_green_nm    = 530.0f;
+  scan.film_scanner_blue_nm     = 460.0f;
+  scan.film_scanner_width_nm    = 60.0f;
+  scan.film_scanner_light       = std::string{"equal_energy"};
+  DisplayTransformSession session(ProjectedSnapshot(NegativeScanDocument(scan)), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  const auto controls = ScanControls();
+  const auto model_of = [&](const ScanControl& control) {
+    return harness.findModel<QObject>(
+        QStringLiteral("displayFilm%1Model").arg(QString::fromLatin1(control.name)));
+  };
+  for (const auto& control : controls) {
+    SCOPED_TRACE(control.name);
+    auto* model = model_of(control);
+    ASSERT_NE(model, nullptr);
+    ASSERT_TRUE(
+        WaitFor([&] { return SameValue(ScanModelValue(model, control.option), control.value); }))
+        << ScanModelValue(model, control.option).toString().toStdString();
+  }
+
+  session.setAdjustmentSnapshot(ProjectedSnapshot(NegativeScanDocument({})));
+  const alcedo::FilmNegativeScanParams defaults;
+  alcedo::DrtParameterUpdate           at_default;
+  at_default.film_scan_auto           = defaults.auto_colour;
+  at_default.film_scan_auto_strength  = defaults.auto_strength;
+  at_default.film_scan_auto_density   = defaults.auto_density;
+  at_default.film_scan_contrast       = defaults.contrast;
+  at_default.film_scan_exposure_stops = defaults.exposure_stops;
+  at_default.film_scan_cyan           = defaults.cyan;
+  at_default.film_scan_magenta        = defaults.magenta;
+  at_default.film_scan_yellow         = defaults.yellow;
+  at_default.film_scan_black          = defaults.black;
+  at_default.film_scanner_red_nm      = defaults.scanner_red_nm;
+  at_default.film_scanner_green_nm    = defaults.scanner_green_nm;
+  at_default.film_scanner_blue_nm     = defaults.scanner_blue_nm;
+  at_default.film_scanner_width_nm    = defaults.scanner_width_nm;
+  at_default.film_scanner_light       = defaults.scanner_light;
+  for (const auto& control : controls) {
+    SCOPED_TRACE(control.name);
+    const auto expected = *control.field(at_default);
+    auto*      model    = model_of(control);
+    ASSERT_TRUE(WaitFor([&] { return SameValue(ScanModelValue(model, control.option), expected); }))
+        << ScanModelValue(model, control.option).toString().toStdString();
+  }
+
+  auto* halation =
+      harness.findModel<EditorAdjustmentValueModel>(QStringLiteral("displayFilmHalationModel"));
+  ASSERT_NE(halation, nullptr);
+  halation->editValue(3.0);
+  halation->commitImmediately();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
   const auto* drt = LastDrtWrite(session);
   ASSERT_NE(drt, nullptr);
-  ASSERT_TRUE(drt->film_lad_aim.has_value());
-  EXPECT_TRUE(*drt->film_lad_aim);
-  ASSERT_TRUE(drt->film_print_material.has_value());
-  EXPECT_EQ(*drt->film_print_material, "lab_scan");
-
-  // A stored LAD aim loads, and a print hides the controls again.
-  auto odt_wrap   = scan.value(QStringLiteral("odt")).toMap();
-  auto inner      = odt_wrap.value(QStringLiteral("odt")).toMap();
-  auto film_print = inner.value(QStringLiteral("film_print")).toMap();
-  film_print.insert(QStringLiteral("lad_aim"), true);
-  inner.insert(QStringLiteral("film_print"), film_print);
-  odt_wrap.insert(QStringLiteral("odt"), inner);
-  scan.insert(QStringLiteral("odt"), odt_wrap);
-  session.setAdjustmentSnapshot(scan);
-  ASSERT_TRUE(WaitFor([&] { return lad_aim->property("value").toBool(); }));
-  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot());
-  ASSERT_TRUE(WaitFor([&] { return !lad_toggle->isVisible() && !open_drt->isVisible(); }));
+  for (const auto& control : controls) {
+    SCOPED_TRACE(control.name);
+    const auto written = control.field(*drt);
+    ASSERT_TRUE(written.has_value());
+    EXPECT_TRUE(SameValue(*written, *control.field(at_default)))
+        << written->toString().toStdString();
+  }
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest,

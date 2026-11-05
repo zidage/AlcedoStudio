@@ -39,7 +39,7 @@ typedef struct {
 // the same values in its static_assert declarations.
 typedef char FilmBlurKernelSizeCheck[sizeof(FilmBlurKernel) == 1552 ? 1 : -1];
 typedef char FilmNarrowKernelSizeCheck[sizeof(FilmNarrowKernel) == 76 ? 1 : -1];
-typedef char FilmKernelParamsSizeCheck[sizeof(FilmKernelParams) == 628 ? 1 : -1];
+typedef char FilmKernelParamsSizeCheck[sizeof(FilmKernelParams) == 416 ? 1 : -1];
 
 __constant sampler_t kFilmNearestClamp =
     CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
@@ -151,7 +151,7 @@ static inline FilmKernelRgb FilmMixHalation(FilmKernelRgb value, FilmKernelRgb b
 }
 
 /// FP1. Input is linear AP1. A colour that a grade moved out of AP1 comes back at this point (lab
-/// rule 'entry_reference_gamut_compression'), except on Lab Scan, which has no such step.
+/// rule 'entry_reference_gamut_compression').
 __kernel void film_print_exposure(__read_only image2d_t src_image, __global const float4* src_buffer,
                                   int src_is_buffer, __global float* q, uint q_offset,
                                   __global const float* values, __global const uchar* data,
@@ -163,11 +163,6 @@ __kernel void film_print_exposure(__read_only image2d_t src_image, __global cons
                                       ? src_buffer[(uint)y * (uint)width + (uint)x]
                                       : read_imagef(src_image, kFilmNearestClamp, (int2)(x, y));
   __global const FilmKernelParams* params = FilmParams(data, params_offset);
-  if (params->scan != 0U) {
-    FilmStore(q, q_offset, (uint)y * (uint)width + (uint)x,
-              FilmKernelLayerExposure(params, values, source.x, source.y, source.z));
-    return;
-  }
   const AcesRgcRgb    compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const FilmKernelRgb exposure =
       FilmKernelLayerExposure(params, values, compressed.r, compressed.g, compressed.b);
@@ -581,8 +576,7 @@ static inline FilmKernelRgb FilmPrintFinishedLinear(
   return params->cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
 }
 
-/// FP6, fused. @p has_flare is 0 when the Enlarger flare is off, and on Lab Scan. Alpha comes from
-/// the scene.
+/// FP6, fused. @p has_flare is 0 when the Enlarger flare is off. Alpha comes from the scene.
 /// @p has_soft is 0 with no image plane; then the graded record reads itself. @p soft is half size
 /// when @p soft_half_size is not 0. On a light table, @p flare is the blurred display light of the
 /// loupe flare, and @p soft is not read.
@@ -601,7 +595,6 @@ __kernel void film_print_display(
   const uint                       index  = (uint)y * (uint)width + (uint)x;
   FilmKernelRgb                    record = FilmLoad(amounts, amounts_offset, index);
   FilmKernelRgb                    linear;
-  // Lab Scan has its own kernel in the DRT program: film_print_scan_display.
   if (params->light_table != 0U) {
     // Lab rules 'light_table_view', 'loupe_flare', and 'dark_surround_on_display' in display light.
     FilmKernelRgb light = FilmKernelPrintDisplay(params, print_rgba, record);

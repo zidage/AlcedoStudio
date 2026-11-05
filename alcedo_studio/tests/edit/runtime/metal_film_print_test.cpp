@@ -511,21 +511,23 @@ TEST_F(MetalFilmPrintFixture, FilmPrintRoiWithNoPublishedResultPublishesNone) {
   EXPECT_EQ(device_->PassStats().film_canvas_sample, 0U);
 }
 
-TEST_F(MetalFilmPrintFixture, LabScanStopsWithTheNamedErrorUntilMetalHasTheScanForm) {
+TEST_F(MetalFilmPrintFixture, NegativeScanStopsWithANamedErrorUntilItsMetalPass) {
+  // Print material Negative Scan has the model layer of issue 661; its Metal pass is issue 662.
   const auto field = PatchField(64, 48, 20, 20, 8);
   SetView({64, 48}, {64, 48}, Matrix3x3::Identity());
   try {
-    (void)RenderView(FilmPrintDocument("kodak_5207", std::string{kFilmLabScanId}), field, false);
-    ADD_FAILURE() << "Lab Scan rendered on Metal";
+    (void)RenderView(FilmPrintDocument("kodak_5207", std::string{kFilmNegativeScanId}), field,
+                     false);
+    ADD_FAILURE() << "Negative Scan rendered on Metal";
   } catch (const std::runtime_error& error) {
-    EXPECT_NE(std::string(error.what()).find("Lab Scan"), std::string::npos) << error.what();
-    EXPECT_NE(std::string(error.what()).find("#662"), std::string::npos) << error.what();
+    EXPECT_NE(std::string(error.what()).find("Negative Scan"), std::string::npos) << error.what();
+    EXPECT_NE(std::string(error.what()).find("issue 662"), std::string::npos) << error.what();
   }
   device_->CancelRender();
   device_->WaitIdle();
-  // A reversal film reads no print material, so a stored Lab Scan renders its light table.
-  const auto pixels =
-      RenderView(FilmPrintDocument("fuji_velvia_50", std::string{kFilmLabScanId}), field, false);
+  // A reversal film reads no print material, so a stored Negative Scan renders its light table.
+  const auto pixels = RenderView(
+      FilmPrintDocument("fuji_velvia_50", std::string{kFilmNegativeScanId}), field, false);
   EXPECT_TRUE(std::isfinite(pixels[0].r));
 }
 
@@ -842,8 +844,8 @@ auto DisplaySelections() -> std::vector<DisplaySelection> {
                             metadata.at("scene_light").get<std::string>()});
       continue;
     }
-    // Lab Scan has no Metal kernel until phase F11 (issue #662).
-    if (metadata.at("print_material").get<std::string>() == kFilmLabScanId) continue;
+    // Negative Scan has no Metal pass until issue 662.
+    if (metadata.at("print_material").get<std::string>() == kFilmNegativeScanId) continue;
     selections.push_back({std::move(file), metadata.at("negative").get<std::string>(),
                           metadata.at("print_material").get<std::string>(),
                           metadata.at("scene_light").get<std::string>()});
@@ -978,8 +980,8 @@ TEST_F(MetalFilmPrintFixture, FilmPrintImageMatchesLab) {
     const auto negative = metadata.at(reversal ? "reversal" : "negative").get<std::string>();
     const auto material = reversal ? FilmPrintParams{}.print_material
                                    : metadata.at("print_material").get<std::string>();
-    // Lab Scan has no Metal kernel until phase F11 (issue #662).
-    if (material == kFilmLabScanId) continue;
+    // Negative Scan has no Metal pass until issue 662.
+    if (material == kFilmNegativeScanId) continue;
     SCOPED_TRACE(negative);
     const auto pixels = RenderView(
         FilmPrintDocument(negative, material, metadata.at("scene_light").get<std::string>()), ap1,

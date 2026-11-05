@@ -17,9 +17,9 @@ namespace alcedo::CUDA {
 /**
  * @brief The display transform of one pixel of linear AP1, with the encoding of the output.
  *
- * The entry has the ACES reference gamut compression, then ACES 2.0 or OpenDRT. `DrtKernel` and
- * the scan form of the film print (print material Lab Scan) call this function, so both show a
- * scene value with the same arithmetic.
+ * The entry has the ACES reference gamut compression, then ACES 2.0 or OpenDRT. `DrtKernel` calls
+ * this function. It is a function of its own, so that another kernel can show linear AP1 with the
+ * same arithmetic.
  */
 GPU_FUNC float3 DrtDisplayPixel(float3 ap1, const CudaDrtGpuParams& runtime) {
   const AcesRgcRgb compressed = AcesReferenceGamutCompress(ap1.x, ap1.y, ap1.z);

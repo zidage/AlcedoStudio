@@ -199,12 +199,12 @@ auto DrtOutputResolver::Resolve(const DrtPayload&               payload,
                         std::to_string(static_cast<int>(payload.method)) + ".");
     return false;
   }
-  // Print material Lab Scan ends in a scene value, and the OpenDRT of the document shows it with
+  // Print material Negative Scan ends in linear AP1, and the OpenDRT of the document shows it with
   // the settings and the encodings of method OpenDRT (issue 661). The film print pass applies it.
-  const bool lab_scan =
+  const bool negative_scan =
       payload.method == DrtMethod::FilmPrint &&
-      IsFilmLabScan(payload.film_print.negative, payload.film_print.print_material);
-  if (lab_scan) {
+      IsFilmNegativeScan(payload.film_print.negative, payload.film_print.print_material);
+  if (negative_scan) {
     method = ColorUtils::ODTMethod::OPEN_DRT;
   }
   if (!ToColorSpace(payload.limiting_space, &limiting_space)) {
@@ -229,7 +229,7 @@ auto DrtOutputResolver::Resolve(const DrtPayload&               payload,
       return false;
     }
   }
-  if (payload.method == DrtMethod::FilmPrint && !lab_scan &&
+  if (payload.method == DrtMethod::FilmPrint && !negative_scan &&
       !CheckFilmPrintEncoding(
           export_encoding != nullptr ? export_encoding->encoding_space : encoding_space,
           encoding_eotf, error)) {
