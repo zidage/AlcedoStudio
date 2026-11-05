@@ -448,6 +448,89 @@ auto ReduceFrame(const Frame& frame) -> Frame {
   return out;
 }
 
+auto PrescanAxisOf(std::int64_t input, std::int64_t output) -> PrescanAxis {
+  if (input <= 0 || output <= 0) {
+    throw std::invalid_argument("Negative Scan: the prescan has an empty axis");
+  }
+  PrescanAxis axis;
+  axis.first.resize(static_cast<std::size_t>(output));
+  axis.count.resize(static_cast<std::size_t>(output));
+  if (input == output) {
+    // Pillow skips a pass that keeps its size: each value stays as it is.
+    for (std::int64_t out = 0; out < output; ++out) {
+      axis.first[static_cast<std::size_t>(out)] = static_cast<std::int32_t>(out);
+      axis.count[static_cast<std::size_t>(out)] = 1;
+    }
+    return axis;
+  }
+  const auto coefficients = BoxCoefficientsOf(input, output);
+  for (std::int64_t out = 0; out < output; ++out) {
+    const auto*  weights = coefficients.weights.data() + out * coefficients.kernel;
+    const auto   taps    = coefficients.count[static_cast<std::size_t>(out)];
+    std::int64_t begin   = 0;
+    while (begin < taps && weights[begin] == 0.0) ++begin;
+    std::int64_t end = taps;
+    while (end > begin && weights[end - 1] == 0.0) --end;
+    for (std::int64_t i = begin; i < end; ++i) {
+      // The window form needs one weight for all its pixels.
+      if (weights[i] != weights[begin]) {
+        throw std::logic_error("Negative Scan: a prescan window has unequal weights");
+      }
+    }
+    axis.first[static_cast<std::size_t>(out)] =
+        static_cast<std::int32_t>(coefficients.first[static_cast<std::size_t>(out)] + begin);
+    axis.count[static_cast<std::size_t>(out)] = static_cast<std::int32_t>(end - begin);
+  }
+  return axis;
+}
+
+auto PrescanPlanOf(std::int64_t frame_rows, std::int64_t frame_columns, std::int64_t render_rows,
+                   std::int64_t render_columns) -> PrescanPlan {
+  if (frame_rows <= 0 || frame_columns <= 0 || render_rows <= 0 || render_columns <= 0) {
+    throw std::invalid_argument("Negative Scan: the prescan has an empty frame or render");
+  }
+  const auto  shape   = PrescanShape(frame_rows, frame_columns);
+  PrescanPlan plan;
+  plan.rows           = shape[0];
+  plan.columns        = shape[1];
+  const auto columns  = PrescanAxisOf(render_columns, shape[1]);
+  const auto rows     = PrescanAxisOf(render_rows, shape[0]);
+  for (const auto* part : {&columns.first, &columns.count, &rows.first, &rows.count}) {
+    plan.windows.insert(plan.windows.end(), part->begin(), part->end());
+  }
+  plan.windows_key = ContentHash{}
+                         .MixText("film scan prescan windows")
+                         .MixU64(static_cast<std::uint64_t>(render_columns))
+                         .MixU64(static_cast<std::uint64_t>(render_rows))
+                         .MixU64(static_cast<std::uint64_t>(plan.columns))
+                         .MixU64(static_cast<std::uint64_t>(plan.rows))
+                         .Key();
+  return plan;
+}
+
+auto AutoColourOfDensityPrescan(std::span<const float> density_rgba, std::int64_t rows,
+                                std::int64_t columns, const SelectionValues& values,
+                                const FilmNegativeScanParams& params) -> AutoColourResult {
+  const auto pixels = static_cast<std::size_t>(rows * columns);
+  if (rows <= 0 || columns <= 0 || density_rgba.size() != pixels * 4U) {
+    throw std::runtime_error("Negative Scan: the prescan of the scan density has " +
+                             std::to_string(density_rgba.size()) + " values, not " +
+                             std::to_string(pixels * 4U));
+  }
+  const auto terms = MakePrescanTerms(values, params);
+  Frame      prescan{{}, rows, columns};
+  prescan.values.resize(pixels * 3U);
+  for (std::size_t p = 0; p < pixels; ++p) {
+    for (std::size_t k = 0; k < 3; ++k) {
+      prescan.values[p * 3 + k] =
+          terms.slope[k] * static_cast<double>(density_rgba[p * 4 + k]) + terms.offset[k];
+    }
+  }
+  return AutoColourShift(prescan, values.light_axis, params.auto_colour,
+                         static_cast<double>(params.auto_strength),
+                         static_cast<double>(params.auto_density));
+}
+
 auto AutoColourShift(const Frame& prescan, const std::array<double, 3>& light_axis,
                      std::string_view mode, double strength, double density_strength)
     -> AutoColourResult {

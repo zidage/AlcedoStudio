@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 namespace alcedo {
@@ -38,6 +39,11 @@ struct GpuNodePassStats {
   std::uint64_t film_canvas_sample           = 0;
   /// Film print canonical results that the render built from its own pixels.
   std::uint64_t film_canvas_rebuild          = 0;
+  /// Negative Scan: host reads of the prescan for rule 'frame_auto_colour' (issue 664). Auto colour
+  /// off reads none.
+  std::uint64_t film_scan_prescan_reads      = 0;
+  /// Negative Scan: the auto colour shift of x of the last render with a prescan read, for tests.
+  std::array<double, 3> film_scan_auto_shift{};
   std::uint64_t drt_execute            = 0;
   std::uint64_t drt_skip               = 0;
   std::uint64_t source_h2d_count       = 0;

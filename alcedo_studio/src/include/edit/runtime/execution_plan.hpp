@@ -315,6 +315,10 @@ struct ExecutionPlan {
   CompiledDrtNode                drt;
   GraphValueId                   display_output{NodeId{"drt"}, PortId{"display"}};
   std::optional<ExportColorProfileConfig> output_color_override;
+  /// Tests only: print material Negative Scan writes its linear AP1 before the display transform
+  /// (step 5 of the form) to the display output, so a test can compare the form with the lab
+  /// values, which are linear AP1. A render never sets it.
+  bool                                    film_scan_linear_output = false;
 
   [[nodiscard]] auto                      Contains(GpuPassKind kind) const -> bool {
     for (const auto& pass : passes) {

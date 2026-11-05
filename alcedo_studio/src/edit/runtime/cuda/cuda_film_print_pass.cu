@@ -17,10 +17,13 @@
 #include "cuda/cuda_check.hpp"
 #include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/cuda/cuda_backend.hpp"
+#include "edit/runtime/cuda/cuda_drt_runtime_state.hpp"
 #include "edit/runtime/cuda/cuda_film_print_pass.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
+#include "edit/runtime/cuda/drt/drt_display_pixel.cuh"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
+#include "edit/runtime/film/film_negative_scan.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
 #include "edit/runtime/film/film_print_math.h"
 #include "edit/runtime/film/film_print_resources.hpp"
@@ -34,6 +37,12 @@ namespace {
 
 constexpr std::uint32_t kBlock      = 256;
 constexpr unsigned      kImageBlock = 16;
+
+// The scan display kernel takes the film values, the scan terms, and the DRT values by value,
+// within the 4 KB of kernel arguments.
+static_assert(sizeof(FilmKernelParams) + sizeof(FilmKernelNegativeScan) + sizeof(CudaDrtGpuParams) +
+                  64 <=
+              4096);
 
 auto                    GridFor(std::uint32_t width, std::uint32_t height) -> dim3 {
   return dim3{(width + kImageBlock - 1) / kImageBlock, (height + kImageBlock - 1) / kImageBlock};
@@ -141,7 +150,13 @@ __global__ void ExposureKernel(const float4* input, float3* output, std::uint32_
   const float4 source = input[index];
   // Input is linear AP1. The final colour space of a print is not known here, so a colour that a
   // grade moved out of AP1 comes back at this point, as in DrtKernel (lab rule
-  // 'entry_reference_gamut_compression').
+  // 'entry_reference_gamut_compression'). Negative Scan has no such step: its display transform
+  // has its own entry compression.
+  if (params.scan != 0U) {
+    const auto q  = FilmKernelLayerExposure(&params, values, source.x, source.y, source.z);
+    output[index] = make_float3(q.r, q.g, q.b);
+    return;
+  }
   const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const auto q = FilmKernelLayerExposure(&params, values, compressed.r, compressed.g, compressed.b);
   output[index]       = make_float3(q.r, q.g, q.b);
@@ -494,6 +509,97 @@ __global__ void AmountsReduceKernel(const float3* amounts, int width, int height
   reduced[i * columns + j] = make_float3(r * scale, g * scale, b * scale);
 }
 
+/// Threads of one window of the horizontal prescan pass: one warp.
+constexpr unsigned kPrescanLanes   = 32;
+/// Windows of one block of the horizontal prescan pass.
+constexpr unsigned kPrescanWindows = 8;
+
+/**
+ * The prescan of Negative Scan, horizontal pass (`film_negative_scan::ReduceFrame`): per row of the
+ * render and output column, the mean of the scan density T over the window of the column.
+ * @p windows holds the windows of `film_negative_scan::PrescanPlanOf`. One warp covers one window,
+ * so the reads of a warp are adjacent; the warp adds its sums with shuffles.
+ */
+__global__ void ScanPrescanRowsKernel(const float3* amounts, int width, int height,
+                                      const float* scanner_table, FilmKernelParams params,
+                                      const std::int32_t* windows, int columns, float3* middle) {
+  const unsigned lane   = threadIdx.x;
+  const auto     window = static_cast<std::int64_t>(blockIdx.x) * kPrescanWindows + threadIdx.y;
+  if (window >= static_cast<std::int64_t>(columns) * height) return;
+  const int     y     = static_cast<int>(window / columns);
+  const int     j     = static_cast<int>(window % columns);
+  const int     first = windows[j];
+  const int     count = windows[columns + j];
+  const float3* row   = amounts + static_cast<std::size_t>(y) * width;
+  float         r     = 0.0f;
+  float         g     = 0.0f;
+  float         b     = 0.0f;
+  for (int x = first + static_cast<int>(lane); x < first + count; x += kPrescanLanes) {
+    const float3 a = row[x];
+    const auto   t =
+        FilmKernelReadRecordTable(&params, scanner_table, FilmKernelMakeRgb(a.x, a.y, a.z));
+    r += t.r;
+    g += t.g;
+    b += t.b;
+  }
+  for (unsigned offset = kPrescanLanes / 2; offset > 0; offset /= 2) {
+    r += __shfl_down_sync(0xffffffffU, r, offset);
+    g += __shfl_down_sync(0xffffffffU, g, offset);
+    b += __shfl_down_sync(0xffffffffU, b, offset);
+  }
+  if (lane == 0) {
+    const float scale = 1.0f / static_cast<float>(count);
+    middle[static_cast<std::size_t>(y) * columns + j] = make_float3(r * scale, g * scale, b * scale);
+  }
+}
+
+/// The vertical pass of the prescan: per output pixel, the mean of @p middle over the window of
+/// the row.
+__global__ void ScanPrescanColumnsKernel(const float3* middle, int columns, int height,
+                                         const std::int32_t* windows, int rows, float4* prescan) {
+  const int j = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  const int i = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
+  if (j >= columns || i >= rows) return;
+  const int first = windows[2 * columns + i];
+  const int count = windows[2 * columns + rows + i];
+  float     r     = 0.0f;
+  float     g     = 0.0f;
+  float     b     = 0.0f;
+  for (int y = first; y < first + count; ++y) {
+    const float3 value = middle[static_cast<std::size_t>(y) * columns + j];
+    r += value.x;
+    g += value.y;
+    b += value.z;
+  }
+  const float scale        = 1.0f / static_cast<float>(count);
+  prescan[i * columns + j] = make_float4(r * scale, g * scale, b * scale, 1.0f);
+}
+
+/**
+ * FP6 of print material Negative Scan (lab step P14): the scan density T of the scanner table, the
+ * point form of `FilmKernelNegativeScanPixel` to linear AP1, then the display transform of the
+ * document (`DrtDisplayPixel`, the arithmetic of `DrtKernel`). There is no flare and no grade. With
+ * @p linear_output, the linear AP1 itself, for a test of the form. Alpha comes from @p scene.
+ */
+__global__ void ScanDisplayKernel(const float3* amounts, const float4* scene, float4* output,
+                                  std::uint32_t pixels, const float* scanner_table,
+                                  FilmKernelParams params, FilmKernelNegativeScan terms,
+                                  CudaDrtGpuParams drt, bool linear_output) {
+  const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= pixels) return;
+  const float3 a = amounts[index];
+  const auto   t =
+      FilmKernelReadRecordTable(&params, scanner_table, FilmKernelMakeRgb(a.x, a.y, a.z));
+  const auto   linear = FilmKernelNegativeScanPixel(t, &terms);
+  const float  alpha  = scene[index].w;
+  if (linear_output) {
+    output[index] = make_float4(linear.r, linear.g, linear.b, alpha);
+    return;
+  }
+  const float3 encoded = CUDA::DrtDisplayPixel(make_float3(linear.r, linear.g, linear.b), drt);
+  output[index]        = make_float4(encoded.x, encoded.y, encoded.z, alpha);
+}
+
 /// FP6, fused. @p flare is null when the Enlarger flare is off. Alpha comes from @p scene. @p soft
 /// is the blurred amounts of rule 'negative_show_grade', null with no image plane, and half size
 /// when @p soft_half_size is true. On a light table, @p flare is the blurred display light of the
@@ -670,16 +776,23 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteCudaDrt");
   const auto  film      = drt.Params().FilmPrint();
-  // Print material Negative Scan has the model layer of issue 661; its GPU pass is issue 664. There
-  // is no other form to substitute for it.
-  if (IsFilmNegativeScan(film.negative, film.print_material)) {
-    throw std::runtime_error(
-        "RecordCudaFilmPrint: print material Negative Scan has no CUDA pass yet (issue 664)");
-  }
   auto&       tables    = SharedFilmPrintTables();
   const auto& bundle    = tables.Bundle();
   const auto  light     = bundle.SceneLightMix(film.scene_light, raw_cct);
-  const auto  data      = tables.Resolve(film.negative, film.print_material, light);
+  // Negative Scan reads the scanner table of the scanner of the document. A rendering setting reads
+  // the kept table.
+  const bool  scan      = IsFilmNegativeScan(film.negative, film.print_material);
+  const auto  data =
+      scan ? tables.ResolveNegativeScan(film.negative, light,
+                                        film_negative_scan::ScannerOf(film.scan))
+           : tables.Resolve(film.negative, film.print_material, light);
+  // With auto colour off the terms are known now, so a black at or above the grey stops the render
+  // before any GPU work.
+  const bool  auto_colour = scan && film.scan.auto_colour != kFilmScanAutoIds[0];
+  std::optional<film_negative_scan::RenderTerms> scan_terms;
+  if (scan && !auto_colour) {
+    scan_terms = film_negative_scan::MakeRenderTerms(data->negative_scan, film.scan, {});
+  }
 
   auto&       workspace = device.Workspace();
   auto&       backend   = workspace.Device();
@@ -917,6 +1030,65 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
     clock.Mark("FP6 flare canvas");
   }
   auto* output = static_cast<float4*>(CudaSceneTexture(device, display).DevicePointer());
+  if (params.scan != 0U) {
+    if (auto_colour) {
+      // Rule 'frame_auto_colour': the prescan of the full frame, a canonical result. The host reads
+      // only the prescan and computes the shift, as the lab does; the per-pixel pass applies it.
+      const auto&          frame        = plan.geometry.edit_extent;
+      const auto           prescan_plan = film_negative_scan::PrescanPlanOf(frame.height, frame.width,
+                                                                            height, width);
+      const ImageExtent    extent{static_cast<std::uint32_t>(prescan_plan.columns),
+                                  static_cast<std::uint32_t>(prescan_plan.rows)};
+      std::optional<Lease> temporary_prescan;
+      const float4*        prescan      = ReadOrBuildCanvasResult(
+          device, plan, FilmScanPrescanResultId(plan.drt.node_id), extent, long_edge,
+          temporary_prescan, [&](float4* target) {
+            const auto windows = backend.AcquireKeyedBuffer(
+                prescan_plan.windows_key, std::as_bytes(std::span(prescan_plan.windows)), context);
+            const auto* window = static_cast<const std::int32_t*>(windows.device_pointer);
+            auto        middle = acquire(extent.width, height);
+            const auto  cols   = static_cast<int>(extent.width);
+            const auto windows_per_render = static_cast<std::uint64_t>(extent.width) * height;
+            const auto row_blocks         = static_cast<unsigned>(
+                (windows_per_render + kPrescanWindows - 1) / kPrescanWindows);
+            ScanPrescanRowsKernel<<<row_blocks, dim3{kPrescanLanes, kPrescanWindows}, 0,
+                                    stream>>>(a, w, h, rgba, params, window, cols,
+                                              PointerRgb(middle));
+            ScanPrescanColumnsKernel<<<GridFor(extent.width, extent.height), image_block, 0,
+                                       stream>>>(PointerRgb(middle), cols, h, window,
+                                                 static_cast<int>(extent.height), target);
+          });
+      clock.Mark("FP6 prescan");
+      std::vector<float> texels(static_cast<std::size_t>(extent.width) * extent.height * 4U);
+      cuda::CheckCuda(::cudaMemcpyAsync(texels.data(), prescan, texels.size() * sizeof(float),
+                                        cudaMemcpyDeviceToHost, stream),
+                      "RecordCudaFilmPrint: prescan read");
+      cuda::CheckCuda(::cudaStreamSynchronize(stream), "RecordCudaFilmPrint: prescan read");
+      const auto result = film_negative_scan::AutoColourOfDensityPrescan(
+          texels, extent.height, extent.width, data->negative_scan, film.scan);
+      ++device.PassStats().film_scan_prescan_reads;
+      device.PassStats().film_scan_auto_shift = result.shift;
+      scan_terms = film_negative_scan::MakeRenderTerms(data->negative_scan, film.scan, result.shift);
+      clock.Mark("FP6 prescan read and auto colour on the host");
+    }
+    FilmKernelNegativeScan terms{};
+    for (std::size_t k = 0; k < 3; ++k) {
+      terms.slope[k]  = static_cast<float>(scan_terms->slope[k]);
+      terms.offset[k] = static_cast<float>(scan_terms->offset[k]);
+      terms.scale[k]  = static_cast<float>(scan_terms->scale[k]);
+      terms.floor[k]  = static_cast<float>(scan_terms->floor[k]);
+    }
+    // The form ends in linear AP1: the OpenDRT of the document shows it. The resolver gives
+    // Negative Scan the transform of method OpenDRT.
+    const CudaDrtGpuParams drt_params = device.DrtRuntime().Pack(resolved);
+    ScanDisplayKernel<<<blocks, kBlock, 0, stream>>>(a, scene_pixels, output, pixels, rgba, params,
+                                                     terms, drt_params,
+                                                     plan.film_scan_linear_output);
+    clock.Mark("FP6 scan and display transform");
+    cuda::CheckCuda(::cudaGetLastError(), "RecordCudaFilmPrint: kernel launch");
+    clock.Finish();
+    return;
+  }
   DisplayKernel<<<image_grid, image_block, 0, stream>>>(
       a, scene_pixels, output, w, h, rgba, flare, static_cast<int>(image.flare_extent.width),
       static_cast<int>(image.flare_extent.height), image.render_to_flare, image.flare, soft,

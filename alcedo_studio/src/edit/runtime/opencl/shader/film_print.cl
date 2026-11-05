@@ -151,7 +151,8 @@ static inline FilmKernelRgb FilmMixHalation(FilmKernelRgb value, FilmKernelRgb b
 }
 
 /// FP1. Input is linear AP1. A colour that a grade moved out of AP1 comes back at this point (lab
-/// rule 'entry_reference_gamut_compression').
+/// rule 'entry_reference_gamut_compression'), except on Negative Scan, whose display transform has
+/// its own entry compression.
 __kernel void film_print_exposure(__read_only image2d_t src_image, __global const float4* src_buffer,
                                   int src_is_buffer, __global float* q, uint q_offset,
                                   __global const float* values, __global const uchar* data,
@@ -163,6 +164,11 @@ __kernel void film_print_exposure(__read_only image2d_t src_image, __global cons
                                       ? src_buffer[(uint)y * (uint)width + (uint)x]
                                       : read_imagef(src_image, kFilmNearestClamp, (int2)(x, y));
   __global const FilmKernelParams* params = FilmParams(data, params_offset);
+  if (params->scan != 0U) {
+    FilmStore(q, q_offset, (uint)y * (uint)width + (uint)x,
+              FilmKernelLayerExposure(params, values, source.x, source.y, source.z));
+    return;
+  }
   const AcesRgcRgb    compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const FilmKernelRgb exposure =
       FilmKernelLayerExposure(params, values, compressed.r, compressed.g, compressed.b);
@@ -545,6 +551,84 @@ __kernel void film_print_amounts_reduce(__global const float* amounts, uint amou
   const float scale = 1.0f / (float)((y1 - y0) * (x1 - x0));
   FilmStore(reduced, reduced_offset, (uint)i * (uint)columns + (uint)j,
             FilmKernelMakeRgb(r * scale, g * scale, b * scale));
+}
+
+// Work items of one window of the horizontal prescan pass. opencl_film_print_pass.cpp has the same
+// value.
+#define FILM_PRESCAN_LANES 32
+
+/// The prescan of Negative Scan, horizontal pass (`film_negative_scan::ReduceFrame`): per row of the
+/// render and output column, the mean of the scan density T over the window of the column.
+/// @p windows holds the windows of `film_negative_scan::PrescanPlanOf`. One work group of
+/// FILM_PRESCAN_LANES covers one window (group j of dimension 0, row y of dimension 1), so the reads
+/// of a group are adjacent; the group adds its sums in local memory.
+__kernel void film_print_scan_prescan_rows(__global const float* amounts, uint amounts_offset,
+                                           int width, int height,
+                                           __global const float* scanner_table,
+                                           __global const int* windows, int columns,
+                                           __global float* middle, uint middle_offset,
+                                           __global const uchar* data, uint params_offset) {
+  __local float sums[3][FILM_PRESCAN_LANES];
+  const int     lane = (int)get_local_id(0);
+  const int     j    = (int)get_group_id(0);
+  const int     y    = (int)get_global_id(1);
+  float         r    = 0.0f;
+  float         g    = 0.0f;
+  float         b    = 0.0f;
+  int           count = 1;
+  if (j < columns && y < height) {
+    __global const FilmKernelParams* params = FilmParams(data, params_offset);
+    const int                        first  = windows[j];
+    count                                   = windows[columns + j];
+    for (int x = first + lane; x < first + count; x += FILM_PRESCAN_LANES) {
+      const FilmKernelRgb t = FilmKernelReadRecordTable(
+          params, scanner_table,
+          FilmLoad(amounts, amounts_offset, (uint)y * (uint)width + (uint)x));
+      r += t.r;
+      g += t.g;
+      b += t.b;
+    }
+  }
+  sums[0][lane] = r;
+  sums[1][lane] = g;
+  sums[2][lane] = b;
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (int offset = FILM_PRESCAN_LANES / 2; offset > 0; offset /= 2) {
+    if (lane < offset) {
+      sums[0][lane] += sums[0][lane + offset];
+      sums[1][lane] += sums[1][lane + offset];
+      sums[2][lane] += sums[2][lane + offset];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+  if (lane == 0 && j < columns && y < height) {
+    const float scale = 1.0f / (float)count;
+    FilmStore(middle, middle_offset, (uint)y * (uint)columns + (uint)j,
+              FilmKernelMakeRgb(sums[0][0] * scale, sums[1][0] * scale, sums[2][0] * scale));
+  }
+}
+
+/// The vertical pass of the prescan: per output pixel, the mean of @p middle over the window of the
+/// row, to the canonical result.
+__kernel void film_print_scan_prescan_columns(__global const float* middle, uint middle_offset,
+                                              int columns, int height, __global const int* windows,
+                                              int rows, __write_only image2d_t prescan) {
+  const int j = (int)get_global_id(0);
+  const int i = (int)get_global_id(1);
+  if (j >= columns || i >= rows) return;
+  const int first = windows[2 * columns + i];
+  const int count = windows[2 * columns + rows + i];
+  float     r     = 0.0f;
+  float     g     = 0.0f;
+  float     b     = 0.0f;
+  for (int y = first; y < first + count; ++y) {
+    const FilmKernelRgb value = FilmLoad(middle, middle_offset, (uint)y * (uint)columns + (uint)j);
+    r += value.r;
+    g += value.g;
+    b += value.b;
+  }
+  const float scale = 1.0f / (float)count;
+  write_imagef(prescan, (int2)(j, i), (float4)(r * scale, g * scale, b * scale, 1.0f));
 }
 
 /// FP6 of a print: the Enlarger flare in density, the negative grade, the print table, the display

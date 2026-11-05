@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "edit/graph/film_print_model.hpp"
+#include "edit/runtime/content_key.hpp"
 #include "edit/runtime/film/film_stock_bundle.hpp"
 
 /// Host values of print material Negative Scan (lab step P14, issue 661): the virtual scanner, the
@@ -194,6 +195,45 @@ struct Frame {
  */
 [[nodiscard]] auto ReduceFrame(const Frame& frame) -> Frame;
 
+/**
+ * @brief The windows of one axis of @ref ReduceFrame, for the GPU form of the prescan.
+ *
+ * Per output pixel, the first input pixel and the count of input pixels with a weight above 0 in
+ * Pillow `precompute_coeffs` with the BOX filter. Those pixels are adjacent, and each has the weight
+ * 1 / count, so an output pixel is the mean of its window. An axis that keeps its size has the
+ * window of one pixel each, which gives the value with no change, as Pillow skips that pass.
+ */
+struct PrescanAxis {
+  std::vector<std::int32_t> first;
+  std::vector<std::int32_t> count;
+};
+
+/// @throws std::invalid_argument when @p input or @p output is not above 0.
+[[nodiscard]] auto PrescanAxisOf(std::int64_t input, std::int64_t output) -> PrescanAxis;
+
+/**
+ * @brief The GPU form of the prescan for one render (issue 664).
+ *
+ * The prescan has the shape @ref PrescanShape of the frame (the edit frame), so a full-edit render
+ * and a viewport ROI render name the same canonical result. A render that builds it reduces its own
+ * pixels with the windows of @ref PrescanAxisOf: a horizontal pass and a vertical pass, each stored
+ * as float32. Each output pixel of a pass is the mean of the input pixels of its window.
+ *
+ * @ref windows has 4 parts of int32: the first input column of each output column, the count of
+ * those columns, then the first input row of each output row, and the count of those rows.
+ */
+struct PrescanPlan {
+  std::int64_t              rows    = 0;
+  std::int64_t              columns = 0;
+  std::vector<std::int32_t> windows;
+  ContentKey                windows_key{};  ///< Content key of @ref windows, for a keyed buffer
+};
+
+/// @throws std::invalid_argument when the frame or the render is empty.
+[[nodiscard]] auto PrescanPlanOf(std::int64_t frame_rows, std::int64_t frame_columns,
+                                 std::int64_t render_rows, std::int64_t render_columns)
+    -> PrescanPlan;
+
 /// Lab `auto_colour_shift` on a prescan: the near-neutral and the white-patch estimates of the
 /// cast, rule 'smaller_cast', and the correction along and across the light axis.
 struct AutoColourResult {
@@ -211,6 +251,24 @@ struct AutoColourResult {
  */
 [[nodiscard]] auto AutoColourShift(const Frame& prescan, const std::array<double, 3>& light_axis,
                                    std::string_view mode, double strength, double density_strength)
+    -> AutoColourResult;
+
+/**
+ * @brief Rule 'frame_auto_colour' on a GPU prescan of the scan density (issue 664).
+ *
+ * The GPU reduces the scan density T, not x: x of the prescan is the affine map slope T + offset of
+ * @ref MakePrescanTerms, and the area mean of an affine map is the map of the mean. So the prescan
+ * does not depend on the contrast, and a rendering setting reads the kept prescan. The map runs
+ * here in double precision; then @ref AutoColourShift with the auto settings of @p params.
+ *
+ * @param density_rgba The prescan of T: rows x columns texels of 4 floats, the fourth unused.
+ * @throws std::runtime_error as @ref AutoColourShift, and when the size of @p density_rgba is not
+ *         rows x columns x 4.
+ */
+[[nodiscard]] auto AutoColourOfDensityPrescan(std::span<const float> density_rgba,
+                                              std::int64_t rows, std::int64_t columns,
+                                              const SelectionValues&        values,
+                                              const FilmNegativeScanParams& params)
     -> AutoColourResult;
 
 }  // namespace alcedo::film_negative_scan

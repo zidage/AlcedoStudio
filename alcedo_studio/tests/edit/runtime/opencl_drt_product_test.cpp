@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifdef HAVE_CUDA
@@ -396,6 +397,77 @@ TEST_F(OpenClDrtFixture, ReversalFilmPrintMatchesCudaReferenceWithinTolerance) {
     ASSERT_TRUE(AllFinite(opencl));
     const auto largest = MaxAbsError(opencl, cuda);
     std::cout << film << ": OpenCL against CUDA, largest " << largest * 255.0f << " codes\n";
+    EXPECT_LT(largest, 1.0f / 255.0f);
+  }
+#endif
+}
+
+TEST_F(OpenClDrtFixture, NegativeScanFilmPrintMatchesCudaReferenceWithinTolerance) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA reference is not enabled in this build.";
+#else
+  if (!HasCudaDevice()) {
+    GTEST_SKIP() << "No CUDA device available for the reference render.";
+  }
+  if (!std::filesystem::exists(FilmPrintResourceDirectory() / "manifest.json")) {
+    GTEST_SKIP() << "No film print resources at " << FilmPrintResourceDirectory().string()
+                 << ". Configure with ALCEDO_FILM_PRINT_RESOURCE_DIR. This is not a pass.";
+  }
+  constexpr std::uint32_t kWidth  = 1024;
+  constexpr std::uint32_t kHeight = 768;
+  input_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(kWidth, kHeight),
+                                         gpu_dag_test::FullSensor(kWidth, kHeight));
+  // Negative Scan (issue 664) on a negative with both parts of the inhibition, one with no
+  // inhibition, and a tungsten stock under a scene light that keeps its cast; auto colour off and
+  // Neutral; As Shot at a colour temperature between grid lights; another scanner; and an HDR
+  // encoding of the OpenDRT after the scan.
+  struct Case {
+    const char* negative;
+    const char* light;
+    const char* auto_colour;
+    bool        other_scanner;
+    bool        hdr;
+  };
+  for (const auto& [negative, light, auto_colour, other_scanner, hdr] :
+       {Case{"kodak_5207", "reference", "off", false, false},
+        Case{"kodak_gold_200", "reference", "neutral", false, false},
+        Case{"kodak_5219", "daylight", "neutral", false, false},
+        Case{"kodak_5219", "as_shot", "off", true, false},
+        Case{"kodak_portra_400", "as_shot", "neutral", false, true}}) {
+    SCOPED_TRACE(std::string{negative} + " under " + light + ", auto " + auto_colour +
+                 (other_scanner ? ", another scanner" : "") + (hdr ? ", Rec. 2020 PQ" : ""));
+    auto document = CreateDefaultPipelineDocument();
+    gpu_dag_test::EnsureTestCameraProfile(document);
+    auto develop        = document.Develop()->Params().Params();
+    develop.wb_mode     = "as_shot";
+    develop.as_shot_cct = 5650.0f;
+    document.Develop()->Params().ReplaceParams(std::move(develop));
+    DrtParameterUpdate update;
+    update.method              = DrtMethod::FilmPrint;
+    update.encoding_space      = hdr ? DrtColorSpace::Rec2020 : DrtColorSpace::Rec709;
+    update.encoding_eotf       = hdr ? DrtEotf::St2084 : DrtEotf::SrgbPiecewise;
+    update.peak_luminance      = hdr ? 1000.0f : 100.0f;
+    update.film_negative       = std::string{negative};
+    update.film_print_material = std::string{kFilmNegativeScanId};
+    update.film_scene_light    = std::string{light};
+    update.film_scan_auto      = std::string{auto_colour};
+    update.film_light_spread   = 2.5f;
+    update.film_halation       = 4.0f;
+    if (other_scanner) {
+      update.film_scanner_red_nm   = 630.0f;
+      update.film_scanner_width_nm = 60.0f;
+      update.film_scanner_light    = std::string{"equal_energy"};
+    }
+    document.Drt()->Params().ApplyUpdate(update);
+    const auto plan   = GraphCompiler::Compile(document, input_.CompileSource(), RenderRequest{});
+    const auto opencl = Download(*device_, device_->Execute(plan, input_, document));
+    CudaRenderDevice cuda_device;
+    const auto       cuda = Download(cuda_device, cuda_device.Execute(plan, input_, document));
+    ASSERT_EQ(opencl.size(), cuda.size());
+    ASSERT_TRUE(AllFinite(opencl));
+    const auto largest = MaxAbsError(opencl, cuda);
+    std::cout << negative << " on Negative Scan, auto " << auto_colour
+              << ": OpenCL against CUDA, largest " << largest * 255.0f << " codes\n";
     EXPECT_LT(largest, 1.0f / 255.0f);
   }
 #endif

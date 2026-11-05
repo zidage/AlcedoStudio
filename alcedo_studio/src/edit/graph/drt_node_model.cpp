@@ -632,12 +632,19 @@ void DrtParamsModel::ApplyUpdate(DrtParameterUpdate update) {
       film.enlarger_flare = *update.film_enlarger_flare;
       changed |= DirtyFieldMask{DrtDirty::FilmFlare};
     }
-    // Negative Scan acts only in FP6, so no canonical film print result reads these fields.
-    const auto set_scan = [&changed](auto& field, auto& value) {
+    // The rendering settings of Negative Scan act only in FP6, so no canonical film print result
+    // reads them. The scanner settings choose the scanner table, which the prescan reads.
+    const auto set_field = [&changed](auto& field, auto& value, DrtDirty dirty) {
       if (value.has_value() && field != *value) {
         field = std::move(*value);
-        changed |= DirtyFieldMask{DrtDirty::FilmScan};
+        changed |= DirtyFieldMask{dirty};
       }
+    };
+    const auto set_scan = [&set_field](auto& field, auto& value) {
+      set_field(field, value, DrtDirty::FilmScan);
+    };
+    const auto set_scanner = [&set_field](auto& field, auto& value) {
+      set_field(field, value, DrtDirty::FilmScanner);
     };
     auto& scan = film.scan;
     set_scan(scan.auto_colour, update.film_scan_auto);
@@ -649,11 +656,11 @@ void DrtParamsModel::ApplyUpdate(DrtParameterUpdate update) {
     set_scan(scan.magenta, update.film_scan_magenta);
     set_scan(scan.yellow, update.film_scan_yellow);
     set_scan(scan.black, update.film_scan_black);
-    set_scan(scan.scanner_red_nm, update.film_scanner_red_nm);
-    set_scan(scan.scanner_green_nm, update.film_scanner_green_nm);
-    set_scan(scan.scanner_blue_nm, update.film_scanner_blue_nm);
-    set_scan(scan.scanner_width_nm, update.film_scanner_width_nm);
-    set_scan(scan.scanner_light, update.film_scanner_light);
+    set_scanner(scan.scanner_red_nm, update.film_scanner_red_nm);
+    set_scanner(scan.scanner_green_nm, update.film_scanner_green_nm);
+    set_scanner(scan.scanner_blue_nm, update.film_scanner_blue_nm);
+    set_scanner(scan.scanner_width_nm, update.film_scanner_width_nm);
+    set_scanner(scan.scanner_light, update.film_scanner_light);
     return changed;
   });
 }
