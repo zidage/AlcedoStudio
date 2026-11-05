@@ -8,6 +8,8 @@ Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
 Tracking: [#631](https://github.com/zidage/AlcedoStudio/issues/631). Section 8 lists the phase issues.
 
+Explanatory document of the model and the main flow: [Film Simulation Explained](film_simulation/film_simulation_explained.md).
+
 Research source: [alcedo-film-lab](https://github.com/zidage/alcedo-film-lab). The decisions are ROADMAP
 U68 to U72 of that repository. The reference evaluator and the measurements are its reports P6 and P7.
 
