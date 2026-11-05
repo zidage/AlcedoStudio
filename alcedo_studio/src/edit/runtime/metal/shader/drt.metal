@@ -314,6 +314,22 @@ static inline float3 DisplayEncoding(float3 rgb, constant float* mat_limit_to_di
 #include "drt_opendrt.metal"
 #include "../../../../include/edit/runtime/aces_reference_gamut_compression.h"
 
+/// The display transform of one pixel of linear AP1, with the encoding of the output: the ACES
+/// reference gamut compression, then ACES 2.0 or OpenDRT. `drt_display` calls this function, and
+/// `film_print_scan_display` shows the linear AP1 of Negative Scan with the same arithmetic.
+static inline float3 DrtDisplayPixel(float3 ap1, constant MetalToOutputParams& params) {
+  const AcesRgcRgb compressed = AcesReferenceGamutCompress(ap1.x, ap1.y, ap1.z);
+  const float3 scene = float3(compressed.r, compressed.g, compressed.b);
+  float3 display_linear;
+  if (params.method_ == kMetalOdtMethodAces20) {
+    display_linear = OutputTransform_fwd(scene, params.aces_params_);
+  } else {
+    display_linear = OpenDRTTransform_fwd(scene, params.open_drt_params_);
+  }
+  return DisplayEncoding(display_linear, params.limit_to_display_matx, params.eotf_,
+                         params.display_linear_scale_);
+}
+
 kernel void drt_display(texture2d<float, access::read> input [[texture(0)]],
                         texture2d<float, access::write> output [[texture(1)]],
                         constant MetalToOutputParams& params [[buffer(0)]],
@@ -323,17 +339,7 @@ kernel void drt_display(texture2d<float, access::read> input [[texture(0)]],
   }
   const float4 source = input.read(gid);
   // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
-  const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
-  const float3 scene = float3(compressed.r, compressed.g, compressed.b);
-  float3 display_linear;
-  if (params.method_ == kMetalOdtMethodAces20) {
-    display_linear = OutputTransform_fwd(scene, params.aces_params_);
-  } else {
-    display_linear = OpenDRTTransform_fwd(scene, params.open_drt_params_);
-  }
-  const float3 encoded = DisplayEncoding(display_linear, params.limit_to_display_matx, params.eotf_,
-                                         params.display_linear_scale_);
-  output.write(float4(encoded, source.w), gid);
+  output.write(float4(DrtDisplayPixel(source.xyz, params), source.w), gid);
 }
 
 /// DiffusionFilter with strength 0: decode the ACEScc AP1 scene to linear AP1 for the DRT.
@@ -565,3 +571,4 @@ kernel void diffusion_filter_mix(texture2d<float, access::read> input [[texture(
 }
 
 #include "drt_neighbor.metal"
+#include "film_print_scan.metal"

@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02). F8 is complete on CUDA and OpenCL (2026-11-03). F9, the reversal films on Metal, is complete (2026-11-03). F10, print material Negative Scan (a virtual scanner and a negative rendering model, shown by OpenDRT) and the scene light As Shot, has two phases: the model layer is complete (2026-11-05), and phase 2 adds the CUDA and OpenCL passes (issue #664); F11 adds Negative Scan to Metal (issue #662).
+Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02). F8 is complete on CUDA and OpenCL (2026-11-03). F9, the reversal films on Metal, is complete (2026-11-03). F10, print material Negative Scan (a virtual scanner and a negative rendering model, shown by OpenDRT) and the scene light As Shot, has two phases: the model layer is complete (2026-11-05), and phase 2 adds the CUDA and OpenCL passes (issue #664). F11, Negative Scan on Metal (issue #662), is complete (2026-11-05).
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -175,7 +175,7 @@ Print material `negative_scan`, "Negative Scan", is a scan of the negative in pl
 - There is no enlarger flare, no printer balance, no print table, no negative grade, no Cine Look, and no dark surround. Negative Scan has all the settings of method OpenDRT, with HDR; `DrtOutputResolver` resolves it as OpenDRT and does not call `CheckFilmPrintEncoding`.
 - The identifier stays in the key `params.film_print.print_material`. The settings are the keys `auto`, `auto_strength`, `auto_density`, `scan_contrast`, `scan_exposure_stops`, `cyan`, `magenta`, `yellow`, `black`, `scanner_red_nm`, `scanner_green_nm`, `scanner_blue_nm`, `scanner_width_nm`, and `scanner_light` of `params.film_print`. A key at its default is not written, so a document with the defaults has the bytes and the root id of a document of before. A reversal film reads no print material, so a stored `negative_scan` has no effect on it.
 - With Negative Scan the panel hides the slider Enlarger Flare (its stored value does not change) and shows the groups "Negative Scan" (Auto Color, Auto Color Strength, Auto Density, Scan Contrast, Scan Exposure, Cyan, Magenta, Yellow, Black at Film Base) and "Scanner" (the three band centres, the band width, the scanner light), the OpenDRT presets, and the section Color & Encoding. The Print list has Negative Scan first, before Cine Look, with its own swatch.
-- GPU: phase 2 of F10 (issue #664) has the CUDA and OpenCL passes, and F11 (issue #662) the Metal pass; until F11 `RecordMetalFilmPrint` stops with a named error before any GPU work. With auto colour on, the GPU reduces the scan density T of the full frame to the prescan (a canonical result, `film.scan_prescan.0`), the host reads it and computes the shift, and the display kernel applies it. With auto colour off no prescan is built or read. See the record of phase 2.
+- GPU: phase 2 of F10 (issue #664) has the CUDA and OpenCL passes, and F11 (issue #662) the Metal pass. With auto colour on, the GPU reduces the scan density T of the full frame to the prescan (a canonical result, `film.scan_prescan.0`), the host reads it and computes the shift, and the display kernel applies it. With auto colour off no prescan is built or read. See the records of F10 phase 2 and F11.
 
 #### Scene light As Shot
 
@@ -1241,7 +1241,60 @@ The first pull request of this phase had an ADX scan named Lab Scan (PR #663, co
 
 **AMD.** `opencl_dag_film_print` and `opencl_dag_drt` build with no error on drivers 26.10.2, 26.6.2, and 26.6.1, on gfx1030, gfx1100, gfx1103, and gfx1201, and on gfx1010 with the legacy runtime.
 
-**Not verified.** Metal (F11, issue #662). A render in the running application. An AMD GPU. The packaged application. The full test suite did not run.
+**Not verified.** Metal (F11, issue #662; see its record). A render in the running application. An AMD GPU. The packaged application. The full test suite did not run.
+
+### F11: Negative Scan on Metal
+
+1. **Objective.** The Negative Scan form of F10 phase 2 (section 3.4) on Metal, with rule `frame_auto_colour` on the GPU, and no named stop.
+2. **Inputs.** F10 phase 2; the resources of schema 10 and the lab values of lab commit fb785ef; a macOS machine.
+3. **Modules.** `metal_film_print_pass.mm`, `film_print.metal` (FP1 with no entry compression, the two prescan passes), the new `film_print_scan.metal` (included by `drt.metal`, so in the DRT AIR file), `drt.metal` (`DrtDisplayPixel`), `film_print_math.h` (`FILM_KERNEL_PRIVATE`), `metal_film_print_test.cpp`.
+4. **Tests.** Section "Tests" of the record below.
+5. **Tracking.** [#662](https://github.com/zidage/AlcedoStudio/issues/662).
+
+#### F11 completion record (2026-11-05)
+
+**Call chain.** `MetalDrtOps::DispatchFilmPrint -> RecordMetalFilmPrint -> FilmPrintTables::ResolveNegativeScan(negative, light, ScannerOf(scan))` -> FP1 (`film_print_exposure`, no entry gamut compression when `params.scan`) to FP5 as the print form -> with auto colour: `ReadOrBuildCanvasResult(FilmScanPrescanResultId)` -> `film_print_scan_prescan_rows`, `film_print_scan_prescan_columns` -> `MetalBackend::DownloadTexture2D` of the prescan -> `film_negative_scan::AutoColourOfDensityPrescan` -> `MakeRenderTerms` -> `film_print_scan_display`: `FilmKernelReadRecordTable` -> `FilmKernelNegativeScanPixel` -> `DrtDisplayPixel` of `drt.metal`.
+
+**Decisions.**
+
+- The form of F10 phase 2: the GPU reduces the scan density T to the prescan, a canonical result; the host reads only the prescan (96 x 64 texels at 6000 x 4006) and computes the shift; auto colour off builds no prescan, reads nothing, and computes the terms before any GPU work.
+- The read of the prescan is `DownloadTexture2D`: it commits the recorded work of the frame (FP1 to FP5 and the prescan) and waits for it. The display pass then records into a new command buffer of the same render. So with auto colour on, the GPU time that a preview request records (`BeginGpuWorkSample`) covers only the work after the read.
+- The horizontal prescan pass gives one SIMD group to each window and adds the sums of its lanes with `simd_sum`; the host dispatches threadgroups of 8 SIMD groups (`Dispatch::RunSimdGroups`). The middle image and the prescan stay float32, as each pass of the lab.
+- The display kernel `film_print_scan_display` is in `film_print_scan.metal`, which `drt.metal` includes, so it calls `DrtDisplayPixel`, the function that `drt_display` now calls too. The point math stays in `film_print_math.h`. The DRT values (`MetalDrtGpuParams`, above the 4 KB of `setBytes`) go to the transient arena; the scan terms (48 bytes) are `setBytes`. The kernel reads the alpha of the scene only when FP1 marked an alpha other than 1, as `film_print_display` does.
+- `ReadOrBuildCanvasResult` returns the `Texture2D` of the result, so the read can take it.
+- Fault of F10 phase 1, found because Metal compiled the header for the first time: `FilmKernelNegativeScanTerms` (host only) had pointers with no address space, which Metal does not allow. Its pointers now have `FILM_KERNEL_PRIVATE` (`thread` on Metal, `__private` on OpenCL, empty on the host and CUDA).
+- Metal against CUDA was measured once with a temporary test that wrote the CUDA output to a file and read it on the Mac. That test is not in the repository, because this project keeps no stored render pixels as a test.
+
+**Tests.** Apple M4 (8-core GPU), macOS, Debug host build (`build/macos-debug`), resources of schema 10, lab values of lab commit fb785ef.
+
+| Check | Result |
+| --- | --- |
+| `GpuDagMetalDrtTest`, `MetalFilmPrintFixture` | 27 of 28 pass; `FilmPrintImageMatchesLab` ran in two halves for the free disk space of the Mac, so each half fails only its file count (26 of 42); every image holds its limits |
+| Ramp, linear AP1 against the lab, 32 files | at most 1.7e-5 stops (limit 0.005); shift at most 5.9e-7 (limit 1e-4) |
+| Chart, the same 32 files | at most 0.0010 stops (limit 0.01), with the relative floor of issue #667; with no relative floor 0.022 at the value of #667 (`kodak_5219` at 3100 K; CUDA 0.045) |
+| Image 6000 x 4006, 32 files | p99.9 0.0149 to 0.0197 stops (limit 0.02); largest 0.080 to 0.148 stops (above 0.1 in 14 files, issue #668; the test has 0.2); shift 3.6e-6 to 2.7e-4 (above 1e-4 in 11 of 16, issue #668; the test has 5e-4). These are the values of CUDA |
+| Viewport ROI inside the reach of the blurs, `kodak_5207`, Neutral | odd row 7.9e-4, even row 6.4e-5 stops (limit 0.002); the shift equals that of the full frame |
+| Display: Negative Scan against method OpenDRT on its linear AP1, SDR and HDR, auto off and Neutral | 0 codes (limit 0.1) |
+| Metal against CUDA, 1024 x 768 field, `kodak_5207`, `kodak_portra_400`, `kodak_ektar_100`, `kodak_5219`; auto off, Neutral under daylight, As Shot 5650 K with another scanner, Rec. 2020 PQ 1000 nits | largest 0.60 codes (`kodak_ektar_100`, Neutral, daylight); the other 15 cases 0.010 to 0.040 codes (limit 1) |
+| Print and reversal cases | ramp at most 0.0005 codes, chart at most 0.029 codes, 10 images p99.9 up to 0.57 and largest up to 1.73 codes, ROI `kodak_5207` 0.034 / 0.0024 and `fuji_velvia_50` 0.137 / 0.042 codes (odd / even row): within the limits of F9 |
+| Other cases of `GpuDagMetalDrtTest` | 14 of 14 pass |
+| Windows, after the change of `film_print_math.h`: `CudaFilmPrintFixture` / `OpenClFilmPrintFixture` (with no lab image cases) / `FilmPrintTablesTest` | 22 / 24 / 67 pass |
+| AMD: `opencl_dag_film_print`, `opencl_dag_drt` | build with no error on gfx1030, gfx1100, gfx1103, gfx1201, and gfx1010 (legacy runtime) |
+
+**Cost.** Wall time in ms to the end of the GPU work after a change, median of 9 renders, Apple M4, at 2560 x 1709 (`DISABLED_DrtCostRecordAtEditorSizes`, Debug host build, as in F7 and F9):
+
+| Case | ms |
+| --- | --- |
+| Print form `kodak_5207`, Halation change / Light spread change | 14.7 / 17.1 |
+| Negative Scan, auto off, Halation change / Scan Contrast change | 14.9 / 14.9 |
+| Negative Scan, Neutral, Halation change (prescan built again) / Scan Contrast change (prescan kept) | 16.8 / 15.8 |
+| Method OpenDRT | 3.2 |
+
+- With auto off, Negative Scan costs 0.2 ms more than the print form after a Halation change. It has no flare canvas, and its display pass runs OpenDRT in place of the print table.
+- With Neutral, the prescan, the read, and the host rule cost about 1.9 ms after a Halation change. When the prescan is kept, the read costs about 0.9 ms.
+- The same run at 4096 and 6000 gave values up to 2 times those of F9 for the unchanged print form (6000: 115 ms against 62.5 ms), and the Mac then went off the network. Those values are not recorded.
+
+**Not verified.** The cost at 4096 and 6000. A Release build, the packaged application, and a render in the running application on macOS. The full test suite did not run.
 
 ---
 

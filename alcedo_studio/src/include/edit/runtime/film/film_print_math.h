@@ -27,6 +27,7 @@
 #define FILM_KERNEL_LOG2   log2
 #define FILM_KERNEL_VALUES __global const
 #define FILM_KERNEL_PARAMS __global const
+#define FILM_KERNEL_PRIVATE __private
 #define FILM_KERNEL_UINT   uint
 #elif defined(__METAL_VERSION__)
 #define FILM_KERNEL_INLINE static inline
@@ -37,6 +38,7 @@
 #define FILM_KERNEL_LOG2   log2
 #define FILM_KERNEL_VALUES const device
 #define FILM_KERNEL_PARAMS constant
+#define FILM_KERNEL_PRIVATE thread
 #define FILM_KERNEL_UINT   uint
 #else
 #include <cmath>
@@ -48,6 +50,7 @@
 #endif
 #define FILM_KERNEL_VALUES const
 #define FILM_KERNEL_PARAMS const
+#define FILM_KERNEL_PRIVATE
 #define FILM_KERNEL_UINT   std::uint32_t
 #ifdef FILM_KERNEL_DOUBLE
 #define FILM_KERNEL_LOG10 log10
@@ -691,14 +694,15 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelCinemaLook(FilmKernelRgb linear) {
  *
  * @return 0 when black E_base is at or above 0.18 in a channel (the lab stops there: the film
  *         base is at or above the grey), else 1. @p terms is written in both cases.
+ *
+ * The pointers are to values of the caller (FILM_KERNEL_PRIVATE: Metal needs an address space).
  */
-FILM_KERNEL_INLINE int FilmKernelNegativeScanTerms(const FilmKernelReal* base_density,
-                                                   const FilmKernelReal* aim_density,
-                                                   const FilmKernelReal* gamma,
-                                                   FilmKernelReal        contrast,
-                                                   const FilmKernelReal* shift,
-                                                   FilmKernelReal        black,
-                                                   FilmKernelNegativeScan* terms) {
+FILM_KERNEL_INLINE int FilmKernelNegativeScanTerms(
+    FILM_KERNEL_PRIVATE const FilmKernelReal* base_density,
+    FILM_KERNEL_PRIVATE const FilmKernelReal* aim_density,
+    FILM_KERNEL_PRIVATE const FilmKernelReal* gamma, FilmKernelReal contrast,
+    FILM_KERNEL_PRIVATE const FilmKernelReal* shift, FilmKernelReal black,
+    FILM_KERNEL_PRIVATE FilmKernelNegativeScan* terms) {
   int valid = 1;
   for (FILM_KERNEL_UINT k = 0U; k < 3U; ++k) {
     const FilmKernelReal slope = contrast / gamma[k];
@@ -767,5 +771,6 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelNegativeScanPrescanX(
 #undef FILM_KERNEL_REAL
 #undef FILM_KERNEL_VALUES
 #undef FILM_KERNEL_PARAMS
+#undef FILM_KERNEL_PRIVATE
 #undef FILM_KERNEL_UINT
 #endif

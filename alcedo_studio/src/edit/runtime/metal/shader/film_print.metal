@@ -24,6 +24,11 @@
 // A colour reversal film (`params.light_table`) has the same FP1 to FP5. Its FP6 reads the light
 // table in place of the print table, and adds the loupe flare and the surround in display light.
 //
+// Print material Negative Scan (`params.scan`) has the same FP1 to FP5, with no entry gamut
+// compression. This file has its prescan passes (float32, as the lab); its FP6 is
+// `film_print_scan_display` of film_print_scan.metal, in the DRT AIR file, because it calls the
+// display transform of drt.metal.
+//
 // A blur pass gives each thread FILM_SLIDE outputs along the blur. A window of FILM_SLIDE values in
 // registers moves one tap at a time, so a pass loads 2 R + FILM_SLIDE values for FILM_SLIDE outputs
 // in place of 2 R + 1 values for each output. The tap sums are those of the CUDA kernels, in
@@ -334,7 +339,8 @@ static inline FilmSlideSums FilmBlurAcross(const device Texel* row, int x0, int 
   return FilmBlurLine(FilmLineLoad<Texel, false>{row, 1, width}, x0, taps);
 }
 
-/// FP1. Input is linear AP1. A colour that a grade moved out of AP1 comes back at this point.
+/// FP1. Input is linear AP1. A colour that a grade moved out of AP1 comes back at this point, except
+/// on Negative Scan, whose display transform has its own entry compression.
 kernel void film_print_exposure(
     texture2d<float, access::read> scene [[texture(0)]], device packed_float3* q [[buffer(0)]],
     const device float* values [[buffer(1)]], constant FilmKernelParams& params [[buffer(2)]],
@@ -345,6 +351,11 @@ kernel void film_print_exposure(
   // See film_print_display. One lane of a SIMD group writes the mark.
   if (simd_any(source.w != 1.0f) && simd_is_first()) {
     atomic_store_explicit(alpha_mark, stamp, memory_order_relaxed);
+  }
+  if (params.scan != 0U) {
+    FilmStore(q, gid.y * uint(size.width) + gid.x,
+              FilmKernelLayerExposure(&params, values, source.x, source.y, source.z));
+    return;
   }
   const AcesRgcRgb    compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const FilmKernelRgb exposure =
@@ -738,6 +749,65 @@ kernel void film_print_amounts_reduce(const device packed_float3* amounts [[buff
     for (int x = x0; x < x1; ++x) sum += FilmLoad3(amounts, uint(y * size.width + x));
   }
   FilmStore3(reduced, uint(i * cells.width + j), sum / float((y1 - y0) * (x1 - x0)));
+}
+
+/**
+ * The prescan of Negative Scan, horizontal pass (`film_negative_scan::ReduceFrame`): per row of the
+ * render and output column, the mean of the scan density T over the window of the column, in
+ * float32 as Pillow stores each pass. @p windows holds the windows of
+ * `film_negative_scan::PrescanPlanOf`. One SIMD group covers one window, so the reads of a group
+ * are adjacent, and `simd_sum` adds the sums of its lanes. The host dispatches threadgroups of
+ * whole SIMD groups, one dimension; window w is (row w / columns, column w % columns).
+ */
+kernel void film_print_scan_prescan_rows(const device packed_float3* amounts [[buffer(0)]],
+                                         device packed_float3*       middle [[buffer(1)]],
+                                         const device float*         scanner_table [[buffer(2)]],
+                                         constant FilmKernelParams&  params [[buffer(3)]],
+                                         constant FilmSize&          size [[buffer(4)]],
+                                         const device int*           windows [[buffer(5)]],
+                                         constant int&               columns [[buffer(6)]],
+                                         uint group [[threadgroup_position_in_grid]],
+                                         uint simd [[simdgroup_index_in_threadgroup]],
+                                         uint simds [[simdgroups_per_threadgroup]],
+                                         uint lane [[thread_index_in_simdgroup]],
+                                         uint lanes [[threads_per_simdgroup]]) {
+  const uint window = group * simds + simd;
+  // Each lane of a SIMD group has the same window, so a whole group returns here or none of it.
+  if (window >= uint(columns) * uint(size.height)) return;
+  const int     y     = int(window / uint(columns));
+  const int     j     = int(window % uint(columns));
+  const int     first = windows[j];
+  const int     count = windows[columns + j];
+  const uint    row   = uint(y) * uint(size.width);
+  float3        sum   = 0.0f;
+  for (int x = first + int(lane); x < first + count; x += int(lanes)) {
+    const FilmKernelRgb t =
+        FilmKernelReadRecordTable(&params, scanner_table, FilmLoad(amounts, row + uint(x)));
+    sum += float3(t.r, t.g, t.b);
+  }
+  sum = float3(simd_sum(sum.x), simd_sum(sum.y), simd_sum(sum.z));
+  if (lane == 0U) {
+    FilmStore3(middle, uint(y) * uint(columns) + uint(j), sum / float(count));
+  }
+}
+
+/// The vertical pass of the prescan: per output pixel, the mean of @p middle over the window of the
+/// row, to the canonical result.
+kernel void film_print_scan_prescan_columns(const device packed_float3*      middle [[buffer(0)]],
+                                            const device int*                windows [[buffer(1)]],
+                                            constant FilmSize&               cells [[buffer(2)]],
+                                            texture2d<float, access::write> prescan [[texture(0)]],
+                                            uint2 gid [[thread_position_in_grid]]) {
+  const int j = int(gid.x);
+  const int i = int(gid.y);
+  if (j >= cells.width || i >= cells.height) return;
+  const int first = windows[2 * cells.width + i];
+  const int count = windows[2 * cells.width + cells.height + i];
+  float3    sum   = 0.0f;
+  for (int y = first; y < first + count; ++y) {
+    sum += FilmLoad3(middle, uint(y) * uint(cells.width) + uint(j));
+  }
+  prescan.write(float4(sum / float(count), 1.0f), gid);
 }
 
 /// The values of FP6 that change per render, apart from the fixed values of the selection.
