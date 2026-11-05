@@ -18,10 +18,12 @@
 #include "edit/graph/film_print_model.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
+#include "edit/runtime/film/film_negative_scan.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
 #include "edit/runtime/film/film_print_math.h"
 #include "edit/runtime/film/film_print_resources.hpp"
 #include "edit/runtime/film_print_plan.hpp"
+#include "edit/runtime/metal/metal_drt_gpu_params.hpp"
 #include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -39,6 +41,7 @@ static_assert(kFilmNarrowSpreadMaxRadius == 2 && sizeof(FilmNarrowKernel) == 76)
 static_assert(sizeof(FilmKernelParams) == 416);
 static_assert(sizeof(Matrix3x3) == 36);
 static_assert(sizeof(FilmKernelRgb) == 12);
+static_assert(sizeof(FilmKernelNegativeScan) == 48);
 
 /// `FilmSize` of film_print.metal.
 struct Size {
@@ -178,6 +181,16 @@ class Dispatch {
     RunBlur((width + kSlide - 1) / kSlide, height);
   }
 
+  /// One SIMD group for each of @p work_items, @p simds_per_group SIMD groups to a threadgroup.
+  void RunSimdGroups(std::uint64_t work_items, std::uint32_t simds_per_group) {
+    const auto lanes   = std::max<NS::UInteger>(1, pipeline_->threadExecutionWidth());
+    const auto largest = std::max<NS::UInteger>(1, pipeline_->maxTotalThreadsPerThreadgroup() / lanes);
+    const auto simds   = std::clamp<NS::UInteger>(simds_per_group, 1, largest);
+    const auto groups  = static_cast<NS::UInteger>((work_items + simds - 1) / simds);
+    encoder_->dispatchThreadgroups(MTL::Size{groups, 1, 1}, MTL::Size{lanes * simds, 1, 1});
+    device_.Workspace().Device().NoteComputeDispatch(device_.CommandContext());
+  }
+
  private:
   /// Blur passes hold a window in registers, so they use groups of 8 SIMD rows.
   void RunBlur(std::uint32_t width, std::uint32_t height) {
@@ -291,7 +304,8 @@ void CanvasReduce(const Recording& r, const Plane& src, Size size, const Plane& 
 using Lease = ResourceLease<MetalBackend>;
 
 /**
- * @brief The canonical result @p id: the published texture, or a texture from @p build.
+ * @brief The canonical result @p id: the published texture, or a texture from @p build, which
+ *        receives its native texture.
  *
  * The rule of `DecideDiffusionScatter`: a render that covers the full edit space builds and
  * publishes; an ROI samples a published texture, and otherwise builds a temporary texture from its
@@ -300,7 +314,8 @@ using Lease = ResourceLease<MetalBackend>;
 template <class Build>
 auto ReadOrBuildCanvasResult(MetalRenderDevice& device, const ExecutionPlan& plan,
                              const GraphValueId& id, ImageExtent extent, std::uint32_t long_edge,
-                             std::optional<Lease>& temporary, Build&& build) -> MTL::Texture* {
+                             std::optional<Lease>& temporary, Build&& build)
+    -> MetalBackend::Texture2D& {
   auto&      workspace    = device.Workspace();
   auto&      invalidation = workspace.ResultInvalidation();
   const bool persist      = workspace.PersistsResult(id);
@@ -317,19 +332,19 @@ auto ReadOrBuildCanvasResult(MetalRenderDevice& device, const ExecutionPlan& pla
   const auto decision = DecideDiffusionScatter(persist, canonical != nullptr, full_edit, long_edge);
   if (decision.action == DiffusionScatterAction::SampleCanonical) {
     ++device.PassStats().film_canvas_sample;
-    return Native(canonical->Texture());
+    return canonical->Texture();
   }
-  MTL::Texture* target = nullptr;
+  MetalBackend::Texture2D* target = nullptr;
   if (decision.persist_canonical) {
-    target = Native(
-        workspace.AcquireImageForWrite(id, {extent.width, extent.height, TextureFormat::Rgba32f})
-            .Texture());
+    target = &workspace
+                  .AcquireImageForWrite(id, {extent.width, extent.height, TextureFormat::Rgba32f})
+                  .Texture();
   } else {
     temporary.emplace(
         workspace.Textures().Acquire({extent.width, extent.height, TextureFormat::Rgba32f}));
-    target = Native(temporary->Texture());
+    target = &temporary->Texture();
   }
-  build(target);
+  build(Native(*target));
   if (decision.persist_canonical) {
     const auto published = invalidation.MakeImageRepresentation(id, extent, TextureFormat::Rgba32f,
                                                                 decision.current_long_edge);
@@ -338,7 +353,7 @@ auto ReadOrBuildCanvasResult(MetalRenderDevice& device, const ExecutionPlan& pla
                                          decision.current_long_edge);
   }
   ++device.PassStats().film_canvas_rebuild;
-  return target;
+  return *target;
 }
 
 }  // namespace
@@ -351,16 +366,23 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteMetalDrt");
   const auto  film        = drt.Params().FilmPrint();
-  // Print material Negative Scan has the model layer of issue 661; its Metal pass is issue 662.
-  // There is no other form to substitute for it.
-  if (IsFilmNegativeScan(film.negative, film.print_material)) {
-    throw std::runtime_error(
-        "RecordMetalFilmPrint: print material Negative Scan has no Metal pass yet (issue 662)");
-  }
   auto&       tables      = SharedFilmPrintTables();
   const auto& bundle      = tables.Bundle();
   const auto  light       = bundle.SceneLightMix(film.scene_light, raw_cct);
-  const auto  tables_data = tables.Resolve(film.negative, film.print_material, light);
+  // Negative Scan reads the scanner table of the scanner of the document. A rendering setting reads
+  // the kept table.
+  const bool  scan        = IsFilmNegativeScan(film.negative, film.print_material);
+  const auto  tables_data =
+      scan ? tables.ResolveNegativeScan(film.negative, light,
+                                        film_negative_scan::ScannerOf(film.scan))
+           : tables.Resolve(film.negative, film.print_material, light);
+  // With auto colour off the terms are known now, so a black at or above the grey stops the render
+  // before any GPU work.
+  const bool  auto_colour = scan && film.scan.auto_colour != kFilmScanAutoIds[0];
+  std::optional<film_negative_scan::RenderTerms> scan_terms;
+  if (scan && !auto_colour) {
+    scan_terms = film_negative_scan::MakeRenderTerms(tables_data->negative_scan, film.scan, {});
+  }
 
   auto&       workspace   = device.Workspace();
   auto&       backend     = workspace.Device();
@@ -455,7 +477,7 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   std::optional<Lease> temporary_halation;
   MTL::Texture*        halation = unused;
   if (image.halation_active) {
-    halation = ReadOrBuildCanvasResult(
+    halation = Native(ReadOrBuildCanvasResult(
         device, plan, FilmHalationResultId(plan.drt.node_id), canvas, long_edge, temporary_halation,
         [&](MTL::Texture* target) {
           const Plane reduced = AllocatePlane(device, canvas.width, canvas.height, PlaneForm::Half);
@@ -465,7 +487,7 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
           BlurHorizontal(recording, PlaneForm::Half, PlaneForm::Half, reduced, middle, canvas_size,
                          image.halation_x);
           BlurVerticalToTexture(recording, middle, target, canvas_size, image.halation_y);
-        });
+        }));
     names.Mark("FP3 canvas");
   }
   const FilmKernelRgb halation_strength{image.halation_strength[0], image.halation_strength[1],
@@ -614,7 +636,7 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
     const Size cells  = MakeSize(extent);
     const auto id     = light_table ? FilmLoupeFlareResultId(plan.drt.node_id)
                                     : FilmFlareResultId(plan.drt.node_id);
-    flare             = ReadOrBuildCanvasResult(
+    flare             = Native(ReadOrBuildCanvasResult(
         device, plan, id, extent, long_edge, temporary_flare, [&](MTL::Texture* target) {
           const Plane reduced = AllocatePlane(device, canvas.width, canvas.height, PlaneForm::Half);
           CanvasReduce(recording, a, size, reduced, canvas, image.canvas_to_render,
@@ -636,8 +658,90 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
           BlurHorizontal(recording, PlaneForm::Half, PlaneForm::Half, source, middle, cells,
                                      image.flare_x);
           BlurVerticalToTexture(recording, middle, target, cells, image.flare_y);
-        });
+        }));
     names.Mark("FP6 flare canvas");
+  }
+  if (params.scan != 0U) {
+    if (auto_colour) {
+      // Rule 'frame_auto_colour': the prescan of the full frame, a canonical result. The host reads
+      // only the prescan and computes the shift, as the lab does; the per-pixel pass applies it.
+      const auto&          frame        = plan.geometry.edit_extent;
+      const auto           prescan_plan = film_negative_scan::PrescanPlanOf(frame.height, frame.width,
+                                                                            height, width);
+      const ImageExtent    extent{static_cast<std::uint32_t>(prescan_plan.columns),
+                                  static_cast<std::uint32_t>(prescan_plan.rows)};
+      std::optional<Lease> temporary_prescan;
+      auto&                prescan = ReadOrBuildCanvasResult(
+          device, plan, FilmScanPrescanResultId(plan.drt.node_id), extent, long_edge,
+          temporary_prescan, [&](MTL::Texture* target) {
+            const auto windows = backend.AcquireKeyedBuffer(
+                prescan_plan.windows_key, std::as_bytes(std::span(prescan_plan.windows)), context);
+            // The middle image stays float32, as each pass of the lab.
+            const Plane        middle  = AllocatePlane(device, extent.width, height, PlaneForm::Float);
+            const std::int32_t columns = static_cast<std::int32_t>(extent.width);
+            Dispatch(device, "film_print_scan_prescan_rows")
+                .Buffer(0, a)
+                .Buffer(1, middle)
+                .Buffer(2, print_rgba)
+                .Bytes(3, params)
+                .Bytes(4, size)
+                .Buffer(5, windows.native)
+                .Bytes(6, columns)
+                .RunSimdGroups(static_cast<std::uint64_t>(extent.width) * height, 8);
+            Dispatch(device, "film_print_scan_prescan_columns")
+                .Buffer(0, middle)
+                .Buffer(1, windows.native)
+                .Bytes(2, MakeSize(extent))
+                .Texture(0, target)
+                .Run(extent.width, extent.height);
+          });
+      names.Mark("FP6 prescan");
+      // The read commits the recorded work of the frame and waits for it.
+      std::vector<float> texels(static_cast<std::size_t>(extent.width) * extent.height * 4U);
+      backend.DownloadTexture2D(prescan, std::as_writable_bytes(std::span(texels)), context);
+      const auto result = film_negative_scan::AutoColourOfDensityPrescan(
+          texels, extent.height, extent.width, tables_data->negative_scan, film.scan);
+      ++device.PassStats().film_scan_prescan_reads;
+      device.PassStats().film_scan_auto_shift = result.shift;
+      scan_terms =
+          film_negative_scan::MakeRenderTerms(tables_data->negative_scan, film.scan, result.shift);
+      names.Mark("FP6 prescan read and auto colour on the host");
+    }
+    FilmKernelNegativeScan terms{};
+    for (std::size_t k = 0; k < 3; ++k) {
+      terms.slope[k]  = static_cast<float>(scan_terms->slope[k]);
+      terms.offset[k] = static_cast<float>(scan_terms->offset[k]);
+      terms.scale[k]  = static_cast<float>(scan_terms->scale[k]);
+      terms.floor[k]  = static_cast<float>(scan_terms->floor[k]);
+    }
+    // The form ends in linear AP1: the OpenDRT of the document shows it, with the display transform
+    // of drt.metal. The resolver gives Negative Scan the transform of method OpenDRT. The DRT values
+    // are above the 4 KB of setBytes, so they go to the transient arena.
+    const auto         drt_params = PackMetalDrtGpuParams(resolved);
+    const auto         drt_bytes  = std::as_bytes(std::span(&drt_params, 1));
+    void*              memory     = workspace.TransientBuffers().Allocate(drt_bytes.size());
+    if (memory == nullptr) {
+      throw std::runtime_error("RecordMetalFilmPrint: transient allocation failed");
+    }
+    backend.UploadDeviceMemory(memory, drt_bytes, context);
+    const auto         location = backend.ResolveDeviceMemory(memory, drt_bytes.size());
+    const Plane        drt_values{static_cast<MTL::Buffer*>(location.first), location.second};
+    const std::int32_t linear_output = plan.film_scan_linear_output ? 1 : 0;
+    Dispatch(device, "film_print_scan_display")
+        .Buffer(0, a)
+        .Buffer(1, print_rgba)
+        .Bytes(2, params)
+        .Bytes(3, terms)
+        .Buffer(4, drt_values)
+        .Bytes(5, size)
+        .Bytes(6, linear_output)
+        .Buffer(7, alpha_mark)
+        .Bytes(8, stamp)
+        .Texture(0, Native(scene_image))
+        .Texture(1, Native(MetalSceneTexture(device, display)))
+        .Run(width, height);
+    names.Mark("FP6 scan and display transform");
+    return;
   }
   DisplayArguments arguments;
   arguments.render_to_flare = image.render_to_flare;
