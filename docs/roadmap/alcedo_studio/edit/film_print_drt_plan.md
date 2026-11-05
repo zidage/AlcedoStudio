@@ -1281,20 +1281,21 @@ The first pull request of this phase had an ADX scan named Lab Scan (PR #663, co
 | Windows, after the change of `film_print_math.h`: `CudaFilmPrintFixture` / `OpenClFilmPrintFixture` (with no lab image cases) / `FilmPrintTablesTest` | 22 / 24 / 67 pass |
 | AMD: `opencl_dag_film_print`, `opencl_dag_drt` | build with no error on gfx1030, gfx1100, gfx1103, gfx1201, and gfx1010 (legacy runtime) |
 
-**Cost.** Wall time in ms to the end of the GPU work after a change, median of 9 renders, Apple M4, at 2560 x 1709 (`DISABLED_DrtCostRecordAtEditorSizes`, Debug host build, as in F7 and F9):
+**Cost.** Wall time in ms to the end of the GPU work after a change, median of 9 renders, Apple M4 (`DISABLED_DrtCostRecordAtEditorSizes`, Debug host build, as in F7 and F9). One run on the code of issue #672 (PR #673), which does not change the passes:
 
-| Case | ms |
-| --- | --- |
-| Print form `kodak_5207`, Halation change / Light spread change | 14.7 / 17.1 |
-| Negative Scan, auto off, Halation change / Scan Contrast change | 14.9 / 14.9 |
-| Negative Scan, Neutral, Halation change (prescan built again) / Scan Contrast change (prescan kept) | 16.8 / 15.8 |
-| Method OpenDRT | 3.2 |
+| Case | 2560 x 1709 | 4096 x 2735 | 6000 x 4006 |
+| --- | --- | --- | --- |
+| Print form `kodak_5207`, Halation change / Light spread change | 14.9 / 17.6 | 35.7 / 39.1 | 63.5 / 67.8 |
+| Negative Scan, auto off, Halation change / Scan Contrast change | 14.9 / 15.0 | 36.9 / 36.9 | 66.1 / 66.1 |
+| Negative Scan, Neutral, Halation change (prescan built again) / Scan Contrast change (prescan kept) | 16.4 / 15.9 | 39.4 / 37.4 | 70.2 / 66.8 |
+| Method OpenDRT | 3.5 | 7.6 | 16.0 |
 
-- With auto off, Negative Scan costs 0.2 ms more than the print form after a Halation change. It has no flare canvas, and its display pass runs OpenDRT in place of the print table.
-- With Neutral, the prescan, the read, and the host rule cost about 1.9 ms after a Halation change. When the prescan is kept, the read costs about 0.9 ms.
-- The same run at 4096 and 6000 gave values up to 2 times those of F9 for the unchanged print form (6000: 115 ms against 62.5 ms), and the Mac then went off the network. Those values are not recorded.
+- The print form holds the values of F9 (4096: 35.4 / 38.9, 6000: 62.5 / 67.4) within 2 percent.
+- With auto off, Negative Scan costs 0.0, 1.2, and 2.6 ms more than the print form after a Halation change. It has no flare canvas, and its display pass runs OpenDRT in place of the print table.
+- With Neutral, the prescan, the read, and the host rule cost 1.5, 2.5, and 4.1 ms after a Halation change. When the prescan is kept, the read costs 0.9, 0.5, and 0.7 ms.
+- The first run at 4096 and 6000 (2026-11-05) gave up to 2 times these values for the unchanged print form, on a Mac with other load. It is not recorded.
 
-**Not verified.** The cost at 4096 and 6000. A Release build, the packaged application, and a render in the running application on macOS. The full test suite did not run.
+**Not verified.** A Release build, the packaged application, and a render in the running application on macOS. The full test suite did not run.
 
 ---
 
