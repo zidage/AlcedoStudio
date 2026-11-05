@@ -7,8 +7,10 @@ import Alcedo.Main 1.0
 // ACES tone mapping, transfer function (EOTF), peak luminance, and HDR
 // display intent. Method-specific controls for ACES 2.0 (limiting space) and
 // OpenDRT (look/tonescale/creative-white presets), and the film print (process
-// switch, film and print material browsers, scene light, three sliders; Rec. 709
-// SDR output, so its page has no encoding controls). All models share fieldKey
+// switch, film and print material browsers, scene light, three sliders; a print
+// has Rec. 709 SDR output, so its page has no encoding controls; print material
+// Negative Scan has its scan settings and the OpenDRT settings and encodings). All models share
+// fieldKey
 // "odt" with a panel-level paramsBuilder that collects the complete state so
 // every partial edit carries the full ODT JSON. The option lists, the EOTF
 // choices of each encoding space, the peak range, and the parameter object
@@ -34,6 +36,18 @@ Item {
     readonly property var filmLightSpreadSpec: parameterCatalog.propertySpec("odt", "light_spread")
     readonly property var filmHalationSpec: parameterCatalog.propertySpec("odt", "halation")
     readonly property var filmEnlargerFlareSpec: parameterCatalog.propertySpec("odt", "enlarger_flare")
+    readonly property var filmScanAutoStrengthModelSpec: parameterCatalog.propertySpec("odt", "auto_strength")
+    readonly property var filmScanAutoDensityModelSpec: parameterCatalog.propertySpec("odt", "auto_density")
+    readonly property var filmScanContrastModelSpec: parameterCatalog.propertySpec("odt", "scan_contrast")
+    readonly property var filmScanExposureModelSpec: parameterCatalog.propertySpec("odt", "scan_exposure_stops")
+    readonly property var filmScanCyanModelSpec: parameterCatalog.propertySpec("odt", "cyan")
+    readonly property var filmScanMagentaModelSpec: parameterCatalog.propertySpec("odt", "magenta")
+    readonly property var filmScanYellowModelSpec: parameterCatalog.propertySpec("odt", "yellow")
+    readonly property var filmScanBlackModelSpec: parameterCatalog.propertySpec("odt", "black")
+    readonly property var filmScannerRedModelSpec: parameterCatalog.propertySpec("odt", "scanner_red_nm")
+    readonly property var filmScannerGreenModelSpec: parameterCatalog.propertySpec("odt", "scanner_green_nm")
+    readonly property var filmScannerBlueModelSpec: parameterCatalog.propertySpec("odt", "scanner_blue_nm")
+    readonly property var filmScannerWidthModelSpec: parameterCatalog.propertySpec("odt", "scanner_width_nm")
 
     EditorParameterCatalog {
         id: parameterCatalog
@@ -139,7 +153,21 @@ Item {
             scene_light: root.selectedValue(filmSceneLightModel, "scene_light"),
             light_spread: filmLightSpreadModel.value,
             halation: filmHalationModel.value,
-            enlarger_flare: filmEnlargerFlareModel.value
+            enlarger_flare: filmEnlargerFlareModel.value,
+            "auto": root.selectedValue(filmScanAutoModel, "auto"),
+            scanner_light: root.selectedValue(filmScannerLightModel, "scanner_light"),
+            auto_strength: filmScanAutoStrengthModel.value,
+            auto_density: filmScanAutoDensityModel.value,
+            scan_contrast: filmScanContrastModel.value,
+            scan_exposure_stops: filmScanExposureModel.value,
+            cyan: filmScanCyanModel.value,
+            magenta: filmScanMagentaModel.value,
+            yellow: filmScanYellowModel.value,
+            black: filmScanBlackModel.value,
+            scanner_red_nm: filmScannerRedModel.value,
+            scanner_green_nm: filmScannerGreenModel.value,
+            scanner_blue_nm: filmScannerBlueModel.value,
+            scanner_width_nm: filmScannerWidthModel.value
         })
     }
 
@@ -159,6 +187,20 @@ Item {
         filmLightSpreadModel.enabled = on
         filmHalationModel.enabled = on
         filmEnlargerFlareModel.enabled = on
+        filmScanAutoModel.enabled = on
+        filmScannerLightModel.enabled = on
+        filmScanAutoStrengthModel.enabled = on
+        filmScanAutoDensityModel.enabled = on
+        filmScanContrastModel.enabled = on
+        filmScanExposureModel.enabled = on
+        filmScanCyanModel.enabled = on
+        filmScanMagentaModel.enabled = on
+        filmScanYellowModel.enabled = on
+        filmScanBlackModel.enabled = on
+        filmScannerRedModel.enabled = on
+        filmScannerGreenModel.enabled = on
+        filmScannerBlueModel.enabled = on
+        filmScannerWidthModel.enabled = on
     }
 
     /// Apply declared defaultIndex / defaultValue before any snapshot load so the
@@ -178,6 +220,20 @@ Item {
         filmLightSpreadModel.value = filmLightSpreadModel.defaultValue
         filmHalationModel.value = filmHalationModel.defaultValue
         filmEnlargerFlareModel.value = filmEnlargerFlareModel.defaultValue
+        filmScanAutoModel.currentIndex = filmScanAutoModel.defaultIndex
+        filmScannerLightModel.currentIndex = filmScannerLightModel.defaultIndex
+        filmScanAutoStrengthModel.value = filmScanAutoStrengthModel.defaultValue
+        filmScanAutoDensityModel.value = filmScanAutoDensityModel.defaultValue
+        filmScanContrastModel.value = filmScanContrastModel.defaultValue
+        filmScanExposureModel.value = filmScanExposureModel.defaultValue
+        filmScanCyanModel.value = filmScanCyanModel.defaultValue
+        filmScanMagentaModel.value = filmScanMagentaModel.defaultValue
+        filmScanYellowModel.value = filmScanYellowModel.defaultValue
+        filmScanBlackModel.value = filmScanBlackModel.defaultValue
+        filmScannerRedModel.value = filmScannerRedModel.defaultValue
+        filmScannerGreenModel.value = filmScannerGreenModel.defaultValue
+        filmScannerBlueModel.value = filmScannerBlueModel.defaultValue
+        filmScannerWidthModel.value = filmScannerWidthModel.defaultValue
         updateEotfOptions()
     }
 
@@ -252,6 +308,20 @@ Item {
         setValueFromSnapshot(filmLightSpreadModel, odt["light_spread"])
         setValueFromSnapshot(filmHalationModel, odt["halation"])
         setValueFromSnapshot(filmEnlargerFlareModel, odt["enlarger_flare"])
+        setEnumFromSnapshot(filmScanAutoModel, odt["auto"])
+        setEnumFromSnapshot(filmScannerLightModel, odt["scanner_light"])
+        setValueFromSnapshot(filmScanAutoStrengthModel, odt["auto_strength"])
+        setValueFromSnapshot(filmScanAutoDensityModel, odt["auto_density"])
+        setValueFromSnapshot(filmScanContrastModel, odt["scan_contrast"])
+        setValueFromSnapshot(filmScanExposureModel, odt["scan_exposure_stops"])
+        setValueFromSnapshot(filmScanCyanModel, odt["cyan"])
+        setValueFromSnapshot(filmScanMagentaModel, odt["magenta"])
+        setValueFromSnapshot(filmScanYellowModel, odt["yellow"])
+        setValueFromSnapshot(filmScanBlackModel, odt["black"])
+        setValueFromSnapshot(filmScannerRedModel, odt["scanner_red_nm"])
+        setValueFromSnapshot(filmScannerGreenModel, odt["scanner_green_nm"])
+        setValueFromSnapshot(filmScannerBlueModel, odt["scanner_blue_nm"])
+        setValueFromSnapshot(filmScannerWidthModel, odt["scanner_width_nm"])
     }
 
     /// Rebuild EOTF entries based on current encoding space, preserving EOTF
@@ -441,6 +511,197 @@ Item {
         paramsBuilder: root.buildOdtParams
     }
 
+    // Negative Scan (issue 661). Only that print material reads these settings.
+    EditorAdjustmentEnumModel {
+        id: filmScanAutoModel
+        objectName: "displayFilmScanAutoModel"
+        fieldKey: "odt"
+        label: qsTr("Auto Color")
+        entries: root.catalogEntries("auto")
+        defaultIndex: root.defaultIndexOf(entries, "auto")
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentEnumModel {
+        id: filmScannerLightModel
+        objectName: "displayFilmScannerLightModel"
+        fieldKey: "odt"
+        label: qsTr("Scanner Light")
+        entries: root.catalogEntries("scanner_light")
+        defaultIndex: root.defaultIndexOf(entries, "scanner_light")
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScanAutoStrengthModel
+        objectName: "displayFilmScanAutoStrengthModel"
+        fieldKey: "odt"
+        label: qsTr("Auto Color Strength")
+        minimum: root.filmScanAutoStrengthModelSpec.ui_min
+        maximum: root.filmScanAutoStrengthModelSpec.ui_max
+        defaultValue: root.odtDefaults.auto_strength
+        step: root.filmScanAutoStrengthModelSpec.ui_step
+        precision: root.filmScanAutoStrengthModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScanAutoDensityModel
+        objectName: "displayFilmScanAutoDensityModel"
+        fieldKey: "odt"
+        label: qsTr("Auto Density")
+        minimum: root.filmScanAutoDensityModelSpec.ui_min
+        maximum: root.filmScanAutoDensityModelSpec.ui_max
+        defaultValue: root.odtDefaults.auto_density
+        step: root.filmScanAutoDensityModelSpec.ui_step
+        precision: root.filmScanAutoDensityModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScanContrastModel
+        objectName: "displayFilmScanContrastModel"
+        fieldKey: "odt"
+        label: qsTr("Scan Contrast")
+        minimum: root.filmScanContrastModelSpec.ui_min
+        maximum: root.filmScanContrastModelSpec.ui_max
+        defaultValue: root.odtDefaults.scan_contrast
+        step: root.filmScanContrastModelSpec.ui_step
+        precision: root.filmScanContrastModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScanExposureModel
+        objectName: "displayFilmScanExposureModel"
+        fieldKey: "odt"
+        label: qsTr("Scan Exposure")
+        minimum: root.filmScanExposureModelSpec.ui_min
+        maximum: root.filmScanExposureModelSpec.ui_max
+        defaultValue: root.odtDefaults.scan_exposure_stops
+        step: root.filmScanExposureModelSpec.ui_step
+        precision: root.filmScanExposureModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScanCyanModel
+        objectName: "displayFilmScanCyanModel"
+        fieldKey: "odt"
+        label: qsTr("Cyan")
+        minimum: root.filmScanCyanModelSpec.ui_min
+        maximum: root.filmScanCyanModelSpec.ui_max
+        defaultValue: root.odtDefaults.cyan
+        step: root.filmScanCyanModelSpec.ui_step
+        precision: root.filmScanCyanModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScanMagentaModel
+        objectName: "displayFilmScanMagentaModel"
+        fieldKey: "odt"
+        label: qsTr("Magenta")
+        minimum: root.filmScanMagentaModelSpec.ui_min
+        maximum: root.filmScanMagentaModelSpec.ui_max
+        defaultValue: root.odtDefaults.magenta
+        step: root.filmScanMagentaModelSpec.ui_step
+        precision: root.filmScanMagentaModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScanYellowModel
+        objectName: "displayFilmScanYellowModel"
+        fieldKey: "odt"
+        label: qsTr("Yellow")
+        minimum: root.filmScanYellowModelSpec.ui_min
+        maximum: root.filmScanYellowModelSpec.ui_max
+        defaultValue: root.odtDefaults.yellow
+        step: root.filmScanYellowModelSpec.ui_step
+        precision: root.filmScanYellowModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScanBlackModel
+        objectName: "displayFilmScanBlackModel"
+        fieldKey: "odt"
+        label: qsTr("Black at Film Base")
+        minimum: root.filmScanBlackModelSpec.ui_min
+        maximum: root.filmScanBlackModelSpec.ui_max
+        defaultValue: root.odtDefaults.black
+        step: root.filmScanBlackModelSpec.ui_step
+        precision: root.filmScanBlackModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScannerRedModel
+        objectName: "displayFilmScannerRedModel"
+        fieldKey: "odt"
+        label: qsTr("Scanner Red (nm)")
+        minimum: root.filmScannerRedModelSpec.ui_min
+        maximum: root.filmScannerRedModelSpec.ui_max
+        defaultValue: root.odtDefaults.scanner_red_nm
+        step: root.filmScannerRedModelSpec.ui_step
+        precision: root.filmScannerRedModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScannerGreenModel
+        objectName: "displayFilmScannerGreenModel"
+        fieldKey: "odt"
+        label: qsTr("Scanner Green (nm)")
+        minimum: root.filmScannerGreenModelSpec.ui_min
+        maximum: root.filmScannerGreenModelSpec.ui_max
+        defaultValue: root.odtDefaults.scanner_green_nm
+        step: root.filmScannerGreenModelSpec.ui_step
+        precision: root.filmScannerGreenModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScannerBlueModel
+        objectName: "displayFilmScannerBlueModel"
+        fieldKey: "odt"
+        label: qsTr("Scanner Blue (nm)")
+        minimum: root.filmScannerBlueModelSpec.ui_min
+        maximum: root.filmScannerBlueModelSpec.ui_max
+        defaultValue: root.odtDefaults.scanner_blue_nm
+        step: root.filmScannerBlueModelSpec.ui_step
+        precision: root.filmScannerBlueModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentValueModel {
+        id: filmScannerWidthModel
+        objectName: "displayFilmScannerWidthModel"
+        fieldKey: "odt"
+        label: qsTr("Scanner Band Width (nm)")
+        minimum: root.filmScannerWidthModelSpec.ui_min
+        maximum: root.filmScannerWidthModelSpec.ui_max
+        defaultValue: root.odtDefaults.scanner_width_nm
+        step: root.filmScannerWidthModelSpec.ui_step
+        precision: root.filmScannerWidthModelSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
     // ── Derived state ───────────────────────────────────────────────────────
     // Panel-level selection aliases so method-card delegates re-evaluate when
     // currentIndex changes or snapshot load restores (LUT selectedPath pattern).
@@ -467,6 +728,9 @@ Item {
         var _dep = filmPrintMaterialModel.currentIndex
         return root.selectedValue(filmPrintMaterialModel, "print_material")
     }
+    // Negative Scan has no enlarger: the Enlarger Flare slider hides, and its stored value stays.
+    readonly property bool isNegativeScan: parameterCatalog.filmIsNegativeScan(
+        root.selectedFilmValue, root.selectedPrintMaterialValue)
 
     Connections {
         target: filmNegativeModel
@@ -724,8 +988,169 @@ Item {
                     AdjustmentSlider {
                         objectName: "displayFilmEnlargerFlareSlider"
                         Layout.fillWidth: true
+                        visible: !root.isNegativeScan
                         model: filmEnlargerFlareModel
                         flickable: displayScroll
+                    }
+
+                    // Negative Scan: the rendering settings act after the scan; the scanner
+                    // settings build the scanner table again (issue 661).
+                    ColumnLayout {
+                        objectName: "displayNegativeScanControls"
+                        Layout.fillWidth: true
+                        spacing: appTheme.spaceSm
+                        visible: root.isNegativeScan
+
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.topMargin: appTheme.spaceXs
+                            text: qsTr("Negative Scan")
+                            color: root.colMuted
+                            font.pixelSize: appTheme.fontSizeCaption
+                            font.weight: appTheme.fontWeightStrong
+                        }
+
+                        AdjustmentCombo {
+                            objectName: "displayFilmScanAutoCombo"
+                            Layout.fillWidth: true
+                            model: filmScanAutoModel
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScanAutoStrengthSlider"
+                            Layout.fillWidth: true
+                            model: filmScanAutoStrengthModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScanAutoDensitySlider"
+                            Layout.fillWidth: true
+                            model: filmScanAutoDensityModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScanContrastSlider"
+                            Layout.fillWidth: true
+                            model: filmScanContrastModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScanExposureSlider"
+                            Layout.fillWidth: true
+                            model: filmScanExposureModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScanCyanSlider"
+                            Layout.fillWidth: true
+                            model: filmScanCyanModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScanMagentaSlider"
+                            Layout.fillWidth: true
+                            model: filmScanMagentaModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScanYellowSlider"
+                            Layout.fillWidth: true
+                            model: filmScanYellowModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScanBlackSlider"
+                            Layout.fillWidth: true
+                            model: filmScanBlackModel
+                            flickable: displayScroll
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.topMargin: appTheme.spaceXs
+                            text: qsTr("Scanner")
+                            color: root.colMuted
+                            font.pixelSize: appTheme.fontSizeCaption
+                            font.weight: appTheme.fontWeightStrong
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScannerRedSlider"
+                            Layout.fillWidth: true
+                            model: filmScannerRedModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScannerGreenSlider"
+                            Layout.fillWidth: true
+                            model: filmScannerGreenModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScannerBlueSlider"
+                            Layout.fillWidth: true
+                            model: filmScannerBlueModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentSlider {
+                            objectName: "displayFilmScannerWidthSlider"
+                            Layout.fillWidth: true
+                            model: filmScannerWidthModel
+                            flickable: displayScroll
+                        }
+
+                        AdjustmentCombo {
+                            objectName: "displayFilmScannerLightCombo"
+                            Layout.fillWidth: true
+                            model: filmScannerLightModel
+                        }
+                    }
+
+                    // Negative Scan ends in linear AP1 that OpenDRT shows, with the settings of
+                    // method OpenDRT. The models are those of that method, so a change of method
+                    // keeps the values.
+                    ColumnLayout {
+                        objectName: "displayNegativeScanOpenDrtControls"
+                        Layout.fillWidth: true
+                        spacing: appTheme.spaceSm
+                        visible: root.isNegativeScan
+
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.topMargin: appTheme.spaceXs
+                            text: qsTr("OpenDRT")
+                            color: root.colMuted
+                            font.pixelSize: appTheme.fontSizeCaption
+                            font.weight: appTheme.fontWeightStrong
+                        }
+
+                        AdjustmentCombo {
+                            objectName: "displayNegativeScanOpenDrtLookCombo"
+                            Layout.fillWidth: true
+                            model: openDrtLookModel
+                        }
+
+                        AdjustmentCombo {
+                            objectName: "displayNegativeScanOpenDrtTonescaleCombo"
+                            Layout.fillWidth: true
+                            model: openDrtTonescaleModel
+                        }
+
+                        AdjustmentCombo {
+                            objectName: "displayNegativeScanOpenDrtCreativeWhiteCombo"
+                            Layout.fillWidth: true
+                            model: openDrtCreativeWhiteModel
+                        }
                     }
                 }
             }
@@ -735,7 +1160,8 @@ Item {
                 id: colorEncodingGroup
                 objectName: "editorAdjustmentGroupShell_display_color_encoding"
                 Layout.fillWidth: true
-                visible: !root.isFilmPrint
+                // A print encodes Rec. 709 SDR only. Negative Scan has the encodings of OpenDRT.
+                visible: !root.isFilmPrint || root.isNegativeScan
                 title: qsTr("Color & Encoding")
                 expanded: true
                 controlsEnabled: root.controlsEnabled

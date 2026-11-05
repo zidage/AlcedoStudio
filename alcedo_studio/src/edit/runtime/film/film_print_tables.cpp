@@ -135,6 +135,19 @@ auto AllFinite(std::span<const double> values) -> bool {
   return std::ranges::all_of(values, [](double value) { return std::isfinite(value); });
 }
 
+/// The scene light of a key: the two lights and the share of the second.
+auto MixLight(ContentHash hash, const FilmSceneLightMix& light) -> ContentHash {
+  return hash.MixText(light.first).MixText(light.second).MixF64(light.share);
+}
+
+/// The scene light of a message.
+auto LightText(const FilmSceneLightMix& light) -> std::string {
+  if (light.share == 0.0) {
+    return light.first;
+  }
+  return light.first + " and " + light.second + " (share " + std::to_string(light.share) + ")";
+}
+
 }  // namespace
 
 auto FilmPrintTableData::ByteSize() const -> std::size_t {
@@ -185,6 +198,7 @@ void FilmPrintTables::RemoveOldestAboveLimit() {
     find_oldest(negative_stages_);
     find_oldest(paper_stages_);
     find_oldest(light_tables_);
+    find_oldest(scan_tables_);
     find_oldest(results_);
     const auto remove_oldest = [&oldest, this](auto& kept) {
       for (auto entry = kept.begin(); entry != kept.end(); ++entry) {
@@ -198,6 +212,7 @@ void FilmPrintTables::RemoveOldestAboveLimit() {
     remove_oldest(negative_stages_);
     remove_oldest(paper_stages_);
     remove_oldest(light_tables_);
+    remove_oldest(scan_tables_);
     remove_oldest(results_);
   }
 }
@@ -272,7 +287,7 @@ auto FilmPrintTables::PaperStageOf(std::string_view print_material)
 }
 
 auto FilmPrintTables::LightTableOf(std::string_view reversal)
-    -> std::shared_ptr<const LightTableStage> {
+    -> std::shared_ptr<const RecordTableStage> {
   const auto key = ContentHash{}
                        .MixU32(kTableImplementationVersion)
                        .MixText("light table")
@@ -305,15 +320,75 @@ auto FilmPrintTables::LightTableOf(std::string_view reversal)
       }
     }
   }
-  auto stage = std::make_shared<LightTableStage>();
+  auto stage = std::make_shared<RecordTableStage>();
   stage->key = key;
-  stage->cube_root_xyz.resize(kTableValues);
+  stage->values.resize(kTableValues);
   film_tables::CubeRootBandResponse(band.View(), view.xyz_scale, amounts.data(), kTableNodes,
-                                    stage->cube_root_xyz.data());
+                                    stage->values.data());
   ++stats_.light_table_builds;
   stats_.last_light_table_seconds = SecondsSince(start);
-  const auto bytes                = stage->cube_root_xyz.size() * sizeof(double);
-  Keep<LightTableStage>(light_tables_, key, stage, bytes);
+  const auto bytes                = stage->values.size() * sizeof(double);
+  Keep<RecordTableStage>(light_tables_, key, stage, bytes);
+  return stage;
+}
+
+auto FilmPrintTables::ScannerTableOf(std::string_view                          negative,
+                                     const film_negative_scan::ScannerWeights& weights,
+                                     ContentKey scanner_key) -> std::shared_ptr<const RecordTableStage> {
+  const auto key = ContentHash{}
+                       .MixU32(kTableImplementationVersion)
+                       .MixText("scanner table")
+                       .MixText(bundle_->ContentDigest())
+                       .MixText(negative)
+                       .MixKey(scanner_key)
+                       .Key();
+  if (auto kept = Find(scan_tables_, key)) {
+    return kept;
+  }
+  const auto start = std::chrono::steady_clock::now();
+  const auto stock = bundle_->Negative(negative);
+  const auto band  = MakeBandOnSupport(stock.base, stock.dyes, weights.weights);
+
+  // With rule 'dye_amount_curves' of the lab, the nodes of the negative record are the dye amounts,
+  // as in the negative stage of the print table.
+  std::vector<double> amounts(kTableValues);
+  std::size_t         out = 0;
+  for (std::int64_t r = 0; r < kFilmPrintTableEdge; ++r) {
+    const auto red = GridNode(stock.density_grid_start[0], stock.density_grid_stop[0], r);
+    for (std::int64_t g = 0; g < kFilmPrintTableEdge; ++g) {
+      const auto green = GridNode(stock.density_grid_start[1], stock.density_grid_stop[1], g);
+      for (std::int64_t b = 0; b < kFilmPrintTableEdge; ++b) {
+        amounts[out++] = red;
+        amounts[out++] = green;
+        amounts[out++] = GridNode(stock.density_grid_start[2], stock.density_grid_stop[2], b);
+      }
+    }
+  }
+  // Lab rule 'ideal_scanner_bands' (ScanPreview.apd with the scanner weights):
+  // T = log10(sum w) - log10(sum w 10^-(base + dyes a)).
+  const auto            wavelengths = static_cast<std::size_t>(bundle_->Wavelengths());
+  std::array<double, 3> log_weight_sum{};
+  for (std::size_t k = 0; k < film_tables::kLayers; ++k) {
+    double sum = 0.0;
+    for (std::size_t w = 0; w < wavelengths; ++w) {
+      sum += weights.weights[k * wavelengths + w];
+    }
+    if (!(sum > 0.0)) {
+      throw std::runtime_error("Film print: a band of the scanner of Negative Scan has no weight");
+    }
+    log_weight_sum[k] = std::log10(sum);
+  }
+  auto stage = std::make_shared<RecordTableStage>();
+  stage->key = key;
+  stage->values.resize(kTableValues);
+  film_tables::Log10BandResponse(band.View(), amounts.data(), kTableNodes, stage->values.data());
+  for (std::size_t index = 0; index < stage->values.size(); ++index) {
+    stage->values[index] = log_weight_sum[index % film_tables::kLayers] - stage->values[index];
+  }
+  ++stats_.scan_table_builds;
+  stats_.last_scan_table_seconds = SecondsSince(start);
+  const auto bytes               = stage->values.size() * sizeof(double);
+  Keep<RecordTableStage>(scan_tables_, key, stage, bytes);
   return stage;
 }
 
@@ -348,14 +423,15 @@ void FilmPrintTables::BuildUvTable(std::span<const double> exposure_weights,
   stats_.last_uv_seconds = SecondsSince(start);
 }
 
-auto FilmPrintTables::ResolveReversal(std::string_view reversal, std::string_view scene_light)
+auto FilmPrintTables::ResolveReversal(std::string_view         reversal,
+                                      const FilmSceneLightMix& scene_light)
     -> std::shared_ptr<const FilmPrintTableData> {
-  const auto result_key = ContentHash{}
-                              .MixU32(kTableImplementationVersion)
-                              .MixText("reversal selection")
-                              .MixText(bundle_->ContentDigest())
-                              .MixText(reversal)
-                              .MixText(scene_light)
+  const auto result_key = MixLight(ContentHash{}
+                                       .MixU32(kTableImplementationVersion)
+                                       .MixText("reversal selection")
+                                       .MixText(bundle_->ContentDigest())
+                                       .MixText(reversal),
+                                   scene_light)
                               .Key();
   if (auto kept = Find(results_, result_key)) {
     return kept;
@@ -367,29 +443,29 @@ auto FilmPrintTables::ResolveReversal(std::string_view reversal, std::string_vie
   result->uv_nodes    = bundle_->UvNodes();
   result->edge        = static_cast<std::uint32_t>(kFilmPrintTableEdge);
   result->light_table = true;
-  result->uv_key      = ContentHash{}
-                       .MixU32(kTableImplementationVersion)
-                       .MixText("uv table")
-                       .MixText(bundle_->ContentDigest())
-                       .MixText(reversal)
-                       .MixText(scene_light)
+  result->uv_key      = MixLight(ContentHash{}
+                                     .MixU32(kTableImplementationVersion)
+                                     .MixText("uv table")
+                                     .MixText(bundle_->ContentDigest())
+                                     .MixText(reversal),
+                                 scene_light)
                        .Key();
-  result->kernel_key = ContentHash{}
-                           .MixU32(kTableImplementationVersion)
-                           .MixText("kernel values")
-                           .MixText(bundle_->ContentDigest())
-                           .MixText(reversal)
-                           .MixText(scene_light)
+  result->kernel_key = MixLight(ContentHash{}
+                                    .MixU32(kTableImplementationVersion)
+                                    .MixText("kernel values")
+                                    .MixText(bundle_->ContentDigest())
+                                    .MixText(reversal),
+                                scene_light)
                            .Key();
   BuildUvTable(film.record.exposure_weights, setup.scene_spectrum, *result);
 
   // The light table depends on the film only, so all scene lights share its GPU copy.
   const auto light_table      = LightTableOf(reversal);
   result->print_key           = light_table->key;
-  result->print_cube_root_xyz = light_table->cube_root_xyz;
+  result->print_cube_root_xyz = light_table->values;
   if (!AllFinite(result->uv_exposure) || !AllFinite(result->print_cube_root_xyz)) {
     throw std::runtime_error("Film print: a table of the reversal film " + std::string(reversal) +
-                             " under " + std::string(scene_light) +
+                             " under " + LightText(scene_light) +
                              " has a value that is not finite");
   }
   result->print_rgba = PackPrintRgba(result->print_cube_root_xyz);
@@ -400,20 +476,138 @@ auto FilmPrintTables::ResolveReversal(std::string_view reversal, std::string_vie
   return result;
 }
 
+auto FilmPrintTables::ResolveNegativeScan(std::string_view                   negative,
+                                          const FilmSceneLightMix&           scene_light,
+                                          const film_negative_scan::Scanner& scanner)
+    -> std::shared_ptr<const FilmPrintTableData> {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return ResolveNegativeScanLocked(negative, scene_light, scanner);
+}
+
+auto FilmPrintTables::ResolveNegativeScanLocked(std::string_view                   negative,
+                                                const FilmSceneLightMix&           scene_light,
+                                                const film_negative_scan::Scanner& scanner)
+    -> std::shared_ptr<const FilmPrintTableData> {
+  const auto& constants   = bundle_->NegativeScanConstants();
+  const bool  default_one = scanner == film_negative_scan::DefaultScanner(constants);
+  const auto  scanner_key = ContentHash{}
+                               .MixText("scanner")
+                               .MixF64(scanner.centres_nm[0])
+                               .MixF64(scanner.centres_nm[1])
+                               .MixF64(scanner.centres_nm[2])
+                               .MixF64(scanner.width_nm)
+                               .MixU32(scanner.equal_energy ? 1U : 0U)
+                               .Key();
+  const auto result_key = MixLight(ContentHash{}
+                                       .MixU32(kTableImplementationVersion)
+                                       .MixText("negative scan selection")
+                                       .MixText(bundle_->ContentDigest())
+                                       .MixText(negative)
+                                       .MixKey(scanner_key),
+                                   scene_light)
+                              .Key();
+  if (auto kept = Find(results_, result_key)) {
+    return kept;
+  }
+  const auto setup  = bundle_->NegativeScanSelection(negative, scene_light);
+  const auto stock  = bundle_->Negative(negative);
+  const auto weights =
+      film_negative_scan::MakeScannerWeights(scanner, constants, bundle_->WavelengthsNm());
+
+  auto result      = std::make_shared<FilmPrintTableData>();
+  result->uv_nodes = bundle_->UvNodes();
+  result->edge     = static_cast<std::uint32_t>(kFilmPrintTableEdge);
+  result->scan     = true;
+  // The u'v' table and the kernel values are those of a print of the same negative and light, so
+  // a change between Negative Scan and a print material keeps their GPU copies.
+  result->uv_key   = MixLight(ContentHash{}
+                                  .MixU32(kTableImplementationVersion)
+                                  .MixText("uv table")
+                                  .MixText(bundle_->ContentDigest())
+                                  .MixText(negative),
+                              scene_light)
+                       .Key();
+  result->kernel_key = MixLight(ContentHash{}
+                                    .MixU32(kTableImplementationVersion)
+                                    .MixText("kernel values")
+                                    .MixText(bundle_->ContentDigest())
+                                    .MixText(negative),
+                                scene_light)
+                           .Key();
+  BuildUvTable(stock.exposure_weights, setup.scene_spectrum, *result);
+
+  // The scanner table depends on the negative and the scanner only, so all scene lights share its
+  // GPU copy.
+  const auto scan_table       = ScannerTableOf(negative, weights, scanner_key);
+  result->print_key           = scan_table->key;
+  result->print_cube_root_xyz = scan_table->values;
+  if (default_one) {
+    result->negative_scan = film_negative_scan::StoredSelectionValues(setup);
+  } else {
+    const auto& medium    = bundle_->ScanMedium(negative);
+    const auto  gamma_key = ContentHash{}
+                               .MixU32(kTableImplementationVersion)
+                               .MixText("scan gamma")
+                               .MixText(bundle_->ContentDigest())
+                               .MixText(medium.id)
+                               .MixKey(scanner_key)
+                               .Key();
+    auto gamma = derived_gamma_.find(gamma_key.hash);
+    if (gamma == derived_gamma_.end()) {
+      // The pool tables stay alive here while the derivation reads them.
+      std::vector<std::shared_ptr<const RecordTableStage>> held;
+      const auto table_of = [&](std::string_view stock_id) {
+        held.push_back(ScannerTableOf(stock_id, weights, scanner_key));
+        return film_negative_scan::ScannerTableView{held.back()->values, kFilmPrintTableEdge};
+      };
+      const auto derived =
+          film_negative_scan::DeriveMediumGamma(*bundle_, medium, weights, table_of);
+      gamma = derived_gamma_.emplace(gamma_key.hash, derived).first;
+      ++stats_.scan_gamma_derivations;
+    }
+    result->negative_scan = film_negative_scan::DeriveSelectionValues(
+        *bundle_, negative, setup, weights,
+        film_negative_scan::ScannerTableView{scan_table->values, kFilmPrintTableEdge},
+        gamma->second);
+  }
+  if (!AllFinite(result->uv_exposure) || !AllFinite(result->print_cube_root_xyz)) {
+    throw std::runtime_error("Film print: a table of Negative Scan of " + std::string(negative) +
+                             " under " + LightText(scene_light) +
+                             " has a value that is not finite");
+  }
+  result->print_rgba = PackPrintRgba(result->print_cube_root_xyz);
+  result->kernel_values =
+      film_print_kernel_tables::MakeValues<float>(*bundle_, negative, result->uv_exposure);
+  const auto bytes = result->ByteSize();
+  Keep<FilmPrintTableData>(results_, result_key, result, bytes);
+  return result;
+}
+
 auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_material,
                               std::string_view scene_light)
+    -> std::shared_ptr<const FilmPrintTableData> {
+  return Resolve(negative, print_material,
+                 FilmSceneLightMix{std::string(scene_light), std::string(scene_light), 0.0});
+}
+
+auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_material,
+                              const FilmSceneLightMix& scene_light)
     -> std::shared_ptr<const FilmPrintTableData> {
   std::lock_guard<std::mutex> lock(mutex_);
   if (bundle_->IsReversal(negative)) {
     return ResolveReversal(negative, scene_light);
   }
-  const auto print_key = ContentHash{}
-                             .MixU32(kTableImplementationVersion)
-                             .MixText("print table")
-                             .MixText(bundle_->ContentDigest())
-                             .MixText(negative)
-                             .MixText(print_material)
-                             .MixText(scene_light)
+  if (bundle_->IsNegativeScan(print_material)) {
+    return ResolveNegativeScanLocked(
+        negative, scene_light, film_negative_scan::DefaultScanner(bundle_->NegativeScanConstants()));
+  }
+  const auto print_key = MixLight(ContentHash{}
+                                      .MixU32(kTableImplementationVersion)
+                                      .MixText("print table")
+                                      .MixText(bundle_->ContentDigest())
+                                      .MixText(negative)
+                                      .MixText(print_material),
+                                  scene_light)
                              .Key();
   if (auto kept = Find(results_, print_key)) {
     return kept;
@@ -427,19 +621,19 @@ auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_
   result->uv_nodes      = bundle_->UvNodes();
   result->edge          = static_cast<std::uint32_t>(kFilmPrintTableEdge);
   result->print_key     = print_key;
-  result->uv_key        = ContentHash{}
-                       .MixU32(kTableImplementationVersion)
-                       .MixText("uv table")
-                       .MixText(bundle_->ContentDigest())
-                       .MixText(negative)
-                       .MixText(scene_light)
+  result->uv_key        = MixLight(ContentHash{}
+                                       .MixU32(kTableImplementationVersion)
+                                       .MixText("uv table")
+                                       .MixText(bundle_->ContentDigest())
+                                       .MixText(negative),
+                                   scene_light)
                        .Key();
-  result->kernel_key    = ContentHash{}
-                           .MixU32(kTableImplementationVersion)
-                           .MixText("kernel values")
-                           .MixText(bundle_->ContentDigest())
-                           .MixText(negative)
-                           .MixText(scene_light)
+  result->kernel_key = MixLight(ContentHash{}
+                                    .MixU32(kTableImplementationVersion)
+                                    .MixText("kernel values")
+                                    .MixText(bundle_->ContentDigest())
+                                    .MixText(negative),
+                                scene_light)
                            .Key();
 
   BuildUvTable(stock.exposure_weights, selection.scene_spectrum, *result);
@@ -475,7 +669,7 @@ auto FilmPrintTables::Resolve(std::string_view negative, std::string_view print_
 
   if (!AllFinite(result->uv_exposure) || !AllFinite(result->print_cube_root_xyz)) {
     throw std::runtime_error("Film print: a table of " + std::string(negative) + " on " +
-                             std::string(print_material) + " under " + std::string(scene_light) +
+                             std::string(print_material) + " under " + LightText(scene_light) +
                              " has a value that is not finite");
   }
   result->print_rgba = PackPrintRgba(result->print_cube_root_xyz);

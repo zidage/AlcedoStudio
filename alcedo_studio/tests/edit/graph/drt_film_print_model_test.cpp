@@ -37,9 +37,11 @@ auto FilmPrintUpdate() -> DrtParameterUpdate {
 void ExpectDefaultFilmPrint(const FilmPrintParams& film) {
   EXPECT_EQ(film.negative, "kodak_5207");
   EXPECT_EQ(film.print_material, "kodak_endura_premier");
-  // The lists of the editor put Cine Look and the most common negative first. The defaults stay.
-  EXPECT_EQ(kFilmPrintMaterialIds.front(), "cine_look");
-  EXPECT_EQ(kFilmPrintMaterialNames.front(), "Cine Look (2383)");
+  // The lists of the editor put Negative Scan, Cine Look, and the most common negative first
+  // (issue #661). The defaults stay.
+  EXPECT_EQ(kFilmPrintMaterialIds[0], kFilmNegativeScanId);
+  EXPECT_EQ(kFilmPrintMaterialIds[1], "cine_look");
+  EXPECT_EQ(kFilmPrintMaterialNames[1], "Cine Look (2383)");
   EXPECT_EQ(kFilmNegativeIds.front(), "kodak_5207");
   EXPECT_TRUE(IsFilmIdentifier(kFilmPrintMaterialIds, "kodak_2383"));
   EXPECT_EQ(film.scene_light, "reference");
@@ -109,6 +111,41 @@ TEST(DrtFilmPrintModelTest, ReversalFilmIsAValueOfTheNegativeKeyAndKeepsThePrint
     EXPECT_EQ(restored.Drt()->Params().FilmPrint().print_material, "fuji_ca_dpII");
     EXPECT_EQ(restored.Drt()->Params().ToJson().dump(), json.dump());
   }
+}
+
+TEST(DrtFilmPrintModelTest, NegativeScanIsAValueOfThePrintMaterialKeyAndKeepsTheFlare) {
+  // Negative Scan is first in the list, before Cine Look, and it is no film.
+  EXPECT_EQ(kFilmPrintMaterialIds.front(), kFilmNegativeScanId);
+  EXPECT_EQ(kFilmNegativeScanId, "negative_scan");
+  EXPECT_EQ(kFilmPrintMaterialNames.front(), "Negative Scan");
+  EXPECT_EQ(kFilmPrintMaterialIds[1], "cine_look");
+  EXPECT_FALSE(IsFilmStockIdentifier(kFilmNegativeScanId));
+  EXPECT_FALSE(IsFilmIdentifier(kFilmPrintMaterialIds, "lab_scan"));
+  EXPECT_TRUE(IsFilmNegativeScan("kodak_5207", kFilmNegativeScanId));
+  EXPECT_FALSE(IsFilmNegativeScan("kodak_5207", "kodak_2383"));
+  // A colour reversal film reads no print material.
+  EXPECT_FALSE(IsFilmNegativeScan("fuji_velvia_50", kFilmNegativeScanId));
+
+  auto document               = CreateDefaultPipelineDocument();
+  auto update                 = FilmPrintUpdate();
+  update.film_print_material  = std::string{kFilmNegativeScanId};
+  document.Drt()->Params().ApplyUpdate(update);
+  const auto json = document.Drt()->Params().ToJson();
+  // The same key holds Negative Scan. Its settings at their defaults write no key, and the stored
+  // flare stays.
+  EXPECT_EQ(json.at("film_print").at("print_material"), "negative_scan");
+  EXPECT_EQ(json.at("film_print").size(), 6u);
+  EXPECT_FLOAT_EQ(json.at("film_print").at("enlarger_flare").get<float>(), 0.05f);
+  const auto restored = PipelineDocument::FromJson(document.ToJson());
+  EXPECT_EQ(restored.Drt()->Params().FilmPrint().print_material, kFilmNegativeScanId);
+  EXPECT_FLOAT_EQ(restored.Drt()->Params().FilmPrint().enlarger_flare, 0.05f);
+  EXPECT_EQ(restored.Drt()->Params().ToJson().dump(), json.dump());
+
+  // A reversal film with a stored Negative Scan keeps it, as it keeps any print material.
+  DrtParameterUpdate slide;
+  slide.film_negative = "fuji_velvia_50";
+  document.Drt()->Params().ApplyUpdate(slide);
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().print_material, kFilmNegativeScanId);
 }
 
 TEST(DrtFilmPrintModelTest, UpperRangeValuesRoundTrip) {
@@ -324,6 +361,198 @@ TEST(DrtFilmPrintModelTest, FieldChangeMarksOnlyItsFilmPrintField) {
   // The Loupe flare of a reversal film is the stored Enlarger flare.
   expect_marks(DrtDirty::FilmFlare,
                [](DrtParameterUpdate& update) { update.film_enlarger_flare = 0.04f; });
+  // Negative Scan has no entry gamut compression, so the exposure and all its results change.
+  expect_marks(DrtDirty::FilmExposure,
+               [](DrtParameterUpdate& update) { update.film_print_material = "negative_scan"; });
+  expect_marks(DrtDirty::FilmExposure, [](DrtParameterUpdate& update) {
+    update.film_scene_light = std::string{kFilmAsShotLightId};
+  });
+
+  // Each setting of Negative Scan changes only the scan: its own field, and no field of the
+  // canvases. The scanner settings build the scanner table again; the others act after the scan.
+  std::vector<DrtParameterUpdate> scan_changes(14);
+  scan_changes[0].film_scan_auto           = std::string{"neutral"};
+  scan_changes[1].film_scan_auto_strength  = 0.5f;
+  scan_changes[2].film_scan_auto_density   = 0.25f;
+  scan_changes[3].film_scan_contrast       = 1.2f;
+  scan_changes[4].film_scan_exposure_stops = -1.0f;
+  scan_changes[5].film_scan_cyan           = 0.05f;
+  scan_changes[6].film_scan_magenta        = -0.05f;
+  scan_changes[7].film_scan_yellow         = 0.1f;
+  scan_changes[8].film_scan_black          = 0.5f;
+  scan_changes[9].film_scanner_red_nm      = 630.0f;
+  scan_changes[10].film_scanner_green_nm   = 530.0f;
+  scan_changes[11].film_scanner_blue_nm    = 460.0f;
+  scan_changes[12].film_scanner_width_nm   = 60.0f;
+  scan_changes[13].film_scanner_light      = std::string{"equal_energy"};
+  for (std::size_t change = 0; change < scan_changes.size(); ++change) {
+    SCOPED_TRACE(change);
+    const auto scan_before = params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmScan});
+    std::array<ParameterRevision, 3> canvas_before{};
+    for (std::size_t index = 0; index < film_fields.size(); ++index) {
+      canvas_before[index] = params.FieldsRevision(DirtyFieldMask{film_fields[index]});
+    }
+    params.ApplyUpdate(scan_changes[change]);
+    EXPECT_GT(params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmScan}), scan_before);
+    for (std::size_t index = 0; index < film_fields.size(); ++index) {
+      EXPECT_EQ(params.FieldsRevision(DirtyFieldMask{film_fields[index]}), canvas_before[index]);
+    }
+    EXPECT_EQ(params.FieldsRevision(other_fields), other_before);
+    // The same value again changes nothing.
+    const auto revision = params.Revision();
+    params.ApplyUpdate(scan_changes[change]);
+    EXPECT_EQ(params.Revision(), revision);
+  }
+}
+
+TEST(DrtFilmPrintModelTest, AsShotIsASceneLightAndNegativeScanWritesOnlyKeysAwayFromTheDefault) {
+  // As Shot is second in the list, after the reference light (issue 661).
+  EXPECT_EQ(kFilmSceneLightIds[0], "reference");
+  EXPECT_EQ(kFilmSceneLightIds[1], kFilmAsShotLightId);
+  EXPECT_TRUE(IsFilmAsShotLight(kFilmAsShotLightId));
+  EXPECT_FALSE(IsFilmAsShotLight("daylight"));
+  // The defaults of the lab (P14 report, section 6): auto colour off, the scanner 650/545/450 nm,
+  // 40 nm, halogen, and black 1.
+  const FilmNegativeScanParams defaults;
+  EXPECT_EQ(defaults.auto_colour, "off");
+  EXPECT_EQ(defaults.auto_strength, 0.8f);
+  EXPECT_EQ(defaults.auto_density, 0.0f);
+  EXPECT_EQ(defaults.contrast, 1.0f);
+  EXPECT_EQ(defaults.exposure_stops, 0.0f);
+  EXPECT_EQ(defaults.cyan, 0.0f);
+  EXPECT_EQ(defaults.black, 1.0f);
+  EXPECT_EQ(defaults.scanner_red_nm, 650.0f);
+  EXPECT_EQ(defaults.scanner_green_nm, 545.0f);
+  EXPECT_EQ(defaults.scanner_blue_nm, 450.0f);
+  EXPECT_EQ(defaults.scanner_width_nm, 40.0f);
+  EXPECT_EQ(defaults.scanner_light, "halogen");
+  EXPECT_EQ(FilmPrintParams{}.scan, defaults);
+  EXPECT_EQ(kFilmScanAutoIds.front(), "off");
+  EXPECT_EQ(kFilmScannerLightIds.front(), "halogen");
+
+  // A document with the settings at their defaults has the bytes, so the root id, of a document
+  // with no Negative Scan keys.
+  auto document              = CreateDefaultPipelineDocument();
+  auto update                = FilmPrintUpdate();
+  update.film_print_material = std::string{kFilmNegativeScanId};
+  update.film_scene_light    = std::string{kFilmAsShotLightId};
+  document.Drt()->Params().ApplyUpdate(update);
+  const auto plain = document.Drt()->Params().ToJson();
+  EXPECT_EQ(plain.at("film_print").size(), 6u);
+  EXPECT_EQ(plain.at("film_print").at("scene_light"), "as_shot");
+  auto explicit_defaults                      = plain;
+  auto& keys                                  = explicit_defaults["film_print"];
+  keys["auto"]                                = "off";
+  keys["auto_strength"]                       = 0.8;
+  keys["auto_density"]                        = 0.0;
+  keys["scan_contrast"]                       = 1.0;
+  keys["scan_exposure_stops"]                 = 0.0;
+  keys["cyan"]                                = 0.0;
+  keys["magenta"]                             = 0.0;
+  keys["yellow"]                              = 0.0;
+  keys["black"]                               = 1.0;
+  keys["scanner_red_nm"]                      = 650.0;
+  keys["scanner_green_nm"]                    = 545.0;
+  keys["scanner_blue_nm"]                     = 450.0;
+  keys["scanner_width_nm"]                    = 40.0;
+  keys["scanner_light"]                       = "halogen";
+  DrtParamsModel read_defaults;
+  read_defaults.LoadJson(explicit_defaults);
+  EXPECT_EQ(read_defaults.ToJson().dump(), plain.dump());
+
+  // Each setting away from its default writes its key, and the document reads it back.
+  DrtParameterUpdate scan;
+  scan.film_scan_auto           = std::string{"warm"};
+  scan.film_scan_auto_strength  = 0.5f;
+  scan.film_scan_auto_density   = 0.25f;
+  scan.film_scan_contrast       = 1.25f;
+  scan.film_scan_exposure_stops = -0.75f;
+  scan.film_scan_cyan           = 0.05f;
+  scan.film_scan_magenta        = -0.03f;
+  scan.film_scan_yellow         = 0.125f;
+  scan.film_scan_black          = 0.5f;
+  scan.film_scanner_red_nm      = 630.0f;
+  scan.film_scanner_green_nm    = 530.0f;
+  scan.film_scanner_blue_nm     = 460.0f;
+  scan.film_scanner_width_nm    = 60.0f;
+  scan.film_scanner_light       = std::string{"equal_energy"};
+  document.Drt()->Params().ApplyUpdate(scan);
+  const auto set = document.Drt()->Params().ToJson().at("film_print");
+  EXPECT_EQ(set.size(), 6u + 14u);
+  EXPECT_EQ(set.at("auto"), "warm");
+  EXPECT_FLOAT_EQ(set.at("scan_exposure_stops").get<float>(), -0.75f);
+  EXPECT_FLOAT_EQ(set.at("scanner_width_nm").get<float>(), 60.0f);
+  EXPECT_EQ(set.at("scanner_light"), "equal_energy");
+  const auto restored = PipelineDocument::FromJson(document.ToJson());
+  const auto film     = restored.Drt()->Params().FilmPrint();
+  EXPECT_EQ(film.scan.auto_colour, "warm");
+  EXPECT_EQ(film.scan.yellow, 0.125f);
+  EXPECT_EQ(film.scan.scanner_red_nm, 630.0f);
+  EXPECT_EQ(film.scan.scanner_light, "equal_energy");
+  EXPECT_EQ(film.scene_light, kFilmAsShotLightId);
+  EXPECT_EQ(restored.Drt()->Params().ToJson().dump(), document.Drt()->Params().ToJson().dump());
+  // One setting back at its default removes its key again.
+  DrtParameterUpdate back;
+  back.film_scan_auto = std::string{"off"};
+  document.Drt()->Params().ApplyUpdate(back);
+  EXPECT_FALSE(document.Drt()->Params().ToJson().at("film_print").contains("auto"));
+  // Another method keeps the settings in memory and writes no film print object.
+  DrtParameterUpdate open;
+  open.method = DrtMethod::OpenDrt;
+  document.Drt()->Params().ApplyUpdate(open);
+  EXPECT_FALSE(document.Drt()->Params().ToJson().contains("film_print"));
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().scan.yellow, 0.125f);
+}
+
+TEST(DrtFilmPrintModelTest, NegativeScanRejectsInvalidValuesAndNamesTheKey) {
+  const RejectedJson cases[] = {
+      {"auto", "vivid"},
+      {"auto", 1},
+      {"auto_strength", 1.1},
+      {"auto_density", -0.1},
+      {"scan_contrast", 0.4},
+      {"scan_contrast", std::numeric_limits<double>::quiet_NaN()},
+      {"scan_exposure_stops", 3.5},
+      {"cyan", 0.31},
+      {"magenta", -0.31},
+      {"yellow", "warm"},
+      {"black", 1.6},
+      {"scanner_red_nm", 590.0},
+      {"scanner_green_nm", 600.0},
+      {"scanner_blue_nm", 395.0},
+      {"scanner_width_nm", 5.0},
+      {"scanner_width_nm", 125.0},
+      {"scanner_light", "led"},
+  };
+  for (const auto& rejected : cases) {
+    SCOPED_TRACE(std::string{rejected.key} + " = " + rejected.value.dump());
+    DrtParamsModel params;
+    params.ApplyUpdate(FilmPrintUpdate());
+    const auto before                = params.ToJson().dump();
+    auto       json                  = params.ToJson();
+    json["film_print"][rejected.key] = rejected.value;
+    try {
+      params.LoadJson(json);
+      FAIL() << "the invalid value was accepted";
+    } catch (const std::runtime_error& error) {
+      EXPECT_NE(std::string{error.what()}.find(std::string{"film_print."} + rejected.key),
+                std::string::npos)
+          << error.what();
+    }
+    EXPECT_EQ(params.ToJson().dump(), before);
+  }
+  // An update out of range changes no field.
+  DrtParamsModel     params;
+  const auto         before = params.ToJson().dump();
+  DrtParameterUpdate update;
+  update.film_scan_contrast  = 1.2f;
+  update.film_scanner_red_nm = 721.0f;
+  EXPECT_THROW(params.ApplyUpdate(update), std::invalid_argument);
+  EXPECT_EQ(params.ToJson().dump(), before);
+  EXPECT_EQ(params.FilmPrint().scan.contrast, 1.0f);
+  DrtParameterUpdate light;
+  light.film_scanner_light = std::string{"led"};
+  EXPECT_THROW(params.ApplyUpdate(light), std::invalid_argument);
 }
 
 TEST(DrtFilmPrintModelTest, EqualValuesKeepTheRevision) {

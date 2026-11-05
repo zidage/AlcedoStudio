@@ -104,6 +104,15 @@ auto ApplyEditorParameterPatch(PipelineDocument& document, const EditorParameter
   return ApplyEditorParameterWrite(document, target, *write, error);
 }
 
+auto ApplyEditorParameterValue(PipelineDocument& document, const EditorParameterTarget& target,
+                               const nlohmann::json& value, std::string* error) -> bool {
+  auto write = ParseEditorParameterValue(target.field_key, value, error);
+  if (!write.has_value()) {
+    return false;
+  }
+  return ApplyEditorParameterWrite(document, target, *write, error);
+}
+
 auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParameterTarget& target,
                              nlohmann::json* json, std::string* error) -> bool {
   if (json == nullptr) {

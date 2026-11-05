@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <span>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -601,6 +602,7 @@ constexpr auto kOdtFilmPrintMaterialOptions =
 
 constexpr std::array<EditorParameterOption, kFilmSceneLightIds.size()> kOdtFilmSceneLightOptions = {
     EditorParameterOption{"reference", "Reference"},
+    EditorParameterOption{"as_shot", "As Shot"},
     EditorParameterOption{"daylight", "Daylight"},
     EditorParameterOption{"tungsten", "Tungsten"},
     EditorParameterOption{"fluorescent", "Fluorescent"},
@@ -615,6 +617,31 @@ constexpr std::array<EditorParameterOption, kFilmSceneLightIds.size()> kOdtFilmS
 
 constexpr double kOdtFilmEnlargerFlareUiMax = 0.1;
 
+constexpr std::array<EditorParameterOption, kFilmScanAutoIds.size()> kOdtFilmScanAutoOptions = {
+    EditorParameterOption{"off", "Off"},
+    EditorParameterOption{"neutral", "Neutral"},
+    EditorParameterOption{"warm", "Warm"},
+    EditorParameterOption{"cool", "Cool"},
+};
+
+constexpr std::array<EditorParameterOption, kFilmScannerLightIds.size()>
+    kOdtFilmScannerLightOptions = {
+        EditorParameterOption{"halogen", "Halogen"},
+        EditorParameterOption{"equal_energy", "Equal Energy"},
+};
+
+/// A number property of the film print with a stored float range.
+constexpr auto FilmNumber(const char* key, float minimum, float maximum, double step, int decimals)
+    -> EditorParameterProperty {
+  return EditorParameterProperty{key,
+                                 PropertyType::Number,
+                                 {},
+                                 static_cast<double>(minimum),
+                                 static_cast<double>(maximum),
+                                 step,
+                                 decimals};
+}
+
 constexpr std::array kOdtProperties = {
     EditorParameterProperty{"method", PropertyType::Option, kOdtMethodOptions},
     EditorParameterProperty{"encoding_space", PropertyType::Option, kOdtEncodingSpaceOptions},
@@ -627,15 +654,30 @@ constexpr std::array kOdtProperties = {
     EditorParameterProperty{"negative", PropertyType::Option, kOdtFilmNegativeOptions},
     EditorParameterProperty{"print_material", PropertyType::Option, kOdtFilmPrintMaterialOptions},
     EditorParameterProperty{"scene_light", PropertyType::Option, kOdtFilmSceneLightOptions},
-    EditorParameterProperty{"light_spread", PropertyType::Number, {},
-                            static_cast<double>(kFilmLightSpreadMin),
-                            static_cast<double>(kFilmLightSpreadMax), 0.01, 2},
-    EditorParameterProperty{"halation", PropertyType::Number, {},
-                            static_cast<double>(kFilmHalationMin),
-                            static_cast<double>(kFilmHalationMax), 0.01, 2},
-    EditorParameterProperty{"enlarger_flare", PropertyType::Number, {},
+    FilmNumber("light_spread", kFilmLightSpreadMin, kFilmLightSpreadMax, 0.01, 2),
+    FilmNumber("halation", kFilmHalationMin, kFilmHalationMax, 0.01, 2),
+    EditorParameterProperty{"enlarger_flare",
+                            PropertyType::Number,
+                            {},
                             static_cast<double>(kFilmEnlargerFlareMin),
-                            kOdtFilmEnlargerFlareUiMax, 0.001, 3},
+                            kOdtFilmEnlargerFlareUiMax,
+                            0.001,
+                            3},
+    EditorParameterProperty{"auto", PropertyType::Option, kOdtFilmScanAutoOptions},
+    FilmNumber("auto_strength", kFilmScanAutoStrengthMin, kFilmScanAutoStrengthMax, 0.05, 2),
+    FilmNumber("auto_density", kFilmScanAutoDensityMin, kFilmScanAutoDensityMax, 0.05, 2),
+    FilmNumber("scan_contrast", kFilmScanContrastMin, kFilmScanContrastMax, 0.05, 2),
+    FilmNumber("scan_exposure_stops", kFilmScanExposureStopsMin, kFilmScanExposureStopsMax, 0.05,
+               2),
+    FilmNumber("cyan", kFilmScanKeyMin, kFilmScanKeyMax, 0.01, 2),
+    FilmNumber("magenta", kFilmScanKeyMin, kFilmScanKeyMax, 0.01, 2),
+    FilmNumber("yellow", kFilmScanKeyMin, kFilmScanKeyMax, 0.01, 2),
+    FilmNumber("black", kFilmScanBlackMin, kFilmScanBlackMax, 0.05, 2),
+    FilmNumber("scanner_red_nm", kFilmScannerRedMinNm, kFilmScannerRedMaxNm, 5.0, 0),
+    FilmNumber("scanner_green_nm", kFilmScannerGreenMinNm, kFilmScannerGreenMaxNm, 5.0, 0),
+    FilmNumber("scanner_blue_nm", kFilmScannerBlueMinNm, kFilmScannerBlueMaxNm, 5.0, 0),
+    FilmNumber("scanner_width_nm", kFilmScannerWidthMinNm, kFilmScannerWidthMaxNm, 5.0, 0),
+    EditorParameterProperty{"scanner_light", PropertyType::Option, kOdtFilmScannerLightOptions},
 };
 
 /// OpenDRT preset properties: the Model holds them under `open_drt`.
@@ -647,12 +689,20 @@ constexpr std::array<const char*, 3> kOdtFilmSelectionKeys = {"negative", "print
                                                               "scene_light"};
 constexpr std::array<const char*, 3> kOdtFilmSliderKeys    = {"light_spread", "halation",
                                                               "enlarger_flare"};
+/// The settings of Negative Scan (issue 661). Only Negative Scan reads them, so the panel shows
+/// them there only. The Model omits a key at its default.
+constexpr std::array<const char*, 2>  kOdtFilmScanOptionKeys = {"auto", "scanner_light"};
+constexpr std::array<const char*, 12> kOdtFilmScanNumberKeys = {
+    "auto_strength",  "auto_density",     "scan_contrast",    "scan_exposure_stops",
+    "cyan",           "magenta",          "yellow",           "black",
+    "scanner_red_nm", "scanner_green_nm", "scanner_blue_nm",  "scanner_width_nm"};
 
 constexpr const char* kOdtFilmPrintEncodingSpace = "rec709";
 constexpr double      kOdtFilmPrintPeakLuminance = 100.0;
 
 auto OdtUiDefault() -> json {
   const FilmPrintParams film_print;
+  const auto&           scan = film_print.scan;
   return {{"method", "open_drt"},
           {"encoding_space", "rec709"},
           {"encoding_eotf", "gamma_2_2"},
@@ -666,7 +716,31 @@ auto OdtUiDefault() -> json {
           {"scene_light", film_print.scene_light},
           {"light_spread", static_cast<double>(film_print.light_spread)},
           {"halation", static_cast<double>(film_print.halation)},
-          {"enlarger_flare", 0.01}};
+          {"enlarger_flare", 0.01},
+          {"auto", scan.auto_colour},
+          // The decimal default, as Enlarger flare: the float 0.8f is 0.800000011920929.
+          {"auto_strength", 0.8},
+          {"auto_density", static_cast<double>(scan.auto_density)},
+          {"scan_contrast", static_cast<double>(scan.contrast)},
+          {"scan_exposure_stops", static_cast<double>(scan.exposure_stops)},
+          {"cyan", static_cast<double>(scan.cyan)},
+          {"magenta", static_cast<double>(scan.magenta)},
+          {"yellow", static_cast<double>(scan.yellow)},
+          {"black", static_cast<double>(scan.black)},
+          {"scanner_red_nm", static_cast<double>(scan.scanner_red_nm)},
+          {"scanner_green_nm", static_cast<double>(scan.scanner_green_nm)},
+          {"scanner_blue_nm", static_cast<double>(scan.scanner_blue_nm)},
+          {"scanner_width_nm", static_cast<double>(scan.scanner_width_nm)},
+          {"scanner_light", scan.scanner_light}};
+}
+
+/// True when the UI value selects the Negative Scan form: method film_print with print material
+/// Negative Scan and a negative. That form ends in linear AP1 that the OpenDRT of the document shows
+/// (issue 661), so it has the OpenDRT settings and encodings of method open_drt.
+auto OdtIsNegativeScan(const json& ui_value) -> bool {
+  return ui_value.at("method").get_ref<const std::string&>() == "film_print" &&
+         IsFilmNegativeScan(ui_value.at("negative").get_ref<const std::string&>(),
+                            ui_value.at("print_material").get_ref<const std::string&>());
 }
 
 auto OptionsText(std::span<const EditorParameterOption> options) -> std::string {
@@ -737,6 +811,20 @@ auto OdtModelToUi(const json& model_json, std::string* error) -> std::optional<j
     }
     ui[key] = value;
   }
+  for (const char* key : kOdtFilmScanOptionKeys) {
+    std::string value;
+    if (!ReadString(film_print, key, defaults.at(key).get<std::string>(), "odt", &value, error)) {
+      return std::nullopt;
+    }
+    ui[key] = value;
+  }
+  for (const char* key : kOdtFilmScanNumberKeys) {
+    double value = 0.0;
+    if (!ReadNumber(film_print, key, defaults.at(key).get<double>(), "odt", &value, error)) {
+      return std::nullopt;
+    }
+    ui[key] = value;
+  }
   // The Model stores a float, and the float of the decimal limit 0.1 is above that limit.
   ui["enlarger_flare"] =
       std::min(ui.at("enlarger_flare").get<double>(), kOdtFilmEnlargerFlareUiMax);
@@ -754,8 +842,6 @@ auto OdtFilmPrintEotf(const json& ui_value) -> std::string {
 
 auto OdtUiToModel(const json& ui_value) -> json {
   if (ui_value.at("method").get_ref<const std::string&>() == "film_print") {
-    // The panel hides the encoding controls, so a selection in an HDR or P3 document writes the
-    // only output of this method. Undo restores the earlier encoding through the history value.
     json film_print = json::object();
     for (const char* key : kOdtFilmSelectionKeys) {
       film_print[key] = ui_value.at(key);
@@ -763,6 +849,29 @@ auto OdtUiToModel(const json& ui_value) -> json {
     for (const char* key : kOdtFilmSliderKeys) {
       film_print[key] = ui_value.at(key);
     }
+    for (const auto& keys : {std::span<const char* const>{kOdtFilmScanOptionKeys},
+                             std::span<const char* const>{kOdtFilmScanNumberKeys}}) {
+      for (const char* key : keys) {
+        film_print[key] = ui_value.at(key);
+      }
+    }
+    if (OdtIsNegativeScan(ui_value)) {
+      // Negative Scan writes the OpenDRT settings and the encoding of the panel, as method open_drt.
+      json open_drt = json::object();
+      for (const char* key : kOdtOpenDrtKeys) {
+        open_drt[key] = ui_value.at(key);
+      }
+      return {{"odt",
+               {{"method", "film_print"},
+                {"encoding_space", ui_value.at("encoding_space")},
+                {"encoding_eotf", ui_value.at("encoding_eotf")},
+                {"peak_luminance", ui_value.at("peak_luminance")},
+                {"open_drt", std::move(open_drt)},
+                {"film_print", std::move(film_print)}}}};
+    }
+    // The panel hides the encoding controls of a print, so a selection in an HDR or P3 document
+    // writes the only output of this form. Undo restores the earlier encoding through the history
+    // value.
     return {{"odt",
              {{"method", "film_print"},
               {"encoding_space", kOdtFilmPrintEncodingSpace},
@@ -798,7 +907,16 @@ auto OdtConstrain(const json& merged_ui, const json& ui_change, const json& curr
     -> std::optional<json> {
   static_cast<void>(source);
   json ui = merged_ui;
-  if (ui.at("method").get_ref<const std::string&>() == "film_print") {
+  // Selecting Negative Scan selects the scene light of the RAW white balance in the same write,
+  // unless the write sets a scene light of its own (issue 661).
+  if (ui.at("method").get_ref<const std::string&>() == "film_print" &&
+      ChangesValue(ui_change, current_ui, "print_material") &&
+      ui_change.at("print_material") == std::string{kFilmNegativeScanId} &&
+      !ChangesValue(ui_change, current_ui, "scene_light")) {
+    ui["scene_light"] = std::string{kFilmAsShotLightId};
+  }
+  const bool negative_scan = OdtIsNegativeScan(ui);
+  if (ui.at("method").get_ref<const std::string&>() == "film_print" && !negative_scan) {
     if (ChangesValue(ui_change, current_ui, "encoding_space") &&
         ui_change.at("encoding_space") != kOdtFilmPrintEncodingSpace) {
       SetError(error, "odt.encoding_space must be rec709 with method film_print");
@@ -834,16 +952,22 @@ auto OdtConstrain(const json& merged_ui, const json& ui_change, const json& curr
     SetError(error, "odt.limiting_space needs method aces_2_0");
     return std::nullopt;
   }
-  if (method != "open_drt") {
+  if (method != "open_drt" && !negative_scan) {
     for (const char* key : kOdtOpenDrtKeys) {
       if (ChangesValue(ui_change, current_ui, key)) {
-        SetError(error, std::string{"odt."} + key + " needs method open_drt");
+        SetError(error, std::string{"odt."} + key +
+                            " needs method open_drt, or film_print with print material "
+                            "negative_scan");
         return std::nullopt;
       }
     }
   }
   if (method != "film_print") {
-    for (const auto& keys : {kOdtFilmSelectionKeys, kOdtFilmSliderKeys}) {
+    for (const auto& keys :
+         {std::span<const char* const>{kOdtFilmSelectionKeys},
+          std::span<const char* const>{kOdtFilmSliderKeys},
+          std::span<const char* const>{kOdtFilmScanOptionKeys},
+          std::span<const char* const>{kOdtFilmScanNumberKeys}}) {
       for (const char* key : keys) {
         if (ChangesValue(ui_change, current_ui, key)) {
           SetError(error, std::string{"odt."} + key + " needs method film_print");

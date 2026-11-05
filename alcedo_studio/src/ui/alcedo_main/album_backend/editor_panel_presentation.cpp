@@ -128,6 +128,23 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           film_print.insert(QStringLiteral("light_spread"), value.film_print.light_spread);
           film_print.insert(QStringLiteral("halation"), value.film_print.halation);
           film_print.insert(QStringLiteral("enlarger_flare"), value.film_print.enlarger_flare);
+          // Negative Scan (issue 661): every key, also at its default, so the echo of a write
+          // gives each control its stored value.
+          const auto& scan = value.film_print.scan;
+          film_print.insert(QStringLiteral("auto"), String(scan.auto_colour));
+          film_print.insert(QStringLiteral("auto_strength"), scan.auto_strength);
+          film_print.insert(QStringLiteral("auto_density"), scan.auto_density);
+          film_print.insert(QStringLiteral("scan_contrast"), scan.contrast);
+          film_print.insert(QStringLiteral("scan_exposure_stops"), scan.exposure_stops);
+          film_print.insert(QStringLiteral("cyan"), scan.cyan);
+          film_print.insert(QStringLiteral("magenta"), scan.magenta);
+          film_print.insert(QStringLiteral("yellow"), scan.yellow);
+          film_print.insert(QStringLiteral("black"), scan.black);
+          film_print.insert(QStringLiteral("scanner_red_nm"), scan.scanner_red_nm);
+          film_print.insert(QStringLiteral("scanner_green_nm"), scan.scanner_green_nm);
+          film_print.insert(QStringLiteral("scanner_blue_nm"), scan.scanner_blue_nm);
+          film_print.insert(QStringLiteral("scanner_width_nm"), scan.scanner_width_nm);
+          film_print.insert(QStringLiteral("scanner_light"), String(scan.scanner_light));
           QVariantMap odt;
           odt.insert(QStringLiteral("method"), String(value.method));
           odt.insert(QStringLiteral("encoding_space"), String(value.encoding_space));

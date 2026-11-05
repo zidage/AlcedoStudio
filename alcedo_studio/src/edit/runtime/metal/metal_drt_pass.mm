@@ -211,10 +211,10 @@ struct MetalDrtOps {
   }
 
   static void DispatchFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
-                                const DrtNodeModel& drt, const FrameSceneBinding& scene,
-                                const FrameSceneBinding& display, std::uint32_t width,
-                                std::uint32_t height) {
-    RecordMetalFilmPrint(device, plan, drt, scene, display, width, height);
+                                const DrtNodeModel& drt, std::optional<double> raw_cct,
+                                const FrameSceneBinding& scene, const FrameSceneBinding& display,
+                                std::uint32_t width, std::uint32_t height) {
+    RecordMetalFilmPrint(device, plan, drt, raw_cct, scene, display, width, height);
   }
 
   static void CheckAfterEncode(MetalRenderDevice&) {}

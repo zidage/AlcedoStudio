@@ -7,6 +7,7 @@
 #ifdef HAVE_OPENCL
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,20 +25,27 @@ namespace alcedo {
  * between the steps are allocations in the transient arena of the render, with 3 floats per pixel.
  * Resolves the tables of the selection on this thread. Does not wait for the GPU.
  *
+ * Print material Negative Scan has no OpenCL pass yet (issue 664): it stops with a named error
+ * before any GPU work.
+ *
+ * @param raw_cct The colour temperature of the RAW decode for scene light As Shot, or none for an
+ *        input with no RAW white balance. See `FilmSceneRawCct`.
  * @param pass_names When set, this function adds the name of each kernel group that it records.
  *        The render path passes null.
  * @param separate_narrow_spread True runs the narrow Gaussian of FP2 as its own two passes, as the
  *        render does when that Gaussian is too wide for one dispatch. A test compares both forms.
- * @throws std::runtime_error for an output that the film print does not support, for a missing or
- *         damaged resource, for an upload, an allocation, or an enqueue failure, for a program
+ * @throws std::runtime_error for print material Negative Scan, for an output that the film print
+ *         does not support, for a missing or damaged resource, for an upload, an allocation, or an
+ *         enqueue failure, for a program
  *         build failure, and for a blur beyond the tap limit. Nothing is published then; the caller
  *         cancels the render. There is no change of backend.
  */
 void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                           const DrtNodeModel& drt, const FrameSceneBinding& scene,
-                           const FrameSceneBinding& display, std::uint32_t width,
-                           std::uint32_t height, std::vector<std::string>* pass_names = nullptr,
-                           bool separate_narrow_spread = false);
+                           const DrtNodeModel& drt, std::optional<double> raw_cct,
+                           const FrameSceneBinding& scene, const FrameSceneBinding& display,
+                           std::uint32_t width, std::uint32_t height,
+                           std::vector<std::string>* pass_names             = nullptr,
+                           bool                      separate_narrow_spread = false);
 
 }  // namespace alcedo
 

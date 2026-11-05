@@ -23,6 +23,7 @@
 #include "app/pipeline_document_history.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/film_print_model.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
@@ -172,6 +173,75 @@ TEST(PipelineHistoryApplierTest, DiffusionStrengthRoundTripsWithoutEnteringOdtHi
   EXPECT_FALSE(odt_json.contains("diffusion")) << odt_json.dump();
   RoundTripOwner(&document, *odt, {{"peak_luminance", 400.0}});
   EXPECT_EQ(document.Drt()->Params().DiffusionStrength(), 0.4f);
+}
+
+TEST(PipelineHistoryApplierTest, NegativeScanChangesUndoAndRedoToEachStoredValue) {
+  // The Model omits a Negative Scan key at its default, so the stored value of an entry has no key
+  // for a setting at its default. A head move must still set that setting (issue 661).
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  auto        odt = CompleteCurrentPanelParameterTarget(document, "odt", &error);
+  ASSERT_TRUE(odt.has_value()) << error;
+  ASSERT_TRUE(ApplyEditorParameterPatch(
+      document, *odt,
+      {{"method", "film_print"},
+       {"film_print", {{"negative", "kodak_5207"}, {"print_material", "kodak_2383"}}}},
+      &error))
+      << error;
+  std::vector<std::string>       states{CanonicalPipelineDocumentJson(document)};
+  std::vector<PipelineEditBatch> batches;
+  const auto change = [&](const nlohmann::json& film_print) {
+    nlohmann::json before;
+    ASSERT_TRUE(ReadEditorParameterJson(document, *odt, &before, &error)) << error;
+    ASSERT_TRUE(ApplyEditorParameterPatch(document, *odt, {{"film_print", film_print}}, &error))
+        << error;
+    nlohmann::json after;
+    ASSERT_TRUE(ReadEditorParameterJson(document, *odt, &after, &error)) << error;
+    batches.push_back(MakeSetParameterBatch(*odt, before, after, true, true, "Display Transform"));
+    states.push_back(CanonicalPipelineDocumentJson(document));
+  };
+  // Negative Scan with As Shot in one entry, then two entries of scan settings.
+  change({{"print_material", "negative_scan"}, {"scene_light", "as_shot"}});
+  change({{"scan_contrast", 1.25}, {"scanner_width_nm", 60.0}});
+  change({{"auto", "warm"}, {"black", 0.5}});
+  ASSERT_EQ(batches.size(), 3U);
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().scan.contrast, 1.25f);
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().scan.auto_colour, "warm");
+
+  // Undo three times, then redo three times: each head move gives the document of that entry.
+  for (std::size_t step = batches.size(); step-- > 0;) {
+    SCOPED_TRACE("undo " + std::to_string(step));
+    ASSERT_TRUE(ApplyPipelineEditBatch(document, batches[step], PipelineEditApplyDirection::Inverse,
+                                       &error))
+        << error;
+    EXPECT_EQ(CanonicalPipelineDocumentJson(document), states[step]);
+  }
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().print_material, "kodak_2383");
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().scene_light, "reference");
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().scan, FilmNegativeScanParams{});
+  for (std::size_t step = 0; step < batches.size(); ++step) {
+    SCOPED_TRACE("redo " + std::to_string(step));
+    ASSERT_TRUE(ApplyPipelineEditBatch(document, batches[step], PipelineEditApplyDirection::Forward,
+                                       &error))
+        << error;
+    EXPECT_EQ(CanonicalPipelineDocumentJson(document), states[step + 1]);
+  }
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().print_material, kFilmNegativeScanId);
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().scene_light, kFilmAsShotLightId);
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().scan.scanner_width_nm, 60.0f);
+  EXPECT_EQ(document.Drt()->Params().FilmPrint().scan.black, 0.5f);
+
+  // A method change drops the film print object from the stored value; its undo restores it.
+  nlohmann::json before;
+  ASSERT_TRUE(ReadEditorParameterJson(document, *odt, &before, &error)) << error;
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, *odt, {{"method", "open_drt"}}, &error)) << error;
+  nlohmann::json after;
+  ASSERT_TRUE(ReadEditorParameterJson(document, *odt, &after, &error)) << error;
+  EXPECT_FALSE(after.contains("film_print"));
+  const auto method = MakeSetParameterBatch(*odt, before, after, true, true, "Display Transform");
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, method, PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_EQ(CanonicalPipelineDocumentJson(document), states.back());
 }
 
 TEST(PipelineHistoryApplierTest, LaterChangeFailureReversesEarlierBatchChanges) {

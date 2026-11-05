@@ -73,20 +73,30 @@ template <class Real>
   return values;
 }
 
-/// The scalar values of a selection that FillParams reads: a print, or a light table.
+/// The scalar values of a selection that FillParams reads: a print, a light table, or Negative
+/// Scan.
 struct SelectionValues {
   std::array<double, 3> layer_gain{};
+  /// XYZ to linear Rec. 709. Negative Scan has none.
   std::array<double, 9> xyz_to_display{};
   std::array<double, 3> negative_grade_grey{};
   bool                  cinema_look    = false;
   bool                  negative_grade = false;
   bool                  light_table    = false;
+  bool                  scan           = false;
 };
 
-[[nodiscard]] inline auto SelectionValuesOf(const FilmStockBundle& bundle,
-                                            std::string_view       negative,
-                                            std::string_view       print_material,
-                                            std::string_view       scene_light) -> SelectionValues {
+[[nodiscard]] inline auto SelectionValuesOf(const FilmStockBundle&   bundle,
+                                            std::string_view         negative,
+                                            std::string_view         print_material,
+                                            const FilmSceneLightMix& scene_light)
+    -> SelectionValues {
+  if (!bundle.IsReversal(negative) && bundle.IsNegativeScan(print_material)) {
+    // Negative Scan has no print: no printer balance, no print table, no negative grade. The values
+    // of FP6 are per render (film_negative_scan::RenderTerms).
+    const auto setup = bundle.NegativeScanSelection(negative, scene_light);
+    return {.layer_gain = setup.layer_gain, .scan = true};
+  }
   if (bundle.IsReversal(negative)) {
     // A colour reversal film has no print, so the print material is not read.
     const auto setup = bundle.ReversalSelection(negative, scene_light);
@@ -108,13 +118,14 @@ struct SelectionValues {
  *
  * The caller sets `display_encoding`, because the display curve belongs to the output and not to
  * the selection. For a colour reversal film @p print_material is not read, and the values are those
- * of the light table form.
+ * of the light table form. For print material Negative Scan only `scan` is set beyond FP1 to FP5:
+ * the values of its FP6 are per render (`FilmKernelNegativeScan`).
  *
  * @throws std::runtime_error that names the identifier for an unknown selection.
  */
 template <class Params>
 void FillParams(const FilmStockBundle& bundle, std::string_view negative,
-                std::string_view print_material, std::string_view scene_light,
+                std::string_view print_material, const FilmSceneLightMix& scene_light,
                 std::uint32_t print_edge, Params& params) {
   using Real           = std::remove_reference_t<decltype(params.gamut_power)>;
   const auto layout    = LayoutOf(bundle, negative);
@@ -181,6 +192,7 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
   params.cinema_look              = setup.cinema_look ? 1U : 0U;
   params.negative_grade           = setup.negative_grade ? 1U : 0U;
   params.light_table              = setup.light_table ? 1U : 0U;
+  params.scan                     = setup.scan ? 1U : 0U;
   const auto light_table          = bundle.LightTable();
   for (std::size_t k = 0; k < 3; ++k) {
     params.negative_grade_grey[k] = real(setup.negative_grade_grey[k]);
@@ -202,6 +214,16 @@ void FillParams(const FilmStockBundle& bundle, std::string_view negative,
   params.inhibition_values_offset = static_cast<std::uint32_t>(layout.InhibitionOffset());
   params.normals_offset           = static_cast<std::uint32_t>(layout.NormalsOffset());
   params.room_offset              = static_cast<std::uint32_t>(layout.RoomOffset());
+}
+
+/// @copydoc FillParams. A selection of one named scene light.
+template <class Params>
+void FillParams(const FilmStockBundle& bundle, std::string_view negative,
+                std::string_view print_material, std::string_view scene_light,
+                std::uint32_t print_edge, Params& params) {
+  FillParams(bundle, negative, print_material,
+             FilmSceneLightMix{std::string(scene_light), std::string(scene_light), 0.0}, print_edge,
+             params);
 }
 
 }  // namespace alcedo::film_print_kernel_tables

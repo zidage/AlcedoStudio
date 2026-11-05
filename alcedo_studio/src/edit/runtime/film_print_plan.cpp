@@ -9,9 +9,25 @@
 #include <stdexcept>
 #include <string>
 
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 
 namespace alcedo {
+
+auto FilmSceneRawCct(const PipelineDocument& document) -> std::optional<double> {
+  const auto* develop = document.Develop();
+  if (develop == nullptr) {
+    return std::nullopt;
+  }
+  const auto payload = develop->Params().Params();
+  if (payload.input.has_value()) {
+    return std::nullopt;
+  }
+  return static_cast<double>(payload.wb_mode == "custom" ? payload.custom_cct
+                                                         : payload.as_shot_cct);
+}
+
 namespace {
 
 /// Variance, in pixels of the reduced image, of a box reduction (1/12) and a bilinear enlargement
@@ -145,8 +161,10 @@ void PlanHalation(const ResolvedRenderGeometry& geometry, const FilmImagePlaneCo
 
 void PlanFlare(const FilmImagePlaneConstants& constants, const FilmPrintParams& film,
                FilmPrintImagePlan& plan) {
-  plan.flare        = film.enlarger_flare;
-  plan.flare_active = film.enlarger_flare > 0.0f;
+  // Negative Scan has no enlarger, so it reads no Enlarger flare and builds no canvas for it.
+  const bool scan   = IsFilmNegativeScan(film.negative, film.print_material);
+  plan.flare        = scan ? 0.0f : film.enlarger_flare;
+  plan.flare_active = plan.flare > 0.0f;
   if (!plan.flare_active) {
     return;
   }

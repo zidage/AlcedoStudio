@@ -19,6 +19,7 @@
 #include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/drt_post_schedule.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/film_print_plan.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -55,7 +56,8 @@ class DrtPostExecutor {
    * A failed dispatch throws after Ops::CheckAfterEncode. A film print on a backend with no film
    * print kernels throws before any GPU start; an encoding that the film print does not support
    * reports its own error first. On a backend with these kernels, Ops::DispatchFilmPrint replaces
-   * the display parameter bind and the display transform dispatch.
+   * the display parameter bind and the display transform dispatch, and it receives the colour
+   * temperature of the RAW decode of @p document for scene light As Shot.
    */
   static auto Execute(Device& device, const ExecutionPlan& plan, const PipelineDocument& document,
                       const FrameSceneBinding& scene) -> DrtPostExecutionResult {
@@ -144,7 +146,8 @@ class DrtPostExecutor {
       if (index == 0) {
         if constexpr (Ops::kImplementsFilmPrint) {
           if (film_print) {
-            Ops::DispatchFilmPrint(device, plan, *drt, current, dest, width, height);
+            Ops::DispatchFilmPrint(device, plan, *drt, FilmSceneRawCct(document), current, dest,
+                                   width, height);
           } else {
             Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), width, height);
           }

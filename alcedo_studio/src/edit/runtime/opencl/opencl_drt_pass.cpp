@@ -190,10 +190,10 @@ struct OpenClDrtOps {
   }
 
   static void DispatchFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                                const DrtNodeModel& drt, const FrameSceneBinding& scene,
-                                const FrameSceneBinding& display, std::uint32_t width,
-                                std::uint32_t height) {
-    RecordOpenClFilmPrint(device, plan, drt, scene, display, width, height);
+                                const DrtNodeModel& drt, std::optional<double> raw_cct,
+                                const FrameSceneBinding& scene, const FrameSceneBinding& display,
+                                std::uint32_t width, std::uint32_t height) {
+    RecordOpenClFilmPrint(device, plan, drt, raw_cct, scene, display, width, height);
   }
 
   static void CheckAfterEncode(OpenClRenderDevice&) {}

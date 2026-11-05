@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,12 +25,13 @@ struct FilmPrintPassTime {
 /**
  * @brief Record the film print display transform of @p drt: @p scene (linear AP1) to @p display.
  *
- * Steps FP1 to FP6 of the Film Print DRT Plan. The entry has no reference gamut compression.
+ * Steps FP1 to FP6 of the Film Print DRT Plan. The entry has the ACES reference gamut compression.
  * Resolves the tables of the selection on this thread, so a new selection takes about 0.5 s here.
  * Does not wait for the GPU, unless @p pass_times is set.
  *
  * A colour reversal film has the light table form of FP6: the light table in place of the print
- * table, then the loupe flare and the surround in linear display light.
+ * table, then the loupe flare and the surround in linear display light. Print material Negative
+ * Scan has no CUDA pass yet (issue 664): it stops with a named error before any GPU work.
  *
  * Halation and Enlarger flare read the canonical results of `FilmHalationResultId` and
  * `FilmFlareResultId`, and the loupe flare of a reversal film reads `FilmLoupeFlareResultId`: a
@@ -37,18 +39,22 @@ struct FilmPrintPassTime {
  * viewport ROI render samples the published images. An ROI with no valid published image builds a
  * temporary image from its own pixels and publishes nothing.
  *
+ * @param raw_cct The colour temperature of the RAW decode for scene light As Shot, or none for an
+ *        input with no RAW white balance. See `FilmSceneRawCct`.
  * @param pass_times When set, this function adds the time of each kernel group and waits for the
  *        GPU. The render path passes null.
  * @param separate_narrow_spread True runs the narrow Gaussian of FP2 as its own two passes, as the
  *        render does when that Gaussian is too wide for one dispatch. A test compares both forms.
- * @throws std::runtime_error for an output that the film print does not support, for a missing or
- *         damaged resource, for an upload or an allocation failure, and for a blur beyond the
- *         tap limit. Nothing is published then; the caller cancels the render.
+ * @throws std::runtime_error for print material Negative Scan, for an output that the film print
+ *         does not support, for a missing or damaged resource, for an upload or an allocation
+ *         failure, and for a blur beyond the tap limit. Nothing is published then; the caller
+ *         cancels the render.
  */
 void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
-                         const DrtNodeModel& drt, const FrameSceneBinding& scene,
-                         const FrameSceneBinding& display, std::uint32_t width,
-                         std::uint32_t height, std::vector<FilmPrintPassTime>* pass_times = nullptr,
-                         bool separate_narrow_spread = false);
+                         const DrtNodeModel& drt, std::optional<double> raw_cct,
+                         const FrameSceneBinding& scene, const FrameSceneBinding& display,
+                         std::uint32_t width, std::uint32_t height,
+                         std::vector<FilmPrintPassTime>* pass_times             = nullptr,
+                         bool                            separate_narrow_spread = false);
 
 }  // namespace alcedo

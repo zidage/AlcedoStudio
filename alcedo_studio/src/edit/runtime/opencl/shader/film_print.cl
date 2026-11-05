@@ -39,7 +39,7 @@ typedef struct {
 // the same values in its static_assert declarations.
 typedef char FilmBlurKernelSizeCheck[sizeof(FilmBlurKernel) == 1552 ? 1 : -1];
 typedef char FilmNarrowKernelSizeCheck[sizeof(FilmNarrowKernel) == 76 ? 1 : -1];
-typedef char FilmKernelParamsSizeCheck[sizeof(FilmKernelParams) == 412 ? 1 : -1];
+typedef char FilmKernelParamsSizeCheck[sizeof(FilmKernelParams) == 416 ? 1 : -1];
 
 __constant sampler_t kFilmNearestClamp =
     CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
@@ -150,7 +150,8 @@ static inline FilmKernelRgb FilmMixHalation(FilmKernelRgb value, FilmKernelRgb b
                            (1.0f - strength.b) * value.b + strength.b * blurred.b);
 }
 
-/// FP1. Input is linear AP1. A colour that a grade moved out of AP1 comes back at this point.
+/// FP1. Input is linear AP1. A colour that a grade moved out of AP1 comes back at this point (lab
+/// rule 'entry_reference_gamut_compression').
 __kernel void film_print_exposure(__read_only image2d_t src_image, __global const float4* src_buffer,
                                   int src_is_buffer, __global float* q, uint q_offset,
                                   __global const float* values, __global const uchar* data,
@@ -161,9 +162,10 @@ __kernel void film_print_exposure(__read_only image2d_t src_image, __global cons
   const float4           source = src_is_buffer != 0
                                       ? src_buffer[(uint)y * (uint)width + (uint)x]
                                       : read_imagef(src_image, kFilmNearestClamp, (int2)(x, y));
-  const AcesRgcRgb       compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
-  const FilmKernelRgb    exposure   = FilmKernelLayerExposure(FilmParams(data, params_offset), values,
-                                                              compressed.r, compressed.g, compressed.b);
+  __global const FilmKernelParams* params = FilmParams(data, params_offset);
+  const AcesRgcRgb    compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
+  const FilmKernelRgb exposure =
+      FilmKernelLayerExposure(params, values, compressed.r, compressed.g, compressed.b);
   FilmStore(q, q_offset, (uint)y * (uint)width + (uint)x, exposure);
 }
 

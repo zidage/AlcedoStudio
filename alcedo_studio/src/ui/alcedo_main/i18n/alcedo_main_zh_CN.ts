@@ -2755,6 +2755,98 @@ Original source files on disk will be kept.</source>
         <translation>放大镜眩光</translation>
     </message>
     <message>
+        <source>As Shot</source>
+        <translation>按拍摄参数</translation>
+    </message>
+    <message>
+        <source>Negative Scan</source>
+        <translation>负片扫描</translation>
+    </message>
+    <message>
+        <source>Scanner</source>
+        <translation>扫描仪</translation>
+    </message>
+    <message>
+        <source>Auto Color</source>
+        <translation>自动色彩</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>关</translation>
+    </message>
+    <message>
+        <source>Neutral</source>
+        <translation>中性</translation>
+    </message>
+    <message>
+        <source>Warm</source>
+        <translation>暖调</translation>
+    </message>
+    <message>
+        <source>Cool</source>
+        <translation>冷调</translation>
+    </message>
+    <message>
+        <source>Auto Color Strength</source>
+        <translation>自动色彩强度</translation>
+    </message>
+    <message>
+        <source>Auto Density</source>
+        <translation>自动密度</translation>
+    </message>
+    <message>
+        <source>Scan Contrast</source>
+        <translation>扫描反差</translation>
+    </message>
+    <message>
+        <source>Scan Exposure</source>
+        <translation>扫描曝光</translation>
+    </message>
+    <message>
+        <source>Cyan</source>
+        <translation>青</translation>
+    </message>
+    <message>
+        <source>Magenta</source>
+        <translation>品红</translation>
+    </message>
+    <message>
+        <source>Yellow</source>
+        <translation>黄</translation>
+    </message>
+    <message>
+        <source>Black at Film Base</source>
+        <translation>片基黑点</translation>
+    </message>
+    <message>
+        <source>Scanner Red (nm)</source>
+        <translation>扫描仪红通道 (nm)</translation>
+    </message>
+    <message>
+        <source>Scanner Green (nm)</source>
+        <translation>扫描仪绿通道 (nm)</translation>
+    </message>
+    <message>
+        <source>Scanner Blue (nm)</source>
+        <translation>扫描仪蓝通道 (nm)</translation>
+    </message>
+    <message>
+        <source>Scanner Band Width (nm)</source>
+        <translation>扫描仪带宽 (nm)</translation>
+    </message>
+    <message>
+        <source>Scanner Light</source>
+        <translation>扫描仪光源</translation>
+    </message>
+    <message>
+        <source>Halogen</source>
+        <translation>卤素灯</translation>
+    </message>
+    <message>
+        <source>Equal Energy</source>
+        <translation>等能光</translation>
+    </message>
+    <message>
         <source>Reference</source>
         <translation>参考</translation>
     </message>

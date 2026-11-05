@@ -145,7 +145,11 @@ enum class DrtDirty : std::uint32_t {
   FilmExposure = 1U << 4,
   FilmHalation = 1U << 5,  ///< Halation of Film Print.
   FilmFlare    = 1U << 6,  ///< Enlarger flare of Film Print.
-  All          = Method | Encoding | OpenDrt | Diffusion | FilmExposure | FilmHalation | FilmFlare,
+  /// The settings of Negative Scan. They act only in FP6, so no canonical film print result reads
+  /// them.
+  FilmScan     = 1U << 7,
+  All =
+      Method | Encoding | OpenDrt | Diffusion | FilmExposure | FilmHalation | FilmFlare | FilmScan,
 };
 
 /**
@@ -174,6 +178,20 @@ struct DrtParameterUpdate {
   std::optional<float>                 film_light_spread;
   std::optional<float>                 film_halation;
   std::optional<float>                 film_enlarger_flare;
+  std::optional<std::string>           film_scan_auto;
+  std::optional<float>                 film_scan_auto_strength;
+  std::optional<float>                 film_scan_auto_density;
+  std::optional<float>                 film_scan_contrast;
+  std::optional<float>                 film_scan_exposure_stops;
+  std::optional<float>                 film_scan_cyan;
+  std::optional<float>                 film_scan_magenta;
+  std::optional<float>                 film_scan_yellow;
+  std::optional<float>                 film_scan_black;
+  std::optional<float>                 film_scanner_red_nm;
+  std::optional<float>                 film_scanner_green_nm;
+  std::optional<float>                 film_scanner_blue_nm;
+  std::optional<float>                 film_scanner_width_nm;
+  std::optional<std::string>           film_scanner_light;
 };
 
 class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload, DrtDirty> {

@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "edit/graph/film_print_model.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 
 namespace alcedo {
@@ -184,6 +185,35 @@ TEST(FilmPrintImagePlan, SlidersAtZeroTurnOffTheirSteps) {
       MakeFilmPrintImagePlan(FullFrame(6000, 4000), Constants(), kNoSpread, true, FilmPrintParams{})
           .spread_passes,
       0U);
+}
+
+TEST(FilmPrintImagePlan, NegativeScanHasNoFlareAndKeepsTheOtherSteps) {
+  FilmPrintParams scan;
+  scan.print_material = std::string{kFilmNegativeScanId};
+  scan.enlarger_flare = 0.1f;
+  const auto plan =
+      MakeFilmPrintImagePlan(FullFrame(6000, 4000), Constants(), kLayerSpreadUm, true, scan);
+  // Negative Scan has no enlarger, so the stored flare builds no canvas.
+  EXPECT_FALSE(plan.flare_active);
+  EXPECT_EQ(plan.flare, 0.0f);
+  // Light spread, Halation, and the inhibitor act as on a print.
+  FilmPrintParams print = scan;
+  print.print_material  = "kodak_2383";
+  const auto printed =
+      MakeFilmPrintImagePlan(FullFrame(6000, 4000), Constants(), kLayerSpreadUm, true, print);
+  EXPECT_TRUE(printed.flare_active);
+  EXPECT_EQ(plan.spread_passes, printed.spread_passes);
+  EXPECT_EQ(plan.halation_active, printed.halation_active);
+  EXPECT_EQ(plan.inhibitor_half_size, printed.inhibitor_half_size);
+  EXPECT_EQ(plan.halation_x.radius, printed.halation_x.radius);
+
+  // A colour reversal film reads no print material, so its loupe flare stays with a stored
+  // Negative Scan.
+  FilmPrintParams reversal = scan;
+  reversal.negative        = "fuji_velvia_50";
+  EXPECT_TRUE(
+      MakeFilmPrintImagePlan(FullFrame(6000, 4000), Constants(), kLayerSpreadUm, true, reversal)
+          .flare_active);
 }
 
 TEST(FilmPrintImagePlan, ALayerWithNoSpreadKeepsItsPixels) {

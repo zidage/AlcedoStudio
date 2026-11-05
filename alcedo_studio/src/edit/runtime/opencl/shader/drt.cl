@@ -4,6 +4,22 @@
 __constant sampler_t kNearestClamp =
     CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
 
+/// The display transform of one pixel of linear AP1, with the encoding of the output: the entry
+/// ACES reference gamut compression, then ACES 2.0 or OpenDRT. The DRT kernels call it. It is a
+/// function of its own, so that another kernel can show linear AP1 with the same arithmetic.
+static inline float3 DrtDisplayPixel(float3 ap1, __global const OpenClToOutputParams* params) {
+  const AcesRgcRgb compressed = AcesReferenceGamutCompress(ap1.x, ap1.y, ap1.z);
+  const float3     scene      = (float3)(compressed.r, compressed.g, compressed.b);
+  float3           display_linear;
+  if (params->method_ == 0) {
+    display_linear = opencl_aces_output_transform_fwd(scene, &params->aces_params_);
+  } else {
+    display_linear = opencl_open_drt_transform_fwd(scene, &params->open_drt_params_);
+  }
+  return opencl_display_encoding(display_linear, params->limit_to_display_matx, params->eotf_,
+                                 params->display_linear_scale_);
+}
+
 __kernel void drt_display_rgba32f(__read_only image2d_t src, __write_only image2d_t dst,
                                   __global const uchar* params_bytes,
                                   const uint params_offset_bytes) {
@@ -17,16 +33,7 @@ __kernel void drt_display_rgba32f(__read_only image2d_t src, __write_only image2
       (__global const OpenClToOutputParams*)(params_bytes + params_offset_bytes);
   const float4 source = read_imagef(src, kNearestClamp, gid);
   // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
-  const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
-  const float3 scene = (float3)(compressed.r, compressed.g, compressed.b);
-  float3 display_linear;
-  if (params->method_ == 0) {
-    display_linear = opencl_aces_output_transform_fwd(scene, &params->aces_params_);
-  } else {
-    display_linear = opencl_open_drt_transform_fwd(scene, &params->open_drt_params_);
-  }
-  const float3 encoded = opencl_display_encoding(
-      display_linear, params->limit_to_display_matx, params->eotf_, params->display_linear_scale_);
+  const float3 encoded = DrtDisplayPixel((float3)(source.x, source.y, source.z), params);
   write_imagef(dst, gid, (float4)(encoded.x, encoded.y, encoded.z, source.w));
 }
 
@@ -45,16 +52,7 @@ __kernel void drt_display_scene_rgba32f(__read_only image2d_t src_image,
                             ? src_buffer[(uint)gid.y * width + (uint)gid.x]
                             : read_imagef(src_image, kNearestClamp, gid);
   // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
-  const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
-  const float3 scene = (float3)(compressed.r, compressed.g, compressed.b);
-  float3 display_linear;
-  if (params->method_ == 0) {
-    display_linear = opencl_aces_output_transform_fwd(scene, &params->aces_params_);
-  } else {
-    display_linear = opencl_open_drt_transform_fwd(scene, &params->open_drt_params_);
-  }
-  const float3 encoded = opencl_display_encoding(
-      display_linear, params->limit_to_display_matx, params->eotf_, params->display_linear_scale_);
+  const float3 encoded = DrtDisplayPixel((float3)(source.x, source.y, source.z), params);
   const float4 outp = (float4)(encoded.x, encoded.y, encoded.z, source.w);
   if (dst_is_buffer != 0) {
     dst_buffer[(uint)gid.y * width + (uint)gid.x] = outp;

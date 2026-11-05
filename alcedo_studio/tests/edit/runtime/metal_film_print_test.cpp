@@ -318,7 +318,7 @@ TEST_F(MetalFilmPrintFixture, FilmPrintReadsASceneWorkImageAndWritesAWorkImage) 
   auto& source  = workspace.SceneWork().Member(SceneWorkMember::Member0);
   auto& output  = workspace.SceneWork().Member(SceneWorkMember::Member1);
   backend.UploadTexture2D(source, std::as_bytes(std::span(field)), device_->CommandContext());
-  RecordMetalFilmPrint(*device_, plan_, *document.Drt(),
+  RecordMetalFilmPrint(*device_, plan_, *document.Drt(), std::nullopt,
                        FrameSceneBinding::WorkImage(SceneWorkMember::Member0),
                        FrameSceneBinding::WorkImage(SceneWorkMember::Member1), kWidth, kHeight);
   std::vector<Rgba> work(field.size());
@@ -511,6 +511,26 @@ TEST_F(MetalFilmPrintFixture, FilmPrintRoiWithNoPublishedResultPublishesNone) {
   EXPECT_EQ(device_->PassStats().film_canvas_sample, 0U);
 }
 
+TEST_F(MetalFilmPrintFixture, NegativeScanStopsWithANamedErrorUntilItsMetalPass) {
+  // Print material Negative Scan has the model layer of issue 661; its Metal pass is issue 662.
+  const auto field = PatchField(64, 48, 20, 20, 8);
+  SetView({64, 48}, {64, 48}, Matrix3x3::Identity());
+  try {
+    (void)RenderView(FilmPrintDocument("kodak_5207", std::string{kFilmNegativeScanId}), field,
+                     false);
+    ADD_FAILURE() << "Negative Scan rendered on Metal";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("Negative Scan"), std::string::npos) << error.what();
+    EXPECT_NE(std::string(error.what()).find("issue 662"), std::string::npos) << error.what();
+  }
+  device_->CancelRender();
+  device_->WaitIdle();
+  // A reversal film reads no print material, so a stored Negative Scan renders its light table.
+  const auto pixels = RenderView(
+      FilmPrintDocument("fuji_velvia_50", std::string{kFilmNegativeScanId}), field, false);
+  EXPECT_TRUE(std::isfinite(pixels[0].r));
+}
+
 TEST_F(MetalFilmPrintFixture, ReversalFilmPublishesTheLoupeFlareResultAndNotThePrintFlare) {
   const auto field    = PatchField(128, 96, 40, 40, 8);
   auto       document = FilmPrintDocument("fuji_velvia_50");
@@ -639,9 +659,9 @@ TEST_F(MetalFilmPrintFixture, FilmPrintFusedSpreadMatchesSeparatePasses) {
                                                device_->CommandContext());
     auto& display = workspace.AcquireImageForWrite(plan_.display_output,
                                                            {kWidth, kHeight, TextureFormat::Rgba32f});
-    RecordMetalFilmPrint(*device_, plan_, *document.Drt(), FrameSceneBinding::CachedImage(scene_id),
-                                 FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight,
-                                 nullptr, separate);
+    RecordMetalFilmPrint(
+        *device_, plan_, *document.Drt(), std::nullopt, FrameSceneBinding::CachedImage(scene_id),
+        FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight, nullptr, separate);
     std::vector<Rgba> pixels(static_cast<std::size_t>(kWidth) * kHeight);
     workspace.Device().DownloadTexture2D(
         display.Texture(), std::as_writable_bytes(std::span(pixels)), device_->CommandContext());
@@ -753,7 +773,8 @@ TEST_F(MetalFilmPrintFixture, FilmPrintWithNoImagePartRunsNoInhibitorBlur) {
     const auto display_id = plan_.display_output;
     (void)workspace.AcquireImageForWrite(display_id, {kWidth, kHeight, TextureFormat::Rgba32f});
     std::vector<std::string> names;
-    RecordMetalFilmPrint(*device_, plan_, *document.Drt(), FrameSceneBinding::CachedImage(scene_id),
+    RecordMetalFilmPrint(*device_, plan_, *document.Drt(), std::nullopt,
+                         FrameSceneBinding::CachedImage(scene_id),
                          FrameSceneBinding::CachedImage(display_id), kWidth, kHeight, &names);
     device_->CancelRender();
     return std::any_of(names.begin(), names.end(), [](const std::string& name) {
@@ -823,6 +844,8 @@ auto DisplaySelections() -> std::vector<DisplaySelection> {
                             metadata.at("scene_light").get<std::string>()});
       continue;
     }
+    // Negative Scan has no Metal pass until issue 662.
+    if (metadata.at("print_material").get<std::string>() == kFilmNegativeScanId) continue;
     selections.push_back({std::move(file), metadata.at("negative").get<std::string>(),
                           metadata.at("print_material").get<std::string>(),
                           metadata.at("scene_light").get<std::string>()});
@@ -957,6 +980,8 @@ TEST_F(MetalFilmPrintFixture, FilmPrintImageMatchesLab) {
     const auto negative = metadata.at(reversal ? "reversal" : "negative").get<std::string>();
     const auto material = reversal ? FilmPrintParams{}.print_material
                                    : metadata.at("print_material").get<std::string>();
+    // Negative Scan has no Metal pass until issue 662.
+    if (material == kFilmNegativeScanId) continue;
     SCOPED_TRACE(negative);
     const auto pixels = RenderView(
         FilmPrintDocument(negative, material, metadata.at("scene_light").get<std::string>()), ap1,

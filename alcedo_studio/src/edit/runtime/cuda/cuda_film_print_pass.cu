@@ -139,8 +139,9 @@ __global__ void ExposureKernel(const float4* input, float3* output, std::uint32_
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixels) return;
   const float4 source = input[index];
-  // Input is linear AP1. The final colour space is not known here, so a colour that a grade moved
-  // out of AP1 comes back at this point, as in DrtKernel.
+  // Input is linear AP1. The final colour space of a print is not known here, so a colour that a
+  // grade moved out of AP1 comes back at this point, as in DrtKernel (lab rule
+  // 'entry_reference_gamut_compression').
   const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const auto q = FilmKernelLayerExposure(&params, values, compressed.r, compressed.g, compressed.b);
   output[index]       = make_float3(q.r, q.g, q.b);
@@ -662,16 +663,23 @@ auto ReadOrBuildCanvasResult(CudaRenderDevice& device, const ExecutionPlan& plan
 }  // namespace
 
 void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
-                         const DrtNodeModel& drt, const FrameSceneBinding& scene,
-                         const FrameSceneBinding& display, std::uint32_t width,
-                         std::uint32_t height, std::vector<FilmPrintPassTime>* pass_times,
-                         bool separate_narrow_spread) {
+                         const DrtNodeModel& drt, std::optional<double> raw_cct,
+                         const FrameSceneBinding& scene, const FrameSceneBinding& display,
+                         std::uint32_t width, std::uint32_t height,
+                         std::vector<FilmPrintPassTime>* pass_times, bool separate_narrow_spread) {
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteCudaDrt");
   const auto  film      = drt.Params().FilmPrint();
+  // Print material Negative Scan has the model layer of issue 661; its GPU pass is issue 664. There
+  // is no other form to substitute for it.
+  if (IsFilmNegativeScan(film.negative, film.print_material)) {
+    throw std::runtime_error(
+        "RecordCudaFilmPrint: print material Negative Scan has no CUDA pass yet (issue 664)");
+  }
   auto&       tables    = SharedFilmPrintTables();
-  const auto  data      = tables.Resolve(film.negative, film.print_material, film.scene_light);
   const auto& bundle    = tables.Bundle();
+  const auto  light     = bundle.SceneLightMix(film.scene_light, raw_cct);
+  const auto  data      = tables.Resolve(film.negative, film.print_material, light);
 
   auto&       workspace = device.Workspace();
   auto&       backend   = workspace.Device();
@@ -681,7 +689,7 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
       data->kernel_key, std::as_bytes(std::span(data->kernel_values)), context);
 
   FilmKernelParams params{};
-  film_print_kernel_tables::FillParams(bundle, film.negative, film.print_material, film.scene_light,
+  film_print_kernel_tables::FillParams(bundle, film.negative, film.print_material, light,
                                        data->edge, params);
   params.display_encoding = static_cast<std::uint32_t>(resolved.eotf_);
 
@@ -908,12 +916,12 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
         });
     clock.Mark("FP6 flare canvas");
   }
+  auto* output = static_cast<float4*>(CudaSceneTexture(device, display).DevicePointer());
   DisplayKernel<<<image_grid, image_block, 0, stream>>>(
-      a, scene_pixels, static_cast<float4*>(CudaSceneTexture(device, display).DevicePointer()), w,
-      h, rgba, flare, static_cast<int>(image.flare_extent.width),
+      a, scene_pixels, output, w, h, rgba, flare, static_cast<int>(image.flare_extent.width),
       static_cast<int>(image.flare_extent.height), image.render_to_flare, image.flare, soft,
-      static_cast<int>(image.inhibitor_extent.width), static_cast<int>(image.inhibitor_extent.height),
-      image.inhibitor_half_size, params);
+      static_cast<int>(image.inhibitor_extent.width),
+      static_cast<int>(image.inhibitor_extent.height), image.inhibitor_half_size, params);
   clock.Mark("FP6 display");
   cuda::CheckCuda(::cudaGetLastError(), "RecordCudaFilmPrint: kernel launch");
   clock.Finish();

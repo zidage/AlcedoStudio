@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 
-Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02). F8 is complete on CUDA and OpenCL (2026-11-03). F9, the reversal films on Metal, is complete (2026-11-03).
+Status: **In progress.** F1, F2, F3, and F4 are complete (2026-11-01). The controls of F5 are implemented, and the user review of F5 is pending. F6 and F7 are complete (2026-11-02). F8 is complete on CUDA and OpenCL (2026-11-03). F9, the reversal films on Metal, is complete (2026-11-03). F10, print material Negative Scan (a virtual scanner and a negative rendering model, shown by OpenDRT) and the scene light As Shot, has two phases: the model layer is complete (2026-11-05), and phase 2 adds the CUDA and OpenCL passes (issue #664); F11 adds Negative Scan to Metal (issue #662).
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -152,6 +152,41 @@ A colour reversal film (slide film) is the final image, so its chain has no prin
 - The film identifier stays in the key `params.film_print.negative`. A reversal identifier selects this form. There is no new JSON key, and the stored print material does not change.
 - The Film list has the reversal films after the negatives, in the lab order: Velvia 50, Velvia 100, Provia 100F, Astia 100F, E100. With a reversal film the panel hides Print Material, and the slider Enlarger Flare has the label "Loupe Flare", with the same range and default.
 
+### 3.4 Negative Scan form (phase F10)
+
+Print material `negative_scan`, "Negative Scan", is a scan of the negative in place of a print (issue #661; lab step P14, the final form by user decision of 2026-11-05). It has two parts: a virtual scanner reads the negative, and a negative rendering model inverts the scan. The DRT of the document (OpenDRT and its settings) shows the result. Lab source: `scripts/poc/p14_negative_scan/negative_scan.py` (`NegativeScanPreview`). It replaces the ADX form Lab Scan of the first pull request of this phase (PR #663, commits 5cdc75af9 and 197326900), which did not ship.
+
+| Step | Lab rule | Negative Scan form |
+| --- | --- | --- |
+| Entry | | No reference gamut compression (the lab option `entry_gamut_compress` is off). |
+| FP1 to FP5 | | No change: the u'v' table, layer gain, spread, Halation, and inhibition of the negative, with the values of the print form. |
+| 1. Scan | `ideal_scanner_bands` | `T(a) = log10(sum w_i) - log10(sum w_i 10^-(base + dyes a))` with `w_i = L S_i`: a Gaussian band per channel (650, 545, 450 nm, 40 nm full width at half maximum, cut below 1e-4 of the peak) times a Planckian lamp of 3200 K (`halogen`) or an equal-energy light. A trilinear read of a 65^3 table over the record. |
+| 2. Density | `base_relative_density` | `D = T - D_base`, with `D_base = T(0)` of the unexposed film. |
+| 3. Inversion | `generic_density_inversion` | `x = contrast (D - D_aim) / gamma + shift`, with one `gamma` per medium (cine, photo) and `D_aim` the grey of the balance light of the stock. `shift = s_auto + exposure log10(2) - (cyan, magenta, yellow)`. |
+| 4. Positive | | `E = 0.18 10^x`; `E_base = 0.18 10^(x at D = 0)`. |
+| 5. Black | `black_at_film_base` | `E' = 0.18 (E - b E_base) / (0.18 - b E_base)`, and a value below 0 is 0. When `b E_base >= 0.18` the render stops with a named error, as the lab (issue #666). |
+| 6. Display | | `E'` is linear AP1. `DrtDisplayPixel` shows it with the settings of method OpenDRT: 0.18 goes in as 0.18. |
+
+- `gamma` of a medium is the mean over its pool of stocks (cine: 5203, 5207, 5213, 5219; photo: Portra 160, 400, 800, Ektar 100, Gold 200, C200) of the density per log10 exposure of the 18 % grey: a central difference at 0.09 and 0.36, each stock under its balance light (D55, or T3200 for a stock with an exposure temperature below 4500 K), with the layer gain of its pool scene light.
+- `D_aim` is the grey density of the balance light with the layer gain of the selection. The light axis is `(D(D65) - D(T3200)) / gamma`, the direction of rule `frame_auto_colour`. Both depend on the scene light, because the layer gain under `reference` differs from that of the balance light for a stock that is not relative to it, so the resources store them per negative and scene light.
+- The grey records of these values use the point form of the lab (16 steps of rule `development_inhibition`, `kPointInhibitionSteps`); the kernels keep the two steps of FP5. The image differs from the stored grey by the steps only.
+- Rule `frame_auto_colour` reads a prescan of `x` before the shift: the box reduction of Pillow to a long edge of 96 (`ReduceFrame`), the pixels with a level in (-1.6, 0.9), the median cast, 4 steps of the near-neutral weighted mean (sigma 0.12), and the median of the top 5 % (white patch). Rule `smaller_cast` takes the estimate of smaller length. The correction is `strength` along the light axis and `0.5 strength` across it, with a target of +0.04 (warm) or -0.04 (cool) along the axis, and `auto_density` times the weighted mean level. Auto is off by default (Neutral Scan).
+- The scanner table depends on the negative and the scanner only, so all scene lights share it. With the default scanner the values of a selection are the stored values; with another scanner the host builds the table, derives `gamma` of the medium from its pool, and derives `D_base`, `D_aim`, and the light axis (`film_negative_scan::DeriveMediumGamma`, `DeriveSelectionValues`).
+- There is no enlarger flare, no printer balance, no print table, no negative grade, no Cine Look, and no dark surround. Negative Scan has all the settings of method OpenDRT, with HDR; `DrtOutputResolver` resolves it as OpenDRT and does not call `CheckFilmPrintEncoding`.
+- The identifier stays in the key `params.film_print.print_material`. The settings are the keys `auto`, `auto_strength`, `auto_density`, `scan_contrast`, `scan_exposure_stops`, `cyan`, `magenta`, `yellow`, `black`, `scanner_red_nm`, `scanner_green_nm`, `scanner_blue_nm`, `scanner_width_nm`, and `scanner_light` of `params.film_print`. A key at its default is not written, so a document with the defaults has the bytes and the root id of a document of before. A reversal film reads no print material, so a stored `negative_scan` has no effect on it.
+- With Negative Scan the panel hides the slider Enlarger Flare (its stored value does not change) and shows the groups "Negative Scan" (Auto Color, Auto Color Strength, Auto Density, Scan Contrast, Scan Exposure, Cyan, Magenta, Yellow, Black at Film Base) and "Scanner" (the three band centres, the band width, the scanner light), the OpenDRT presets, and the section Color & Encoding. The Print list has Negative Scan first, before Cine Look, with its own swatch.
+- GPU: phase 2 of F10 (issue #664) has the CUDA and OpenCL passes, and F11 (issue #662) the Metal pass. Until then `RecordCudaFilmPrint`, `RecordOpenClFilmPrint`, and `RecordMetalFilmPrint` stop with a named error before any GPU work.
+
+#### Scene light As Shot
+
+Scene light `as_shot`, "As Shot", is second in the list, after the reference. It is for all forms, not only Negative Scan. Its colour temperature is that of the RAW decode: in mode Custom of Develop the Kelvin of the user, in another mode the solved as-shot temperature (`FilmSceneRawCct`). The tint is not used. A raster input or a document with no Develop has no RAW white balance, so As Shot renders as the reference.
+
+- The bundle has a grid of 88 lights `cct2000` to `cct15000`, 5 mired apart (metadata `cct_grid`: kelvin, lights, mired). The host blends the two grid lights around the temperature linearly in mired (`FilmStockBundle::SceneLightMix`); outside the grid it takes the nearest end. The blend applies to the spectrum, the layer gain, the printer balance, the grey of the negative grade, the layer gain of a reversal film, and `D_aim` and the light axis of Negative Scan. The lab sets the step so that a blend is within 0.5 codes of the exact light.
+- The keys of the tables have the blend (`MixLight`), so a new temperature builds a new u'v' table, and a change back finds the kept one.
+- A write that selects Negative Scan also selects As Shot, unless the same write sets a scene light (`OdtConstrain`). A later change of the scene light stays. Undo of that write restores both values.
+
+The pickers of the film print page stay open after a pick: the picked entry is highlighted and becomes current, so the user can compare films. A click on the card or Escape closes the browser.
+
 ---
 
 ## 4. Resources
@@ -169,6 +204,8 @@ calculates them; the product does not need the logic of `_camera_filter`, `_prin
 | Stage B | Paper Status A to XYZ (65^3, axis power 2) | 6.6 MB, in memory | `film_tables` |
 | Print table | Composed from A and B; RGBA32F for the GPU | 4.4 MB | `film_tables`, `AcquireLut` |
 | Light table (reversal film) | 65^3 over the record of removed dye: the cube root of XYZ under the light of the table. One per film, for all scene lights | 6.6 MB, in memory; 4.4 MB on the GPU | `film_tables::CubeRootBandResponse`, `AcquireLut` |
+
+Resource schema 10 (phase F10, lab commit fb785ef) has the values of Negative Scan and the grid of As Shot. The stock bundle has the default scanner (`common/negative_scan_centres_nm` (3), `common/negative_scan_width_nm`, `common/negative_scan_band_cut`, `common/negative_scan_lamp_kelvin`, `common/negative_scan_planck_c2_nm_k`), per negative `scan_base_density` (3), per medium `scan_medium/<medium>/gamma` (3), the spectra `light/D55`, `light/T3200`, and `light/D65`, the 88 lights of the grid, and the metadata: per negative `medium` and `scan_balance_light`, `negative_scan` (id, name, default light, lights, axis lights, and the pool of each medium with the scene light of each pool stock), and `cct_grid`. The print setup has per negative and scene light `negative_scan_aim_density` (3) and `negative_scan_light_axis` (3), for the 99 scene lights. The scanner table of a negative (65^3 over the record, 6.6 MB in memory, 4.4 MB on the GPU) is built on the host by `film_tables::Log10BandResponse`. Schemas 7 to 9 (the chart-calibrated scan and the ADX forms of Lab Scan) did not ship.
 
 Resource schema 6 (phase F8) adds the reversal films. The stock bundle has the group `reversal/<film>/` in the form of `negative/<film>/`, with the record of rule `removed_dye_record` and `dye_max`, and the group `light_table/` with the D50 viewing weights, the XYZ scale, the exponent of the dark surround, and the luminance weights of linear Rec. 709. Its metadata has `reversal_films` and `reversal_list_order`. The print setup has `reversal_layer_gain` (films, scene lights, 3), `reversal_xyz_to_display` (films, 3, 3), and `reversal_scene_spectrum_index` (films, scene lights). The compact reflectance table keeps its form.
 
@@ -236,6 +273,8 @@ Limits for the numeric phases: the 8 bit difference of final sRGB against the la
 | F7 | Metal passes | 1500 lines | One backend per phase |
 | F8 | Reversal films on a light table, on CUDA and OpenCL (section 3.3) | 1500 lines | New resource content and a second form of FP6 |
 | F9 | Reversal films on Metal | 600 lines | One backend per phase |
+| F10 | Print material Negative Scan (section 3.4): phase 1 the model layer, phase 2 the CUDA and OpenCL passes | 2500 and 1500 lines | New resource content and a third form of FP6 |
+| F11 | Negative Scan on Metal | 500 lines | One backend per phase |
 
 Commands for all phases, from the repository root:
 
@@ -1092,6 +1131,63 @@ GPU time of each pass after a Light spread change at 2560, in ms, with one commi
 
 **Not verified.** A Release build, the packaged application, and a render in the running application on macOS. The user review of the five films. The full test suite did not run.
 
+### F10: Negative Scan, phase 1: model layer
+
+1. **Objective.** Print material Negative Scan of issue #661 (lab step P14) in the model layer: the resources of schema 10, the host tables and values, the CPU form of the point math and of rule `frame_auto_colour`, the document keys, the panel, the history, and the scene light As Shot. The GPU passes are phase 2 (issue #664, CUDA and OpenCL) and F11 (issue #662, Metal).
+2. **Inputs.** F8; resources of schema 10 from the lab (`build_product_resources.py`, lab commit fb785ef, results in 8c3a4fe), and the lab values of the same commit (`build_display_expected.py`, `build_image_expected.py`), written from a clean worktree of that commit.
+3. **Modules.** `include/edit/graph/film_print_model.hpp`, `edit/graph/drt_node_model.cpp`, `edit/runtime/film/` (`film_stock_bundle`, `film_print_tables`, the new `film_negative_scan`), `film_print_math.h`, `film_print_kernel_tables.hpp`, the GPU passes (named stops), `app/editor_parameter_catalog.cpp`, `app/editor_parameter_write_parse.cpp`, `app/editor_pipeline_command_service.cpp`, `app/pipeline_history_applier.cpp`, the album backend (panel projection, history mutation, commit summary), `EditorDisplayTransformPanel.qml`, and the Chinese translation.
+4. **Data rules.** Section 3.4. FP1 to FP5 do not change. The print and light table forms do not change.
+5. **Steps.** (a) Read schema 10. (b) The scanner weights and table, the stored values of a selection, and the derivation for another scanner. (c) The render terms, the prescan, and rule `frame_auto_colour` on the host. (d) The document keys and the panel. (e) The history fault. (f) Named stops in the GPU passes. (g) Tests.
+6. **Success chain.** A Negative Scan selection resolves its scanner table and values on the host; each setting writes its key, the panel shows the value of each document, and undo and redo set every setting.
+7. **Failure chain.** A missing or wrong resource array stops `FilmStockBundle::Open` with its name. A render of Negative Scan stops with a named error on every backend until its GPU pass exists. There is no change of backend and no change of form.
+8. **Tests.** Section "Tests" of the record below.
+9. **Exit criteria.** The host values against the lab to 1e-9; the CPU point form against the lab render (ramp 0.005 stops, chart 0.01 stops above 2^-10, auto off and Neutral); the history and the panel faults proved by a test that fails without the fix.
+10. **Expected diff.** 2500 lines.
+11. **Completion record.** See below.
+
+#### F10 phase 1 completion record (2026-11-05)
+
+The first pull request of this phase had an ADX scan named Lab Scan (PR #663, commits 5cdc75af9 and 197326900). The user then took method `negative_scan` of lab step P14 as the final form (lab ROADMAP item 10), and issue #661 was written again for it. This record replaces the record of the ADX form. Scene light As Shot, the picker that stays open, and the `DrtDisplayPixel` refactors of the first commits stay.
+
+**Call chain.**
+
+- Document: `DrtParameterUpdate` -> `DrtParamsModel::ApplyUpdate` (`RequireValidFilmPrintUpdate`; a scan setting marks `DrtDirty::FilmScan`) -> `FilmPrintToJson`, which omits a key at its default; load: `ReadFilmPrint` -> `ReadFilmNegativeScan`.
+- Panel: `EditorDisplayTransformPanel.qml` `buildOdtParams` -> `EditorParameterCatalog::ToModelJson` (`OdtConstrain`: a write that selects Negative Scan selects As Shot in the same write) -> `ParseEditorParameterWrite` -> the editor session. Echo: `ProjectCurrentPanelFields` -> `PanelProjectionToVariantMap` (every Negative Scan key, also at its default) -> `loadFromSnapshot`.
+- History: `ApplySetParameter` -> `ApplyEditorParameterValue` -> `ParseEditorParameterValue` (form Value: `CompleteFilmPrintUpdate` reads each missing film print key as its default) -> `ApplyEditorParameterWrite`. The album backend (`RestoreDocumentFields`, `ApplyCommitToLiveDocument`) calls the same function.
+- Host: `FilmPrintTables::Resolve(negative, negative_scan, mix)` -> `ResolveNegativeScanLocked` (default scanner) -> `FilmStockBundle::NegativeScanSelection`, `film_negative_scan::MakeScannerWeights`, `ScannerTableOf` -> `film_tables::Log10BandResponse`, and `StoredSelectionValues`. Another scanner: `FilmPrintTables::ResolveNegativeScan(negative, mix, scanner)` -> `DeriveMediumGamma` (the scanner tables of the pool, kept by content key) and `DeriveSelectionValues` (`GreyDensity` -> `PointRecord`, `ReadScannerTable`).
+- Render values: `MakeRenderTerms(values, params, auto_shift)` -> `FilmKernelNegativeScanTerms`, and per pixel `FilmKernelNegativeScanPixel`; prescan: `MakePrescanTerms` -> `FilmKernelNegativeScanPrescanX`, `ReduceFrame`, `AutoColourShift`.
+- GPU: `RecordCudaFilmPrint`, `RecordOpenClFilmPrint`, `RecordMetalFilmPrint` -> `IsFilmNegativeScan` -> a named error (issue 664, issue 662).
+
+**Changes from the plan, and details that the plan does not state.**
+
+- Two faults of the issue are fixed. (1) The panel projection had no Negative Scan key, so the panel kept the values of the last document that had them, and the next write of any control (for example Halation) wrote them into this document. (2) A head move applied the stored value as a patch; the Model omits a key at its default (and the film print object for another method), so undo and redo did not set those settings. The tests `NegativeScanSettingsFollowTheProjectionOfEachDocument` and `NegativeScanChangesUndoAndRedoToEachStoredValue` fail with the old code (each was run once with the old code).
+- `FilmKernelParams` is 416 bytes again: the 412 bytes of main and `scan`. The values of the Negative Scan form are per render (`FilmKernelNegativeScan`, 48 bytes), because the shift has the auto colour of the frame.
+- `film_print_math.h` has a guard per precision, so a test can have the float32 and the double form in one file.
+- `DeriveMediumGamma` stops with the name of the medium when a gamma is not above 0, as the bundle does for a stored gamma.
+- The default of Auto Color Strength in the panel is the decimal 0.8, as Enlarger Flare has 0.01, because the float 0.8 is 0.800000011920929.
+- `kFilmResourceSchemaVersion` is 10. The ADX arrays, the printing paper, the LAD aim, `ExecutionPlan::film_scan_scene_output`, and the program `film_print_scan.cl` are removed, and so is the aces-dev notice of `THIRD_PARTY_NOTICE.txt`.
+- The resources of schema 10 do not change the print and light table forms: their tests pass with the same results.
+
+**Tests.** Debug host build, NVIDIA GeForce RTX 3080 Laptop GPU, resources of schema 10 and lab values of lab commit fb785ef.
+
+| Check | Result |
+| --- | --- |
+| `FilmPrintTablesTest` | 65 of 65 pass |
+| Scanner table against the lab, 4 selections | largest relative difference 7.6e-15; scanner weights 1.9e-16 |
+| Negative Scan setup against the lab arrays, 2970 selections (30 negatives, 99 scene lights) | difference 0 |
+| As Shot blend against the lab blend, 5207 at 3100 K and 5219 at 5650 K | difference 0 |
+| Host derivation on the default scanner against the stored values | gamma 6.7e-16; D_base, D_aim, light axis 1.7e-15 |
+| Second scanner (630/530/460 nm, 60 nm, equal energy) against the lab | weights 0; gamma 3.3e-16; D_base, D_aim, light axis 9.2e-16 |
+| Rule `frame_auto_colour`, two frames of 257 x 391, 10 cases (both branches of `smaller_cast`) | prescan 0, shift 4.9e-15 |
+| CPU point form against the lab render, 32 files (4 negatives, reference / daylight / 3100 K / 5650 K, auto off and Neutral) | ramp at most 1.5e-5 stops (limit 0.005), chart at most 1.2e-4 stops (limit 0.01); prescan x 1.9e-6, shift 4.7e-7 |
+| `GpuDagModelGraphTest` / `GpuDagRawInputTest` (film print) / `EditorParameterCatalogTest` | 173 / 11 / 38 pass |
+| `PipelineHistoryApplierTest` / `EditorPanelProjectionTest` / `EditorPipelineCommandServiceTest` | 13 / 11 / 24 pass |
+| `EditorDisplayTransformSnapshotQmlTest` | 25 of 25 pass |
+| `CudaFilmPrintFixture` / `OpenClFilmPrintFixture` (prints, reversal films, the named stop) | 20 of 20 / 22 of 22 pass; image p99.9 at most 0.57 codes |
+| `EditorSessionHistoryPortTest` | 118 of 119; `CheckoutAndPasteHashesAreUnchanged` fails as on main (issue #555; its paste payload has only color grade changes) |
+
+**Not verified.** Metal (the sources with the new size checks and the named stop compile only on a Mac). A render of Negative Scan, which needs phase 2. The application with the panel on screen. An AMD GPU. The full test suite did not run.
+
 ---
 
 ## 7. Risks
@@ -1118,3 +1214,5 @@ GPU time of each pass after a Light spread change at 2560, in ms, with one commi
 - F7: [#630](https://github.com/zidage/AlcedoStudio/issues/630)
 - F8: [#654](https://github.com/zidage/AlcedoStudio/issues/654)
 - F9: [#655](https://github.com/zidage/AlcedoStudio/issues/655)
+- F10: [#661](https://github.com/zidage/AlcedoStudio/issues/661) (phase 1, model layer), [#664](https://github.com/zidage/AlcedoStudio/issues/664) (phase 2, CUDA and OpenCL)
+- F11: [#662](https://github.com/zidage/AlcedoStudio/issues/662)

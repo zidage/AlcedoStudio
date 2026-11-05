@@ -6,7 +6,8 @@ import QtQuick.Layouts
 // Film or print material picker of the film print page (issue #657). The
 // collapsed card shows the swatch, the brand, and the short name of the
 // current entry. A click opens the browser inside the same card: the entries
-// grouped by brand, then by family. When the list has more than
+// grouped by brand, then by family. A pick keeps the browser open; a click on
+// the card or Escape closes it. When the list has more than
 // `searchThreshold` entries, a search field and brand filter chips show.
 //
 // The caller gives the entries of one browser list in browser order
@@ -230,9 +231,12 @@ Item {
             root.pickValue(String(row.entry.value))
     }
 
+    /// A pick applies the entry and keeps the browser open, with the entry highlighted; the caller
+    /// makes it current. The browser closes on a click on the card or on Escape (issue 661).
     function pickValue(value) {
-        root.expanded = false
-        root.forceActiveFocus()
+        const row = root.rowOfValue(value)
+        if (row >= 0)
+            root.highlightedRow = row
         root.picked(value)
     }
 

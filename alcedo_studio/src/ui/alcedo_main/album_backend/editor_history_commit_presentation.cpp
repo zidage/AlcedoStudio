@@ -17,6 +17,7 @@
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_history_types.hpp"
 #include "app/pipeline_document_history.hpp"
+#include "edit/graph/film_print_model.hpp"
 #include "edit/graph/image_geometry_model.hpp"
 #include "json.hpp"
 
@@ -598,6 +599,34 @@ auto SummarizeFilmPrint(const nlohmann::json& after, const nlohmann::json& befor
     const auto old_value = JsonNumberAtPath(before, {"odt", "film_print", key});
     if (value.has_value() && old_value.has_value() && std::fabs(*value - *old_value) > 1e-6) {
       return changed(FormatNumber(*old_value), FormatNumber(*value));
+    }
+  }
+  // Negative Scan: the Model omits a key at its default, so a missing key reads as the default.
+  const alcedo::FilmNegativeScanParams scan;
+  const std::pair<const char*, QString> scan_options[] = {
+      {"auto", QString::fromStdString(scan.auto_colour)},
+      {"scanner_light", QString::fromStdString(scan.scanner_light)}};
+  for (const auto& [key, fallback] : scan_options) {
+    const auto value     = JsonStringAtPath(after, {"odt", "film_print", key}).value_or(fallback);
+    const auto old_value = JsonStringAtPath(before, {"odt", "film_print", key}).value_or(fallback);
+    if (value != old_value) {
+      return changed(PrettyToken(old_value), PrettyToken(value));
+    }
+  }
+  const std::pair<const char*, float> scan_numbers[] = {
+      {"auto_strength", scan.auto_strength},       {"auto_density", scan.auto_density},
+      {"scan_contrast", scan.contrast},            {"scan_exposure_stops", scan.exposure_stops},
+      {"cyan", scan.cyan},                         {"magenta", scan.magenta},
+      {"yellow", scan.yellow},                     {"black", scan.black},
+      {"scanner_red_nm", scan.scanner_red_nm},     {"scanner_green_nm", scan.scanner_green_nm},
+      {"scanner_blue_nm", scan.scanner_blue_nm},   {"scanner_width_nm", scan.scanner_width_nm}};
+  for (const auto& [key, fallback] : scan_numbers) {
+    const auto value =
+        JsonNumberAtPath(after, {"odt", "film_print", key}).value_or(static_cast<double>(fallback));
+    const auto old_value = JsonNumberAtPath(before, {"odt", "film_print", key})
+                               .value_or(static_cast<double>(fallback));
+    if (std::fabs(value - old_value) > 1e-6) {
+      return changed(FormatNumber(old_value), FormatNumber(value));
     }
   }
   return std::nullopt;

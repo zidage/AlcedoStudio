@@ -316,6 +316,39 @@ auto ReadFilmIdentifier(const nlohmann::json& film_print, const char* key, std::
   return id;
 }
 
+/// The settings of Negative Scan in the object `film_print`. A missing key reads as its default.
+auto ReadFilmNegativeScan(const nlohmann::json& object) -> FilmNegativeScanParams {
+  FilmNegativeScanParams scan;
+  scan.auto_colour = ReadFilmIdentifier(object, "auto", scan.auto_colour, [](std::string_view id) {
+    return IsFilmIdentifier(kFilmScanAutoIds, id);
+  });
+  scan.auto_strength  = ReadFilmSlider(object, "auto_strength", scan.auto_strength,
+                                       kFilmScanAutoStrengthMin, kFilmScanAutoStrengthMax);
+  scan.auto_density   = ReadFilmSlider(object, "auto_density", scan.auto_density,
+                                       kFilmScanAutoDensityMin, kFilmScanAutoDensityMax);
+  scan.contrast       = ReadFilmSlider(object, "scan_contrast", scan.contrast, kFilmScanContrastMin,
+                                       kFilmScanContrastMax);
+  scan.exposure_stops = ReadFilmSlider(object, "scan_exposure_stops", scan.exposure_stops,
+                                       kFilmScanExposureStopsMin, kFilmScanExposureStopsMax);
+  scan.cyan    = ReadFilmSlider(object, "cyan", scan.cyan, kFilmScanKeyMin, kFilmScanKeyMax);
+  scan.magenta = ReadFilmSlider(object, "magenta", scan.magenta, kFilmScanKeyMin, kFilmScanKeyMax);
+  scan.yellow  = ReadFilmSlider(object, "yellow", scan.yellow, kFilmScanKeyMin, kFilmScanKeyMax);
+  scan.black   = ReadFilmSlider(object, "black", scan.black, kFilmScanBlackMin, kFilmScanBlackMax);
+  scan.scanner_red_nm   = ReadFilmSlider(object, "scanner_red_nm", scan.scanner_red_nm,
+                                         kFilmScannerRedMinNm, kFilmScannerRedMaxNm);
+  scan.scanner_green_nm = ReadFilmSlider(object, "scanner_green_nm", scan.scanner_green_nm,
+                                         kFilmScannerGreenMinNm, kFilmScannerGreenMaxNm);
+  scan.scanner_blue_nm  = ReadFilmSlider(object, "scanner_blue_nm", scan.scanner_blue_nm,
+                                         kFilmScannerBlueMinNm, kFilmScannerBlueMaxNm);
+  scan.scanner_width_nm = ReadFilmSlider(object, "scanner_width_nm", scan.scanner_width_nm,
+                                         kFilmScannerWidthMinNm, kFilmScannerWidthMaxNm);
+  scan.scanner_light =
+      ReadFilmIdentifier(object, "scanner_light", scan.scanner_light, [](std::string_view id) {
+        return IsFilmIdentifier(kFilmScannerLightIds, id);
+      });
+  return scan;
+}
+
 /// A missing object reads as the default fields, so that a load replaces every field.
 auto ReadFilmPrint(const nlohmann::json& json) -> FilmPrintParams {
   FilmPrintParams params;
@@ -340,6 +373,7 @@ auto ReadFilmPrint(const nlohmann::json& json) -> FilmPrintParams {
       ReadFilmSlider(object, "halation", params.halation, kFilmHalationMin, kFilmHalationMax);
   params.enlarger_flare = ReadFilmSlider(object, "enlarger_flare", params.enlarger_flare,
                                          kFilmEnlargerFlareMin, kFilmEnlargerFlareMax);
+  params.scan = ReadFilmNegativeScan(object);
   return params;
 }
 
@@ -373,12 +407,62 @@ void RequireValidFilmPrintUpdate(const DrtParameterUpdate& update) {
   RequireFilmSlider(update.film_halation, "halation", kFilmHalationMin, kFilmHalationMax);
   RequireFilmSlider(update.film_enlarger_flare, "enlarger_flare", kFilmEnlargerFlareMin,
                     kFilmEnlargerFlareMax);
+  RequireFilmIdentifier(update.film_scan_auto, "auto",
+                        [](std::string_view id) { return IsFilmIdentifier(kFilmScanAutoIds, id); });
+  RequireFilmSlider(update.film_scan_auto_strength, "auto_strength", kFilmScanAutoStrengthMin,
+                    kFilmScanAutoStrengthMax);
+  RequireFilmSlider(update.film_scan_auto_density, "auto_density", kFilmScanAutoDensityMin,
+                    kFilmScanAutoDensityMax);
+  RequireFilmSlider(update.film_scan_contrast, "scan_contrast", kFilmScanContrastMin,
+                    kFilmScanContrastMax);
+  RequireFilmSlider(update.film_scan_exposure_stops, "scan_exposure_stops",
+                    kFilmScanExposureStopsMin, kFilmScanExposureStopsMax);
+  RequireFilmSlider(update.film_scan_cyan, "cyan", kFilmScanKeyMin, kFilmScanKeyMax);
+  RequireFilmSlider(update.film_scan_magenta, "magenta", kFilmScanKeyMin, kFilmScanKeyMax);
+  RequireFilmSlider(update.film_scan_yellow, "yellow", kFilmScanKeyMin, kFilmScanKeyMax);
+  RequireFilmSlider(update.film_scan_black, "black", kFilmScanBlackMin, kFilmScanBlackMax);
+  RequireFilmSlider(update.film_scanner_red_nm, "scanner_red_nm", kFilmScannerRedMinNm,
+                    kFilmScannerRedMaxNm);
+  RequireFilmSlider(update.film_scanner_green_nm, "scanner_green_nm", kFilmScannerGreenMinNm,
+                    kFilmScannerGreenMaxNm);
+  RequireFilmSlider(update.film_scanner_blue_nm, "scanner_blue_nm", kFilmScannerBlueMinNm,
+                    kFilmScannerBlueMaxNm);
+  RequireFilmSlider(update.film_scanner_width_nm, "scanner_width_nm", kFilmScannerWidthMinNm,
+                    kFilmScannerWidthMaxNm);
+  RequireFilmIdentifier(update.film_scanner_light, "scanner_light", [](std::string_view id) {
+    return IsFilmIdentifier(kFilmScannerLightIds, id);
+  });
 }
 
 auto FilmPrintToJson(const FilmPrintParams& params) -> nlohmann::json {
-  return {{"negative", params.negative},       {"print_material", params.print_material},
-          {"scene_light", params.scene_light}, {"light_spread", params.light_spread},
-          {"halation", params.halation},       {"enlarger_flare", params.enlarger_flare}};
+  nlohmann::json json = {
+      {"negative", params.negative},       {"print_material", params.print_material},
+      {"scene_light", params.scene_light}, {"light_spread", params.light_spread},
+      {"halation", params.halation},       {"enlarger_flare", params.enlarger_flare}};
+  // A key of Negative Scan at its default is not written, so a document with no Negative Scan
+  // keeps its bytes and its root id.
+  const FilmNegativeScanParams defaults;
+  const auto&                  scan = params.scan;
+  const auto put = [&json](const char* key, const auto& value, const auto& fallback) {
+    if (value != fallback) {
+      json[key] = value;
+    }
+  };
+  put("auto", scan.auto_colour, defaults.auto_colour);
+  put("auto_strength", scan.auto_strength, defaults.auto_strength);
+  put("auto_density", scan.auto_density, defaults.auto_density);
+  put("scan_contrast", scan.contrast, defaults.contrast);
+  put("scan_exposure_stops", scan.exposure_stops, defaults.exposure_stops);
+  put("cyan", scan.cyan, defaults.cyan);
+  put("magenta", scan.magenta, defaults.magenta);
+  put("yellow", scan.yellow, defaults.yellow);
+  put("black", scan.black, defaults.black);
+  put("scanner_red_nm", scan.scanner_red_nm, defaults.scanner_red_nm);
+  put("scanner_green_nm", scan.scanner_green_nm, defaults.scanner_green_nm);
+  put("scanner_blue_nm", scan.scanner_blue_nm, defaults.scanner_blue_nm);
+  put("scanner_width_nm", scan.scanner_width_nm, defaults.scanner_width_nm);
+  put("scanner_light", scan.scanner_light, defaults.scanner_light);
+  return json;
 }
 
 }  // namespace
@@ -548,6 +632,28 @@ void DrtParamsModel::ApplyUpdate(DrtParameterUpdate update) {
       film.enlarger_flare = *update.film_enlarger_flare;
       changed |= DirtyFieldMask{DrtDirty::FilmFlare};
     }
+    // Negative Scan acts only in FP6, so no canonical film print result reads these fields.
+    const auto set_scan = [&changed](auto& field, auto& value) {
+      if (value.has_value() && field != *value) {
+        field = std::move(*value);
+        changed |= DirtyFieldMask{DrtDirty::FilmScan};
+      }
+    };
+    auto& scan = film.scan;
+    set_scan(scan.auto_colour, update.film_scan_auto);
+    set_scan(scan.auto_strength, update.film_scan_auto_strength);
+    set_scan(scan.auto_density, update.film_scan_auto_density);
+    set_scan(scan.contrast, update.film_scan_contrast);
+    set_scan(scan.exposure_stops, update.film_scan_exposure_stops);
+    set_scan(scan.cyan, update.film_scan_cyan);
+    set_scan(scan.magenta, update.film_scan_magenta);
+    set_scan(scan.yellow, update.film_scan_yellow);
+    set_scan(scan.black, update.film_scan_black);
+    set_scan(scan.scanner_red_nm, update.film_scanner_red_nm);
+    set_scan(scan.scanner_green_nm, update.film_scanner_green_nm);
+    set_scan(scan.scanner_blue_nm, update.film_scanner_blue_nm);
+    set_scan(scan.scanner_width_nm, update.film_scanner_width_nm);
+    set_scan(scan.scanner_light, update.film_scanner_light);
     return changed;
   });
 }

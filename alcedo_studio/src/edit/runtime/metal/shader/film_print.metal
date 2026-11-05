@@ -77,7 +77,7 @@ struct FilmSize {
 // metal_film_print_pass.mm has the same values in its static_assert declarations.
 static_assert(sizeof(FilmBlurWeights) == 2192, "FilmBlurWeights differs from the host");
 static_assert(sizeof(FilmNarrowKernel) == 76, "FilmNarrowKernel differs from the host");
-static_assert(sizeof(FilmKernelParams) == 412, "FilmKernelParams differs from the host");
+static_assert(sizeof(FilmKernelParams) == 416, "FilmKernelParams differs from the host");
 static_assert(sizeof(FilmMatrix) == 36, "FilmMatrix differs from the host");
 static_assert(sizeof(FilmKernelRgb) == 12, "FilmKernelRgb differs from the host");
 

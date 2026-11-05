@@ -110,6 +110,21 @@ using EditorParameterWrite =
     -> std::optional<EditorParameterWrite>;
 
 /**
+ * @brief Parse a complete stored value of one field, as a history head move restores it.
+ *
+ * A write (@ref ParseEditorParameterWrite) sets only the keys that it has. A complete value sets
+ * every field: a key that @p value does not have takes the default of the Model. For `odt`, the
+ * Model omits a key of Negative Scan at its default and the film print object of another method,
+ * so each film print field that @p value does not have is the default. Other fields read as a
+ * write, because their Model JSON has every key.
+ *
+ * @return The operation, or nullopt when keys, types, or dimensions are invalid.
+ */
+[[nodiscard]] auto ParseEditorParameterValue(std::string_view field_key, const nlohmann::json& value,
+                                             std::string* error)
+    -> std::optional<EditorParameterWrite>;
+
+/**
  * @brief Apply one typed field operation to the live document owner.
  *
  * Compound operations are already complete values. The Model update runs once

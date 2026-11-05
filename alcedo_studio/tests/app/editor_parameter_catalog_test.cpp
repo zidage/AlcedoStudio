@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <json.hpp>
 #include <optional>
 #include <set>
@@ -702,7 +703,9 @@ TEST(EditorParameterCatalogTest, OdtWriteHoldsTheControlsOfTheSelectedMethod) {
                    "odt", {{"method", "aces_2_0"}, {"look_preset", "umbra"}}, nlohmann::json{},
                    &error)
                    .has_value());
-  EXPECT_EQ(error, "odt.look_preset needs method open_drt");
+  EXPECT_EQ(error,
+            "odt.look_preset needs method open_drt, or film_print with print material "
+            "negative_scan");
   // The complete current value (for example from editor.get) writes without an error.
   EXPECT_TRUE(EditorParameterCatalog::ToModelJson(
                   "odt", EditorParameterCatalog::UiDefault(*EditorParameterCatalog::Find("odt")),
@@ -765,8 +768,8 @@ TEST(EditorParameterCatalogTest, FilmBrowserHasOneEntryForEachFilmAndPrintMateri
     for (std::size_t i = 0; i < entry.color_count; ++i) {
       EXPECT_LE(entry.colors[i], 0xFFFFFFU) << entry.id;
     }
-    // Only Cine Look is above the brand groups.
-    if (entry.id == "cine_look") {
+    // Only Negative Scan and Cine Look are above the brand groups.
+    if (entry.id == "cine_look" || entry.id == kFilmNegativeScanId) {
       EXPECT_TRUE(entry.brand.empty());
     } else {
       EXPECT_TRUE(brands.contains(entry.brand)) << entry.id;
@@ -789,6 +792,16 @@ TEST(EditorParameterCatalogTest, FilmBrowserHasOneEntryForEachFilmAndPrintMateri
     std::set<std::string_view> seen(order.begin(), order.end());
     EXPECT_EQ(seen.size(), order.size()) << "a brand is in two groups";
   }
+
+  // Negative Scan is first in the print list, with its own swatch shape.
+  const auto first_print = std::find_if(
+      kFilmPresentations.begin(), kFilmPresentations.end(),
+      [](const FilmPresentation& entry) { return entry.list == FilmBrowserList::Print; });
+  ASSERT_NE(first_print, kFilmPresentations.end());
+  EXPECT_EQ(first_print->id, kFilmNegativeScanId);
+  EXPECT_EQ(first_print->short_label, "Negative Scan");
+  EXPECT_EQ(first_print->shape, FilmSwatchShape::Scan);
+  EXPECT_EQ(std::next(first_print)->id, "cine_look");
 
   // A change of process selects these films first.
   EXPECT_EQ(FindFilmPresentation(kFilmDefaultNegative)->list, FilmBrowserList::Negative);
@@ -820,6 +833,176 @@ TEST(EditorParameterCatalogTest, FilmPrintWriteOfAReversalFilmKeepsThePrintMater
                    .has_value());
 }
 
+TEST(EditorParameterCatalogTest, FilmPrintWriteOfNegativeScanKeepsTheStoredFlare) {
+  std::string error;
+  const auto  model = EditorParameterCatalog::ToModelJson("odt",
+                                                          {{"method", "film_print"},
+                                                           {"negative", "kodak_5207"},
+                                                           {"print_material", "negative_scan"},
+                                                           {"enlarger_flare", 0.02}},
+                                                          nlohmann::json{}, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  const auto& film_print = model->at("odt").at("film_print");
+  EXPECT_EQ(film_print.at("print_material"), "negative_scan");
+  // Negative Scan reads no Enlarger flare, and the panel keeps the stored value.
+  EXPECT_DOUBLE_EQ(film_print.at("enlarger_flare").get<double>(), 0.02);
+}
+
+TEST(EditorParameterCatalogTest, NegativeScanPropertiesHaveTheRangesOfTheDocumentModel) {
+  const auto* entry = EditorParameterCatalog::Find("odt");
+  ASSERT_NE(entry, nullptr);
+  const auto property = [&](std::string_view name) -> const EditorParameterProperty& {
+    const auto it =
+        std::find_if(entry->properties.begin(), entry->properties.end(),
+                     [&](const EditorParameterProperty& item) { return item.name == name; });
+    EXPECT_NE(it, entry->properties.end()) << name;
+    return *it;
+  };
+  struct Range {
+    std::string_view name;
+    float            minimum;
+    float            maximum;
+  };
+  for (const auto& range : {Range{"auto_strength", kFilmScanAutoStrengthMin, kFilmScanAutoStrengthMax},
+                            Range{"auto_density", kFilmScanAutoDensityMin, kFilmScanAutoDensityMax},
+                            Range{"scan_contrast", kFilmScanContrastMin, kFilmScanContrastMax},
+                            Range{"scan_exposure_stops", kFilmScanExposureStopsMin,
+                                  kFilmScanExposureStopsMax},
+                            Range{"cyan", kFilmScanKeyMin, kFilmScanKeyMax},
+                            Range{"magenta", kFilmScanKeyMin, kFilmScanKeyMax},
+                            Range{"yellow", kFilmScanKeyMin, kFilmScanKeyMax},
+                            Range{"black", kFilmScanBlackMin, kFilmScanBlackMax},
+                            Range{"scanner_red_nm", kFilmScannerRedMinNm, kFilmScannerRedMaxNm},
+                            Range{"scanner_green_nm", kFilmScannerGreenMinNm, kFilmScannerGreenMaxNm},
+                            Range{"scanner_blue_nm", kFilmScannerBlueMinNm, kFilmScannerBlueMaxNm},
+                            Range{"scanner_width_nm", kFilmScannerWidthMinNm,
+                                  kFilmScannerWidthMaxNm}}) {
+    const auto& item = property(range.name);
+    EXPECT_EQ(item.type, EditorParameterPropertyType::Number) << range.name;
+    EXPECT_DOUBLE_EQ(item.minimum, static_cast<double>(range.minimum)) << range.name;
+    EXPECT_DOUBLE_EQ(item.maximum, static_cast<double>(range.maximum)) << range.name;
+  }
+  const auto& automatic = property("auto");
+  ASSERT_EQ(automatic.options.size(), kFilmScanAutoIds.size());
+  for (std::size_t i = 0; i < kFilmScanAutoIds.size(); ++i) {
+    EXPECT_EQ(automatic.options[i].value, kFilmScanAutoIds[i]);
+  }
+  const auto& light = property("scanner_light");
+  ASSERT_EQ(light.options.size(), kFilmScannerLightIds.size());
+  EXPECT_EQ(light.options[0].value, "halogen");
+  EXPECT_EQ(light.options[1].label, "Equal Energy");
+  // The defaults of the panel are those of the Model.
+  const auto defaults = EditorParameterCatalog::UiDefault(*entry);
+  const FilmNegativeScanParams scan;
+  EXPECT_EQ(defaults.at("auto"), scan.auto_colour);
+  EXPECT_EQ(defaults.at("auto_strength").get<double>(), 0.8);
+  EXPECT_FLOAT_EQ(static_cast<float>(defaults.at("auto_strength").get<double>()), scan.auto_strength);
+  EXPECT_DOUBLE_EQ(defaults.at("black").get<double>(), 1.0);
+  EXPECT_DOUBLE_EQ(defaults.at("scanner_red_nm").get<double>(), 650.0);
+  EXPECT_DOUBLE_EQ(defaults.at("scanner_width_nm").get<double>(), 40.0);
+  EXPECT_EQ(defaults.at("scanner_light"), "halogen");
+}
+
+TEST(EditorParameterCatalogTest, NegativeScanWritesTheOpenDrtSettingsAndTheEncodingOfThePanel) {
+  // An HDR document with OpenDRT settings: Negative Scan keeps them, as method open_drt (issue
+  // 661).
+  const nlohmann::json hdr = {{"odt",
+                               {{"method", "open_drt"},
+                                {"encoding_space", "rec2020"},
+                                {"encoding_eotf", "st2084"},
+                                {"peak_luminance", 1000.0},
+                                {"open_drt", {{"look_preset", "arriba"}}}}}};
+  std::string          error;
+  auto                 model = EditorParameterCatalog::ToModelJson(
+      "odt", {{"method", "film_print"}, {"print_material", "negative_scan"}}, hdr, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  const auto& odt = model->at("odt");
+  EXPECT_EQ(odt.at("method"), "film_print");
+  EXPECT_EQ(odt.at("encoding_space"), "rec2020");
+  EXPECT_EQ(odt.at("encoding_eotf"), "st2084");
+  EXPECT_EQ(odt.at("peak_luminance"), 1000.0);
+  EXPECT_EQ(odt.at("open_drt").at("look_preset"), "arriba");
+  EXPECT_TRUE(odt.at("open_drt").contains("tonescale_preset"));
+  EXPECT_TRUE(odt.at("open_drt").contains("creative_white"));
+  // Method OpenDRT has no limiting space, so Negative Scan has none.
+  EXPECT_FALSE(odt.contains("limiting_space"));
+  // Selecting Negative Scan selects As Shot in the same write, and the scan settings are their
+  // defaults.
+  EXPECT_EQ(odt.at("film_print").at("scene_light"), "as_shot");
+  EXPECT_EQ(odt.at("film_print").at("auto"), "off");
+  EXPECT_DOUBLE_EQ(odt.at("film_print").at("black").get<double>(), 1.0);
+  EXPECT_EQ(odt.at("film_print").at("scanner_light"), "halogen");
+
+  // A write that selects Negative Scan and a scene light keeps that scene light.
+  model = EditorParameterCatalog::ToModelJson(
+      "odt",
+      {{"method", "film_print"}, {"print_material", "negative_scan"}, {"scene_light", "tungsten"}},
+      hdr, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(model->at("odt").at("film_print").at("scene_light"), "tungsten");
+
+  // With Negative Scan, the OpenDRT settings, the encodings, and the scan settings write.
+  auto scan = *EditorParameterCatalog::ToModelJson(
+      "odt", {{"method", "film_print"}, {"print_material", "negative_scan"}}, nlohmann::json{},
+      &error);
+  model = EditorParameterCatalog::ToModelJson("odt",
+                                              {{"tonescale_preset", "high_contrast"},
+                                               {"encoding_space", "p3_d65"},
+                                               {"auto", "neutral"},
+                                               {"scan_exposure_stops", -0.5},
+                                               {"scanner_width_nm", 60.0},
+                                               {"scanner_light", "equal_energy"}},
+                                              scan, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(model->at("odt").at("open_drt").at("tonescale_preset"), "high_contrast");
+  EXPECT_EQ(model->at("odt").at("encoding_space"), "p3_d65");
+  const auto& film_print = model->at("odt").at("film_print");
+  EXPECT_EQ(film_print.at("auto"), "neutral");
+  EXPECT_DOUBLE_EQ(film_print.at("scan_exposure_stops").get<double>(), -0.5);
+  EXPECT_DOUBLE_EQ(film_print.at("scanner_width_nm").get<double>(), 60.0);
+  EXPECT_EQ(film_print.at("scanner_light"), "equal_energy");
+  // The Model JSON of the write reads back to the panel values.
+  const auto ui = EditorParameterCatalog::ToUiValue("odt", *model, &error);
+  ASSERT_TRUE(ui.has_value()) << error;
+  EXPECT_EQ(ui->at("auto"), "neutral");
+  EXPECT_DOUBLE_EQ(ui->at("scanner_width_nm").get<double>(), 60.0);
+  // A later write of another value keeps As Shot: only a change of print material selects it.
+  model = EditorParameterCatalog::ToModelJson("odt", {{"scene_light", "daylight"}}, *model, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  model = EditorParameterCatalog::ToModelJson("odt", {{"halation", 2.0}}, *model, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(model->at("odt").at("film_print").at("scene_light"), "daylight");
+
+  // A print has only Rec. 709 SDR and no OpenDRT settings, and a scan setting needs method
+  // film_print.
+  const auto print = EditorParameterCatalog::ToModelJson("odt", {{"print_material", "kodak_2383"}},
+                                                         *model, &error);
+  ASSERT_TRUE(print.has_value()) << error;
+  EXPECT_EQ(print->at("odt").at("encoding_space"), "rec709");
+  EXPECT_FALSE(print->at("odt").contains("open_drt"));
+  EXPECT_EQ(print->at("odt").at("film_print").at("scene_light"), "daylight");
+  // A print keeps the scan settings of the document, which only Negative Scan reads.
+  EXPECT_EQ(print->at("odt").at("film_print").at("auto"), "neutral");
+  EXPECT_FALSE(
+      EditorParameterCatalog::ToModelJson("odt", {{"look_preset", "umbra"}}, *print, &error)
+          .has_value());
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "odt", {{"method", "open_drt"}, {"black", 0.5}}, nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "odt.black needs method film_print");
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "odt", {{"method", "film_print"}, {"auto", "vivid"}}, nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "odt", {{"method", "film_print"}, {"scan_contrast", 2.0}}, nlohmann::json{},
+                   &error)
+                   .has_value());
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "odt", {{"method", "film_print"}, {"scanner_light", 1}}, nlohmann::json{},
+                   &error)
+                   .has_value());
+}
+
 TEST(EditorParameterCatalogTest, FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput) {
   std::string          error;
   // A Display P3 document, and an HDR document: the panel has no encoding controls.
@@ -842,7 +1025,21 @@ TEST(EditorParameterCatalogTest, FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput)
                                         {"scene_light", "reference"},
                                         {"light_spread", 1.0},
                                         {"halation", 2.5},
-                                        {"enlarger_flare", 0.01}}}}}}));
+                                        {"enlarger_flare", 0.01},
+                                        {"auto", "off"},
+                                        {"auto_strength", 0.8},
+                                        {"auto_density", 0.0},
+                                        {"scan_contrast", 1.0},
+                                        {"scan_exposure_stops", 0.0},
+                                        {"cyan", 0.0},
+                                        {"magenta", 0.0},
+                                        {"yellow", 0.0},
+                                        {"black", 1.0},
+                                        {"scanner_red_nm", 650.0},
+                                        {"scanner_green_nm", 545.0},
+                                        {"scanner_blue_nm", 450.0},
+                                        {"scanner_width_nm", 40.0},
+                                        {"scanner_light", "halogen"}}}}}}));
   const nlohmann::json hdr = {{"odt",
                                {{"method", "aces_2_0"},
                                 {"encoding_space", "rec2020"},

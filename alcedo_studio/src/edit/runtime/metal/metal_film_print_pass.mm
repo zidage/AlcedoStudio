@@ -15,6 +15,7 @@
 
 #include <alcedo/metal/Metal.hpp>
 
+#include "edit/graph/film_print_model.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
@@ -35,7 +36,7 @@ static_assert(kFilmBlurMaxRadius == 128 && sizeof(FilmBlurKernel) == 1552);
 /// FILM_SLIDE of film_print.metal: the outputs of one thread of a blur pass.
 constexpr std::uint32_t kSlide = 8;
 static_assert(kFilmNarrowSpreadMaxRadius == 2 && sizeof(FilmNarrowKernel) == 76);
-static_assert(sizeof(FilmKernelParams) == 412);
+static_assert(sizeof(FilmKernelParams) == 416);
 static_assert(sizeof(Matrix3x3) == 36);
 static_assert(sizeof(FilmKernelRgb) == 12);
 
@@ -343,16 +344,23 @@ auto ReadOrBuildCanvasResult(MetalRenderDevice& device, const ExecutionPlan& pla
 }  // namespace
 
 void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
-                          const DrtNodeModel& drt, const FrameSceneBinding& scene,
-                          const FrameSceneBinding& display, std::uint32_t width,
-                          std::uint32_t height, std::vector<std::string>* pass_names,
-                          bool separate_narrow_spread) {
+                          const DrtNodeModel& drt, std::optional<double> raw_cct,
+                          const FrameSceneBinding& scene, const FrameSceneBinding& display,
+                          std::uint32_t width, std::uint32_t height,
+                          std::vector<std::string>* pass_names, bool separate_narrow_spread) {
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteMetalDrt");
   const auto  film        = drt.Params().FilmPrint();
+  // Print material Negative Scan has the model layer of issue 661; its Metal pass is issue 662.
+  // There is no other form to substitute for it.
+  if (IsFilmNegativeScan(film.negative, film.print_material)) {
+    throw std::runtime_error(
+        "RecordMetalFilmPrint: print material Negative Scan has no Metal pass yet (issue 662)");
+  }
   auto&       tables      = SharedFilmPrintTables();
-  const auto  tables_data = tables.Resolve(film.negative, film.print_material, film.scene_light);
   const auto& bundle      = tables.Bundle();
+  const auto  light       = bundle.SceneLightMix(film.scene_light, raw_cct);
+  const auto  tables_data = tables.Resolve(film.negative, film.print_material, light);
 
   auto&       workspace   = device.Workspace();
   auto&       backend     = workspace.Device();
@@ -363,7 +371,7 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
       tables_data->kernel_key, std::as_bytes(std::span(tables_data->kernel_values)), context);
 
   FilmKernelParams params{};
-  film_print_kernel_tables::FillParams(bundle, film.negative, film.print_material, film.scene_light,
+  film_print_kernel_tables::FillParams(bundle, film.negative, film.print_material, light,
                                        tables_data->edge, params);
   params.display_encoding = static_cast<std::uint32_t>(resolved.eotf_);
 

@@ -15,6 +15,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../graph/test_camera_profile.hpp"
@@ -34,6 +35,7 @@
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "film_print_reference.hpp"
+#include "film_print_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -514,9 +516,9 @@ TEST_F(CudaFilmPrintFixture, FilmPrintFusedSpreadMatchesSeparatePasses) {
                                                device_.CommandContext());
     auto& display = workspace.AcquireImageForWrite(plan_.display_output,
                                                            {kWidth, kHeight, TextureFormat::Rgba32f});
-    RecordCudaFilmPrint(device_, plan_, *document.Drt(), FrameSceneBinding::CachedImage(scene_id),
-                                FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight,
-                                nullptr, separate);
+    RecordCudaFilmPrint(
+        device_, plan_, *document.Drt(), std::nullopt, FrameSceneBinding::CachedImage(scene_id),
+        FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight, nullptr, separate);
     std::vector<Rgba> pixels(static_cast<std::size_t>(kWidth) * kHeight);
     workspace.Device().DownloadTexture2D(
         display.Texture(), std::as_writable_bytes(std::span(pixels)), device_.CommandContext());
@@ -627,7 +629,8 @@ TEST_F(CudaFilmPrintFixture, FilmPrintWithNoImagePartRunsNoInhibitorBlur) {
     const auto display_id = plan_.display_output;
     (void)workspace.AcquireImageForWrite(display_id, {kWidth, kHeight, TextureFormat::Rgba32f});
     std::vector<FilmPrintPassTime> times;
-    RecordCudaFilmPrint(device_, plan_, *document.Drt(), FrameSceneBinding::CachedImage(scene_id),
+    RecordCudaFilmPrint(device_, plan_, *document.Drt(), std::nullopt,
+                        FrameSceneBinding::CachedImage(scene_id),
                         FrameSceneBinding::CachedImage(display_id), kWidth, kHeight, &times);
     device_.CancelRender();
     return std::any_of(times.begin(), times.end(), [](const FilmPrintPassTime& time) {
@@ -670,6 +673,128 @@ TEST_F(CudaFilmPrintFixture, FilmPrintAllocationFailureReportsTheErrorAndPublish
   EXPECT_NE(images.PublishedLastWriter(flare), 0U);
 }
 
+/// Linear AP1 values of the As Shot test: a neutral ramp of -8 to +8 stops and saturated colours,
+/// one row with no image plane.
+auto RampAndColourValues() -> std::vector<Rgba> {
+  std::vector<Rgba> values;
+  for (int step = -32; step <= 32; ++step) {
+    const float v = 0.18f * std::exp2(static_cast<float>(step) / 4.0f);
+    values.push_back({v, v, v, 0.75f});
+  }
+  for (const float level : {0.05f, 0.18f, 0.7f, 3.0f}) {
+    for (const auto& [r, g, b] : std::vector<std::array<float, 3>>{{1.0f, 0.1f, 0.05f},
+                                                                   {0.1f, 1.0f, 0.1f},
+                                                                   {0.05f, 0.1f, 1.0f},
+                                                                   {1.0f, 0.8f, 0.1f},
+                                                                   {0.1f, 0.9f, 1.0f},
+                                                                   {0.9f, 0.1f, 1.0f},
+                                                                   {0.6f, 0.4f, 0.3f}}) {
+      values.push_back({level * r, level * g, level * b, 0.75f});
+    }
+  }
+  return values;
+}
+
+TEST_F(CudaFilmPrintFixture, AsShotFollowsTheColourTemperatureOfTheRawDecode) {
+  const auto values  = RampAndColourValues();
+  const auto render  = [&](PipelineDocument& document) { return RenderDrt(document, values); };
+  const auto differs = [](const std::vector<Rgba>& a, const std::vector<Rgba>& b) {
+    return LargestCodeDifference(a, a.size(), [&b](std::size_t index) { return b[index]; });
+  };
+  auto& tables = SharedFilmPrintTables();
+  {
+    const std::string material = "kodak_2383";
+    auto document = FilmPrintDocument("kodak_5207", material, std::string{kFilmAsShotLightId});
+    // A RAW file in mode As Shot uses its solved temperature: the same as mode Custom at it.
+    film_print_test::SetRawAsShot(document, 5650.0);
+    ASSERT_EQ(FilmSceneRawCct(document), std::optional<double>(5650.0));
+    const auto as_shot = render(document);
+    auto       custom  = FilmPrintDocument("kodak_5207", material, std::string{kFilmAsShotLightId});
+    film_print_test::SetRawCustom(custom, 5650.0);
+    ASSERT_EQ(FilmSceneRawCct(custom), std::optional<double>(5650.0));
+    EXPECT_EQ(differs(as_shot, render(custom)), 0.0);
+
+    // A change of the Kelvin in mode Custom changes the output and the keys of the tables.
+    const auto key_of = [&](const PipelineDocument& d) {
+      const auto light = tables.Bundle().SceneLightMix(kFilmAsShotLightId, FilmSceneRawCct(d));
+      return tables.Resolve("kodak_5207", material, light)->uv_key;
+    };
+    const auto warm_key = key_of(custom);
+    film_print_test::SetRawCustom(custom, 3100.0);
+    EXPECT_NE(key_of(custom), warm_key);
+    EXPECT_GT(differs(as_shot, render(custom)), 1.0);
+
+    // An input with no RAW white balance renders As Shot as the reference.
+    film_print_test::SetRasterInput(document);
+    EXPECT_EQ(FilmSceneRawCct(document), std::nullopt);
+    const auto raster    = render(document);
+    auto       reference = FilmPrintDocument("kodak_5207", material, "reference");
+    film_print_test::SetRasterInput(reference);
+    EXPECT_EQ(differs(raster, render(reference)), 0.0);
+  }
+
+  // The as-shot neutral of a DNG: the solve of Develop gives the temperature of the scene light.
+  auto document =
+      FilmPrintDocument("kodak_5219", "kodak_2383", std::string{kFilmAsShotLightId});
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  auto payload      = document.Develop()->Params().Params();
+  payload.wb_mode   = "as_shot";
+  const auto solved = ResolveDevelopColorTransform(payload);
+  ASSERT_TRUE(solved.ok);
+  payload.as_shot_cct = solved.transform.resolved_cct;
+  document.Develop()->Params().ReplaceParams(payload);
+  ASSERT_EQ(FilmSceneRawCct(document), std::optional<double>(solved.transform.resolved_cct));
+  const auto neutral = render(document);
+  for (const auto& pixel : neutral) {
+    ASSERT_TRUE(std::isfinite(pixel.r) && std::isfinite(pixel.g) && std::isfinite(pixel.b));
+  }
+  auto custom =
+      FilmPrintDocument("kodak_5219", "kodak_2383", std::string{kFilmAsShotLightId});
+  film_print_test::SetRawCustom(custom, solved.transform.resolved_cct);
+  EXPECT_EQ(differs(neutral, render(custom)), 0.0);
+}
+
+TEST_F(CudaFilmPrintFixture, NegativeScanStopsWithANamedErrorAndPublishesNoResult) {
+  // Print material Negative Scan has the model layer of issue 661; its CUDA pass is issue 664.
+  // There is no other form to substitute for it, so the render stops before any GPU work.
+  const auto field = PatchField(128, 96, 40, 40, 8);
+  SetView({128, 96}, {128, 96}, Matrix3x3::Identity());
+  auto&      images = device_.Workspace().Images();
+  const auto print  = RenderView(FilmPrintDocument("kodak_5207", "kodak_2383"), field, true);
+  const auto writer = images.PublishedLastWriter(plan_.display_output);
+  try {
+    (void)RenderView(FilmPrintDocument("kodak_5207", std::string{kFilmNegativeScanId}), field,
+                     true);
+    ADD_FAILURE() << "Negative Scan rendered with no CUDA pass";
+  } catch (const std::runtime_error& error) {
+    const std::string text = error.what();
+    EXPECT_NE(text.find("Negative Scan"), std::string::npos) << text;
+    EXPECT_NE(text.find("issue 664"), std::string::npos) << text;
+  }
+  device_.CancelRender();
+  device_.WaitIdle();
+  EXPECT_EQ(images.PublishedLastWriter(plan_.display_output), writer);
+  // The print renders again after the error, with the same image.
+  const auto again = RenderView(FilmPrintDocument("kodak_5207", "kodak_2383"), field, true);
+  ASSERT_EQ(again.size(), print.size());
+  for (std::size_t index = 0; index < print.size(); ++index) {
+    ASSERT_EQ(again[index].r, print[index].r) << index;
+    ASSERT_EQ(again[index].g, print[index].g) << index;
+    ASSERT_EQ(again[index].b, print[index].b) << index;
+  }
+  // A colour reversal film reads no print material, so a stored Negative Scan renders its light
+  // table.
+  const auto slide = RenderView(
+      FilmPrintDocument("fuji_velvia_50", std::string{kFilmNegativeScanId}), field, true);
+  const auto slide_print =
+      RenderView(FilmPrintDocument("fuji_velvia_50", "kodak_2383"), field, true);
+  for (std::size_t index = 0; index < slide.size(); ++index) {
+    ASSERT_EQ(slide[index].r, slide_print[index].r) << index;
+    ASSERT_EQ(slide[index].g, slide_print[index].g) << index;
+    ASSERT_EQ(slide[index].b, slide_print[index].b) << index;
+  }
+}
+
 // The lab values come from build_display_expected.py of alcedo-film-lab. They are not in Git, so a
 // skip here means that the comparison did not run.
 #if defined(ALCEDO_FILM_PRINT_EXPECTED_DIR)
@@ -695,6 +820,8 @@ auto DisplaySelections() -> std::vector<DisplaySelection> {
                             metadata.at("scene_light").get<std::string>()});
       continue;
     }
+    // The files of Negative Scan are the expected values of its GPU pass (issue 664).
+    if (metadata.value("print_material", std::string{}) == kFilmNegativeScanId) continue;
     selections.push_back({std::move(file), metadata.at("negative").get<std::string>(),
                           metadata.at("print_material").get<std::string>(),
                           metadata.at("scene_light").get<std::string>()});
@@ -824,6 +951,8 @@ TEST_F(CudaFilmPrintFixture, FilmPrintImageMatchesLab) {
     if (entry.path().filename() == "ap1.bin") continue;
     auto       file     = FilmArrayFile::Parse(ReadFilmResourceBytes(entry.path()), entry.path());
     const auto metadata = file.Metadata();
+    // The files of Negative Scan are the expected values of its GPU pass (issue 664).
+    if (metadata.value("print_material", std::string{}) == kFilmNegativeScanId) continue;
     // A colour reversal film has no print material, so its file names none.
     const bool reversal = metadata.contains("reversal");
     const auto negative = metadata.at(reversal ? "reversal" : "negative").get<std::string>();
@@ -1079,7 +1208,8 @@ TEST_F(CudaFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
                           cudaMemcpyDeviceToDevice, device_.CommandContext().Stream()),
         cudaSuccess);
     (void)workspace.AcquireImageForWrite(display_id, {width, height, TextureFormat::Rgba32f});
-    RecordCudaFilmPrint(device_, plan_, *document.Drt(), FrameSceneBinding::CachedImage(scene_id),
+    RecordCudaFilmPrint(device_, plan_, *document.Drt(), std::nullopt,
+                        FrameSceneBinding::CachedImage(scene_id),
                         FrameSceneBinding::CachedImage(display_id), width, height, &times);
     device_.EndRender();
     device_.PublishResults();
