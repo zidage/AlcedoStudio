@@ -39,7 +39,7 @@ typedef struct {
 // the same values in its static_assert declarations.
 typedef char FilmBlurKernelSizeCheck[sizeof(FilmBlurKernel) == 1552 ? 1 : -1];
 typedef char FilmNarrowKernelSizeCheck[sizeof(FilmNarrowKernel) == 76 ? 1 : -1];
-typedef char FilmKernelParamsSizeCheck[sizeof(FilmKernelParams) == 448 ? 1 : -1];
+typedef char FilmKernelParamsSizeCheck[sizeof(FilmKernelParams) == 628 ? 1 : -1];
 
 __constant sampler_t kFilmNearestClamp =
     CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
@@ -601,10 +601,8 @@ __kernel void film_print_display(
   const uint                       index  = (uint)y * (uint)width + (uint)x;
   FilmKernelRgb                    record = FilmLoad(amounts, amounts_offset, index);
   FilmKernelRgb                    linear;
-  if (params->scan != 0U) {
-    // Lab Scan: @p print_rgba is the Status M table, and there is no flare and no grade.
-    linear = FilmKernelScanDisplay(params, print_rgba, record);
-  } else if (params->light_table != 0U) {
+  // Lab Scan has its own kernel in the DRT program: film_print_scan_display.
+  if (params->light_table != 0U) {
     // Lab rules 'light_table_view', 'loupe_flare', and 'dark_surround_on_display' in display light.
     FilmKernelRgb light = FilmKernelPrintDisplay(params, print_rgba, record);
     if (has_flare != 0) {

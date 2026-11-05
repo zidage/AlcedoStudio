@@ -30,18 +30,19 @@ struct Rgb {
  *
  * It runs on the host tables of one selection, with no blur and no Enlarger flare: the entry gamut
  * compression, FP1, FP4, the two steps of FP5, and FP6, then the sRGB curve. A colour reversal film
- * has the light table form of FP6, and print material Lab Scan has the scan form with no entry
- * gamut compression.
+ * has the light table form of FP6. Print material Lab Scan has the scan form with no entry gamut
+ * compression, up to its scene value (@ref SceneAces); the display transform after it is the
+ * OpenDRT of the document.
  */
 class FilmPrintPointReference {
  public:
   FilmPrintPointReference(const FilmStockBundle& bundle, const FilmPrintTableData& tables,
                           const std::string& negative, const std::string& print_material,
-                          const std::string& scene_light)
+                          const FilmSceneLightMix& scene_light, bool lad_aim = false)
       : values_(
             film_print_kernel_tables::MakeValues<double>(bundle, negative, tables.uv_exposure)) {
-    film_print_kernel_tables::FillParams(bundle, negative, print_material, scene_light, tables.edge,
-                                         params_);
+    film_print_kernel_tables::FillParams(bundle, negative, print_material, scene_light, lad_aim,
+                                         tables.edge, params_);
     // The host table has red varying slowest. The math reads red varying fastest.
     const std::size_t edge = tables.edge;
     print_rgba_.resize(edge * edge * edge * 4, 1.0);
@@ -57,15 +58,23 @@ class FilmPrintPointReference {
     }
   }
 
-  /// Linear AP1 to final sRGB.
+  FilmPrintPointReference(const FilmStockBundle& bundle, const FilmPrintTableData& tables,
+                          const std::string& negative, const std::string& print_material,
+                          const std::string& scene_light)
+      : FilmPrintPointReference(bundle, tables, negative, print_material,
+                                FilmSceneLightMix{scene_light, scene_light, 0.0}) {}
+
+  /// Lab Scan: linear AP1 to the linear AP1 of the scan form, before the display transform. No
+  /// entry gamut compression.
+  [[nodiscard]] auto SceneAp1(float r, float g, float b) const -> Rgb {
+    const auto q   = FilmKernelLayerExposure(&params_, values_.data(), r, g, b);
+    const auto a   = FilmKernelPointAmounts(&params_, values_.data(), q);
+    const auto ap1 = FilmKernelScanSceneAp1(&params_, print_rgba_.data(), a);
+    return {ap1.r, ap1.g, ap1.b};
+  }
+
+  /// Linear AP1 to final sRGB. Not for Lab Scan, which has no sRGB of its own.
   [[nodiscard]] auto Srgb(float r, float g, float b) const -> Rgb {
-    if (params_.scan != 0U) {
-      // Lab Scan: no entry gamut compression, and the scan form of FP6 on the Status M table.
-      const auto q      = FilmKernelLayerExposure(&params_, values_.data(), r, g, b);
-      const auto a      = FilmKernelPointAmounts(&params_, values_.data(), q);
-      const auto linear = FilmKernelScanDisplay(&params_, print_rgba_.data(), a);
-      return {Encode(linear.r), Encode(linear.g), Encode(linear.b)};
-    }
     const auto compressed = AcesReferenceGamutCompress(r, g, b);
     const auto q =
         FilmKernelLayerExposure(&params_, values_.data(), compressed.r, compressed.g, compressed.b);

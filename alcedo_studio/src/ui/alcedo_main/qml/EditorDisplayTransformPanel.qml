@@ -7,8 +7,9 @@ import Alcedo.Main 1.0
 // ACES tone mapping, transfer function (EOTF), peak luminance, and HDR
 // display intent. Method-specific controls for ACES 2.0 (limiting space) and
 // OpenDRT (look/tonescale/creative-white presets), and the film print (process
-// switch, film and print material browsers, scene light, three sliders; Rec. 709
-// SDR output, so its page has no encoding controls). All models share fieldKey
+// switch, film and print material browsers, scene light, three sliders; a print
+// has Rec. 709 SDR output, so its page has no encoding controls; print material
+// Lab Scan has the LAD aim and the OpenDRT settings and encodings). All models share fieldKey
 // "odt" with a panel-level paramsBuilder that collects the complete state so
 // every partial edit carries the full ODT JSON. The option lists, the EOTF
 // choices of each encoding space, the peak range, and the parameter object
@@ -139,7 +140,8 @@ Item {
             scene_light: root.selectedValue(filmSceneLightModel, "scene_light"),
             light_spread: filmLightSpreadModel.value,
             halation: filmHalationModel.value,
-            enlarger_flare: filmEnlargerFlareModel.value
+            enlarger_flare: filmEnlargerFlareModel.value,
+            lad_aim: filmLadAimModel.value
         })
     }
 
@@ -159,6 +161,7 @@ Item {
         filmLightSpreadModel.enabled = on
         filmHalationModel.enabled = on
         filmEnlargerFlareModel.enabled = on
+        filmLadAimModel.enabled = on
     }
 
     /// Apply declared defaultIndex / defaultValue before any snapshot load so the
@@ -178,6 +181,7 @@ Item {
         filmLightSpreadModel.value = filmLightSpreadModel.defaultValue
         filmHalationModel.value = filmHalationModel.defaultValue
         filmEnlargerFlareModel.value = filmEnlargerFlareModel.defaultValue
+        filmLadAimModel.value = filmLadAimModel.defaultValue
         updateEotfOptions()
     }
 
@@ -252,6 +256,8 @@ Item {
         setValueFromSnapshot(filmLightSpreadModel, odt["light_spread"])
         setValueFromSnapshot(filmHalationModel, odt["halation"])
         setValueFromSnapshot(filmEnlargerFlareModel, odt["enlarger_flare"])
+        if (odt["lad_aim"] !== undefined && Boolean(odt["lad_aim"]) !== filmLadAimModel.value)
+            filmLadAimModel.value = Boolean(odt["lad_aim"])
     }
 
     /// Rebuild EOTF entries based on current encoding space, preserving EOTF
@@ -437,6 +443,19 @@ Item {
         defaultValue: root.odtDefaults.enlarger_flare
         step: root.filmEnlargerFlareSpec.ui_step
         precision: root.filmEnlargerFlareSpec.ui_decimals
+        submitter: root.editorSession
+        paramsBuilder: root.buildOdtParams
+    }
+
+    EditorAdjustmentToggleModel {
+        id: filmLadAimModel
+        objectName: "displayFilmLadAimModel"
+        fieldKey: "odt"
+        // Lab Scan only: on, the grey of the scene light goes to the LAD aim (a timed scan); off,
+        // the scan is untimed and the cast of the scene light stays.
+        label: qsTr("LAD Aim")
+        defaultValue: Boolean(root.odtDefaults.lad_aim)
+        value: Boolean(root.odtDefaults.lad_aim)
         submitter: root.editorSession
         paramsBuilder: root.buildOdtParams
     }
@@ -731,6 +750,50 @@ Item {
                         model: filmEnlargerFlareModel
                         flickable: displayScroll
                     }
+
+                    AdjustmentToggle {
+                        objectName: "displayFilmLadAimToggle"
+                        Layout.fillWidth: true
+                        visible: root.isLabScan
+                        model: filmLadAimModel
+                    }
+
+                    // Lab Scan ends in a scene value that OpenDRT shows, with the settings of
+                    // method OpenDRT. The models are those of that method, so a change of method
+                    // keeps the values.
+                    ColumnLayout {
+                        objectName: "displayLabScanOpenDrtControls"
+                        Layout.fillWidth: true
+                        spacing: appTheme.spaceSm
+                        visible: root.isLabScan
+
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.topMargin: appTheme.spaceXs
+                            text: qsTr("OpenDRT")
+                            color: root.colMuted
+                            font.pixelSize: appTheme.fontSizeCaption
+                            font.weight: appTheme.fontWeightStrong
+                        }
+
+                        AdjustmentCombo {
+                            objectName: "displayLabScanOpenDrtLookCombo"
+                            Layout.fillWidth: true
+                            model: openDrtLookModel
+                        }
+
+                        AdjustmentCombo {
+                            objectName: "displayLabScanOpenDrtTonescaleCombo"
+                            Layout.fillWidth: true
+                            model: openDrtTonescaleModel
+                        }
+
+                        AdjustmentCombo {
+                            objectName: "displayLabScanOpenDrtCreativeWhiteCombo"
+                            Layout.fillWidth: true
+                            model: openDrtCreativeWhiteModel
+                        }
+                    }
                 }
             }
 
@@ -739,7 +802,8 @@ Item {
                 id: colorEncodingGroup
                 objectName: "editorAdjustmentGroupShell_display_color_encoding"
                 Layout.fillWidth: true
-                visible: !root.isFilmPrint
+                // A print encodes Rec. 709 SDR only. Lab Scan has the encodings of OpenDRT.
+                visible: !root.isFilmPrint || root.isLabScan
                 title: qsTr("Color & Encoding")
                 expanded: true
                 controlsEnabled: root.controlsEnabled

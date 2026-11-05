@@ -33,10 +33,10 @@ inline constexpr std::int64_t kFilmPrintTableEdge = 65;
  * on the film only, so @ref print_key does not change with the scene light. The print material is
  * not read.
  *
- * For print material Lab Scan the print table is the Status M density of the negative over the
- * record (lab rule 'scan_light', scanner 'status_m'): log10 of the sum of the weights minus log10 of
- * the weighted transmittance, with no cube root. It depends on the negative only. @ref print_rgba
- * has the same form.
+ * For print material Lab Scan the print table is the printing density of the negative over the
+ * record, with the printing weights of the print material of the scan (Kodak 2383; equation 1 of
+ * ST 2065-2): log10 of the sum of the weights minus log10 of the weighted transmittance, with no
+ * cube root. It depends on the negative only. @ref print_rgba has the same form.
  */
 struct FilmPrintTableData {
   /// (uv_nodes, uv_nodes, 3), u varying slowest. A node that no read can reach holds 0.
@@ -105,13 +105,18 @@ class FilmPrintTables {
    * @brief The tables of a selection, from memory or from a new build.
    *
    * When @p negative is a colour reversal film, the result holds the light table, and
-   * @p print_material is not read. When @p print_material is Lab Scan, the result holds the Status
-   * M table of the negative.
+   * @p print_material is not read. When @p print_material is Lab Scan, the result holds the
+   * printing density table of the negative. A blend of two lights has the blended spectrum, and
+   * the blended values of the two lights; see `FilmSceneLightMix`.
    *
    * @return Shared immutable data.
    * @throws std::runtime_error that names the identifier for an unknown selection, or that names
    *         the selection when a table has a value that is not finite. No result is kept then.
    */
+  [[nodiscard]] auto Resolve(std::string_view negative, std::string_view print_material,
+                             const FilmSceneLightMix& scene_light)
+      -> std::shared_ptr<const FilmPrintTableData>;
+  /// @copydoc Resolve. A selection of one named scene light.
   [[nodiscard]] auto Resolve(std::string_view negative, std::string_view print_material,
                              std::string_view scene_light)
       -> std::shared_ptr<const FilmPrintTableData>;
@@ -130,7 +135,7 @@ class FilmPrintTables {
     std::vector<std::uint8_t> not_reached;    ///< (edge^3)
   };
   struct RecordTableStage {
-    /// (edge^3, 3), red varying slowest: the cube root of XYZ of a light table, or the Status M
+    /// (edge^3, 3), red varying slowest: the cube root of XYZ of a light table, or the printing
     /// density of a scan table.
     std::vector<double> values;
     ContentKey          key{};
@@ -150,12 +155,14 @@ class FilmPrintTables {
       -> std::shared_ptr<const PaperStage>;
   [[nodiscard]] auto LightTableOf(std::string_view reversal)
       -> std::shared_ptr<const RecordTableStage>;
-  [[nodiscard]] auto ResolveReversal(std::string_view reversal, std::string_view scene_light)
+  [[nodiscard]] auto ResolveReversal(std::string_view         reversal,
+                                     const FilmSceneLightMix& scene_light)
       -> std::shared_ptr<const FilmPrintTableData>;
-  /// The Status M table of a negative, as a light table stage: (edge^3, 3), red varying slowest.
+  /// The printing density table of a negative, as a light table stage: (edge^3, 3), red varying
+  /// slowest.
   [[nodiscard]] auto ScanTableOf(std::string_view negative)
       -> std::shared_ptr<const RecordTableStage>;
-  [[nodiscard]] auto ResolveScan(std::string_view negative, std::string_view scene_light)
+  [[nodiscard]] auto ResolveScan(std::string_view negative, const FilmSceneLightMix& scene_light)
       -> std::shared_ptr<const FilmPrintTableData>;
   /// The u'v' table of @p result, with the exposure weights of a film under a scene spectrum.
   void BuildUvTable(std::span<const double> exposure_weights,

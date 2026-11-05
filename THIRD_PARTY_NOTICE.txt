@@ -243,14 +243,15 @@ The corresponding source archive is in the aria2 release above.
 
 E) Data tables in the bundled film print resources
 
-33) python-colormath, Status M density standard (film print: Lab Scan)
-Upstream: https://github.com/gtaylor/python-colormath (colormath/density_standards.py, commit 6d3261f9)
-License: BSD-3-Clause
-License text file: third_party_licenses/python-colormath-LICENSE.txt
-Usage note: the Status M spectral products (a copy of the ANSI tables) are resampled onto the
-wavelength grid of the film print and stored as common/scan_status_m_weights in
+33) aces-dev v1.3.1, the Academy ADX to ACES transform (film print: Lab Scan)
+Upstream: https://github.com/ampas/aces-dev (transforms/ctl/csc/ACEScsc.Academy.ADX10_to_ACES.ctl and
+ACEScsc.Academy.ADX16_to_ACES.ctl, tag v1.3.1)
+License: Academy Color Encoding System Components License (custom permissive license by A.M.P.A.S.)
+License text file: third_party_licenses/aces-core-LICENSE.md (the same text as LICENSE.md of aces-dev v1.3.1)
+Usage note: the constants of the transform (the CDD_TO_CID and EXP_TO_ACES matrices, the table below
+cid 0.6, and the ADX16 encoding values) are stored as common/adx_* in
 config/film_print/film_stock_bundle.bin, which print material Lab Scan reads. The tables of
-SMPTE ST 2065-2 (APD) are not distributed.
+SMPTE ST 2065-2 (APD) are not distributed: Lab Scan reads the printing density of Kodak 2383.
 
 F) Redistribution reminder
 

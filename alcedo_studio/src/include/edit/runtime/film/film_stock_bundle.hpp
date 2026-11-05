@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -82,31 +83,67 @@ struct FilmLightTableConstants {
   double                  surround_exponent = 1.0;  ///< On luminance in linear display light
 };
 
-/// Values of Lab Scan that are the same for all negatives: lab rules 'scan_light' with scanner
-/// 'status_m' and 'scan_log_curve'.
+/**
+ * @brief Values of Lab Scan that are the same for all negatives (lab decisions U92, U93).
+ *
+ * The scan reads the record in the printing density of a print material, encodes ADX16 with lab
+ * rule 'adx_slope_match', and applies the Academy ADX16 to ACES transform of aces-dev v1.3.1
+ * (A.M.P.A.S. license). The matrices multiply row vectors, as in the CTL of aces-dev.
+ */
 struct FilmScanConstants {
-  std::span<const double> status_m_weights;  ///< (3, wavelengths): the Status M weights
-  double                  log_curve_s0 = 0.0;  ///< Stops of the middle of the curve from the grey
-  double                  log_curve_w  = 0.0;  ///< Width of the curve, in stops
+  std::string             printing_paper;          ///< Print material of @ref printing_weights
+  std::span<const double> printing_weights;        ///< (3, wavelengths)
+  double                  code_per_density = 0.0;  ///< ADX16 code values per density
+  double                  code_base        = 0.0;  ///< ADX16 code of the film base
+  double                  lad_aim          = 0.0;  ///< ADX16 code of the LAD aim
+  double                  code_max         = 0.0;  ///< Largest ADX16 code
+  std::span<const double> cdd_to_cid;              ///< (3, 3)
+  std::span<const double> exp_to_aces;             ///< (3, 3)
+  std::span<const double> lut_cid;    ///< (n): the table of the transform below cid 0.6
+  std::span<const double> lut_log_e;  ///< (n)
+  double                  ref_pt = 0.0;
 };
 
 /// The fixed scalar values of one selection of negative and scene light on Lab Scan.
 struct FilmScanSetup {
   std::array<double, 3> layer_gain{};  ///< The layer gain of the print form of the same selection
-  /// Lab rule 'chart_straight_line': Status M density per stop of the grey scale.
-  std::array<double, 3> slope{};
-  /// Status M density of an 18 % grey, with the scan timing of the lab.
-  std::array<double, 3> grey{};
-  /// Row major: from the equivalent exposure to linear Rec. 709. Lab rule 'film_sensitivity_matrix'.
-  std::array<double, 9> rec709_matrix{};
-  std::span<const double> scene_spectrum;  ///< (wavelengths)
+  /// Printing density of the negative base: the D-min of equation 2 of ST 2065-3.
+  std::array<double, 3> base_printing_density{};
+  /// Printing density of an 18 % grey under the scene light: the pivot of rule 'adx_slope_match'.
+  std::array<double, 3> grey_printing_density{};
+  /// Rule 'adx_slope_match': the scale of each channel, 0.92 times the slope of green over the
+  /// slope of the channel at the grey.
+  std::array<double, 3> channel_scale{};
+  /// ADX16 code of the grey with the scale of equation 2, with no offset.
+  std::array<double, 3> grey_code{};
+  std::vector<double>   scene_spectrum;  ///< (wavelengths)
+};
+
+/**
+ * @brief A scene light as the blend of two lights of the bundle: (1 - share) first + share second.
+ *
+ * A named light has the same light twice and a share of 0. Scene light `as_shot` blends the two
+ * lights of the colour temperature grid around the colour temperature of the RAW decode, linear in
+ * mired. Each light has Y = 1, and the layer exposure is linear in the light, so the u'v' table of
+ * the blend is the blend of the two tables.
+ */
+struct FilmSceneLightMix {
+  std::string first;
+  std::string second;
+  double      share = 0.0;  ///< Share of @ref second, in [0, 1]
+};
+
+/// The colour temperature grid of the scene lights, in the order of falling mired.
+struct FilmCctGrid {
+  std::vector<double>      kelvin;  ///< The rounded colour temperature of each light
+  std::vector<std::string> lights;  ///< The scene light of each node
 };
 
 /// The fixed scalar values of one selection of colour reversal film and scene light.
 struct FilmReversalSetup {
-  std::array<double, 3>   layer_gain{};      ///< Lab rule 'daylight_reversal_balance'
-  std::array<double, 9>   xyz_to_display{};  ///< Row major. Lab rule 'clear_film_white'
-  std::span<const double> scene_spectrum;    ///< (wavelengths)
+  std::array<double, 3> layer_gain{};      ///< Lab rule 'daylight_reversal_balance'
+  std::array<double, 9> xyz_to_display{};  ///< Row major. Lab rule 'clear_film_white'
+  std::vector<double>   scene_spectrum;    ///< (wavelengths)
 };
 
 /// Values of the point stages that are the same for all stocks. Lab rules
@@ -160,7 +197,7 @@ struct FilmSelectionSetup {
   std::array<double, 3>   printing_gain{};
   std::array<double, 3>   aim_log_h{};
   std::array<double, 9>   xyz_to_display{};  ///< Row major: XYZ to linear Rec. 709
-  std::span<const double> scene_spectrum;    ///< (wavelengths)
+  std::vector<double>     scene_spectrum;    ///< (wavelengths)
 };
 
 /**
@@ -210,6 +247,25 @@ class FilmStockBundle {
   /// @throws std::runtime_error that names the identifier when one of the three is unknown.
   [[nodiscard]] auto Selection(std::string_view negative, std::string_view print_material,
                                std::string_view scene_light) const -> FilmSelectionSetup;
+  /// The values under a blend of two lights: each value that depends on the light is the blend of
+  /// its values under the two lights. @copydoc Selection
+  [[nodiscard]] auto Selection(std::string_view negative, std::string_view print_material,
+                               const FilmSceneLightMix& scene_light) const -> FilmSelectionSetup;
+
+  /**
+   * @brief The scene light of a document field, as lights of this bundle.
+   *
+   * @param scene_light A light of @ref SceneLights, or `as_shot`.
+   * @param raw_cct The colour temperature of the RAW decode, or none for an input with no RAW
+   *        white balance. Only `as_shot` reads it: with none, `as_shot` is the light `reference`;
+   *        else the blend of the two grid lights around it, linear in mired. A temperature outside
+   *        the grid takes the nearest end.
+   * @throws std::runtime_error that names @p scene_light when it is unknown, and for a temperature
+   *         that is not finite and above 0.
+   */
+  [[nodiscard]] auto SceneLightMix(std::string_view      scene_light,
+                                   std::optional<double> raw_cct) const -> FilmSceneLightMix;
+  [[nodiscard]] auto CctGrid() const -> const FilmCctGrid& { return cct_grid_; }
 
   /// True when @p id is a colour reversal film of this bundle.
   [[nodiscard]] auto IsReversal(std::string_view id) const -> bool;
@@ -218,6 +274,10 @@ class FilmStockBundle {
   /// @throws std::runtime_error that names the identifier when one of the two is unknown.
   [[nodiscard]] auto ReversalSelection(std::string_view reversal,
                                        std::string_view scene_light) const -> FilmReversalSetup;
+  /// @copydoc ReversalSelection
+  [[nodiscard]] auto ReversalSelection(std::string_view         reversal,
+                                       const FilmSceneLightMix& scene_light) const
+      -> FilmReversalSetup;
   /**
    * @brief The values of the steps FP1 to FP5 of a film: of a negative, or the record of a colour
    * reversal film.
@@ -235,6 +295,9 @@ class FilmStockBundle {
   /// @throws std::runtime_error that names the identifier when one of the two is unknown.
   [[nodiscard]] auto ScanSelection(std::string_view negative, std::string_view scene_light) const
       -> FilmScanSetup;
+  /// @copydoc ScanSelection
+  [[nodiscard]] auto ScanSelection(std::string_view         negative,
+                                   const FilmSceneLightMix& scene_light) const -> FilmScanSetup;
 
   /**
    * @brief Reflectance shapes of the kept u'v' nodes: (kept nodes, reflectance wavelengths).
@@ -278,6 +341,12 @@ class FilmStockBundle {
   void                       ReadReflectance(const FilmArrayFile& file);
   void                       CheckShapes() const;
   void CheckExposureBand(std::string_view id, std::span<const double> exposure_weights) const;
+  void ReadCctGrid();
+  /// Index of a light of @ref SceneLights. @throws std::runtime_error that names an unknown one.
+  [[nodiscard]] auto LightIndex(std::string_view scene_light) const -> std::int64_t;
+  /// The spectrum of @p mix, from the spectra that row @p row of @p spectrum_index names per light.
+  [[nodiscard]] auto MixSpectrum(std::span<const std::int32_t> spectrum_index, std::int64_t row,
+                                 const FilmSceneLightMix& mix) const -> std::vector<double>;
   /// The values of group @p group ('negative' or 'reversal') with the form of a negative.
   [[nodiscard]] auto ReadFilmRecord(std::string_view group, std::string_view id) const
       -> FilmNegativeView;
@@ -305,6 +374,7 @@ class FilmStockBundle {
   FilmImagePlaneConstants    image_plane_constants_;
   FilmLightTableConstants    light_table_;
   FilmScanConstants          scan_constants_;
+  FilmCctGrid                cct_grid_;
 };
 
 }  // namespace alcedo

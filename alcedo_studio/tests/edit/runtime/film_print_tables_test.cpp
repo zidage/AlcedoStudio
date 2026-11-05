@@ -161,8 +161,9 @@ auto Flat(double value) -> std::vector<double> {
 /// Small resources with two negatives, two papers, and two scene lights. The values have no
 /// physical meaning. Each one is distinct, so that a wrong index gives a wrong table.
 void WriteSyntheticResources(const fs::path& directory, double surround_exponent = 1.0,
-                             const std::string& lab_scan_id    = "lab_scan",
-                             double             first_scan_slope = 0.21) {
+                             const std::string& lab_scan_id      = "lab_scan",
+                             double             first_scan_scale = 0.91,
+                             const std::string& printing_paper   = "paper_a") {
   fs::create_directories(directory);
   std::map<std::string, ArrayValues> stock;
   stock["common/wavelengths_nm"] = F64Array({kWavelengths}, Flat(500.0));
@@ -184,8 +185,23 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
   stock["common/halation_um"]         = F64Array({}, {120.0});
   stock["common/inhibition_um"]       = F64Array({}, {35.0});
   stock["common/enlarger_flare_size"] = F64Array({}, {0.1});
-  stock["common/scan_status_m_weights"] = F64Array({3, kWavelengths}, BandRows(0.8, 0.001));
-  stock["common/scan_log_curve"]        = F64Array({2}, {0.2581, 1.6664});
+  // The ADX16 encoding and the constants of the Academy ADX to ACES transform (aces-dev v1.3.1).
+  stock["common/adx_code_per_density"] = F64Array({}, {8000.0});
+  stock["common/adx_code_base"]        = F64Array({}, {1520.0});
+  stock["common/adx_lad_aim"]          = F64Array({}, {7120.0});
+  stock["common/adx_code_max"]         = F64Array({}, {65535.0});
+  stock["common/adx_equation_scale"]   = F64Array({3}, {1.00, 0.92, 0.95});
+  stock["common/adx_cdd_to_cid"]       = F64Array(
+      {3, 3}, {0.75573, 0.05901, 0.16134, 0.22197, 0.96928, 0.07406, 0.02230, -0.02829, 0.76460});
+  stock["common/adx_exp_to_aces"] = F64Array(
+      {3, 3}, {0.72286, 0.11923, 0.01427, 0.12630, 0.76418, 0.08213, 0.15084, 0.11659, 0.90359});
+  stock["common/adx_lut_cid"] =
+      F64Array({11}, {-0.19, 0.01, 0.028, 0.054, 0.095, 0.145, 0.22, 0.3, 0.4, 0.5, 0.6});
+  stock["common/adx_lut_log_e"] =
+      F64Array({11}, {-6.0, -2.721718645, -2.521718645, -2.321718645, -2.121718645, -1.921718645,
+                      -1.721718645, -1.521718645, -1.321718645, -1.121718645, -0.926545676714876});
+  stock["common/adx_ref_pt"] =
+      F64Array({}, {(7120.0 - 1520.0) / 8000.0 * (100.0 / 55.0) - std::log10(0.18)});
   stock["light/flat/spectrum"]   = F64Array({kWavelengths}, Flat(1.0));
   stock["light/ramp/spectrum"]   = F64Array({kWavelengths}, {0.5, 0.75, 1.0, 1.25, 1.5, 1.75});
   for (const auto& stock_entry : std::map<std::string, double>{{"neg_a", 1.0}, {"neg_b", 1.2}}) {
@@ -210,6 +226,8 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
     stock[name("curve_lengths")]     = ArrayValues{"i8", {3}, ToBytes<std::int64_t>({4, 4, 3})};
     stock[name("curve_log_h_start")] = F64Array({3}, {-3.0, -2.5, -2.0});
     stock[name("curve_log_h_step")]  = F64Array({}, {0.5});
+    stock[name("adx_base_printing_density")] =
+        F64Array({3}, {0.2 * scale, 0.3 * scale, 0.4 * scale});
   }
   // neg_b has no inhibition, as a stock with no modulation transfer data.
   stock["negative/neg_a/inhibition_k"] =
@@ -279,7 +297,12 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
       {"reversal_list_order", {"rev_a"}},
       {"scene_lights", {"reference", "daylight"}},
       {"scene_spectra", {"flat", "ramp"}},
-      {"lab_scan", {{"id", lab_scan_id}, {"name", "Lab Scan"}}}};
+      {"lab_scan", {{"id", lab_scan_id}, {"name", "Lab Scan"}, {"printing_paper", printing_paper}}},
+      // A grid of two nodes. The lights are those of the list, so the arrays keep two lights.
+      {"cct_grid",
+       {{"kelvin", {3000, 6000}},
+        {"lights", {"reference", "daylight"}},
+        {"mired", {1e6 / 3000.0, 1e6 / 6000.0}}}}};
   WriteArrayFile(directory / "film_stock_bundle.bin", stock, metadata);
 
   std::vector<double> balance;
@@ -303,15 +326,12 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
   // balance.
   setup["reversal_scene_spectrum_index"] = ArrayValues{"i4", {1, 2}, ToBytes<std::int32_t>({1, 0})};
   // Lab Scan, per negative and scene light.
-  setup["scan_slope"] =
-      F64Array({2, 2, 3}, {first_scan_slope, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27, 0.28, 0.29, 0.30, 0.31, 0.32});
-  setup["scan_grey"] =
+  setup["adx_channel_scale"] = F64Array({2, 2, 3}, {first_scan_scale, 0.92, 0.93, 0.94, 0.92, 0.96,
+                                                    0.97, 0.92, 0.99, 0.81, 0.92, 0.83});
+  setup["adx_grey_printing_density"] =
       F64Array({2, 2, 3}, {0.9, 1.0, 1.1, 0.95, 1.05, 1.15, 0.8, 0.85, 0.9, 0.82, 0.87, 0.92});
-  std::vector<double> scan_matrix;
-  for (int value = 0; value < 2 * 2 * 9; ++value) {
-    scan_matrix.push_back(value % 4 == 0 ? 1.2 : -0.1 + 0.001 * value);
-  }
-  setup["scan_rec709_matrix"] = F64Array({2, 2, 3, 3}, scan_matrix);
+  setup["adx_grey"] = F64Array({2, 2, 3}, {6000.0, 6100.0, 6200.0, 6300.0, 6400.0, 6500.0, 5000.0,
+                                           5100.0, 5200.0, 5300.0, 5400.0, 5500.0});
   WriteArrayFile(directory / "film_print_setup.bin", setup, nlohmann::json::object());
 
   WriteReflectance(directory / "film_reflectance_table.bin", KeptNodes(), 0, kWavelengths - 1);
@@ -756,31 +776,128 @@ TEST_F(FilmPrintTablesTest, ScanSelectionReadsTheValuesOfItsNegativeAndLight) {
 
   // neg_b is the second negative and daylight the second light.
   const auto scan = bundle->ScanSelection("neg_b", "daylight");
-  EXPECT_EQ(scan.slope, (std::array<double, 3>{0.30, 0.31, 0.32}));
-  EXPECT_EQ(scan.grey, (std::array<double, 3>{0.82, 0.87, 0.92}));
-  // The matrix of (neg_b, daylight) starts at value 27 of the array.
-  EXPECT_EQ(scan.rec709_matrix[0], -0.1 + 0.001 * 27);
-  EXPECT_EQ(scan.rec709_matrix[1], 1.2);
+  EXPECT_EQ(scan.channel_scale, (std::array<double, 3>{0.81, 0.92, 0.83}));
+  EXPECT_EQ(scan.grey_printing_density, (std::array<double, 3>{0.82, 0.87, 0.92}));
+  EXPECT_EQ(scan.grey_code, (std::array<double, 3>{5300.0, 5400.0, 5500.0}));
+  EXPECT_EQ(scan.base_printing_density, (std::array<double, 3>{0.2 * 1.2, 0.3 * 1.2, 0.4 * 1.2}));
   // The layer gain and the scene spectrum are those of a print of the same negative and light.
   const auto print = bundle->Selection("neg_b", "paper_a", "daylight");
   EXPECT_EQ(scan.layer_gain, print.layer_gain);
-  EXPECT_EQ(scan.scene_spectrum.data(), print.scene_spectrum.data());
-  EXPECT_EQ(bundle->ScanConstants().log_curve_s0, 0.2581);
-  EXPECT_EQ(bundle->ScanConstants().log_curve_w, 1.6664);
-  EXPECT_EQ(bundle->ScanConstants().status_m_weights.size(), 3U * kWavelengths);
+  EXPECT_EQ(scan.scene_spectrum, print.scene_spectrum);
+  // The printing weights are those of the printing paper of the metadata.
+  const auto& constants = bundle->ScanConstants();
+  EXPECT_EQ(constants.printing_paper, "paper_a");
+  EXPECT_EQ(constants.printing_weights.data(),
+            bundle->PrintMaterial("paper_a").printing_weights.data());
+  EXPECT_EQ(constants.code_per_density, 8000.0);
+  EXPECT_EQ(constants.code_base, 1520.0);
+  EXPECT_EQ(constants.lad_aim, 7120.0);
+  EXPECT_EQ(constants.code_max, 65535.0);
+  EXPECT_EQ(constants.cdd_to_cid[3], 0.22197);
+  EXPECT_EQ(constants.exp_to_aces[8], 0.90359);
+  EXPECT_EQ(constants.lut_cid.size(), 11U);
+  EXPECT_EQ(constants.lut_log_e[10], -0.926545676714876);
 
   EXPECT_THROW((void)bundle->ScanSelection("rev_a", "daylight"), std::runtime_error);
   EXPECT_THROW((void)bundle->ScanSelection("neg_a", "no_light"), std::runtime_error);
 }
 
-TEST_F(FilmPrintTablesTest, ScanTableIsTheStatusMDensityOfTheNegative) {
+TEST_F(FilmPrintTablesTest, AsShotBlendsTheTwoGridLightsLinearInMired) {
+  const auto bundle = FilmStockBundle::Open(Resources());
+  ASSERT_EQ(bundle->CctGrid().kelvin, (std::vector<double>{3000.0, 6000.0}));
+  // A named light is that light.
+  const auto named = bundle->SceneLightMix("daylight", 4000.0);
+  EXPECT_EQ(named.first, "daylight");
+  EXPECT_EQ(named.second, "daylight");
+  EXPECT_EQ(named.share, 0.0);
+  // As Shot with no RAW white balance is the reference.
+  const auto raster = bundle->SceneLightMix("as_shot", std::nullopt);
+  EXPECT_EQ(raster.first, "reference");
+  EXPECT_EQ(raster.share, 0.0);
+  // 4000 K is 250 mired, the middle of 333.3 and 166.7 mired.
+  const auto middle = bundle->SceneLightMix("as_shot", 4000.0);
+  EXPECT_EQ(middle.first, "reference");
+  EXPECT_EQ(middle.second, "daylight");
+  EXPECT_NEAR(middle.share, 0.5, 1e-12);
+  EXPECT_NEAR(bundle->SceneLightMix("as_shot", 1e6 / 300.0).share,
+              (1e6 / 3000.0 - 300.0) / (1e6 / 3000.0 - 1e6 / 6000.0), 1e-12);
+  // Outside the grid: the nearest end.
+  EXPECT_EQ(bundle->SceneLightMix("as_shot", 2000.0).first, "reference");
+  EXPECT_EQ(bundle->SceneLightMix("as_shot", 2000.0).share, 0.0);
+  EXPECT_EQ(bundle->SceneLightMix("as_shot", 15000.0).first, "daylight");
+  EXPECT_THROW((void)bundle->SceneLightMix("no_light", 4000.0), std::runtime_error);
+  EXPECT_THROW((void)bundle->SceneLightMix("as_shot", std::nan("")), std::runtime_error);
+  EXPECT_THROW((void)bundle->SceneLightMix("as_shot", 0.0), std::runtime_error);
+
+  // Each value that depends on the light is the blend of its values under the two lights.
+  const auto mix = FilmSceneLightMix{"reference", "daylight", 0.25};
+  const auto a   = bundle->Selection("neg_b", "paper_b", "reference");
+  const auto b   = bundle->Selection("neg_b", "paper_b", "daylight");
+  const auto ab  = bundle->Selection("neg_b", "paper_b", mix);
+  for (std::size_t k = 0; k < 3; ++k) {
+    EXPECT_NEAR(ab.layer_gain[k], 0.75 * a.layer_gain[k] + 0.25 * b.layer_gain[k], 1e-15);
+    EXPECT_NEAR(ab.printer_balance_log10[k],
+                0.75 * a.printer_balance_log10[k] + 0.25 * b.printer_balance_log10[k], 1e-15);
+    EXPECT_EQ(ab.printing_gain[k], a.printing_gain[k]);
+  }
+  ASSERT_EQ(ab.scene_spectrum.size(), a.scene_spectrum.size());
+  for (std::size_t w = 0; w < ab.scene_spectrum.size(); ++w) {
+    EXPECT_NEAR(ab.scene_spectrum[w], 0.75 * a.scene_spectrum[w] + 0.25 * b.scene_spectrum[w],
+                1e-15);
+  }
+  const auto sa  = bundle->ScanSelection("neg_a", "reference");
+  const auto sb  = bundle->ScanSelection("neg_a", "daylight");
+  const auto sab = bundle->ScanSelection("neg_a", mix);
+  for (std::size_t k = 0; k < 3; ++k) {
+    EXPECT_NEAR(sab.channel_scale[k], 0.75 * sa.channel_scale[k] + 0.25 * sb.channel_scale[k],
+                1e-15);
+    EXPECT_NEAR(sab.grey_printing_density[k],
+                0.75 * sa.grey_printing_density[k] + 0.25 * sb.grey_printing_density[k], 1e-15);
+    EXPECT_NEAR(sab.grey_code[k], 0.75 * sa.grey_code[k] + 0.25 * sb.grey_code[k], 1e-12);
+    EXPECT_EQ(sab.base_printing_density[k], sa.base_printing_density[k]);
+  }
+  const auto ra  = bundle->ReversalSelection("rev_a", "reference");
+  const auto rb  = bundle->ReversalSelection("rev_a", "daylight");
+  const auto rab = bundle->ReversalSelection("rev_a", mix);
+  EXPECT_NEAR(rab.layer_gain[1], 0.75 * ra.layer_gain[1] + 0.25 * rb.layer_gain[1], 1e-15);
+  EXPECT_NEAR(rab.scene_spectrum[0], 0.75 * ra.scene_spectrum[0] + 0.25 * rb.scene_spectrum[0],
+              1e-15);
+}
+
+TEST_F(FilmPrintTablesTest, UvTableOfABlendIsTheBlendOfTheTables) {
+  // The layer exposure is linear in the light, so the table of the blended spectrum is the blend.
+  FilmPrintTables tables(FilmStockBundle::Open(Resources()));
+  const auto      a     = tables.Resolve("neg_a", "paper_a", "reference");
+  const auto      b     = tables.Resolve("neg_a", "paper_a", "daylight");
+  const auto      mix   = FilmSceneLightMix{"reference", "daylight", 0.4};
+  const auto      blend = tables.Resolve("neg_a", "paper_a", mix);
+  ASSERT_EQ(blend->uv_exposure.size(), a->uv_exposure.size());
+  for (std::size_t index = 0; index < blend->uv_exposure.size(); ++index) {
+    const auto expected = 0.6 * a->uv_exposure[index] + 0.4 * b->uv_exposure[index];
+    EXPECT_NEAR(blend->uv_exposure[index], expected, 1e-12 * (std::max)(1.0, expected));
+  }
+  EXPECT_NE(blend->uv_key, a->uv_key);
+  EXPECT_NE(blend->uv_key, b->uv_key);
+  EXPECT_NE(blend->print_key, a->print_key);
+  EXPECT_EQ(tables.Resolve("neg_a", "paper_a", mix).get(), blend.get());
+  // A share of 0 is the first light, with its own key, and the same values.
+  const auto zero =
+      tables.Resolve("neg_a", "paper_a", FilmSceneLightMix{"reference", "daylight", 0.0});
+  EXPECT_EQ(zero->uv_exposure, a->uv_exposure);
+  // The Lab Scan of the blend shares the u'v' table of the print of the blend.
+  const auto scan = tables.Resolve("neg_a", "lab_scan", mix);
+  EXPECT_EQ(scan->uv_key, blend->uv_key);
+  EXPECT_EQ(scan->print_key, tables.Resolve("neg_a", "lab_scan", "reference")->print_key);
+}
+
+TEST_F(FilmPrintTablesTest, ScanTableIsThePrintingDensityOfTheNegative) {
   const auto      bundle = FilmStockBundle::Open(Resources());
   FilmPrintTables tables(bundle);
   const auto      result = tables.Resolve("neg_a", "lab_scan", "reference");
   ASSERT_TRUE(result->scan);
   EXPECT_FALSE(result->light_table);
   const auto     negative = bundle->Negative("neg_a");
-  const auto     weights  = bundle->ScanConstants().status_m_weights;
+  const auto     weights  = bundle->PrintMaterial("paper_a").printing_weights;
   constexpr auto kEdge    = static_cast<std::size_t>(kFilmPrintTableEdge);
   ASSERT_EQ(result->print_cube_root_xyz.size(), kEdge * kEdge * kEdge * 3);
   for (const auto& [r, g, b] :
@@ -826,7 +943,7 @@ TEST_F(FilmPrintTablesTest, ScanReadsNoPaperAndSharesTheTablesOfTheNegativeWithA
   EXPECT_EQ(scan->uv_exposure, print->uv_exposure);
   EXPECT_EQ(scan->kernel_values, print->kernel_values);
   EXPECT_NE(scan->print_key, print->print_key);
-  // The Status M table depends on the negative only.
+  // The printing density table depends on the negative only.
   const auto daylight = tables.Resolve("neg_a", "lab_scan", "daylight");
   EXPECT_NE(daylight.get(), scan.get());
   EXPECT_EQ(daylight->print_key, scan->print_key);
@@ -845,70 +962,160 @@ TEST_F(FilmPrintTablesTest, ScanReadsNoPaperAndSharesTheTablesOfTheNegativeWithA
 
 TEST_F(FilmPrintTablesTest, ScanKernelParamsHaveTheScanForm) {
   const auto       bundle = FilmStockBundle::Open(Resources());
+  const auto       light  = FilmSceneLightMix{"daylight", "daylight", 0.0};
   FilmKernelParams params{};
-  film_print_kernel_tables::FillParams(*bundle, "neg_b", "lab_scan", "daylight", 65, params);
+  film_print_kernel_tables::FillParams(*bundle, "neg_b", "lab_scan", light, false, 65, params);
   EXPECT_EQ(params.scan, 1U);
   EXPECT_EQ(params.light_table, 0U);
   EXPECT_EQ(params.cinema_look, 0U);
   EXPECT_EQ(params.negative_grade, 0U);
   EXPECT_EQ(params.display_surround_power, 0.0f);
-  EXPECT_FLOAT_EQ(params.scan_slope[2], 0.32f);
-  EXPECT_FLOAT_EQ(params.scan_grey[0], 0.82f);
-  EXPECT_FLOAT_EQ(params.xyz_to_display[1], 1.2f);
-  EXPECT_FLOAT_EQ(params.scan_log_s0, 0.2581f);
-  EXPECT_FLOAT_EQ(params.scan_log_w, 1.6664f);
+  EXPECT_FLOAT_EQ(params.scan_grey_density[0], 0.82f);
+  // With the LAD aim off, the code of the grey has no offset: the scan is untimed.
+  EXPECT_FLOAT_EQ(params.scan_grey_code[1], 5400.0f);
+  EXPECT_FLOAT_EQ(params.scan_code_slope[2], static_cast<float>(8000.0 * 0.83));
+  EXPECT_FLOAT_EQ(params.scan_code_base, 1520.0f);
+  EXPECT_FLOAT_EQ(params.scan_code_max, 65535.0f);
+  EXPECT_FLOAT_EQ(params.scan_code_per_density, 8000.0f);
+  EXPECT_FLOAT_EQ(params.scan_cdd_to_cid[1], 0.05901f);
+  EXPECT_FLOAT_EQ(params.scan_lut_cid[10], 0.6f);
+  EXPECT_FLOAT_EQ(params.scan_lut_log_e[0], -6.0f);
   EXPECT_FLOAT_EQ(params.layer_gain[0], 1.9f);
-  // The record grid of the Status M table is the grid of the print table.
+  // EXP_TO_ACES (row vectors), then ACES2065-1 to AP1: AP0 (1, 0, 0) is AP1 (1.4514, -0.0766,
+  // 0.0083), so the first row of a unit exposure (1, 0, 0) is EXP_TO_ACES row 0 in AP1.
+  const double ap0_to_ap1[9] = {1.4514393161,  -0.2365107469, -0.2149285693,
+                                -0.0765537734, 1.1762296998,  -0.0996759264,
+                                0.0083161484,  -0.0060324498, 0.9977163014};
+  const double exp_row0[3]   = {0.72286, 0.11923, 0.01427};
+  for (std::size_t j = 0; j < 3; ++j) {
+    double expected = 0.0;
+    for (std::size_t i = 0; i < 3; ++i) {
+      expected += exp_row0[i] * ap0_to_ap1[j * 3 + i];
+    }
+    EXPECT_NEAR(params.scan_exp_to_ap1[j], expected, 2e-6) << j;
+  }
+  // With the LAD aim on, the grey goes to the aim on each channel.
+  FilmKernelParams timed{};
+  film_print_kernel_tables::FillParams(*bundle, "neg_b", "lab_scan", light, true, 65, timed);
+  EXPECT_EQ(timed.scan_grey_code[0], 7120.0f);
+  EXPECT_EQ(timed.scan_grey_code[2], 7120.0f);
+  // The record grid of the printing density table is the grid of the print table.
   const auto negative = bundle->Negative("neg_b");
   EXPECT_FLOAT_EQ(params.print_step[1],
                   static_cast<float>((negative.density_grid_stop[1] - negative.density_grid_start[1]) / 64.0));
 
-  // The other forms have no scan values.
+  // The other forms are not the scan form, and the LAD aim does not change them.
   FilmKernelParams print{};
-  film_print_kernel_tables::FillParams(*bundle, "neg_b", "paper_a", "daylight", 65, print);
+  film_print_kernel_tables::FillParams(*bundle, "neg_b", "paper_a", light, true, 65, print);
   EXPECT_EQ(print.scan, 0U);
+  FilmKernelParams print_off{};
+  film_print_kernel_tables::FillParams(*bundle, "neg_b", "paper_a", "daylight", 65, print_off);
+  EXPECT_EQ(std::memcmp(&print, &print_off, sizeof(print)), 0);
   FilmKernelParams reversal{};
   film_print_kernel_tables::FillParams(*bundle, "rev_a", "lab_scan", "daylight", 65, reversal);
   EXPECT_EQ(reversal.scan, 0U);
   EXPECT_EQ(reversal.light_table, 1U);
 }
 
-TEST_F(FilmPrintTablesTest, ScanLogCurveShowsTheGreyAsTheCodeOfADigitalGrey) {
-  // Rule 'scan_log_curve': s0 and w of the lab put an 18 % grey at the sRGB code of 0.18.
-  FilmKernelParams params{};
-  params.scan_log_s0     = 0.2581f;
-  params.scan_log_w      = 1.6664f;
-  const float grey_code  = FilmKernelSrgbEncode(0.18f);
-  EXPECT_NEAR(FilmKernelScanLogCurve(&params, 0.18f), grey_code, 1e-4f);
-  // A value of 0 or below takes the smallest value, so the curve stays finite.
-  EXPECT_GT(FilmKernelScanLogCurve(&params, 0.0f), 0.0f);
-  EXPECT_LT(FilmKernelScanLogCurve(&params, -1.0f), 1e-6f);
-  EXPECT_GT(FilmKernelScanLogCurve(&params, 1e6f), 0.999f);
-  // One stop up and down are symmetric about s0, not about the grey.
-  const float up   = FilmKernelScanLogCurve(&params, 0.18f * std::exp2(0.2581f + 1.0f));
-  const float down = FilmKernelScanLogCurve(&params, 0.18f * std::exp2(0.2581f - 1.0f));
-  EXPECT_NEAR(up + down, 1.0f, 1e-6f);
+/// The scan form of issue 661 in double precision, from the stored values: the lab
+/// `scan_point_form` of build_product_resources.py after the read of the table.
+auto ScanAcesOfDensity(const FilmStockBundle& bundle, const FilmScanSetup& setup, bool lad_aim,
+                       std::array<double, 3> density) -> std::array<double, 3> {
+  const auto&           scan = bundle.ScanConstants();
+  std::array<double, 3> cdd{};
+  for (std::size_t k = 0; k < 3; ++k) {
+    const double offset = lad_aim ? scan.lad_aim - setup.grey_code[k] : 0.0;
+    const double code   = std::clamp(setup.grey_code[k] +
+                                         scan.code_per_density * setup.channel_scale[k] *
+                                             (density[k] - setup.grey_printing_density[k]) +
+                                         offset,
+                                     0.0, scan.code_max);
+    cdd[k]              = (code - scan.code_base) / scan.code_per_density;
+  }
+  std::array<double, 3> exposure{};
+  for (std::size_t j = 0; j < 3; ++j) {
+    const double cid = cdd[0] * scan.cdd_to_cid[j] + cdd[1] * scan.cdd_to_cid[3 + j] +
+                       cdd[2] * scan.cdd_to_cid[6 + j];
+    double log_e = 0.0;
+    if (cid > 0.6) {
+      log_e = (100.0 / 55.0) * cid - scan.ref_pt;
+    } else if (cid <= scan.lut_cid[0]) {
+      log_e = scan.lut_log_e[0];
+    } else {
+      std::size_t k = 1;
+      while (cid > scan.lut_cid[k]) ++k;
+      const double t = (cid - scan.lut_cid[k - 1]) / (scan.lut_cid[k] - scan.lut_cid[k - 1]);
+      log_e          = scan.lut_log_e[k - 1] + t * (scan.lut_log_e[k] - scan.lut_log_e[k - 1]);
+    }
+    exposure[j] = std::pow(10.0, log_e);
+  }
+  std::array<double, 3> aces{};
+  for (std::size_t j = 0; j < 3; ++j) {
+    aces[j] = exposure[0] * scan.exp_to_aces[j] + exposure[1] * scan.exp_to_aces[3 + j] +
+              exposure[2] * scan.exp_to_aces[6 + j];
+  }
+  return aces;
 }
 
-TEST_F(FilmPrintTablesTest, ScanCompressionKeepsValuesAboveOne) {
-  // The scan form compresses with the values of the print display, and has no clip before the log
-  // curve. The print form clips after the same compression.
-  FilmKernelParams params{};
-  for (std::size_t k = 0; k < 3; ++k) {
-    params.gamut_threshold[k] = 0.8f;
-    params.gamut_scale[k]     = 0.3f;
+TEST_F(FilmPrintTablesTest, ScanSceneIsTheAcademyTransformOfTheAdx16Code) {
+  const auto      bundle = FilmStockBundle::Open(Resources());
+  FilmPrintTables tables(bundle);
+  const auto      data          = tables.Resolve("neg_a", "lab_scan", "reference");
+  const auto      setup         = bundle->ScanSelection("neg_a", "reference");
+  const auto*     rgba          = reinterpret_cast<const float*>(data->print_rgba.data());
+  const auto      negative      = bundle->Negative("neg_a");
+  // AP1 to ACES2065-1, for the comparison in ACES.
+  const double    ap1_to_ap0[9] = {0.6954522414,  0.1406786965, 0.1638690622,
+                                   0.0447945634,  0.8596711185, 0.0955343182,
+                                   -0.0055258826, 0.0040252103, 1.0015006723};
+  for (const bool lad : {false, true}) {
+    FilmKernelParams params{};
+    film_print_kernel_tables::FillParams(*bundle, "neg_a", "lab_scan",
+                                         FilmSceneLightMix{"reference", "reference", 0.0}, lad,
+                                         data->edge, params);
+    for (const auto& node :
+         {std::array<std::size_t, 3>{0, 0, 0}, std::array<std::size_t, 3>{20, 33, 41},
+          std::array<std::size_t, 3>{64, 64, 64}, std::array<std::size_t, 3>{50, 5, 30}}) {
+      SCOPED_TRACE(std::to_string(node[0]) + ", " + std::to_string(node[1]) + ", " +
+                   std::to_string(node[2]) + (lad ? ", LAD aim on" : ", LAD aim off"));
+      // A record on a node reads the node value with no interpolation.
+      std::array<float, 3>  record{};
+      std::array<double, 3> density{};
+      for (std::size_t k = 0; k < 3; ++k) {
+        record[k]  = params.print_start[k] + params.print_step[k] * static_cast<float>(node[k]);
+        density[k] = data->print_cube_root_xyz[((node[0] * 65 + node[1]) * 65 + node[2]) * 3 + k];
+      }
+      const auto ap1 =
+          FilmKernelScanSceneAp1(&params, rgba, FilmKernelMakeRgb(record[0], record[1], record[2]));
+      const std::array<double, 3> got{ap1.r, ap1.g, ap1.b};
+      const auto                  expected = ScanAcesOfDensity(*bundle, setup, lad, density);
+      for (std::size_t j = 0; j < 3; ++j) {
+        const double aces = ap1_to_ap0[j * 3] * got[0] + ap1_to_ap0[j * 3 + 1] * got[1] +
+                            ap1_to_ap0[j * 3 + 2] * got[2];
+        EXPECT_NEAR(aces, expected[j], 2e-5 * (std::max)(std::abs(expected[j]), 1e-3)) << j;
+      }
+    }
   }
-  params.gamut_power  = 1.2f;
-  const auto rgb      = FilmKernelMakeRgb(2.5f, -0.4f, 0.6f);
-  const auto scan     = FilmKernelCompressDisplay(&params, rgb);
-  const auto print    = FilmKernelFinishDisplay(&params, rgb);
-  EXPECT_EQ(scan.r, 2.5f);
-  EXPECT_GT(scan.g, -0.4f);
-  EXPECT_EQ(print.r, 1.0f);
-  EXPECT_EQ(print.b, (std::min)(scan.b, 1.0f));
-  const auto none = FilmKernelCompressDisplay(&params, FilmKernelMakeRgb(-1.0f, -2.0f, 0.0f));
-  EXPECT_EQ(none.r, 0.0f);
-  EXPECT_EQ(none.g, 0.0f);
+  (void)negative;
+}
+
+TEST_F(FilmPrintTablesTest, ScanLogExposureFollowsTheAcademyTable) {
+  const auto       bundle = FilmStockBundle::Open(Resources());
+  FilmKernelParams params{};
+  film_print_kernel_tables::FillParams(*bundle, "neg_a", "lab_scan", "reference", 65, params);
+  // Below the first node: the end value, as numpy.interp.
+  EXPECT_EQ(FilmKernelScanLogExposure(&params, -1.0f), -6.0f);
+  EXPECT_EQ(FilmKernelScanLogExposure(&params, -0.19f), -6.0f);
+  // On a node: the node value. Between: the straight line.
+  EXPECT_NEAR(FilmKernelScanLogExposure(&params, 0.3f), -1.521718645f, 1e-6f);
+  EXPECT_NEAR(FilmKernelScanLogExposure(&params, 0.35f), -1.421718645f, 1e-6f);
+  // Above 0.6: slope 100 / 55, and no step at 0.6.
+  const float ref_pt = params.scan_ref_pt;
+  EXPECT_NEAR(FilmKernelScanLogExposure(&params, 0.6f), -0.926545676714876f, 1e-6f);
+  EXPECT_NEAR(FilmKernelScanLogExposure(&params, 0.6001f), 100.0f / 55.0f * 0.6001f - ref_pt,
+              1e-6f);
+  EXPECT_NEAR(100.0f / 55.0f * 0.6f - ref_pt, -0.926545676714876f, 2e-6f);
+  EXPECT_NEAR(FilmKernelScanLogExposure(&params, 1.0f), 100.0f / 55.0f - ref_pt, 1e-6f);
 }
 
 TEST_F(FilmPrintTablesTest, LabScanThatNamesAPrintMaterialThrows) {
@@ -918,11 +1125,18 @@ TEST_F(FilmPrintTablesTest, LabScanThatNamesAPrintMaterialThrows) {
   EXPECT_NE(error.find("paper_a"), std::string::npos) << error;
 }
 
-TEST_F(FilmPrintTablesTest, ScanSlopeOfZeroThrows) {
-  // A slope of 0 has no inverse in rule 'chart_straight_line'.
-  WriteSyntheticResources(root_ / "scan_slope_zero", 1.0, "lab_scan", 0.0);
-  const auto error = OpenError(root_ / "scan_slope_zero");
-  EXPECT_NE(error.find("slope"), std::string::npos) << error;
+TEST_F(FilmPrintTablesTest, LabScanPrintingPaperThatIsNotAPrintMaterialThrows) {
+  WriteSyntheticResources(root_ / "lab_scan_no_paper", 1.0, "lab_scan", 0.91, "paper_z");
+  const auto error = OpenError(root_ / "lab_scan_no_paper");
+  EXPECT_NE(error.find("printing paper"), std::string::npos) << error;
+  EXPECT_NE(error.find("paper_z"), std::string::npos) << error;
+}
+
+TEST_F(FilmPrintTablesTest, ScanChannelScaleOfZeroThrows) {
+  // Rule 'adx_slope_match' divides by the slope of each channel.
+  WriteSyntheticResources(root_ / "scan_scale_zero", 1.0, "lab_scan", 0.0);
+  const auto error = OpenError(root_ / "scan_scale_zero");
+  EXPECT_NE(error.find("channel scale"), std::string::npos) << error;
 }
 
 TEST_F(FilmPrintTablesTest, DisplaySurroundMovesLuminanceAndKeepsChromaticity) {
@@ -1088,10 +1302,33 @@ struct LabSelection {
   std::string print_material;
   std::string scene_light;
   bool        reversal = false;
-  /// A file of print material Lab Scan holds the Status M table and the scan values, and no u'v'
-  /// table.
+  /// A file of print material Lab Scan holds the printing density table and the scan values, and
+  /// no u'v' table.
   bool        scan     = false;
 };
+
+/// A file of the blend of two grid lights for scene light As Shot (`scan__<negative>__cct<K>.bin`).
+struct LabBlend {
+  fs::path    path;
+  std::string negative;
+  double      kelvin = 0.0;
+  std::string node_a;
+  std::string node_b;
+};
+
+auto LabBlends() -> std::vector<LabBlend> {
+  std::vector<LabBlend> blends;
+  for (const auto& entry : fs::directory_iterator(fs::path(ALCEDO_FILM_PRINT_EXPECTED_DIR))) {
+    if (!entry.is_regular_file()) continue;
+    const auto file     = FilmArrayFile::Parse(ReadBytes(entry.path()), entry.path());
+    const auto metadata = file.Metadata();
+    if (!metadata.contains("kelvin")) continue;
+    blends.push_back({entry.path(), metadata.at("negative").get<std::string>(),
+                      metadata.at("kelvin").get<double>(), metadata.at("node_a").get<std::string>(),
+                      metadata.at("node_b").get<std::string>()});
+  }
+  return blends;
+}
 
 auto LabSelections() -> std::vector<LabSelection> {
   std::vector<LabSelection> selections;
@@ -1100,6 +1337,8 @@ auto LabSelections() -> std::vector<LabSelection> {
     if (!entry.is_regular_file()) continue;
     const auto file     = FilmArrayFile::Parse(ReadBytes(entry.path()), entry.path());
     const auto metadata = file.Metadata();
+    // A blend file has no table: see LabBlends.
+    if (metadata.contains("kelvin")) continue;
     if (metadata.contains("reversal")) {
       selections.push_back({entry.path(), metadata.at("reversal").get<std::string>(), "",
                             metadata.at("scene_light").get<std::string>(), true});
@@ -1244,7 +1483,7 @@ TEST_F(FilmPrintTablesLabTest, ReversalSetupOfEachFilmAndLightMatchesTheLabArray
   }
   std::cout << "reversal setup of " << checked << " selections: largest absolute difference "
             << largest << "\n";
-  EXPECT_EQ(checked, 5 * 11);
+  EXPECT_EQ(checked, 5 * static_cast<int>(lights.size()));
   EXPECT_LE(largest, 1e-9);
 }
 
@@ -1256,13 +1495,13 @@ TEST_F(FilmPrintTablesLabTest, ScanTableMatchesLab) {
     const auto result = tables_->Resolve(selection.negative, kFilmLabScanId, selection.scene_light);
     ASSERT_TRUE(result->scan);
     const auto file  = FilmArrayFile::Parse(ReadBytes(selection.path), selection.path);
-    const auto table = file.F64("status_m_table", {65, 65, 65, 3});
+    const auto table = file.F64("printing_density_table", {65, 65, 65, 3});
     ASSERT_EQ(result->print_cube_root_xyz.size(), table.size());
     EXPECT_TRUE(std::ranges::all_of(result->print_cube_root_xyz,
                                     [](double value) { return std::isfinite(value); }));
     const auto largest = LargestRelativeDifference(result->print_cube_root_xyz, table);
     std::cout << "scan " << selection.negative << " under " << selection.scene_light
-              << ": Status M table largest relative difference " << largest << "\n";
+              << ": printing density table largest relative difference " << largest << "\n";
     EXPECT_LE(largest, kLabRelativeLimit);
     // The record grid of the table.
     const auto negative = bundle_->Negative(selection.negative);
@@ -1273,17 +1512,19 @@ TEST_F(FilmPrintTablesLabTest, ScanTableMatchesLab) {
       EXPECT_NEAR(negative.density_grid_stop[k], stop[k], 1e-12);
     }
     // The values of the selection that the file states.
-    const auto setup   = bundle_->ScanSelection(selection.negative, selection.scene_light);
-    const auto slope   = file.F64("scan_slope", {3});
-    const auto grey    = file.F64("scan_grey", {3});
-    const auto matrix  = file.F64("scan_rec709_matrix", {3, 3});
+    const auto setup         = bundle_->ScanSelection(selection.negative, selection.scene_light);
+    const auto base          = file.F64("adx_base_printing_density", {3});
+    const auto pivot         = file.F64("adx_grey_printing_density", {3});
+    const auto scale         = file.F64("adx_channel_scale", {3});
+    const auto grey          = file.F64("adx_grey", {3});
+    const auto lad_offset    = file.F64("lad_offset", {3});
     double     largest_value = 0.0;
     for (std::size_t k = 0; k < 3; ++k) {
-      largest_value = (std::max)({largest_value, std::abs(setup.slope[k] - slope[k]),
-                                  std::abs(setup.grey[k] - grey[k])});
-    }
-    for (std::size_t k = 0; k < 9; ++k) {
-      largest_value = (std::max)(largest_value, std::abs(setup.rec709_matrix[k] - matrix[k]));
+      largest_value = (std::max)(
+          {largest_value, std::abs(setup.base_printing_density[k] - base[k]),
+           std::abs(setup.grey_printing_density[k] - pivot[k]),
+           std::abs(setup.channel_scale[k] - scale[k]), std::abs(setup.grey_code[k] - grey[k]),
+           std::abs(bundle_->ScanConstants().lad_aim - setup.grey_code[k] - lad_offset[k])});
     }
     EXPECT_LE(largest_value, 1e-9);
   }
@@ -1304,9 +1545,9 @@ TEST_F(FilmPrintTablesLabTest, ScanSetupOfEachNegativeAndLightMatchesTheLabArray
   const auto lights  = stock.Metadata().at("scene_lights").get<std::vector<std::string>>();
   const auto n_count = static_cast<std::int64_t>(negatives.size());
   const auto l_count = static_cast<std::int64_t>(lights.size());
-  const auto slope   = setup.F64("scan_slope", {n_count, l_count, 3});
-  const auto grey    = setup.F64("scan_grey", {n_count, l_count, 3});
-  const auto matrix  = setup.F64("scan_rec709_matrix", {n_count, l_count, 3, 3});
+  const auto pivot   = setup.F64("adx_grey_printing_density", {n_count, l_count, 3});
+  const auto scale   = setup.F64("adx_channel_scale", {n_count, l_count, 3});
+  const auto grey    = setup.F64("adx_grey", {n_count, l_count, 3});
   const auto gain    = setup.F64("layer_gain", {n_count, l_count, 3});
   double     largest = 0.0;
   int        checked = 0;
@@ -1316,31 +1557,74 @@ TEST_F(FilmPrintTablesLabTest, ScanSetupOfEachNegativeAndLightMatchesTheLabArray
       const auto values = bundle_->ScanSelection(negatives[n], lights[l]);
       const auto at     = n * lights.size() + l;
       for (std::size_t k = 0; k < 3; ++k) {
-        largest = (std::max)({largest, std::abs(values.slope[k] - slope[at * 3 + k]),
-                              std::abs(values.grey[k] - grey[at * 3 + k]),
-                              std::abs(values.layer_gain[k] - gain[at * 3 + k])});
-      }
-      for (std::size_t k = 0; k < 9; ++k) {
-        largest = (std::max)(largest, std::abs(values.rec709_matrix[k] - matrix[at * 9 + k]));
+        largest =
+            (std::max)({largest, std::abs(values.grey_printing_density[k] - pivot[at * 3 + k]),
+                        std::abs(values.channel_scale[k] - scale[at * 3 + k]),
+                        std::abs(values.grey_code[k] - grey[at * 3 + k]),
+                        std::abs(values.layer_gain[k] - gain[at * 3 + k])});
       }
       // The kernel values of this selection have the same values, in float32.
       FilmKernelParams params{};
       film_print_kernel_tables::FillParams(*bundle_, negatives[n], kFilmLabScanId, lights[l], 65,
                                            params);
       EXPECT_EQ(params.scan, 1U);
-      EXPECT_EQ(params.scan_slope[1], static_cast<float>(values.slope[1]));
-      EXPECT_EQ(params.scan_grey[2], static_cast<float>(values.grey[2]));
-      EXPECT_EQ(params.xyz_to_display[4], static_cast<float>(values.rec709_matrix[4]));
+      EXPECT_EQ(params.scan_grey_density[1], static_cast<float>(values.grey_printing_density[1]));
+      EXPECT_EQ(params.scan_grey_code[2], static_cast<float>(values.grey_code[2]));
+      EXPECT_EQ(
+          params.scan_code_slope[0],
+          static_cast<float>(bundle_->ScanConstants().code_per_density * values.channel_scale[0]));
       ++checked;
     }
   }
-  const auto log_curve = stock.F64("common/scan_log_curve", {2});
-  EXPECT_EQ(bundle_->ScanConstants().log_curve_s0, log_curve[0]);
-  EXPECT_EQ(bundle_->ScanConstants().log_curve_w, log_curve[1]);
+  // The constants of the transform are those of aces-dev v1.3.1.
+  const auto& constants = bundle_->ScanConstants();
+  EXPECT_EQ(constants.printing_paper, "kodak_2383");
+  EXPECT_EQ(constants.code_per_density, 8000.0);
+  EXPECT_EQ(constants.code_base, 1520.0);
+  EXPECT_EQ(constants.lad_aim, 7120.0);
+  EXPECT_EQ(constants.code_max, 65535.0);
+  EXPECT_EQ(constants.cdd_to_cid[0], 0.75573);
+  EXPECT_EQ(constants.exp_to_aces[0], 0.72286);
+  EXPECT_EQ(constants.lut_cid.size(), 11U);
   std::cout << "scan setup of " << checked << " selections: largest absolute difference "
             << largest << "\n";
-  EXPECT_EQ(checked, 30 * 11);
+  EXPECT_EQ(checked, 30 * static_cast<int>(lights.size()));
   EXPECT_LE(largest, 1e-9);
+}
+
+TEST_F(FilmPrintTablesLabTest, AsShotBlendMatchesTheLabBlend) {
+  // The blend of two grid lights of the lab (scan_blend_model) against the values of the product.
+  const auto blends = LabBlends();
+  ASSERT_GE(blends.size(), 2u);
+  for (const auto& blend : blends) {
+    SCOPED_TRACE(blend.negative + " at " + std::to_string(blend.kelvin) + " K");
+    const auto file = FilmArrayFile::Parse(ReadBytes(blend.path), blend.path);
+    const auto mix  = bundle_->SceneLightMix(kFilmAsShotLightId, blend.kelvin);
+    EXPECT_EQ(mix.first, blend.node_a);
+    EXPECT_EQ(mix.second, blend.node_b);
+    EXPECT_NEAR(mix.share, file.F64("blend_share", {})[0], 1e-12);
+    const auto setup    = bundle_->ScanSelection(blend.negative, mix);
+    const auto spectrum = file.F64("spectrum", {bundle_->Wavelengths()});
+    double     largest  = 0.0;
+    for (std::size_t w = 0; w < spectrum.size(); ++w) {
+      largest = (std::max)(largest, std::abs(setup.scene_spectrum[w] - spectrum[w]));
+    }
+    const auto pivot  = file.F64("adx_grey_printing_density", {3});
+    const auto scale  = file.F64("adx_channel_scale", {3});
+    const auto grey   = file.F64("adx_grey", {3});
+    const auto gain   = file.F64("layer_gain", {3});
+    const auto offset = file.F64("lad_offset", {3});
+    for (std::size_t k = 0; k < 3; ++k) {
+      largest = (std::max)(
+          {largest, std::abs(setup.grey_printing_density[k] - pivot[k]),
+           std::abs(setup.channel_scale[k] - scale[k]), std::abs(setup.grey_code[k] - grey[k]),
+           std::abs(setup.layer_gain[k] - gain[k]),
+           std::abs(bundle_->ScanConstants().lad_aim - setup.grey_code[k] - offset[k])});
+    }
+    std::cout << "As Shot " << blend.negative << " at " << blend.kelvin
+              << " K: largest absolute difference " << largest << "\n";
+    EXPECT_LE(largest, 1e-9);
+  }
 }
 
 TEST_F(FilmPrintTablesLabTest, UvTableMatchesLab) {
@@ -1398,7 +1682,12 @@ TEST_F(FilmPrintTablesLabTest, ShippedListsHoldTheStocksOfThePlan) {
   EXPECT_EQ(bundle_->Negatives().size(), 30u);
   EXPECT_EQ(bundle_->PrintMaterials().size(), 19u);
   EXPECT_EQ(bundle_->Reversals().size(), 5u);
-  EXPECT_EQ(bundle_->SceneLights().size(), 11u);
+  // 11 named lights and the colour temperature grid of As Shot: 5 mired from 500 to 70, and
+  // 15000 K.
+  EXPECT_EQ(bundle_->SceneLights().size(), 11u + 88u);
+  EXPECT_EQ(bundle_->CctGrid().lights.size(), 88u);
+  EXPECT_EQ(bundle_->CctGrid().kelvin.front(), 2000.0);
+  EXPECT_EQ(bundle_->CctGrid().kelvin.back(), 15000.0);
   EXPECT_EQ(bundle_->SceneLights()[0], "reference");
   EXPECT_NO_THROW((void)bundle_->Selection("kodak_5207", "kodak_2383", "reference"));
 }
@@ -1435,10 +1724,21 @@ TEST_F(FilmPrintTablesLabTest, ShippedListsMatchTheIdentifiersOfTheDocumentModel
     EXPECT_TRUE(IsFilmIdentifier(kFilmPrintMaterialIds, material.id)) << material.id;
     EXPECT_NE(material.id, kFilmLabScanId);
   }
-  ASSERT_EQ(bundle_->SceneLights().size(), kFilmSceneLightIds.size());
+  // The document lights are the named lights of the bundle and As Shot, which the host resolves
+  // on the grid of the bundle.
+  std::vector<std::string> named;
   for (const auto& light : bundle_->SceneLights()) {
+    if (std::ranges::find(bundle_->CctGrid().lights, light) == bundle_->CctGrid().lights.end()) {
+      named.push_back(light);
+    }
+  }
+  ASSERT_EQ(named.size() + 1, kFilmSceneLightIds.size());
+  for (const auto& light : named) {
     EXPECT_TRUE(IsFilmIdentifier(kFilmSceneLightIds, light)) << light;
   }
+  EXPECT_TRUE(IsFilmIdentifier(kFilmSceneLightIds, kFilmAsShotLightId));
+  EXPECT_EQ(std::ranges::find(bundle_->SceneLights(), std::string(kFilmAsShotLightId)),
+            bundle_->SceneLights().end());
   // The editor list has the reversal films in the order of the lab list.
   ASSERT_EQ(bundle_->ReversalListOrder().size(), kFilmReversalIds.size());
   for (std::size_t index = 0; index < kFilmReversalIds.size(); ++index) {
@@ -1502,7 +1802,7 @@ TEST_F(FilmPrintTablesLabTest, RecordsTheHostTimeOfEachStage) {
   (void)tables.Resolve("kodak_5207", kFilmLabScanId, "reference");
   const auto scan = tables.Stats();
   std::cout << "scan u'v' table: " << scan.last_uv_seconds
-            << " s; Status M table: " << scan.last_scan_table_seconds << " s\n";
+            << " s; printing density table: " << scan.last_scan_table_seconds << " s\n";
   EXPECT_GT(scan.last_scan_table_seconds, 0.0);
 }
 

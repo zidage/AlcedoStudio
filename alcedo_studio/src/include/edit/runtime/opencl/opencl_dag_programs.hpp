@@ -101,6 +101,9 @@ inline constexpr const char* kFilmPrintAmountsReduceKernelName =
     "film_print_amounts_reduce";
 inline constexpr const char* kFilmPrintDisplayKernelName =
     "film_print_display";
+/// FP6 of print material Lab Scan. It is a kernel of @ref kDrtProgramName, because it applies the
+/// display transform of that program.
+inline constexpr const char* kFilmPrintScanDisplayKernelName = "film_print_scan_display";
 
 }  // namespace alcedo::OpenCL::GpuDag
 

@@ -22,6 +22,8 @@
 #include "edit/runtime/film/film_print_resources.hpp"
 #include "edit/runtime/film_print_plan.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_drt_gpu_params.hpp"
+#include "edit/runtime/opencl/opencl_drt_params.hpp"
 #include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -36,7 +38,7 @@ namespace {
 // film_print.cl has the same values, and a different size stops the build of its program.
 static_assert(kFilmBlurMaxRadius == 128 && sizeof(FilmBlurKernel) == 1552);
 static_assert(kFilmNarrowSpreadMaxRadius == 2 && sizeof(FilmNarrowKernel) == 76);
-static_assert(sizeof(FilmKernelParams) == 448);
+static_assert(sizeof(FilmKernelParams) == 628);
 static_assert(sizeof(Matrix3x3) == 36);
 static_assert(sizeof(FilmKernelRgb) == 12);
 
@@ -272,16 +274,17 @@ auto ReadOrBuildCanvasResult(OpenClRenderDevice& device, const ExecutionPlan& pl
 }  // namespace
 
 void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                           const DrtNodeModel& drt, const FrameSceneBinding& scene,
-                           const FrameSceneBinding& display, std::uint32_t width,
-                           std::uint32_t height, std::vector<std::string>* pass_names,
-                           bool separate_narrow_spread) {
+                           const DrtNodeModel& drt, std::optional<double> raw_cct,
+                           const FrameSceneBinding& scene, const FrameSceneBinding& display,
+                           std::uint32_t width, std::uint32_t height,
+                           std::vector<std::string>* pass_names, bool separate_narrow_spread) {
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteOpenClDrt");
   const auto  film        = drt.Params().FilmPrint();
   auto&       tables      = SharedFilmPrintTables();
-  const auto  tables_data = tables.Resolve(film.negative, film.print_material, film.scene_light);
   const auto& bundle      = tables.Bundle();
+  const auto  light       = bundle.SceneLightMix(film.scene_light, raw_cct);
+  const auto  tables_data = tables.Resolve(film.negative, film.print_material, light);
 
   auto&       workspace   = device.Workspace();
   auto&       backend     = workspace.Device();
@@ -292,8 +295,8 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
       tables_data->kernel_key, std::as_bytes(std::span(tables_data->kernel_values)), context);
 
   FilmPrintDeviceData uploaded{};
-  film_print_kernel_tables::FillParams(bundle, film.negative, film.print_material, film.scene_light,
-                                       tables_data->edge, uploaded.params);
+  film_print_kernel_tables::FillParams(bundle, film.negative, film.print_material, light,
+                                       film.lad_aim, tables_data->edge, uploaded.params);
   uploaded.params.display_encoding = static_cast<std::uint32_t>(resolved.eotf_);
   const auto& params               = uploaded.params;
 
@@ -618,6 +621,38 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
                                           offsetof(FilmPrintDeviceData, flare_y));
         });
     names.Mark("FP6 flare canvas");
+  }
+  if (params.scan != 0U) {
+    // The scan form ends in a scene value: the OpenDRT of the document shows it, with the kernel of
+    // the DRT program. The resolver gives Lab Scan the transform of method OpenDRT.
+    const auto drt_params = PackOpenClDrtParams(resolved);
+    void*      drt_memory = workspace.TransientBuffers().Allocate(sizeof(drt_params));
+    if (drt_memory == nullptr) {
+      throw std::runtime_error("RecordOpenClFilmPrint: transient allocation failed");
+    }
+    backend.UploadDeviceMemory(
+        drt_memory,
+        std::as_bytes(std::span<const OpenCL::Pipeline::OpenClToOutputParams>(&drt_params, 1)),
+        context);
+    const auto drt_location = backend.ResolveDeviceMemory(drt_memory, sizeof(drt_params));
+    auto       kernel       = OpenClKernelCache::Instance().GetKernel(
+        OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kFilmPrintScanDisplayKernelName);
+    const auto display_view = OpenClBindScene(device, display);
+    Arguments(kernel, "RecordOpenClFilmPrint: scan display")
+        .Add(a)
+        .AddSceneView(scene_view, backend, OpenClSceneArgAccess::Read)
+        .AddSceneView(display_view, backend, OpenClSceneArgAccess::Write)
+        .Add(static_cast<cl_uint>(width))
+        .Add(static_cast<cl_uint>(height))
+        .Add(print_rgba)
+        .Add(data.native)
+        .Add(params_offset)
+        .Add(drt_location.first)
+        .Add(drt_location.second)
+        .Add(static_cast<cl_int>(plan.film_scan_scene_output ? 1 : 0));
+    Dispatch(device, kernel, width, height, "RecordOpenClFilmPrint: scan display enqueue");
+    names.Mark("FP6 scan and display transform");
+    return;
   }
   {
     auto       kernel       = Kernel(OpenCL::GpuDag::kFilmPrintDisplayKernelName);

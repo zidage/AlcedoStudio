@@ -23,6 +23,7 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_DAG_AI_MASK_COVERAGE_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/ai_mask_coverage.cl")
     set(OPENCL_DAG_DRT_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/drt.cl")
     set(OPENCL_DAG_FILM_PRINT_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/film_print.cl")
+    set(OPENCL_DAG_FILM_PRINT_SCAN_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/film_print_scan.cl")
     # DRT parameter struct, ACEScc helpers, and ACES 2.0 / OpenDRT math.
     set(OPENCL_DAG_DRT_PARAMS_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/drt_params.cl")
     set(OPENCL_DAG_COMMON_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/common.cl")
@@ -147,6 +148,7 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_DAG_AI_MASK_COVERAGE_CL="${OPENCL_DAG_AI_MASK_COVERAGE_CL}"
         ALCEDO_OPENCL_DAG_DRT_CL="${OPENCL_DAG_DRT_CL}"
         ALCEDO_OPENCL_DAG_FILM_PRINT_CL="${OPENCL_DAG_FILM_PRINT_CL}"
+        ALCEDO_OPENCL_DAG_FILM_PRINT_SCAN_CL="${OPENCL_DAG_FILM_PRINT_SCAN_CL}"
         ALCEDO_OPENCL_FILM_PRINT_MATH_H="${OPENCL_FILM_PRINT_MATH_H}"
         ALCEDO_OPENCL_FILM_GRAIN_MATH_H="${OPENCL_FILM_GRAIN_MATH_H}"
         ALCEDO_OPENCL_DAG_DRT_PARAMS_CL="${OPENCL_DAG_DRT_PARAMS_CL}"

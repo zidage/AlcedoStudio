@@ -23,9 +23,7 @@
 #include "edit/runtime/cuda/cuda_drt_runtime_state.hpp"
 #include "edit/runtime/cuda/cuda_film_print_pass.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
-#include "edit/runtime/cuda/drt/disp_enc_funcs.cuh"
-#include "edit/runtime/cuda/drt/odt_funcs.cuh"
-#include "edit/runtime/cuda/drt/open_drt_funcs.cuh"
+#include "edit/runtime/cuda/drt/drt_display_pixel.cuh"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/drt_post_executor.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
@@ -45,17 +43,7 @@ __global__ void         DrtKernel(const float4* input, float4* output, std::uint
   auto         runtime = *params;
   const float4 source  = input[index];
   // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
-  const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
-  const float3 scene = make_float3(compressed.r, compressed.g, compressed.b);
-  float3       display_linear;
-  if (runtime.method_ == CudaDrtMethod::ACES_2_0) {
-    auto aces      = runtime.aces_params_;
-    display_linear = CUDA::OutputTransform_fwd(scene, aces);
-  } else {
-    display_linear = CUDA::OpenDRTTransform_fwd(scene, runtime.open_drt_params_);
-  }
-  const float3 encoded = CUDA::DisplayEncoding(display_linear, runtime.limit_to_display_matx,
-                                               runtime.eotf, runtime.display_linear_scale_);
+  const float3 encoded = CUDA::DrtDisplayPixel(make_float3(source.x, source.y, source.z), runtime);
   output[index]        = make_float4(encoded.x, encoded.y, encoded.z, source.w);
 }
 
@@ -164,10 +152,10 @@ struct CudaDrtOps {
   }
 
   static void DispatchFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
-                                const DrtNodeModel& drt, const FrameSceneBinding& scene,
-                                const FrameSceneBinding& display, std::uint32_t width,
-                                std::uint32_t height) {
-    RecordCudaFilmPrint(device, plan, drt, scene, display, width, height);
+                                const DrtNodeModel& drt, std::optional<double> raw_cct,
+                                const FrameSceneBinding& scene, const FrameSceneBinding& display,
+                                std::uint32_t width, std::uint32_t height) {
+    RecordCudaFilmPrint(device, plan, drt, raw_cct, scene, display, width, height);
   }
 
   static void CheckAfterEncode(CudaRenderDevice&) {

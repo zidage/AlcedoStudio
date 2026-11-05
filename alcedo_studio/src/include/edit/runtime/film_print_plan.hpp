@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -17,6 +18,17 @@
 #include "edit/runtime/film/film_stock_bundle.hpp"
 
 namespace alcedo {
+
+class PipelineDocument;
+
+/**
+ * @brief The colour temperature of the RAW decode of @p document, for scene light As Shot.
+ *
+ * Develop mode Custom gives its Kelvin; the other modes give the solved as-shot temperature. The
+ * tint is not read. A raster input (JPEG, PNG, TIFF, OpenEXR) or a document with no Develop has no
+ * RAW white balance, so the result is none, and As Shot reads as the reference.
+ */
+[[nodiscard]] auto FilmSceneRawCct(const PipelineDocument& document) -> std::optional<double>;
 
 /**
  * @brief Graph value for the canonical Halation result of the DRT node @p drt_id.

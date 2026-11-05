@@ -318,7 +318,7 @@ TEST_F(MetalFilmPrintFixture, FilmPrintReadsASceneWorkImageAndWritesAWorkImage) 
   auto& source  = workspace.SceneWork().Member(SceneWorkMember::Member0);
   auto& output  = workspace.SceneWork().Member(SceneWorkMember::Member1);
   backend.UploadTexture2D(source, std::as_bytes(std::span(field)), device_->CommandContext());
-  RecordMetalFilmPrint(*device_, plan_, *document.Drt(),
+  RecordMetalFilmPrint(*device_, plan_, *document.Drt(), std::nullopt,
                        FrameSceneBinding::WorkImage(SceneWorkMember::Member0),
                        FrameSceneBinding::WorkImage(SceneWorkMember::Member1), kWidth, kHeight);
   std::vector<Rgba> work(field.size());
@@ -657,9 +657,9 @@ TEST_F(MetalFilmPrintFixture, FilmPrintFusedSpreadMatchesSeparatePasses) {
                                                device_->CommandContext());
     auto& display = workspace.AcquireImageForWrite(plan_.display_output,
                                                            {kWidth, kHeight, TextureFormat::Rgba32f});
-    RecordMetalFilmPrint(*device_, plan_, *document.Drt(), FrameSceneBinding::CachedImage(scene_id),
-                                 FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight,
-                                 nullptr, separate);
+    RecordMetalFilmPrint(
+        *device_, plan_, *document.Drt(), std::nullopt, FrameSceneBinding::CachedImage(scene_id),
+        FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight, nullptr, separate);
     std::vector<Rgba> pixels(static_cast<std::size_t>(kWidth) * kHeight);
     workspace.Device().DownloadTexture2D(
         display.Texture(), std::as_writable_bytes(std::span(pixels)), device_->CommandContext());
@@ -771,7 +771,8 @@ TEST_F(MetalFilmPrintFixture, FilmPrintWithNoImagePartRunsNoInhibitorBlur) {
     const auto display_id = plan_.display_output;
     (void)workspace.AcquireImageForWrite(display_id, {kWidth, kHeight, TextureFormat::Rgba32f});
     std::vector<std::string> names;
-    RecordMetalFilmPrint(*device_, plan_, *document.Drt(), FrameSceneBinding::CachedImage(scene_id),
+    RecordMetalFilmPrint(*device_, plan_, *document.Drt(), std::nullopt,
+                         FrameSceneBinding::CachedImage(scene_id),
                          FrameSceneBinding::CachedImage(display_id), kWidth, kHeight, &names);
     device_->CancelRender();
     return std::any_of(names.begin(), names.end(), [](const std::string& name) {

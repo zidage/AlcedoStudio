@@ -5,9 +5,11 @@
 #define ALCEDO_FILM_PRINT_MATH_H
 
 // Point stages of the film print, shared by the host, CUDA, OpenCL C, and Metal. Plan: Film Print
-// DRT Plan, section 3, steps FP1, FP4, FP5, and FP6 (the print, light table, and scan forms). The stages are those of `fast_kernels.py` of
-// alcedo-film-lab. The product arithmetic is float32. A host file can define FILM_KERNEL_DOUBLE
-// before the first include, inside its own namespace, for a double-precision form of the same math.
+// DRT Plan, section 3, steps FP1, FP4, FP5, and FP6 (the print, light table, and scan forms). The
+// scan form ends in linear AP1; the backend applies the OpenDRT of the document after it. The
+// stages are those of `fast_kernels.py` of alcedo-film-lab. The product arithmetic is float32. A
+// host file can define FILM_KERNEL_DOUBLE before the first include, inside its own namespace, for a
+// double-precision form of the same math.
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
 #define FILM_KERNEL_INLINE static inline
 #define FILM_KERNEL_LOG10  log10
@@ -66,6 +68,9 @@ typedef struct {
   FilmKernelReal r, g, b;
 } FilmKernelRgb;
 
+/// Nodes of the table of the Academy ADX to ACES transform below cid 0.6 (aces-dev v1.3.1).
+#define FILM_KERNEL_SCAN_LUT_NODES 11
+
 /**
  * Fixed values of one selection. The struct has only 4-byte members in the float32 form, so it has
  * one layout on each backend. `FillParams` in film_print_kernel_tables.hpp writes it.
@@ -99,10 +104,18 @@ typedef struct {
   FilmKernelReal   negative_grade_grey[3];  // Rule 'negative_show_grade': the record of an 18 % grey
   FilmKernelReal   display_luminance[3];    // Light table form: Y of linear Rec. 709
   FilmKernelReal   display_surround_power;  // Light table form: surround exponent - 1. 0: none
-  FilmKernelReal   scan_grey[3];   // Scan form: Status M density of an 18 % grey
-  FilmKernelReal   scan_slope[3];  // Scan form: Status M density per stop of the grey scale
-  FilmKernelReal   scan_log_s0;    // Scan form: rule 'scan_log_curve', the middle in stops
-  FilmKernelReal   scan_log_w;     // Scan form: rule 'scan_log_curve', the width in stops
+  // Scan form, see FilmKernelScanSceneAp1. The matrices multiply row vectors, as in aces-dev.
+  FilmKernelReal   scan_grey_density[3];  // Printing density of an 18 % grey under the scene light
+  FilmKernelReal   scan_grey_code[3];     // ADX16 code of that grey, with the LAD offset
+  FilmKernelReal   scan_code_slope[3];    // ADX16 code values per density, rule 'adx_slope_match'
+  FilmKernelReal   scan_code_base;        // ADX16 code of the film base
+  FilmKernelReal   scan_code_max;         // Largest ADX16 code
+  FilmKernelReal   scan_code_per_density;
+  FilmKernelReal   scan_cdd_to_cid[9];
+  FilmKernelReal   scan_exp_to_ap1[9];  // EXP_TO_ACES, then ACES2065-1 to AP1
+  FilmKernelReal   scan_lut_cid[FILM_KERNEL_SCAN_LUT_NODES];
+  FilmKernelReal   scan_lut_log_e[FILM_KERNEL_SCAN_LUT_NODES];
+  FilmKernelReal   scan_ref_pt;
   FILM_KERNEL_UINT locus_facets;
   FILM_KERNEL_UINT uv_nodes;
   FILM_KERNEL_UINT curve_stored;
@@ -123,9 +136,9 @@ typedef struct {
   // the light table, and FP6 has the loupe flare and the surround in display light. Read by the
   // backend kernel.
   FILM_KERNEL_UINT light_table;
-  // 1: print material Lab Scan (lab decisions U87, U88). The print table is the Status M density of
-  // the negative over the record, and `xyz_to_display` is the matrix from the equivalent exposure to
-  // linear Rec. 709. FP6 has the scan form, with no enlarger flare. Read by the backend kernel.
+  // 1: print material Lab Scan (lab decisions U92, U93). The print table is the printing density of
+  // the negative over the record, and FP6 has the scan form, with no enlarger flare: the linear AP1
+  // of FilmKernelScanSceneAp1, then the OpenDRT of the document. Read by the backend kernel.
   FILM_KERNEL_UINT scan;
 } FilmKernelParams;
 
@@ -665,50 +678,72 @@ FILM_KERNEL_INLINE FilmKernelRgb FilmKernelCinemaLook(FilmKernelRgb linear) {
 }
 
 /**
- * Rule 'scan_log_curve' of one channel: a logistic in stops on the display code,
- * code = 1 / (1 + exp(-(s - s0) / w)) with s = log2(value / 0.18).
+ * The Academy ADX to ACES transform from cid to log10 of the exposure: the table below the last
+ * node (0.6), with the end value below the first node as numpy.interp gives, and the straight line
+ * of slope 100 / 55 above it.
  */
-FILM_KERNEL_INLINE FilmKernelReal FilmKernelScanLogCurve(FILM_KERNEL_PARAMS FilmKernelParams* params,
-                                                         FilmKernelReal value) {
-  const FilmKernelReal stops =
-      FILM_KERNEL_LOG2(FilmKernelMax(value, FILM_KERNEL_REAL(1e-12)) / FILM_KERNEL_REAL(0.18));
-  return FILM_KERNEL_REAL(1.0) /
-         (FILM_KERNEL_REAL(1.0) +
-          FILM_KERNEL_EXP(-(stops - params->scan_log_s0) / params->scan_log_w));
+FILM_KERNEL_INLINE FilmKernelReal
+FilmKernelScanLogExposure(FILM_KERNEL_PARAMS FilmKernelParams* params, FilmKernelReal cid) {
+  FILM_KERNEL_PARAMS FilmKernelReal* nodes = params->scan_lut_cid;
+  FILM_KERNEL_PARAMS FilmKernelReal* log_e = params->scan_lut_log_e;
+  const FILM_KERNEL_UINT             last  = FILM_KERNEL_SCAN_LUT_NODES - 1U;
+  if (cid > nodes[last]) {
+    return FILM_KERNEL_REAL(100.0) / FILM_KERNEL_REAL(55.0) * cid - params->scan_ref_pt;
+  }
+  if (!(cid > nodes[0])) return log_e[0];
+  for (FILM_KERNEL_UINT k = 1U; k < last; ++k) {
+    if (cid <= nodes[k]) {
+      const FilmKernelReal t = (cid - nodes[k - 1U]) / (nodes[k] - nodes[k - 1U]);
+      return log_e[k - 1U] + t * (log_e[k] - log_e[k - 1U]);
+    }
+  }
+  const FilmKernelReal t = (cid - nodes[last - 1U]) / (nodes[last] - nodes[last - 1U]);
+  return log_e[last - 1U] + t * (log_e[last] - log_e[last - 1U]);
 }
 
 /**
- * FP6 of print material Lab Scan (lab decisions U87, U88; `ChartScanPreview` of `chart_scan.py` with
- * `SELECTED_FORM`): the negative read with Status M densitometry, and an inversion that a chart and
- * a grey scale on the same stock calibrate. The steps:
- * 1. Rule 'scan_light' with scanner 'status_m': D, a trilinear read of @p status_m over the record.
- * 2. Rules 'chart_straight_line' and 'chart_equivalent_exposure': e = 0.18 * 2^((D - grey) / slope).
- * 3. Rule 'film_sensitivity_matrix', with AP1 to Rec. 709 folded in: linear Rec. 709 = M e.
- * 4. Rule 'rgc_style_display_compression' with the values of the print display, and no clip.
- * 5. Rule 'scan_log_curve' per channel, which gives the display code.
+ * FP6 of print material Lab Scan, before the display transform (lab decisions U92, U93;
+ * `ScanPreview` of `aces_scan.py` with reading 'print2383', encoding 'adx16', and rule
+ * 'adx_slope_match'):
+ * 1. D, the printing density of the negative: a trilinear read of @p density over the record.
+ * 2. ADX16 = clip(code of the grey + code slope (D - D of the grey), 0, largest code). The code of
+ *    the grey holds the LAD offset: 0 with the LAD aim off, so the scan is untimed.
+ * 3. The Academy ADX16 to ACES transform: cdd = (ADX16 - code of the base) / codes per density,
+ *    cid = cdd CDD_TO_CID, log10 E from FilmKernelScanLogExposure, ACES = 10^log10 E EXP_TO_ACES.
+ * 4. ACES2065-1 to linear AP1, folded into `scan_exp_to_ap1`.
  *
- * @param status_m The Status M density of the negative over the record, 4 values per node.
+ * @param density The printing density of the negative over the record, 4 values per node.
  * @param amounts Dye amounts of the negative after FP5.
- * @return The display code as linear Rec. 709 in 0 to 1, for the display encoding of the output.
+ * @return Linear AP1, the input of the display transform.
  */
-FILM_KERNEL_INLINE FilmKernelRgb FilmKernelScanDisplay(FILM_KERNEL_PARAMS FilmKernelParams* params,
-                                                       FILM_KERNEL_VALUES FilmKernelReal* status_m,
-                                                       FilmKernelRgb amounts) {
-  const FilmKernelRgb  d   = FilmKernelReadRecordTable(params, status_m, amounts);
-  const FilmKernelReal e_r = FILM_KERNEL_REAL(0.18) *
-                             FILM_KERNEL_EXP2((d.r - params->scan_grey[0]) / params->scan_slope[0]);
-  const FilmKernelReal e_g = FILM_KERNEL_REAL(0.18) *
-                             FILM_KERNEL_EXP2((d.g - params->scan_grey[1]) / params->scan_slope[1]);
-  const FilmKernelReal e_b = FILM_KERNEL_REAL(0.18) *
-                             FILM_KERNEL_EXP2((d.b - params->scan_grey[2]) / params->scan_slope[2]);
-  FILM_KERNEL_PARAMS FilmKernelReal* m          = params->xyz_to_display;
-  const FilmKernelRgb                compressed = FilmKernelCompressDisplay(
-      params, FilmKernelMakeRgb(m[0] * e_r + m[1] * e_g + m[2] * e_b,
-                                m[3] * e_r + m[4] * e_g + m[5] * e_b,
-                                m[6] * e_r + m[7] * e_g + m[8] * e_b));
-  return FilmKernelMakeRgb(FilmKernelSrgbDecode(FilmKernelScanLogCurve(params, compressed.r)),
-                           FilmKernelSrgbDecode(FilmKernelScanLogCurve(params, compressed.g)),
-                           FilmKernelSrgbDecode(FilmKernelScanLogCurve(params, compressed.b)));
+FILM_KERNEL_INLINE FilmKernelRgb FilmKernelScanSceneAp1(FILM_KERNEL_PARAMS FilmKernelParams* params,
+                                                        FILM_KERNEL_VALUES FilmKernelReal* density,
+                                                        FilmKernelRgb amounts) {
+  const FilmKernelRgb d = FilmKernelReadRecordTable(params, density, amounts);
+  FilmKernelReal      code[3];
+  code[0] =
+      params->scan_grey_code[0] + params->scan_code_slope[0] * (d.r - params->scan_grey_density[0]);
+  code[1] =
+      params->scan_grey_code[1] + params->scan_code_slope[1] * (d.g - params->scan_grey_density[1]);
+  code[2] =
+      params->scan_grey_code[2] + params->scan_code_slope[2] * (d.b - params->scan_grey_density[2]);
+  FilmKernelReal cdd[3];
+  for (FILM_KERNEL_UINT k = 0U; k < 3U; ++k) {
+    const FilmKernelReal clipped =
+        FilmKernelMin(FilmKernelMax(code[k], FILM_KERNEL_REAL(0.0)), params->scan_code_max);
+    cdd[k] = (clipped - params->scan_code_base) / params->scan_code_per_density;
+  }
+  FILM_KERNEL_PARAMS FilmKernelReal* m = params->scan_cdd_to_cid;
+  FilmKernelReal                     e[3];
+  for (FILM_KERNEL_UINT j = 0U; j < 3U; ++j) {
+    const FilmKernelReal cid = cdd[0] * m[j] + cdd[1] * m[3U + j] + cdd[2] * m[6U + j];
+    e[j]                     = FILM_KERNEL_EXP(FILM_KERNEL_REAL(2.302585092994046) *
+                                               FilmKernelScanLogExposure(params, cid));
+  }
+  FILM_KERNEL_PARAMS FilmKernelReal* x = params->scan_exp_to_ap1;
+  return FilmKernelMakeRgb(e[0] * x[0] + e[1] * x[3] + e[2] * x[6],
+                           e[0] * x[1] + e[1] * x[4] + e[2] * x[7],
+                           e[0] * x[2] + e[1] * x[5] + e[2] * x[8]);
 }
 
 #undef FILM_KERNEL_INLINE

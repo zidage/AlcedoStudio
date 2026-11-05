@@ -56,9 +56,10 @@ inline constexpr std::array<std::string_view, 30> kFilmNegativeIds = {
     "kodak_aerocolor",
     "agfa_vista_100"};
 
-/// Print material `lab_scan` (lab decisions U87, U88): no print. It selects the scan form of FP6, a
-/// scan of the negative with an inversion that a chart on the stock calibrates. The stock bundle
-/// names it in its metadata `lab_scan`, not in its list of print materials.
+/// Print material `lab_scan` (lab decisions U92, U93): no print. It selects the scan form of FP6,
+/// an ADX16 scan of the negative in the printing density of Kodak 2383, the Academy ADX to ACES
+/// transform, and the OpenDRT of the document. The stock bundle names it in its metadata
+/// `lab_scan`, not in its list of print materials.
 inline constexpr std::string_view kFilmLabScanId = "lab_scan";
 
 /// Print material identifiers. The first is @ref kFilmLabScanId; the others are the print
@@ -154,11 +155,16 @@ inline constexpr std::array<std::string_view, 5> kFilmReversalNames = {
     "Fujichrome Velvia 50", "Fujichrome Velvia 100", "Fujichrome Provia 100F",
     "Fujichrome Astia 100F", "Kodak Ektachrome E100"};
 
-/// Scene light identifiers: the reference, 5 lights, and 5 scenes. See @ref kFilmNegativeIds.
-inline constexpr std::array<std::string_view, 11> kFilmSceneLightIds = {
-    "reference",  "daylight",      "tungsten",       "fluorescent",
-    "led",        "sodium",        "street_mixed",   "street_sodium",
-    "street_led", "interior_warm", "interior_office"};
+/// Scene light `as_shot` (lab decision U92): the light of the colour temperature of the RAW decode.
+/// The stock bundle holds no light of this name: the host blends two lights of its colour
+/// temperature grid. An input with no RAW white balance reads it as `reference`.
+inline constexpr std::string_view                 kFilmAsShotLightId = "as_shot";
+
+/// Scene light identifiers: the reference, As Shot, 5 lights, and 5 scenes. See
+/// @ref kFilmNegativeIds. The stock bundle has each of them except @ref kFilmAsShotLightId.
+inline constexpr std::array<std::string_view, 12> kFilmSceneLightIds = {
+    "reference", "as_shot",      "daylight",      "tungsten",   "fluorescent",   "led",
+    "sodium",    "street_mixed", "street_sodium", "street_led", "interior_warm", "interior_office"};
 
 /**
  * @brief Stored fields of the film print display transform.
@@ -166,7 +172,8 @@ inline constexpr std::array<std::string_view, 11> kFilmSceneLightIds = {
  * All sliders act on the image. Only the three selections choose host tables. A colour reversal
  * film in @ref negative has no print, so it reads no @ref print_material, and @ref enlarger_flare
  * is the flare of the loupe on the light table. Print material @ref kFilmLabScanId has no enlarger,
- * so it reads no @ref enlarger_flare, and the stored value stays.
+ * so it reads no @ref enlarger_flare, and the stored value stays. Only Lab Scan reads
+ * @ref lad_aim.
  */
 struct FilmPrintParams {
   std::string negative       = "kodak_5207";
@@ -175,6 +182,10 @@ struct FilmPrintParams {
   float       light_spread   = 1.0f;
   float       halation       = 1.0f;
   float       enlarger_flare = 0.01f;
+  /// Lab Scan: true puts the ADX16 code of an 18 % grey under the scene light on the LAD aim, so
+  /// the scan is timed. False: the scan is untimed, and the cast of the scene light stays. The JSON
+  /// key is written only when true, so a document from before this field keeps its bytes.
+  bool        lad_aim        = false;
 };
 
 /// True when @p id is in the identifier list @p ids.
@@ -192,6 +203,11 @@ template <std::size_t Count>
 /// True when @p id is a value of the field `negative`: a negative or a colour reversal film.
 [[nodiscard]] constexpr auto IsFilmStockIdentifier(std::string_view id) -> bool {
   return IsFilmIdentifier(kFilmNegativeIds, id) || IsFilmReversalIdentifier(id);
+}
+
+/// True when @p id is @ref kFilmAsShotLightId.
+[[nodiscard]] constexpr auto IsFilmAsShotLight(std::string_view id) -> bool {
+  return id == kFilmAsShotLightId;
 }
 
 /**

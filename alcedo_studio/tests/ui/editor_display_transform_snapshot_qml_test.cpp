@@ -909,7 +909,8 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmBrowserFiltersByBrandAndSearchAn
   film->setProperty("query", QStringLiteral("no such film"));
   EXPECT_TRUE(PickerShownValues(film).empty());
 
-  // A pick writes the film and closes the browser.
+  // A pick writes the film and keeps the browser open, with the film highlighted, so the next pick
+  // compares the films (issue 661).
   film->setProperty("query", QString());
   ASSERT_TRUE(QMetaObject::invokeMethod(film, "pickValue",
                                         Q_ARG(QVariant, QStringLiteral("agfa_vista_100"))));
@@ -919,8 +920,89 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmBrowserFiltersByBrandAndSearchAn
   ASSERT_NE(drt, nullptr);
   ASSERT_TRUE(drt->film_negative.has_value());
   EXPECT_EQ(*drt->film_negative, "agfa_vista_100");
+  ASSERT_TRUE(WaitFor([&] {
+    return film->property("currentValue").toString() == QStringLiteral("agfa_vista_100");
+  }));
+  EXPECT_TRUE(film->property("expanded").toBool());
+  QVariant highlighted_row;
+  ASSERT_TRUE(QMetaObject::invokeMethod(film, "rowOfValue", Q_RETURN_ARG(QVariant, highlighted_row),
+                                        Q_ARG(QVariant, QStringLiteral("agfa_vista_100"))));
+  EXPECT_EQ(film->property("highlightedRow").toInt(), highlighted_row.toInt());
+
+  // A second pick also keeps it open. Escape closes it, and a click on the card opens and closes
+  // it.
+  ASSERT_TRUE(QMetaObject::invokeMethod(film, "pickValue",
+                                        Q_ARG(QVariant, QStringLiteral("kodak_gold_200"))));
+  ASSERT_TRUE(WaitFor([&] {
+    return film->property("currentValue").toString() == QStringLiteral("kodak_gold_200");
+  }));
+  EXPECT_TRUE(film->property("expanded").toBool());
+  QVariant handled;
+  ASSERT_TRUE(QMetaObject::invokeMethod(film, "handleBrowserKey", Q_RETURN_ARG(QVariant, handled),
+                                        Q_ARG(QVariant, static_cast<int>(Qt::Key_Escape))));
+  EXPECT_TRUE(handled.toBool());
   EXPECT_FALSE(film->property("expanded").toBool());
-  EXPECT_EQ(film->property("currentValue").toString().toStdString(), "agfa_vista_100");
+  ASSERT_TRUE(QMetaObject::invokeMethod(film, "toggleExpanded"));
+  EXPECT_TRUE(film->property("expanded").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(film, "toggleExpanded"));
+  EXPECT_FALSE(film->property("expanded").toBool());
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, LabScanShowsTheLadAimAndTheOpenDrtControls) {
+  DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* lad_toggle = harness.findModel<QQuickItem>(QStringLiteral("displayFilmLadAimToggle"));
+  auto* open_drt   = harness.findModel<QQuickItem>(QStringLiteral("displayLabScanOpenDrtControls"));
+  auto* look_combo =
+      harness.findModel<QQuickItem>(QStringLiteral("displayLabScanOpenDrtLookCombo"));
+  auto* lad_aim =
+      harness.findModel<EditorAdjustmentToggleModel>(QStringLiteral("displayFilmLadAimModel"));
+  auto* encoding = harness.findModel<QQuickItem>(QStringLiteral("displayEncodingSpaceCombo"));
+  ASSERT_NE(lad_toggle, nullptr);
+  ASSERT_NE(open_drt, nullptr);
+  ASSERT_NE(look_combo, nullptr);
+  ASSERT_NE(lad_aim, nullptr);
+  ASSERT_NE(encoding, nullptr);
+  auto* halation_slider =
+      harness.findModel<QQuickItem>(QStringLiteral("displayFilmHalationSlider"));
+  ASSERT_NE(halation_slider, nullptr);
+  // A print has no LAD aim, no OpenDRT settings, and no encodings.
+  ASSERT_TRUE(WaitFor([&] { return halation_slider->isVisible(); }));
+  EXPECT_FALSE(lad_toggle->isVisible());
+  EXPECT_FALSE(open_drt->isVisible());
+  EXPECT_FALSE(encoding->isVisible());
+
+  auto scan = MakeFilmPrintSnapshot(2.5, QStringLiteral("kodak_5207"), QStringLiteral("lab_scan"));
+  session.setAdjustmentSnapshot(scan);
+  ASSERT_TRUE(WaitFor([&] { return lad_toggle->isVisible(); }));
+  ASSERT_TRUE(WaitFor([&] { return open_drt->isVisible() && look_combo->isVisible(); }));
+  EXPECT_TRUE(encoding->isVisible());
+  EXPECT_FALSE(lad_aim->property("value").toBool());
+
+  // The toggle writes the LAD aim with the selection of the scan.
+  const auto before = session.submitCount();
+  lad_aim->commitValue(true);
+  ASSERT_TRUE(WaitFor([&] { return session.submitCount() > before; }));
+  const auto* drt = LastDrtWrite(session);
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->film_lad_aim.has_value());
+  EXPECT_TRUE(*drt->film_lad_aim);
+  ASSERT_TRUE(drt->film_print_material.has_value());
+  EXPECT_EQ(*drt->film_print_material, "lab_scan");
+
+  // A stored LAD aim loads, and a print hides the controls again.
+  auto odt_wrap   = scan.value(QStringLiteral("odt")).toMap();
+  auto inner      = odt_wrap.value(QStringLiteral("odt")).toMap();
+  auto film_print = inner.value(QStringLiteral("film_print")).toMap();
+  film_print.insert(QStringLiteral("lad_aim"), true);
+  inner.insert(QStringLiteral("film_print"), film_print);
+  odt_wrap.insert(QStringLiteral("odt"), inner);
+  scan.insert(QStringLiteral("odt"), odt_wrap);
+  session.setAdjustmentSnapshot(scan);
+  ASSERT_TRUE(WaitFor([&] { return lad_aim->property("value").toBool(); }));
+  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot());
+  ASSERT_TRUE(WaitFor([&] { return !lad_toggle->isVisible() && !open_drt->isVisible(); }));
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest,

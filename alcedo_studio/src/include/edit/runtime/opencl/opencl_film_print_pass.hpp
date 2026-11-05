@@ -7,6 +7,7 @@
 #ifdef HAVE_OPENCL
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,11 @@ namespace alcedo {
  * between the steps are allocations in the transient arena of the render, with 3 floats per pixel.
  * Resolves the tables of the selection on this thread. Does not wait for the GPU.
  *
+ * Print material Lab Scan has its FP6 in the DRT program (`film_print_scan_display`), because it
+ * applies the OpenDRT of that program to its scene value.
+ *
+ * @param raw_cct The colour temperature of the RAW decode for scene light As Shot, or none for an
+ *        input with no RAW white balance. See `FilmSceneRawCct`.
  * @param pass_names When set, this function adds the name of each kernel group that it records.
  *        The render path passes null.
  * @param separate_narrow_spread True runs the narrow Gaussian of FP2 as its own two passes, as the
@@ -34,10 +40,11 @@ namespace alcedo {
  *         cancels the render. There is no change of backend.
  */
 void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                           const DrtNodeModel& drt, const FrameSceneBinding& scene,
-                           const FrameSceneBinding& display, std::uint32_t width,
-                           std::uint32_t height, std::vector<std::string>* pass_names = nullptr,
-                           bool separate_narrow_spread = false);
+                           const DrtNodeModel& drt, std::optional<double> raw_cct,
+                           const FrameSceneBinding& scene, const FrameSceneBinding& display,
+                           std::uint32_t width, std::uint32_t height,
+                           std::vector<std::string>* pass_names             = nullptr,
+                           bool                      separate_narrow_spread = false);
 
 }  // namespace alcedo
 

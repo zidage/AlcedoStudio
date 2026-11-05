@@ -361,6 +361,67 @@ TEST(DrtFilmPrintModelTest, FieldChangeMarksOnlyItsFilmPrintField) {
   // Lab Scan has no entry gamut compression, so the exposure and all its results change.
   expect_marks(DrtDirty::FilmExposure,
                [](DrtParameterUpdate& update) { update.film_print_material = "lab_scan"; });
+  expect_marks(DrtDirty::FilmExposure, [](DrtParameterUpdate& update) {
+    update.film_scene_light = std::string{kFilmAsShotLightId};
+  });
+
+  // The LAD aim changes only the code of the scan: its own field, and no field of the canvases.
+  const auto scan_before = params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmScan});
+  std::array<ParameterRevision, 3> canvas_before{};
+  for (std::size_t index = 0; index < film_fields.size(); ++index) {
+    canvas_before[index] = params.FieldsRevision(DirtyFieldMask{film_fields[index]});
+  }
+  DrtParameterUpdate lad;
+  lad.film_lad_aim = true;
+  params.ApplyUpdate(lad);
+  EXPECT_GT(params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmScan}), scan_before);
+  for (std::size_t index = 0; index < film_fields.size(); ++index) {
+    EXPECT_EQ(params.FieldsRevision(DirtyFieldMask{film_fields[index]}), canvas_before[index]);
+  }
+  EXPECT_EQ(params.FieldsRevision(other_fields), other_before);
+}
+
+TEST(DrtFilmPrintModelTest, AsShotIsASceneLightAndTheLadAimIsWrittenOnlyWhenOn) {
+  // As Shot is second in the list, after the reference light (issue 661).
+  EXPECT_EQ(kFilmSceneLightIds[0], "reference");
+  EXPECT_EQ(kFilmSceneLightIds[1], kFilmAsShotLightId);
+  EXPECT_TRUE(IsFilmAsShotLight(kFilmAsShotLightId));
+  EXPECT_FALSE(IsFilmAsShotLight("daylight"));
+  EXPECT_FALSE(FilmPrintParams{}.lad_aim);
+
+  // A document with the LAD aim off has the bytes and the root id of a document of before.
+  auto document              = CreateDefaultPipelineDocument();
+  auto update                = FilmPrintUpdate();
+  update.film_print_material = std::string{kFilmLabScanId};
+  update.film_scene_light    = std::string{kFilmAsShotLightId};
+  document.Drt()->Params().ApplyUpdate(update);
+  const auto off = document.Drt()->Params().ToJson();
+  EXPECT_FALSE(off.at("film_print").contains("lad_aim"));
+  EXPECT_EQ(off.at("film_print").size(), 6u);
+  EXPECT_EQ(off.at("film_print").at("scene_light"), "as_shot");
+  auto explicit_off                     = off;
+  explicit_off["film_print"]["lad_aim"] = false;
+  DrtParamsModel read_off;
+  read_off.LoadJson(explicit_off);
+  EXPECT_EQ(read_off.ToJson().dump(), off.dump());
+
+  DrtParameterUpdate lad;
+  lad.film_lad_aim = true;
+  document.Drt()->Params().ApplyUpdate(lad);
+  const auto on = document.Drt()->Params().ToJson();
+  EXPECT_EQ(on.at("film_print").at("lad_aim"), true);
+  const auto restored = PipelineDocument::FromJson(document.ToJson());
+  EXPECT_TRUE(restored.Drt()->Params().FilmPrint().lad_aim);
+  EXPECT_EQ(restored.Drt()->Params().FilmPrint().scene_light, kFilmAsShotLightId);
+  EXPECT_EQ(restored.Drt()->Params().ToJson().dump(), on.dump());
+
+  // The LAD aim must be a boolean.
+  auto wrong                     = on;
+  wrong["film_print"]["lad_aim"] = 1;
+  DrtParamsModel params;
+  const auto     before = params.ToJson().dump();
+  EXPECT_THROW(params.LoadJson(wrong), std::runtime_error);
+  EXPECT_EQ(params.ToJson().dump(), before);
 }
 
 TEST(DrtFilmPrintModelTest, EqualValuesKeepTheRevision) {

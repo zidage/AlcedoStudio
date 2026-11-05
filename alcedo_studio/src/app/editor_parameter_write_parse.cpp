@@ -788,10 +788,10 @@ auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
   }
   if (object.contains("film_print")) {
     const auto& film_print = RequireObject(object.at("film_print"), "odt.film_print");
-    RejectUnknownKeys(
-        film_print,
-        {"negative", "print_material", "scene_light", "light_spread", "halation", "enlarger_flare"},
-        "odt.film_print");
+    RejectUnknownKeys(film_print,
+                      {"negative", "print_material", "scene_light", "light_spread", "halation",
+                       "enlarger_flare", "lad_aim"},
+                      "odt.film_print");
     update.film_negative = ReadOptionalString(film_print, {"negative"}, "odt.film_print");
     update.film_print_material =
         ReadOptionalString(film_print, {"print_material"}, "odt.film_print");
@@ -800,6 +800,7 @@ auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
     update.film_halation     = ReadOptionalFloat(film_print, {"halation"}, "odt.film_print");
     update.film_enlarger_flare =
         ReadOptionalFloat(film_print, {"enlarger_flare"}, "odt.film_print");
+    update.film_lad_aim = ReadOptionalBool(film_print, {"lad_aim"}, "odt.film_print");
   }
   return update;
 }

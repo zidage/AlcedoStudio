@@ -703,7 +703,8 @@ TEST(EditorParameterCatalogTest, OdtWriteHoldsTheControlsOfTheSelectedMethod) {
                    "odt", {{"method", "aces_2_0"}, {"look_preset", "umbra"}}, nlohmann::json{},
                    &error)
                    .has_value());
-  EXPECT_EQ(error, "odt.look_preset needs method open_drt");
+  EXPECT_EQ(error,
+            "odt.look_preset needs method open_drt, or film_print with print material lab_scan");
   // The complete current value (for example from editor.get) writes without an error.
   EXPECT_TRUE(EditorParameterCatalog::ToModelJson(
                   "odt", EditorParameterCatalog::UiDefault(*EditorParameterCatalog::Find("odt")),
@@ -845,6 +846,77 @@ TEST(EditorParameterCatalogTest, FilmPrintWriteOfLabScanKeepsTheStoredFlare) {
   EXPECT_DOUBLE_EQ(film_print.at("enlarger_flare").get<double>(), 0.02);
 }
 
+TEST(EditorParameterCatalogTest, LabScanWritesTheOpenDrtSettingsAndTheEncodingOfThePanel) {
+  // An HDR document with OpenDRT settings: Lab Scan keeps them, as method open_drt (issue 661).
+  const nlohmann::json hdr = {{"odt",
+                               {{"method", "open_drt"},
+                                {"encoding_space", "rec2020"},
+                                {"encoding_eotf", "st2084"},
+                                {"peak_luminance", 1000.0},
+                                {"open_drt", {{"look_preset", "arriba"}}}}}};
+  std::string          error;
+  auto                 model = EditorParameterCatalog::ToModelJson(
+      "odt", {{"method", "film_print"}, {"print_material", "lab_scan"}}, hdr, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  const auto& odt = model->at("odt");
+  EXPECT_EQ(odt.at("method"), "film_print");
+  EXPECT_EQ(odt.at("encoding_space"), "rec2020");
+  EXPECT_EQ(odt.at("encoding_eotf"), "st2084");
+  EXPECT_EQ(odt.at("peak_luminance"), 1000.0);
+  EXPECT_EQ(odt.at("open_drt").at("look_preset"), "arriba");
+  EXPECT_TRUE(odt.at("open_drt").contains("tonescale_preset"));
+  EXPECT_TRUE(odt.at("open_drt").contains("creative_white"));
+  // Method OpenDRT has no limiting space, so Lab Scan has none.
+  EXPECT_FALSE(odt.contains("limiting_space"));
+  // Selecting Lab Scan selects As Shot, and the LAD aim is off.
+  EXPECT_EQ(odt.at("film_print").at("scene_light"), "as_shot");
+  EXPECT_EQ(odt.at("film_print").at("lad_aim"), false);
+
+  // A write that selects Lab Scan and a scene light keeps that scene light.
+  model = EditorParameterCatalog::ToModelJson(
+      "odt",
+      {{"method", "film_print"}, {"print_material", "lab_scan"}, {"scene_light", "tungsten"}}, hdr,
+      &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(model->at("odt").at("film_print").at("scene_light"), "tungsten");
+
+  // With Lab Scan, the OpenDRT settings, the encodings, and the LAD aim write.
+  auto lab_scan = *EditorParameterCatalog::ToModelJson(
+      "odt", {{"method", "film_print"}, {"print_material", "lab_scan"}}, nlohmann::json{}, &error);
+  model = EditorParameterCatalog::ToModelJson(
+      "odt",
+      {{"tonescale_preset", "high_contrast"}, {"encoding_space", "p3_d65"}, {"lad_aim", true}},
+      lab_scan, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(model->at("odt").at("open_drt").at("tonescale_preset"), "high_contrast");
+  EXPECT_EQ(model->at("odt").at("encoding_space"), "p3_d65");
+  EXPECT_EQ(model->at("odt").at("film_print").at("lad_aim"), true);
+  // A later write of another value keeps As Shot: only a change of print material selects it.
+  model = EditorParameterCatalog::ToModelJson("odt", {{"scene_light", "daylight"}}, *model, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  model = EditorParameterCatalog::ToModelJson("odt", {{"halation", 2.0}}, *model, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(model->at("odt").at("film_print").at("scene_light"), "daylight");
+
+  // A print has only Rec. 709 SDR and no OpenDRT settings, and the LAD aim needs method film_print.
+  const auto print = EditorParameterCatalog::ToModelJson("odt", {{"print_material", "kodak_2383"}},
+                                                         *model, &error);
+  ASSERT_TRUE(print.has_value()) << error;
+  EXPECT_EQ(print->at("odt").at("encoding_space"), "rec709");
+  EXPECT_FALSE(print->at("odt").contains("open_drt"));
+  EXPECT_EQ(print->at("odt").at("film_print").at("scene_light"), "daylight");
+  EXPECT_FALSE(
+      EditorParameterCatalog::ToModelJson("odt", {{"look_preset", "umbra"}}, *print, &error)
+          .has_value());
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "odt", {{"method", "open_drt"}, {"lad_aim", true}}, nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "odt.lad_aim needs method film_print");
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson(
+                   "odt", {{"method", "film_print"}, {"lad_aim", "on"}}, nlohmann::json{}, &error)
+                   .has_value());
+}
+
 TEST(EditorParameterCatalogTest, FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput) {
   std::string          error;
   // A Display P3 document, and an HDR document: the panel has no encoding controls.
@@ -867,7 +939,8 @@ TEST(EditorParameterCatalogTest, FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput)
                                         {"scene_light", "reference"},
                                         {"light_spread", 1.0},
                                         {"halation", 2.5},
-                                        {"enlarger_flare", 0.01}}}}}}));
+                                        {"enlarger_flare", 0.01},
+                                        {"lad_aim", false}}}}}}));
   const nlohmann::json hdr = {{"odt",
                                {{"method", "aces_2_0"},
                                 {"encoding_space", "rec2020"},

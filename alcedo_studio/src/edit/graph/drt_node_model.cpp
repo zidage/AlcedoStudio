@@ -340,6 +340,12 @@ auto ReadFilmPrint(const nlohmann::json& json) -> FilmPrintParams {
       ReadFilmSlider(object, "halation", params.halation, kFilmHalationMin, kFilmHalationMax);
   params.enlarger_flare = ReadFilmSlider(object, "enlarger_flare", params.enlarger_flare,
                                          kFilmEnlargerFlareMin, kFilmEnlargerFlareMax);
+  if (object.contains("lad_aim")) {
+    if (!object.at("lad_aim").is_boolean()) {
+      throw std::runtime_error("DRT params: film_print.lad_aim must be a boolean");
+    }
+    params.lad_aim = object.at("lad_aim").get<bool>();
+  }
   return params;
 }
 
@@ -376,9 +382,15 @@ void RequireValidFilmPrintUpdate(const DrtParameterUpdate& update) {
 }
 
 auto FilmPrintToJson(const FilmPrintParams& params) -> nlohmann::json {
-  return {{"negative", params.negative},       {"print_material", params.print_material},
-          {"scene_light", params.scene_light}, {"light_spread", params.light_spread},
-          {"halation", params.halation},       {"enlarger_flare", params.enlarger_flare}};
+  nlohmann::json json = {
+      {"negative", params.negative},       {"print_material", params.print_material},
+      {"scene_light", params.scene_light}, {"light_spread", params.light_spread},
+      {"halation", params.halation},       {"enlarger_flare", params.enlarger_flare}};
+  // The default is not written, so a document from before the key keeps its bytes and root id.
+  if (params.lad_aim) {
+    json["lad_aim"] = true;
+  }
+  return json;
 }
 
 }  // namespace
@@ -547,6 +559,10 @@ void DrtParamsModel::ApplyUpdate(DrtParameterUpdate update) {
         film.enlarger_flare != *update.film_enlarger_flare) {
       film.enlarger_flare = *update.film_enlarger_flare;
       changed |= DirtyFieldMask{DrtDirty::FilmFlare};
+    }
+    if (update.film_lad_aim.has_value() && film.lad_aim != *update.film_lad_aim) {
+      film.lad_aim = *update.film_lad_aim;
+      changed |= DirtyFieldMask{DrtDirty::FilmScan};
     }
     return changed;
   });

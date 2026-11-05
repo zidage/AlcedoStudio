@@ -418,20 +418,36 @@ TEST_F(OpenClDrtFixture, LabScanFilmPrintMatchesCudaReferenceWithinTolerance) {
   input_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(kWidth, kHeight),
                                          gpu_dag_test::FullSensor(kWidth, kHeight));
   // The scan form, on a negative with both parts of the inhibition, one with no inhibition, and a
-  // tungsten stock under a scene light that keeps its cast.
-  for (const auto& [negative, light] : {std::pair{"kodak_5207", "reference"},
-                                        std::pair{"kodak_gold_200", "reference"},
-                                        std::pair{"kodak_5219", "daylight"}}) {
-    SCOPED_TRACE(std::string{negative} + " under " + light);
+  // tungsten stock under a scene light that keeps its cast. Then As Shot at a colour temperature
+  // between grid lights with the LAD aim, and an HDR encoding of the OpenDRT after the scan.
+  struct Case {
+    const char* negative;
+    const char* light;
+    bool        lad_aim;
+    bool        hdr;
+  };
+  for (const auto& [negative, light, lad_aim, hdr] :
+       {Case{"kodak_5207", "reference", false, false},
+        Case{"kodak_gold_200", "reference", false, false},
+        Case{"kodak_5219", "daylight", false, false}, Case{"kodak_5219", "as_shot", true, false},
+        Case{"kodak_portra_400", "as_shot", false, true}}) {
+    SCOPED_TRACE(std::string{negative} + " under " + light + (lad_aim ? ", LAD aim" : "") +
+                 (hdr ? ", Rec. 2020 PQ" : ""));
     auto document = CreateDefaultPipelineDocument();
     gpu_dag_test::EnsureTestCameraProfile(document);
+    auto develop        = document.Develop()->Params().Params();
+    develop.wb_mode     = "as_shot";
+    develop.as_shot_cct = 5650.0f;
+    document.Develop()->Params().ReplaceParams(std::move(develop));
     DrtParameterUpdate update;
     update.method              = DrtMethod::FilmPrint;
-    update.encoding_space      = DrtColorSpace::Rec709;
-    update.encoding_eotf       = DrtEotf::SrgbPiecewise;
+    update.encoding_space      = hdr ? DrtColorSpace::Rec2020 : DrtColorSpace::Rec709;
+    update.encoding_eotf       = hdr ? DrtEotf::St2084 : DrtEotf::SrgbPiecewise;
+    update.peak_luminance      = hdr ? 1000.0f : 100.0f;
     update.film_negative       = std::string{negative};
     update.film_print_material = std::string{kFilmLabScanId};
     update.film_scene_light    = std::string{light};
+    update.film_lad_aim        = lad_aim;
     update.film_light_spread   = 2.5f;
     update.film_halation       = 4.0f;
     document.Drt()->Params().ApplyUpdate(update);

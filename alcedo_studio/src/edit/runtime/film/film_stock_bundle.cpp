@@ -5,6 +5,7 @@
 #include "edit/runtime/film/film_stock_bundle.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <json.hpp>
 #include <stdexcept>
@@ -99,6 +100,29 @@ auto CopyValues(std::span<const double> values, std::int64_t first) -> std::arra
   return out;
 }
 
+/// The values of row @p row under the two lights of a mix, (1 - share) first + share second.
+/// @p lights is the light count, and a row holds `lights * Count` values.
+template <std::size_t Count>
+auto MixValues(std::span<const double> values, std::int64_t row, std::int64_t lights,
+               std::int64_t first, std::int64_t second, double share) -> std::array<double, Count> {
+  const auto a =
+      CopyValues<Count>(values, (row * lights + first) * static_cast<std::int64_t>(Count));
+  if (share == 0.0) {
+    return a;
+  }
+  const auto b =
+      CopyValues<Count>(values, (row * lights + second) * static_cast<std::int64_t>(Count));
+  std::array<double, Count> out{};
+  for (std::size_t k = 0; k < Count; ++k) {
+    out[k] = (1.0 - share) * a[k] + share * b[k];
+  }
+  return out;
+}
+
+auto SingleLight(std::string_view scene_light) -> FilmSceneLightMix {
+  return {std::string(scene_light), std::string(scene_light), 0.0};
+}
+
 void RequireCurveLengths(std::span<const std::int64_t> lengths, std::int64_t stored_length,
                          std::string_view id) {
   if (std::ranges::any_of(lengths, [stored_length](std::int64_t length) {
@@ -149,6 +173,7 @@ FilmStockBundle::FilmStockBundle(FilmArrayFile stock, FilmArrayFile setup,
       setup_(std::move(setup)),
       content_digest_(std::move(content_digest)) {
   ReadLists();
+  ReadCctGrid();
   ReadCommonValues();
   ReadReflectance(reflectance);
   CheckShapes();
@@ -171,6 +196,7 @@ void FilmStockBundle::ReadLists() {
     scene_spectra_  = stock_.Metadata().at("scene_spectra").get<std::vector<std::string>>();
     const auto& lab_scan = stock_.Metadata().at("lab_scan");
     lab_scan_ = {lab_scan.at("id").get<std::string>(), lab_scan.at("name").get<std::string>()};
+    scan_constants_.printing_paper = lab_scan.at("printing_paper").get<std::string>();
   } catch (const nlohmann::json::exception& error) {
     throw std::runtime_error(std::string("Film print resource: the stock lists are not valid: ") +
                              error.what());
@@ -185,6 +211,12 @@ void FilmStockBundle::ReadLists() {
       })) {
     throw std::runtime_error("Film print resource: the identifier of Lab Scan '" + lab_scan_.id +
                              "' is empty or names a print material");
+  }
+  if (!std::ranges::any_of(papers_, [this](const FilmStockName& paper) {
+        return paper.id == scan_constants_.printing_paper;
+      })) {
+    throw std::runtime_error("Film print resource: the printing paper of Lab Scan '" +
+                             scan_constants_.printing_paper + "' is not a print material");
   }
   // The setup indexes a film by its place in the list of identifiers, so the two lists must not
   // share an identifier, and the list order must name each reversal film one time.
@@ -227,14 +259,30 @@ void FilmStockBundle::ReadCommonValues() {
       .xyz_scale         = stock_.F64("light_table/xyz_scale", {})[0],
       .surround_exponent = stock_.F64("light_table/surround_exponent", {})[0],
   };
-  const auto log_curve = stock_.F64("common/scan_log_curve", {2});
-  scan_constants_      = {
-           .status_m_weights = stock_.F64("common/scan_status_m_weights", {3, wavelengths_}),
-           .log_curve_s0     = log_curve[0],
-           .log_curve_w      = log_curve[1],
-  };
-  if (!(scan_constants_.log_curve_w > 0.0)) {
-    throw std::runtime_error("Film print resource: the width of the scan log curve is not above 0");
+  auto& scan = scan_constants_;
+  scan.printing_weights =
+      stock_.F64(ArrayName("paper", scan.printing_paper, "printing_weights"), {3, wavelengths_});
+  scan.code_per_density = stock_.F64("common/adx_code_per_density", {})[0];
+  scan.code_base        = stock_.F64("common/adx_code_base", {})[0];
+  scan.lad_aim          = stock_.F64("common/adx_lad_aim", {})[0];
+  scan.code_max         = stock_.F64("common/adx_code_max", {})[0];
+  scan.cdd_to_cid       = stock_.F64("common/adx_cdd_to_cid", {3, 3});
+  scan.exp_to_aces      = stock_.F64("common/adx_exp_to_aces", {3, 3});
+  const auto lut        = stock_.Shape("common/adx_lut_cid");
+  if (lut.size() != 1 || lut[0] < 2) {
+    throw std::runtime_error(
+        "Film print resource: the cid table of the scan does not have one axis");
+  }
+  scan.lut_cid   = stock_.F64("common/adx_lut_cid", {lut[0]});
+  scan.lut_log_e = stock_.F64("common/adx_lut_log_e", {lut[0]});
+  scan.ref_pt    = stock_.F64("common/adx_ref_pt", {})[0];
+  for (std::size_t node = 1; node < scan.lut_cid.size(); ++node) {
+    if (!(scan.lut_cid[node] > scan.lut_cid[node - 1])) {
+      throw std::runtime_error("Film print resource: the cid table of the scan does not rise");
+    }
+  }
+  if (!(scan.code_per_density > 0.0) || !(scan.code_max > scan.code_base)) {
+    throw std::runtime_error("Film print resource: the ADX16 encoding of the scan is not valid");
   }
   const auto normals = stock_.Shape("common/locus_normals");
   if (normals.size() != 2 || normals[1] != 2 || normals[0] < 1) {
@@ -289,6 +337,96 @@ void FilmStockBundle::ReadReflectance(const FilmArrayFile& file) {
   }
 }
 
+void FilmStockBundle::ReadCctGrid() {
+  try {
+    const auto& grid = stock_.Metadata().at("cct_grid");
+    cct_grid_.kelvin = grid.at("kelvin").get<std::vector<double>>();
+    cct_grid_.lights = grid.at("lights").get<std::vector<std::string>>();
+  } catch (const nlohmann::json::exception& error) {
+    throw std::runtime_error(
+        std::string("Film print resource: the colour temperature grid is not valid: ") +
+        error.what());
+  }
+  if (cct_grid_.kelvin.size() < 2 || cct_grid_.kelvin.size() != cct_grid_.lights.size()) {
+    throw std::runtime_error(
+        "Film print resource: the colour temperature grid has fewer than 2 lights or a name list "
+        "of "
+        "another size");
+  }
+  for (std::size_t node = 0; node < cct_grid_.kelvin.size(); ++node) {
+    if (!(cct_grid_.kelvin[node] > 0.0) ||
+        (node > 0 && !(cct_grid_.kelvin[node] > cct_grid_.kelvin[node - 1]))) {
+      throw std::runtime_error(
+          "Film print resource: the colour temperature grid does not rise above 0");
+    }
+    (void)LightIndex(cct_grid_.lights[node]);
+  }
+}
+
+auto FilmStockBundle::LightIndex(std::string_view scene_light) const -> std::int64_t {
+  const auto light = std::find(scene_lights_.begin(), scene_lights_.end(), scene_light);
+  if (light == scene_lights_.end()) {
+    throw std::runtime_error("Film print: unknown scene light '" + std::string(scene_light) + "'");
+  }
+  return light - scene_lights_.begin();
+}
+
+auto FilmStockBundle::SceneLightMix(std::string_view      scene_light,
+                                    std::optional<double> raw_cct) const -> FilmSceneLightMix {
+  if (scene_light != "as_shot") {
+    (void)LightIndex(scene_light);
+    return SingleLight(scene_light);
+  }
+  // An input with no RAW white balance reads As Shot as the reference (user rule of issue 661).
+  if (!raw_cct.has_value()) {
+    return SingleLight("reference");
+  }
+  if (!std::isfinite(*raw_cct) || !(*raw_cct > 0.0)) {
+    throw std::runtime_error(
+        "Film print: the colour temperature of scene light As Shot is not "
+        "finite and above 0");
+  }
+  // Lab grid_blend: the nodes are the mired of the rounded kelvin of each light, and the share is
+  // linear in mired.
+  const auto& kelvin = cct_grid_.kelvin;
+  const auto& lights = cct_grid_.lights;
+  const auto  mired  = 1e6 / *raw_cct;
+  if (mired >= 1e6 / kelvin.front()) {
+    return SingleLight(lights.front());
+  }
+  if (mired <= 1e6 / kelvin.back()) {
+    return SingleLight(lights.back());
+  }
+  for (std::size_t k = 0; k + 1 < kelvin.size(); ++k) {
+    const auto high = 1e6 / kelvin[k];
+    const auto low  = 1e6 / kelvin[k + 1];
+    if (high >= mired && mired >= low) {
+      return {lights[k], lights[k + 1], (high - mired) / (high - low)};
+    }
+  }
+  throw std::runtime_error("Film print: the colour temperature grid has no node pair for " +
+                           std::to_string(*raw_cct) + " K");
+}
+
+auto FilmStockBundle::MixSpectrum(std::span<const std::int32_t> spectrum_index, std::int64_t row,
+                                  const FilmSceneLightMix& mix) const -> std::vector<double> {
+  const auto lights   = static_cast<std::int64_t>(scene_lights_.size());
+  const auto spectrum = [&](std::string_view light) {
+    const auto  index = spectrum_index[row * lights + LightIndex(light)];
+    const auto& name  = scene_spectra_[static_cast<std::size_t>(index)];
+    return stock_.F64(ArrayName("light", name, "spectrum"), {wavelengths_});
+  };
+  const auto          first = spectrum(mix.first);
+  std::vector<double> out(first.begin(), first.end());
+  if (mix.share != 0.0) {
+    const auto second = spectrum(mix.second);
+    for (std::size_t w = 0; w < out.size(); ++w) {
+      out[w] = (1.0 - mix.share) * first[w] + mix.share * second[w];
+    }
+  }
+  return out;
+}
+
 void FilmStockBundle::CheckExposureBand(std::string_view        id,
                                         std::span<const double> exposure_weights) const {
   for (std::size_t index = 0; index < exposure_weights.size(); ++index) {
@@ -326,13 +464,18 @@ void FilmStockBundle::CheckShapes() const {
   const auto reversals = static_cast<std::int64_t>(reversals_.size());
   (void)setup_.F64("reversal_layer_gain", {reversals, lights, 3});
   (void)setup_.F64("reversal_xyz_to_display", {reversals, 3, 3});
-  // A slope of 0 has no inverse, so the straight line of the scan needs one above 0 on each layer.
-  const auto slope = setup_.F64("scan_slope", {negatives, lights, 3});
-  if (std::ranges::any_of(slope, [](double value) { return !(value > 0.0); })) {
-    throw std::runtime_error("Film print resource: a slope of the scan grey scale is not above 0");
+  // Rule 'adx_slope_match' divides by the slope of each channel, so a scale must be finite and
+  // above 0.
+  const auto scale = setup_.F64("adx_channel_scale", {negatives, lights, 3});
+  if (std::ranges::any_of(scale,
+                          [](double value) { return !(value > 0.0) || !std::isfinite(value); })) {
+    throw std::runtime_error("Film print resource: a channel scale of the scan is not above 0");
   }
-  (void)setup_.F64("scan_grey", {negatives, lights, 3});
-  (void)setup_.F64("scan_rec709_matrix", {negatives, lights, 3, 3});
+  (void)setup_.F64("adx_grey_printing_density", {negatives, lights, 3});
+  (void)setup_.F64("adx_grey", {negatives, lights, 3});
+  for (const auto& negative : negatives_) {
+    (void)stock_.F64(ArrayName("negative", negative.id, "adx_base_printing_density"), {3});
+  }
   const auto spectrum_count = static_cast<std::int32_t>(scene_spectra_.size());
   for (const auto spectra : {setup_.I32("scene_spectrum_index", {negatives, lights}),
                              setup_.I32("reversal_scene_spectrum_index", {reversals, lights})}) {
@@ -371,22 +514,24 @@ auto FilmStockBundle::Film(std::string_view id) const -> FilmNegativeView {
 
 auto FilmStockBundle::ReversalSelection(std::string_view reversal,
                                         std::string_view scene_light) const -> FilmReversalSetup {
-  const auto r     = IndexOf(reversals_, reversal, "reversal film");
-  const auto light = std::find(scene_lights_.begin(), scene_lights_.end(), scene_light);
-  if (light == scene_lights_.end()) {
-    throw std::runtime_error("Film print: unknown scene light '" + std::string(scene_light) + "'");
-  }
-  const auto  l         = light - scene_lights_.begin();
-  const auto  reversals = static_cast<std::int64_t>(reversals_.size());
-  const auto  lights    = static_cast<std::int64_t>(scene_lights_.size());
-  const auto  gain      = setup_.F64("reversal_layer_gain", {reversals, lights, 3});
-  const auto  display   = setup_.F64("reversal_xyz_to_display", {reversals, 3, 3});
-  const auto  spectra   = setup_.I32("reversal_scene_spectrum_index", {reversals, lights});
-  const auto& spectrum  = scene_spectra_[static_cast<std::size_t>(spectra[r * lights + l])];
+  return ReversalSelection(reversal, SingleLight(scene_light));
+}
+
+auto FilmStockBundle::ReversalSelection(std::string_view         reversal,
+                                        const FilmSceneLightMix& scene_light) const
+    -> FilmReversalSetup {
+  const auto r         = IndexOf(reversals_, reversal, "reversal film");
+  const auto a         = LightIndex(scene_light.first);
+  const auto b         = LightIndex(scene_light.second);
+  const auto reversals = static_cast<std::int64_t>(reversals_.size());
+  const auto lights    = static_cast<std::int64_t>(scene_lights_.size());
+  const auto gain      = setup_.F64("reversal_layer_gain", {reversals, lights, 3});
+  const auto display   = setup_.F64("reversal_xyz_to_display", {reversals, 3, 3});
+  const auto spectra   = setup_.I32("reversal_scene_spectrum_index", {reversals, lights});
   return {
-      .layer_gain     = CopyValues<3>(gain, (r * lights + l) * 3),
+      .layer_gain     = MixValues<3>(gain, r, lights, a, b, scene_light.share),
       .xyz_to_display = CopyValues<9>(display, r * 9),
-      .scene_spectrum = stock_.F64(ArrayName("light", spectrum, "spectrum"), {wavelengths_}),
+      .scene_spectrum = MixSpectrum(spectra, r, scene_light),
   };
 }
 
@@ -446,57 +591,66 @@ auto FilmStockBundle::PrintMaterial(std::string_view id) const -> FilmPaperView 
 
 auto FilmStockBundle::Selection(std::string_view negative, std::string_view print_material,
                                 std::string_view scene_light) const -> FilmSelectionSetup {
-  const auto n     = IndexOf(negatives_, negative, "negative");
-  const auto p     = IndexOf(papers_, print_material, "print material");
-  const auto light = std::find(scene_lights_.begin(), scene_lights_.end(), scene_light);
-  if (light == scene_lights_.end()) {
-    throw std::runtime_error("Film print: unknown scene light '" + std::string(scene_light) + "'");
-  }
-  const auto  l         = light - scene_lights_.begin();
-  const auto  negatives = static_cast<std::int64_t>(negatives_.size());
-  const auto  papers    = static_cast<std::int64_t>(papers_.size());
-  const auto  lights    = static_cast<std::int64_t>(scene_lights_.size());
-  const auto  balance   = setup_.F64("printer_balance_log10", {negatives, papers, lights, 3});
-  const auto  gain      = setup_.F64("layer_gain", {negatives, lights, 3});
-  const auto  printing  = setup_.F64("printing_gain", {negatives, papers, 3});
-  const auto  aim       = setup_.F64("aim_log_h", {papers, 3});
-  const auto  display   = setup_.F64("xyz_to_display", {papers, 3, 3});
-  const auto  spectra   = setup_.I32("scene_spectrum_index", {negatives, lights});
-  const auto  grey      = setup_.F64("negative_grade_grey", {negatives, lights, 3});
-  const auto& spectrum  = scene_spectra_[static_cast<std::size_t>(spectra[n * lights + l])];
+  return Selection(negative, print_material, SingleLight(scene_light));
+}
+
+auto FilmStockBundle::Selection(std::string_view negative, std::string_view print_material,
+                                const FilmSceneLightMix& scene_light) const -> FilmSelectionSetup {
+  const auto n         = IndexOf(negatives_, negative, "negative");
+  const auto p         = IndexOf(papers_, print_material, "print material");
+  const auto a         = LightIndex(scene_light.first);
+  const auto b         = LightIndex(scene_light.second);
+  const auto share     = scene_light.share;
+  const auto negatives = static_cast<std::int64_t>(negatives_.size());
+  const auto papers    = static_cast<std::int64_t>(papers_.size());
+  const auto lights    = static_cast<std::int64_t>(scene_lights_.size());
+  const auto balance   = setup_.F64("printer_balance_log10", {negatives, papers, lights, 3});
+  const auto gain      = setup_.F64("layer_gain", {negatives, lights, 3});
+  const auto printing  = setup_.F64("printing_gain", {negatives, papers, 3});
+  const auto aim       = setup_.F64("aim_log_h", {papers, 3});
+  const auto display   = setup_.F64("xyz_to_display", {papers, 3, 3});
+  const auto spectra   = setup_.I32("scene_spectrum_index", {negatives, lights});
+  const auto grey      = setup_.F64("negative_grade_grey", {negatives, lights, 3});
+  // The lab check 'Grid blend, print' blends the printer balance of the two lights, in log10.
   return {
-      .printer_balance_log10 = CopyValues<3>(balance, ((n * papers + p) * lights + l) * 3),
-      .negative_grade_grey   = CopyValues<3>(grey, (n * lights + l) * 3),
-      .layer_gain            = CopyValues<3>(gain, (n * lights + l) * 3),
+      .printer_balance_log10 = MixValues<3>(balance, n * papers + p, lights, a, b, share),
+      .negative_grade_grey   = MixValues<3>(grey, n, lights, a, b, share),
+      .layer_gain            = MixValues<3>(gain, n, lights, a, b, share),
       .printing_gain         = CopyValues<3>(printing, (n * papers + p) * 3),
       .aim_log_h             = CopyValues<3>(aim, p * 3),
       .xyz_to_display        = CopyValues<9>(display, p * 9),
-      .scene_spectrum        = stock_.F64(ArrayName("light", spectrum, "spectrum"), {wavelengths_}),
+      .scene_spectrum        = MixSpectrum(spectra, n, scene_light),
   };
 }
 
 auto FilmStockBundle::ScanSelection(std::string_view negative, std::string_view scene_light) const
     -> FilmScanSetup {
-  const auto n     = IndexOf(negatives_, negative, "negative");
-  const auto light = std::find(scene_lights_.begin(), scene_lights_.end(), scene_light);
-  if (light == scene_lights_.end()) {
-    throw std::runtime_error("Film print: unknown scene light '" + std::string(scene_light) + "'");
-  }
-  const auto  l         = light - scene_lights_.begin();
-  const auto  negatives = static_cast<std::int64_t>(negatives_.size());
-  const auto  lights    = static_cast<std::int64_t>(scene_lights_.size());
-  const auto  gain      = setup_.F64("layer_gain", {negatives, lights, 3});
-  const auto  slope     = setup_.F64("scan_slope", {negatives, lights, 3});
-  const auto  grey      = setup_.F64("scan_grey", {negatives, lights, 3});
-  const auto  matrix    = setup_.F64("scan_rec709_matrix", {negatives, lights, 3, 3});
-  const auto  spectra   = setup_.I32("scene_spectrum_index", {negatives, lights});
-  const auto& spectrum  = scene_spectra_[static_cast<std::size_t>(spectra[n * lights + l])];
+  return ScanSelection(negative, SingleLight(scene_light));
+}
+
+auto FilmStockBundle::ScanSelection(std::string_view         negative,
+                                    const FilmSceneLightMix& scene_light) const -> FilmScanSetup {
+  const auto n         = IndexOf(negatives_, negative, "negative");
+  const auto a         = LightIndex(scene_light.first);
+  const auto b         = LightIndex(scene_light.second);
+  const auto share     = scene_light.share;
+  const auto negatives = static_cast<std::int64_t>(negatives_.size());
+  const auto lights    = static_cast<std::int64_t>(scene_lights_.size());
+  const auto gain      = setup_.F64("layer_gain", {negatives, lights, 3});
+  const auto pivot     = setup_.F64("adx_grey_printing_density", {negatives, lights, 3});
+  const auto scale     = setup_.F64("adx_channel_scale", {negatives, lights, 3});
+  const auto grey      = setup_.F64("adx_grey", {negatives, lights, 3});
+  const auto spectra   = setup_.I32("scene_spectrum_index", {negatives, lights});
+  // The lab form of a blend (scan_blend_model): the blended D_g, s, and ADX16 grey of the two
+  // lights, and the LAD offset from the blended grey.
   return {
-      .layer_gain     = CopyValues<3>(gain, (n * lights + l) * 3),
-      .slope          = CopyValues<3>(slope, (n * lights + l) * 3),
-      .grey           = CopyValues<3>(grey, (n * lights + l) * 3),
-      .rec709_matrix  = CopyValues<9>(matrix, (n * lights + l) * 9),
-      .scene_spectrum = stock_.F64(ArrayName("light", spectrum, "spectrum"), {wavelengths_}),
+      .layer_gain            = MixValues<3>(gain, n, lights, a, b, share),
+      .base_printing_density = CopyValues<3>(
+          stock_.F64(ArrayName("negative", negative, "adx_base_printing_density"), {3}), 0),
+      .grey_printing_density = MixValues<3>(pivot, n, lights, a, b, share),
+      .channel_scale         = MixValues<3>(scale, n, lights, a, b, share),
+      .grey_code             = MixValues<3>(grey, n, lights, a, b, share),
+      .scene_spectrum        = MixSpectrum(spectra, n, scene_light),
   };
 }
 

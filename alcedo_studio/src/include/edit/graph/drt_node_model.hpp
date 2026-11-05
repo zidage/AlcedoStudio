@@ -145,7 +145,10 @@ enum class DrtDirty : std::uint32_t {
   FilmExposure = 1U << 4,
   FilmHalation = 1U << 5,  ///< Halation of Film Print.
   FilmFlare    = 1U << 6,  ///< Enlarger flare of Film Print.
-  All          = Method | Encoding | OpenDrt | Diffusion | FilmExposure | FilmHalation | FilmFlare,
+  /// The LAD aim of Lab Scan. It acts only in FP6, so no canonical film print result reads it.
+  FilmScan     = 1U << 7,
+  All =
+      Method | Encoding | OpenDrt | Diffusion | FilmExposure | FilmHalation | FilmFlare | FilmScan,
 };
 
 /**
@@ -174,6 +177,7 @@ struct DrtParameterUpdate {
   std::optional<float>                 film_light_spread;
   std::optional<float>                 film_halation;
   std::optional<float>                 film_enlarger_flare;
+  std::optional<bool>                  film_lad_aim;
 };
 
 class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload, DrtDirty> {
