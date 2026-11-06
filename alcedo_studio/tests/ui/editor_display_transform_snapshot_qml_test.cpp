@@ -34,6 +34,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -172,6 +173,13 @@ class AdjustmentStackHarness {
   }
 
   auto window() -> QQuickWindow* { return &window_; }
+
+  /// Give the window and the panel stack the height @p height.
+  void resizeHeight(int height) {
+    window_.resize(400, height);
+    root_->setSize(QSizeF(400, height));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  }
 
   auto root() const -> QQuickItem* { return root_.get(); }
   auto errors() const -> QString {
@@ -1072,6 +1080,74 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmBrowserShowsOnlyTheFilmsOfThePro
             "FUJIFILM");
   EXPECT_EQ(PickerShownValues(film), reversal);
   EXPECT_FALSE(print->isVisible());
+}
+
+/// Scroll the browser list of @p picker to its end with wheel steps on the list, then return
+/// the top and the bottom of the row of its last entry in list coordinates.
+auto ScrollBrowserToEndAndMeasureLastEntry(QQuickWindow* window, QQuickItem* picker)
+    -> std::optional<std::pair<double, double>> {
+  auto* list = picker->findChild<QQuickItem*>(QStringLiteral("filmStockPickerList"));
+  if (list == nullptr) {
+    return std::nullopt;
+  }
+  const QPointF center = list->mapToScene(QPointF(list->width() / 2.0, list->height() / 2.0));
+  for (int step = 0; step < 60; ++step) {
+    QWheelEvent wheel(center, window->mapToGlobal(center.toPoint()), QPoint(0, 0),
+                      QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(window, &wheel);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+  }
+  const auto shown = PickerShownValues(picker);
+  if (shown.empty()) {
+    return std::nullopt;
+  }
+  // The delegates of a ListView are visual children of its content item.
+  const QString row_name =
+      QStringLiteral("filmStockEntry_") + QString::fromStdString(shown.back());
+  QQuickItem* row = nullptr;
+  for (auto* child : list->property("contentItem").value<QQuickItem*>()->childItems()) {
+    if (child->objectName() == row_name) {
+      row = child;
+    }
+  }
+  if (row == nullptr) {
+    ADD_FAILURE() << "no row " << row_name.toStdString() << " contentY "
+                  << list->property("contentY").toDouble() << " contentHeight "
+                  << list->property("contentHeight").toDouble();
+    return std::nullopt;
+  }
+  const QPointF top    = row->mapToItem(list, QPointF(0, 0));
+  const QPointF bottom = row->mapToItem(list, QPointF(0, row->height()));
+  return std::make_pair(top.y(), bottom.y());
+}
+
+// The wheel scrolls each browser list to the full row of its last entry. The list has rows of
+// three heights, so the list estimates the height of the rows that it did not make.
+TEST(EditorDisplayTransformSnapshotQmlTest, BrowserWheelScrollShowsTheWholeLastEntry) {
+  DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  harness.resizeHeight(1600);
+  auto* film  = harness.findModel<QQuickItem>(QStringLiteral("displayFilmNegativePicker"));
+  auto* print = harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintMaterialPicker"));
+  ASSERT_NE(film, nullptr);
+  ASSERT_NE(print, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    return film->property("currentValue").toString() == QStringLiteral("kodak_portra_400");
+  }));
+
+  for (auto* picker : {film, print}) {
+    film->setProperty("expanded", picker == film);
+    print->setProperty("expanded", picker == print);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    auto* list = picker->findChild<QQuickItem*>(QStringLiteral("filmStockPickerList"));
+    ASSERT_NE(list, nullptr);
+    const auto last = ScrollBrowserToEndAndMeasureLastEntry(harness.window(), picker);
+    ASSERT_TRUE(last.has_value()) << picker->objectName().toStdString();
+    EXPECT_GE(last->first, -0.5) << picker->objectName().toStdString();
+    EXPECT_LE(last->second, list->height() + 0.5)
+        << picker->objectName().toStdString() << " list height " << list->height();
+  }
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, FilmBrowserFiltersByBrandAndSearchAndPicksAFilm) {

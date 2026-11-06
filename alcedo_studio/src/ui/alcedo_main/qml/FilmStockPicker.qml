@@ -619,15 +619,20 @@ Item {
                     clip: true
 
                     // The wheel scrolls the list and is always accepted, so the
-                    // panel does not scroll when the list is at its end.
+                    // panel does not scroll when the list is at its end. The rows
+                    // have three heights, so the list estimates the height of the
+                    // rows that it did not make, and corrects the estimate through
+                    // originY: the content starts at originY, not at 0.
                     WheelHandler {
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                         onWheel: function (event) {
                             const step = event.pixelDelta.y !== 0
                                          ? event.pixelDelta.y
                                          : event.angleDelta.y / 120 * 48
-                            const maxY = Math.max(0, entryView.contentHeight - entryView.height)
-                            entryView.contentY = Math.max(0, Math.min(maxY, entryView.contentY - step))
+                            const minY = entryView.originY
+                            const maxY = Math.max(minY, entryView.originY + entryView.contentHeight
+                                                        - entryView.height)
+                            entryView.contentY = Math.max(minY, Math.min(maxY, entryView.contentY - step))
                             event.accepted = true
                         }
                     }
