@@ -112,13 +112,12 @@ kernel void film_grain_post(texture2d<float, access::read>  src [[texture(0)]],
   for (int entry = 0; entry < 6; ++entry) mix[entry] = field.mix[entry];
   const FilmGrainNoise3     grain = FilmGrainMix(mix, unit);
 
-  const FilmGrainPostParams post_params = post;
   const uint2               position    = uint2(uint(x), uint(y));
   const float4              pixel       = src.read(position);
   FilmGrainPostRgb          code;
   code.r                        = pixel.x;
   code.g                        = pixel.y;
   code.b                        = pixel.z;
-  const FilmGrainPostRgb result = FilmGrainPostPixel(post_params, code, grain);
+  const FilmGrainPostRgb result = FilmGrainPostPixel(&post, code, grain);
   dst.write(float4(result.r, result.g, result.b, pixel.w), position);
 }

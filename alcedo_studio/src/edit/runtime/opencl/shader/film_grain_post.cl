@@ -18,6 +18,8 @@
 // The fixed values of the render are one upload of FilmGrainPostDeviceData of
 // opencl_film_grain_pass.cpp: a FilmGrainFieldParams at `field_offset` and a FilmGrainPostParams
 // at `post_offset`, in bytes from `data`. They are too large for by-value arguments of OpenCL 1.2.
+// Each work-group copies them into local memory (1000 bytes), so film_grain_field.h and
+// film_grain_post.h read their parameters through `__local const` pointers on OpenCL.
 
 #define FILM_GRAIN_POST_TILE    16
 #define FILM_GRAIN_POST_THREADS (FILM_GRAIN_POST_TILE * FILM_GRAIN_POST_TILE)
@@ -33,27 +35,45 @@ static inline float4 FilmGrainPostRead(read_only image2d_t image, __global const
   return read_imagef(image, kFilmGrainPostSampler, (int2)(x, y));
 }
 
+/// Copies @p count 32-bit words, each lane of the work-group a share of them.
+static inline void FilmGrainPostCopyWords(__global const uint* from, __local uint* to, int count,
+                                          int lane) {
+  for (int word = lane; word < count; word += FILM_GRAIN_POST_THREADS) to[word] = from[word];
+}
+
 __kernel __attribute__((reqd_work_group_size(FILM_GRAIN_POST_TILE, FILM_GRAIN_POST_TILE, 1))) void
 film_grain_post_rgba32f(read_only image2d_t src_image, __global const float4* src_buffer,
                         int src_is_buffer, write_only image2d_t dst_image,
                         __global float4* dst_buffer, int dst_is_buffer, __global const uchar* data,
                         uint field_offset, uint post_offset, uint width, uint height,
                         __local float* shared) {
-  __global const FilmGrainFieldParams* field =
+  __global const FilmGrainFieldParams* field_upload =
       (__global const FilmGrainFieldParams*)(data + field_offset);
-  const int                  halo   = field->halo;
-  const int                  span   = FILM_GRAIN_POST_TILE + 2 * halo;
+  const int                  local_x      = (int)get_local_id(0);
+  const int                  local_y      = (int)get_local_id(1);
+  const int                  lane         = local_y * FILM_GRAIN_POST_TILE + local_x;
+  // The work-group copies the fixed values of the render once into local memory: the blur loops
+  // read the weights of every tap, and the apply step reads the curves of every pixel. With these
+  // reads from global memory, the pass took 7.6 ms in place of 5.7 ms at 6000 px (phase G4). The
+  // first barrier below publishes the copies.
+  __local FilmGrainFieldParams field_local;
+  __local FilmGrainPostParams  post;
+  FilmGrainPostCopyWords((__global const uint*)field_upload, (__local uint*)&field_local,
+                         (int)(sizeof(FilmGrainFieldParams) / sizeof(uint)), lane);
+  FilmGrainPostCopyWords((__global const uint*)(data + post_offset), (__local uint*)&post,
+                         (int)(sizeof(FilmGrainPostParams) / sizeof(uint)), lane);
+  __local const FilmGrainFieldParams* field = &field_local;
+  // Every lane reads these before the first barrier, so they come from the upload.
+  const int                  halo         = field_upload->halo;
+  const FilmGrainNoiseParams noise_params = field_upload->noise;
+  const int                  span         = FILM_GRAIN_POST_TILE + 2 * halo;
   // One band of the noise (16 rows of span columns) and the horizontal blur (span rows of 16
   // columns) have the same number of texels.
-  const int                  band   = FILM_GRAIN_POST_TILE * span;
-  __local float*             noise  = shared;
-  __local float*             across = shared + 3 * band;
-  const int                  local_x = (int)get_local_id(0);
-  const int                  local_y = (int)get_local_id(1);
-  const int                  lane    = local_y * FILM_GRAIN_POST_TILE + local_x;
-  const int                  x0      = (int)get_group_id(0) * FILM_GRAIN_POST_TILE - halo;
-  const int                  y0      = (int)get_group_id(1) * FILM_GRAIN_POST_TILE - halo;
-  const FilmGrainNoiseParams noise_params = field->noise;
+  const int                  band         = FILM_GRAIN_POST_TILE * span;
+  __local float*             noise        = shared;
+  __local float*             across       = shared + 3 * band;
+  const int                  x0           = (int)get_group_id(0) * FILM_GRAIN_POST_TILE - halo;
+  const int                  y0           = (int)get_group_id(1) * FILM_GRAIN_POST_TILE - halo;
 
   for (int band_row = 0; band_row < span; band_row += FILM_GRAIN_POST_TILE) {
     const int rows = min(FILM_GRAIN_POST_TILE, span - band_row);
@@ -114,13 +134,12 @@ film_grain_post_rgba32f(read_only image2d_t src_image, __global const float4* sr
   for (int entry = 0; entry < 6; ++entry) mix[entry] = field->mix[entry];
   const FilmGrainNoise3     grain = FilmGrainMix(mix, unit);
 
-  const FilmGrainPostParams post = *(__global const FilmGrainPostParams*)(data + post_offset);
   const float4 pixel = FilmGrainPostRead(src_image, src_buffer, src_is_buffer, x, y, width);
   FilmGrainPostRgb code;
   code.r                        = pixel.x;
   code.g                        = pixel.y;
   code.b                        = pixel.z;
-  const FilmGrainPostRgb result = FilmGrainPostPixel(post, code, grain);
+  const FilmGrainPostRgb result = FilmGrainPostPixel(&post, code, grain);
   const float4           output = (float4)(result.r, result.g, result.b, pixel.w);
   if (dst_is_buffer != 0) {
     dst_buffer[(uint)y * width + (uint)x] = output;

@@ -51,7 +51,9 @@
 #endif
 
 /**
- * The apply step of one render. Copied by value into the kernels.
+ * The apply step of one render. The kernels read it through a pointer in their parameter memory
+ * (FILM_GRAIN_FIELD_PARAMS): a copy of its 612 bytes for each pixel made the OpenCL apply step
+ * about 5 times slower (phase G4).
  *
  * `transfer` is the CE_TF_* id of the display encoding. `decode_scale` converts the decoded light
  * to the light relative to the reference white: CE_PQ_PEAK_NITS / reference white nits for ST
@@ -79,8 +81,8 @@ FILM_GRAIN_POST_INLINE float FilmGrainPostClamp01(float value) {
 }
 
 /// T(q) of the header comment, for the curve @p curve and its node range [@p low, @p high].
-FILM_GRAIN_POST_INLINE float FilmGrainPostTone(FilmGrainCurve curve, float low, float high,
-                                               float q) {
+FILM_GRAIN_POST_INLINE float FilmGrainPostTone(FILM_GRAIN_FIELD_PARAMS FilmGrainCurve* curve,
+                                               float low, float high, float q) {
   const float density = low + (high - low) * q;
   return FILM_GRAIN_POST_SQRT(q * (1.0f - q)) * FilmGrainCurveSigma(curve, density);
 }
@@ -97,44 +99,46 @@ FILM_GRAIN_POST_INLINE float FilmGrainPostSmoothstep(float edge0, float edge1, f
   return t * t * (3.0f - 2.0f * t);
 }
 
-/// One channel: the code value @p code with the grain @p unit (the mixed unit grain N_j).
-FILM_GRAIN_POST_INLINE float FilmGrainPostChannel(FilmGrainPostParams params, int channel,
-                                                  float code, float q, float unit, float brighten) {
-  const float light = CeDecode(params.transfer, code);
+/// One channel: the code value @p code, its decoded light @p light, with the grain @p unit (the
+/// mixed unit grain N_j).
+FILM_GRAIN_POST_INLINE float FilmGrainPostChannel(
+    FILM_GRAIN_FIELD_PARAMS FilmGrainPostParams* params, int channel, float code, float light,
+    float q, float unit, float brighten) {
   if (!(light > 0.0f)) {
     return code;
   }
   float error =
-      params.strength * params.pixel_factor[channel] * params.tone_scale[channel] *
-      FilmGrainPostTone(params.curves[channel], params.low[channel], params.high[channel], q) *
+      params->strength * params->pixel_factor[channel] * params->tone_scale[channel] *
+      FilmGrainPostTone(&params->curves[channel], params->low[channel], params->high[channel], q) *
       unit;
   if (error == 0.0f) {
     return code;
   }
   error = error < 0.0f ? error * brighten : error;
-  return CeEncode(params.transfer, light * FILM_GRAIN_POST_EXP(-error));
+  return CeEncode(params->transfer, light * FILM_GRAIN_POST_EXP(-error));
 }
 
 /**
  * Applies the grain @p unit (N of rule 'grain_layer_mix') to the display code values @p code.
  * A channel with no light (a code value at or below black) does not change.
  */
-FILM_GRAIN_POST_INLINE FilmGrainPostRgb FilmGrainPostPixel(FilmGrainPostParams params,
-                                                           FilmGrainPostRgb    code,
-                                                           FilmGrainNoise3     unit) {
-  const float qr =
-      FilmGrainPostToneCoordinate(CeDecode(params.transfer, code.r) * params.decode_scale);
-  const float qg =
-      FilmGrainPostToneCoordinate(CeDecode(params.transfer, code.g) * params.decode_scale);
-  const float qb =
-      FilmGrainPostToneCoordinate(CeDecode(params.transfer, code.b) * params.decode_scale);
+FILM_GRAIN_POST_INLINE FilmGrainPostRgb
+FilmGrainPostPixel(FILM_GRAIN_FIELD_PARAMS FilmGrainPostParams* params, FilmGrainPostRgb code,
+                   FilmGrainNoise3 unit) {
+  // Each channel is decoded once: the tone coordinate and the apply step read the same light.
+  const float lr        = CeDecode(params->transfer, code.r);
+  const float lg        = CeDecode(params->transfer, code.g);
+  const float lb        = CeDecode(params->transfer, code.b);
+  const float qr        = FilmGrainPostToneCoordinate(lr * params->decode_scale);
+  const float qg        = FilmGrainPostToneCoordinate(lg * params->decode_scale);
+  const float qb        = FilmGrainPostToneCoordinate(lb * params->decode_scale);
   // Near white, a negative density error (a brighter cloud) gets smaller.
   const float highlight = FilmGrainPostSmoothstep(0.72f, 0.96f, (qr + qg + qb) * (1.0f / 3.0f));
   const float brighten  = 1.0f + (0.12f - 1.0f) * highlight;
   FilmGrainPostRgb result;
-  result.r = FilmGrainPostChannel(params, 0, code.r, qr, unit.x, brighten);
-  result.g = FilmGrainPostChannel(params, 1, code.g, qg, unit.y, brighten);
-  result.b = FilmGrainPostChannel(params, 2, code.b, qb, unit.z, brighten);
+  result.r = FilmGrainPostChannel(params, 0, code.r, lr, qr, unit.x, brighten);
+  result.g = FilmGrainPostChannel(params, 1, code.g, lg, qg, unit.y, brighten);
+  result.b = FilmGrainPostChannel(params, 2, code.b, lb, qb, unit.z, brighten);
   return result;
 }
 

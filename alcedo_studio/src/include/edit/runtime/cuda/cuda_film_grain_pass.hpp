@@ -20,7 +20,8 @@ namespace alcedo {
  *
  * The steps of section 6.3 of the plan 'film_grain_format_and_stock_plan.md', in one kernel: each
  * 16 x 16 tile makes the noise of its reference pixels with a halo of the largest blur radius
- * (rule 'grain_aggregate') in shared memory, then the horizontal blur, the vertical blur, the
+ * (rule 'grain_aggregate') in shared memory, one band of rows at a time (the layout of the OpenCL
+ * and Metal kernels), then the horizontal blur, the vertical blur, the
  * division by the sum of w^2, the mix, and the apply step of film_grain_post.h. The halo makes a
  * viewport region equal to the same region of the full frame. The pass uses no pool image, so it
  * allocates no GPU memory.

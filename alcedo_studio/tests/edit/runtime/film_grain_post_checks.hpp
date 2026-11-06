@@ -245,7 +245,7 @@ inline auto HostForm(const FilmGrainPlan& plan, const ResolvedRenderGeometry& ge
       }
       const auto  grain  = FilmGrainMix(field.mix, FilmGrainNoise3{unit[0], unit[1], unit[2]});
       const auto& source = input[static_cast<std::size_t>(y) * width + x];
-      const auto  result = FilmGrainPostPixel(post, {source.r, source.g, source.b}, grain);
+      const auto  result = FilmGrainPostPixel(&post, {source.r, source.g, source.b}, grain);
       output[static_cast<std::size_t>(y) * width + x] = {result.r, result.g, result.b, source.a};
     }
   }

@@ -30,6 +30,7 @@
 #define FILM_GRAIN_FIELD_SQRT    sqrt
 #define FILM_GRAIN_FIELD_FLOOR   floor
 #define FILM_GRAIN_FIELD_PRIVATE __private
+#define FILM_GRAIN_FIELD_PARAMS  __local const
 #elif defined(__METAL_VERSION__)
 #define FILM_GRAIN_FIELD_INLINE  static inline
 #define FILM_GRAIN_FIELD_UINT    uint
@@ -37,6 +38,7 @@
 #define FILM_GRAIN_FIELD_SQRT    sqrt
 #define FILM_GRAIN_FIELD_FLOOR   floor
 #define FILM_GRAIN_FIELD_PRIVATE thread
+#define FILM_GRAIN_FIELD_PARAMS  constant
 #else
 #include <cmath>
 #ifdef __CUDACC__
@@ -49,6 +51,7 @@
 #define FILM_GRAIN_FIELD_SQRT  sqrtf
 #define FILM_GRAIN_FIELD_FLOOR floorf
 #define FILM_GRAIN_FIELD_PRIVATE
+#define FILM_GRAIN_FIELD_PARAMS const
 #endif
 
 /// Most nodes of one granularity curve of the stock bundle (schema 11, section 4.1).
@@ -142,13 +145,15 @@ FILM_GRAIN_FIELD_INLINE float FilmGrainGaussian(FILM_GRAIN_FIELD_UINT bits) {
 }
 
 /// The value of @p curve at @p value: a dye amount (layer curve) or a gross density (channel
-/// curve).
-FILM_GRAIN_FIELD_INLINE float FilmGrainCurveSigma(FilmGrainCurve curve, float value) {
-  float sigma = curve.first_sigma;
+/// curve). @p curve is in the parameter memory of the kernel (FILM_GRAIN_FIELD_PARAMS: local
+/// memory on OpenCL, constant memory on Metal), so no kernel copies the curve for each pixel.
+FILM_GRAIN_FIELD_INLINE float FilmGrainCurveSigma(FILM_GRAIN_FIELD_PARAMS FilmGrainCurve* curve,
+                                                  float                                   value) {
+  float sigma = curve->first_sigma;
   for (int segment = 0; segment < FILM_GRAIN_CURVE_SEGMENTS; ++segment) {
-    float t = (value - curve.start[segment]) * curve.inverse_width[segment];
+    float t = (value - curve->start[segment]) * curve->inverse_width[segment];
     t       = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
-    sigma += curve.delta[segment] * t;
+    sigma += curve->delta[segment] * t;
   }
   return sigma;
 }

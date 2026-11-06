@@ -284,16 +284,17 @@ TEST(FilmGrainPlan, CurveSegmentsReproduceTheNodesAndHoldTheEndValues) {
     const auto x     = std::span(stock.layer_x).subspan(layer * 4, count);
     const auto sigma = std::span(stock.layer_sigma).subspan(layer * 4, count);
     for (std::size_t node = 0; node < count; ++node) {
-      EXPECT_NEAR(FilmGrainCurveSigma(curve, static_cast<float>(x[node])), sigma[node], 1e-7);
+      EXPECT_NEAR(FilmGrainCurveSigma(&curve, static_cast<float>(x[node])), sigma[node], 1e-7);
     }
     for (std::size_t node = 0; node + 1 < count; ++node) {
       const double middle   = 0.5 * (x[node] + x[node + 1]);
       const double expected = 0.5 * (sigma[node] + sigma[node + 1]);
-      EXPECT_NEAR(FilmGrainCurveSigma(curve, static_cast<float>(middle)), expected, 1e-7);
+      EXPECT_NEAR(FilmGrainCurveSigma(&curve, static_cast<float>(middle)), expected, 1e-7);
     }
-    EXPECT_NEAR(FilmGrainCurveSigma(curve, static_cast<float>(x.front() - 1.0)), sigma.front(),
+    EXPECT_NEAR(FilmGrainCurveSigma(&curve, static_cast<float>(x.front() - 1.0)), sigma.front(),
                 1e-7);
-    EXPECT_NEAR(FilmGrainCurveSigma(curve, static_cast<float>(x.back() + 5.0)), sigma.back(), 1e-7);
+    EXPECT_NEAR(FilmGrainCurveSigma(&curve, static_cast<float>(x.back() + 5.0)), sigma.back(),
+                1e-7);
     for (std::size_t segment = count - 1; segment < FILM_GRAIN_CURVE_SEGMENTS; ++segment) {
       EXPECT_EQ(curve.delta[segment], 0.0f);
       EXPECT_EQ(curve.inverse_width[segment], 0.0f);
@@ -459,7 +460,7 @@ TEST_F(FilmGrainPlanLabTest, PlanOfEachPrintStockGivesTheLabPixelSigmaAtGrey) {
         for (std::size_t layer = 0; layer < 3; ++layer) {
           SCOPED_TRACE(stocks[stock] + " " + std::string(FilmFormatId(kFormats[f])) + " " +
                        std::to_string(sides[s]) + " layer " + std::to_string(layer));
-          const double curve = FilmGrainCurveSigma(plan.curves[layer],
+          const double curve = FilmGrainCurveSigma(&plan.curves[layer],
                                                    static_cast<float>(amount[stock * 3 + layer]));
           EXPECT_NEAR(curve / sigma_48[stock * 3 + layer], 1.0, 1e-5);
           const double expected = pixel[((stock * 3 + f) * 2 + s) * 3 + layer];
