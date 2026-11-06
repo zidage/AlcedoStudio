@@ -68,11 +68,12 @@ class MetalFilmGrainNegativeTest : public ::testing::Test {
                                 device_->CommandContext());
       RecordMetalFilmGrainNegative(*device_, plan, geometry, dye_max, buffer.Native(), 0,
                                    geometry.render_extent.width, geometry.render_extent.height);
+      // DownloadBufferRange waits only for a committed frame, so the frame ends first.
+      device_->EndRender();
+      device_->WaitIdle();
       std::vector<Amounts> output(record.size());
       backend.DownloadBufferRange(buffer, 0, std::as_writable_bytes(std::span(output)),
                                   device_->CommandContext());
-      device_->EndRender();
-      device_->WaitIdle();
       return output;
     };
   }
