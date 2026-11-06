@@ -24,17 +24,19 @@
 // read it. Metal shaders include it by relative path, after <metal_stdlib>.
 
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
-#define FILM_GRAIN_FIELD_INLINE static inline
-#define FILM_GRAIN_FIELD_UINT   uint
-#define FILM_GRAIN_FIELD_LOG    log
-#define FILM_GRAIN_FIELD_SQRT   sqrt
-#define FILM_GRAIN_FIELD_FLOOR  floor
+#define FILM_GRAIN_FIELD_INLINE  static inline
+#define FILM_GRAIN_FIELD_UINT    uint
+#define FILM_GRAIN_FIELD_LOG     log
+#define FILM_GRAIN_FIELD_SQRT    sqrt
+#define FILM_GRAIN_FIELD_FLOOR   floor
+#define FILM_GRAIN_FIELD_PRIVATE __private
 #elif defined(__METAL_VERSION__)
-#define FILM_GRAIN_FIELD_INLINE static inline
-#define FILM_GRAIN_FIELD_UINT   uint
-#define FILM_GRAIN_FIELD_LOG    log
-#define FILM_GRAIN_FIELD_SQRT   sqrt
-#define FILM_GRAIN_FIELD_FLOOR  floor
+#define FILM_GRAIN_FIELD_INLINE  static inline
+#define FILM_GRAIN_FIELD_UINT    uint
+#define FILM_GRAIN_FIELD_LOG     log
+#define FILM_GRAIN_FIELD_SQRT    sqrt
+#define FILM_GRAIN_FIELD_FLOOR   floor
+#define FILM_GRAIN_FIELD_PRIVATE thread
 #else
 #include <cmath>
 #ifdef __CUDACC__
@@ -46,6 +48,7 @@
 #define FILM_GRAIN_FIELD_LOG   logf
 #define FILM_GRAIN_FIELD_SQRT  sqrtf
 #define FILM_GRAIN_FIELD_FLOOR floorf
+#define FILM_GRAIN_FIELD_PRIVATE
 #endif
 
 /// Most nodes of one granularity curve of the stock bundle (schema 11, section 4.1).
@@ -238,8 +241,11 @@ FILM_GRAIN_FIELD_INLINE FilmGrainNoise3 FilmGrainAggregateNoise(FilmGrainNoisePa
   return sum;
 }
 
-/// Rule 'grain_layer_mix': N = L u for the unit fields @p unit of the three layers.
-FILM_GRAIN_FIELD_INLINE FilmGrainNoise3 FilmGrainMix(const float mix[6], FilmGrainNoise3 unit) {
+/// Rule 'grain_layer_mix': N = L u for the unit fields @p unit of the three layers. @p mix holds
+/// the 6 entries of `FilmGrainFieldParams::mix`, in the private memory of the thread: a Metal or
+/// OpenCL kernel copies them from its parameter buffer first.
+FILM_GRAIN_FIELD_INLINE FilmGrainNoise3 FilmGrainMix(const FILM_GRAIN_FIELD_PRIVATE float* mix,
+                                                     FilmGrainNoise3                       unit) {
   FilmGrainNoise3 mixed;
   mixed.x = mix[0] * unit.x;
   mixed.y = mix[1] * unit.x + mix[2] * unit.y;

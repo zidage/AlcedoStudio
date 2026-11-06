@@ -23,6 +23,7 @@
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/geometry/texture_sampling_plan.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
@@ -1070,7 +1071,7 @@ TEST_F(OpenClGradeFixture, OpenClFilmGrainStrengthScalesDeterministicDensityVari
 }
 
 TEST_F(OpenClGradeFixture, OpenClFilmGrainColourIsWarmCoolWithTheQuietestGreen) {
-  // film_grain_math.h: the channel mix and weights of real colour negative grain.
+  // film_grain_post.h: the channel correlation and ratio of the 5207 scans of #660.
   constexpr std::uint32_t width  = 128;
   constexpr std::uint32_t height = 128;
   UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
@@ -1087,7 +1088,19 @@ TEST_F(OpenClGradeFixture, OpenClFilmGrainColourIsWarmCoolWithTheQuietestGreen) 
   EXPECT_GT(colour.lightness_warmth_correlation, 0.05);
 }
 
-/// GPU time of the DRT/Post passes with and without film grain at 6000 x 4000, median of 9 renders.
+TEST_F(OpenClGradeFixture, OpenClFilmGrainAtStrengthZeroRunsNoPostPass) {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
+  auto& grain = ModelByType<FilmGrainModel>(type_ids::FilmGrain());
+  grain.SetValue(0.0f);
+  EXPECT_EQ(RenderThroughDrtPost().post_neighborhood_count, 0U);
+  grain.SetValue(0.5f);
+  EXPECT_EQ(RenderThroughDrtPost().post_neighborhood_count, 1U);
+}
+
+/// GPU time of the DRT/Post passes with and without film grain at 6000 x 4000, median of 9 renders:
+/// Film Grain 100 % at 35mm and at 16mm (plan 'film_grain_format_and_stock_plan.md', phase G4).
 /// Run it with --gtest_also_run_disabled_tests. The OpenCL driver compiles the kernels with its
 /// own optimization, so a Debug host build gives the kernel time.
 TEST_F(OpenClGradeFixture, DISABLED_FilmGrainCostRecordAt24Megapixels) {
@@ -1120,10 +1133,13 @@ TEST_F(OpenClGradeFixture, DISABLED_FilmGrainCostRecordAt24Megapixels) {
     return runs[runs.size() / 2];
   };
   const double without_grain = median(0.0f);
-  const double with_grain    = median(0.6f);
-  std::cout << "DRT/Post at " << width << " x " << height << ": without grain " << without_grain
-            << " ms, with grain " << with_grain << " ms, grain " << with_grain - without_grain
-            << " ms\n";
+  for (const auto format : {FilmFormat::Film35mm, FilmFormat::Film16mm}) {
+    document_.Drt()->Params().ApplyFilmFormat(format);
+    const double with_grain = median(1.0f);
+    std::cout << "DRT/Post at " << width << " x " << height << ", " << FilmFormatId(format)
+              << ": without grain " << without_grain << " ms, with grain " << with_grain
+              << " ms, grain " << with_grain - without_grain << " ms\n";
+  }
 }
 
 TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance) {

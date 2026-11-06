@@ -277,6 +277,7 @@ if(ALCEDO_METAL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_display_to_ap1_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_params.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_pass.mm
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_film_grain_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_film_print_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_frame_presenter.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_local_tone_pass.mm
@@ -309,6 +310,7 @@ if(ALCEDO_METAL_ENABLED)
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_diffusion_filter_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_display_to_ap1_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_pass.mm
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_film_grain_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_film_print_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_frame_presenter.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_local_tone_pass.mm
@@ -364,6 +366,7 @@ if(ALCEDO_OPENCL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_display_to_ap1_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_drt_params.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_drt_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_film_grain_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_film_print_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_frame_presenter.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_local_tone_pass.cpp

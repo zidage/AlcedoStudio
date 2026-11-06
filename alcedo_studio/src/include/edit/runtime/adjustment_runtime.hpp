@@ -65,18 +65,12 @@ struct GradeNeighborParams {
   float         threshold = 0.0f;
   float         weights[kGradeNeighborMaxTapCount]{};
   std::uint32_t enabled = 0;
-  std::uint32_t seed_lo = 0;
-  std::uint32_t seed_hi = 0;
   float         sigma_x = 0.0f;
   float         sigma_y = 0.0f;
   float         redshift[3]{};
-  float         render_to_reference[6]    = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
-  std::uint32_t use_reference_coordinates = 0;
-  std::int32_t  reference_width           = 0;
-  std::int32_t  reference_height          = 0;
 };
 
-static_assert(sizeof(GradeNeighborParams) == 344);
+static_assert(sizeof(GradeNeighborParams) == 300);
 
 inline constexpr std::uint32_t kGradeRuntimeParamDirtyBit = 1;
 inline constexpr std::uint32_t kGradeRuntimeParamBytes =

@@ -32,11 +32,8 @@ constexpr float         kHalationSigma            = 7.0f;
 constexpr float         kHalationStrengthScale    = 2.0f;
 constexpr float         kHalationRedshift[3]      = {1.0f, 0.05f, 0.02f};
 constexpr float         kClarityNeighborhoodSigma = 15.0f;
-constexpr float         kFilmGrainDyeCloudSigma   = 0.8f;
 constexpr std::uint32_t kSharpenMaxRadius         = 15U;
 constexpr std::uint32_t kClarityMaxRadius         = 60U;
-constexpr std::uint32_t kFilmGrainMaxRadius       = 3U;
-constexpr std::uint64_t kFilmGrainSeed            = 0x6a09e667f3bcc909ULL;
 
 void BuildGaussianWeights(float sigma, std::uint32_t max_radius, GradeNeighborParams& result) {
   if (!(sigma > 0.0f)) {
@@ -67,19 +64,6 @@ void BuildGaussianWeights(float sigma, std::uint32_t max_radius, GradeNeighborPa
 /** @brief Mean of the X/Y render-to-reference scales, clamped like the per-axis helper. */
 auto NeighborhoodRenderScale(const ResolvedRenderGeometry& geometry) -> float {
   return 0.5f * (RenderAxisScale(geometry, true) + RenderAxisScale(geometry, false));
-}
-
-void CopyRenderMapping(const ResolvedRenderGeometry& geometry, GradeNeighborParams& result) {
-  const auto& matrix               = geometry.render_to_reference.m;
-  result.render_to_reference[0]    = matrix[0];
-  result.render_to_reference[1]    = matrix[1];
-  result.render_to_reference[2]    = matrix[2];
-  result.render_to_reference[3]    = matrix[3];
-  result.render_to_reference[4]    = matrix[4];
-  result.render_to_reference[5]    = matrix[5];
-  result.use_reference_coordinates = CoversFullEditSpace(geometry) ? 1U : 0U;
-  result.reference_width  = static_cast<std::int32_t>(geometry.full_reference_extent.width);
-  result.reference_height = static_cast<std::int32_t>(geometry.full_reference_extent.height);
 }
 
 }  // namespace
@@ -281,7 +265,6 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
 
   GradeNeighborParams result;
   result.behavior = static_cast<std::uint32_t>(behavior);
-  CopyRenderMapping(geometry, result);
   const float render_scale = NeighborhoodRenderScale(geometry);
 
   if (behavior == AdjustmentBehavior::Sharpen) {
@@ -330,14 +313,10 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
     return result;
   }
 
-  // The grain is linear in the amount, so the full slider range (0 to 2) scales it.
-  result.amount  = std::clamp(scalar, FilmGrainTraits::kMin, FilmGrainTraits::kMax) / 3.0f;
+  // Film Grain carries only the strength here, for the DRT/Post schedule. Its size and its kernel
+  // come from the grain plan (drt_post_film_grain.hpp, film_grain_plan.hpp).
+  result.amount  = std::clamp(scalar, FilmGrainTraits::kMin, FilmGrainTraits::kMax);
   result.enabled = result.amount > 0.0f ? 1U : 0U;
-  result.sigma_x = kFilmGrainDyeCloudSigma * render_scale;
-  result.sigma_y = result.sigma_x;
-  result.seed_lo = static_cast<std::uint32_t>(kFilmGrainSeed & 0xffffffffULL);
-  result.seed_hi = static_cast<std::uint32_t>((kFilmGrainSeed >> 32U) & 0xffffffffULL);
-  BuildGaussianWeights(result.sigma_x, kFilmGrainMaxRadius, result);
   return result;
 }
 

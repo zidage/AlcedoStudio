@@ -20,6 +20,8 @@ inline constexpr const char* kDisplayToAp1ProgramName         = "opencl_dag_disp
 inline constexpr const char* kAiMaskCoverageProgramName       = "opencl_dag_ai_mask_coverage";
 /// F6 of the Film Print DRT Plan: the film print display transform (film_print.cl).
 inline constexpr const char* kFilmPrintProgramName            = "opencl_dag_film_print";
+/// G4 of the film grain plan: the DRT/Post Film Grain (film_grain_post.cl).
+inline constexpr const char* kFilmGrainProgramName            = "opencl_dag_film_grain";
 
 inline constexpr const char* kGeometryResampleKernelName      = "geometry_resample_rgba32f";
 inline constexpr const char* kCameraColorKernelName           = "camera_color_acescc";
@@ -108,6 +110,7 @@ inline constexpr const char* kFilmPrintScanPrescanColumnsKernelName =
 /// FP6 of print material Negative Scan. It is a kernel of @ref kDrtProgramName, because it applies
 /// the display transform of that program.
 inline constexpr const char* kFilmPrintScanDisplayKernelName = "film_print_scan_display";
+inline constexpr const char* kFilmGrainPostKernelName        = "film_grain_post_rgba32f";
 
 }  // namespace alcedo::OpenCL::GpuDag
 

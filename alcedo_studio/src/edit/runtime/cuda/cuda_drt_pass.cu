@@ -56,8 +56,6 @@ struct CudaDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteCudaDrt";
   static constexpr bool        kImplementsFilmPrint = true;
-  /// Film Grain runs the passes of the grain field (RecordCudaFilmGrainPost).
-  static constexpr bool        kImplementsFilmGrainField = true;
 
   static void DispatchFilmGrain(CudaRenderDevice& device, const FrameSceneBinding& src,
                                 const FrameSceneBinding& dst, const FilmGrainPlan& grain,

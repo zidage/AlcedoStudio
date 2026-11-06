@@ -23,6 +23,7 @@
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_drt_gpu_params.hpp"
 #include "edit/runtime/opencl/opencl_drt_params.hpp"
+#include "edit/runtime/opencl/opencl_film_grain_pass.hpp"
 #include "edit/runtime/opencl/opencl_film_print_pass.hpp"
 #include "edit/runtime/opencl/opencl_neighbor_dispatch.hpp"
 #include "edit/runtime/opencl/opencl_scene_work.hpp"
@@ -108,9 +109,15 @@ struct OpenClDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteOpenClDrt";
   static constexpr bool        kImplementsFilmPrint = true;
-  /// Film Grain still runs the neighborhood kernels with the Bernoulli field; phase G4 of the
-  /// film grain plan ports the grain field.
-  static constexpr bool        kImplementsFilmGrainField = false;
+
+  static void DispatchFilmGrain(OpenClRenderDevice& device, const FrameSceneBinding& src,
+                                const FrameSceneBinding& dst, const FilmGrainPlan& grain,
+                                FilmGrainDisplayEncoding      encoding,
+                                const ResolvedRenderGeometry& geometry, std::uint32_t width,
+                                std::uint32_t height) {
+    RecordOpenClFilmGrainPost(device, grain, geometry, encoding, OpenClBindScene(device, src),
+                              OpenClBindScene(device, dst), width, height);
+  }
 
   /// Post neighborhood parameters travel in the command, not in an arena slot.
   static void RefreshNeighborhoodAdjustment(OpenClRenderDevice&, const IOperatorModel&,

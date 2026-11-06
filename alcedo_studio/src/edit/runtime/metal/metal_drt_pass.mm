@@ -22,6 +22,7 @@
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/metal/metal_drt_gpu_params.hpp"
+#include "edit/runtime/metal/metal_film_grain_pass.hpp"
 #include "edit/runtime/metal/metal_film_print_pass.hpp"
 #include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/parameter_arena.hpp"
@@ -52,10 +53,19 @@ void DispatchThreads(MTL::ComputeCommandEncoder* encoder, MTL::ComputePipelineSt
   encoder->dispatchThreads(MTL::Size{width, height, 1}, MTL::Size{thread_width, thread_height, 1});
 }
 
+/// Film Grain has its own pass (RecordMetalFilmGrainPost), so these kernels do not take it.
+void RequireNeighborhoodKernelBehavior(const GradeNeighborParams& params, const char* caller) {
+  if (static_cast<AdjustmentBehavior>(params.behavior) == AdjustmentBehavior::FilmGrain) {
+    throw std::invalid_argument(std::string(caller) +
+                                ": Film Grain runs RecordMetalFilmGrainPost, not this kernel");
+  }
+}
+
 /** @brief Start the display-referred horizontal neighborhood kernel. */
 void DispatchNeighborHorizontal(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
                                 MetalBackend::Texture2D& dst, const GradeNeighborParams& params,
                                 std::uint32_t width, std::uint32_t height) {
+  RequireNeighborhoodKernelBehavior(params, "DispatchNeighborHorizontal");
   auto pipeline = NeighborPipeline("drt_neighbor_blur_horizontal", "Metal DRT Post Horizontal");
   auto* encoder  = static_cast<MTL::ComputeCommandEncoder*>(
       device.Workspace().Device().EnsureComputeCommandEncoder(device.CommandContext()));
@@ -75,6 +85,7 @@ void DispatchNeighborVertical(MetalRenderDevice& device, const MetalBackend::Tex
                               const MetalBackend::Texture2D& horizontal,
                               MetalBackend::Texture2D& dst, const GradeNeighborParams& params,
                               std::uint32_t width, std::uint32_t height) {
+  RequireNeighborhoodKernelBehavior(params, "DispatchNeighborVertical");
   auto pipeline = NeighborPipeline("drt_neighbor_apply_vertical", "Metal DRT Post Vertical");
   auto* encoder = static_cast<MTL::ComputeCommandEncoder*>(
       device.Workspace().Device().EnsureComputeCommandEncoder(device.CommandContext()));
@@ -128,9 +139,15 @@ struct MetalDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteMetalDrt";
   static constexpr bool kImplementsFilmPrint = true;
-  /// Film Grain still runs the neighborhood kernels with the Bernoulli field; phase G4 of the
-  /// film grain plan ports the grain field.
-  static constexpr bool        kImplementsFilmGrainField = false;
+
+  static void DispatchFilmGrain(MetalRenderDevice& device, const FrameSceneBinding& src,
+                                const FrameSceneBinding& dst, const FilmGrainPlan& grain,
+                                FilmGrainDisplayEncoding      encoding,
+                                const ResolvedRenderGeometry& geometry, std::uint32_t width,
+                                std::uint32_t height) {
+    RecordMetalFilmGrainPost(device, grain, geometry, encoding, MetalSceneTexture(device, src),
+                             MetalSceneTexture(device, dst), width, height);
+  }
 
   static void RefreshNeighborhoodAdjustment(MetalRenderDevice& device, const IOperatorModel& model,
                                             const ParameterSlotKey& key,
@@ -235,6 +252,8 @@ void AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
   pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_DRT_METALLIB_PATH,
                                           "drt_neighbor_apply_vertical",
                                           "Metal DRT Post Vertical"});
+  pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_DRT_METALLIB_PATH, "film_grain_post",
+                                          "Metal DRT Post Film Grain"});
 #else
   (void)pipelines;
 #endif
