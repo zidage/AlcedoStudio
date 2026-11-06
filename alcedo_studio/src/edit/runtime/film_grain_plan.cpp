@@ -230,16 +230,93 @@ auto MakeFilmGrainPlan(const ResolvedRenderGeometry& geometry, FilmFormat format
         stock.common.cloud_sigma_um[layer], stock.common.aperture_area_um2, plan.render_pitch_um);
   }
   const bool negative = target == FilmGrainTarget::Negative;
-  plan.mix            = negative
-                            ? CorrelationCholesky(stock.common.layer_correlation, "grain_layer_correlation")
-                            : CorrelationCholesky(stock.common.post_display_correlation,
-                                                  "grain_post_display_correlation");
+  plan.mix =
+      negative
+          ? CorrelationCholesky(stock.common.layer_correlation, "grain_layer_correlation")
+          : CorrelationCholesky(kFilmGrainPostScanCorrelation, "kFilmGrainPostScanCorrelation");
   const auto& curves  = negative ? stock.layer : stock.channel;
   for (std::size_t layer = 0; layer < 3; ++layer) {
     plan.curves[layer] =
         MakeFilmGrainCurve(curves, layer, negative ? "grain layer curve" : "grain channel curve");
+    const auto first      = static_cast<std::size_t>(curves.stored_nodes) * layer;
+    plan.curve_low[layer] = curves.x[first];
+    plan.curve_high[layer] =
+        curves.x[first + static_cast<std::size_t>(curves.node_count[layer]) - 1];
+  }
+  if (!negative) {
+    if (stock.common.post_display_value.size() != 3 ||
+        stock.common.post_display_sigma_48.size() != 3) {
+      FailField("grain_post_display_value", "does not hold 3 values");
+    }
+    plan.post_grey = stock.common.post_display_value[1];
+    if (!(plan.post_grey > 0.0 && plan.post_grey < 1.0) ||
+        !(stock.common.post_display_sigma_48[1] > 0.0)) {
+      FailField("grain_post_display_value", "of green is not inside (0, 1)");
+    }
+    const double green = stock.common.post_display_sigma_48[1] / plan.post_grey;
+    for (std::size_t channel = 0; channel < 3; ++channel) {
+      plan.post_relative_sigma_48[channel] = green * kFilmGrainPostChannelRatio[channel];
+    }
   }
   return plan;
+}
+
+auto MakeFilmGrainFieldParams(const FilmGrainPlan& plan, const ResolvedRenderGeometry& geometry)
+    -> FilmGrainFieldParams {
+  FilmGrainFieldParams params{};
+  const auto&          matrix = geometry.render_to_reference.m;
+  for (std::size_t entry = 0; entry < 6; ++entry) {
+    params.noise.render_to_reference[entry] = matrix[entry];
+  }
+  params.noise.seed              = kFilmGrainSeed;
+  params.noise.aggregate         = plan.aggregate;
+  params.noise.inverse_aggregate = static_cast<float>(1.0 / static_cast<double>(plan.aggregate));
+  params.halo                    = 0;
+  for (std::size_t layer = 0; layer < 3; ++layer) {
+    const auto& kernel   = plan.layers[layer];
+    params.radius[layer] = static_cast<int>(kernel.radius);
+    params.halo          = (std::max)(params.halo, params.radius[layer]);
+    for (std::uint32_t tap = 0; tap <= kFilmGrainMaxBlurRadius; ++tap) {
+      params.weights[layer][tap] = static_cast<float>(kernel.weights[tap]);
+    }
+    params.inverse_weight_square_sum[layer] = static_cast<float>(1.0 / kernel.weight_square_sum);
+  }
+  // The lower triangle of L, row major.
+  params.mix[0] = static_cast<float>(plan.mix[0]);
+  params.mix[1] = static_cast<float>(plan.mix[3]);
+  params.mix[2] = static_cast<float>(plan.mix[4]);
+  params.mix[3] = static_cast<float>(plan.mix[6]);
+  params.mix[4] = static_cast<float>(plan.mix[7]);
+  params.mix[5] = static_cast<float>(plan.mix[8]);
+  return params;
+}
+
+auto MakeFilmGrainPostParams(const FilmGrainPlan& plan, int transfer, float decode_scale)
+    -> FilmGrainPostParams {
+  if (plan.target != FilmGrainTarget::Post) {
+    FailField("target", "is not the post path");
+  }
+  if (!std::isfinite(decode_scale) || !(decode_scale > 0.0f)) {
+    FailField("decode_scale", "is not above 0");
+  }
+  FilmGrainPostParams params{};
+  params.strength     = static_cast<float>(plan.strength);
+  params.transfer     = transfer;
+  params.decode_scale = decode_scale;
+  const float grey    = FilmGrainPostToneCoordinate(static_cast<float>(plan.post_grey));
+  for (std::size_t channel = 0; channel < 3; ++channel) {
+    params.pixel_factor[channel] = static_cast<float>(plan.layers[channel].pixel_factor);
+    params.low[channel]          = static_cast<float>(plan.curve_low[channel]);
+    params.high[channel]         = static_cast<float>(plan.curve_high[channel]);
+    params.curves[channel]       = plan.curves[channel];
+    const double tone =
+        FilmGrainPostTone(params.curves[channel], params.low[channel], params.high[channel], grey);
+    if (!(tone > 0.0)) {
+      FailField("grain channel curve", "gives no grain at the grey of the post target");
+    }
+    params.tone_scale[channel] = static_cast<float>(plan.post_relative_sigma_48[channel] / tone);
+  }
+  return params;
 }
 
 }  // namespace alcedo

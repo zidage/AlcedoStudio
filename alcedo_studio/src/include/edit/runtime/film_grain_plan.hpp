@@ -12,19 +12,33 @@
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/graph/film_format.hpp"
 #include "edit/runtime/film/film_grain_field.h"
+#include "edit/runtime/film/film_grain_post.h"
 #include "edit/runtime/film/film_stock_bundle.hpp"
 
 namespace alcedo {
 
 /// Largest blur radius of rule 'grain_kernel', in taps on each side of the centre.
-inline constexpr std::uint32_t kFilmGrainMaxBlurRadius = 24;
+inline constexpr std::uint32_t         kFilmGrainMaxBlurRadius = FILM_GRAIN_MAX_BLUR_RADIUS;
 /// Largest k of rule 'grain_aggregate': reference pixels summed per render pixel and axis.
-inline constexpr std::uint32_t kFilmGrainMaxAggregate  = 4;
+inline constexpr std::uint32_t         kFilmGrainMaxAggregate  = FILM_GRAIN_MAX_AGGREGATE;
+
+/// The film whose grain data the DRT/Post Film Grain of ACES 2.0 and OpenDRT reads (section 2.2).
+inline constexpr std::string_view      kFilmGrainPostFilm      = "kodak_5207";
+/// The channel correlation rg, gb, rb of the 5207 scans of #660. The post path mixes its unit
+/// fields with it, so the post grain has the colour of the scans (user decision of G3).
+inline constexpr std::array<double, 3> kFilmGrainPostScanCorrelation{0.661, 0.41, 0.246};
+/// The relative standard deviation r : g : b of the post grain at a neutral mid grey, at the 48 um
+/// aperture, from the 5207 and Pro Image 100 scans of #660.
+inline constexpr std::array<double, 3> kFilmGrainPostChannelRatio{1.2, 1.0, 1.4};
+/// The seed of the reference noise of every grain field.
+inline constexpr std::uint32_t         kFilmGrainSeed = 0x6a09e667U;
 
 /// Where the grain goes. It selects the curves and the correlation of the plan.
 enum class FilmGrainTarget : std::uint8_t {
   /// The DRT/Post Film Grain pass of ACES 2.0 and OpenDRT: the channel curves of the stock, and the
-  /// display correlation of `common/grain_post_display_correlation`.
+  /// channel correlation of the 5207 scans, @ref kFilmGrainPostScanCorrelation. The display
+  /// correlation of `common/grain_post_display_correlation` is the colour of the film print, which
+  /// the film print makes from its layers (phase G5).
   Post     = 0,
   /// The dye amounts of the negative of the film print: the layer curves of the stock, and the
   /// layer correlation of `common/grain_layer_correlation`.
@@ -60,9 +74,10 @@ struct FilmGrainLayerKernel {
  * evaluator `grain_reference.py`: 'grain_pitch', 'grain_pixel_integral', 'grain_kernel',
  * 'grain_layer_mix', and 'grain_aggregate'.
  *
- * The kernel of a layer `k` adds `strength * sigma_k(v) * layers[k].amplitude * N_k`, with
- * `sigma_k` the curve @ref curves of the layer at the value `v` of the pixel, and `N = mix * u`,
- * `u` the three blurred unit fields.
+ * The kernel of a layer `k` adds `strength * sigma_k(v) * layers[k].pixel_factor * N_k`, with
+ * `sigma_k` the curve @ref curves of the layer at the value `v` of the pixel, `N = mix * u`, and
+ * `u` the three blurred fields divided by their `weight_square_sum` (unit fields). The post path
+ * scales the linear display light with the form of film_grain_post.h.
  */
 struct FilmGrainPlan {
   bool            enabled            = false;  ///< False when the strength is 0
@@ -85,6 +100,17 @@ struct FilmGrainPlan {
   /// The layer curves (target Negative: dye amount to sigma of the amount) or the channel curves
   /// (target Post: gross density to sigma_48) of the stock.
   std::array<FilmGrainCurve, 3>       curves{};
+  /// The first and the last counted node of each curve of @ref curves.
+  std::array<double, 3>               curve_low{};
+  std::array<double, 3>               curve_high{};
+
+  /// Target Post only: the linear display light of the neutral mid grey of the post target
+  /// (`common/grain_post_display_value` of green), and the relative standard deviation of the
+  /// linear display light of each channel there, at the 48 um aperture: the green value of
+  /// `common/grain_post_display_sigma_48` / `common/grain_post_display_value`, times
+  /// @ref kFilmGrainPostChannelRatio.
+  double                              post_grey = 0.0;
+  std::array<double, 3>               post_relative_sigma_48{};
 };
 
 /**
@@ -130,5 +156,31 @@ struct FilmGrainPlan {
  */
 [[nodiscard]] auto MakeFilmGrainCurve(const FilmGrainCurveView& curves, std::size_t layer,
                                       std::string_view field) -> FilmGrainCurve;
+
+/**
+ * @brief The noise, blur, and mix parameters of the kernels for @p plan.
+ *
+ * @param geometry The render geometry of the plan. Its render-to-reference mapping places the
+ *        reference noise, so every render reads the grain of the reference pixels it shows.
+ */
+[[nodiscard]] auto MakeFilmGrainFieldParams(const FilmGrainPlan&          plan,
+                                            const ResolvedRenderGeometry& geometry)
+    -> FilmGrainFieldParams;
+
+/**
+ * @brief The apply parameters of the post path (film_grain_post.h) for @p plan.
+ *
+ * The tone scale of each channel gives the linear display light at the grey @ref
+ * FilmGrainPlan::post_grey the relative standard deviation @ref
+ * FilmGrainPlan::post_relative_sigma_48 times the pixel factor and the strength.
+ *
+ * @param transfer The CE_TF_* id of the display encoding of the render.
+ * @param decode_scale The light relative to the reference white per decoded unit: for ST 2084,
+ *        CE_PQ_PEAK_NITS / the nits of the reference white; else 1.
+ * @throws std::invalid_argument when @p plan is not a Post plan, or a tone value at the grey is not
+ *         above 0.
+ */
+[[nodiscard]] auto MakeFilmGrainPostParams(const FilmGrainPlan& plan, int transfer,
+                                           float decode_scale) -> FilmGrainPostParams;
 
 }  // namespace alcedo

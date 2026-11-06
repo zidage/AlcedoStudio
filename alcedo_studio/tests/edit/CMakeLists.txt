@@ -403,6 +403,7 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_print_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_math_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_plan_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_post_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/renderer_metal_instantiate_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/result_content_key_test.cpp
@@ -463,6 +464,15 @@ if(ALCEDO_CUDA_ENABLED)
     ALCEDO_NEIGHBOR_GRADE_EXPECTED_PIXEL_DIR="${ALCEDO_TEST_ROOT}/resources/expected_pixels/cuda_neighbor_grade"
     ALCEDO_CI_RAW_FIXTURE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images/ci_rawfiles"
     ALCEDO_XTRANS_RAW_FIXTURE="${ALCEDO_TEST_ROOT}/resources/sample_images/raw/xtrans_edge/DSCF0019.RAF")
+  # The DRT/Post Film Grain reads the 5207 grain data of the film stock bundle, as the product
+  # does, from config/film_print next to the executable.
+  if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+    add_custom_command(TARGET GpuDagCudaPrimaryGradeTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+        "$<TARGET_FILE_DIR:GpuDagCudaPrimaryGradeTest>/config/film_print"
+      VERBATIM)
+  endif()
   gtest_discover_tests(GpuDagCudaPrimaryGradeTest TEST_PREFIX "GpuDagCudaPrimaryGradeTest."
     PROPERTIES LABELS "gpu;edit;runtime")
   alcedo_register_test_target(GpuDagCudaPrimaryGradeTest gpu)
@@ -471,6 +481,7 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_expected_output_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_diffusion_filter_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_grain_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_print_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp

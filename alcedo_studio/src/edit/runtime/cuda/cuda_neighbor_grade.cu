@@ -6,11 +6,25 @@
 #include "cuda_neighbor_grade.cuh"
 
 #include <cstddef>
+#include <stdexcept>
+#include <string>
 
 namespace alcedo::cuda_neighbor_grade {
+namespace {
+
+/// Film Grain has its own passes (RecordCudaFilmGrainPost), so these kernels do not take it.
+void RequireNeighborhoodKernelBehavior(const GradeNeighborParams& params, const char* caller) {
+  if (static_cast<AdjustmentBehavior>(params.behavior) == AdjustmentBehavior::FilmGrain) {
+    throw std::invalid_argument(std::string(caller) +
+                                ": Film Grain runs RecordCudaFilmGrainPost, not this kernel");
+  }
+}
+
+}  // namespace
 
 void LaunchBlurHorizontal(cudaStream_t stream, const float4* src, float4* dst, int width,
                           int height, const GradeNeighborParams& params) {
+  RequireNeighborhoodKernelBehavior(params, "LaunchBlurHorizontal");
   const dim3 block{16, 16};
   const dim3 grid{(static_cast<unsigned>(width) + 15U) / 16U,
                   (static_cast<unsigned>(height) + 15U) / 16U};
@@ -21,6 +35,7 @@ void LaunchApplyVertical(cudaStream_t stream, const float4* original,
                          const float4* blur_horizontal, float4* dst, const float4* mix_original,
                          float mix, const std::uint8_t* mask, int width, int height,
                          const GradeNeighborParams& params) {
+  RequireNeighborhoodKernelBehavior(params, "LaunchApplyVertical");
   const dim3 block{16, 16};
   const dim3 grid{(static_cast<unsigned>(width) + 15U) / 16U,
                   (static_cast<unsigned>(height) + 15U) / 16U};

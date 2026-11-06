@@ -21,6 +21,7 @@
 #include "edit/runtime/cuda/cuda_drt_gpu_params.cuh"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
 #include "edit/runtime/cuda/cuda_drt_runtime_state.hpp"
+#include "edit/runtime/cuda/cuda_film_grain_pass.hpp"
 #include "edit/runtime/cuda/cuda_film_print_pass.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
 #include "edit/runtime/cuda/drt/drt_display_pixel.cuh"
@@ -55,6 +56,17 @@ struct CudaDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteCudaDrt";
   static constexpr bool        kImplementsFilmPrint = true;
+  /// Film Grain runs the passes of the grain field (RecordCudaFilmGrainPost).
+  static constexpr bool        kImplementsFilmGrainField = true;
+
+  static void DispatchFilmGrain(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                const FrameSceneBinding& dst, const FilmGrainPlan& grain,
+                                FilmGrainDisplayEncoding      encoding,
+                                const ResolvedRenderGeometry& geometry, std::uint32_t width,
+                                std::uint32_t height) {
+    RecordCudaFilmGrainPost(device, grain, geometry, encoding, CudaSceneTexture(device, src),
+                            CudaSceneTexture(device, dst), width, height);
+  }
 
   /// Post neighborhood parameters travel in the command, not in an arena slot.
   static void RefreshNeighborhoodAdjustment(CudaRenderDevice&, const IOperatorModel&,

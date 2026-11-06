@@ -128,6 +128,9 @@ struct MetalDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteMetalDrt";
   static constexpr bool kImplementsFilmPrint = true;
+  /// Film Grain still runs the neighborhood kernels with the Bernoulli field; phase G4 of the
+  /// film grain plan ports the grain field.
+  static constexpr bool        kImplementsFilmGrainField = false;
 
   static void RefreshNeighborhoodAdjustment(MetalRenderDevice& device, const IOperatorModel& model,
                                             const ParameterSlotKey& key,

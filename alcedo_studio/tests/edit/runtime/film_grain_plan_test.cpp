@@ -243,7 +243,8 @@ TEST(FilmGrainPlan, TargetSelectsTheCurvesAndTheCorrelation) {
   EXPECT_FLOAT_EQ(post.curves[0].first_sigma, 0.0056f);
   // Row 1 of L is (rg, sqrt(1 - rg^2), 0).
   EXPECT_DOUBLE_EQ(negative.mix[3], 0.489);
-  EXPECT_DOUBLE_EQ(post.mix[3], 0.535);
+  // The post path mixes with the channel correlation of the 5207 scans of #660.
+  EXPECT_DOUBLE_EQ(post.mix[3], kFilmGrainPostScanCorrelation[0]);
   for (const auto* plan : {&negative, &post}) {
     const auto& l = plan->mix;
     EXPECT_EQ(l[1], 0.0);
@@ -426,19 +427,16 @@ TEST_F(FilmGrainPlanLabTest, AggregateAndMixMatchTheLabEvaluator) {
   }
   GrainStockValues stock;
   const auto       layer = file.F64("layer_correlation", {3});
-  const auto       post  = file.F64("post_display_correlation", {3});
   std::copy(layer.begin(), layer.end(), stock.layer_correlation.begin());
-  std::copy(post.begin(), post.end(), stock.post_correlation.begin());
   const auto negative_plan = MakeFilmGrainPlan(Frame(6000), FilmFormat::Film35mm, stock.View(),
                                                FilmGrainTarget::Negative, 1.0f);
-  const auto post_plan     = MakeFilmGrainPlan(Frame(6000), FilmFormat::Film35mm, stock.View(),
-                                               FilmGrainTarget::Post, 1.0f);
   const auto layer_l       = file.F64("layer_cholesky", {3, 3});
-  const auto post_l        = file.F64("post_cholesky", {3, 3});
   for (std::size_t entry = 0; entry < 9; ++entry) {
     EXPECT_NEAR(negative_plan.mix[entry], layer_l[entry], 1e-12) << entry;
-    EXPECT_NEAR(post_plan.mix[entry], post_l[entry], 1e-12) << entry;
   }
+  // The post path does not read the Endura display correlation of the lab (post_cholesky): it
+  // mixes with the scan correlation of #660 (G3 decision), which TargetSelectsTheCurvesAndThe-
+  // Correlation and PostMixGivesTheScanCorrelationOf660 check.
 }
 
 #if defined(ALCEDO_FILM_PRINT_RESOURCE_DIR)

@@ -17,8 +17,10 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
+#include "edit/runtime/drt_post_film_grain.hpp"
 #include "edit/runtime/drt_post_schedule.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/film_grain_plan.hpp"
 #include "edit/runtime/film_print_plan.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/neighbor_executor.hpp"
@@ -86,6 +88,8 @@ class DrtPostExecutor {
     works.reserve(plan.drt.post_adjustments.size());
     std::vector<std::uint32_t> command_offsets;
     command_offsets.reserve(plan.drt.post_adjustments.size());
+    // The grain plan of the Film Grain write, when it runs on a backend with the grain field.
+    std::optional<FilmGrainPlan> film_grain;
     for (const auto& compiled : plan.drt.post_adjustments) {
       const auto* model = drt->FindAdjustment(compiled.instance_id);
       if (model == nullptr || model->Type() != compiled.type) {
@@ -103,6 +107,11 @@ class DrtPostExecutor {
       compiled_order.push_back(neighbor);
       if (!DrtPostNeighborhoodRuns(method, neighbor)) {
         continue;
+      }
+      if constexpr (Ops::kImplementsFilmGrainField) {
+        if (*behavior == AdjustmentBehavior::FilmGrain) {
+          film_grain = MakeDrtPostFilmGrainPlan(*drt, *model, plan.geometry);
+        }
       }
       NeighborWork work;
       work.params        = neighbor;
@@ -155,9 +164,22 @@ class DrtPostExecutor {
           Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), width, height);
         }
       } else {
-        const auto lut = Ops::NeighborLut(device);
-        NeighborExecutor<Ops>::Execute(device, current, dest, current, lut, works[index - 1], 1.0f,
-                                       nullptr, width, height);
+        const auto& work = works[index - 1];
+        bool        done = false;
+        if constexpr (Ops::kImplementsFilmGrainField) {
+          if (static_cast<AdjustmentBehavior>(work.params.behavior) ==
+              AdjustmentBehavior::FilmGrain) {
+            Ops::DispatchFilmGrain(device, current, dest, *film_grain,
+                                   MakeDrtPostFilmGrainEncoding(*drt, plan, Ops::kErrorPrefix),
+                                   plan.geometry, width, height);
+            done = true;
+          }
+        }
+        if (!done) {
+          const auto lut = Ops::NeighborLut(device);
+          NeighborExecutor<Ops>::Execute(device, current, dest, current, lut, work, 1.0f, nullptr,
+                                         width, height);
+        }
       }
       current = dest;
     }
