@@ -53,9 +53,11 @@ inline auto SharedBytes(int halo, int tile_rows) -> std::size_t {
  * (G-blur-y), and the apply step @p apply. The noise reads the reference pixels of the render
  * pixels, so a tile at the edge of a viewport region reads the same noise as in the full frame. The
  * block makes the noise one band of rows at a time and blurs each band across, the layout of
- * film_grain_post.cl and film_grain_post.metal; up to the halo 8 one band holds the whole tile
- * (@ref BandRows). The weights past the radius of a channel are 0. Each sum has the order of the
- * host form, so the result does not depend on the place of a pixel in its tile.
+ * film_grain_tile.h of OpenCL and Metal; up to the halo 8 one band holds the whole tile
+ * (@ref BandRows). film_grain_tile.h takes one band up to 28 KB of shared memory, because OpenCL
+ * 1.2 and Apple GPUs give 32 KB; the bands do not change the sums. The weights past the radius of a
+ * channel are 0. Each sum has the order of the host form, so the result does not depend on the
+ * place of a pixel in its tile.
  *
  * @tparam Apply A value type with the member type `Params`, the constant `kTileRows` (16 or 32),
  *         and the device call `(const Params* params, int x, int y, FilmGrainNoise3 grain)` for

@@ -138,9 +138,7 @@ struct MetalDrtOps {
   using LutBinding        = MetalLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteMetalDrt";
-  static constexpr bool kImplementsFilmPrint = true;
-  /// The film print keeps the DRT/Post Film Grain until its negative has the grain (phase G6).
-  static constexpr bool kFilmPrintGrainInNegative = false;
+  static constexpr bool        kImplementsFilmPrint = true;
 
   static void DispatchFilmGrain(MetalRenderDevice& device, const FrameSceneBinding& src,
                                 const FrameSceneBinding& dst, const FilmGrainPlan& grain,
@@ -235,8 +233,8 @@ struct MetalDrtOps {
   static void DispatchFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
                                 const DrtNodeModel& drt, std::optional<double> raw_cct,
                                 const FrameSceneBinding& scene, const FrameSceneBinding& display,
-                                std::uint32_t width, std::uint32_t height) {
-    RecordMetalFilmPrint(device, plan, drt, raw_cct, scene, display, width, height);
+                                std::uint32_t width, std::uint32_t height, float grain_strength) {
+    RecordMetalFilmPrint(device, plan, drt, raw_cct, scene, display, width, height, grain_strength);
   }
 
   static void CheckAfterEncode(MetalRenderDevice&) {}

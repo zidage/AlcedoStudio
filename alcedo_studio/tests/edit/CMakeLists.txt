@@ -627,6 +627,7 @@ if(ALCEDO_METAL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_drt_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_diffusion_filter_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_grain_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_grain_negative_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_print_test.cpp)
   target_include_directories(GpuDagMetalDrtTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalDrtTest PRIVATE
@@ -732,6 +733,7 @@ if(ALCEDO_OPENCL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_diffusion_filter_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_grain_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_grain_negative_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_print_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp

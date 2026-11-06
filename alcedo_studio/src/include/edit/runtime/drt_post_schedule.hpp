@@ -41,16 +41,13 @@ struct DrtPostDecisionTrace {
  * @brief True when @p neighbor runs in the Post of a display transform of @p method.
  *
  * A disabled adjustment does not run. The film print does not run the Halation operator, because
- * the film model takes this colour from its layers. With @p film_print_grain_in_negative, the film
- * print does not run the Film Grain operator either: the film print adds the grain to the dye
- * amounts of its negative with the value of the same slider (decision U4 of the plan
+ * the film model takes this colour from its layers. The film print does not run the Film Grain
+ * operator either: the film print adds the grain to the dye amounts of its negative with the value
+ * of the same slider, on every backend (decision U4 and phases G5 and G6 of the plan
  * 'film_grain_format_and_stock_plan.md'). Each Model keeps its stored value.
- *
- * @param film_print_grain_in_negative True on a backend whose film print adds the grain to the
- *        negative: CUDA since phase G5. OpenCL and Metal keep the post grain until phase G6.
  */
-[[nodiscard]] auto DrtPostNeighborhoodRuns(DrtMethod method, const GradeNeighborParams& neighbor,
-                                           bool film_print_grain_in_negative) -> bool;
+[[nodiscard]] auto DrtPostNeighborhoodRuns(DrtMethod method, const GradeNeighborParams& neighbor)
+    -> bool;
 
 /**
  * @brief Keep the neighborhood params that @ref DrtPostNeighborhoodRuns selects, in compiler order.
@@ -58,8 +55,7 @@ struct DrtPostDecisionTrace {
  * An empty enabled list copies the display-transform result to the final display output.
  */
 [[nodiscard]] auto MakeDrtPostSchedule(std::span<const GradeNeighborParams> compiled_order,
-                                       DrtMethod method, bool film_print_grain_in_negative)
-    -> DrtPostSchedule;
+                                       DrtMethod method) -> DrtPostSchedule;
 
 /** @brief Record the comparable host decisions from @p schedule. */
 [[nodiscard]] auto MakeDrtPostDecisionTrace(const DrtPostSchedule& schedule) -> DrtPostDecisionTrace;

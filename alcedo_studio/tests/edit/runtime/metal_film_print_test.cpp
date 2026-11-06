@@ -352,7 +352,8 @@ TEST_F(MetalFilmPrintFixture, FilmPrintReadsASceneWorkImageAndWritesAWorkImage) 
   backend.UploadTexture2D(source, std::as_bytes(std::span(field)), device_->CommandContext());
   RecordMetalFilmPrint(*device_, plan_, *document.Drt(), std::nullopt,
                        FrameSceneBinding::WorkImage(SceneWorkMember::Member0),
-                       FrameSceneBinding::WorkImage(SceneWorkMember::Member1), kWidth, kHeight);
+                       FrameSceneBinding::WorkImage(SceneWorkMember::Member1), kWidth, kHeight,
+                       0.0f);
   std::vector<Rgba> work(field.size());
   backend.DownloadTexture2D(output, std::as_writable_bytes(std::span(work)),
                             device_->CommandContext());
@@ -987,9 +988,10 @@ TEST_F(MetalFilmPrintFixture, FilmPrintFusedSpreadMatchesSeparatePasses) {
                                                device_->CommandContext());
     auto& display = workspace.AcquireImageForWrite(plan_.display_output,
                                                            {kWidth, kHeight, TextureFormat::Rgba32f});
-    RecordMetalFilmPrint(
-        *device_, plan_, *document.Drt(), std::nullopt, FrameSceneBinding::CachedImage(scene_id),
-        FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight, nullptr, separate);
+    RecordMetalFilmPrint(*device_, plan_, *document.Drt(), std::nullopt,
+                         FrameSceneBinding::CachedImage(scene_id),
+                         FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight,
+                         0.0f, nullptr, separate);
     std::vector<Rgba> pixels(static_cast<std::size_t>(kWidth) * kHeight);
     workspace.Device().DownloadTexture2D(
         display.Texture(), std::as_writable_bytes(std::span(pixels)), device_->CommandContext());
@@ -1104,7 +1106,7 @@ TEST_F(MetalFilmPrintFixture, FilmPrintWithNoImagePartRunsNoInhibitorBlur) {
     std::vector<std::string> names;
     RecordMetalFilmPrint(*device_, plan_, *document.Drt(), std::nullopt,
                          FrameSceneBinding::CachedImage(scene_id),
-                         FrameSceneBinding::CachedImage(display_id), kWidth, kHeight, &names);
+                         FrameSceneBinding::CachedImage(display_id), kWidth, kHeight, 0.0f, &names);
     device_->CancelRender();
     return std::any_of(names.begin(), names.end(), [](const std::string& name) {
       return name.find("inhibitor") != std::string::npos;

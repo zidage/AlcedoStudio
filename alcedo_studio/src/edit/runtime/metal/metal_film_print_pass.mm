@@ -18,12 +18,15 @@
 #include "edit/graph/film_print_model.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
+#include "edit/runtime/drt_post_film_grain.hpp"
+#include "edit/runtime/film/film_grain_tile.h"
 #include "edit/runtime/film/film_negative_scan.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
 #include "edit/runtime/film/film_print_math.h"
 #include "edit/runtime/film/film_print_resources.hpp"
 #include "edit/runtime/film_print_plan.hpp"
 #include "edit/runtime/metal/metal_drt_gpu_params.hpp"
+#include "edit/runtime/metal/metal_film_grain_pass.hpp"
 #include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -161,6 +164,20 @@ class Dispatch {
   auto Texture(NS::UInteger index, MTL::Texture* texture) -> Dispatch& {
     encoder_->setTexture(texture, index);
     return *this;
+  }
+
+  /// The tiles of a kernel with the steps of film_grain_tile.h: threadgroups of 16 x 16 threads
+  /// with the threadgroup memory of @p grain.
+  void RunGrainTiles(const MetalFilmGrainNegative& grain) {
+    if (pipeline_->maxTotalThreadsPerThreadgroup() < FILM_GRAIN_TILE_THREADS) {
+      throw std::runtime_error(
+          "RecordMetalFilmPrint: the grain pipeline allows fewer than 256 threads to a "
+          "threadgroup");
+    }
+    encoder_->setThreadgroupMemoryLength(grain.threadgroup_bytes, 0);
+    encoder_->dispatchThreadgroups(MTL::Size{grain.groups[0], grain.groups[1], 1},
+                                   MTL::Size{FILM_GRAIN_TILE, FILM_GRAIN_TILE, 1});
+    device_.Workspace().Device().NoteComputeDispatch(device_.CommandContext());
   }
 
   /// One thread for each pixel of @p width x @p height.
@@ -361,13 +378,19 @@ auto ReadOrBuildCanvasResult(MetalRenderDevice& device, const ExecutionPlan& pla
 void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
                           const DrtNodeModel& drt, std::optional<double> raw_cct,
                           const FrameSceneBinding& scene, const FrameSceneBinding& display,
-                          std::uint32_t width, std::uint32_t height,
+                          std::uint32_t width, std::uint32_t height, float grain_strength,
                           std::vector<std::string>* pass_names, bool separate_narrow_spread) {
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteMetalDrt");
   const auto  film        = drt.Params().FilmPrint();
   auto&       tables      = SharedFilmPrintTables();
   const auto& bundle      = tables.Bundle();
+  // Phase G6: the grain of the negative. A strength outside [0, 2] stops the render here, before
+  // any GPU work.
+  std::optional<FilmGrainPlan> grain_plan;
+  if (grain_strength != 0.0f) {
+    grain_plan = MakeDrtFilmPrintGrainPlan(drt, grain_strength, plan.geometry);
+  }
   const auto  light       = bundle.SceneLightMix(film.scene_light, raw_cct);
   // Negative Scan reads the scanner table of the scanner of the document. A rendering setting reads
   // the kept table.
@@ -662,6 +685,17 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
         }));
     names.Mark("FP6 flare canvas");
   }
+  // Phase G6: the grain of the negative, the rules of RecordCudaFilmPrint. The FP6 kernel adds it
+  // to the record of each pixel, before the flare amounts and the table read. The blurred amounts,
+  // the flare canvas, and the prescan read the amounts with no grain: they are means over many
+  // pixels, where the grain has a mean of 0, so their canonical results do not depend on it.
+  std::optional<MetalFilmGrainNegative> grain;
+  if (grain_plan.has_value() && grain_plan->enabled) {
+    grain = MakeMetalFilmGrainNegative(
+        *grain_plan, plan.geometry,
+        grain_plan->reversal ? bundle.Reversal(film.negative).dye_max : std::span<const double>{},
+        width, height, "RecordMetalFilmPrint");
+  }
   if (params.scan != 0U) {
     if (auto_colour) {
       // Rule 'frame_auto_colour': the prescan of the full frame, a canonical result. The host reads
@@ -728,8 +762,9 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
     const auto         location = backend.ResolveDeviceMemory(memory, drt_bytes.size());
     const Plane        drt_values{static_cast<MTL::Buffer*>(location.first), location.second};
     const std::int32_t linear_output = plan.film_scan_linear_output ? 1 : 0;
-    Dispatch(device, "film_print_scan_display")
-        .Buffer(0, a)
+    Dispatch           dispatch(
+        device, grain.has_value() ? "film_print_scan_display_grain" : "film_print_scan_display");
+    dispatch.Buffer(0, a)
         .Buffer(1, print_rgba)
         .Bytes(2, params)
         .Bytes(3, terms)
@@ -739,9 +774,15 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
         .Buffer(7, alpha_mark)
         .Bytes(8, stamp)
         .Texture(0, Native(scene_image))
-        .Texture(1, Native(MetalSceneTexture(device, display)))
-        .Run(width, height);
-    names.Mark("FP6 scan and display transform");
+        .Texture(1, Native(MetalSceneTexture(device, display)));
+    if (grain.has_value()) {
+      dispatch.Bytes(9, grain->field).Bytes(10, grain->negative).RunGrainTiles(*grain);
+      ++device.PassStats().film_grain_negative;
+      names.Mark("FP6 scan and display transform, with the grain of the negative");
+    } else {
+      dispatch.Run(width, height);
+      names.Mark("FP6 scan and display transform");
+    }
     return;
   }
   DisplayArguments arguments;
@@ -751,8 +792,8 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
   arguments.has_soft        = soft.has_value() ? 1 : 0;
   arguments.soft_half_size  = image.inhibitor_half_size ? 1 : 0;
   arguments.soft_cells      = MakeSize(image.inhibitor_extent);
-  Dispatch(device, "film_print_display")
-      .Buffer(0, a)
+  Dispatch dispatch(device, grain.has_value() ? "film_print_display_grain" : "film_print_display");
+  dispatch.Buffer(0, a)
       .Buffer(1, print_rgba)
       .Buffer(2, soft.has_value() ? *soft : a)
       .Bytes(3, params)
@@ -762,9 +803,15 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
       .Texture(1, Native(MetalSceneTexture(device, display)))
       .Texture(2, flare)
       .Buffer(6, alpha_mark)
-      .Bytes(7, stamp)
-      .Run(width, height);
-  names.Mark("FP6 display");
+      .Bytes(7, stamp);
+  if (grain.has_value()) {
+    dispatch.Bytes(8, grain->field).Bytes(9, grain->negative).RunGrainTiles(*grain);
+    ++device.PassStats().film_grain_negative;
+    names.Mark("FP6 display, with the grain of the negative");
+  } else {
+    dispatch.Run(width, height);
+    names.Mark("FP6 display");
+  }
 }
 
 }  // namespace alcedo

@@ -43,6 +43,9 @@ using namespace metal;
 
 #include "../../../../include/color/color_encoding_math.h"
 #include "../../../../include/edit/runtime/aces_reference_gamut_compression.h"
+#include "../../../../include/edit/runtime/film/film_grain_field.h"
+#include "../../../../include/edit/runtime/film/film_grain_negative.h"
+#include "../../../../include/edit/runtime/film/film_grain_tile.h"
 #include "../../../../include/edit/runtime/film/film_print_math.h"
 
 // kFilmBlurMaxRadius + 1 and kFilmNarrowSpreadMaxRadius + 1 of film_print_plan.hpp.
@@ -85,6 +88,9 @@ static_assert(sizeof(FilmNarrowKernel) == 76, "FilmNarrowKernel differs from the
 static_assert(sizeof(FilmKernelParams) == 416, "FilmKernelParams differs from the host");
 static_assert(sizeof(FilmMatrix) == 36, "FilmMatrix differs from the host");
 static_assert(sizeof(FilmKernelRgb) == 12, "FilmKernelRgb differs from the host");
+static_assert(sizeof(FilmGrainFieldParams) == 388, "FilmGrainFieldParams differs from the host");
+static_assert(sizeof(FilmGrainNegativeParams) == 616,
+              "FilmGrainNegativeParams differs from the host");
 
 static inline float3 FilmLoad3(const device packed_float3* image, uint index) {
   return float3(image[index]);
@@ -850,21 +856,18 @@ static inline FilmKernelRgb FilmPrintFinishedLinear(
   return params.cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
 }
 
-/// FP6, fused. Alpha comes from the scene. On a light table, @p print_rgba is the light table,
-/// @p flare is the blurred display light of the loupe flare, and @p soft is not read.
-kernel void film_print_display(
-    const device packed_float3* amounts [[buffer(0)]], const device float* print_rgba [[buffer(1)]],
-    const device half4* soft [[buffer(2)]], constant FilmKernelParams& params [[buffer(3)]],
-    constant FilmSize& size [[buffer(4)]], constant FilmDisplayArguments& arguments [[buffer(5)]],
-    texture2d<float, access::read>  scene [[texture(0)]],
-    texture2d<float, access::write> display [[texture(1)]],
-    texture2d<float, access::read>  flare [[texture(2)]],
-    const device uint* alpha_mark [[buffer(6)]], constant uint& stamp [[buffer(7)]],
-    uint2 gid [[thread_position_in_grid]]) {
-  if (int(gid.x) >= size.width || int(gid.y) >= size.height) return;
-  const uint          index  = gid.y * uint(size.width) + gid.x;
-  const FilmKernelRgb record = FilmLoad(amounts, index);
-  FilmKernelRgb       linear;
+/// FP6, fused, at pixel @p gid with the record @p record of the negative. Alpha comes from the
+/// scene. On a light table, @p print_rgba is the light table, @p flare is the blurred display light
+/// of the loupe flare, and @p soft is not read.
+static inline void FilmPrintDisplayPixel(constant FilmKernelParams& params, FilmKernelRgb record,
+                                         uint2 gid, uint index, const device float* print_rgba,
+                                         const device half4*             soft,
+                                         constant FilmDisplayArguments&  arguments,
+                                         texture2d<float, access::read>  scene,
+                                         texture2d<float, access::write> display,
+                                         texture2d<float, access::read>  flare,
+                                         const device uint* alpha_mark, uint stamp) {
+  FilmKernelRgb linear;
   if (params.light_table != 0U) {
     // Lab rules 'light_table_view', 'loupe_flare', and 'dark_surround_on_display' in display light.
     FilmKernelRgb light = FilmKernelPrintDisplay(&params, print_rgba, record);
@@ -884,9 +887,109 @@ kernel void film_print_display(
   // with a different value means that each alpha is 1, so the scene, 16 bytes a pixel, is not read
   // again. The mark is not cleared: when old memory holds the stamp, the stage reads the scene,
   // which gives the same alpha.
-  const float         alpha  = alpha_mark[0] == stamp ? scene.read(gid).w : 1.0f;
+  const float alpha = alpha_mark[0] == stamp ? scene.read(gid).w : 1.0f;
   display.write(
       float4(CeDisplayEncodeChannel(tf, linear.r, 1.0f), CeDisplayEncodeChannel(tf, linear.g, 1.0f),
              CeDisplayEncodeChannel(tf, linear.b, 1.0f), alpha),
       gid);
+}
+
+/// FP6, fused. See FilmPrintDisplayPixel.
+kernel void film_print_display(
+    const device packed_float3* amounts [[buffer(0)]], const device float* print_rgba [[buffer(1)]],
+    const device half4* soft [[buffer(2)]], constant FilmKernelParams& params [[buffer(3)]],
+    constant FilmSize& size [[buffer(4)]], constant FilmDisplayArguments& arguments [[buffer(5)]],
+    texture2d<float, access::read>  scene [[texture(0)]],
+    texture2d<float, access::write> display [[texture(1)]],
+    texture2d<float, access::read>  flare [[texture(2)]],
+    const device uint* alpha_mark [[buffer(6)]], constant uint& stamp [[buffer(7)]],
+    uint2 gid [[thread_position_in_grid]]) {
+  if (int(gid.x) >= size.width || int(gid.y) >= size.height) return;
+  const uint index = gid.y * uint(size.width) + gid.x;
+  FilmPrintDisplayPixel(params, FilmLoad(amounts, index), gid, index, print_rgba, soft, arguments,
+                        scene, display, flare, alpha_mark, stamp);
+}
+
+/// @p record with the grain @p grain of rule 'grain_layer_mix' (film_grain_negative.h).
+static inline FilmKernelRgb FilmGrainRecord(constant FilmGrainNegativeParams& params,
+                                            FilmKernelRgb record, FilmGrainNoise3 grain) {
+  FilmGrainNegativeRgb value;
+  value.r                           = record.r;
+  value.g                           = record.g;
+  value.b                           = record.b;
+  const FilmGrainNegativeRgb result = FilmGrainNegativeRecord(&params, value, grain);
+  return FilmKernelMakeRgb(result.r, result.g, result.b);
+}
+
+/// Phase G6: FP6 with the grain of the negative, in the steps of film_grain_tile.h, as
+/// film_print_display_grain of film_print.cl. Each 16 x 16 threadgroup covers a tile of
+/// 16 x FILM_GRAIN_NEGATIVE_TILE_ROWS pixels, and each thread applies the grain to two pixels. The
+/// grain goes into the record of each pixel before the flare amounts, the negative grade, and the
+/// table read, so the amounts with grain are never written. The other arguments are those of
+/// film_print_display.
+kernel void film_print_display_grain(
+    const device packed_float3* amounts [[buffer(0)]], const device float* print_rgba [[buffer(1)]],
+    const device half4* soft [[buffer(2)]], constant FilmKernelParams& params [[buffer(3)]],
+    constant FilmSize& size [[buffer(4)]], constant FilmDisplayArguments& arguments [[buffer(5)]],
+    texture2d<float, access::read>  scene [[texture(0)]],
+    texture2d<float, access::write> display [[texture(1)]],
+    texture2d<float, access::read>  flare [[texture(2)]],
+    const device uint* alpha_mark [[buffer(6)]], constant uint& stamp [[buffer(7)]],
+    constant FilmGrainFieldParams&    field [[buffer(8)]],
+    constant FilmGrainNegativeParams& negative [[buffer(9)]],
+    threadgroup float* shared [[threadgroup(0)]], uint2 group [[threadgroup_position_in_grid]],
+    uint2 lane2 [[thread_position_in_threadgroup]]) {
+  const int halo    = field.halo;
+  const int local_x = int(lane2.x);
+  const int local_y = int(lane2.y);
+  FilmGrainTileAcross(&field, field.noise, halo, FILM_GRAIN_NEGATIVE_TILE_ROWS, int(group.x),
+                      int(group.y), local_y * FILM_GRAIN_TILE + local_x, shared);
+
+  const int x = int(group.x) * FILM_GRAIN_TILE + local_x;
+  if (x >= size.width) return;
+  for (int half_index = 0; half_index < FILM_GRAIN_NEGATIVE_TILE_ROWS / FILM_GRAIN_TILE;
+       ++half_index) {
+    const int tile_row = local_y + half_index * FILM_GRAIN_TILE;
+    const int y        = int(group.y) * FILM_GRAIN_NEGATIVE_TILE_ROWS + tile_row;
+    if (y >= size.height) return;
+    const FilmGrainNoise3 grain =
+        FilmGrainTileGrain(&field, halo, FILM_GRAIN_NEGATIVE_TILE_ROWS, tile_row, local_x, shared);
+    const uint2 gid   = uint2(uint(x), uint(y));
+    const uint  index = gid.y * uint(size.width) + gid.x;
+    FilmPrintDisplayPixel(params, FilmGrainRecord(negative, FilmLoad(amounts, index), grain), gid,
+                          index, print_rgba, soft, arguments, scene, display, flare, alpha_mark,
+                          stamp);
+  }
+}
+
+/// The grain in the negative alone (phase G6), in place on @p amounts, the record of each layer
+/// after the inhibitor step, so the backend tests measure the dye amounts of each stock. The film
+/// print runs the same steps in film_print_display_grain and writes no amounts with grain. It is in
+/// this file, so it has the compile options of the FP6 kernels. Each thread reads and writes only
+/// its own pixels.
+kernel void film_grain_negative_amounts(device packed_float3*             amounts [[buffer(0)]],
+                                        constant FilmGrainFieldParams&    field [[buffer(1)]],
+                                        constant FilmGrainNegativeParams& negative [[buffer(2)]],
+                                        constant FilmSize&                size [[buffer(3)]],
+                                        threadgroup float*                shared [[threadgroup(0)]],
+                                        uint2 group [[threadgroup_position_in_grid]],
+                                        uint2 lane2 [[thread_position_in_threadgroup]]) {
+  const int halo    = field.halo;
+  const int local_x = int(lane2.x);
+  const int local_y = int(lane2.y);
+  FilmGrainTileAcross(&field, field.noise, halo, FILM_GRAIN_NEGATIVE_TILE_ROWS, int(group.x),
+                      int(group.y), local_y * FILM_GRAIN_TILE + local_x, shared);
+
+  const int x = int(group.x) * FILM_GRAIN_TILE + local_x;
+  if (x >= size.width) return;
+  for (int half_index = 0; half_index < FILM_GRAIN_NEGATIVE_TILE_ROWS / FILM_GRAIN_TILE;
+       ++half_index) {
+    const int tile_row = local_y + half_index * FILM_GRAIN_TILE;
+    const int y        = int(group.y) * FILM_GRAIN_NEGATIVE_TILE_ROWS + tile_row;
+    if (y >= size.height) return;
+    const FilmGrainNoise3 grain =
+        FilmGrainTileGrain(&field, halo, FILM_GRAIN_NEGATIVE_TILE_ROWS, tile_row, local_x, shared);
+    const uint index = uint(y) * uint(size.width) + uint(x);
+    FilmStore(amounts, index, FilmGrainRecord(negative, FilmLoad(amounts, index), grain));
+  }
 }
