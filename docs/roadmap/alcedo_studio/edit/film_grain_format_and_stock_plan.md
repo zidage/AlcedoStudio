@@ -2,8 +2,9 @@
 
 Date: 2026-11-05
 
-Status: **Planned.** No phase has implementation evidence. The user approved the plan and closed decisions U1 to U4 on
-2026-11-05 (section 2.3). Section 2.4 states the compatibility requirement of the user.
+Status: **In progress.** G0 is complete in the lab ([alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2)). The user approved the plan and closed decisions U1 to U4 on
+2026-11-05 (section 2.3). Section 2.4 states the compatibility requirement of the user. The G0 results changed some designs of
+this plan; the sections below hold the changed form, and the G0 completion record lists each change.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -152,9 +153,14 @@ I(sigma_c, p) = integral over f of exp(-4 pi^2 sigma_c^2 f^2) * sinc^2(p f) df  
 For a large pixel, `I` goes to `1 / p`, and `sigma_px = G / p`: Selwyn's law. For a pixel near the cloud size, `I` is smaller,
 and the pixel reads the cloud itself. The host computes `I` once per render geometry.
 
-The renderer makes the field from a unit white noise per pixel, blurred by a discrete Gaussian of `sigma_b = sigma_c / p` pixels
-with the weights `w`. The blur gives the variance `(sum w^2)^2`. The host multiplies the field by
-`sigma_px / (sum w^2)`, so the pixel standard deviation is exact at every pitch.
+The renderer makes the field from a unit white noise per pixel, blurred by a discrete Gaussian of `sigma_b` pixels with the
+weights `w` (radius `ceil(3 sigma_b)`, at most 24). Rule `grain_kernel`: `sigma_b` is the value that gives the discrete field the
+lag-1 correlation of the continuous pixel field, `rho1 = C(p) / C(0)`, with
+`C(d) = integral of tri_p(u) N(d - u; 0, 2 sigma_c^2) du` (closed form in the lab evaluator; the host finds `sigma_b` by
+bisection). The blur gives the variance `(sum w^2)^2`. The host multiplies the field by `sigma_px / (sum w^2)`, so the pixel
+standard deviation is exact at every pitch, and the 2 x 2 box ratio `(1 + rho1) / 2` equals `I(2p) / I(p)`. The first form,
+`sigma_b = sigma_c / p`, omits the pixel box: below 1 pixel it gives a lag-1 correlation up to 0.28 too low, and the zoom check of
+G3 fails by 21 % (lab P15 report, section 5).
 
 Values for the 5207 green layer near mid density (`sigma_48 = 0.0070`, script in G0):
 
@@ -164,7 +170,9 @@ Values for the 5207 green layer near mid density (`sigma_48 = 0.0070`, script in
 | 35mm (36 mm) | p 14.06 um, sigma_px 0.018 | p 6.00 um, sigma_px 0.031, blur 0.33 px | p 3.79 um, sigma_px 0.037, blur 0.53 px |
 | 70mm (70 mm) | p 27.34 um, sigma_px 0.010 | p 11.67 um, sigma_px 0.021, blur 0.17 px | p 7.37 um, sigma_px 0.028, blur 0.27 px |
 
-The table uses `sigma_c = 2.0 um`. At the same view size (2560 px), 16mm has 1.9 times and 70mm has 0.56 times the grain of 35mm.
+The table uses `sigma_c = 2.0 um`, and its blur column is `sigma_c / p`. Rule `grain_kernel` gives `sigma_b` 1.00 px (16mm,
+6000 px), 0.51 px (35mm, 6000 px), and 0.42 px (70mm, 6000 px); `grain__expected.bin` of G0 holds the values of the tests. At the
+same view size (2560 px), 16mm has 1.9 times and 70mm has 0.56 times the grain of 35mm.
 With `sigma_c = 3.0 um` the ratios are 1.57 and 0.59. The ratio of the frame sizes, 2.88, applies only when the pixel is much
 larger than the cloud.
 
@@ -176,10 +184,12 @@ Sources:
 | --- | --- | --- |
 | Wiener spectrum model of colour negative film (J. Photogr. Sci., 1990s; two diameters fit measured spectra) | One cloud 6.5 um, one cluster 15 um | About 1.6 um and 3.8 um (sigma = diameter / 4) |
 | Jarvis, coupler-starved C-41 layer (J. Photogr. Sci. 40:105, 1992; 43:136, 1995), exponential cloud `exp(-r / k)` | k = 1.45 um | 2.05 um (same noise area: sigma = sqrt(2) k) |
-| fotufilm stock packs (Apache-2.0) | Clump radius 4 to 5 um | 2.0 to 2.5 um |
+| fotufilm profiles (CC BY-SA 4.0) | Clump radius 4 to 5 um | 2.0 to 2.5 um |
 | spektrafilm `GrainParams` | Blue particle area 2 times red and green | Blue about 1.4 times red and green |
 
-Starting values: `sigma_c` = 2.0 um for red and green and 2.8 um for blue. G0 fits the values on the 5207 scans (section 8, G0).
+Values: `sigma_c` = 2.0 um for red and green and 2.8 um for blue. G0 result: the 5207 scans give a total width of 5.9 um (R),
+7.7 um (G), and 7.8 um (B), the cloud and the scanner blur together. The scans have no sharp edge for the scanner MTF, so the width
+is an upper limit only. The product uses the literature values and no cluster term.
 A Gaussian cloud profile fits photomicrographs better than a sharp disc (J. Photogr. Sci., 1985).
 
 ### 3.4 Why a Gaussian field
@@ -198,6 +208,10 @@ about 2.7 and the display encoding, this is about 0.07 relative display error. T
 at 24 MP. G0 computes the exact target of the post path: at 35mm and mid grey, the post path gives the display standard
 deviation of the film print path with 5207 on Endura Premier.
 
+G0 result (linear display, 48 um aperture, 18 % grey, reference light): display value 0.188 / 0.191 / 0.172 (R, G, B), standard
+deviation 0.0107 / 0.0100 / 0.0152, display correlation rg 0.535, gb 0.509, rb 0.087. The post path mixes its three unit fields
+with this display correlation (section 4.4).
+
 ---
 
 ## 4. Stock granularity data
@@ -208,14 +222,20 @@ G0 adds a group `grain/<stock>` for each film stock to `film_stock_bundle.bin`, 
 
 | Field | Shape | Meaning |
 | --- | --- | --- |
-| `density_nodes` | (3, n) | Layer density nodes of the granularity curve (diffuse, the read condition of the source) |
-| `sigma_48` | (3, n) | `sigma_48` of the channel at each node |
-| `layer_sigma` | (3, n) | Standard deviation of the dye amount of each layer, solved from `sigma_48` (section 4.4) |
-| `cloud_sigma_um` | (3) | `sigma_c` of each layer |
-| `shared_share` | (1) | Share of the variance that the three layers share (section 4.4) |
-| `tier` | string | `curve`, `number`, or `pgi` (section 4.2) |
+| `layer_amount`, `layer_sigma_amount` | (3, 16) | Standard deviation of the dye amount of each layer at 48 um against the dye amount, solved from `sigma_48` (section 4.4). A reversal film reads `dye_max - record`. |
+| `channel_density`, `channel_sigma_48` | (3, 16) | `sigma_48` of each channel against the gross density of the read condition of the source (Status M; Status A for a reversal film) |
+| `layer_node_count`, `channel_node_count` | (3), int32 | The counted nodes of each curve. The nodes after the count repeat the last node. |
 
-`n` is at most 16 nodes. The host packs the curves into the kernel parameters as literal segments, as `FilmGrainLayerSigma` does
+Values for all stocks:
+
+| Field | Shape | Meaning |
+| --- | --- | --- |
+| `common/grain_cloud_sigma_um` | (3) | `sigma_c` of each layer: 2.0, 2.0, 2.8 |
+| `common/grain_layer_correlation` | (3) | rg, gb, rb of the layer correlation R (section 4.4) |
+| `common/grain_aperture_area_um2` | () | `A_48` |
+| `common/grain_post_display_value`, `common/grain_post_display_sigma_48`, `common/grain_post_display_correlation` | (3) | Target of the post path (section 3.5) |
+
+The bundle metadata `grain` holds the tier, the source, and the rule of each stock. `n` is at most 16 nodes. The host packs the curves into the kernel parameters as literal segments, as `FilmGrainLayerSigma` does
 today, so no backend indexes an array per pixel.
 
 ### 4.2 Source tiers
@@ -226,9 +246,15 @@ today, so no backend indexes an array per pixel.
 | `number` | One published value | `fuji_*` negatives, `kodak_5206`, `kodak_5277`, `kodak_5250`, `kodak_5248`, `kodak_5247_II`, `kodak_vericolor_iii`, `kodak_aerocolor`, `agfa_vista_100`, and the five reversal films | Scale the 5207 curve shape of the same layer to the value at the read density of the source. Reversal films read at gross density 1.0. |
 | `pgi` | Print Grain Index only | `kodak_portra_160`, `kodak_portra_400`, `kodak_portra_800`, `kodak_ektar_100`, `kodak_gold_200`, `kodak_ultramax_400` | Section 4.3. |
 
+G0 result: 8 `curve` stocks (5203, 5206, 5207, 5213, 5219, 5277, 5293, EXR 5248: vector charts), 9 `number` stocks, 6 `family`
+stocks (the value of a named related stock: 5247 II and 5250 from 5247, Natura 1600 from Superia 1600, both Eterna 500 from F-250,
+Kodak 5248 from EXR 5248), 7 `pgi` stocks (with Vericolor III), and 5 `reversal` stocks (rule `reversal_nutting`,
+`sigma = v sqrt(D_gross)`). The Fuji values are about half of the Kodak values of a similar speed; the Fuji sheets state no aperture,
+and the values are used as published.
+
 The datasheets in `D:\Projects\spectral_film_lut\datasheets` cover the `curve` tier and Ektar 100, Portra 400, and Gold 200
 (`E-7022`). G0 collects the other Kodak, Fuji, and Agfa sheets and records the source of each value. The fotufilm packs
-(`grainStrength`, Apache-2.0) are a check value only.
+(`grainStrength`, CC BY-SA 4.0) are a check value; the Portra 400 value is the PGI anchor (section 4.3).
 
 ### 4.3 Print Grain Index
 
@@ -258,6 +284,10 @@ The PGI scale has an unknown constant `c`, so it gives no absolute value. G0 fin
 2. If none exists: the Portra 400 value 0.009 of fotufilm, recorded as an external value with no primary source, and checked in the
    user review of G8.
 
+G0 result: no collected sheet gives both values, so the anchor is the fotufilm value (rule `pgi_anchor_external`; attribution in the
+lab THIRD_PARTY_NOTICES). Green `sigma_48` at net density 1.0: Portra 160 0.0069, Portra 400 0.0090, Portra 800 0.0123, Ektar 100
+0.0047, Gold 200 0.0110, Ultramax 400 0.0117, Vericolor III 0.0095.
+
 ### 4.4 From channel granularity to layer noise
 
 The grain of the film print goes into the dye amount `a_k` of layer `k`. Parameters:
@@ -270,10 +300,14 @@ The datasheet curves read a neutral exposure. With independent layers, `sigma_48
 this 3x3 linear system in the squares at each density node, with the condition `sigma_a_k^2 >= 0`. The product then reproduces the
 datasheet value in each channel, and the dye side absorption gives the channel correlation.
 
-The 5207 scans give the channel correlation rg 0.661, gb 0.41, rb 0.246 (study of #660). G0 renders the independent layers through
-Negative Scan of 5207 and compares the correlation. If the model correlation is lower, a shared field with the share `rho`
-(`shared_share`) adds the difference: `N_k = sqrt(1 - rho) N_k,own + sqrt(rho) N_shared`. G0 fits `rho` so that rg is within 0.05 of
-0.661. The fourth channel of the noise image holds `N_shared`.
+The 5207 scans give the channel correlation rg 0.661, gb 0.41, rb 0.246 (study of #660). G0 rendered the independent layers through
+Negative Scan of 5207: rg 0.255, gb 0.178, rb 0.044. The first form of this plan, one shared field
+(`N_k = sqrt(1 - rho) N_k,own + sqrt(rho) N_shared`), cannot give the target: `rho = 0.466` matches rg and gives gb 0.62 and rb 0.53.
+G0 fitted a layer correlation matrix R (unit diagonal; rg 0.489, gb 0.2349, rb 0.1743; eigenvalues 0.51, 0.87, 1.62). R gives the
+three targets exactly. Rule `grain_layer_mix`: the renderer mixes the three unit fields after the blur and the division,
+`N = L u`, with L the lower Cholesky factor of R, so the pixel correlation of the layers is R exactly. The noise image has three
+channels. R of 5207 holds for all stocks (no other stock has a measured scan). The post path mixes with the display correlation of
+section 3.5 in place of R.
 
 ---
 
@@ -337,8 +371,10 @@ MakeFilmGrainPlan(const ResolvedRenderGeometry& geometry, FilmFormat format,
 - Output, a value type that the compile step copies into the kernel parameters:
   - `reference_pitch_um` and `render_pitch_um`;
   - `aggregate` k: `clamp(round(1 / render_scale), 1, 4)`; 1 for a render scale of 1 or more;
-  - for each layer: the blur weights (radius `ceil(3 sigma_b)`, at most 24 taps) and the amplitude factor `I / (sum w^2)`;
-  - the shared share and the piecewise curve segments of the stock;
+  - for each layer: the blur weights (`sigma_b` of rule `grain_kernel`, radius `ceil(3 sigma_b)`, at most 24 taps) and the
+    amplitude factor `I / (sum w^2)`;
+  - the Cholesky factor L of the layer correlation (film print) or of the display correlation (post path), and the piecewise curve
+    segments of the stock;
   - `enabled`: 0 when the strength is 0.
 - The plan is a pure function. It changes no state. A bad input (a format outside the enum, an empty stock curve) throws
   `std::invalid_argument` with the name of the field.
@@ -360,11 +396,12 @@ Passes, for each render:
 
 ```text
 G-noise   one thread per pixel of the render plus a halo of the blur radius:
-          sum of k x k reference-pixel Gaussians / k, at the true reference coordinates; 4 channels
-          (3 layers + shared); writes the noise image (float4; half4 on Metal)
+          sum of k x k reference-pixel Gaussians / k, at the true reference coordinates; 3 channels
+          (one per layer); writes the noise image (float4, the 4th channel unused; half4 on Metal)
 G-blur-x  separable Gaussian, per-channel weights (the FP2 blur of the film print, with its
           Metal sliding window)
-G-blur-y  same; writes the unit grain image
+G-blur-y  same; divides each channel by its sum w^2 and mixes with L (rule grain_layer_mix);
+          writes the unit grain image
 apply     post path:   FilmGrainDyeClouds with the unit grain image in place of the Bernoulli field
           film print:  in FP6, a' = a + strength * sigma_a(a) * amplitude * N, before the flare
                        amounts and the table read
@@ -436,7 +473,7 @@ closed by G3.
 
 | Phase | Issue | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | --- | ---: | --- |
-| G0 | [#675](https://github.com/zidage/AlcedoStudio/issues/675) | Grain data, fits, and reference evaluator in the lab | alcedo-film-lab | none | 1500 (lab) | Planned |
+| G0 | [#675](https://github.com/zidage/AlcedoStudio/issues/675) | Grain data, fits, and reference evaluator in the lab | alcedo-film-lab | none | 1500 (lab) | Complete ([alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2)) |
 | G1 | [#676](https://github.com/zidage/AlcedoStudio/issues/676) | Host plan, shared math, bundle schema 11 | `edit/runtime`, `edit/runtime/film` | G0 | 1100 | Planned |
 | G2 | [#677](https://github.com/zidage/AlcedoStudio/issues/677) | `film_format`, slider range, panels, catalogs, compatibility tests | `edit/graph`, `app`, `ui` | G1 | 1300 | Planned |
 | G3 | [#678](https://github.com/zidage/AlcedoStudio/issues/678) | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Planned |
@@ -460,7 +497,7 @@ Timing values come from a Release build only (`win_release`, `macos_release`). M
 
 ### G0: grain data and reference evaluator (lab)
 
-**Objective and deliverables.** The lab produces the grain group of every stock, the fitted cloud sizes, the shared share, and a
+**Objective and deliverables.** The lab produces the grain group of every stock, the cloud sizes, the layer correlation (first form: the shared share), and a
 reference evaluator for the product tests.
 
 **Inputs.** The datasheets of section 4.2. The 5207 scans `D:\素材\照片\胶片翻拍\2023 5207\2\` (Flextight, 3200 dpi, 7.94 um per
@@ -476,7 +513,7 @@ pixel, FlexColor USM -60, Gamma 2.0). The lab bundle builder `scripts/poc/p7_spe
    scanner white noise removed by the lag-1 and lag-2 cross-covariance). Measure the scanner MTF from a sharp frame edge or a
    sprocket edge of the same scan. Fit one Gaussian per layer. If the fit residual in the band 5 to 40 cycles per mm is above 10 %,
    fit the cluster term of section 3.3 and record its design and its added cost before G1.
-5. Fit `rho` (section 4.4).
+5. Fit the correlation of the layer noise (section 4.4; the first form fitted `rho`).
 6. Compute the post-path target of section 3.5.
 7. Write the reference evaluator `grain_reference.py`: per-pixel standard deviation, lag-1 correlation, and channel correlation for
    a format, a pitch, a stock, and a density. Write the expected values for the product tests to the directory that
@@ -486,7 +523,42 @@ pixel, FlexColor USM -60, Gamma 2.0). The lab bundle builder `scripts/poc/p7_spe
 **Exit criteria.** Every stock of `kFilmNegativeIds` and `kFilmReversalIds` has a grain group with a recorded source and tier. The
 lab report records the fits, the residuals, and the anchor. The lab ROADMAP records the decisions.
 
-**Completion record.** Pending.
+**Completion record.** Complete 2026-11-05: [alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2), lab commit `d98712f`, branch `feature/p15-film-grain-data` (stacked on
+`feature/p7-product-resources`). Report: [P15 report](https://github.com/zidage/alcedo-film-lab/blob/feature/p15-film-grain-data/docs/exploration/p15_film_grain.md). Lab ROADMAP decision 12.
+
+Results:
+
+- All 35 stocks have a grain group (8 `curve`, 9 `number`, 6 `family`, 7 `pgi`, 5 `reversal`). The layer solve has no negative
+  square; the 16-node curves are within 4.3 % of the full curves.
+- Step 1: the vector digitization passes its axis limits on all 8 charts. The 5207 segments of `film_grain_math.h` differ from it by a
+  median of 6 % (R), 12 % (G), and 15 % (B), not 3 %; the product puts the green and blue peaks at higher density (0.94 against 0.77,
+  1.32 against 1.12). The product segments are the older reading. G1 replaces them with `grain/kodak_5207/channel_*`.
+- Step 2: no collected sheet anchors the PGI; the anchor is the fotufilm value (section 4.3).
+- Step 4: the scanner MTF is not measurable on the scans; `sigma_c` keeps the literature values (section 3.3).
+- Step 5: the layer correlation R replaces `rho` (section 4.4).
+- Step 6: the post target and the display correlation (section 3.5).
+- Step 7: `grain_reference.py` reproduces the table of section 3.2 and writes `grain__expected.bin` (pitch, `sigma_b`, radius,
+  `sum w^2`, pixel factor, lag-1 before and after the mix, the zoom factors and pattern correlation, the aggregate k, R and L, the
+  film print sigma for 5207, 5219, Portra 400, and Velvia 50, and the post sigma). With rule `grain_kernel` the 2 x 2 zoom statistic
+  is exact and the zoom pattern correlation is at least 0.943 (G3 limits: 5 % and 0.9).
+- Step 8: `build_product_resources.py` writes schema 11 (section 4.1).
+
+Changes to this plan from G0: rule `grain_kernel` in place of `sigma_b = sigma_c / p` (section 3.2); R and rule `grain_layer_mix`
+in place of the shared field, three noise channels (sections 4.4, 6.3); the post path mixes with the display correlation (section
+3.5); the bundle fields of section 4.1; the Selwyn test of G1 at 500 um; the fotufilm licence is CC BY-SA 4.0 for the profiles.
+
+Primary call chain (lab):
+
+```text
+fetch_sources.py -> build/tmp/p15_grain/sources/ (38 documents, SHA-256)
+digitize_granularity_charts.py -> granularity_curves.json
+stock_granularity.py (tiers, PGI anchor, layer solve, nodes) -> stock_grain.json
+fit_scan_correlation_width.py -> scan_correlation_width.json
+fit_layer_correlation.py -> layer_correlation.json
+post_path_target.py -> post_path_target.json
+build_product_resources.py: collect() -> collect_grain() -> film_stock_bundle.bin, schema 11
+                            main() -> grain_reference.expected_arrays() -> expected/grain__expected.bin
+```
 
 ### G1: host plan, shared math, and bundle schema 11
 
@@ -512,8 +584,9 @@ the CMake lists of the runtime and the tests.
 
 **Tests.** New suites in the `GpuDagRawInputTest` executable, next to `film_grain_math_test.cpp`:
 
-- `FilmGrainPlan`: the amplitude for the table of section 3.2 within 1 %; Selwyn's law at `p = 50 um` within 1 %; the aggregate k
-  for render scales 1, 0.5, 0.3, and 0.1.
+- `FilmGrainPlan`: the amplitude for the table of section 3.2 within 1 %; Selwyn's law at `p = 500 um` within 1 % (at 50 um, `I p`
+  is 0.955 with `sigma_c` 2.0); `sigma_b`, the weights, the pixel factor, and lag-1 against `grain__expected.bin` within 1e-6; the
+  aggregate k for render scales 1, 0.5, 0.3, and 0.1 (1, 2, 3, 4).
 - `FilmGrainField`: the Gaussian of 10^6 hashes has mean 0 within 0.005, standard deviation 1 within 0.005, and kurtosis 3 within
   0.05; neighbour hashes have a correlation below 0.005.
 
@@ -698,8 +771,8 @@ document.
 
 | Risk | Effect | Response |
 | --- | --- | --- |
-| No absolute anchor for the PGI films | Portra, Ektar, Gold, and Ultramax have a relative value only | G0 searches older sheets; else the recorded external value and the user review |
-| The 3200 dpi scan cannot resolve a 2 um cloud | `sigma_c` has a wide error | The fit uses the scanner MTF; the user can make an 8000 dpi Flextight scan of a 5207 frame for a second fit |
+| No absolute anchor for the PGI films | Portra, Ektar, Gold, Ultramax, and Vericolor III have one common external scale | G0: no collected sheet gives both values; the recorded fotufilm value; the user review of G8 |
+| The 3200 dpi scan cannot resolve a 2 um cloud | `sigma_c` keeps the literature values | G0: the scans give an upper limit only (5.9 to 7.8 um). An 8000 dpi Flextight scan of a 5207 frame with a sharp film edge gives the scanner MTF and a fit |
 | Grain in the negative moves the mean through the print curve | A small tone shift in the shadows of the print | G5 measures the mean shift on a grey ramp and records it |
 | The halo adds memory | One more float4 image at full size | The pool releases it at the end of the pass; Metal uses half4 |
 
@@ -713,14 +786,15 @@ document.
 | `A_48` | Area of the 48 um aperture | um^2 | 1809.6 | definition |
 | `G` | Selwyn granularity | density um | `sigma_48 sqrt(A_48)` | derived |
 | `p` | Pixel pitch on the film | um | frame long side / image long side | derived |
-| `sigma_c` | Gaussian sigma of the dye cloud | um | start 2.0 (R, G), 2.8 (B) | literature, fit in G0 |
+| `sigma_c` | Gaussian sigma of the dye cloud | um | 2.0 (R, G), 2.8 (B) | literature; G0 scans: upper limit 5.9 to 7.8 |
 | `I` | Pixel integral of the cloud and the pixel square | 1 / um | section 3.2 | derived |
-| `sigma_b` | Blur sigma in pixels | px | `sigma_c / p` | derived |
+| `sigma_b` | Blur sigma in pixels | px | rule `grain_kernel` | derived |
+| `rho1` | Lag-1 correlation of the pixel field, one axis | none | 0 to 1 | derived |
 | `w` | Discrete blur weights | none | sum 1 | derived |
 | `k` | Reference pixels summed per render pixel per axis | none | 1 to 4 | design |
 | `s_jk` | Channel `j` density of a unit of dye `k` | density | per stock | bundle dye spectra |
 | `sigma_a_k` | Standard deviation of the dye amount of layer `k` at 48 um | dye amount | per stock | solved in G0 |
-| `rho` | Variance share common to the three layers | none | 0 to 1 | fit in G0 |
+| `R`, `L` | Correlation of the unit fields of the three layers, and its lower Cholesky factor | none | rg 0.489, gb 0.2349, rb 0.1743 | fit in G0 on the 5207 scans |
 | PGI | Print Grain Index | index | per stock and magnification | Kodak datasheets |
 | 34.3 | PGI units per natural log of granularity | index | `2 / ln(1.06)` | E-58, US 5629769 |
 | frame | Frame long side | mm | 12.52, 36, 70 | U1 |
