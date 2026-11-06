@@ -217,10 +217,13 @@ struct FilmPointConstants {
 
 /// Values of the image-plane steps that are the same for all stocks. Lab rules 'layer_spread',
 /// 'development_inhibition', and the options of Halation and Enlarger flare.
+///
+/// The frame comes from the film format of the DRT node (`MakeFilmPrintImagePlan`). The bundle
+/// value `common/frame_mm` is the frame of the lab values; the open checks that it is the frame of
+/// `35mm`, so a `35mm` document gets the lab values.
 struct FilmImagePlaneConstants {
   std::span<const double> halation_strength;          ///< (3): strength of each layer at slider 1
   std::span<const double> spread_gaussians;           ///< (2, 2): (weight, sigma / spread length)
-  double                  frame_mm            = 0.0;  ///< Long side of the frame
   double                  halation_um         = 0.0;
   double                  inhibition_um       = 0.0;
   double                  enlarger_flare_size = 0.0;  ///< Sigma, as a share of the long side

@@ -11,6 +11,7 @@
 
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 
@@ -193,15 +194,17 @@ void PlanFlare(const FilmImagePlaneConstants& constants, const FilmPrintParams& 
 auto MakeFilmPrintImagePlan(const ResolvedRenderGeometry&  geometry,
                             const FilmImagePlaneConstants& constants,
                             std::span<const double> layer_spread_um, bool has_inhibitor_blur,
-                            const FilmPrintParams& film) -> FilmPrintImagePlan {
+                            const FilmPrintParams& film, FilmFormat format) -> FilmPrintImagePlan {
+  // Throws for a format outside the enum, also for a frame with no image plane.
+  const double       frame_mm = FilmFrameLongSideMm(format);
   FilmPrintImagePlan plan;
   const auto         reference = geometry.full_reference_extent;
   plan.image_plane = (std::min)(reference.width, reference.height) >= kFilmImagePlaneSmallestEdge;
   if (!plan.image_plane) {
     return plan;
   }
-  const double pixel_um = constants.frame_mm * 1000.0 /
-                          static_cast<double>((std::max)(reference.width, reference.height));
+  const double pixel_um =
+      frame_mm * 1000.0 / static_cast<double>((std::max)(reference.width, reference.height));
   plan.canvas_extent    = DiffusionCanvasExtent(reference);
   const auto mapping    = MakeDiffusionScatterMapping(geometry, plan.canvas_extent);
   plan.render_to_canvas = mapping.render_to_base;

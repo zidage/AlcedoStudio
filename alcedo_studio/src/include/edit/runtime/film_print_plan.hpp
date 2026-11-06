@@ -12,6 +12,7 @@
 
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/geometry/types.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/film_print_model.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/content_key.hpp"
@@ -76,8 +77,10 @@ class PipelineDocument;
          port == "film.scan_prescan.0";
 }
 
-/// Largest tap distance of one blur pass. It holds the spread of the widest negative at slider 3
-/// up to a long edge of about 40000 pixels.
+/// Largest tap distance of one blur pass. The sigma of a blur in pixels is its length on the film
+/// over the pixel pitch, so the limit depends on the film format. At `35mm` it holds the spread of
+/// the widest negative at slider 3 up to a long edge of about 40000 pixels; at `16mm`, with
+/// 36 / 12.52 the pitch, up to about 13900 pixels.
 inline constexpr std::uint32_t kFilmBlurMaxRadius          = 128;
 
 /// A reference frame with a smaller edge has no image plane: lab rule
@@ -172,16 +175,24 @@ struct FilmPrintImagePlan {
 /**
  * @brief Make the plan of the image-plane steps. Backend-neutral; computed on the CPU per render.
  *
+ * The pixel pitch on the film is the long side of the frame of @p format over the long side of the
+ * full reference frame (plan 'film_grain_format_and_stock_plan.md', phase G7). Light spread,
+ * Halation, and the inhibitor have a length on the film, so their sigma in pixels scales with the
+ * format. Enlarger flare is a share of the frame, so the format does not change it. At `35mm` the
+ * frame is 36 mm, the frame of the lab values.
+ *
  * @param layer_spread_um The spread lengths of the negative.
  * @param has_inhibitor_blur False for a selection with no image part of its inhibition and no
  *        negative grade, which reads the same blur. The plan then has no inhibitor.
+ * @param format The film format of the DRT node.
  * @throws std::runtime_error when a blur needs more than @ref kFilmBlurMaxRadius taps. The message
  *         states the sigma. There is no substitute blur.
+ * @throws std::invalid_argument that names the field `film_format` for a format outside the enum.
  */
 [[nodiscard]] auto MakeFilmPrintImagePlan(const ResolvedRenderGeometry&  geometry,
                                           const FilmImagePlaneConstants& constants,
                                           std::span<const double>        layer_spread_um,
-                                          bool has_inhibitor_blur, const FilmPrintParams& film)
-    -> FilmPrintImagePlan;
+                                          bool has_inhibitor_blur, const FilmPrintParams& film,
+                                          FilmFormat format) -> FilmPrintImagePlan;
 
 }  // namespace alcedo
