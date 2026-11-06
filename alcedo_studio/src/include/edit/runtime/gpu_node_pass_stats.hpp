@@ -44,6 +44,8 @@ struct GpuNodePassStats {
   std::uint64_t film_scan_prescan_reads      = 0;
   /// Negative Scan: the auto colour shift of x of the last render with a prescan read, for tests.
   std::array<double, 3> film_scan_auto_shift{};
+  /// Film print renders that added the grain to the dye amounts of the negative (phase G5).
+  std::uint64_t         film_grain_negative          = 0;
   std::uint64_t drt_execute            = 0;
   std::uint64_t drt_skip               = 0;
   std::uint64_t source_h2d_count       = 0;

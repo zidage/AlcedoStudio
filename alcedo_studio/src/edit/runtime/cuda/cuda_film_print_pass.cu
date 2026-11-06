@@ -18,11 +18,15 @@
 #include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/cuda/cuda_backend.hpp"
 #include "edit/runtime/cuda/cuda_drt_runtime_state.hpp"
+#include "edit/runtime/cuda/cuda_film_grain_tile.cuh"
 #include "edit/runtime/cuda/cuda_film_print_pass.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
 #include "edit/runtime/cuda/drt/drt_display_pixel.cuh"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
+#include "edit/runtime/drt_post_film_grain.hpp"
+#include "edit/runtime/film/film_grain_field.h"
+#include "edit/runtime/film/film_grain_negative.h"
 #include "edit/runtime/film/film_negative_scan.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
 #include "edit/runtime/film/film_print_math.h"
@@ -581,85 +585,177 @@ __global__ void ScanPrescanColumnsKernel(const float3* middle, int columns, int 
  * document (`DrtDisplayPixel`, the arithmetic of `DrtKernel`). There is no flare and no grade. With
  * @p linear_output, the linear AP1 itself, for a test of the form. Alpha comes from @p scene.
  */
-__global__ void ScanDisplayKernel(const float3* amounts, const float4* scene, float4* output,
-                                  std::uint32_t pixels, const float* scanner_table,
-                                  FilmKernelParams params, FilmKernelNegativeScan terms,
-                                  CudaDrtGpuParams drt, bool linear_output) {
-  const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (index >= pixels) return;
-  const float3 a = amounts[index];
-  const auto   t =
-      FilmKernelReadRecordTable(&params, scanner_table, FilmKernelMakeRgb(a.x, a.y, a.z));
-  const auto   linear = FilmKernelNegativeScanPixel(t, &terms);
-  const float  alpha  = scene[index].w;
-  if (linear_output) {
-    output[index] = make_float4(linear.r, linear.g, linear.b, alpha);
+/// The inputs of the Negative Scan form of FP6. With @ref linear_output, the linear AP1 itself,
+/// for a test of the form. Alpha comes from @ref scene.
+struct ScanDisplayArgs {
+  const float3*          amounts;
+  const float4*          scene;
+  float4*                output;
+  int                    width;
+  const float*           scanner_table;
+  FilmKernelParams       params;
+  FilmKernelNegativeScan terms;
+  CudaDrtGpuParams       drt;
+  bool                   linear_output;
+};
+
+/**
+ * FP6 of print material Negative Scan (lab step P14) at pixel @p index with the record @p record:
+ * the scan density T of the scanner table, the point form of `FilmKernelNegativeScanPixel` to
+ * linear AP1, then the display transform of the document (`DrtDisplayPixel`, the arithmetic of
+ * `DrtKernel`). There is no flare and no grade.
+ */
+__device__ __forceinline__ void ScanDisplayPixel(const ScanDisplayArgs& args, std::size_t index,
+                                                 FilmKernelRgb record) {
+  const auto  t      = FilmKernelReadRecordTable(&args.params, args.scanner_table, record);
+  const auto  linear = FilmKernelNegativeScanPixel(t, &args.terms);
+  const float alpha  = args.scene[index].w;
+  if (args.linear_output) {
+    args.output[index] = make_float4(linear.r, linear.g, linear.b, alpha);
     return;
   }
-  const float3 encoded = CUDA::DrtDisplayPixel(make_float3(linear.r, linear.g, linear.b), drt);
-  output[index]        = make_float4(encoded.x, encoded.y, encoded.z, alpha);
+  const float3 encoded = CUDA::DrtDisplayPixel(make_float3(linear.r, linear.g, linear.b), args.drt);
+  args.output[index]   = make_float4(encoded.x, encoded.y, encoded.z, alpha);
 }
 
-/// FP6, fused. @p flare is null when the Enlarger flare is off. Alpha comes from @p scene. @p soft
-/// is the blurred amounts of rule 'negative_show_grade', null with no image plane, and half size
-/// when @p soft_half_size is true. On a light table, @p flare is the blurred display light of the
-/// loupe flare, and @p soft is not read.
-__global__ void DisplayKernel(const float3* amounts, const float4* scene, float4* output, int width,
-                              int height, const float* print_rgba, const float4* flare,
-                              int flare_width, int flare_height, Matrix3x3 render_to_flare,
-                              float flare_strength, const float3* soft, int soft_columns,
-                              int soft_rows, bool soft_half_size, FilmKernelParams params) {
-  const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-  const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
-  if (x >= width || y >= height) return;
-  const int     index  = y * width + x;
-  const float3  a      = amounts[index];
-  FilmKernelRgb record = FilmKernelMakeRgb(a.x, a.y, a.z);
-  const int     tf     = static_cast<int>(params.display_encoding);
+__global__ void ScanDisplayKernel(ScanDisplayArgs args, std::uint32_t pixels) {
+  const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= pixels) return;
+  const float3 a = args.amounts[index];
+  ScanDisplayPixel(args, index, FilmKernelMakeRgb(a.x, a.y, a.z));
+}
+
+/// The inputs of the print and the light table forms of FP6. @ref flare is null when the Enlarger
+/// flare is off. Alpha comes from @ref scene. @ref soft is the blurred amounts of rule
+/// 'negative_show_grade', null with no image plane, and half size when @ref soft_half_size is true.
+/// On a light table, @ref flare is the blurred display light of the loupe flare, and @ref soft is
+/// not read.
+struct DisplayArgs {
+  const float3*    amounts;
+  const float4*    scene;
+  float4*          output;
+  int              width;
+  int              height;
+  const float*     print_rgba;
+  const float4*    flare;
+  int              flare_width;
+  int              flare_height;
+  Matrix3x3        render_to_flare;
+  float            flare_strength;
+  const float3*    soft;
+  int              soft_columns;
+  int              soft_rows;
+  bool             soft_half_size;
+  FilmKernelParams params;
+};
+
+/// FP6, fused, at pixel (@p x, @p y) with the record @p record of the negative.
+__device__ __forceinline__ void DisplayPixel(const DisplayArgs& args, int x, int y,
+                                             FilmKernelRgb record) {
+  const int               index  = y * args.width + x;
+  const FilmKernelParams& params = args.params;
+  const int               tf     = static_cast<int>(params.display_encoding);
   if (params.light_table != 0U) {
     // Lab rules 'light_table_view', 'loupe_flare', and 'dark_surround_on_display' in display light.
-    auto light = FilmKernelPrintDisplay(&params, print_rgba, record);
-    if (flare != nullptr) {
-      const float2 position =
-          Transform(render_to_flare, static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
-      const float3 blurred = ReadBilinear(flare, flare_width, flare_height, position.x, position.y);
+    auto light = FilmKernelPrintDisplay(&params, args.print_rgba, record);
+    if (args.flare != nullptr) {
+      const float2 position = Transform(args.render_to_flare, static_cast<float>(x) + 0.5f,
+                                        static_cast<float>(y) + 0.5f);
+      const float3 blurred =
+          ReadBilinear(args.flare, args.flare_width, args.flare_height, position.x, position.y);
       light = FilmKernelLoupeFlare(light, FilmKernelMakeRgb(blurred.x, blurred.y, blurred.z),
-                                   flare_strength);
+                                   args.flare_strength);
     }
     const auto finished =
         FilmKernelFinishDisplay(&params, FilmKernelDisplaySurround(&params, light));
-    output[index] = make_float4(CeDisplayEncodeChannel(tf, finished.r, 1.0f),
-                                CeDisplayEncodeChannel(tf, finished.g, 1.0f),
-                                CeDisplayEncodeChannel(tf, finished.b, 1.0f), scene[index].w);
+    args.output[index] = make_float4(
+        CeDisplayEncodeChannel(tf, finished.r, 1.0f), CeDisplayEncodeChannel(tf, finished.g, 1.0f),
+        CeDisplayEncodeChannel(tf, finished.b, 1.0f), args.scene[index].w);
     return;
   }
   FilmKernelRgb soft_record = record;
-  if (params.negative_grade != 0U && soft != nullptr) {
-    const float3 s = soft_half_size
-                         ? ReadBilinear(soft, soft_columns, soft_rows,
+  if (params.negative_grade != 0U && args.soft != nullptr) {
+    const float3 s = args.soft_half_size
+                         ? ReadBilinear(args.soft, args.soft_columns, args.soft_rows,
                                         (static_cast<float>(x) + 0.5f) * 0.5f,
                                         (static_cast<float>(y) + 0.5f) * 0.5f)
-                         : soft[index];
+                         : args.soft[index];
     soft_record = FilmKernelMakeRgb(s.x, s.y, s.z);
   }
-  if (flare != nullptr) {
+  if (args.flare != nullptr) {
     const float2 position =
-        Transform(render_to_flare, static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
-    const float3 blurred = ReadBilinear(flare, flare_width, flare_height, position.x, position.y);
+        Transform(args.render_to_flare, static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
+    const float3 blurred =
+        ReadBilinear(args.flare, args.flare_width, args.flare_height, position.x, position.y);
     record = FilmKernelFlareAmounts(record, FilmKernelMakeRgb(blurred.x, blurred.y, blurred.z),
-                                    flare_strength);
+                                    args.flare_strength);
   }
   if (params.negative_grade != 0U) {
-    if (soft == nullptr) soft_record = record;
+    if (args.soft == nullptr) soft_record = record;
     record = FilmKernelNegativeGrade(&params, record, soft_record);
   }
   const auto finished =
-      FilmKernelFinishDisplay(&params, FilmKernelPrintDisplay(&params, print_rgba, record));
-  const auto linear = params.cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
-  output[index]     = make_float4(CeDisplayEncodeChannel(tf, linear.r, 1.0f),
-                                  CeDisplayEncodeChannel(tf, linear.g, 1.0f),
-                                  CeDisplayEncodeChannel(tf, linear.b, 1.0f), scene[index].w);
+      FilmKernelFinishDisplay(&params, FilmKernelPrintDisplay(&params, args.print_rgba, record));
+  const auto linear  = params.cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
+  args.output[index] = make_float4(CeDisplayEncodeChannel(tf, linear.r, 1.0f),
+                                   CeDisplayEncodeChannel(tf, linear.g, 1.0f),
+                                   CeDisplayEncodeChannel(tf, linear.b, 1.0f), args.scene[index].w);
 }
+
+__global__ void DisplayKernel(DisplayArgs args) {
+  const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
+  if (x >= args.width || y >= args.height) return;
+  const float3 a = args.amounts[y * args.width + x];
+  DisplayPixel(args, x, y, FilmKernelMakeRgb(a.x, a.y, a.z));
+}
+
+/// The record of pixel @p index of @p amounts with the grain @p grain of rule 'grain_layer_mix'.
+__device__ __forceinline__ auto GrainRecord(const FilmGrainNegativeParams* params,
+                                            const float3* amounts, std::size_t index,
+                                            FilmGrainNoise3 grain) -> FilmKernelRgb {
+  const float3               a = amounts[index];
+  const FilmGrainNegativeRgb r =
+      FilmGrainNegativeRecord(params, FilmGrainNegativeRgb{a.x, a.y, a.z}, grain);
+  return FilmKernelMakeRgb(r.r, r.g, r.b);
+}
+
+/// Phase G5: FP6 of the print and the light table with the grain of the negative, as the apply
+/// step of the grain tile kernel (cuda_film_grain_tile.cuh).
+struct GrainDisplayApply {
+  using Params                              = FilmGrainNegativeParams;
+  static constexpr int            kTileRows = 2 * cuda_film_grain::kTile;
+  DisplayArgs                     args;
+
+  __device__ __forceinline__ void operator()(const Params* params, int x, int y,
+                                             FilmGrainNoise3 grain) const {
+    const auto index = static_cast<std::size_t>(y) * static_cast<std::size_t>(args.width) + x;
+    DisplayPixel(args, x, y, GrainRecord(params, args.amounts, index, grain));
+  }
+};
+
+/// Phase G5: FP6 of Negative Scan with the grain of the negative, as the apply step of the grain
+/// tile kernel.
+struct GrainScanDisplayApply {
+  using Params                              = FilmGrainNegativeParams;
+  static constexpr int            kTileRows = 2 * cuda_film_grain::kTile;
+  ScanDisplayArgs                 args;
+
+  __device__ __forceinline__ void operator()(const Params* params, int x, int y,
+                                             FilmGrainNoise3 grain) const {
+    const auto index = static_cast<std::size_t>(y) * static_cast<std::size_t>(args.width) + x;
+    ScanDisplayPixel(args, index, GrainRecord(params, args.amounts, index, grain));
+  }
+};
+
+// The grain forms of FP6 take their inputs, the field, and the grain values by value, within the
+// 4 KB of kernel arguments.
+static_assert(sizeof(GrainScanDisplayApply) + sizeof(FilmGrainNegativeParams) +
+                  sizeof(FilmGrainFieldParams) + 64 <=
+              4096);
+static_assert(sizeof(GrainDisplayApply) + sizeof(FilmGrainNegativeParams) +
+                  sizeof(FilmGrainFieldParams) + 64 <=
+              4096);
 
 using Lease = ResourceLease<CudaBackend>;
 
@@ -771,13 +867,19 @@ auto ReadOrBuildCanvasResult(CudaRenderDevice& device, const ExecutionPlan& plan
 void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
                          const DrtNodeModel& drt, std::optional<double> raw_cct,
                          const FrameSceneBinding& scene, const FrameSceneBinding& display,
-                         std::uint32_t width, std::uint32_t height,
+                         std::uint32_t width, std::uint32_t height, float grain_strength,
                          std::vector<FilmPrintPassTime>* pass_times, bool separate_narrow_spread) {
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteCudaDrt");
   const auto  film      = drt.Params().FilmPrint();
   auto&       tables    = SharedFilmPrintTables();
   const auto& bundle    = tables.Bundle();
+  // Phase G5: the grain of the negative. A strength outside [0, 2] stops the render here, before
+  // any GPU work.
+  std::optional<FilmGrainPlan> grain;
+  if (grain_strength != 0.0f) {
+    grain = MakeDrtFilmPrintGrainPlan(drt, grain_strength, plan.geometry);
+  }
   const auto  light     = bundle.SceneLightMix(film.scene_light, raw_cct);
   // Negative Scan reads the scanner table of the scanner of the document. A rendering setting reads
   // the kept table.
@@ -1029,6 +1131,19 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
         });
     clock.Mark("FP6 flare canvas");
   }
+  // Phase G5: the grain of the negative. The FP6 kernel adds it to the record of each pixel, before
+  // the flare amounts and the table read, as the apply step of the grain tile kernel. The blurred
+  // amounts, the flare canvas, and the prescan read the amounts with no grain: they are means over
+  // many pixels, where the grain has a mean of 0, so their canonical results do not depend on it.
+  constexpr const char*                  kCaller = "RecordCudaFilmPrint";
+  std::optional<FilmGrainFieldParams>    grain_field;
+  std::optional<FilmGrainNegativeParams> grain_params;
+  if (grain.has_value() && grain->enabled) {
+    grain_field = cuda_film_grain::FieldParamsFor(*grain, plan.geometry, width, height, kCaller);
+    grain_params =
+        MakeFilmGrainNegativeParams(*grain, grain->reversal ? bundle.Reversal(film.negative).dye_max
+                                                            : std::span<const double>{});
+  }
   auto* output = static_cast<float4*>(CudaSceneTexture(device, display).DevicePointer());
   if (params.scan != 0U) {
     if (auto_colour) {
@@ -1080,21 +1195,53 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
     }
     // The form ends in linear AP1: the OpenDRT of the document shows it. The resolver gives
     // Negative Scan the transform of method OpenDRT.
-    const CudaDrtGpuParams drt_params = device.DrtRuntime().Pack(resolved);
-    ScanDisplayKernel<<<blocks, kBlock, 0, stream>>>(a, scene_pixels, output, pixels, rgba, params,
-                                                     terms, drt_params,
-                                                     plan.film_scan_linear_output);
-    clock.Mark("FP6 scan and display transform");
+    const ScanDisplayArgs scan_args{a,
+                                    scene_pixels,
+                                    output,
+                                    w,
+                                    rgba,
+                                    params,
+                                    terms,
+                                    device.DrtRuntime().Pack(resolved),
+                                    plan.film_scan_linear_output};
+    if (grain_field.has_value()) {
+      cuda_film_grain::Launch(stream, GrainScanDisplayApply{scan_args}, *grain_params, *grain_field,
+                              width, height, kCaller);
+      ++device.PassStats().film_grain_negative;
+      clock.Mark("FP6 scan and display transform, with the grain of the negative");
+    } else {
+      ScanDisplayKernel<<<blocks, kBlock, 0, stream>>>(scan_args, pixels);
+      clock.Mark("FP6 scan and display transform");
+    }
     cuda::CheckCuda(::cudaGetLastError(), "RecordCudaFilmPrint: kernel launch");
     clock.Finish();
     return;
   }
-  DisplayKernel<<<image_grid, image_block, 0, stream>>>(
-      a, scene_pixels, output, w, h, rgba, flare, static_cast<int>(image.flare_extent.width),
-      static_cast<int>(image.flare_extent.height), image.render_to_flare, image.flare, soft,
-      static_cast<int>(image.inhibitor_extent.width),
-      static_cast<int>(image.inhibitor_extent.height), image.inhibitor_half_size, params);
-  clock.Mark("FP6 display");
+  const DisplayArgs display_args{a,
+                                 scene_pixels,
+                                 output,
+                                 w,
+                                 h,
+                                 rgba,
+                                 flare,
+                                 static_cast<int>(image.flare_extent.width),
+                                 static_cast<int>(image.flare_extent.height),
+                                 image.render_to_flare,
+                                 image.flare,
+                                 soft,
+                                 static_cast<int>(image.inhibitor_extent.width),
+                                 static_cast<int>(image.inhibitor_extent.height),
+                                 image.inhibitor_half_size,
+                                 params};
+  if (grain_field.has_value()) {
+    cuda_film_grain::Launch(stream, GrainDisplayApply{display_args}, *grain_params, *grain_field,
+                            width, height, kCaller);
+    ++device.PassStats().film_grain_negative;
+    clock.Mark("FP6 display, with the grain of the negative");
+  } else {
+    DisplayKernel<<<image_grid, image_block, 0, stream>>>(display_args);
+    clock.Mark("FP6 display");
+  }
   cuda::CheckCuda(::cudaGetLastError(), "RecordCudaFilmPrint: kernel launch");
   clock.Finish();
 }

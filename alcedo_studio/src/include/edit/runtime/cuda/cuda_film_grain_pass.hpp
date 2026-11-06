@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/runtime/cuda/cuda_backend.hpp"
@@ -37,5 +38,28 @@ void RecordCudaFilmGrainPost(CudaRenderDevice& device, const FilmGrainPlan& plan
                              FilmGrainDisplayEncoding encoding, const CudaBackend::Texture2D& src,
                              CudaBackend::Texture2D& dst, std::uint32_t width,
                              std::uint32_t height);
+
+/**
+ * @brief Record the grain in the negative of the film print (phase G5): add the grain of @p plan
+ * to the dye amounts @p amounts of @p width x @p height pixels, in place.
+ *
+ * @p amounts holds three packed floats per pixel, row by row: the record of each layer after the
+ * inhibitor step, as the images between the steps of the film print. The kernel is the grain tile
+ * kernel (cuda_film_grain_tile.cuh) with the apply step of film_grain_negative.h, so a viewport
+ * region gets the grain of the same region of the full frame. The film print runs the same apply
+ * step inside its FP6 kernel and writes no amounts with grain; this function gives the step alone,
+ * so the backend tests measure the dye amounts of each stock (phases G5 and G6). Does not wait for
+ * the GPU.
+ *
+ * @param reversal_dye_max The `dye_max` of a colour reversal film, or an empty span for a
+ *        negative (`MakeFilmGrainNegativeParams`).
+ * @throws std::invalid_argument for a disabled plan, a plan that is not a Negative plan, an empty
+ *         render, null amounts, or dye_max values that do not match the film; std::runtime_error
+ *         for a kernel launch failure.
+ */
+void RecordCudaFilmGrainNegative(CudaRenderDevice& device, const FilmGrainPlan& plan,
+                                 const ResolvedRenderGeometry& geometry,
+                                 std::span<const double> reversal_dye_max, float* amounts,
+                                 std::uint32_t width, std::uint32_t height);
 
 }  // namespace alcedo

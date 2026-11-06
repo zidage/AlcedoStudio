@@ -6,20 +6,27 @@
 
 namespace alcedo {
 
-auto DrtPostNeighborhoodRuns(DrtMethod method, const GradeNeighborParams& neighbor) -> bool {
+auto DrtPostNeighborhoodRuns(DrtMethod method, const GradeNeighborParams& neighbor,
+                             bool film_print_grain_in_negative) -> bool {
   if (neighbor.enabled == 0U) {
     return false;
   }
-  return method != DrtMethod::FilmPrint ||
-         static_cast<AdjustmentBehavior>(neighbor.behavior) != AdjustmentBehavior::Halation;
+  if (method != DrtMethod::FilmPrint) {
+    return true;
+  }
+  const auto behavior = static_cast<AdjustmentBehavior>(neighbor.behavior);
+  if (behavior == AdjustmentBehavior::Halation) {
+    return false;
+  }
+  return !(film_print_grain_in_negative && behavior == AdjustmentBehavior::FilmGrain);
 }
 
-auto MakeDrtPostSchedule(std::span<const GradeNeighborParams> compiled_order, DrtMethod method)
-    -> DrtPostSchedule {
+auto MakeDrtPostSchedule(std::span<const GradeNeighborParams> compiled_order, DrtMethod method,
+                         bool film_print_grain_in_negative) -> DrtPostSchedule {
   DrtPostSchedule schedule;
   schedule.enabled.reserve(compiled_order.size());
   for (const auto& neighbor : compiled_order) {
-    if (DrtPostNeighborhoodRuns(method, neighbor)) {
+    if (DrtPostNeighborhoodRuns(method, neighbor, film_print_grain_in_negative)) {
       schedule.enabled.push_back(neighbor);
     }
   }
