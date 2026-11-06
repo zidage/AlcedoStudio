@@ -20,8 +20,11 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/film_print_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
@@ -1523,6 +1526,9 @@ TEST_F(CudaFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
       device_.BeginRender();
       auto& workspace = device_.Workspace();
       workspace.PrepareResultValidity(plan_, document, input_);
+      // A DRT/Post write between the display transform and the display output uses a scene work
+      // image, as after the Color Grade of a full render.
+      workspace.EnsureSceneWorkImages({width, height});
       auto& scene =
           workspace.AcquireImageForWrite(scene_id, {width, height, TextureFormat::Rgba32f});
       auto stream = device_.CommandContext().Stream();
@@ -1592,6 +1598,33 @@ TEST_F(CudaFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
     };
     record("ACES 2.0", method_document(DrtMethod::Aces20), false);
     record("OpenDRT", method_document(DrtMethod::OpenDrt), false);
+    // The DRT/Post Film Grain at 100 % next to OpenDRT alone: the difference is the time of the
+    // grain (plan 'film_grain_format_and_stock_plan.md', phase G3).
+    const auto grain_document = [&method_document](FilmFormat format) {
+      auto document = method_document(DrtMethod::OpenDrt);
+      document.Drt()->Params().ApplyFilmFormat(format);
+      auto* grain =
+          dynamic_cast<FilmGrainModel*>(document.Drt()->FindAdjustmentByType(type_ids::FilmGrain()));
+      if (grain == nullptr) throw std::runtime_error("The document has no Film Grain");
+      grain->SetValue(1.0f);
+      return document;
+    };
+    // This plan has no compiled DRT/Post adjustments, so the grain records add those of the
+    // document, as GraphCompiler lists them, and the records after them run without them again.
+    {
+      const auto  document = grain_document(FilmFormat::Film35mm);
+      const auto& drt      = *document.Drt();
+      for (std::size_t index = 0; index < drt.AdjustmentCount(); ++index) {
+        plan_.drt.post_adjustments.push_back({drt.AdjustmentIdAt(index),
+                                              drt.AdjustmentAt(index).Type(),
+                                              CompiledAdjustmentAlgorithm::Neighborhood});
+      }
+    }
+    record("OpenDRT, Film Grain 100 %, 35mm", grain_document(FilmFormat::Film35mm), false);
+    record("OpenDRT, Film Grain 100 %, 16mm", grain_document(FilmFormat::Film16mm), false);
+    record("OpenDRT, Film Grain 0 %, post adjustments compiled",
+           method_document(DrtMethod::OpenDrt), false);
+    plan_.drt.post_adjustments.clear();
     record("film print, results valid", FilmPrintDocument(), false);
     record("film print, slider change", FilmPrintDocument(), true);
     // A stock with only the point part of the inhibition, and a stock with both parts.
