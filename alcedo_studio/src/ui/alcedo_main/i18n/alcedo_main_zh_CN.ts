@@ -2637,10 +2637,6 @@ Original source files on disk will be kept.</source>
         <source>Format</source>
         <translation>画幅</translation>
     </message>
-    <message>
-        <source>Granularity of %1</source>
-        <translation>%1 的颗粒度</translation>
-    </message>
 </context>
 <context>
     <name>EditorComparisonPanel</name>
@@ -2733,6 +2729,10 @@ Original source files on disk will be kept.</source>
     <message>
         <source>Film Print</source>
         <translation>胶片印片</translation>
+    </message>
+    <message>
+        <source>Film Grain</source>
+        <translation>胶片颗粒</translation>
     </message>
     <message>
         <source>Film</source>

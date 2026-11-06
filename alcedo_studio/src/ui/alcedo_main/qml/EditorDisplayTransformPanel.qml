@@ -7,7 +7,8 @@ import Alcedo.Main 1.0
 // ACES tone mapping, transfer function (EOTF), peak luminance, and HDR
 // display intent. Method-specific controls for ACES 2.0 (limiting space) and
 // OpenDRT (look/tonescale/creative-white presets), and the film print (process
-// switch, film and print material browsers, scene light, three sliders; a print
+// switch, film browser, Format and Film Grain, print material browser, scene light, three
+// sliders; a print
 // has Rec. 709 SDR output, so its page has no encoding controls; print material
 // Negative Scan has its scan settings and the OpenDRT settings and encodings). All models share
 // fieldKey
@@ -112,16 +113,30 @@ Item {
         root.selectFilm(last.length > 0 ? last : parameterCatalog.filmDefault(process))
     }
 
+    /// Film Grain strength in UI percent that a selection of method Film Print sets when the
+    /// stored strength is 0: the datasheet granularity of the film.
+    readonly property real filmPrintGrainPercent: 100
+
     /// A selection of method Film Print on another method applies the remembered film print
     /// settings in the same write (issue #672). The film print of a document is not written when
     /// it has another method, so without them the selection starts at the defaults.
+    ///
+    /// The film print has its grain in the negative, so the selection also turns on Film Grain at
+    /// @ref filmPrintGrainPercent when its stored strength is 0. A stored strength stays. Film
+    /// Grain is a field of its own, so this is a second settled write: a second history entry
+    /// after the method.
     function selectMethod(index, value) {
-        if (String(value) === "film_print" && !root.isFilmPrint && root.editorBehavior) {
+        const entersFilmPrint = String(value) === "film_print" && !root.isFilmPrint
+        if (entersFilmPrint && root.editorBehavior) {
             const remembered = root.editorBehavior.filmPrintUiValue
             if (remembered && remembered.method === "film_print")
                 root.loadFilmValues(remembered)
         }
         methodModel.selectIndex(index)
+        if (entersFilmPrint && !(filmGrainModel.value > 0)) {
+            filmGrainModel.editValue(root.filmPrintGrainPercent)
+            filmGrainModel.commitImmediately()
+        }
     }
 
     /// Remember the film print settings after a settled user write with method Film Print.
@@ -255,6 +270,7 @@ Item {
         filmScannerBlueModel.enabled = on
         filmScannerWidthModel.enabled = on
         filmFormatModel.enabled = on
+        filmGrainModel.enabled = on
     }
 
     /// Apply declared defaultIndex / defaultValue before any snapshot load so the
@@ -352,8 +368,11 @@ Item {
     /// Load display transform values from the session adjustment snapshot.
     /// The snapshot stores odt params as snapshot["odt"] = {"odt": {...}}.
     function loadFromSnapshot(snapshot) {
-        // The film format is a field of its own (film_format), so it loads with any method.
+        // The film format and Film Grain are fields of their own (film_format, film_grain), so they
+        // load with any method.
         root.loadFilmFormat(snapshot)
+        if (snapshot !== undefined && snapshot !== null)
+            filmGrainModel.loadFromSnapshot(snapshot)
         const odt = odtUiValue(snapshot)
         if (odt === null)
             return
@@ -417,6 +436,16 @@ Item {
         paramsBuilder: function(value) {
             return parameterCatalog.modelParamsJson("film_format", { film_format: value })
         }
+    }
+
+    // Film Grain of the DRT node. With the film print it sets the grain of the negative, so the
+    // slider is on this page under Format, and the Post Processing page does not show it.
+    EditorAdjustmentValueModel {
+        id: filmGrainModel
+        objectName: "displayFilmGrainModel"
+        fieldKey: "film_grain"
+        label: qsTr("Film Grain")
+        submitter: root.editorSession
     }
 
     /// Index of the format identifier @p value in the Format entries, or -1.
@@ -1083,6 +1112,13 @@ Item {
                         textColor: root.colText
                         hoverColor: root.colHover
                         onSelected: function(index, value) { filmFormatModel.selectIndex(index) }
+                    }
+
+                    AdjustmentSlider {
+                        objectName: "displayFilmGrainSlider"
+                        Layout.fillWidth: true
+                        model: filmGrainModel
+                        flickable: displayScroll
                     }
 
                     // A colour reversal film has no print: the page has no print section.
