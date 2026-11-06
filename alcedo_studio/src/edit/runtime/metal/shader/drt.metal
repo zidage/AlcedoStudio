@@ -571,5 +571,4 @@ kernel void diffusion_filter_mix(texture2d<float, access::read> input [[texture(
 }
 
 #include "drt_neighbor.metal"
-#include "film_grain_post.metal"
 #include "film_print_scan.metal"

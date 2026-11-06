@@ -485,7 +485,7 @@ closed by G3.
 | G1 | [#676](https://github.com/zidage/AlcedoStudio/issues/676) | Host plan, shared math, bundle schema 11 | `edit/runtime`, `edit/runtime/film` | G0 | 1100 | Complete (1605 lines) |
 | G2 | [#677](https://github.com/zidage/AlcedoStudio/issues/677) | `film_format`, slider range, panels, catalogs, compatibility tests | `edit/graph`, `app`, `ui` | G1 | 1300 | Complete (991 lines) |
 | G3 | [#678](https://github.com/zidage/AlcedoStudio/issues/678) | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Complete (1492 lines) |
-| G4 | [#679](https://github.com/zidage/AlcedoStudio/issues/679) | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | In progress: OpenCL done, Metal tests open |
+| G4 | [#679](https://github.com/zidage/AlcedoStudio/issues/679) | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | Complete (Metal 16mm timing: #696) |
 | G5 | [#680](https://github.com/zidage/AlcedoStudio/issues/680) | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Planned |
 | G6 | [#681](https://github.com/zidage/AlcedoStudio/issues/681) | Grain in the negative on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G4, G5 | 1100 | Planned |
 | G7 | [#682](https://github.com/zidage/AlcedoStudio/issues/682) | Format sets the film print image plane | `film_print_plan.cpp` | G2 | 400 | Planned |
@@ -1039,13 +1039,15 @@ pass the per-channel weights in the per-render parameter upload (the 1024-byte a
 
 **Exit criteria.** The tests pass on Windows (OpenCL) and on the Mac (Metal). Check the free space of the Mac first.
 
-**Completion record.** In progress, 2026-11-06, branch `feature/film-grain-opencl-metal-post-grain`, stacked on the G3 branch
-`feature/film-grain-cuda-post-grain`. The OpenCL part is complete and verified on Windows. The Metal part is implemented; its build
-and its tests on the Apple M4 are the open exit condition (the Mac was not available for the rest of this session).
+**Completion record.** Complete 2026-11-06, branch `feature/film-grain-opencl-metal-post-grain`, stacked on the G3 branch
+`feature/film-grain-cuda-post-grain`. OpenCL is verified on Windows and Metal on the Apple M4. The tests pass on both. Metal is above
+the timing limit at 16mm (23 ms against 15 ms); issue [#696](https://github.com/zidage/AlcedoStudio/issues/696) records the gap
+and its measurements.
 
 Files: the new `edit/runtime/opencl/shader/film_grain_post.cl`, `edit/runtime/opencl/opencl_film_grain_pass.cpp`, and
 `include/edit/runtime/opencl/opencl_film_grain_pass.hpp` (`RecordOpenClFilmGrainPost`, program `opencl_dag_film_grain`); the new
-`edit/runtime/metal/shader/film_grain_post.metal` (in the DRT library), `edit/runtime/metal/metal_film_grain_pass.mm`, and
+`edit/runtime/metal/shader/film_grain_post.metal` (its own AIR file, which the DRT library links; `src/metal/CMakeLists.txt`),
+`color_encoding_math.h` (`CE_OPENCL_POW_EXP2_LOG2`, `CE_METAL_POW_EXP2_LOG2`), `edit/runtime/metal/metal_film_grain_pass.mm`, and
 `include/edit/runtime/metal/metal_film_grain_pass.hpp` (`RecordMetalFilmGrainPost`); `film_grain_field.h` and `film_grain_post.h`
 (pointer parameters, `FILM_GRAIN_FIELD_PRIVATE`, `FILM_GRAIN_FIELD_PARAMS`); `cuda_film_grain_pass.cu` (the band layout);
 `opencl_drt_pass.cpp`, `metal_drt_pass.mm`, `drt_post_executor.hpp` (`DispatchFilmGrain` on every backend, `kImplementsFilmGrainField`
@@ -1080,6 +1082,11 @@ Details that the plan did not give, or changes to the plan, chosen in G4:
 - The OpenCL grain program builds with `-DCE_OPENCL_POW_EXP2_LOG2`: `CE_POW` of `color_encoding_math.h` is exp2(y log2 x) there.
   The pow of the NVIDIA OpenCL driver cost about 0.16 ms per call and pixel at 24 MP; the relative error of the form is about 2e-6
   on the gamma and sRGB curves and up to about 2e-5 near the black of the ST 2084 decode. The other OpenCL programs keep pow.
+- The Metal grain shader has the same form: `film_grain_post.metal` is its own AIR file with `-DCE_METAL_POW_EXP2_LOG2`, so
+  `CE_POW` is `fast::exp2(y * fast::log2(x))` there, and the DRT library links that AIR file as it links the film print. The other
+  DRT shaders keep `precise::pow`. With `precise::pow` the kernel took 28.3 ms (35mm) and 35.0 ms (16mm) at 6000 px on the M4; the
+  decode and the sRGB encode of the tone coordinate were 15 ms of it. With the form it takes 16.2 ms and 22.5 ms, and the
+  `MetalFilmGrainPostTest` checks against the host form pass.
 - The curve loop keeps its fixed count of 15 segments: a loop to the counted segments was slower (the compiler does not unroll it).
 - `FilmGrainMix` takes a pointer in the private memory of the thread (`FILM_GRAIN_FIELD_PRIVATE`), because Metal needs an address
   space on every pointer parameter.
@@ -1126,7 +1133,22 @@ What was proven (debug build, RTX 3080 Laptop, Windows):
 | Strength 0 runs no grain pass; colour of the product path | `OpenClGradeFixture.OpenClFilmGrainAtStrengthZeroRunsNoPostPass`, `.OpenClFilmGrainColourIsWarmCool...`, `.OpenClFilmGrainStrengthScales...` | `GpuDagOpenClGradeTest` | PASS |
 | CUDA after the band layout and the pointer parameters | `CudaFilmGrainPostTest.*` (8), `CudaPrimaryGradeFixture` grain cases | `GpuDagCudaDrtProductTest`, `GpuDagCudaPrimaryGradeTest` | PASS |
 | Host plan, apply step, neighborhood strength | `FilmGrainPlan*`, `FilmGrainPost*`, `GpuDagAdjustmentRuntime.FilmGrainNeighborhoodCarriesOnlyTheStrength` | `GpuDagRawInputTest` | PASS (58 / 58) |
-| G3 statistics, 3 % against the host form, timing on Metal | `MetalFilmGrainPostTest.*`, `MetalGradeFixture` grain cases | `GpuDagMetalDrtTest`, `GpuDagMetalGradeTest` | Not run: the Mac was not available |
+
+What was proven on the Mac (`macos-debug`, Apple M4):
+
+| Required name / criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| G3 statistics on Metal: pixel sigma, half scale, ROI, channel correlation, ST 2084 | `MetalFilmGrainPostTest.*` (5 tests) | `GpuDagMetalDrtTest` | PASS |
+| Standard deviation within 3 % of the form of CUDA (the host form) | `MetalFilmGrainPostTest.StandardDeviationIsWithin3PercentOfTheFormOfCuda` | `GpuDagMetalDrtTest` | PASS |
+| Kernel equals the host form at partial tiles and at the radius 24 (24 KB of threadgroup memory) | `MetalFilmGrainPostTest.KernelEquals...`, `.LargestBlurRadiusFitsTheThreadgroupMemory...` | `GpuDagMetalDrtTest` | PASS |
+| Disabled plan rejected | `MetalFilmGrainPostTest.DisabledPlanIsRejectedBeforeAnyKernel` | `GpuDagMetalDrtTest` | PASS |
+| Strength 0 runs no grain pass; colour and strength of the product path | `MetalGradeFixture.MetalFilmGrain*` (3 tests) | `GpuDagMetalGradeTest` | PASS |
+
+Mac suite totals: `GpuDagMetalDrtTest` 46 passed, 5 skipped, 0 failed; the skipped tests are the lab comparisons of
+`MetalFilmPrintFixture`, which read expected files that the G4 expected folder (`grain__expected.bin` only) does not have.
+`GpuDagMetalGradeTest` 75 / 86; the 11 failures are those of issues [#497](https://github.com/zidage/AlcedoStudio/issues/497)
+(LLF, Mask Mix, and `MetalPointwiseAdjustmentsUseOneDispatchPerLlfSegment`) and
+[#496](https://github.com/zidage/AlcedoStudio/issues/496) (the six multi-grade tests).
 
 Suite totals: `GpuDagOpenClGradeTest` 127 / 133; the 6 failures are `OpenClMultiGradeFixture.*` of issue
 [#496](https://github.com/zidage/AlcedoStudio/issues/496). `GpuDagCudaDrtProductTest` 120 / 120. `GpuDagCudaPrimaryGradeTest` with the
@@ -1175,10 +1197,33 @@ GpuDagOpenClGradeTest.exe --gtest_filter=OpenClGradeFixture.DISABLED_FilmGrainCo
 GpuDagOpenClGradeTest.exe --gtest_filter=*KernelCostRecordAt24Megapixels --gtest_also_run_disabled_tests
 ```
 
-Remaining work for the exit criteria: build `GpuDagMetalDrtTest` and `GpuDagMetalGradeTest` on the Apple M4 (the schema 11
-resources and `grain__expected.bin` are in `~/Projects/PuerhLab/build/tmp/g4` on the Mac), run `MetalFilmGrainPostTest.*` and the
-grain cases of `MetalGradeFixture`, and record `MetalGradeFixture.DISABLED_FilmGrainCostRecordAt24Megapixels` against the limit of
-15 ms. The Metal shaders compile `film_grain_field.h` and `film_grain_post.h` for the first time there.
+Timing, Metal (Apple M4, `macos-debug`: the Metal shaders of a debug build differ from Release only by `-gline-tables-only`;
+6000 x 4000, Film Grain 100 %, median of 9):
+
+| Record | 35mm (halo 2) | 16mm (halo 5) |
+| --- | ---: | ---: |
+| Kernel alone, `precise::pow` (first build) | 28.3 ms | 35.0 ms |
+| Kernel alone, exp2(y log2 x) (this branch; `MetalFilmGrainPostTest.DISABLED_KernelCostRecordAt24Megapixels`) | 16.2 ms | 22.5 ms |
+| Frame difference, `precise::pow` (`MetalGradeFixture.DISABLED_FilmGrainCostRecordAt24Megapixels`, 3 runs) | +29.1 to 30.0 ms | +36.4 to 36.6 ms |
+| Frame difference, this branch (3 runs) | +15.4 to 17.0 ms | +22.7 to 23.8 ms |
+
+The limit of 15 ms holds about at 35mm and does not hold at 16mm. In the kernel record, the read and the write of the two 24 MP
+float4 images are about 6.4 ms (768 MB at about 120 GB/s), the granularity curve about 4 ms, and the noise and the blur about 2 ms
+at 35mm and 8 ms at 16mm (1.56 and 2.64 noise texels per pixel). Issue [#696](https://github.com/zidage/AlcedoStudio/issues/696)
+has the ablation and the possible next steps. The old grain took 56.5 ms at 24 MP.
+
+Commands (Mac, repository root; the schema 11 resources and `grain__expected.bin` of the lab are in `build/tmp/g4`):
+
+```text
+cmake -S . -B build/macos-debug -DALCEDO_FILM_PRINT_RESOURCE_DIR=$PWD/build/tmp/g4/resources
+  -DALCEDO_FILM_PRINT_EXPECTED_DIR=$PWD/build/tmp/g4/expected
+cmake --build build/macos-debug --target GpuDagMetalDrtTest GpuDagMetalGradeTest -j 8
+GpuDagMetalDrtTest; GpuDagMetalGradeTest
+GpuDagMetalDrtTest --gtest_filter='*KernelCostRecord*' --gtest_also_run_disabled_tests
+GpuDagMetalGradeTest --gtest_filter='*FilmGrainCostRecordAt24Megapixels' --gtest_also_run_disabled_tests
+```
+
+Remaining gaps: the Metal timing at 16mm (#696).
 
 ### G5: grain in the negative on CUDA
 

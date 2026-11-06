@@ -4,7 +4,12 @@
 
 // The DRT/Post Film Grain on Metal (plan 'film_grain_format_and_stock_plan.md', phase G4): the
 // steps of FilmGrainPostKernel of cuda_film_grain_pass.cu and of film_grain_post.cl, in one kernel.
-// drt.metal includes this file after color_encoding_math.h; metal_film_grain_pass.mm records it.
+// metal_film_grain_pass.mm records it.
+//
+// This file has its own AIR file, which the DRT metallib links (src/metal/CMakeLists.txt). It is
+// compiled with -DCE_METAL_POW_EXP2_LOG2: the power of color_encoding_math.h in the decode and in
+// the tone coordinate is exp2(y log2 x), as in the OpenCL program of the grain. With precise::pow
+// the kernel took 28 ms at 6000 x 4000 on an Apple M4, and 16 ms with this form.
 //
 // Each 16 x 16 threadgroup makes the noise of its tile and a halo of the largest blur radius, at
 // the reference pixels of the render pixels, so a viewport region has the grain of the same region
@@ -15,6 +20,10 @@
 // The pass has no noise or blur image in device memory, so it moves only the source and the
 // output pixels.
 
+#include <metal_stdlib>
+using namespace metal;
+
+#include "../../../../include/color/color_encoding_math.h"
 #include "../../../../include/edit/runtime/film/film_grain_field.h"
 #include "../../../../include/edit/runtime/film/film_grain_post.h"
 

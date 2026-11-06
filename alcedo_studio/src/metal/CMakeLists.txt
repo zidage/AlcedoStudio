@@ -78,6 +78,10 @@ if(ALCEDO_METAL_ENABLED)
         CACHE INTERNAL "Metal DAG DRT metallib path" FORCE)
     set(METAL_FILM_PRINT_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/film_print.metal")
     set(METAL_FILM_PRINT_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/film_print.air")
+    set(METAL_FILM_GRAIN_POST_SRC
+        "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/film_grain_post.metal")
+    set(METAL_FILM_GRAIN_POST_AIR
+        "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/film_grain_post.air")
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -359,6 +363,34 @@ if(ALCEDO_METAL_ENABLED)
         COMMAND_EXPAND_LISTS
     )
 
+    # The DRT/Post Film Grain has its own AIR file for the power exp2(y log2 x) of
+    # CE_METAL_POW_EXP2_LOG2 (color_encoding_math.h); the other DRT shaders keep precise::pow. The
+    # DRT metallib links it.
+    get_filename_component(_film_grain_post_air_dir "${METAL_FILM_GRAIN_POST_AIR}" DIRECTORY)
+    add_custom_command(
+        OUTPUT "${METAL_FILM_GRAIN_POST_AIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_film_grain_post_air_dir}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_METAL_MODULE_CACHE_DIR}"
+        COMMAND ${ALCEDO_METAL_EXECUTABLE}
+                ${ALCEDO_METAL_COMMON_COMPILE_FLAGS}
+                ${ALCEDO_METAL_PLATFORM_COMPILE_FLAGS}
+                ${ALCEDO_METAL_CONFIG_COMPILE_FLAGS}
+                -DCE_METAL_POW_EXP2_LOG2
+                -fmodules-cache-path="${ALCEDO_METAL_MODULE_CACHE_DIR}"
+                -MF "${METAL_FILM_GRAIN_POST_AIR}.d"
+                -c "${METAL_FILM_GRAIN_POST_SRC}"
+                -o "${METAL_FILM_GRAIN_POST_AIR}"
+        DEPENDS "${METAL_FILM_GRAIN_POST_SRC}"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_field.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_post.h"
+                "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
+        DEPFILE "${METAL_FILM_GRAIN_POST_AIR}.d"
+        BYPRODUCTS "${METAL_FILM_GRAIN_POST_AIR}.d"
+        COMMENT "Compiling Metal DAG DRT/Post Film Grain shader"
+        VERBATIM
+        COMMAND_EXPAND_LISTS
+    )
+
     alcedo_add_metal_library(
         GpuDagDrtShaders
         "${METAL_DRT_SRC}"
@@ -370,14 +402,11 @@ if(ALCEDO_METAL_ENABLED)
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_aces.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_opendrt.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_neighbor.metal"
-            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/film_grain_post.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/film_print_scan.metal"
-            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_field.h"
-            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_grain_post.h"
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/film/film_print_math.h"
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
             "${ALCEDO_INCLUDE_ROOT}/color/color_encoding_math.h"
-        LINK_AIR "${METAL_FILM_PRINT_AIR}"
+        LINK_AIR "${METAL_FILM_PRINT_AIR}" "${METAL_FILM_GRAIN_POST_AIR}"
     )
 
     # The ACES 2.0 inverse is checked against OpenColorIO within 1e-3; fast math is off.

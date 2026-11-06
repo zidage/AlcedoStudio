@@ -10,7 +10,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -115,6 +118,49 @@ TEST_F(MetalFilmGrainPostTest, StandardDeviationIsWithin3PercentOfTheFormOfCuda)
     return HostForm(plan, geometry, source, encoding);
   };
   ExpectSigmaAtGreyMatches(Renderer(), host, 0.03);
+}
+
+/// Wall time of the grain kernel alone on a 6000 x 4000 display image, 35mm and 16mm, Film Grain
+/// 100 %, gamma 2.2 (the display encoding of a new document), median of 9. Each run waits for the
+/// GPU. Run it with --gtest_also_run_disabled_tests.
+TEST_F(MetalFilmGrainPostTest, DISABLED_KernelCostRecordAt24Megapixels) {
+  constexpr std::uint32_t kWidth   = 6000;
+  constexpr std::uint32_t kHeight  = 4000;
+  const auto              geometry = TileGeometry(kWidth, 1.0f, 0.0f, 0.0f, kWidth, kHeight);
+  for (const auto format : {FilmFormat::Film35mm, FilmFormat::Film16mm}) {
+    const auto  plan = Plan(geometry, format);
+    const float code = CeGammaEncode(static_cast<float>(plan.post_grey), CE_GAMMA_2_2_EXPONENT);
+    const std::vector<Rgba>        input(static_cast<std::size_t>(kWidth) * kHeight,
+                                         Rgba{code, code, code, 1.0f});
+    const FilmGrainDisplayEncoding gamma22{CE_TF_GAMMA_2_2, 1.0f};
+    const auto                     run = [&]() {
+      device_->BeginRender();
+      auto& workspace = device_->Workspace();
+      auto  src       = workspace.Textures().Acquire({kWidth, kHeight, TextureFormat::Rgba32f});
+      auto  dst       = workspace.Textures().Acquire({kWidth, kHeight, TextureFormat::Rgba32f});
+      workspace.Device().UploadTexture2D(src.Texture(), std::as_bytes(std::span(input)),
+                                         device_->CommandContext());
+      // Metal runs the recorded commands at the submission.
+      workspace.Device().Submit(device_->CommandContext());
+      device_->WaitIdle();
+      const auto start = std::chrono::steady_clock::now();
+      RecordMetalFilmGrainPost(*device_, plan, geometry, gamma22, src.Texture(), dst.Texture(),
+                               kWidth, kHeight);
+      workspace.Device().Submit(device_->CommandContext());
+      device_->WaitIdle();
+      const std::chrono::duration<double, std::milli> elapsed =
+          std::chrono::steady_clock::now() - start;
+      device_->CancelRender();
+      return elapsed.count();
+    };
+    (void)run();
+    std::vector<double> runs;
+    for (int index = 0; index < 9; ++index) runs.push_back(run());
+    std::sort(runs.begin(), runs.end());
+    std::cout << "Film Grain kernel at " << kWidth << " x " << kHeight << ", "
+              << FilmFormatId(format) << " (halo " << MakeFilmGrainFieldParams(plan, geometry).halo
+              << "): " << runs[runs.size() / 2] << " ms\n";
+  }
 }
 
 TEST_F(MetalFilmGrainPostTest, DisabledPlanIsRejectedBeforeAnyKernel) {
