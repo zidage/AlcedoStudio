@@ -4,7 +4,8 @@ Date: 2026-11-05
 
 Status: **In progress.** G0 is complete in the lab ([alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2)). G1 is complete
 (2026-11-05): the host plan, the shared grain math, and the bundle schema 11. G2 is complete (2026-11-05): the field
-`film_format`, the Film Grain range 0 to 200 %, the Format selector of both panels, and the compatibility tests. The user approved the plan and closed decisions U1 to U4 on
+`film_format`, the Film Grain range 0 to 200 %, the Format selector of both panels, and the compatibility tests. G3 is complete
+(2026-11-05): the CUDA post grain with the size and the strength of the plan, and decision U5 (the #660 colour). The user approved the plan and closed decisions U1 to U4 on
 2026-11-05 (section 2.3). Section 2.4 states the compatibility requirement of the user. The G0 results changed some designs of
 this plan; the sections below hold the changed form, and the G0 completion record lists each change.
 
@@ -97,6 +98,7 @@ The user accepted each recommendation. Each row is now an approved decision.
 | U2 | The format also sets the frame of the film print image plane: light spread, halation, and the inhibitor. | Yes. A real 16mm frame is softer and has a larger halation relative to the frame. With the 36 mm frame alone, 16mm grain has 35mm sharpness. Phase G7. |
 | U3 | The range and the meaning of the slider. | The stored key stays `strength`. The range becomes 0 to 2, shown as 0 to 200 %. The value 1 is the datasheet granularity of the film. Old documents keep their stored value and render with the new model. By the estimate of section 3.5, the old value 1 and the new value 1 give about the same grain at 6000 px on 35mm. |
 | U4 | With the film print, the grain goes into the negative and the post Film Grain pass is skipped. | Yes. This follows the rule of Halation: the film model makes the effect from the film layers, and the stored value of the post operator stays. Here the film print reads the same slider. |
+| U5 | The colour of the post grain (closed 2026-11-05, in G3). G0 changed the post mix to the display correlation of 5207 on Endura Premier, but section 2.2 keeps the #660 colour, and G3 requires the #660 colour statistics. With the Endura correlation the lightness-warmth correlation of #660 is negative (grain that darkens is warm). | The #660 scan colour: the channel correlation rg 0.661, gb 0.41, rb 0.246 of the 5207 scans, and the ratio r : g : b = 1.2 : 1 : 1.4 at the 48 um aperture. The green level is the G0 target, `grain_post_display_sigma_48` / `grain_post_display_value` of green. The Endura display correlation stays in the bundle for the film print, which makes its colour from its layers (G5). |
 
 ### 2.4 Compatibility requirement (user, 2026-11-05)
 
@@ -211,8 +213,8 @@ at 24 MP. G0 computes the exact target of the post path: at 35mm and mid grey, t
 deviation of the film print path with 5207 on Endura Premier.
 
 G0 result (linear display, 48 um aperture, 18 % grey, reference light): display value 0.188 / 0.191 / 0.172 (R, G, B), standard
-deviation 0.0107 / 0.0100 / 0.0152, display correlation rg 0.535, gb 0.509, rb 0.087. The post path mixes its three unit fields
-with this display correlation (section 4.4).
+deviation 0.0107 / 0.0100 / 0.0152, display correlation rg 0.535, gb 0.509, rb 0.087. The post path takes the green level of
+this target, and the colour of the 5207 scans of #660 (decision U5): the scan correlation and the ratio 1.2 : 1 : 1.4.
 
 ---
 
@@ -308,8 +310,8 @@ Negative Scan of 5207: rg 0.255, gb 0.178, rb 0.044. The first form of this plan
 G0 fitted a layer correlation matrix R (unit diagonal; rg 0.489, gb 0.2349, rb 0.1743; eigenvalues 0.51, 0.87, 1.62). R gives the
 three targets exactly. Rule `grain_layer_mix`: the renderer mixes the three unit fields after the blur and the division,
 `N = L u`, with L the lower Cholesky factor of R, so the pixel correlation of the layers is R exactly. The noise image has three
-channels. R of 5207 holds for all stocks (no other stock has a measured scan). The post path mixes with the display correlation of
-section 3.5 in place of R.
+channels. R of 5207 holds for all stocks (no other stock has a measured scan). The post path mixes with the channel correlation of
+the 5207 scans (rg 0.661, gb 0.41, rb 0.246) in place of R (decision U5).
 
 ---
 
@@ -482,7 +484,7 @@ closed by G3.
 | G0 | [#675](https://github.com/zidage/AlcedoStudio/issues/675) | Grain data, fits, and reference evaluator in the lab | alcedo-film-lab | none | 1500 (lab) | Complete ([alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2)) |
 | G1 | [#676](https://github.com/zidage/AlcedoStudio/issues/676) | Host plan, shared math, bundle schema 11 | `edit/runtime`, `edit/runtime/film` | G0 | 1100 | Complete (1605 lines) |
 | G2 | [#677](https://github.com/zidage/AlcedoStudio/issues/677) | `film_format`, slider range, panels, catalogs, compatibility tests | `edit/graph`, `app`, `ui` | G1 | 1300 | Complete (991 lines) |
-| G3 | [#678](https://github.com/zidage/AlcedoStudio/issues/678) | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Planned |
+| G3 | [#678](https://github.com/zidage/AlcedoStudio/issues/678) | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Complete (1492 lines) |
 | G4 | [#679](https://github.com/zidage/AlcedoStudio/issues/679) | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | Planned |
 | G5 | [#680](https://github.com/zidage/AlcedoStudio/issues/680) | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Planned |
 | G6 | [#681](https://github.com/zidage/AlcedoStudio/issues/681) | Grain in the negative on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G4, G5 | 1100 | Planned |
@@ -893,7 +895,133 @@ same machine first.
 
 **Exit criteria.** The tests pass. The fit-view defect of section 5.2 is closed by the zoom test.
 
-**Completion record.** Pending.
+**Completion record.** Complete 2026-11-05, branch `feature/film-grain-cuda-post-grain`, stacked on the G2 branch
+`feature/film-grain-format-field`. OpenCL and Metal keep the Bernoulli grain until G4.
+
+Files: `include/edit/runtime/film/film_grain_field.h` (`FilmGrainNoiseParams`, `FilmGrainFieldParams`, `FilmGrainAggregateNoise`,
+`FilmGrainMix`), the new `include/edit/runtime/film/film_grain_post.h` (`FilmGrainPostParams`, `FilmGrainPostPixel`),
+`film_grain_plan.hpp/.cpp` (`MakeFilmGrainFieldParams`, `MakeFilmGrainPostParams`, the post target, the curve ranges, the scan
+correlation), the new `include/edit/runtime/drt_post_film_grain.hpp` (`MakeDrtPostFilmGrainPlan`, `MakeDrtPostFilmGrainEncoding`),
+`drt_post_executor.hpp` (`Ops::kImplementsFilmGrainField`, `Ops::DispatchFilmGrain`), `drt_output_resolver.hpp/.cpp`
+(`ResolveNodeEotf`), the new `edit/runtime/cuda/cuda_film_grain_pass.cu` and `include/edit/runtime/cuda/cuda_film_grain_pass.hpp`
+(`RecordCudaFilmGrainPost`), `cuda_drt_pass.cu`, `cuda_neighbor_grade.cu/.cuh` (the Bernoulli grain removed),
+`opencl_drt_pass.cpp` and `metal_drt_pass.mm` (`kImplementsFilmGrainField = false`). `cuda_film_grain_math.cuh` moved to
+`alcedo_studio/deprecated/legacy_pipeline/` with no change.
+
+Details that the plan did not give, or changes to the plan, chosen in G3:
+
+- Decision U5 (user, 2026-11-05): the post grain has the #660 colour of the 5207 scans, not the Endura display correlation of G0.
+  The plan mixes the post fields with the Cholesky factor of rg 0.661, gb 0.41, rb 0.246 (`kFilmGrainPostScanCorrelation`), and the
+  relative standard deviation of the linear display light at the grey is the green G0 target 0.0100 / 0.191 times 1.2 : 1 : 1.4
+  (`kFilmGrainPostChannelRatio`), at the 48 um aperture. `FilmGrainPlanLabTest.AggregateAndMixMatchTheLabEvaluator` no longer
+  compares the post mix with `post_cholesky` of the lab.
+- One kernel in place of three passes. Each 16 x 16 tile makes its noise and halo in shared memory, then the horizontal blur, the
+  vertical blur, the unit field, the mix, and the apply step. The first form, with a pool noise image of (w + 2 halo) x (h + 2 halo)
+  and a horizontal blur image of w x (h + 2 halo), failed `CudaNeighborStagesReuseWorkspaceTexturesAfterFirstRender`: the texture
+  pool frees an idle image whose size no live lease holds, so the two images were made again on each frame. The kernel uses no pool
+  image and no global intermediate image (risk "The halo adds memory" of section 10 is gone). Shared memory is 3 (16 + 2 halo)^2
+  floats, at most 48 KB at the radius 24. The noise of a halo is made again by each tile that reads it: about 1.6 hashes per pixel
+  at 35mm and 6000 px, and 1.9 at 16mm.
+- The apply step (`film_grain_post.h`) scales the linear display light, y' = y exp(-e), so no grain makes negative light. It decodes
+  the code value with the transfer function of the output (`ResolveNodeEotf`, which runs no precompute) and encodes it again; for
+  ST 2084 the light relative to the reference white is the decoded light times 10000 / `ColorUtils::ref_lum`. The tone form is the
+  #660 form, sqrt(q (1 - q)) times the channel curve of the stock at the gross density lerp(first node, last node, q), with q the
+  sRGB code of the relative light. The grain is 0 at black and at or above the reference white, as on a print paper. Near white the
+  brightening half gets smaller, as in #660. HLG decodes with the inverse OETF only, so its relative grain differs by the OOTF gain
+  (about 17 % on a neutral). A value with no grain keeps its code value exactly.
+- The plan is made for each render from the 5207 data of `SharedFilmPrintTables`, the format of the DRT node, and the strength. It
+  costs a few microseconds, so no state is kept between frames and the render does not read `DrtDirty::FilmFormat`.
+- The post grain reads the film stock bundle for every DRT method. A missing or damaged bundle fails the render with its real error
+  (section 6.5). `GpuDagCudaPrimaryGradeTest` now copies the resources next to the executable, as `GpuDagCudaDrtProductTest` does.
+- The noise reads the reference pixels for every render, so a viewport region has the grain of the same region of the full frame
+  (issue [#687](https://github.com/zidage/AlcedoStudio/issues/687)), on CUDA. `GradeNeighborParams` keeps
+  `use_reference_coordinates` for OpenCL and Metal until G4; `adjustment_runtime.cpp` keeps the old weights for them too.
+- The Bernoulli kernels of CUDA throw `std::invalid_argument` when they get Film Grain, so no path can run the old grain on CUDA.
+
+Primary success call chain:
+
+```text
+ExecuteCudaDrt -> DrtPostExecutor<CudaDrtOps>::Execute
+  -> MakeGradeNeighborParams (enabled when strength > 0) -> DrtPostNeighborhoodRuns
+  -> MakeDrtPostFilmGrainPlan(drt, model, plan.geometry)
+     -> SharedFilmPrintTables().Bundle().Grain("kodak_5207") -> MakeFilmGrainPlan(..., Post, strength)
+  -> display transform write -> CudaDrtOps::DispatchFilmGrain
+     (MakeDrtPostFilmGrainEncoding -> DrtOutputResolver::ResolveNodeEotf)
+  -> RecordCudaFilmGrainPost -> MakeFilmGrainFieldParams, MakeFilmGrainPostParams
+  -> FilmGrainPostKernel: FilmGrainAggregateNoise (tile + halo, shared) -> blur x -> blur y
+     -> unit field -> FilmGrainMix -> FilmGrainPostPixel -> display output
+```
+
+Primary failure call chain:
+
+```text
+Missing or damaged film stock bundle
+  -> SharedFilmPrintTables throws std::runtime_error with the file name -> the render fails; no partial grain is published
+Strength 0
+  -> DrtPostNeighborhoodRuns false -> no grain kernel runs (RecordCudaFilmGrainPost throws for a disabled plan)
+Unknown display EOTF
+  -> ResolveNodeEotf throws std::runtime_error "ExecuteCudaDrt: ... unsupported DRT encoding EOTF"
+Film Grain parameters in the CUDA neighborhood kernels
+  -> LaunchBlurHorizontal / LaunchApplyVertical throw std::invalid_argument
+```
+
+What was proven (executed tests, debug build, RTX 3080 Laptop):
+
+| Required name / criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Per-pixel standard deviation at a flat grey, 3 formats x 2560 and 6000 px, within 5 % of the evaluator | `CudaFilmGrainPostTest.PixelSigmaAtGreyMatchesTheEvaluatorForEachFormatAndSize` (green: `post_pixel_sigma_linear`; red and blue: the U5 ratio at the lab pixel factor) | `GpuDagCudaDrtProductTest` | PASS |
+| Lag-1 correlation within 0.03 | same test (sum of L^2 times `lag1_kernel`) | `GpuDagCudaDrtProductTest` | PASS |
+| Zoom: scale 0.5 against the full render box-downscaled, standard deviation within 5 %, pattern correlation above 0.9 (issue 674) | `CudaFilmGrainPostTest.HalfScaleRenderHasTheGrainOfTheFullRenderBoxDownscaled` (16mm and 35mm, 6000 px) | `GpuDagCudaDrtProductTest` | PASS |
+| ROI: a 512 x 512 region equals the full render within 1e-5 (issue 687) | `CudaFilmGrainPostTest.ViewportRegionEqualsTheSameRegionOfTheFullRender` (origin 250, 317: the tiles do not line up) | `GpuDagCudaDrtProductTest` | PASS |
+| The kernel equals the host form of its steps, partial tiles, aggregate 2 | `CudaFilmGrainPostTest.KernelEqualsTheHostFormOfItsStepsAtTheTileEdges` | `GpuDagCudaDrtProductTest` | PASS |
+| Colour statistics of `film_grain_colour_statistics.hpp` | `CudaPrimaryGradeFixture.CudaFilmGrainColourIsWarmCoolWithTheQuietestGreen`, `CudaFilmGrainPostTest.ChannelCorrelationAtGreyIsTheScanCorrelationOf660` | `GpuDagCudaPrimaryGradeTest`, `GpuDagCudaDrtProductTest` | PASS |
+| Strength 0 runs no grain pass | `CudaPrimaryGradeFixture.CudaFilmGrainAtStrengthZeroRunsNoPostPass`, `CudaFilmGrainPostTest.DisabledPlanIsRejectedBeforeAnyKernel` | `GpuDagCudaPrimaryGradeTest`, `GpuDagCudaDrtProductTest` | PASS |
+| The same change of light for sRGB and ST 2084 output | `CudaFilmGrainPostTest.St2084OutputGetsTheSameChangeOfLinearLightAsSrgbOutput` | `GpuDagCudaDrtProductTest` | PASS |
+| No allocation on the second render | `CudaPrimaryGradeFixture.CudaNeighborStagesReuseWorkspaceTexturesAfterFirstRender` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| Post target, scan mix, kernel parameters, aggregate noise, apply step | `FilmGrainPostPlan.*` (4), `FilmGrainPostField.*` (2), `FilmGrainPostApply.*` (5) | `GpuDagRawInputTest` | PASS |
+
+Commands (PowerShell, repository root):
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 6 --target GpuDagRawInputTest GpuDagCudaDrtProductTest
+  GpuDagCudaPrimaryGradeTest EditRuntimeOpenCl
+GpuDagRawInputTest.exe --gtest_filter="FilmGrainPlan*:FilmGrainField*:FilmGrainPost*:FilmFormatTest*:FilmGrainMath*:
+  GpuDagAdjustmentRuntime*:FilmPrintImagePlan*:DrtPost*"
+GpuDagCudaDrtProductTest.exe
+GpuDagCudaPrimaryGradeTest.exe --gtest_filter="*Grain*:*Neighbor*:*DrtPost*:*Halation*"
+cmd /c scripts\msvc_env.cmd --preset win_release -DALCEDO_BUILD_TESTS=ON   (timing only, then OFF again)
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target GpuDagCudaDrtProductTest
+GpuDagCudaDrtProductTest.exe --gtest_filter=CudaFilmPrintFixture.DISABLED_DrtCostRecordAtEditorSizes
+  --gtest_also_run_disabled_tests   (on this branch and on 839abddbb)
+```
+
+Suite totals: `GpuDagRawInputTest` with the filter 66 / 66; `GpuDagCudaDrtProductTest` 119 / 119 (the cost record is disabled); `GpuDagCudaPrimaryGradeTest` with the
+filter 8 / 10. The two failures are older than G3 and do not use Film Grain: `CudaNeighborGradeDetailPixelsAreUnchanged` and
+`CudaSceneWorkPairFixture.NeighborhoodApplyReadsScratchBeforeInPlaceWrite` fail the same way on `839abddbb` (the G2 head), issue
+[#690](https://github.com/zidage/AlcedoStudio/issues/690). `EditRuntimeOpenCl` builds with the shared executor change. Metal was not
+built (no Mac in this phase); its change is the constant `kImplementsFilmGrainField = false`.
+
+Timing (Release, RTX 3080 Laptop, `CudaFilmPrintFixture.DISABLED_DrtCostRecordAtEditorSizes`, median of 9 GPU times of the DRT
+pass, the grain is the difference against OpenDRT alone):
+
+| Render | OpenDRT alone | Old grain (`839abddbb`) | G3, 35mm | G3, 16mm |
+| --- | ---: | ---: | ---: | ---: |
+| 2560 x 1709 | 1.36 ms | +1.42 ms | +0.92 ms | +1.05 ms |
+| 4096 x 2735 | 3.33 ms | +3.57 ms | +1.51 ms | +1.66 ms |
+| 6000 x 4006 | 7.13 ms | +9.98 ms | +3.26 ms | +4.31 ms |
+
+The limits of the plan at 6000 px are 4 ms (35mm) and 6 ms (16mm): both pass. The old grain has the same cost for every format, so
+G3 is 3.1 times faster at 35mm and 2.3 times faster at 16mm. Each grain value holds the Post write itself (one more pass over the
+display image). The record now adds the DRT/Post adjustments of the document to its plan and allocates the scene work images; before
+G3 it measured no Post write. Release built with `-DALCEDO_BUILD_TESTS=ON` for this record only; `build/release` is back at `OFF`.
+
+Checklist / exit condition: steps 1 to 4 done; the tests of the section pass; the fit-view defect of section 5.2 is closed by the
+zoom test (issue [#674](https://github.com/zidage/AlcedoStudio/issues/674)).
+
+LOC note: 24 files, 1492 added and 85 removed lines against `839abddbb`, without this record. Product code about 650, tests 754 (`cuda_film_grain_test.cpp` 438, `film_grain_post_test.cpp` 246, the rest in existing test files), the archived header unchanged. `cuda_film_grain_pass.cu` 151, `film_grain_post.h` 141, `film_grain_plan.cpp` 322. `cuda_film_print_test.cpp` is 1692 lines and `cuda_primary_grade_test.cpp` 1147; G3 adds 33 and 21 lines to them, next to their tests of the same subject.
+
+Remaining gaps: OpenCL and Metal still have the old grain, its size, and the ROI pattern of #687 (G4). The post grain still runs
+under the film print until G5 skips it (U4).
 
 ### G4: post grain on OpenCL and Metal
 
