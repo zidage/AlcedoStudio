@@ -2,7 +2,8 @@
 
 Date: 2026-11-05
 
-Status: **Planned.** No phase has implementation evidence. Section 2.3 lists four user decisions. Close them before G1 starts.
+Status: **Planned.** No phase has implementation evidence. The user approved the plan and closed decisions U1 to U4 on
+2026-11-05 (section 2.3). Section 2.4 states the compatibility requirement of the user.
 
 Parent: [Roadmap](../../roadmap.md), section "Still Planned".
 
@@ -83,14 +84,35 @@ Rejected work that must not return:
 - A per-stock grain look fitted by eye in place of the datasheet value. The user review in G8 can change the slider, not
   the data.
 
-### 2.3 User decisions to close before G1
+### 2.3 User decisions (closed 2026-11-05)
 
-| Id | Question | Recommendation |
+The user accepted each recommendation. Each row is now an approved decision.
+
+| Id | Question | Decision |
 | --- | --- | --- |
 | U1 | Frame long side of each format. | 16mm: 12.52 mm (Super 16 camera aperture). 35mm: 36 mm (the 135 frame and the current film print frame `common/frame_mm`). 70mm: 70 mm (the 6x7 frame of 120 film, 69.5 mm, and the 15/70 frame, 70.4 mm). A Super 35 cine frame (24.89 mm) is between 16mm and 35mm. |
 | U2 | The format also sets the frame of the film print image plane: light spread, halation, and the inhibitor. | Yes. A real 16mm frame is softer and has a larger halation relative to the frame. With the 36 mm frame alone, 16mm grain has 35mm sharpness. Phase G7. |
 | U3 | The range and the meaning of the slider. | The stored key stays `strength`. The range becomes 0 to 2, shown as 0 to 200 %. The value 1 is the datasheet granularity of the film. Old documents keep their stored value and render with the new model. By the estimate of section 3.5, the old value 1 and the new value 1 give about the same grain at 6000 px on 35mm. |
 | U4 | With the film print, the grain goes into the negative and the post Film Grain pass is skipped. | Yes. This follows the rule of Halation: the film model makes the effect from the film layers, and the stored value of the post operator stays. Here the film print reads the same slider. |
+
+### 2.4 Compatibility requirement (user, 2026-11-05)
+
+Every project made before this plan opens with no error. The rendered look of its grain can change (U3). These items are required:
+
+| Item | Rule | Check |
+| --- | --- | --- |
+| Document bytes | An unedited document serializes to the same bytes. `film_format` is written only when it is not `35mm`. `strength` keeps its key and its value. | G2: `ExistingFilmGrainRootDocumentsSerializeByteIdenticalAfterFormatChange` |
+| Root id | `ComputeRootId` of an old root gives the same id, so `TryDecodeRootState` accepts it. | Same test |
+| History | An old `SetParameter` entry of Film Grain or of the DRT node replays: its `before_value` equals the current Model JSON byte for byte. Undo and redo of an old entry work. | G2: `ExistingFilmGrainHistoryReplaysAfterFormatChange` |
+| Values | An old `strength` in 0 to 1 is in the new range 0 to 2. No value is clamped or rewritten on load. | G2: catalog and parser tests |
+| Film print documents | An old document with method `film_print` reads `35mm`, so G7 gives its image plane the same values as before. | G7: the `35mm` plan equals the current plan exactly |
+| Resources | Schema 11 resources ship with the application. A project stores no resource data, so no project depends on the schema. | G1: `FilmPrintTablesTest` |
+
+The pre-change documents for these tests come from the build of `main` before G2: one root and one checkpoint with method `film_print`
+and Film Grain 0.6, and one with OpenDRT and Film Grain 0.3, each with one Film Grain history entry. G2 stores them in
+`alcedo_studio/tests/edit/history/expected_serialized/` as `drt_film_grain_root_before_film_format.json` and
+`drt_film_grain_checkpoint_before_film_format.json`, as the existing `raw_root_before_raster_input.json` pattern does. These files hold
+serialized documents, not pixels.
 
 ---
 
@@ -279,7 +301,7 @@ The fit view shows more grain than the full image. At a render scale below 1, th
 0.2 render pixels at 25 %. That blur has a variance factor of 1.0, against 0.354 at full size. Each render pixel reads one
 reference pixel (`FilmReferenceCoordinate`, nearest pixel). So the fit view shows the per-pixel grain of the full image at about
 2.8 times its amplitude, and about 4 times the amplitude of the full image downscaled to the same size. Phase G3 removes this.
-This plan reports it as a GitHub issue.
+Issue [#674](https://github.com/zidage/AlcedoStudio/issues/674) records it.
 
 Inference to check in G1: `use_reference_coordinates` is `CoversFullEditSpace(geometry)`. A render that does not cover the full edit
 space then hashes render coordinates. G1 confirms the ROI behavior with a test before G3 changes it.
@@ -409,17 +431,20 @@ The panel shows the same Format selector under Film. Both selectors write `film_
 
 ## 8. Phases
 
-| Phase | Result | Main modules | Dependency | Expected diff | Status |
-| --- | --- | --- | --- | ---: | --- |
-| G0 | Grain data, fits, and reference evaluator in the lab | alcedo-film-lab | U1 to U4 closed | 1500 (lab) | Planned |
-| G1 | Host plan, shared math, bundle schema 11 | `edit/runtime`, `edit/runtime/film` | G0 | 1100 | Planned |
-| G2 | `film_format`, slider range, panels, catalogs | `edit/graph`, `app`, `ui` | G1 | 1300 | Planned |
-| G3 | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Planned |
-| G4 | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | Planned |
-| G5 | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Planned |
-| G6 | Grain in the negative on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G4, G5 | 1100 | Planned |
-| G7 | Format sets the film print image plane | `film_print_plan.cpp` | G2 (U2 yes) | 400 | Planned |
-| G8 | Measurements, user review, and documents | docs, lab | G6, G7 | 400 | Planned |
+Tracking: [#684](https://github.com/zidage/AlcedoStudio/issues/684). Related bug: [#674](https://github.com/zidage/AlcedoStudio/issues/674),
+closed by G3.
+
+| Phase | Issue | Result | Main modules | Dependency | Expected diff | Status |
+| --- | --- | --- | --- | --- | ---: | --- |
+| G0 | [#675](https://github.com/zidage/AlcedoStudio/issues/675) | Grain data, fits, and reference evaluator in the lab | alcedo-film-lab | none | 1500 (lab) | Planned |
+| G1 | [#676](https://github.com/zidage/AlcedoStudio/issues/676) | Host plan, shared math, bundle schema 11 | `edit/runtime`, `edit/runtime/film` | G0 | 1100 | Planned |
+| G2 | [#677](https://github.com/zidage/AlcedoStudio/issues/677) | `film_format`, slider range, panels, catalogs, compatibility tests | `edit/graph`, `app`, `ui` | G1 | 1300 | Planned |
+| G3 | [#678](https://github.com/zidage/AlcedoStudio/issues/678) | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Planned |
+| G4 | [#679](https://github.com/zidage/AlcedoStudio/issues/679) | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | Planned |
+| G5 | [#680](https://github.com/zidage/AlcedoStudio/issues/680) | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Planned |
+| G6 | [#681](https://github.com/zidage/AlcedoStudio/issues/681) | Grain in the negative on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G4, G5 | 1100 | Planned |
+| G7 | [#682](https://github.com/zidage/AlcedoStudio/issues/682) | Format sets the film print image plane | `film_print_plan.cpp` | G2 | 400 | Planned |
+| G8 | [#683](https://github.com/zidage/AlcedoStudio/issues/683) | Measurements, user review, and documents | docs, lab | G6, G7 | 400 | Planned |
 
 Each estimate is at or below 2000 lines. One backend group per phase keeps each review small.
 
@@ -511,6 +536,7 @@ yet.
 
 **Steps.**
 
+0. Before any code change, build `main` and write the pre-change documents of section 2.4. Commit them first, in their own commit.
 1. Add the field and its JSON rule. Add a dirty flag `FilmFormat` that rebuilds the grain plan and, with G7, the film print canvases.
 2. Add the catalog entries and the write parser.
 3. Add the selector and the caption to both panels.
@@ -521,7 +547,11 @@ stays. `EditorParameterCatalogTest`: the range and the enum. `EditorDisplayTrans
 `EditorPostProcessPanelQmlTest`:
 one click writes one history entry; both selectors show the value; a QTRY timeout fails the test (#526 rule).
 
-**Exit criteria.** The listed tests pass. The old documents keep their bytes.
+In `PipelineDocumentCheckpointTest`, from the pre-change documents of section 2.4:
+`ExistingFilmGrainRootDocumentsSerializeByteIdenticalAfterFormatChange` (bytes and root id) and
+`ExistingFilmGrainHistoryReplaysAfterFormatChange` (replay, undo, and redo of the stored Film Grain entry).
+
+**Exit criteria.** The listed tests pass. Every row of section 2.4 that G2 owns has a passing test.
 
 **Completion record.** Pending.
 
@@ -620,7 +650,7 @@ statistics, and the standard deviation against CUDA within 3 %.
 
 ### G7: the format sets the film print image plane
 
-Runs only when U2 is yes.
+U2 is yes (2026-11-05), so this phase runs.
 
 **Objective and deliverables.** `MakeFilmPrintImagePlan` computes `pixel_um` from `FilmFrameLongSideMm(film_format)` in place of
 `constants.frame_mm`. The light spread, the halation, and the inhibitor then scale with the format.
