@@ -1,0 +1,717 @@
+# Film Grain Format and Stock Granularity Plan
+
+Date: 2026-11-05
+
+Status: **Planned.** No phase has implementation evidence. Section 2.3 lists four user decisions. Close them before G1 starts.
+
+Parent: [Roadmap](../../roadmap.md), section "Still Planned".
+
+Related plans:
+
+- [Film Print DRT Plan](film_print_drt_plan.md): this plan extends it. The film print gets grain in the negative, and the film format
+  sets the frame of its image plane (decision U2).
+- [Film Simulation Explained](film_simulation/film_simulation_explained.md): the model and the flow of the film print. Phase G8
+  adds a grain section to it.
+
+Research source: [alcedo-film-lab](https://github.com/zidage/alcedo-film-lab). Phase G0 adds the grain data and the reference
+evaluator there.
+
+Source audit revision: `f28ca394` on `main` (2026-11-05). All source paths are relative to `alcedo_studio/src/` unless the path
+starts with `alcedo_studio/` or `docs/`.
+
+Before each phase, read `AGENTS.md` and each applicable skill again. These rules directly affect this work:
+
+- No fallback without user authorization. A failure gives the real error.
+- No stored expected pixels. Grain tests are statistical tests.
+- A change of the `ToJson` bytes of a Model breaks the root id of old projects. Unedited old JSON stays byte-identical.
+- New GPU work is for CUDA, OpenCL, and Metal only.
+- Run only the targeted test binaries. Only the user starts a full test suite.
+- No phase id in a pull request title. No prohibited terminology.
+
+---
+
+## 1. Summary
+
+The current Film Grain has a fixed size of 0.8 source pixels and one fixed strength curve, the Kodak 5207 datasheet. The grain
+therefore has the same size in pixels for a 12 MP and a 100 MP image, and a different size relative to the frame. The grain is
+the same for every film.
+
+This plan gives the grain a physical size on the film. The user selects the film format: 16mm, 35mm, or 70mm. The format sets
+the frame size, and the frame size and the image size set the pixel pitch on the film. Each film stock brings its own datasheet
+granularity, so the strength follows the film. With the film print, the grain goes into the negative, before the print or the
+scan, as in a real film.
+
+Main rules of the model:
+
+1. The grain field has a fixed size on the film, in micrometres. A smaller frame shows the same grain larger and stronger.
+2. The strength comes from the RMS granularity of the stock datasheet, through the 48 um aperture. The Selwyn relation and
+   an exact pixel integral convert it to the pitch of each render.
+3. The grain is a Gaussian random field. Its statistics are the same at each zoom level, and its pattern is the same in a
+   region of interest (ROI) and in the full frame.
+4. Each frame uses one hash per pixel and two separable blur passes. No pass draws one random value per tap.
+
+---
+
+## 2. Decision record
+
+### 2.1 User request (2026-11-05)
+
+| Item | Request |
+| --- | --- |
+| Format | Add three grain sizes: 16mm, 35mm, and 70mm. Each format has its own grain size. |
+| Realism | Use the model that is closest to real film. Keep the algorithm fast. |
+| Stock | Adjust the grain strength automatically from the film stock. |
+
+### 2.2 Design decisions of this plan
+
+| Item | Decision | Reason |
+| --- | --- | --- |
+| Grain size | A fixed size on the film in micrometres, from the dye-cloud size of the stock (section 3.3). | Grain is a property of the film. The frame size sets its size in the image. |
+| Pixel pitch | `pitch_um = frame_long_side_mm * 1000 / reference_long_side_px`. | The same rule as the image plane of the film print (`film_print_plan.cpp`). A crop enlarges the grain, as an enlargement of a part of a negative does. |
+| Strength | The datasheet RMS granularity, converted to the render pitch by an exact pixel integral (section 3.2). | Selwyn's law holds only for an aperture much larger than the cloud. At 16mm the pixel is near the cloud size. |
+| Strength control | Film Grain stays one slider. 100 % is the granularity of the film on its datasheet. | Section 2.3, decision U3. |
+| Grain with the film print | The grain is added to the dye amounts of the negative before the print table, the scanner table, or the light table. The DRT/Post Film Grain pass is then skipped. | Section 2.3, decision U4. The print contrast and the dye spectra then give the tone and the colour of the grain. |
+| Grain with other methods | ACES 2.0 and OpenDRT keep the display-referred grain of #660, with the size and strength rules of this plan and the 5207 data. | These methods have no negative. The colour rules of #660 come from measured 5207 scans. |
+| Random field | A Gaussian field from a 32-bit hash per pixel and a separable Gaussian blur. | Section 3.4: about 300 dye clouds overlap at each point, so the density is Gaussian. A 32-bit hash is fast on Metal. |
+| Zoom | The hash reads the reference pixel. A render below full size sums k x k reference hashes (k up to 4). | The fit view then shows the grain of the downscaled full image. Section 5.1 records the current defect. |
+
+Rejected work that must not return:
+
+- A grain size in source pixels.
+- A Bernoulli draw for each blur tap.
+- A stored grain texture with a fixed pixel size.
+- A per-stock grain look fitted by eye in place of the datasheet value. The user review in G8 can change the slider, not
+  the data.
+
+### 2.3 User decisions to close before G1
+
+| Id | Question | Recommendation |
+| --- | --- | --- |
+| U1 | Frame long side of each format. | 16mm: 12.52 mm (Super 16 camera aperture). 35mm: 36 mm (the 135 frame and the current film print frame `common/frame_mm`). 70mm: 70 mm (the 6x7 frame of 120 film, 69.5 mm, and the 15/70 frame, 70.4 mm). A Super 35 cine frame (24.89 mm) is between 16mm and 35mm. |
+| U2 | The format also sets the frame of the film print image plane: light spread, halation, and the inhibitor. | Yes. A real 16mm frame is softer and has a larger halation relative to the frame. With the 36 mm frame alone, 16mm grain has 35mm sharpness. Phase G7. |
+| U3 | The range and the meaning of the slider. | The stored key stays `strength`. The range becomes 0 to 2, shown as 0 to 200 %. The value 1 is the datasheet granularity of the film. Old documents keep their stored value and render with the new model. By the estimate of section 3.5, the old value 1 and the new value 1 give about the same grain at 6000 px on 35mm. |
+| U4 | With the film print, the grain goes into the negative and the post Film Grain pass is skipped. | Yes. This follows the rule of Halation: the film model makes the effect from the film layers, and the stored value of the post operator stays. Here the film print reads the same slider. |
+
+---
+
+## 3. Physical model
+
+This section defines each parameter before it uses it. Section 11 lists all parameters.
+
+### 3.1 The grain of a colour negative
+
+A colour negative has three layers. Each layer has two or three sublayers of different speed. In development, each developed
+silver halide crystal makes a dye cloud. The clouds of one layer overlap. The density of a layer at a point is the sum of the
+clouds there. The three layers develop independently, so their grain is spatially independent. The dyes absorb also outside
+their main band, so a densitometer channel reads some grain of the other layers.
+
+The datasheet gives the RMS granularity `sigma_48`: the standard deviation of the diffuse density, read with a
+microdensitometer through a circular aperture of 48 um diameter, on a uniform exposure. Kodak gives `sigma_48` as a curve over
+the density for each layer (for example `Kodak_Vision3_250D.pdf`). A Kodak still film gives the Print Grain Index (PGI) in
+place of `sigma_48` (section 4.3).
+
+### 3.2 From the datasheet to a pixel
+
+Parameters:
+
+- `A_48 = pi * (24 um)^2`: the area of the datasheet aperture.
+- `G = sigma_48 * sqrt(A_48)`: the Selwyn granularity, in density times micrometres. It is a property of the film.
+- `p`: the pixel pitch on the film, in micrometres.
+- `sigma_c`: the size of the dye cloud as the sigma of an equivalent Gaussian, in micrometres (section 3.3).
+
+The density field of one layer is white noise with the spectral density `G^2`, blurred by the cloud. A pixel integrates the field
+over a square of side `p`. The standard deviation of one pixel is:
+
+```text
+sigma_px = G * I(sigma_c, p)
+I(sigma_c, p) = integral over f of exp(-4 pi^2 sigma_c^2 f^2) * sinc^2(p f) df      (one axis, f in cycles per um)
+```
+
+For a large pixel, `I` goes to `1 / p`, and `sigma_px = G / p`: Selwyn's law. For a pixel near the cloud size, `I` is smaller,
+and the pixel reads the cloud itself. The host computes `I` once per render geometry.
+
+The renderer makes the field from a unit white noise per pixel, blurred by a discrete Gaussian of `sigma_b = sigma_c / p` pixels
+with the weights `w`. The blur gives the variance `(sum w^2)^2`. The host multiplies the field by
+`sigma_px / (sum w^2)`, so the pixel standard deviation is exact at every pitch.
+
+Values for the 5207 green layer near mid density (`sigma_48 = 0.0070`, script in G0):
+
+| Format | 2560 px | 6000 px (24 MP) | 9504 px (61 MP) |
+| --- | --- | --- | --- |
+| 16mm (12.52 mm) | p 4.89 um, sigma_px 0.034 | p 2.09 um, sigma_px 0.040, blur 0.96 px | p 1.32 um, sigma_px 0.041, blur 1.52 px |
+| 35mm (36 mm) | p 14.06 um, sigma_px 0.018 | p 6.00 um, sigma_px 0.031, blur 0.33 px | p 3.79 um, sigma_px 0.037, blur 0.53 px |
+| 70mm (70 mm) | p 27.34 um, sigma_px 0.010 | p 11.67 um, sigma_px 0.021, blur 0.17 px | p 7.37 um, sigma_px 0.028, blur 0.27 px |
+
+The table uses `sigma_c = 2.0 um`. At the same view size (2560 px), 16mm has 1.9 times and 70mm has 0.56 times the grain of 35mm.
+With `sigma_c = 3.0 um` the ratios are 1.57 and 0.59. The ratio of the frame sizes, 2.88, applies only when the pixel is much
+larger than the cloud.
+
+### 3.3 The size of the dye cloud
+
+Sources:
+
+| Source | Value | Gaussian sigma |
+| --- | --- | --- |
+| Wiener spectrum model of colour negative film (J. Photogr. Sci., 1990s; two diameters fit measured spectra) | One cloud 6.5 um, one cluster 15 um | About 1.6 um and 3.8 um (sigma = diameter / 4) |
+| Jarvis, coupler-starved C-41 layer (J. Photogr. Sci. 40:105, 1992; 43:136, 1995), exponential cloud `exp(-r / k)` | k = 1.45 um | 2.05 um (same noise area: sigma = sqrt(2) k) |
+| fotufilm stock packs (Apache-2.0) | Clump radius 4 to 5 um | 2.0 to 2.5 um |
+| spektrafilm `GrainParams` | Blue particle area 2 times red and green | Blue about 1.4 times red and green |
+
+Starting values: `sigma_c` = 2.0 um for red and green and 2.8 um for blue. G0 fits the values on the 5207 scans (section 8, G0).
+A Gaussian cloud profile fits photomicrographs better than a sharp disc (J. Photogr. Sci., 1985).
+
+### 3.4 Why a Gaussian field
+
+For overlapping clouds of area `a` and density `d0` with `n` clouds per square micrometre, the mean density is `D = n a d0` and
+`G^2 = n a^2 d0^2`. Then `n = D^2 / G^2`, with no dependence on the cloud size. For the 5207 green layer (`D = 1`, `G = 0.30`), `n`
+is about 11 clouds per square micrometre, and with `sigma_c = 2 um` about 500 clouds overlap at each point. The skew of the
+density is then near 0, so a Gaussian field is correct. A Gaussian field also needs no per-tap random draw.
+
+### 3.5 Calibration of the post path against the old grain
+
+The old post grain at slider value `s` gives a relative display error of about `0.05 s` per pixel at mid grey, at the source
+resolution (unit field standard deviation 0.354 after the 7-tap blur of sigma 0.8, times the channel terms of
+`film_grain_math.h`). The 5207 field of section 3.2 at 6000 px on 35mm gives 0.031 negative density. Through a print slope of
+about 2.7 and the display encoding, this is about 0.07 relative display error. The new value 1 is therefore near the old value 1
+at 24 MP. G0 computes the exact target of the post path: at 35mm and mid grey, the post path gives the display standard
+deviation of the film print path with 5207 on Endura Premier.
+
+---
+
+## 4. Stock granularity data
+
+### 4.1 Data in the stock bundle
+
+G0 adds a group `grain/<stock>` for each film stock to `film_stock_bundle.bin`, resource schema 11:
+
+| Field | Shape | Meaning |
+| --- | --- | --- |
+| `density_nodes` | (3, n) | Layer density nodes of the granularity curve (diffuse, the read condition of the source) |
+| `sigma_48` | (3, n) | `sigma_48` of the channel at each node |
+| `layer_sigma` | (3, n) | Standard deviation of the dye amount of each layer, solved from `sigma_48` (section 4.4) |
+| `cloud_sigma_um` | (3) | `sigma_c` of each layer |
+| `shared_share` | (1) | Share of the variance that the three layers share (section 4.4) |
+| `tier` | string | `curve`, `number`, or `pgi` (section 4.2) |
+
+`n` is at most 16 nodes. The host packs the curves into the kernel parameters as literal segments, as `FilmGrainLayerSigma` does
+today, so no backend indexes an array per pixel.
+
+### 4.2 Source tiers
+
+| Tier | Data | Stocks | Rule |
+| --- | --- | --- | --- |
+| `curve` | Datasheet curves per layer | `kodak_5207` (in `film_grain_math.h`), `kodak_5203`, `kodak_5213`, `kodak_5219` (`Kodak_Vision3_*.pdf`), `kodak_exr_5248` (`EXR_5248_100T.pdf`), `kodak_5247` (`ECN_5247.pdf`), `kodak_5293` (`Kennel_Sehlin_etalNeg5293_1982.pdf`) | Digitize each curve. Check the read density against the characteristic curve of the same sheet. |
+| `number` | One published value | `fuji_*` negatives, `kodak_5206`, `kodak_5277`, `kodak_5250`, `kodak_5248`, `kodak_5247_II`, `kodak_vericolor_iii`, `kodak_aerocolor`, `agfa_vista_100`, and the five reversal films | Scale the 5207 curve shape of the same layer to the value at the read density of the source. Reversal films read at gross density 1.0. |
+| `pgi` | Print Grain Index only | `kodak_portra_160`, `kodak_portra_400`, `kodak_portra_800`, `kodak_ektar_100`, `kodak_gold_200`, `kodak_ultramax_400` | Section 4.3. |
+
+The datasheets in `D:\Projects\spectral_film_lut\datasheets` cover the `curve` tier and Ektar 100, Portra 400, and Gold 200
+(`E-7022`). G0 collects the other Kodak, Fuji, and Agfa sheets and records the source of each value. The fotufilm packs
+(`grainStrength`, Apache-2.0) are a check value only.
+
+### 4.3 Print Grain Index
+
+Kodak E-58 (July 2000) defines the PGI:
+
+- PGI rises with the logarithm of the visual granularity of the print. Two units are a 50 % just-noticeable difference.
+- A change of 6 % of the granularity gives 2 units (Cookingham and Kane, US 5629769). So
+  `PGI = c + 34.3 ln(sigma_visual)`, with `34.3 = 2 / ln(1.06)`.
+- The print granularity is linear in the negative granularity for most colour negative films.
+- The common viewing distance is 14 inches for all print sizes.
+
+At the same magnification, the ratio of two films is therefore `G_1 / G_2 = exp((PGI_1 - PGI_2) / 34.3)`. Compare only values
+above 25, at the same magnification on the 135 frame:
+
+| Film | PGI on 135 | G relative to Portra 400 |
+| --- | --- | --- |
+| Portra 400 (`Kodak_Portra_400.pdf`) | 37 at 4.4X, 59 at 8.8X, 89 at 17.8X | 1.00 |
+| Ektar 100 (`Kodak_Ektar_100.pdf`) | 38 at 8.8X, 66 at 17.8X | 0.54 at 8.8X, 0.51 at 17.8X |
+| Gold 200 (`E-7022`) | 44 at 4.4X | 1.23 at 4.4X |
+
+The two Ektar ratios differ by 6 %, which supports the rule.
+
+The PGI scale has an unknown constant `c`, so it gives no absolute value. G0 finds the anchor in this order:
+
+1. A Kodak colour negative still film with a published `sigma_48` and a published PGI (older E-series sheets, for example
+   Portra 160NC and 400NC of 1998 to 2000, or Kodak E-143).
+2. If none exists: the Portra 400 value 0.009 of fotufilm, recorded as an external value with no primary source, and checked in the
+   user review of G8.
+
+### 4.4 From channel granularity to layer noise
+
+The grain of the film print goes into the dye amount `a_k` of layer `k`. Parameters:
+
+- `s_jk`: the density in densitometer channel `j` of one unit of dye `k`, from the dye spectra of the bundle and the read
+  condition of the source (Status M for Kodak cine sheets).
+- `sigma_a_k`: the standard deviation of the dye amount of layer `k` for the 48 um aperture.
+
+The datasheet curves read a neutral exposure. With independent layers, `sigma_48_j^2 = sum over k of s_jk^2 sigma_a_k^2`. G0 solves
+this 3x3 linear system in the squares at each density node, with the condition `sigma_a_k^2 >= 0`. The product then reproduces the
+datasheet value in each channel, and the dye side absorption gives the channel correlation.
+
+The 5207 scans give the channel correlation rg 0.661, gb 0.41, rb 0.246 (study of #660). G0 renders the independent layers through
+Negative Scan of 5207 and compares the correlation. If the model correlation is lower, a shared field with the share `rho`
+(`shared_share`) adds the difference: `N_k = sqrt(1 - rho) N_k,own + sqrt(rho) N_shared`. G0 fits `rho` so that rg is within 0.05 of
+0.661. The fourth channel of the noise image holds `N_shared`.
+
+---
+
+## 5. Current source audit
+
+### 5.1 Source facts
+
+| Area | Current owner and path | Current behavior | Required change |
+| --- | --- | --- | --- |
+| Grain parameters | `edit/runtime/adjustment_runtime.cpp`, `MakeNeighborhoodParams` | `amount = strength / 3`. Blur `sigma = 0.8 * render_scale` render pixels, at most 3 taps. Fixed seed. | The plan of section 6.2 sets the blur and the amplitude. |
+| Grain math | `include/edit/runtime/film/film_grain_math.h` | Dye clouds of #660. 5207 `sigma_D` curves as literal segments on a linear map from display value to density. | Keep the colour mix. Replace the size and amplitude terms. Add the per-stock curve evaluation. |
+| CUDA pass | `edit/runtime/cuda/cuda_neighbor_grade.cuh`, `include/edit/runtime/cuda/cuda_film_grain_math.cuh` | The horizontal pass draws a Bernoulli value for each tap and channel with a 64-bit hash (`cuda::PixelStream2D`, `UniformFloat01`), at the nearest reference pixel. | A noise pass with a 32-bit hash and a halo, then the separable blur. |
+| OpenCL pass | `edit/runtime/opencl/shader/primary_grade_neighbor.cl` | Same structure as CUDA. | Same change. |
+| Metal pass | `edit/runtime/metal/shader/drt_neighbor.metal` | Same structure. 56.5 ms at 24 MP; the horizontal pass dominates (#660 record). | Same change. The sliding-window blur of the film print. |
+| Post schedule | `edit/runtime/drt_post_schedule.cpp`, `DrtPostNeighborhoodRuns` | Skips Halation when the method is the film print. | Also skips Film Grain when the method is the film print (U4). |
+| Model | `include/edit/operators/models/scalar_operator_model.hpp`, `FilmGrainTraits` | `ScalarFloatPayload`, key `strength`, range 0 to 1. | Range 0 to 2 (U3). |
+| Format | none | The film print image plane uses `common/frame_mm` = 36 for all stocks (`film_print_plan.cpp`, `MakeFilmPrintImagePlan`). | A field `film_format` of the DRT parameters (section 6.1). |
+| Film print display | `include/edit/runtime/film/film_print_math.h`, `FilmKernelReadRecordTable`; kernels in `cuda_film_print_pass.cu`, `film_print.cl`, `film_print.metal`, `film_print_scan.*` | FP6 reads the print table, the scanner table, or the light table with the dye amounts of the pixel. | Add the grain to the dye amounts before the read and before the Enlarger flare amounts. |
+| Panel | `ui/alcedo_main/qml/EditorPostProcessPanel.qml`, `editorAdjustmentPanel_post` | One Film Grain slider, 0 to 100 %, `Conversion::Percent` (`app/editor_parameter_catalog.cpp`). | Slider 0 to 200 %, a Format selector, and the name of the film whose data apply. |
+| Tests | `alcedo_studio/tests/edit/runtime/film_grain_math_test.cpp`, `film_grain_colour_statistics.hpp`, `cuda_drt_product_test.cpp`, `adjustment_runtime_test.cpp` | Host and backend statistical colour tests. | Add the size, zoom, ROI, and stock statistics of section 9. |
+
+### 5.2 Defect found in the audit
+
+The fit view shows more grain than the full image. At a render scale below 1, the blur sigma is `0.8 * render_scale`, for example
+0.2 render pixels at 25 %. That blur has a variance factor of 1.0, against 0.354 at full size. Each render pixel reads one
+reference pixel (`FilmReferenceCoordinate`, nearest pixel). So the fit view shows the per-pixel grain of the full image at about
+2.8 times its amplitude, and about 4 times the amplitude of the full image downscaled to the same size. Phase G3 removes this.
+This plan reports it as a GitHub issue.
+
+Inference to check in G1: `use_reference_coordinates` is `CoversFullEditSpace(geometry)`. A render that does not cover the full edit
+space then hashes render coordinates. G1 confirms the ROI behavior with a test before G3 changes it.
+
+---
+
+## 6. Target design
+
+### 6.1 Data and ownership
+
+| Data | Owner | Serialization | Default | Compatibility |
+| --- | --- | --- | --- | --- |
+| `film_format` (`16mm`, `35mm`, `70mm`) | `DrtParamsModel`, `DrtPayload` (`include/edit/graph/drt_node_model.hpp`) | Key `film_format` in `params` of the DRT node. Written only when the value is not `35mm`. | `35mm` | Old documents read `35mm`. Their bytes and root id stay. |
+| Grain strength | `FilmGrainModel`, key `strength` | Unchanged | 0 | Same bytes. Range 0 to 2 (U3). |
+| Stock grain data | `FilmStockBundle` (`include/edit/runtime/film/film_stock_bundle.hpp`), read-only after `Open` | `grain/<stock>` in the bundle, schema 11 | 5207 data for methods with no stock | A bundle of schema 10 fails to open with the real version error, as today. |
+
+`film_format` belongs to the DRT node because it is a property of the film frame. The grain of every method and the film print
+image plane read it (U2). It is not part of `params.film_print`, so the remembered film print settings of #672 keep their form.
+
+`FilmFormat` is a proposed scoped enum in the proposed header `include/edit/graph/film_format.hpp`, with
+`FilmFrameLongSideMm(FilmFormat) -> double` (U1 values) and the identifier conversion.
+
+### 6.2 Host grain plan
+
+Proposed: `include/edit/runtime/film_grain_plan.hpp`, `edit/runtime/film_grain_plan.cpp`.
+
+```text
+MakeFilmGrainPlan(const ResolvedRenderGeometry& geometry, FilmFormat format,
+                  const FilmGrainStockView& stock, float strength) -> FilmGrainPlan
+```
+
+- Input: the render geometry, the format, the grain data of the stock (or of 5207), and the slider value.
+- Output, a value type that the compile step copies into the kernel parameters:
+  - `reference_pitch_um` and `render_pitch_um`;
+  - `aggregate` k: `clamp(round(1 / render_scale), 1, 4)`; 1 for a render scale of 1 or more;
+  - for each layer: the blur weights (radius `ceil(3 sigma_b)`, at most 24 taps) and the amplitude factor `I / (sum w^2)`;
+  - the shared share and the piecewise curve segments of the stock;
+  - `enabled`: 0 when the strength is 0.
+- The plan is a pure function. It changes no state. A bad input (a format outside the enum, an empty stock curve) throws
+  `std::invalid_argument` with the name of the field.
+
+`FilmGrainStockView` is a view into the bundle; its spans are valid for the life of the bundle. The post path reads the 5207 view.
+The film print path reads the view of the selected film.
+
+### 6.3 GPU passes
+
+Shared math: proposed `include/edit/runtime/film/film_grain_field.h`, included like `film_grain_math.h` (OpenCL lists it in the
+program, Metal includes it by relative path, CUDA through a `.cuh` wrapper):
+
+- `FilmGrainHash3(uint x, uint y, uint seed) -> uint3`: pcg3d, the 32-bit hash of Jarzynski and Olano (JCGT 9(3), 2020). One call
+  gives three channels.
+- `FilmGrainGaussian(uint bits) -> float`: the inverse normal CDF of Giles (2010), single precision.
+- `FilmGrainLayerSigma(stock segments, layer, amount) -> float`: the per-stock curve.
+
+Passes, for each render:
+
+```text
+G-noise   one thread per pixel of the render plus a halo of the blur radius:
+          sum of k x k reference-pixel Gaussians / k, at the true reference coordinates; 4 channels
+          (3 layers + shared); writes the noise image (float4; half4 on Metal)
+G-blur-x  separable Gaussian, per-channel weights (the FP2 blur of the film print, with its
+          Metal sliding window)
+G-blur-y  same; writes the unit grain image
+apply     post path:   FilmGrainDyeClouds with the unit grain image in place of the Bernoulli field
+          film print:  in FP6, a' = a + strength * sigma_a(a) * amplitude * N, before the flare
+                       amounts and the table read
+```
+
+The halo makes an ROI render equal to the same region of a full-frame render. The noise image and the blur buffers come from the
+texture pool of the pass and are released at the end of the pass.
+
+### 6.4 Primary success chain
+
+```text
+User moves Film Grain or Format
+  -> EditorParameterWrite (strength or film_format) -> DRT node history entry
+  -> GraphCompiler::CompileDrt -> MakeFilmGrainPlan(geometry, format, stock, strength)
+  -> film print:  DrtPostSchedule skips Film Grain; RecordCudaFilmPrint (and OpenCL, Metal)
+                  runs G-noise, G-blur-x, G-blur-y, then FP6 with the grain image
+  -> other method: DrtPostExecutor runs G-noise, G-blur-x, G-blur-y, apply
+  -> display image published
+```
+
+### 6.5 Primary failure chain
+
+```text
+Bundle of schema 10, or a stock with no grain group
+  -> FilmStockBundle::Open throws with the file name and the found version
+  -> the render fails with that error; no partial grain image is published; the pass releases
+     its pool textures
+Allocation of the noise image fails
+  -> the backend reports the allocation error of the texture pool; the frame fails; the
+     previous published frame stays on screen
+```
+
+No fallback grain path exists. A stock with no grain data is a resource defect, and G0 checks that every stock has a group.
+
+---
+
+## 7. Product design specification
+
+### 7.1 Post Processing page, Film Grain section
+
+```text
+Film Grain                                   [  48 % ]
+  ------------------------------o-------------------------  0 % to 200 %
+Format            ( 16mm | 35mm | 70mm )
+Granularity of Kodak Vision3 250D 5207
+```
+
+- The slider keeps its current position in the page. 100 % is the datasheet granularity.
+- Format is a segmented selector with three buttons. One write per click, one history entry.
+- The caption names the film whose data apply: the selected film of the film print, else Kodak Vision3 250D 5207.
+- The section has the same enabled state as the other post controls (`controlsEnabled`).
+
+### 7.2 Display Transform panel, Film Print
+
+The panel shows the same Format selector under Film. Both selectors write `film_format`, so they always show the same value.
+
+### 7.3 Other surfaces
+
+- `EditorParameterCatalog`: `film_grain` gets the range 0 to 200 %; a new entry `film_format` (enum).
+- `alcedo-cli` parameter catalog and the adjustment transfer catalog (copy and paste of settings) include `film_format`.
+- Reset of the DRT node writes `35mm`.
+
+---
+
+## 8. Phases
+
+| Phase | Result | Main modules | Dependency | Expected diff | Status |
+| --- | --- | --- | --- | ---: | --- |
+| G0 | Grain data, fits, and reference evaluator in the lab | alcedo-film-lab | U1 to U4 closed | 1500 (lab) | Planned |
+| G1 | Host plan, shared math, bundle schema 11 | `edit/runtime`, `edit/runtime/film` | G0 | 1100 | Planned |
+| G2 | `film_format`, slider range, panels, catalogs | `edit/graph`, `app`, `ui` | G1 | 1300 | Planned |
+| G3 | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Planned |
+| G4 | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | Planned |
+| G5 | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Planned |
+| G6 | Grain in the negative on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G4, G5 | 1100 | Planned |
+| G7 | Format sets the film print image plane | `film_print_plan.cpp` | G2 (U2 yes) | 400 | Planned |
+| G8 | Measurements, user review, and documents | docs, lab | G6, G7 | 400 | Planned |
+
+Each estimate is at or below 2000 lines. One backend group per phase keeps each review small.
+
+Commands for the product phases, from the repository root, in PowerShell:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4
+ctest --test-dir build/debug -R "<test name>" --output-on-failure
+```
+
+Timing values come from a Release build only (`win_release`, `macos_release`). Metal phases build and run on the Mac.
+
+### G0: grain data and reference evaluator (lab)
+
+**Objective and deliverables.** The lab produces the grain group of every stock, the fitted cloud sizes, the shared share, and a
+reference evaluator for the product tests.
+
+**Inputs.** The datasheets of section 4.2. The 5207 scans `D:\素材\照片\胶片翻拍\2023 5207\2\` (Flextight, 3200 dpi, 7.94 um per
+pixel, FlexColor USM -60, Gamma 2.0). The lab bundle builder `scripts/poc/p7_spectral_acceleration/build_product_resources.py`.
+
+**Work, in order.**
+
+1. Digitize the `curve` tier. Record each sheet, page, and read condition. Check: the 5207 digitization reproduces the segments
+   of `film_grain_math.h` within 3 %.
+2. Collect the `number` and `pgi` sources. Compute the PGI ratios of section 4.3 and find the anchor in the stated order.
+3. Solve `sigma_a_k` (section 4.4) for every stock. A negative square is a data error: record it and stop for that stock.
+4. Fit `sigma_c` on the 5207 scans: compute the radial noise power spectrum of the density residual on flat blocks (method of #660,
+   scanner white noise removed by the lag-1 and lag-2 cross-covariance). Measure the scanner MTF from a sharp frame edge or a
+   sprocket edge of the same scan. Fit one Gaussian per layer. If the fit residual in the band 5 to 40 cycles per mm is above 10 %,
+   fit the cluster term of section 3.3 and record its design and its added cost before G1.
+5. Fit `rho` (section 4.4).
+6. Compute the post-path target of section 3.5.
+7. Write the reference evaluator `grain_reference.py`: per-pixel standard deviation, lag-1 correlation, and channel correlation for
+   a format, a pitch, a stock, and a density. Write the expected values for the product tests to the directory that
+   `ALCEDO_FILM_PRINT_EXPECTED_DIR` names.
+8. Add `grain/<stock>` to the bundle builder. Schema 11.
+
+**Exit criteria.** Every stock of `kFilmNegativeIds` and `kFilmReversalIds` has a grain group with a recorded source and tier. The
+lab report records the fits, the residuals, and the anchor. The lab ROADMAP records the decisions.
+
+**Completion record.** Pending.
+
+### G1: host plan, shared math, and bundle schema 11
+
+**Objective and deliverables.** `FilmGrainPlan`, `film_grain_field.h`, the bundle reader for `grain/*`, and their host tests. No
+GPU change.
+
+**Files.** Proposed: `include/edit/runtime/film_grain_plan.hpp`, `edit/runtime/film_grain_plan.cpp`,
+`include/edit/runtime/film/film_grain_field.h`, `include/edit/graph/film_format.hpp`. Changed:
+`include/edit/runtime/film/film_stock_bundle.hpp`, `edit/runtime/film/film_stock_bundle.cpp` (schema 11, `FilmGrainStockView`),
+the CMake lists of the runtime and the tests.
+
+**Data rules.** The amplitude of the plan equals `G * I(sigma_c, p) / (sum w^2)`. The integral uses a fixed quadrature of at least
+2000 points per axis. The weights sum to 1.
+
+**Steps.**
+
+1. Add `FilmFormat` and the frame sizes of U1.
+2. Read `grain/<stock>` in `FilmStockBundle::Open`; check shapes and the tier string.
+3. Write `MakeFilmGrainPlan` as in section 6.2.
+4. Write the hash and the inverse CDF in `film_grain_field.h`, compiled also on the host.
+5. Write a test of the ROI hash coordinates of the current post pass (section 5.1, inference to check). Record the result in this
+   section.
+
+**Tests.** New suites in the `GpuDagRawInputTest` executable, next to `film_grain_math_test.cpp`:
+
+- `FilmGrainPlan`: the amplitude for the table of section 3.2 within 1 %; Selwyn's law at `p = 50 um` within 1 %; the aggregate k
+  for render scales 1, 0.5, 0.3, and 0.1.
+- `FilmGrainField`: the Gaussian of 10^6 hashes has mean 0 within 0.005, standard deviation 1 within 0.005, and kurtosis 3 within
+  0.05; neighbour hashes have a correlation below 0.005.
+
+In `FilmPrintTablesTest`: every stock has a grain view; a schema 10 bundle fails with the version in the message.
+
+**Exit criteria.** The tests pass in the debug build. No GPU file changed.
+
+**Completion record.** Pending.
+
+### G2: format field, slider range, panels, and catalogs
+
+**Objective and deliverables.** The user can set the format and the slider range of section 7. The render does not use the format
+yet.
+
+**Files.** `include/edit/graph/drt_node_model.hpp` and its source (`film_format` in `DrtPayload`, JSON only when not `35mm`),
+`include/edit/operators/models/scalar_operator_model.hpp` (`FilmGrainTraits::kMax = 2`), `app/editor_parameter_catalog.cpp`,
+`app/editor_parameter_write.cpp`, `app/editor_parameter_write_parse.cpp`, `app/editor_panel_projection.cpp`,
+`include/app/adjustment_transfer_catalog.hpp`, the `alcedo-cli` parameter catalog, `EditorPostProcessPanel.qml`,
+`EditorDisplayTransformPanel.qml`, the translation sources (no `lupdate` run on a partial scan).
+
+**Steps.**
+
+1. Add the field and its JSON rule. Add a dirty flag `FilmFormat` that rebuilds the grain plan and, with G7, the film print canvases.
+2. Add the catalog entries and the write parser.
+3. Add the selector and the caption to both panels.
+
+**Tests.** `GpuDagModelGraphTest` (`json_roundtrip_test.cpp`): the expected serialized documents of `alcedo_studio/tests/edit/history/expected_serialized/` keep
+their bytes; a document with `film_format: "16mm"` round-trips. `PipelineDocumentCheckpointTest`: the root id of an old document
+stays. `EditorParameterCatalogTest`: the range and the enum. `EditorDisplayTransformSnapshotQmlTest` and a new
+`EditorPostProcessPanelQmlTest`:
+one click writes one history entry; both selectors show the value; a QTRY timeout fails the test (#526 rule).
+
+**Exit criteria.** The listed tests pass. The old documents keep their bytes.
+
+**Completion record.** Pending.
+
+### G3: post grain on CUDA
+
+**Objective and deliverables.** The CUDA post grain uses the passes of section 6.3. Its size and strength follow the plan.
+
+**Files.** `edit/runtime/cuda/cuda_neighbor_grade.cuh` and `.cu`, `include/edit/runtime/cuda/cuda_film_grain_math.cuh`,
+`edit/runtime/adjustment_runtime.cpp` (the grain no longer uses `kFilmGrainDyeCloudSigma`), `film_grain_math.h` (the unit field
+comes from the grain image).
+
+**Steps.**
+
+1. Add the G-noise kernel with the halo and the aggregate k.
+2. Blur with per-channel weights.
+3. Apply `FilmGrainDyeClouds` with the unit grain image and the amplitude of the plan.
+4. Remove the Bernoulli draw and the 64-bit per-tap hash of the grain.
+
+**Tests** (`GpuDagCudaDrtProductTest`, statistical, expected values from G0):
+
+- per-pixel standard deviation on a flat grey at 16mm, 35mm, 70mm and at 2560 and 6000 px: within 5 % of the evaluator;
+- lag-1 correlation within 0.03;
+- zoom: a render at scale 0.5 against the full render box-downscaled by 2: standard deviation within 5 %, pattern correlation above
+  0.9;
+- ROI: a 512 x 512 ROI equals the same region of the full render within 1e-5;
+- the colour statistics of `film_grain_colour_statistics.hpp` still pass;
+- strength 0 runs no grain pass.
+
+**Timing.** Release, RTX 3080 Laptop, 6000 px: at most 4 ms for the grain at 35mm, at most 6 ms at 16mm. Record the old value on the
+same machine first.
+
+**Exit criteria.** The tests pass. The fit-view defect of section 5.2 is closed by the zoom test.
+
+**Completion record.** Pending.
+
+### G4: post grain on OpenCL and Metal
+
+**Objective and deliverables.** OpenCL and Metal give the G3 result.
+
+**Files.** `edit/runtime/opencl/shader/primary_grade_neighbor.cl`, `edit/runtime/opencl/opencl_gpu_dag_programs.cpp` (list
+`film_grain_field.h`), `edit/runtime/metal/shader/drt_neighbor.metal`, the Metal pass source.
+
+**Steps.** Port G3. On Metal, use `half4` for the noise and blur images and the sliding-window blur of the film print. On OpenCL,
+pass the per-channel weights in the per-render parameter upload (the 1024-byte argument limit of OpenCL 1.2).
+
+**Tests.** `GpuDagOpenClGradeTest` and `GpuDagMetalDrtTest`: the G3 statistics; the standard deviation against CUDA within 3 %.
+
+**Timing.** Metal, Apple M4, 6000 px: at most 15 ms (the old grain is 56.5 ms at 24 MP). OpenCL: at most 6 ms on the RTX 3080 Laptop.
+
+**Exit criteria.** The tests pass on Windows (OpenCL) and on the Mac (Metal). Check the free space of the Mac first.
+
+**Completion record.** Pending.
+
+### G5: grain in the negative on CUDA
+
+**Objective and deliverables.** With the film print, CUDA adds the grain to the dye amounts in FP6. The post Film Grain pass is
+skipped.
+
+**Files.** `edit/runtime/drt_post_schedule.cpp`, `edit/runtime/cuda/cuda_film_print_pass.cu`, `film_print_math.h`
+(`FilmKernelGrainAmounts`), `include/edit/runtime/film/film_print_kernel_tables.hpp` (the grain segments of the stock),
+`film_print_plan.cpp` (the grain plan joins the image plan).
+
+**Data rules.** The grain is added after the inhibitor step and before `FilmKernelFlareAmounts` and the table read, in the print,
+Negative Scan, and light table forms. For a reversal film, the grain is added to the dye amount `dye_max - record`. The noise image
+uses the halo rule, so an ROI equals the full frame.
+
+**Tests** (`GpuDagCudaDrtProductTest`, `FilmPrintImagePlan`, statistical):
+
+- the standard deviation of the dye amounts on a flat field, box-averaged to 48 um equivalent area, equals `sigma_a` of the stock
+  within 5 % at three densities, for 5207, 5219, Portra 400, and Velvia 50;
+- through Negative Scan of 5207, the channel correlation rg is within 0.05 of 0.661;
+- with strength 0, the output equals the film print without grain (no grain pass runs);
+- the post schedule skips Film Grain under the film print and keeps the stored value.
+
+**Timing.** Release, RTX 3080 Laptop, 6000 px: the film print with grain adds at most 3 ms.
+
+**Exit criteria.** The tests pass. The film print tests of F4 and F10 still pass with strength 0.
+
+**Completion record.** Pending.
+
+### G6: grain in the negative on OpenCL and Metal
+
+**Objective and deliverables.** OpenCL and Metal give the G5 result in all three forms.
+
+**Files.** `edit/runtime/opencl/opencl_film_print_pass.cpp`, `shader/film_print.cl`, `shader/film_print_scan.cl`,
+`edit/runtime/metal/metal_film_print_pass.mm`, `shader/film_print.metal`, `shader/film_print_scan.metal`.
+
+**Tests.** `GpuDagOpenClGradeTest` (`opencl_film_print_test.cpp`) and `GpuDagMetalDrtTest` (`metal_film_print_test.cpp`): the G5
+statistics, and the standard deviation against CUDA within 3 %.
+
+**Timing.** Metal, Apple M4, 6000 px: the film print with grain adds at most 10 ms.
+
+**Exit criteria.** The tests pass on both platforms.
+
+**Completion record.** Pending.
+
+### G7: the format sets the film print image plane
+
+Runs only when U2 is yes.
+
+**Objective and deliverables.** `MakeFilmPrintImagePlan` computes `pixel_um` from `FilmFrameLongSideMm(film_format)` in place of
+`constants.frame_mm`. The light spread, the halation, and the inhibitor then scale with the format.
+
+**Data rules.** `35mm` gives the same plan as today, because its frame is 36 mm. A change of `film_format` sets the dirty flag
+`FilmExposure`, so the halation and flare canvases are rebuilt.
+
+**Tests.** `FilmPrintImagePlan`: at `35mm` the plan equals the current plan exactly; at `16mm` the spread sigma in pixels is 36 / 12.52
+times the `35mm` value. `GpuDagCudaDrtProductTest`: a format change rebuilds the canvases once.
+
+**Exit criteria.** The tests pass. The lab expected values at `35mm` still pass.
+
+**Completion record.** Pending.
+
+### G8: measurements, user review, and documents
+
+**Objective and deliverables.** The timing record of all backends, the user review, and the grain section of the explanatory
+document.
+
+**Steps.**
+
+1. Record the Release timing of G3 to G6 in this plan.
+2. Render a review set from `sample_image/raw/` (no lab photos): one portrait, one landscape, and one low-light image, with 5207,
+   5219, Portra 400, Ektar 100, and Velvia 50, at 16mm, 35mm, and 70mm, at fit and at 100 %. The user reviews the set.
+3. Add a grain section to `film_simulation/film_simulation_explained.md`, with the parameter table and the sources.
+
+**Exit criteria.** The user accepts the review, or the review gives a slider default and no data change.
+
+**Completion record.** Pending.
+
+---
+
+## 9. Test rules for all phases
+
+- Grain tests are statistical. They use a fixed seed, a flat or ramp input, and expected values from the evaluator of G0 or from
+  the host formula. No stored pixels.
+- A tolerance names the quantity: the per-pixel standard deviation, the lag-1 correlation, the channel correlation, or the pattern
+  correlation.
+- A GPU test that runs a QML panel fails on a QTRY timeout (#526).
+- AMD OpenCL compile checks use the offline repro of the memory note when no AMD GPU is present.
+
+---
+
+## 10. Risks
+
+| Risk | Effect | Response |
+| --- | --- | --- |
+| No absolute anchor for the PGI films | Portra, Ektar, Gold, and Ultramax have a relative value only | G0 searches older sheets; else the recorded external value and the user review |
+| The 3200 dpi scan cannot resolve a 2 um cloud | `sigma_c` has a wide error | The fit uses the scanner MTF; the user can make an 8000 dpi Flextight scan of a 5207 frame for a second fit |
+| Grain in the negative moves the mean through the print curve | A small tone shift in the shadows of the print | G5 measures the mean shift on a grey ramp and records it |
+| The halo adds memory | One more float4 image at full size | The pool releases it at the end of the pass; Metal uses half4 |
+
+---
+
+## 11. Parameter table
+
+| Symbol | Meaning | Unit | Value | Source |
+| --- | --- | --- | --- | --- |
+| `sigma_48` | RMS granularity through the 48 um aperture | density | per stock, per layer, per density | datasheet |
+| `A_48` | Area of the 48 um aperture | um^2 | 1809.6 | definition |
+| `G` | Selwyn granularity | density um | `sigma_48 sqrt(A_48)` | derived |
+| `p` | Pixel pitch on the film | um | frame long side / image long side | derived |
+| `sigma_c` | Gaussian sigma of the dye cloud | um | start 2.0 (R, G), 2.8 (B) | literature, fit in G0 |
+| `I` | Pixel integral of the cloud and the pixel square | 1 / um | section 3.2 | derived |
+| `sigma_b` | Blur sigma in pixels | px | `sigma_c / p` | derived |
+| `w` | Discrete blur weights | none | sum 1 | derived |
+| `k` | Reference pixels summed per render pixel per axis | none | 1 to 4 | design |
+| `s_jk` | Channel `j` density of a unit of dye `k` | density | per stock | bundle dye spectra |
+| `sigma_a_k` | Standard deviation of the dye amount of layer `k` at 48 um | dye amount | per stock | solved in G0 |
+| `rho` | Variance share common to the three layers | none | 0 to 1 | fit in G0 |
+| PGI | Print Grain Index | index | per stock and magnification | Kodak datasheets |
+| 34.3 | PGI units per natural log of granularity | index | `2 / ln(1.06)` | E-58, US 5629769 |
+| frame | Frame long side | mm | 12.52, 36, 70 | U1 |
+| strength | Film Grain slider | none | 0 to 2; 1 is the datasheet | U3 |
+
+---
+
+## 12. References
+
+- Kodak, *Print Grain Index: An Assessment of Print Graininess from Color Negative Films*, publication E-58, July 2000.
+  [PDF](https://filmcolors.org/wp-content/uploads/2025/12/Kodak_Print-Grain-Index_E-58.pdf)
+- Kodak Gold 200 technical data, E-7022 (2022). [PDF](https://kodakprofessional.com/sites/default/files/wysiwyg/E7022-1.pdf)
+- Cookingham and Kane, *Apparatus and method for the measurement of grain in images*, US 5629769.
+  [Patent](https://patents.google.com/patent/US5629769)
+- Kodak and Fuji datasheets in `D:\Projects\spectral_film_lut\datasheets` (Vision3 50D, 200T, 250D, 500T; EXR 5248; ECN 5247;
+  Ektar 100; Portra 400; Kennel and Sehlin on 5293).
+- Jarvis, dye-cloud spread in C-41 coatings, J. Photogr. Sci. 40:105 (1992) and 43:136 (1995), as cited by fotufilm
+  `docs/film-grain.md`.
+- Wiener spectrum and dye-cloud size of colour negative film: J. Photogr. Sci., 1985 (cloud profile), 1995 and 1996 (noise spectrum
+  and dye diffusion). [1995](https://informahealthcare.com/doi/abs/10.1080/00223638.1995.11738635),
+  [1996](https://informahealthcare.com/doi/abs/10.1080/00223638.1996.11737647)
+- Jarzynski and Olano, *Hash Functions for GPU Rendering*, JCGT 9(3), 2020.
+- Giles, *Approximating the erfinv function*, GPU Computing Gems, 2010.
+- spektrafilm `model/grain.py` and `runtime/params_schema.py` (`film_format_mm`), fotufilm `FilmFormat.swift` and `FilmStock.swift`.
