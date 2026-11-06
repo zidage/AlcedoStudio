@@ -18,8 +18,9 @@
 
 namespace alcedo {
 
-/// Version of the film print resource files. The manifest and each array file state it.
-inline constexpr int kFilmResourceSchemaVersion = 10;
+/// Version of the film print resource files. The manifest and each array file state it. Version 11
+/// adds the film grain: `grain/<film>` and `common/grain_*` of the stock bundle.
+inline constexpr int kFilmResourceSchemaVersion = 11;
 
 /// Element type of an array in a @ref FilmArrayFile.
 enum class FilmArrayType { kF64, kF32, kI32, kI64, kU8 };

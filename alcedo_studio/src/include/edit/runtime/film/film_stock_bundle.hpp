@@ -83,6 +83,51 @@ struct FilmLightTableConstants {
   double                  surround_exponent = 1.0;  ///< On luminance in linear display light
 };
 
+/**
+ * @brief Three granularity curves of a film: one per layer or one per densitometer channel.
+ *
+ * Curve `k` has the nodes `x[k * stored_nodes + i]` and `sigma[k * stored_nodes + i]` for `i` below
+ * `node_count[k]`. The stored nodes past the count repeat the last node. A value outside the nodes
+ * takes the end value. @ref FilmStockBundle::Open checks that `x` rises, that `sigma` is above 0,
+ * and that each count is in [2, `FILM_GRAIN_CURVE_NODES`].
+ */
+struct FilmGrainCurveView {
+  std::span<const double>       x;           ///< (3, stored_nodes)
+  std::span<const double>       sigma;       ///< (3, stored_nodes)
+  std::span<const std::int32_t> node_count;  ///< (3)
+  std::int64_t                  stored_nodes = 0;
+};
+
+/// The grain values that are the same for all films (schema 11, `common/grain_*`).
+struct FilmGrainConstants {
+  std::span<const double> cloud_sigma_um;  ///< (3): sigma_c of the dye cloud of each layer
+  /// (3): rg, gb, and rb of the correlation of the unit fields of the layers (rule grain_layer_mix)
+  std::span<const double> layer_correlation;
+  /// (3) each, linear display, the target of the post path: 5207 on Endura Premier at 18 % grey
+  std::span<const double> post_display_value;
+  std::span<const double> post_display_sigma_48;
+  /// (3): rg, gb, and rb of the display channels of that print. The post path mixes with it.
+  std::span<const double> post_display_correlation;
+  double                  aperture_area_um2 = 0.0;  ///< A_48 of the datasheet aperture
+};
+
+/**
+ * @brief The grain data of one negative or colour reversal film (schema 11, `grain/<film>`).
+ *
+ * A view into the bundle: its spans and its tier text stay valid for the life of the bundle.
+ */
+struct FilmGrainStockView {
+  /// Standard deviation of the dye amount of each layer at the 48 um aperture, against the dye
+  /// amount. For a colour reversal film the amount is `dye_max - record`.
+  FilmGrainCurveView layer;
+  /// sigma_48 of each densitometer channel against the gross density of the read condition of the
+  /// source (Status M for a negative, Status A for a colour reversal film).
+  FilmGrainCurveView channel;
+  FilmGrainConstants common;
+  std::string_view   tier;  ///< `curve`, `number`, `family`, `pgi`, or `reversal`
+  bool               reversal = false;
+};
+
 /// One medium of rule 'generic_density_inversion' of Negative Scan (lab step P14).
 struct FilmScanMedium {
   std::string              id;     ///< `photo` or `cine`
@@ -296,6 +341,16 @@ class FilmStockBundle {
   [[nodiscard]] auto Film(std::string_view id) const -> FilmNegativeView;
   [[nodiscard]] auto LightTable() const -> const FilmLightTableConstants& { return light_table_; }
 
+  /**
+   * @brief The grain data of a negative or a colour reversal film. Every film of the bundle has
+   * one; @ref Open fails for a film with no grain group.
+   * @throws std::runtime_error that names @p id when the film is unknown.
+   */
+  [[nodiscard]] auto Grain(std::string_view id) const -> FilmGrainStockView;
+  [[nodiscard]] auto GrainConstants() const -> const FilmGrainConstants& {
+    return grain_constants_;
+  }
+
   /// Print material Negative Scan: its identifier and name from the metadata `negative_scan`. It is
   /// not in @ref PrintMaterials, because it has no print.
   [[nodiscard]] auto NegativeScan() const -> const FilmStockName& { return negative_scan_; }
@@ -371,6 +426,8 @@ class FilmStockBundle {
   void                       ReadLists();
   void                       ReadCommonValues();
   void                       ReadReflectance(const FilmArrayFile& file);
+  /// Reads `common/grain_*` and the tier of each film, and checks the group of each film.
+  void                       ReadGrain();
   void                       CheckShapes() const;
   void CheckExposureBand(std::string_view id, std::span<const double> exposure_weights) const;
   void ReadCctGrid();
@@ -397,6 +454,10 @@ class FilmStockBundle {
   /// Per negative, in the order of @ref negatives_: the medium and the balance light of the scan.
   std::vector<std::string>   negative_media_;
   std::vector<std::string>   negative_balance_lights_;
+  /// The grain tier of each negative, in the order of @ref negatives_, then of each reversal film,
+  /// in the order of @ref reversals_.
+  std::vector<std::string>   grain_tiers_;
+  FilmGrainConstants         grain_constants_;
   std::string                content_digest_;
   std::int64_t               reflectance_first_wavelength_ = 0;
   std::int64_t               reflectance_wavelengths_      = 0;

@@ -118,6 +118,36 @@ TEST(GpuDagAdjustmentRuntime, NativeViewportRoiKeepsFullReferenceNeighborhoodSiz
   EXPECT_EQ(roi.radius, full.radius);
 }
 
+// Plan 'film_grain_format_and_stock_plan.md', G1 step 5: the current post grain hashes the
+// reference pixel only for a render of the full edit space. A viewport ROI hashes its own render
+// coordinates (FilmReferenceCoordinate of the three backends returns (x, y) for flag 0), so its
+// grain pattern is not the pattern of the same region of the full frame. G3 replaces this.
+TEST(GpuDagAdjustmentRuntime, FilmGrainOfAViewportRoiHashesRenderCoordinates) {
+  FilmGrainModel grain;
+  grain.SetValue(0.5f);
+
+  ResolutionRequest preview;
+  preview.max_edge = 64;
+  const auto full  = MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain, MakeGeometry(256));
+  const auto fit   = MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain,
+                                             MakeGeometry(256, preview));
+
+  ViewRequest view;
+  view.visible_rect_in_edit_space = {0.25f, 0.25f, 0.5f, 0.5f};
+  view.viewport_extent            = {128, 128};
+  const auto roi_geometry         = MakeGeometry(256, {}, view);
+  const auto roi = MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain, roi_geometry);
+
+  EXPECT_EQ(full.use_reference_coordinates, 1U);
+  EXPECT_EQ(fit.use_reference_coordinates, 1U);
+  EXPECT_EQ(roi.use_reference_coordinates, 0U);
+  // The ROI starts at reference pixel 64, so its render pixel (0, 0) is reference pixel (64, 64),
+  // but the hash reads (0, 0).
+  EXPECT_NEAR(roi.render_to_reference[2], 64.0f, 1.0e-3f);
+  EXPECT_NEAR(roi.render_to_reference[5], 64.0f, 1.0e-3f);
+  EXPECT_EQ(roi.reference_width, 256);
+}
+
 class DtoOnlyExposureModel : public IOperatorModel {
  public:
   mutable int dto_reads = 0;

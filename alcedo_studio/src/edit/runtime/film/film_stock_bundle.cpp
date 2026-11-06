@@ -11,12 +11,17 @@
 #include <stdexcept>
 #include <utility>
 
+#include "edit/runtime/film/film_grain_field.h"
 #include "utils/hash/sha256.hpp"
 
 namespace alcedo {
 namespace {
 
 constexpr std::string_view kManifestFileName = "manifest.json";
+
+/// The source tiers of the grain data (plan 'film_grain_format_and_stock_plan.md', section 4.2).
+constexpr std::array<std::string_view, 5> kFilmGrainTiers{"curve", "number", "family", "pgi",
+                                                          "reversal"};
 
 [[noreturn]] void          FailFile(const std::filesystem::path& path, std::string_view reason) {
   throw std::runtime_error("Film print resource '" + FilmPathText(path) +
@@ -153,6 +158,49 @@ auto ReadCurves(const FilmArrayFile& stock, const Field& field, std::string_view
   };
 }
 
+/// The curves `grain/<id>/<x_name>` and `<sigma_name>` with the counts `<count_name>`.
+auto ReadGrainCurves(const FilmArrayFile& stock, std::string_view id, std::string_view x_name,
+                     std::string_view sigma_name, std::string_view count_name)
+    -> FilmGrainCurveView {
+  const auto shape = stock.Shape(ArrayName("grain", id, x_name));
+  if (shape.size() != 2 || shape[0] != 3 || shape[1] < 2) {
+    throw std::runtime_error("Film print resource: the grain curves '" + std::string(x_name) +
+                             "' of '" + std::string(id) + "' do not have the shape (3, n)");
+  }
+  return {
+      .x            = stock.F64(ArrayName("grain", id, x_name), {3, shape[1]}),
+      .sigma        = stock.F64(ArrayName("grain", id, sigma_name), {3, shape[1]}),
+      .node_count   = stock.I32(ArrayName("grain", id, count_name), {3}),
+      .stored_nodes = shape[1],
+  };
+}
+
+/// Each counted curve has 2 to FILM_GRAIN_CURVE_NODES nodes, a rising x, and a sigma above 0.
+void CheckGrainCurves(const FilmGrainCurveView& curves, std::string_view id,
+                      std::string_view group) {
+  const auto fail = [&](std::size_t layer, const std::string& reason) {
+    throw std::runtime_error("Film print resource: the grain curve '" + std::string(group) + "' " +
+                             std::to_string(layer) + " of '" + std::string(id) + "' " + reason);
+  };
+  for (std::size_t layer = 0; layer < 3; ++layer) {
+    const auto count = curves.node_count[layer];
+    if (count < 2 || count > curves.stored_nodes || count > FILM_GRAIN_CURVE_NODES) {
+      fail(layer, "has " + std::to_string(count) + " nodes");
+    }
+    const auto first = static_cast<std::size_t>(curves.stored_nodes) * layer;
+    for (std::size_t node = 0; node < static_cast<std::size_t>(count); ++node) {
+      const auto x     = curves.x[first + node];
+      const auto sigma = curves.sigma[first + node];
+      if (!std::isfinite(x) || !std::isfinite(sigma) || !(sigma > 0.0)) {
+        fail(layer, "has a node that is not finite or a sigma that is not above 0");
+      }
+      if (node > 0 && !(x > curves.x[first + node - 1])) {
+        fail(layer, "does not rise");
+      }
+    }
+  }
+}
+
 }  // namespace
 
 auto FilmStockBundle::Open(const std::filesystem::path& directory)
@@ -176,7 +224,84 @@ FilmStockBundle::FilmStockBundle(FilmArrayFile stock, FilmArrayFile setup,
   ReadCctGrid();
   ReadCommonValues();
   ReadReflectance(reflectance);
+  ReadGrain();
   CheckShapes();
+}
+
+void FilmStockBundle::ReadGrain() {
+  grain_constants_ = {
+      .cloud_sigma_um           = stock_.F64("common/grain_cloud_sigma_um", {3}),
+      .layer_correlation        = stock_.F64("common/grain_layer_correlation", {3}),
+      .post_display_value       = stock_.F64("common/grain_post_display_value", {3}),
+      .post_display_sigma_48    = stock_.F64("common/grain_post_display_sigma_48", {3}),
+      .post_display_correlation = stock_.F64("common/grain_post_display_correlation", {3}),
+      .aperture_area_um2        = stock_.F64("common/grain_aperture_area_um2", {})[0],
+  };
+  const auto& common      = grain_constants_;
+  const auto  above_zero  = [](double value) { return std::isfinite(value) && value > 0.0; };
+  const auto  correlation = [](double value) { return std::isfinite(value) && std::abs(value) < 1.0; };
+  if (!std::ranges::all_of(common.cloud_sigma_um, above_zero) ||
+      !std::ranges::all_of(common.post_display_value, above_zero) ||
+      !std::ranges::all_of(common.post_display_sigma_48, above_zero) ||
+      !above_zero(common.aperture_area_um2)) {
+    throw std::runtime_error(
+        "Film print resource: a cloud size, the aperture, or a post target of the grain is not "
+        "above 0");
+  }
+  if (!std::ranges::all_of(common.layer_correlation, correlation) ||
+      !std::ranges::all_of(common.post_display_correlation, correlation)) {
+    throw std::runtime_error(
+        "Film print resource: a correlation of the grain is not finite and inside (-1, 1)");
+  }
+
+  std::vector<std::string_view> films;
+  for (const auto& negative : negatives_) {
+    films.emplace_back(negative.id);
+  }
+  for (const auto& reversal : reversals_) {
+    films.emplace_back(reversal.id);
+  }
+  grain_tiers_.clear();
+  for (const auto id : films) {
+    if (!stock_.Contains(ArrayName("grain", id, "layer_amount"))) {
+      throw std::runtime_error("Film print resource: the film '" + std::string(id) +
+                               "' has no grain group");
+    }
+    std::string tier;
+    try {
+      tier = stock_.Metadata().at("grain").at(std::string(id)).at("tier").get<std::string>();
+    } catch (const nlohmann::json::exception& error) {
+      throw std::runtime_error("Film print resource: the grain metadata of '" + std::string(id) +
+                               "' is not valid: " + error.what());
+    }
+    if (std::ranges::find(kFilmGrainTiers, tier) == kFilmGrainTiers.end()) {
+      throw std::runtime_error("Film print resource: the grain tier '" + tier + "' of '" +
+                               std::string(id) + "' is unknown");
+    }
+    grain_tiers_.push_back(std::move(tier));
+    CheckGrainCurves(
+        ReadGrainCurves(stock_, id, "layer_amount", "layer_sigma_amount", "layer_node_count"), id,
+        "layer");
+    CheckGrainCurves(
+        ReadGrainCurves(stock_, id, "channel_density", "channel_sigma_48", "channel_node_count"),
+        id, "channel");
+  }
+}
+
+auto FilmStockBundle::Grain(std::string_view id) const -> FilmGrainStockView {
+  const bool reversal = IsReversal(id);
+  const auto index    = reversal ? static_cast<std::int64_t>(negatives_.size()) +
+                                    IndexOf(reversals_, id, "reversal film")
+                                 : IndexOf(negatives_, id, "film");
+  return {
+      .layer =
+          ReadGrainCurves(stock_, id, "layer_amount", "layer_sigma_amount", "layer_node_count"),
+      .channel = ReadGrainCurves(stock_, id, "channel_density", "channel_sigma_48",
+                                 "channel_node_count"),
+      .common   = grain_constants_,
+      .tier     = grain_tiers_[static_cast<std::size_t>(index)],
+      .reversal = reversal,
+  };
 }
 
 void FilmStockBundle::ReadLists() {

@@ -2,7 +2,8 @@
 
 Date: 2026-11-05
 
-Status: **In progress.** G0 is complete in the lab ([alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2)). The user approved the plan and closed decisions U1 to U4 on
+Status: **In progress.** G0 is complete in the lab ([alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2)). G1 is complete
+(2026-11-05): the host plan, the shared grain math, and the bundle schema 11. The user approved the plan and closed decisions U1 to U4 on
 2026-11-05 (section 2.3). Section 2.4 states the compatibility requirement of the user. The G0 results changed some designs of
 this plan; the sections below hold the changed form, and the G0 completion record lists each change.
 
@@ -337,8 +338,9 @@ reference pixel (`FilmReferenceCoordinate`, nearest pixel). So the fit view show
 2.8 times its amplitude, and about 4 times the amplitude of the full image downscaled to the same size. Phase G3 removes this.
 Issue [#674](https://github.com/zidage/AlcedoStudio/issues/674) records it.
 
-Inference to check in G1: `use_reference_coordinates` is `CoversFullEditSpace(geometry)`. A render that does not cover the full edit
-space then hashes render coordinates. G1 confirms the ROI behavior with a test before G3 changes it.
+ROI behavior, confirmed in G1: `use_reference_coordinates` is `CoversFullEditSpace(geometry)`. A render that does not cover the full
+edit space hashes its render coordinates, so a zoomed view has another grain pattern than the same region of the full frame, and the
+pattern stays on the screen on a pan. Issue [#687](https://github.com/zidage/AlcedoStudio/issues/687) records it; G3 removes it.
 
 ---
 
@@ -364,10 +366,12 @@ Proposed: `include/edit/runtime/film_grain_plan.hpp`, `edit/runtime/film_grain_p
 
 ```text
 MakeFilmGrainPlan(const ResolvedRenderGeometry& geometry, FilmFormat format,
-                  const FilmGrainStockView& stock, float strength) -> FilmGrainPlan
+                  const FilmGrainStockView& stock, FilmGrainTarget target,
+                  float strength) -> FilmGrainPlan
 ```
 
-- Input: the render geometry, the format, the grain data of the stock (or of 5207), and the slider value.
+- Input: the render geometry, the format, the grain data of the stock (or of 5207), the target (`Post` or `Negative`), and the
+  slider value. The target selects the curves (channel or layer) and the correlation (display or layer) of the plan.
 - Output, a value type that the compile step copies into the kernel parameters:
   - `reference_pitch_um` and `render_pitch_um`;
   - `aggregate` k: `clamp(round(1 / render_scale), 1, 4)`; 1 for a render scale of 1 or more;
@@ -390,7 +394,8 @@ program, Metal includes it by relative path, CUDA through a `.cuh` wrapper):
 - `FilmGrainHash3(uint x, uint y, uint seed) -> uint3`: pcg3d, the 32-bit hash of Jarzynski and Olano (JCGT 9(3), 2020). One call
   gives three channels.
 - `FilmGrainGaussian(uint bits) -> float`: the inverse normal CDF of Giles (2010), single precision.
-- `FilmGrainLayerSigma(stock segments, layer, amount) -> float`: the per-stock curve.
+- `FilmGrainCurveSigma(FilmGrainCurve curve, float value) -> float`: the per-stock curve. `FilmGrainCurve` holds the first sigma
+  and 15 segments (start, inverse width, change); a segment past the counted nodes adds 0.
 
 Passes, for each render:
 
@@ -474,7 +479,7 @@ closed by G3.
 | Phase | Issue | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | --- | ---: | --- |
 | G0 | [#675](https://github.com/zidage/AlcedoStudio/issues/675) | Grain data, fits, and reference evaluator in the lab | alcedo-film-lab | none | 1500 (lab) | Complete ([alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2)) |
-| G1 | [#676](https://github.com/zidage/AlcedoStudio/issues/676) | Host plan, shared math, bundle schema 11 | `edit/runtime`, `edit/runtime/film` | G0 | 1100 | Planned |
+| G1 | [#676](https://github.com/zidage/AlcedoStudio/issues/676) | Host plan, shared math, bundle schema 11 | `edit/runtime`, `edit/runtime/film` | G0 | 1100 | Complete (1605 lines) |
 | G2 | [#677](https://github.com/zidage/AlcedoStudio/issues/677) | `film_format`, slider range, panels, catalogs, compatibility tests | `edit/graph`, `app`, `ui` | G1 | 1300 | Planned |
 | G3 | [#678](https://github.com/zidage/AlcedoStudio/issues/678) | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Planned |
 | G4 | [#679](https://github.com/zidage/AlcedoStudio/issues/679) | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | Planned |
@@ -594,7 +599,113 @@ In `FilmPrintTablesTest`: every stock has a grain view; a schema 10 bundle fails
 
 **Exit criteria.** The tests pass in the debug build. No GPU file changed.
 
-**Completion record.** Pending.
+**Completion record.** Complete 2026-11-05, branch `feature/film-grain-host-plan`, stacked on the plan branch
+`docs/film-grain-format-plan`. No GPU file changed.
+
+Files: `include/edit/graph/film_format.hpp` (`FilmFormat`, `FilmFormatId`, `TryParseFilmFormat`, `FilmFrameLongSideMm`),
+`include/edit/runtime/film/film_grain_field.h` (`FilmGrainHash3`, `FilmGrainGaussian`, `FilmGrainCurve`, `FilmGrainCurveSigma`),
+`include/edit/runtime/film_grain_plan.hpp` and `edit/runtime/film_grain_plan.cpp` (`MakeFilmGrainPlan` and its rules),
+`film_stock_bundle.hpp/.cpp` (`FilmGrainStockView`, `FilmGrainConstants`, `FilmStockBundle::Grain`, `GrainConstants`, the checks of
+`ReadGrain`), `film_array_file.hpp` (`kFilmResourceSchemaVersion` 11).
+
+Details that the plan did not give, chosen in G1:
+
+- Pixel integral: the closed form of the lab evaluator, which is exact. The data rule "a fixed quadrature of at least 2000 points"
+  is the check: a composite Simpson rule of 20000 intervals of the frequency form agrees within 1e-6 for sigma_c 1 to 4 um and p 1
+  to 60 um.
+- `MakeFilmGrainPlan` has the parameter `FilmGrainTarget` (section 6.2): `Post` reads the channel curves and the display
+  correlation, `Negative` the layer curves and the layer correlation. The plan holds the values in double precision; the compile
+  step of G3 and G5 converts them to the kernel parameters.
+- The render scale is the mean of the two axis scales, as `NeighborhoodRenderScale` of the current post grain. The aggregate k
+  rounds half to even, as the lab (Python `round`).
+- `FilmGrainGaussian` reads the 23 high bits of the hash: u = (k + 0.5) / 2^23 is exact in single precision, so 1 - u is exact, and
+  the tails end at about 5.3.
+- A curve is literal segments of start, inverse width, and change, so a padded node adds 0 and no division happens per pixel.
+- `FilmStockBundle::Open` checks the grain data: each negative and reversal film has a group and a known tier; each counted curve
+  has 2 to 16 nodes, a rising x, and a sigma above 0; the cloud sizes, the aperture, and the post target are above 0; each
+  correlation is inside (-1, 1). `MakeFilmGrainPlan` checks that each correlation matrix has a Cholesky factor.
+
+Step 5 result: the inference of section 5.1 is correct. Test `FilmGrainOfAViewportRoiHashesRenderCoordinates` shows the flag
+`use_reference_coordinates` 1 for the full frame and the fit view, and 0 for a ROI whose render pixel (0, 0) is reference pixel
+(64, 64). `FilmReferenceCoordinate` returns `(x, y)` for flag 0 (`cuda_neighbor_grade.cuh:87`, `primary_grade_neighbor.cl:109`,
+`drt_neighbor.metal:123`). Issue [#687](https://github.com/zidage/AlcedoStudio/issues/687).
+
+Lab outputs: G0 rebuilt the resources and `grain__expected.bin` at schema 11, but `expected/display/` and `expected/image/` stayed at
+schema 10. G1 rebuilt both at lab commit `a3356a8` (`build_display_expected.py`, 1 min; `build_image_expected.py
+_DSC8148.ARW`, 8.5 min). All 105 expected files now state schema 11. Their values do not depend on the grain; only the schema version in the header changes.
+
+Primary success call chain:
+
+```text
+FilmStockBundle::Open(directory)
+  -> ReadManifest (schema 11) -> ReadResource x 3 (size, SHA-256)
+  -> FilmStockBundle ctor -> ReadLists -> ReadCctGrid -> ReadCommonValues -> ReadReflectance
+  -> ReadGrain: common/grain_* -> per film: metadata grain/<id>/tier, ReadGrainCurves, CheckGrainCurves
+  -> CheckShapes -> read-only bundle
+FilmStockBundle::Grain(id) -> FilmGrainStockView (spans into the bundle, tier, reversal flag)
+MakeFilmGrainPlan(geometry, format, view, target, strength)
+  -> FilmFrameLongSideMm(format) -> reference_pitch_um = frame * 1000 / long side of the full reference
+  -> render_scale (RenderAxisScale, two axes) -> render_pitch_um, Aggregate (grain_aggregate)
+  -> per layer MakeFilmGrainLayerKernel: MatchedSigmaB (grain_kernel bisection of FilmGrainPixelLag1),
+     GaussianKernel, weight_square_sum, FilmGrainPixelIntegral -> pixel_factor, amplitude
+  -> CorrelationCholesky (layer or display correlation) -> mix
+  -> MakeFilmGrainCurve x 3 (layer or channel curves) -> FilmGrainPlan (value type)
+```
+
+Primary failure call chain:
+
+```text
+Bundle of schema 10
+  -> ReadManifest: "Film print resource '.../manifest.json': schema version 10 is not version 11"
+  -> Open throws std::runtime_error; no partial bundle stays in memory
+Film with no grain group, an unknown tier, or a damaged curve
+  -> ReadGrain throws std::runtime_error that names the film and the reason ("'rev_a' has no grain group",
+     "does not rise", "has 1 nodes", "tier 'guess'")
+Format outside the enum, strength outside [0, 2], empty reference extent, curve outside 2..16 nodes,
+cloud size not above 0, correlation with no Cholesky factor
+  -> MakeFilmGrainPlan throws std::invalid_argument that names the field; it changes no state
+```
+
+What was proven (executed tests, debug build):
+
+| Required name / criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Amplitude for the table of section 3.2 within 1 % | `FilmGrainPlan.PixelSigmaOfTheGreenLayerMatchesTheTableOfThePlan`, `SmallerFrameGivesLargerGrainAtTheSameViewSize` | `GpuDagRawInputTest` | PASS |
+| Selwyn's law at 500 um within 1 %; `I p` 0.955 at 50 um | `FilmGrainPlan.SelwynLawHoldsForALargePixel` | `GpuDagRawInputTest` | PASS |
+| Quadrature of at least 2000 points | `FilmGrainPlan.PixelIntegralEqualsTheQuadratureOfTheFrequencyForm` | `GpuDagRawInputTest` | PASS |
+| `sigma_b`, weights, pixel factor, lag-1 against `grain__expected.bin` within 1e-6 | `FilmGrainPlanLabTest.KernelAndPixelFactorMatchTheLabEvaluator`, `FilmGrainPlan.KernelWeightsSumToOneAndGiveTheLag1OfThePixelField` | `GpuDagRawInputTest` | PASS |
+| Aggregate k 1, 2, 3, 4 for render scales 1, 0.5, 0.3, 0.1 | `FilmGrainPlan.AggregateFollowsTheRenderScale`, `FilmGrainPlanLabTest.AggregateAndMixMatchTheLabEvaluator` | `GpuDagRawInputTest` | PASS |
+| L of the layer and the display correlation | `FilmGrainPlanLabTest.AggregateAndMixMatchTheLabEvaluator`, `FilmGrainPlan.TargetSelectsTheCurvesAndTheCorrelation` | `GpuDagRawInputTest` | PASS |
+| Stock curves of 5207, 5219, Portra 400, Velvia 50 give the lab sigma at grey | `FilmGrainPlanLabTest.PlanOfEachPrintStockGivesTheLabPixelSigmaAtGrey` | `GpuDagRawInputTest` | PASS |
+| Curve segments, strength 0, field-named errors | `FilmGrainPlan.CurveSegmentsReproduceTheNodesAndHoldTheEndValues`, `StrengthZeroDisablesThePlanAndKeepsItsValues`, `InvalidInputThrowsWithTheNameOfTheField`, `FilmFormatTest.IdentifiersAndFrameSizesFollowDecisionU1` | `GpuDagRawInputTest` | PASS |
+| Gaussian of 10^6 hashes: mean, standard deviation, kurtosis | `FilmGrainField.GaussianOfAMillionHashesHasUnitMomentsAndNormalKurtosis` | `GpuDagRawInputTest` | PASS |
+| Neighbour hashes: correlation below 0.005 | `FilmGrainField.NeighbourHashesAndChannelsAreUncorrelated` | `GpuDagRawInputTest` | PASS |
+| Inverse normal and hash identity | `FilmGrainField.GaussianIsTheInverseNormalDistribution`, `HashIsAFunctionOfTheCoordinatesAndTheSeed` | `GpuDagRawInputTest` | PASS |
+| Step 5, ROI hash coordinates | `GpuDagAdjustmentRuntime.FilmGrainOfAViewportRoiHashesRenderCoordinates` | `GpuDagRawInputTest` | PASS |
+| Every stock has a grain view | `FilmPrintTablesTest.EveryFilmHasAGrainViewWithItsTierAndCurves`, `FilmPrintTablesLabTest.EveryShippedFilmHasAGrainViewOfItsTier` (35 films: 8 curve, 9 number, 6 family, 7 pgi, 5 reversal) | `FilmPrintTablesTest` | PASS |
+| A schema 10 bundle fails with the version in the message | `FilmPrintTablesTest.BundleOfSchema10FailsWithTheFoundVersionInTheMessage` | `FilmPrintTablesTest` | PASS |
+| Damaged grain data fails with the film and the reason | `FilmPrintTablesTest.FilmWithNoGrainGroupThrowsWithItsName`, `DamagedGrainDataThrowsWithTheFilmAndTheReason` | `FilmPrintTablesTest` | PASS |
+
+Commands (PowerShell, repository root):
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagRawInputTest FilmPrintTablesTest --parallel 6
+build\debug\alcedo_studio\tests\edit\GpuDagRawInputTest_runtime\GpuDagRawInputTest.exe
+  --gtest_filter="FilmGrainPlan*:FilmGrainField*:FilmFormatTest*:FilmGrainMath*:GpuDagAdjustmentRuntime*:FilmPrintImagePlan*"
+build\debug\alcedo_studio\tests\edit\FilmPrintTablesTest_runtime\FilmPrintTablesTest.exe
+```
+
+Suite totals: `GpuDagRawInputTest` with the filter above 51 / 51 (the existing `FilmGrainMath`, `GpuDagAdjustmentRuntime`, and
+`FilmPrintImagePlan` suites are included); `FilmPrintTablesTest` 72 / 72, with the lab values configured (no skip).
+
+Checklist / exit condition: steps 1 to 5 done; the tests of the section pass in the debug build; no GPU file changed.
+
+LOC note: 12 files, 1605 added lines. `film_grain_plan.cpp` 245, `film_grain_plan_test.cpp` 599, `film_stock_bundle.cpp` 846. The
+test file `film_print_tables_test.cpp` was 2506 lines before G1 and is 2678 now; its grain tests use the fixture of the file, so G1
+kept them there.
+
+Remaining gaps: none for G1. G2 adds `film_format` to the document; G3 to G6 read the plan in the kernels.
 
 ### G2: format field, slider range, panels, and catalogs
 
