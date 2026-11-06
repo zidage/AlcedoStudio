@@ -121,6 +121,11 @@ struct EditorPanelInputProfileValue {
   std::string referral;
 };
 
+/// The film format of the DRT node, as its document identifier (`16mm`, `35mm`, or `70mm`).
+struct EditorPanelFilmFormatValue {
+  std::string film_format = "35mm";
+};
+
 struct EditorPanelGeometryValue {
   NormalizedRect  crop_rect{};
   float           rotation_degrees = 0.0f;
@@ -133,7 +138,7 @@ using EditorPanelFieldValue =
                  EditorPanelCurveValue, EditorPanelHlsValue, EditorPanelColorWheelValue,
                  EditorPanelColorTempValue, EditorPanelRawDecodeValue, EditorPanelOdtValue,
                  EditorPanelLensValue, EditorPanelGeometryValue, EditorPanelGradeWhiteBalanceValue,
-                 EditorPanelInputProfileValue>;
+                 EditorPanelInputProfileValue, EditorPanelFilmFormatValue>;
 
 /**
  * @brief One panel field copied from a Graph Node Model.

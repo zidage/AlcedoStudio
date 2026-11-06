@@ -330,7 +330,8 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
     return result;
   }
 
-  result.amount  = std::clamp(scalar, 0.0f, 1.0f) / 3.0f;
+  // The grain is linear in the amount, so the full slider range (0 to 2) scales it.
+  result.amount  = std::clamp(scalar, FilmGrainTraits::kMin, FilmGrainTraits::kMax) / 3.0f;
   result.enabled = result.amount > 0.0f ? 1U : 0U;
   result.sigma_x = kFilmGrainDyeCloudSigma * render_scale;
   result.sigma_y = result.sigma_x;

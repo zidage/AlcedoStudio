@@ -32,6 +32,7 @@
 #include "edit/geometry/crop_frame.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/film_print_model.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
@@ -143,7 +144,7 @@ TEST(EditorParameterCatalogTest, ScalarRangesMatchPreviousPanelSliders) {
       {"white", "tone", -100.0, 100.0, 1.0, 0},      {"black", "tone", -100.0, 100.0, 1.0, 0},
       {"saturation", "look", -100.0, 100.0, 1.0, 0}, {"vibrance", "look", -100.0, 100.0, 1.0, 0},
       {"diffusion", "post", 0.0, 100.0, 1.0, 0},     {"clarity", "post", -100.0, 100.0, 1.0, 0},
-      {"sharpen", "post", 0.0, 100.0, 1.0, 0},       {"film_grain", "post", 0.0, 100.0, 1.0, 0},
+      {"sharpen", "post", 0.0, 100.0, 1.0, 0},       {"film_grain", "post", 0.0, 200.0, 1.0, 0},
       {"halation", "post", 0.0, 100.0, 1.0, 0},
   };
   for (const auto& test_case : cases) {
@@ -204,7 +205,7 @@ TEST(EditorParameterCatalogTest, OutOfRangeValueIsRejectedWithRange) {
 
   error.clear();
   EXPECT_FALSE(UiToModelJson("film_grain", -1.0, &error).has_value());
-  EXPECT_EQ(error, "film_grain must be in [0, 100]");
+  EXPECT_EQ(error, "film_grain must be in [0, 200]");
 
   // The range limits themselves are valid values.
   EXPECT_TRUE(UiToModelJson("saturation", -100.0).has_value());
@@ -358,6 +359,7 @@ TEST(EditorParameterCatalogTest, ObjectFieldsAreKnownFieldKeysWithPanels) {
       {"grade_white_balance", "look"},
       {"hls", "look"},
       {"color_wheel", "look"},
+      {"film_format", "post"},
   };
   std::set<std::pair<std::string, std::string>> listed;
   for (const auto& entry : EditorParameterCatalog::Entries()) {
@@ -459,6 +461,53 @@ TEST(EditorParameterCatalogTest, InputProfileOptionsAreTheDevelopOverrides) {
   EXPECT_EQ(error,
             "input_profile.profile_override must be one of: auto, srgb, display_p3, adobe_rgb, "
             "rec2020, prophoto, linear_rec709");
+}
+
+TEST(EditorParameterCatalogTest, FilmGrainRangeIsTwiceTheDatasheetGranularity) {
+  // Plan 'film_grain_format_and_stock_plan.md', decision U3: 100 % is the datasheet granularity,
+  // and the slider goes to 200 %. A stored value of a document made before the change (0 to 1)
+  // reads in range and is not changed.
+  const auto model = UiToModelJson("film_grain", 200.0);
+  ASSERT_TRUE(model.has_value());
+  EXPECT_NEAR(model->at("strength").get<double>(), 2.0, kRoundTripTolerance);
+  std::string error;
+  for (const double stored : {0.0, 0.3, 0.6, 1.0}) {
+    const auto ui = EditorParameterCatalog::ToUiValue("film_grain", {{"strength", stored}}, &error);
+    ASSERT_TRUE(ui.has_value()) << error;
+    EXPECT_NEAR(ui->get<double>(), stored * 100.0, kRoundTripTolerance);
+  }
+  EXPECT_FALSE(UiToModelJson("film_grain", 201.0).has_value());
+}
+
+TEST(EditorParameterCatalogTest, FilmFormatOptionsAreTheThreeFormatsWithDefault35mm) {
+  const auto* entry = EditorParameterCatalog::Find("film_format");
+  ASSERT_NE(entry, nullptr);
+  EXPECT_EQ(entry->kind, EditorParameterValueKind::Object);
+  EXPECT_EQ(entry->panel, "post");
+  ASSERT_EQ(entry->properties.size(), 1U);
+  EXPECT_EQ(entry->properties[0].name, "film_format");
+  ASSERT_EQ(entry->properties[0].options.size(), 3U);
+  // The options are the document identifiers of the formats, in menu order.
+  const FilmFormat formats[] = {FilmFormat::Film16mm, FilmFormat::Film35mm, FilmFormat::Film70mm};
+  for (std::size_t index = 0; index < 3; ++index) {
+    EXPECT_EQ(entry->properties[0].options[index].value, FilmFormatId(formats[index]));
+    EXPECT_EQ(entry->properties[0].options[index].label, FilmFormatId(formats[index]));
+  }
+  EXPECT_EQ(EditorParameterCatalog::UiDefault(*entry), (nlohmann::json{{"film_format", "35mm"}}));
+  std::string error;
+  const auto  model = EditorParameterCatalog::ToModelJson("film_format", {{"film_format", "16mm"}},
+                                                          nlohmann::json{}, &error);
+  ASSERT_TRUE(model.has_value()) << error;
+  EXPECT_EQ(*model, (nlohmann::json{{"film_format", "16mm"}}));
+  // The panel projection wraps the value in the field key.
+  const auto ui = EditorParameterCatalog::ToUiValue(
+      "film_format", {{"film_format", {{"film_format", "70mm"}}}}, &error);
+  ASSERT_TRUE(ui.has_value()) << error;
+  EXPECT_EQ(*ui, (nlohmann::json{{"film_format", "70mm"}}));
+  EXPECT_FALSE(EditorParameterCatalog::ToModelJson("film_format", {{"film_format", "8mm"}},
+                                                   nlohmann::json{}, &error)
+                   .has_value());
+  EXPECT_EQ(error, "film_format.film_format must be one of: 16mm, 35mm, 70mm");
 }
 
 TEST(EditorParameterCatalogTest, LensDefaultsMergeMakerAndModel) {

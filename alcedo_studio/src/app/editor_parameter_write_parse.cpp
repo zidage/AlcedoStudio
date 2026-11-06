@@ -18,6 +18,7 @@
 
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/image_geometry_model.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
@@ -482,6 +483,21 @@ auto ParseInputProfileUpdate(const nlohmann::json& params) -> DevelopInputProfil
   return DevelopInputProfileUpdate{std::move(*value)};
 }
 
+/// `{"film_format": "16mm"}`, or `{"value": "16mm"}` from an enum control.
+auto ParseFilmFormatUpdate(const nlohmann::json& params) -> DrtFilmFormatUpdate {
+  RequireObject(params, "film_format");
+  RejectUnknownKeys(params, {"film_format", "value", "index"}, "film_format");
+  auto value = ReadOptionalString(params, {"film_format"}, "film_format");
+  if (!value.has_value()) {
+    value = ReadOptionalString(params, {"value"}, "film_format");
+  }
+  const auto format = value.has_value() ? TryParseFilmFormat(*value) : std::optional<FilmFormat>{};
+  if (!format.has_value()) {
+    throw std::invalid_argument("film_format must be one of 16mm, 35mm, 70mm");
+  }
+  return DrtFilmFormatUpdate{*format};
+}
+
 auto ParseLensCalibrationUpdate(const nlohmann::json& params) -> DevelopLensCalibrationUpdate {
   const auto& object = UnwrapObject(params, {"lens_calib"}, "lens_calib");
   RejectUnknownKeys(object,
@@ -893,6 +909,9 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, Par
   }
   if (field == "diffusion") {
     return ParseScalarWrite(params, field, "strength");
+  }
+  if (field == "film_format") {
+    return ParseFilmFormatUpdate(params);
   }
   if (field == "curve") {
     return ParseCurveWrite(params);

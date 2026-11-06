@@ -37,6 +37,8 @@
 #include <vector>
 
 #include "app/editor_panel_projection.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/film_print_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
@@ -76,8 +78,8 @@ class DisplayTransformSession final : public QObject, public IEditorAdjustmentSu
   }
   auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
       -> bool override {
-    static_cast<void>(fieldKey);
-    static_cast<void>(settled);
+    field_keys_.push_back(std::move(fieldKey));
+    settled_.push_back(settled);
     writes_.push_back(std::move(write));
     ++submit_count_;
     return true;
@@ -101,6 +103,8 @@ class DisplayTransformSession final : public QObject, public IEditorAdjustmentSu
   auto canEdit() const -> bool override { return true; }
   auto submitCount() const -> int { return submit_count_; }
   auto writes() const -> const std::vector<alcedo::EditorParameterWrite>& { return writes_; }
+  auto fieldKeys() const -> const std::vector<QString>& { return field_keys_; }
+  auto settled() const -> const std::vector<bool>& { return settled_; }
 
  signals:
   void AdjustmentSnapshotChanged();
@@ -112,6 +116,8 @@ class DisplayTransformSession final : public QObject, public IEditorAdjustmentSu
   int                                       submit_count_ = 0;
   QString                                   active_panel_ = QStringLiteral("display");
   std::vector<alcedo::EditorParameterWrite> writes_;
+  std::vector<QString>                      field_keys_;
+  std::vector<bool>                         settled_;
 };
 
 auto QmlDirectory() -> QString {
@@ -1397,6 +1403,121 @@ TEST(EditorDisplayTransformSnapshotQmlTest,
   session.setAdjustmentSnapshot(open_drt);
   ASSERT_TRUE(WaitFor([&] { return slider->isVisible(); }));
   EXPECT_DOUBLE_EQ(model->property("value").toDouble(), stored);
+  EXPECT_EQ(session.submitCount(), 0);
+}
+
+/// The panel snapshot of a film print document of Kodak 5207 on 2383 with the format @p format.
+auto FilmFormatSnapshot(alcedo::FilmFormat format) -> QVariantMap {
+  auto                       document = alcedo::CreateDefaultPipelineDocument();
+  alcedo::DrtParameterUpdate update;
+  update.method              = alcedo::DrtMethod::FilmPrint;
+  update.film_negative       = std::string{"kodak_5207"};
+  update.film_print_material = std::string{"kodak_2383"};
+  document.Drt()->Params().ApplyUpdate(update);
+  document.Drt()->Params().ApplyFilmFormat(format);
+  return ProjectedSnapshot(document);
+}
+
+// Plan 'film_grain_format_and_stock_plan.md', sections 7.1 and 7.2: the Post Processing page and
+// the Display Transform page show the same stored film format.
+TEST(EditorDisplayTransformSnapshotQmlTest, FilmFormatSelectorsOfBothPagesShowTheStoredFormat) {
+  DisplayTransformSession session(FilmFormatSnapshot(alcedo::FilmFormat::Film16mm), 0);
+  session.setActiveAdjustmentPanel(QStringLiteral("post"));
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* post_model =
+      harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("postFilmFormatModel"));
+  auto* post_control = harness.findModel<QQuickItem>(QStringLiteral("postFilmFormatControl"));
+  ASSERT_NE(post_model, nullptr);
+  ASSERT_NE(post_control, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return post_model->currentValue() == QStringLiteral("16mm"); }));
+  EXPECT_EQ(post_control->property("currentValue").toString(), QStringLiteral("16mm"));
+  EXPECT_TRUE(post_control->isVisible());
+  const auto entries = post_model->entries();
+  ASSERT_EQ(entries.size(), 3);
+  EXPECT_EQ(entries[0].toMap().value("value").toString(), QStringLiteral("16mm"));
+  EXPECT_EQ(entries[1].toMap().value("value").toString(), QStringLiteral("35mm"));
+  EXPECT_EQ(entries[2].toMap().value("value").toString(), QStringLiteral("70mm"));
+  EXPECT_EQ(post_model->defaultIndex(), 1);
+
+  session.setActiveAdjustmentPanel(QStringLiteral("display"));
+  auto* display_model = static_cast<EditorAdjustmentEnumModel*>(nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    display_model =
+        harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayFilmFormatModel"));
+    return display_model != nullptr && display_model->currentValue() == QStringLiteral("16mm");
+  }));
+  auto* display_control = harness.findModel<QQuickItem>(QStringLiteral("displayFilmFormatControl"));
+  ASSERT_NE(display_control, nullptr);
+  EXPECT_EQ(display_control->property("currentValue").toString(), QStringLiteral("16mm"));
+
+  // A new projection moves both selectors and writes nothing.
+  session.setAdjustmentSnapshot(FilmFormatSnapshot(alcedo::FilmFormat::Film70mm));
+  ASSERT_TRUE(WaitFor([&] { return display_model->currentValue() == QStringLiteral("70mm"); }));
+  session.setActiveAdjustmentPanel(QStringLiteral("post"));
+  ASSERT_TRUE(WaitFor([&] {
+    post_model =
+        harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("postFilmFormatModel"));
+    return post_model != nullptr && post_model->currentValue() == QStringLiteral("70mm");
+  }));
+  EXPECT_EQ(session.submitCount(), 0);
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, FilmFormatSelectionWritesOneSettledFilmFormatWrite) {
+  for (const auto* panel : {"post", "display"}) {
+    SCOPED_TRACE(panel);
+    DisplayTransformSession session(FilmFormatSnapshot(alcedo::FilmFormat::Film35mm), 0);
+    session.setActiveAdjustmentPanel(QString::fromLatin1(panel));
+    AdjustmentStackHarness harness(&session);
+    ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+    const auto prefix  = QString::fromLatin1(panel);
+    auto*      model   = harness.findModel<EditorAdjustmentEnumModel>(prefix + "FilmFormatModel");
+    auto*      control = harness.findModel<QQuickItem>(prefix + "FilmFormatControl");
+    ASSERT_NE(model, nullptr);
+    ASSERT_NE(control, nullptr);
+    ASSERT_TRUE(WaitFor([&] { return model->currentValue() == QStringLiteral("35mm"); }));
+
+    // The selection of a segment, as a click gives it.
+    ASSERT_TRUE(QMetaObject::invokeMethod(control, "selected", Q_ARG(int, 0),
+                                          Q_ARG(QString, QStringLiteral("16mm"))));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    ASSERT_EQ(session.submitCount(), 1);
+    EXPECT_EQ(session.fieldKeys().back(), QStringLiteral("film_format"));
+    EXPECT_TRUE(session.settled().back());
+    const auto* write = std::get_if<alcedo::DrtFilmFormatUpdate>(&session.writes().back());
+    ASSERT_NE(write, nullptr);
+    EXPECT_EQ(write->format, alcedo::FilmFormat::Film16mm);
+    EXPECT_EQ(control->property("currentValue").toString(), QStringLiteral("16mm"));
+
+    // The selected segment again writes nothing.
+    ASSERT_TRUE(QMetaObject::invokeMethod(control, "selected", Q_ARG(int, 0),
+                                          Q_ARG(QString, QStringLiteral("16mm"))));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    EXPECT_EQ(session.submitCount(), 1);
+  }
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, FilmGrainCaptionNamesTheFilmOfItsGranularity) {
+  DisplayTransformSession session(MakeOpenDrtSnapshot(), 0);
+  session.setActiveAdjustmentPanel(QStringLiteral("post"));
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* caption = harness.findModel<QQuickItem>(QStringLiteral("postFilmGrainStockCaption"));
+  auto* grain = harness.findModel<EditorAdjustmentValueModel>(QStringLiteral("postFilmGrainModel"));
+  ASSERT_NE(caption, nullptr);
+  ASSERT_NE(grain, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    return caption->property("text").toString() ==
+           QStringLiteral("Granularity of Kodak Vision3 250D 5207");
+  }));
+  // 100 % is the datasheet granularity; the slider goes to 200 % (decision U3).
+  EXPECT_DOUBLE_EQ(grain->maximum(), 200.0);
+
+  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot());
+  ASSERT_TRUE(WaitFor([&] {
+    return caption->property("text").toString() ==
+           QStringLiteral("Granularity of Kodak Portra 400");
+  })) << caption->property("text").toString().toStdString();
   EXPECT_EQ(session.submitCount(), 0);
 }
 

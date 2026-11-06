@@ -254,6 +254,7 @@ Item {
         filmScannerGreenModel.enabled = on
         filmScannerBlueModel.enabled = on
         filmScannerWidthModel.enabled = on
+        filmFormatModel.enabled = on
     }
 
     /// Apply declared defaultIndex / defaultValue before any snapshot load so the
@@ -288,6 +289,7 @@ Item {
         filmScannerGreenModel.value = filmScannerGreenModel.defaultValue
         filmScannerBlueModel.value = filmScannerBlueModel.defaultValue
         filmScannerWidthModel.value = filmScannerWidthModel.defaultValue
+        filmFormatModel.currentIndex = filmFormatModel.defaultIndex
         updateEotfOptions()
     }
 
@@ -350,6 +352,8 @@ Item {
     /// Load display transform values from the session adjustment snapshot.
     /// The snapshot stores odt params as snapshot["odt"] = {"odt": {...}}.
     function loadFromSnapshot(snapshot) {
+        // The film format is a field of its own (film_format), so it loads with any method.
+        root.loadFilmFormat(snapshot)
         const odt = odtUiValue(snapshot)
         if (odt === null)
             return
@@ -398,6 +402,43 @@ Item {
         setValueFromSnapshot(filmScannerGreenModel, odt["scanner_green_nm"])
         setValueFromSnapshot(filmScannerBlueModel, odt["scanner_blue_nm"])
         setValueFromSnapshot(filmScannerWidthModel, odt["scanner_width_nm"])
+    }
+
+    // The film format of the DRT node: one write of film_format per selection.
+    EditorAdjustmentEnumModel {
+        id: filmFormatModel
+        objectName: "displayFilmFormatModel"
+        fieldKey: "film_format"
+        label: qsTr("Format")
+        entries: parameterCatalog.options("film_format", "film_format")
+        defaultIndex: Math.max(0, root.indexOfFilmFormat(
+                                   parameterCatalog.uiDefault("film_format").film_format))
+        submitter: root.editorSession
+        paramsBuilder: function(value) {
+            return parameterCatalog.modelParamsJson("film_format", { film_format: value })
+        }
+    }
+
+    /// Index of the format identifier @p value in the Format entries, or -1.
+    function indexOfFilmFormat(value) {
+        const entries = parameterCatalog.options("film_format", "film_format")
+        for (var i = 0; i < entries.length; ++i) {
+            if (String(entries[i].value) === String(value))
+                return i
+        }
+        return -1
+    }
+
+    /// Load the film format of the snapshot into the Format model. Loading never submits.
+    function loadFilmFormat(snapshot) {
+        if (snapshot === undefined || snapshot === null)
+            return
+        const entry = snapshot["film_format"]
+        if (entry === undefined || entry === null)
+            return
+        const index = root.indexOfFilmFormat(parameterCatalog.uiValue("film_format", entry).film_format)
+        if (index >= 0 && index !== filmFormatModel.currentIndex)
+            filmFormatModel.currentIndex = index
     }
 
     /// Rebuild EOTF entries based on current encoding space, preserving EOTF
@@ -1017,6 +1058,31 @@ Item {
                         emptyText: qsTr("No films match")
                         familyText: root.filmFamilyText
                         onPicked: function(value) { root.selectFilm(value) }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.topMargin: appTheme.spaceXs
+                        text: qsTr("Format")
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeCaption
+                        font.weight: appTheme.fontWeightStrong
+                    }
+
+                    // One write of film_format per click. The Post Processing page and the
+                    // Display Transform page write the same field, so both show its value.
+                    SegmentedCardSwitcher {
+                        objectName: "displayFilmFormatControl"
+                        Layout.fillWidth: true
+                        entries: filmFormatModel.entries
+                        currentIndex: filmFormatModel.currentIndex
+                        currentValue: filmFormatModel.currentValue
+                        enabled: root.controlsEnabled
+                        trackColor: root.colBase
+                        trackBorderColor: root.colCardBorder
+                        textColor: root.colText
+                        hoverColor: root.colHover
+                        onSelected: function(index, value) { filmFormatModel.selectIndex(index) }
                     }
 
                     // A colour reversal film has no print: the page has no print section.

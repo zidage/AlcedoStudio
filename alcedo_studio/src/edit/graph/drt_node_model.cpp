@@ -277,6 +277,24 @@ auto ReadDiffusionStrength(const nlohmann::json& json) -> float {
   return static_cast<float>(strength);
 }
 
+/// A missing key reads as 35mm, the frame of every document made before the field. A present value
+/// that is not a format identifier fails the load.
+auto ReadFilmFormat(const nlohmann::json& json) -> FilmFormat {
+  if (!json.contains("film_format")) {
+    return FilmFormat::Film35mm;
+  }
+  const auto& value = json.at("film_format");
+  if (!value.is_string()) {
+    throw std::runtime_error("DRT params: film_format must be a string");
+  }
+  const auto format = TryParseFilmFormat(value.get<std::string>());
+  if (!format.has_value()) {
+    throw std::runtime_error("DRT params: film_format has the unknown identifier '" +
+                             value.get<std::string>() + "'; expected 16mm, 35mm, or 70mm");
+  }
+  return *format;
+}
+
 /// A missing key reads as @p fallback. A present invalid value fails the load; it is not clamped.
 auto ReadFilmSlider(const nlohmann::json& film_print, const char* key, float fallback,
                     float minimum, float maximum) -> float {
@@ -472,7 +490,8 @@ auto DrtParamsModel::IsDefault() const -> bool {
     return payload.method == DrtMethod::OpenDrt &&
            payload.encoding_space == DrtColorSpace::Rec709 &&
            payload.encoding_eotf == DrtEotf::Gamma22 && payload.peak_luminance == 100.0f &&
-           payload.diffusion_strength == kDiffusionStrengthMin;
+           payload.diffusion_strength == kDiffusionStrengthMin &&
+           payload.film_format == FilmFormat::Film35mm;
   });
 }
 
@@ -530,6 +549,21 @@ auto DrtParamsModel::DiffusionStrength() const -> float {
 
 auto DrtParamsModel::FilmPrint() const -> FilmPrintParams {
   return Read([](const DrtPayload& payload) { return payload.film_print; });
+}
+
+auto DrtParamsModel::FilmFormat() const -> alcedo::FilmFormat {
+  return Read([](const DrtPayload& payload) { return payload.film_format; });
+}
+
+void DrtParamsModel::ApplyFilmFormat(alcedo::FilmFormat format) {
+  (void)FilmFormatId(format);  // Throws for a value outside the enum.
+  MutateWithDirtyFields([format](DrtPayload& payload) {
+    if (payload.film_format == format) {
+      return DirtyFieldMask{};
+    }
+    payload.film_format = format;
+    return DirtyFieldMask{DrtDirty::FilmFormat};
+  });
 }
 
 void DrtParamsModel::ApplyDiffusionStrength(float strength) {
@@ -671,6 +705,10 @@ auto DrtParamsModel::ToJson() const -> nlohmann::json {
   if (strength != kDiffusionStrengthMin) {
     json["diffusion"] = {{"strength", strength}};
   }
+  const auto format = FilmFormat();
+  if (format != alcedo::FilmFormat::Film35mm) {
+    json["film_format"] = std::string{FilmFormatId(format)};
+  }
   return json;
 }
 
@@ -700,6 +738,7 @@ void DrtParamsModel::LoadJson(const nlohmann::json& json) {
   // Read the validated groups first: a rejected document changes no field.
   const auto diffusion_strength = ReadDiffusionStrength(json);
   auto       film_print         = ReadFilmPrint(json);
+  const auto film_format        = ReadFilmFormat(json);
   Mutate(DrtDirty::All, [&](DrtPayload& payload) {
     payload.method = MethodFromString(json_util::ReadString(json, "method", "open_drt"));
     payload.encoding_space =
@@ -729,6 +768,7 @@ void DrtParamsModel::LoadJson(const nlohmann::json& json) {
     }
     payload.diffusion_strength = diffusion_strength;
     payload.film_print         = std::move(film_print);
+    payload.film_format        = film_format;
   });
 }
 

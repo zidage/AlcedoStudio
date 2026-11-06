@@ -17,6 +17,7 @@
 #include "color/color_encoding_math.h"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/diffusion_filter_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/film_print_model.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -132,6 +133,9 @@ struct DrtPayload {
   float                 diffusion_strength = 0.0f;
   /// Written only when @ref method is @ref DrtMethod::FilmPrint.
   FilmPrintParams       film_print{};
+  /// The film format of the frame. Every method reads it. Key `film_format`, written only when the
+  /// value is not @ref FilmFormat::Film35mm, so a document made before the field keeps its bytes.
+  FilmFormat            film_format = FilmFormat::Film35mm;
 };
 
 enum class DrtDirty : std::uint32_t {
@@ -151,8 +155,10 @@ enum class DrtDirty : std::uint32_t {
   /// The scanner settings of Negative Scan (band centres, width, light). They choose the scanner
   /// table, so the prescan of rule 'frame_auto_colour' (`FilmScanPrescanResultId`) reads them.
   FilmScanner  = 1U << 8,
+  /// The film format. It sets the size and the strength of the grain on the film.
+  FilmFormat   = 1U << 9,
   All          = Method | Encoding | OpenDrt | Diffusion | FilmExposure | FilmHalation | FilmFlare |
-        FilmScan | FilmScanner,
+        FilmScan | FilmScanner | FilmFormat,
 };
 
 /**
@@ -197,6 +203,11 @@ struct DrtParameterUpdate {
   std::optional<std::string>           film_scanner_light;
 };
 
+/// The film format write of the editor field `film_format` (@ref DrtParamsModel::ApplyFilmFormat).
+struct DrtFilmFormatUpdate {
+  FilmFormat format = FilmFormat::Film35mm;
+};
+
 class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload, DrtDirty> {
  public:
   static auto        TypeId() -> const OperatorTypeId& { return type_ids::DrtNode(); }
@@ -220,6 +231,7 @@ class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload
   [[nodiscard]] auto HdrPurity() const -> float;
   [[nodiscard]] auto DiffusionStrength() const -> float;
   [[nodiscard]] auto FilmPrint() const -> FilmPrintParams;
+  [[nodiscard]] auto FilmFormat() const -> alcedo::FilmFormat;
 
   /**
    * @brief Apply validated DRT/ODT fields atomically and mark changed groups dirty.
@@ -238,21 +250,30 @@ class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload
   void               ApplyDiffusionStrength(float strength);
 
   /**
+   * @brief Set the film format and mark @ref DrtDirty::FilmFormat when it changes.
+   *
+   * @throws std::invalid_argument that names the field `film_format` for a value outside the enum.
+   *         No field changes.
+   */
+  void               ApplyFilmFormat(alcedo::FilmFormat format);
+
+  /**
    * @brief Output-transform fields only (method, encoding, OpenDRT, and `film_print` when the
-   *        method is the film print). Excludes the diffusion filter, which the editor writes
-   *        through its own `diffusion` field.
+   *        method is the film print). Excludes the diffusion filter and the film format, which the
+   *        editor writes through their own `diffusion` and `film_format` fields.
    */
   [[nodiscard]] auto OutputTransformJson() const -> nlohmann::json;
 
   /**
-   * @brief @ref OutputTransformJson plus `diffusion.strength` when the strength is not 0.
+   * @brief @ref OutputTransformJson plus `diffusion.strength` when the strength is not 0, and
+   *        `film_format` when the format is not `35mm`.
    *
-   * A document without the filter keeps its previous serialized bytes.
+   * A document without the filter and with the format `35mm` keeps its previous serialized bytes.
    */
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
   /**
-   * @throws std::runtime_error that names the key for an invalid `diffusion` or `film_print` value.
-   *         No field changes. A missing object or key reads as its default.
+   * @throws std::runtime_error that names the key for an invalid `diffusion`, `film_print`, or
+   *         `film_format` value. No field changes. A missing object or key reads as its default.
    */
   void               LoadJson(const nlohmann::json& json) override;
 

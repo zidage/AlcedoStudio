@@ -23,6 +23,8 @@
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -897,6 +899,39 @@ TEST(DocumentTransferTest, DrtPasteFromSourceWithoutDiffusionClearsTargetDiffusi
   const auto working = ApplyPasteToClone(PlanSelectivePaste(package, target), target);
   EXPECT_EQ(working.Drt()->Params().ToJson().dump(), source.Drt()->Params().ToJson().dump());
   EXPECT_FLOAT_EQ(working.Drt()->Params().DiffusionStrength(), 0.0f);
+}
+
+TEST(DocumentTransferTest, DrtPasteAppliesSourceFilmFormat) {
+  auto source = CreateDefaultPipelineDocument();
+  source.Drt()->Params().ApplyFilmFormat(FilmFormat::Film16mm);
+  const auto source_drt_json = source.Drt()->Params().ToJson();
+  ASSERT_EQ(source_drt_json.at("film_format"), "16mm");
+
+  AdjustmentTransferSelection selection;
+  selection.nodes.push_back(
+      {source.Drt()->Id(), {{AdjustmentTransferItemKind::DrtParameters, std::nullopt}}});
+  const auto package = AdjustmentTransferPackageBuilder::Build(source, selection);
+
+  const auto target  = CreateDefaultPipelineDocument();
+  const auto working = ApplyPasteToClone(PlanSelectivePaste(package, target), target);
+  EXPECT_EQ(working.Drt()->Params().ToJson().dump(), source_drt_json.dump());
+  EXPECT_EQ(working.Drt()->Params().FilmFormat(), FilmFormat::Film16mm);
+}
+
+TEST(DocumentTransferTest, DrtPasteFromSourceWith35mmSetsTargetFormatTo35mm) {
+  // A package of a 35mm source, and a package made before the field, hold no film_format key.
+  // They read 35mm, as the source renders.
+  const auto                  source = CreateDefaultPipelineDocument();
+  AdjustmentTransferSelection selection;
+  selection.nodes.push_back(
+      {source.Drt()->Id(), {{AdjustmentTransferItemKind::DrtParameters, std::nullopt}}});
+  const auto package = AdjustmentTransferPackageBuilder::Build(source, selection);
+
+  auto       target  = CreateDefaultPipelineDocument();
+  target.Drt()->Params().ApplyFilmFormat(FilmFormat::Film70mm);
+  const auto working = ApplyPasteToClone(PlanSelectivePaste(package, target), target);
+  EXPECT_EQ(working.Drt()->Params().FilmFormat(), FilmFormat::Film35mm);
+  EXPECT_FALSE(working.Drt()->Params().ToJson().contains("film_format"));
 }
 
 TEST(DocumentTransferTest, PartialDrtPasteKeepsUnselectedTargetRootValues) {

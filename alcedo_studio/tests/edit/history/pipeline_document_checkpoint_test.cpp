@@ -6,22 +6,32 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "app/editor_pipeline_command_service.hpp"
+#include "app/pipeline_document_history.hpp"
+#include "app/pipeline_history_applier.hpp"
 #include "app/project_package_backend.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/history/commit_clock_test_access.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/pipeline_history_format.hpp"
 #include "edit/history/version_ref.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -70,6 +80,89 @@ auto MultiGradeDocument() -> PipelineDocument {
   EXPECT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.look"}).empty());
   grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
   return document;
+}
+
+/// One document of the Film Grain compatibility files: its root document, the history entries from
+/// the root to the head, and the commits of those entries at fixed timestamps.
+struct FilmGrainHistoryCase {
+  std::uint32_t                  element_id = 0;
+  nlohmann::json                 raw_json;
+  PipelineDocument               root;
+  PipelineDocument               head;
+  std::vector<PipelineEditBatch> batches;
+};
+
+/// Applies @p patch to @p field of @p document as one editor write and records its history entry.
+void RecordParameterEntry(PipelineDocument& document, std::string_view field,
+                          const nlohmann::json& patch, std::vector<PipelineEditBatch>& batches) {
+  std::string error;
+  const auto  target = CompleteCurrentPanelParameterTarget(document, std::string{field}, &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  nlohmann::json before;
+  ASSERT_TRUE(ReadEditorParameterJson(document, *target, &before, &error)) << error;
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, *target, patch, &error)) << error;
+  nlohmann::json after;
+  ASSERT_TRUE(ReadEditorParameterJson(document, *target, &after, &error)) << error;
+  batches.push_back(MakeSetParameterBatch(*target, before, after, true, true, "DRT"));
+}
+
+/// The two documents of plan 'film_grain_format_and_stock_plan.md', section 2.4. `film_print`: the
+/// film print of Kodak 5207 on 2383, then Film Grain 0 to 0.6 and Halation 0.6 to 0.4. `open_drt`:
+/// OpenDRT, then Film Grain 0 to 0.3.
+auto MakeFilmGrainHistoryCase(std::string_view name) -> FilmGrainHistoryCase {
+  FilmGrainHistoryCase result;
+  result.raw_json = nlohmann::json{{"CameraModel", "RootStateCamera"}};
+  auto document   = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  std::string error;
+  if (name == "film_print") {
+    result.element_id = 42;
+    const auto odt    = CompleteCurrentPanelParameterTarget(document, "odt", &error);
+    EXPECT_TRUE(odt.has_value()) << error;
+    EXPECT_TRUE(ApplyEditorParameterPatch(document, *odt,
+                                          {{"method", "film_print"},
+                                           {"film_print",
+                                            {{"negative", "kodak_5207"},
+                                             {"print_material", "kodak_2383"},
+                                             {"scene_light", "reference"}}}},
+                                          &error))
+        << error;
+  } else {
+    result.element_id = 43;
+  }
+  result.root = ClonePipelineDocument(document);
+  if (name == "film_print") {
+    RecordParameterEntry(document, "film_grain", {{"strength", 0.6}}, result.batches);
+    RecordParameterEntry(document, "odt", {{"film_print", {{"halation", 0.4}}}}, result.batches);
+  } else {
+    RecordParameterEntry(document, "film_grain", {{"strength", 0.3}}, result.batches);
+  }
+  result.head = std::move(document);
+  return result;
+}
+
+/// The commits of @p history_case, oldest first, at the timestamps 1000, 2000, and so on.
+auto FilmGrainHistoryCommits(const FilmGrainHistoryCase& history_case, const root_id_t& root_id)
+    -> std::vector<EditCommit> {
+  std::vector<EditCommit> commits;
+  head_commit_hash_t      parent;
+  std::uint64_t           created_at_ns = 1000;
+  for (const auto& batch : history_case.batches) {
+    commits.push_back(edit_history_test::EditCommitAccess::MakePipelineEditAtTimestamp(
+        root_id, parent, created_at_ns, batch));
+    parent = commits.back().GetCommitHash();
+    created_at_ns += 1000;
+  }
+  return commits;
+}
+
+auto FilmGrainHistoryChainHash(const root_id_t& root_id, const std::vector<EditCommit>& commits)
+    -> transaction_chain_hash_t {
+  auto chain = ComputeRootChainHash(root_id);
+  for (const auto& commit : commits) {
+    chain = FoldTransactionChainHash(chain, commit.GetCommitHash());
+  }
+  return chain;
 }
 
 }  // namespace
@@ -210,6 +303,117 @@ TEST(PipelineDocumentCheckpointFormat,
                                              checkpoint.transaction_chain_hash, checkpoint.document)
                 .dump(),
             checkpoint_bytes);
+}
+
+TEST(PipelineDocumentCheckpointFormat,
+     ExistingFilmGrainRootDocumentsSerializeByteIdenticalAfterFormatChange) {
+  // The drt_film_grain_*_before_film_format.json files were written by the document code of
+  // 6b8eebaf6, before the film format existed (plan 'film_grain_format_and_stock_plan.md', section
+  // 2.4). Each document must encode to the same bytes, keep its root id, read the format 35mm, and
+  // never gain the key `film_format`.
+  const auto roots =
+      nlohmann::json::parse(LoadExpectedBytes("drt_film_grain_root_before_film_format.json"));
+  const auto checkpoints =
+      nlohmann::json::parse(LoadExpectedBytes("drt_film_grain_checkpoint_before_film_format.json"));
+  const auto histories =
+      nlohmann::json::parse(LoadExpectedBytes("drt_film_grain_history_before_film_format.json"));
+  for (const char* name : {"film_print", "open_drt"}) {
+    SCOPED_TRACE(name);
+    const auto history_case = MakeFilmGrainHistoryCase(name);
+    const auto root_bytes   = roots.at(name).dump();
+    EXPECT_EQ(
+        EncodePipelineRootState(history_case.element_id, history_case.root, history_case.raw_json)
+            .dump(),
+        root_bytes);
+    const auto root = DecodePipelineRootState(roots.at(name));
+    EXPECT_EQ(
+        EncodePipelineRootState(root.element_id, root.document, root.raw_color_context).dump(),
+        root_bytes);
+    ASSERT_NE(root.document.Drt(), nullptr);
+    EXPECT_EQ(root.document.Drt()->Params().FilmFormat(), FilmFormat::Film35mm);
+    EXPECT_FALSE(root.document.Drt()->Params().ToJson().contains("film_format"));
+
+    const auto checkpoint_bytes = checkpoints.at(name).dump();
+    const auto checkpoint       = DecodePipelineDocumentCheckpoint(checkpoints.at(name));
+    const auto root_id = ComputeRootId(root.element_id, root.document, root.raw_color_context);
+    EXPECT_EQ(root_id, checkpoint.root_id);
+    EXPECT_EQ(ComputeRootId(history_case.element_id, history_case.root, history_case.raw_json),
+              checkpoint.root_id);
+    EXPECT_EQ(
+        EncodePipelineDocumentCheckpoint(checkpoint.root_id, checkpoint.head_commit_hash,
+                                         checkpoint.transaction_chain_hash, checkpoint.document)
+            .dump(),
+        checkpoint_bytes);
+    EXPECT_EQ(EncodePipelineDocumentCheckpoint(checkpoint.root_id, checkpoint.head_commit_hash,
+                                               checkpoint.transaction_chain_hash, history_case.head)
+                  .dump(),
+              checkpoint_bytes);
+    EXPECT_FALSE(checkpoint.document.Drt()->Params().ToJson().contains("film_format"));
+
+    // The stored entries give the head and the chain of the checkpoint.
+    ASSERT_EQ(histories.at(name).size(), history_case.batches.size());
+    for (std::size_t index = 0; index < history_case.batches.size(); ++index) {
+      EXPECT_EQ(history_case.batches[index].CanonicalJSON().dump(),
+                histories.at(name).at(index).dump());
+    }
+    const auto commits = FilmGrainHistoryCommits(history_case, root_id);
+    EXPECT_EQ(head_commit_hash_t{commits.back().GetCommitHash()}, checkpoint.head_commit_hash);
+    EXPECT_EQ(FilmGrainHistoryChainHash(root_id, commits), checkpoint.transaction_chain_hash);
+  }
+}
+
+TEST(PipelineDocumentCheckpointFormat, ExistingFilmGrainHistoryReplaysAfterFormatChange) {
+  // Each stored entry must apply to the stored root: its before value equals the current Model
+  // JSON. Replay gives the checkpoint document, and undo and redo give the root and the head.
+  const auto roots =
+      nlohmann::json::parse(LoadExpectedBytes("drt_film_grain_root_before_film_format.json"));
+  const auto checkpoints =
+      nlohmann::json::parse(LoadExpectedBytes("drt_film_grain_checkpoint_before_film_format.json"));
+  const auto histories =
+      nlohmann::json::parse(LoadExpectedBytes("drt_film_grain_history_before_film_format.json"));
+  for (const char* name : {"film_print", "open_drt"}) {
+    SCOPED_TRACE(name);
+    const auto root       = DecodePipelineRootState(roots.at(name));
+    const auto checkpoint = DecodePipelineDocumentCheckpoint(checkpoints.at(name));
+    const auto root_json  = root.document.ToJson().dump();
+    const auto head_json  = checkpoint.document.ToJson().dump();
+    std::vector<PipelineEditBatch> batches;
+    for (const auto& batch_json : histories.at(name)) {
+      batches.push_back(PipelineEditBatch::FromJSON(batch_json));
+    }
+    FilmGrainHistoryCase history_case;
+    history_case.batches = batches;
+    std::string error;
+    const auto  replayed = ReplayPipelineDocumentFromRoot(
+        root.document, FilmGrainHistoryCommits(history_case, checkpoint.root_id), &error);
+    ASSERT_TRUE(replayed.has_value()) << error;
+    EXPECT_EQ(replayed->ToJson().dump(), head_json);
+
+    auto document = ClonePipelineDocument(root.document);
+    for (const auto& batch : batches) {
+      ASSERT_TRUE(
+          ApplyPipelineEditBatch(document, batch, PipelineEditApplyDirection::Forward, &error))
+          << error;
+    }
+    EXPECT_EQ(document.ToJson().dump(), head_json);
+    for (auto batch = batches.rbegin(); batch != batches.rend(); ++batch) {
+      ASSERT_TRUE(
+          ApplyPipelineEditBatch(document, *batch, PipelineEditApplyDirection::Inverse, &error))
+          << error;
+    }
+    EXPECT_EQ(document.ToJson().dump(), root_json);
+    for (const auto& batch : batches) {
+      ASSERT_TRUE(
+          ApplyPipelineEditBatch(document, batch, PipelineEditApplyDirection::Forward, &error))
+          << error;
+    }
+    EXPECT_EQ(document.ToJson().dump(), head_json);
+    const auto* grain = dynamic_cast<const FilmGrainModel*>(
+        document.Drt()->FindAdjustmentByType(type_ids::FilmGrain()));
+    ASSERT_NE(grain, nullptr);
+    EXPECT_FLOAT_EQ(grain->Value(), std::string_view{name} == "film_print" ? 0.6f : 0.3f);
+    EXPECT_EQ(document.Drt()->Params().FilmFormat(), FilmFormat::Film35mm);
+  }
 }
 
 TEST(PipelineDocumentCheckpointFormat, RoundTripPreservesDefaultIdentityAndIndependentUnlocks) {

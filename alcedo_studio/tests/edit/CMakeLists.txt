@@ -181,7 +181,7 @@ add_executable(PipelineDocumentCheckpointTest
 target_include_directories(PipelineDocumentCheckpointTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(PipelineDocumentCheckpointTest
-  PipelineHistory EditGraph ProjectService GTest::gtest_main)
+  PipelineHistoryApplier PipelineHistory EditGraph ProjectService GTest::gtest_main)
 target_compile_definitions(PipelineDocumentCheckpointTest PRIVATE
   PIPELINE_HISTORY_FORMAT_EXPECTED_SERIALIZED_DIR="${ALCEDO_TEST_ROOT}/edit/history/expected_serialized"
   ALCEDO_EXPECTED_JSON_DIR="${ALCEDO_TEST_ROOT}/resources/expected_json")
@@ -223,6 +223,7 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_snapshot_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/drt_diffusion_filter_model_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/drt_film_format_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/drt_film_print_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/lmt_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_wheel_tone_test.cpp

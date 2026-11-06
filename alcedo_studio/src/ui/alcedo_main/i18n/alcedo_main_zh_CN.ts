@@ -2633,6 +2633,14 @@ Original source files on disk will be kept.</source>
         <source>Post Processing</source>
         <translation>后期处理</translation>
     </message>
+    <message>
+        <source>Format</source>
+        <translation>画幅</translation>
+    </message>
+    <message>
+        <source>Granularity of %1</source>
+        <translation>%1 的颗粒度</translation>
+    </message>
 </context>
 <context>
     <name>EditorComparisonPanel</name>
@@ -3217,6 +3225,10 @@ Original source files on disk will be kept.</source>
     <message>
         <source>Display</source>
         <translation>展示</translation>
+    </message>
+    <message>
+        <source>Format</source>
+        <translation>画幅</translation>
     </message>
 </context>
 <context>
