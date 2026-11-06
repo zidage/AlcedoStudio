@@ -234,7 +234,7 @@ auto MakeFilmGrainPlan(const ResolvedRenderGeometry& geometry, FilmFormat format
       negative
           ? CorrelationCholesky(stock.common.layer_correlation, "grain_layer_correlation")
           : CorrelationCholesky(kFilmGrainPostScanCorrelation, "kFilmGrainPostScanCorrelation");
-  const auto& curves  = negative ? stock.layer : stock.channel;
+  const auto& curves = negative ? stock.layer : stock.channel;
   for (std::size_t layer = 0; layer < 3; ++layer) {
     plan.curves[layer] =
         MakeFilmGrainCurve(curves, layer, negative ? "grain layer curve" : "grain channel curve");

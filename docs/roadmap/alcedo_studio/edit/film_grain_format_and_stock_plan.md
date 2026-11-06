@@ -1072,6 +1072,15 @@ Details that the plan did not give, or changes to the plan, chosen in G4:
   and 6000 px. The OpenCL work-group copies the field and the apply parameters (1000 bytes) once into local memory; the CUDA block
   copies the apply parameters once into shared memory (a pointer to a kernel parameter makes a copy for each thread); Metal reads
   them from the constant buffer of `setBytes`. `FilmGrainPostPixel` decodes each channel once.
+- The code value of the scaled light (`FilmGrainPostScaledCode`, issue
+  [#693](https://github.com/zidage/AlcedoStudio/issues/693)): a pure power encoding has
+  Encode(L f) = Encode(L) f^(1/g), so linear, gamma 2.2, 2.6, 1.8, and BT.1886 take code * exp(-error / g), and sRGB takes
+  (code + 0.055) exp(-error / 2.4) - 0.055 in its power segment. Other encodings encode the light. Gamma 2.2 is the display encoding
+  of a new document.
+- The OpenCL grain program builds with `-DCE_OPENCL_POW_EXP2_LOG2`: `CE_POW` of `color_encoding_math.h` is exp2(y log2 x) there.
+  The pow of the NVIDIA OpenCL driver cost about 0.16 ms per call and pixel at 24 MP; the relative error of the form is about 2e-6
+  on the gamma and sRGB curves and up to about 2e-5 near the black of the ST 2084 decode. The other OpenCL programs keep pow.
+- The curve loop keeps its fixed count of 15 segments: a loop to the counted segments was slower (the compiler does not unroll it).
 - `FilmGrainMix` takes a pointer in the private memory of the thread (`FILM_GRAIN_FIELD_PRIVATE`), because Metal needs an address
   space on every pointer parameter.
 - The fixed values of OpenCL are one upload in the transient arena of the render (`FilmGrainPostDeviceData`, 1000 bytes), because
@@ -1120,7 +1129,7 @@ What was proven (debug build, RTX 3080 Laptop, Windows):
 | G3 statistics, 3 % against the host form, timing on Metal | `MetalFilmGrainPostTest.*`, `MetalGradeFixture` grain cases | `GpuDagMetalDrtTest`, `GpuDagMetalGradeTest` | Not run: the Mac was not available |
 
 Suite totals: `GpuDagOpenClGradeTest` 127 / 133; the 6 failures are `OpenClMultiGradeFixture.*` of issue
-[#496](https://github.com/zidage/AlcedoStudio/issues/496). `GpuDagCudaDrtProductTest` 119 / 120 before the band layout of CUDA, with the radius-24 case as the failure; after it `CudaFilmGrainPostTest` 8 / 8. `GpuDagCudaPrimaryGradeTest` with the
+[#496](https://github.com/zidage/AlcedoStudio/issues/496). `GpuDagCudaDrtProductTest` 120 / 120. `GpuDagCudaPrimaryGradeTest` with the
 grain filter 8 / 10; the 2 failures are those of issue [#690](https://github.com/zidage/AlcedoStudio/issues/690).
 `GpuDagOpenClDrtProductTest` 31 / 32; the failure is the stale source count of issue
 [#692](https://github.com/zidage/AlcedoStudio/issues/692).
@@ -1132,12 +1141,18 @@ Timing, OpenCL (debug host build, the driver compiles the kernel; `OpenClGradeFi
 | --- | ---: | ---: |
 | Parameters by value | +19.0 ms | +20.3 ms |
 | Parameters through a `__global` pointer | +7.9 ms | +8.4 ms |
-| Parameters in local memory (this branch) | +5.3 to 5.7 ms | +7.0 to 7.7 ms |
+| Parameters in local memory | +5.3 to 5.7 ms | +7.0 to 7.7 ms |
+| Also the scaled code value and exp2(y log2 x) (this branch, 3 runs) | +4.5 to 5.2 ms | +5.7 to 5.8 ms |
 
-The limit of 6 ms holds at 35mm. At 16mm the pass is above it; issue [#693](https://github.com/zidage/AlcedoStudio/issues/693) has
-the measurements and the parts of the cost.
+The limit of 6 ms holds at both formats. The time without grain varies between runs (6.8 to 8.1 ms); the values above use the
+runs at 6.8 ms. `OpenClFilmGrainPostTest.DISABLED_KernelCostRecordAt24Megapixels` times the kernel alone on scene work buffers in
+gamma 2.2: 4.8 ms at 35mm and 6.1 ms at 16mm, with the enqueue and the wait. In that record the noise is about 1.6 ms at 16mm, the
+apply step about 2 ms, and the read and the write of the two 24 MP float4 images about 2 ms.
 
-Timing, CUDA after the band layout (Release, `CudaFilmPrintFixture.DISABLED_DrtCostRecordAtEditorSizes`, median of 9 GPU times):
+Timing, CUDA after the band layout and before the scaled code value (Release,
+`CudaFilmPrintFixture.DISABLED_DrtCostRecordAtEditorSizes`, median of 9 GPU times). The scaled code value removes work from the
+apply step of CUDA too; this record is its upper limit:
+
 | Render | OpenDRT alone | G3, 35mm | G4, 35mm | G3, 16mm | G4, 16mm |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 2560 x 1709 | 1.36 ms | +0.92 ms | +1.03 ms | +1.05 ms | +1.11 ms |
@@ -1157,13 +1172,13 @@ GpuDagCudaPrimaryGradeTest.exe --gtest_filter="*Grain*:*Neighbor*:*DrtPost*:*Hal
 GpuDagRawInputTest.exe --gtest_filter="FilmGrainPlan*:FilmGrainField*:FilmGrainPost*:FilmFormatTest*:GpuDagAdjustmentRuntime*:
   FilmPrintImagePlan*:DrtPost*"
 GpuDagOpenClGradeTest.exe --gtest_filter=OpenClGradeFixture.DISABLED_FilmGrainCostRecordAt24Megapixels --gtest_also_run_disabled_tests
+GpuDagOpenClGradeTest.exe --gtest_filter=*KernelCostRecordAt24Megapixels --gtest_also_run_disabled_tests
 ```
 
 Remaining work for the exit criteria: build `GpuDagMetalDrtTest` and `GpuDagMetalGradeTest` on the Apple M4 (the schema 11
 resources and `grain__expected.bin` are in `~/Projects/PuerhLab/build/tmp/g4` on the Mac), run `MetalFilmGrainPostTest.*` and the
 grain cases of `MetalGradeFixture`, and record `MetalGradeFixture.DISABLED_FilmGrainCostRecordAt24Megapixels` against the limit of
-15 ms. The Metal shaders compile `film_grain_field.h` and `film_grain_post.h` for the first time there. The OpenCL time at 16mm is
-issue #693.
+15 ms. The Metal shaders compile `film_grain_field.h` and `film_grain_post.h` for the first time there.
 
 ### G5: grain in the negative on CUDA
 

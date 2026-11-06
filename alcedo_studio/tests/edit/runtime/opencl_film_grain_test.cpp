@@ -8,8 +8,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -182,6 +186,49 @@ TEST_F(OpenClFilmGrainPostTest, StandardDeviationIsWithin3PercentOfCuda) {
       };
   ExpectSigmaAtGreyMatches(Renderer(), cuda_render, 0.03);
 #endif
+}
+
+/// Wall time of the grain kernel alone on a 6000 x 4000 display image (scene work buffers, as in
+/// the DRT/Post write), 35mm and 16mm, Film Grain 100 %, gamma 2.2 (the display encoding of a new
+/// document), median of 9. Each run waits for the GPU. Run it with --gtest_also_run_disabled_tests
+/// (issue 693).
+TEST_F(OpenClFilmGrainPostTest, DISABLED_KernelCostRecordAt24Megapixels) {
+  constexpr std::uint32_t kWidth   = 6000;
+  constexpr std::uint32_t kHeight  = 4000;
+  const auto              geometry = TileGeometry(kWidth, 1.0f, 0.0f, 0.0f, kWidth, kHeight);
+  for (const auto format : {FilmFormat::Film35mm, FilmFormat::Film16mm}) {
+    const auto  plan = Plan(geometry, format);
+    const float code = CeGammaEncode(static_cast<float>(plan.post_grey), CE_GAMMA_2_2_EXPONENT);
+    const std::vector<Rgba>        input(static_cast<std::size_t>(kWidth) * kHeight,
+                                         Rgba{code, code, code, 1.0f});
+    const FilmGrainDisplayEncoding gamma22{CE_TF_GAMMA_2_2, 1.0f};
+    const auto                     run = [&]() {
+      device_->BeginRender();
+      auto& workspace = device_->Workspace();
+      workspace.EnsureSceneWorkImages({kWidth, kHeight});
+      workspace.Device().UploadBufferRange(
+          workspace.SceneWork().Member(SceneWorkMember::Member0).Storage(), 0,
+          std::as_bytes(std::span(input)), device_->CommandContext());
+      device_->WaitIdle();
+      const auto start = std::chrono::steady_clock::now();
+      RecordOpenClFilmGrainPost(
+          *device_, plan, geometry, gamma22,
+          OpenClBindScene(*device_, FrameSceneBinding::WorkImage(SceneWorkMember::Member0)),
+          OpenClBindScene(*device_, FrameSceneBinding::WorkImage(SceneWorkMember::Member1)), kWidth,
+          kHeight);
+      device_->WaitIdle();
+      const std::chrono::duration<double, std::milli> elapsed =
+          std::chrono::steady_clock::now() - start;
+      device_->CancelRender();
+      return elapsed.count();
+    };
+    (void)run();
+    std::vector<double> runs;
+    for (int index = 0; index < 9; ++index) runs.push_back(run());
+    std::sort(runs.begin(), runs.end());
+    std::cout << "Film Grain kernel at " << kWidth << " x " << kHeight << ", "
+              << FilmFormatId(format) << ": " << runs[runs.size() / 2] << " ms\n";
+  }
 }
 
 TEST_F(OpenClFilmGrainPostTest, DisabledPlanIsRejectedBeforeAnyKernel) {

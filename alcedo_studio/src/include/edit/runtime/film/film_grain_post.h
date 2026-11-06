@@ -99,6 +99,38 @@ FILM_GRAIN_POST_INLINE float FilmGrainPostSmoothstep(float edge0, float edge1, f
   return t * t * (3.0f - 2.0f * t);
 }
 
+/**
+ * The code value of the light @p light times exp(-@p error), for the code value @p code of
+ * @p light, in the display encoding @p transfer.
+ *
+ * A pure power encoding, Encode(L) = L^(1/g), has Encode(L f) = Encode(L) f^(1/g), so the code
+ * value is code * exp(-error / g) with no decode and no encode: linear, gamma 2.2, 2.6, 1.8, and
+ * BT.1886 (gamma 2.4 with a black of 0). The sRGB encode has that form in its power segment, with
+ * the offset 0.055: (code + 0.055) exp(-error / 2.4) - 0.055 while the code values on both sides
+ * are above the break point 0.04045. Every other case encodes the light. The results equal the
+ * encode of the light within the rounding of the two forms; the form saves the full-precision power
+ * of each channel (phase G4, issue 693).
+ */
+FILM_GRAIN_POST_INLINE float FilmGrainPostScaledCode(int transfer, float code, float light,
+                                                     float error) {
+  float inverse_gamma = 0.0f;
+  if (transfer == CE_TF_LINEAR) inverse_gamma = 1.0f;
+  if (transfer == CE_TF_GAMMA_2_2) inverse_gamma = 1.0f / CE_GAMMA_2_2_EXPONENT;
+  if (transfer == CE_TF_GAMMA_2_6) inverse_gamma = 1.0f / CE_GAMMA_2_6_EXPONENT;
+  if (transfer == CE_TF_GAMMA_1_8) inverse_gamma = 1.0f / CE_GAMMA_1_8_EXPONENT;
+  if (transfer == CE_TF_BT1886) inverse_gamma = 1.0f / CE_BT1886_GAMMA;
+  if (inverse_gamma > 0.0f) {
+    return code * FILM_GRAIN_POST_EXP(-error * inverse_gamma);
+  }
+  if (transfer == CE_TF_SRGB && code > 0.04045f) {
+    const float scaled = (code + 0.055f) * FILM_GRAIN_POST_EXP(-error * (1.0f / 2.4f)) - 0.055f;
+    if (scaled > 0.04045f) {
+      return scaled;
+    }
+  }
+  return CeEncode(transfer, light * FILM_GRAIN_POST_EXP(-error));
+}
+
 /// One channel: the code value @p code, its decoded light @p light, with the grain @p unit (the
 /// mixed unit grain N_j).
 FILM_GRAIN_POST_INLINE float FilmGrainPostChannel(
@@ -115,7 +147,7 @@ FILM_GRAIN_POST_INLINE float FilmGrainPostChannel(
     return code;
   }
   error = error < 0.0f ? error * brighten : error;
-  return CeEncode(params->transfer, light * FILM_GRAIN_POST_EXP(-error));
+  return FilmGrainPostScaledCode(params->transfer, code, light, error);
 }
 
 /**

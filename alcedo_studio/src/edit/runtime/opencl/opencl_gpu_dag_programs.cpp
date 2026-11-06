@@ -92,7 +92,8 @@ void RegisterOpenClGpuDagPrograms() {
                                             ALCEDO_OPENCL_FILM_GRAIN_FIELD_H,
                                             ALCEDO_OPENCL_FILM_GRAIN_POST_H,
                                             ALCEDO_OPENCL_DAG_FILM_GRAIN_POST_CL},
-                    .build_options       = "-cl-std=CL1.2",
+                    // The power of color_encoding_math.h as exp2(y log2 x): see CE_POW.
+                    .build_options       = "-cl-std=CL1.2 -DCE_OPENCL_POW_EXP2_LOG2",
                     .required_at_startup = false,
                 },
             },

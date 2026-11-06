@@ -71,7 +71,9 @@ typedef struct {
  *
  * Segment i goes from node i to node i + 1 of the curve. A value below the first node takes the
  * first sigma, and a value above the last node takes the last sigma, as the lab (numpy interp). A
- * segment past the counted nodes has a delta and an inverse width of 0, so it adds 0.
+ * segment past the counted nodes has a delta and an inverse width of 0, so it adds 0. The loop of
+ * @ref FilmGrainCurveSigma has the fixed count FILM_GRAIN_CURVE_SEGMENTS, so the compiler unrolls
+ * it: a loop to the counted segments was slower on OpenCL (phase G4, issue 693).
  */
 typedef struct {
   float first_sigma;
