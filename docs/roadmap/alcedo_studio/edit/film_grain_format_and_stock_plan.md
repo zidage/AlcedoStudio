@@ -505,7 +505,7 @@ closed by G3.
 | G3 | [#678](https://github.com/zidage/AlcedoStudio/issues/678) | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Complete (1492 lines) |
 | G4 | [#679](https://github.com/zidage/AlcedoStudio/issues/679) | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | Complete (Metal 16mm timing: #696) |
 | G5 | [#680](https://github.com/zidage/AlcedoStudio/issues/680) | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Complete (1703 lines) |
-| G6 | [#681](https://github.com/zidage/AlcedoStudio/issues/681) | Grain in the negative on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G4, G5 | 1100 | OpenCL complete (1159 product lines); Metal written, build and tests on the Mac open |
+| G6 | [#681](https://github.com/zidage/AlcedoStudio/issues/681) | Grain in the negative on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G4, G5 | 1100 | Complete (1159 product lines; Metal 16mm timing: #696) |
 | G7 | [#682](https://github.com/zidage/AlcedoStudio/issues/682) | Format sets the film print image plane | `film_print_plan.cpp` | G2 | 400 | Complete |
 | G8 | [#683](https://github.com/zidage/AlcedoStudio/issues/683) | Measurements, user review, and documents | docs, lab | G6, G7 | 400 | Planned |
 
@@ -1442,10 +1442,10 @@ statistics, and the standard deviation against CUDA within 3 %.
 
 **Exit criteria.** The tests pass on both platforms.
 
-**Completion record.** OpenCL complete 2026-11-06, branch `feature/film-grain-opencl-metal-negative-grain`, stacked on the
-branch of the Film Grain panel layout (`feature/film-grain-film-print-panel`). The user checked the CUDA result of G5 by eye
-before this phase. Metal is written and not built: the Mac (`yurunmac.local`) was not reachable in this session, so the Metal
-build, the Metal tests, and the Metal timing are open.
+**Completion record.** Complete 2026-11-06, branch `feature/film-grain-opencl-metal-negative-grain`, stacked on the branch
+of the Film Grain panel layout (`feature/film-grain-film-print-panel`). The user checked the CUDA result of G5 by eye before this
+phase. OpenCL is verified on Windows and Metal on the Apple M4; the tests pass on both. Metal is above the timing limit at 16mm
+(+16 ms against 10 ms), the gap of the post grain in issue [#696](https://github.com/zidage/AlcedoStudio/issues/696).
 
 Files: the new `include/edit/runtime/film/film_grain_tile.h` (`FilmGrainTileAcross`, `FilmGrainTileGrain`,
 `FilmGrainTileBandRows`, `FilmGrainTileSharedFloats`, `FilmGrainTileCopyWords` on OpenCL; the tile steps of OpenCL and Metal);
@@ -1560,8 +1560,37 @@ GpuDagOpenClGradeTest.exe --gtest_filter="*CostRecordAt24Megapixels" --gtest_als
 python scripts/amd_opencl/amd_opencl_check.py check --program opencl_dag_film_print   (and opencl_dag_drt, opencl_dag_film_grain)
 ```
 
-Commands for the open Metal checks (Mac, repository root; check the free space first; the schema 11 resources are in
-`build/tmp/g4`):
+What was proven on the Mac (`macos-debug`, Apple M4):
+
+| Required name / criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| The G5 kernel statistics: datasheet sigma of four stocks, pixel sigma of three formats, ROI, host form at partial tiles (1e-5, with the `-ffast-math` of `film_print.metal`) | `MetalFilmGrainNegativeTest.*` (6) | `GpuDagMetalDrtTest` | PASS |
+| Standard deviation within 3 % of the form of CUDA (the host form) | `MetalFilmGrainNegativeTest.StandardDeviationIsWithin3PercentOfTheFormOfCuda` | `GpuDagMetalDrtTest` | PASS |
+| The film print checks: Negative Scan correlation (rg 0.661 to 0.673), strength 0 in the three forms, post skip, mean shift (the OpenCL values within 2e-6 stop) | `MetalFilmPrintGrainTest.*` (4) | `GpuDagMetalDrtTest` | PASS |
+| The post grain after the move to `film_grain_tile.h` | `MetalFilmGrainPostTest.*` (9) | `GpuDagMetalDrtTest` | PASS |
+
+Suite totals: `GpuDagMetalDrtTest` 56 passed, 5 skipped, 0 failed; the skipped tests are the lab comparisons of
+`MetalFilmPrintFixture`, as in G4. `GpuDagMetalGradeTest` 75 / 86; the 11 failures are those of issues
+[#497](https://github.com/zidage/AlcedoStudio/issues/497) and [#496](https://github.com/zidage/AlcedoStudio/issues/496), as in G4.
+
+The first Metal run of the kernel tests read the amounts before the frame ran: `MetalBackend::DownloadBufferRange` waits only for a
+committed frame, so the test renderer ends the frame and waits before the read.
+
+Timing, Metal (Apple M4, `macos-debug`; 6000 x 4000, 5207 on 2383, median of 9 wall times of the DRT pass with the commit and the
+wait; the grain is the difference against Film Grain 0 % at the same format; `MetalFilmPrintGrainTest.DISABLED_FilmPrintGrainCostRecordAt24Megapixels`):
+
+| Record | 35mm | 16mm |
+| --- | ---: | ---: |
+| Film print, Film Grain 0 % (2 of 3 runs) | 75.1 to 76.0 ms | 96.1 ms |
+| Grain in the negative (2 of 3 runs) | +8.5 to +8.8 ms | +15.7 to +16.0 ms |
+| Grain step alone on the amounts (`MetalFilmGrainNegativeTest.DISABLED_KernelCostRecordAt24Megapixels`) | 11.6 ms | 17.9 ms |
+| Post grain kernel alone, for comparison (`MetalFilmGrainPostTest.DISABLED_KernelCostRecordAt24Megapixels`) | 16.2 ms | 24.5 ms |
+
+The other run of the three gave +110 ms and -13 ms, with the time of the film print with no grain at 80 and 143 ms; the Mac had
+other work then, and the record leaves that run out. The limit of 10 ms holds at 35mm and does not hold at 16mm: the noise and the
+blur at the halo 5 of 16mm cost on Metal as in the post grain of G4, so issue #696 tracks both.
+
+Commands (Mac, repository root; check the free space first; the schema 11 resources are in `build/tmp/g4`):
 
 ```text
 cmake -S . -B build/macos-debug -DALCEDO_FILM_PRINT_RESOURCE_DIR=$PWD/build/tmp/g4/resources
@@ -1575,10 +1604,7 @@ GpuDagMetalDrtTest --gtest_filter='*FilmPrintGrainCostRecordAt24Megapixels:Metal
 LOC note: 37 files, 2086 added and 583 removed lines against `fd0f8a887`, without this record: product code 1159 added (the shaders
 and the tile header), tests 927 added.
 
-Remaining gaps: the Metal build, `MetalFilmGrainNegativeTest` and `MetalFilmPrintGrainTest` (with the same checks as OpenCL), the
-post grain of Metal after the move to `film_grain_tile.h` (`MetalFilmGrainPostTest`), and the Metal timing limit of 10 ms. One risk
-to check there: `film_print.metal` builds with `-ffast-math`, so the 1e-5 check against the host form
-(`KernelEqualsTheHostFormOfItsStepsAtTheTileEdges`) may need the fast log of the Gaussian to stay within it.
+Remaining gaps: the Metal timing at 16mm (#696).
 
 ### G7: the format sets the film print image plane
 
