@@ -1507,7 +1507,8 @@ GpuDagRawInputTest.exe --gtest_filter="FilmPrintImagePlan*:FilmGrainPlan*:FilmFo
 Effect at `16mm` (6000 px frame): the wide red spread goes from a sigma of 1.18 to 3.39 pixels, the inhibitor from 5.83 to 16.8
 pixels (half-size radius 34), and Halation on the 2048 canvas from 6.8 to 19.6 texels (radius 79). The tap limit
 `kFilmBlurMaxRadius` (128) then holds the widest spread at slider 3 up to a long edge of about 13900 pixels at `16mm`, against about
-40000 at `35mm`; a larger render at `16mm` stops with the sigma in the message.
+40000 at `35mm`; a larger render at `16mm` stops with the sigma in the message (issue
+[#698](https://github.com/zidage/AlcedoStudio/issues/698)).
 
 Remaining gaps: none for G7. The user checks the CUDA result by eye before G6.
 
