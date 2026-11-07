@@ -401,6 +401,7 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/diffusion_filter_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_print_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_math_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/renderer_metal_instantiate_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/result_content_key_test.cpp
@@ -411,7 +412,8 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/static_execution_plan_cache_test.cpp)
 target_include_directories(GpuDagRawInputTest PUBLIC ${ALCEDO_INCLUDE_DIR}
   PRIVATE ${ALCEDO_TEST_ROOT}/edit/runtime ${ALCEDO_TEST_ROOT}/edit)
-target_link_libraries(GpuDagRawInputTest PRIVATE GTest::gtest_main EditInput EditRuntime Image)
+target_link_libraries(GpuDagRawInputTest PRIVATE GTest::gtest_main EditInput EditRuntime
+  EditRuntimeFilm Image)
 if(ALCEDO_METAL_ENABLED)
   target_link_libraries(GpuDagRawInputTest PRIVATE EditRuntimeMetal)
 endif()
@@ -420,6 +422,16 @@ target_compile_definitions(GpuDagRawInputTest PRIVATE
   ALCEDO_INPUT_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/input"
   ALCEDO_CI_RAW_FIXTURE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images/ci_rawfiles"
   ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
+# FilmGrainPlanLabTest compares the grain plan with grain__expected.bin of the lab evaluator, and
+# reads the shipped bundle for the curves of the print stocks.
+if(ALCEDO_FILM_PRINT_EXPECTED_DIR)
+  target_compile_definitions(GpuDagRawInputTest PRIVATE
+    ALCEDO_FILM_PRINT_EXPECTED_DIR="${ALCEDO_FILM_PRINT_EXPECTED_DIR}")
+endif()
+if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+  target_compile_definitions(GpuDagRawInputTest PRIVATE
+    ALCEDO_FILM_PRINT_RESOURCE_DIR="${ALCEDO_FILM_PRINT_RESOURCE_DIR}")
+endif()
 gtest_discover_tests(GpuDagRawInputTest TEST_PREFIX "GpuDagRawInputTest."
   PROPERTIES LABELS "ci_core_flow;edit;input")
 alcedo_register_test_target(GpuDagRawInputTest edit)

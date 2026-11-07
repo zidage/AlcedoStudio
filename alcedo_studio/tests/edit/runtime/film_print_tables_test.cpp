@@ -13,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <json.hpp>
 #include <map>
@@ -168,12 +169,44 @@ const std::vector<double> kWavelengthsNm{400.0, 460.0, 520.0, 580.0, 640.0, 700.
 /// @param negative_scan_id The identifier of Negative Scan in the metadata.
 /// @param first_gamma The first gamma of the medium 'cine'.
 /// @param neg_b_medium The medium of neg_b.
+/// @param edit_stock Changes the arrays and the metadata of the stock bundle before it is written.
+using StockEdit = std::function<void(std::map<std::string, ArrayValues>&, nlohmann::json&)>;
+
+/// The grain group of schema 11 of one film. The curves have no physical meaning; the third
+/// layer counts 3 of its 4 nodes.
+void AddGrainGroup(std::map<std::string, ArrayValues>& stock, const std::string& id, double scale) {
+  const auto name    = [&id](const char* field) { return "grain/" + id + "/" + field; };
+  stock[name("layer_amount")] =
+      F64Array({3, 4}, {0.1, 0.5, 1.0, 2.0, 0.2, 0.6, 1.1, 2.1, 0.3, 0.9, 1.5, 1.5});
+  stock[name("layer_sigma_amount")] =
+      F64Array({3, 4}, {0.010 * scale, 0.020 * scale, 0.015 * scale, 0.012 * scale, 0.011,
+                        0.021, 0.016, 0.013, 0.030, 0.040, 0.035, 0.035});
+  stock[name("layer_node_count")]  = ArrayValues{"i4", {3}, ToBytes<std::int32_t>({4, 4, 3})};
+  stock[name("channel_density")]   =
+      F64Array({3, 4}, {0.2, 0.8, 1.4, 2.4, 0.3, 0.9, 1.5, 2.5, 1.0, 1.3, 2.0, 3.0});
+  stock[name("channel_sigma_48")] =
+      F64Array({3, 4}, {0.0056 * scale, 0.0108, 0.0084, 0.0048, 0.0052, 0.0108, 0.0082, 0.0062,
+                        0.0118, 0.0158, 0.0110, 0.0042});
+  stock[name("channel_node_count")] = ArrayValues{"i4", {3}, ToBytes<std::int32_t>({4, 4, 4})};
+}
+
 void WriteSyntheticResources(const fs::path& directory, double surround_exponent = 1.0,
                              const std::string& negative_scan_id = "negative_scan",
                              double             first_gamma      = 0.48,
-                             const std::string& neg_b_medium     = "photo") {
+                             const std::string& neg_b_medium     = "photo",
+                             const StockEdit&   edit_stock       = {}) {
   fs::create_directories(directory);
   std::map<std::string, ArrayValues> stock;
+  // The film grain of schema 11: the values of all films, and one group per film.
+  stock["common/grain_cloud_sigma_um"]           = F64Array({3}, {2.0, 2.0, 2.8});
+  stock["common/grain_layer_correlation"]        = F64Array({3}, {0.489, 0.2349, 0.1743});
+  stock["common/grain_aperture_area_um2"]        = F64Array({}, {1809.5573684677208});
+  stock["common/grain_post_display_value"]       = F64Array({3}, {0.188, 0.191, 0.172});
+  stock["common/grain_post_display_sigma_48"]    = F64Array({3}, {0.0107, 0.0100, 0.0152});
+  stock["common/grain_post_display_correlation"] = F64Array({3}, {0.535, 0.509, 0.087});
+  AddGrainGroup(stock, "neg_a", 1.0);
+  AddGrainGroup(stock, "neg_b", 1.5);
+  AddGrainGroup(stock, "rev_a", 0.5);
   stock["common/wavelengths_nm"] = F64Array({kWavelengths}, kWavelengthsNm);
   stock["common/print_contrast"] = F64Array({}, {0.85});
   stock["common/print_flash"]    = F64Array({}, {0.02});
@@ -290,7 +323,7 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
   stock["light_table/viewing_cct_k"]     = F64Array({}, {5000.0});
   // neg_a reads the spectrum 'ramp' as its balance light, and neg_b the spectrum 'flat'. The light
   // axis goes from 'ramp' to 'flat'. The pool of 'photo' has both negatives.
-  const nlohmann::json metadata{
+  nlohmann::json metadata{
       {"negatives",
        {{"neg_a", {{"name", "Negative A"}, {"medium", "cine"}, {"scan_balance_light", "ramp"}}},
         {"neg_b",
@@ -298,6 +331,10 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
       {"print_materials", {{"paper_a", {{"name", "Paper A"}}}, {"paper_b", {{"name", "Paper B"}}}}},
       {"reversal_films", {{"rev_a", {{"name", "Reversal A"}}}}},
       {"reversal_list_order", {"rev_a"}},
+      {"grain",
+       {{"neg_a", {{"tier", "curve"}, {"source", "neg_a.pdf"}, {"rule", "datasheet_curve"}}},
+        {"neg_b", {{"tier", "pgi"}, {"source", "neg_b.pdf"}, {"rule", "pgi_anchor_external"}}},
+        {"rev_a", {{"tier", "reversal"}, {"source", "rev_a.pdf"}, {"rule", "reversal_nutting"}}}}},
       {"scene_lights", {"reference", "daylight"}},
       {"scene_spectra", {"flat", "ramp"}},
       {"negative_scan",
@@ -315,6 +352,9 @@ void WriteSyntheticResources(const fs::path& directory, double surround_exponent
        {{"kelvin", {3000, 6000}},
         {"lights", {"reference", "daylight"}},
         {"mired", {1e6 / 3000.0, 1e6 / 6000.0}}}}};
+  if (edit_stock) {
+    edit_stock(stock, metadata);
+  }
   WriteArrayFile(directory / "film_stock_bundle.bin", stock, metadata);
 
   std::vector<double> balance;
@@ -456,6 +496,115 @@ TEST_F(FilmPrintTablesTest, OtherArrayFileSchemaVersionThrows) {
   const auto error = OpenError(directory);
   EXPECT_NE(error.find("film_print_setup.bin"), std::string::npos) << error;
   EXPECT_NE(error.find("schema version"), std::string::npos) << error;
+}
+
+TEST_F(FilmPrintTablesTest, BundleOfSchema10FailsWithTheFoundVersionInTheMessage) {
+  ASSERT_EQ(kFilmResourceSchemaVersion, 11);
+  const auto directory = CopyOfResources("schema_10");
+  WriteManifest(directory, 10);
+  const auto error = OpenError(directory);
+  EXPECT_NE(error.find("manifest.json"), std::string::npos) << error;
+  EXPECT_NE(error.find("schema version 10 is not version 11"), std::string::npos) << error;
+}
+
+TEST_F(FilmPrintTablesTest, EveryFilmHasAGrainViewWithItsTierAndCurves) {
+  const auto bundle = FilmStockBundle::Open(Resources());
+  struct Film {
+    std::string id;
+    std::string tier;
+    double      scale    = 1.0;
+    bool        reversal = false;
+  };
+  for (const auto& film : {Film{"neg_a", "curve", 1.0}, Film{"neg_b", "pgi", 1.5},
+                           Film{"rev_a", "reversal", 0.5, true}}) {
+    SCOPED_TRACE(film.id);
+    const auto grain = bundle->Grain(film.id);
+    EXPECT_EQ(grain.tier, film.tier);
+    EXPECT_EQ(grain.reversal, film.reversal);
+    EXPECT_EQ(grain.layer.stored_nodes, 4);
+    ASSERT_EQ(grain.layer.node_count.size(), 3u);
+    EXPECT_EQ(grain.layer.node_count[2], 3);
+    EXPECT_EQ(grain.channel.node_count[2], 4);
+    EXPECT_DOUBLE_EQ(grain.layer.sigma[0], 0.010 * film.scale);
+    EXPECT_DOUBLE_EQ(grain.channel.sigma[0], 0.0056 * film.scale);
+    EXPECT_DOUBLE_EQ(grain.channel.x[11], 3.0);
+    EXPECT_EQ(grain.common.cloud_sigma_um.data(), bundle->GrainConstants().cloud_sigma_um.data());
+  }
+  const auto& common = bundle->GrainConstants();
+  EXPECT_DOUBLE_EQ(common.cloud_sigma_um[2], 2.8);
+  EXPECT_DOUBLE_EQ(common.layer_correlation[1], 0.2349);
+  EXPECT_DOUBLE_EQ(common.post_display_correlation[2], 0.087);
+  EXPECT_DOUBLE_EQ(common.post_display_sigma_48[0], 0.0107);
+  EXPECT_DOUBLE_EQ(common.aperture_area_um2, 1809.5573684677208);
+  try {
+    (void)bundle->Grain("paper_a");
+    ADD_FAILURE() << "A print material has no grain view";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("paper_a"), std::string::npos) << error.what();
+  }
+}
+
+TEST_F(FilmPrintTablesTest, FilmWithNoGrainGroupThrowsWithItsName) {
+  const auto directory = root_ / "no_grain_group";
+  WriteSyntheticResources(directory, 1.0, "negative_scan", 0.48, "photo",
+                          [](std::map<std::string, ArrayValues>& stock, nlohmann::json&) {
+                            std::erase_if(stock, [](const auto& entry) {
+                              return entry.first.starts_with("grain/rev_a/");
+                            });
+                          });
+  const auto error = OpenError(directory);
+  EXPECT_NE(error.find("'rev_a' has no grain group"), std::string::npos) << error;
+}
+
+TEST_F(FilmPrintTablesTest, DamagedGrainDataThrowsWithTheFilmAndTheReason) {
+  struct Damage {
+    std::string name;
+    StockEdit   edit;
+    std::string film;
+    std::string reason;
+  };
+  const std::vector<Damage> damages{
+      {"layer_not_rising",
+       [](auto& stock, auto&) {
+         stock["grain/neg_b/layer_amount"] =
+             F64Array({3, 4}, {0.1, 0.1, 1.0, 2.0, 0.2, 0.6, 1.1, 2.1, 0.3, 0.9, 1.5, 1.5});
+       },
+       "neg_b", "does not rise"},
+      {"channel_one_node",
+       [](auto& stock, auto&) {
+         stock["grain/neg_a/channel_node_count"] =
+             ArrayValues{"i4", {3}, ToBytes<std::int32_t>({1, 4, 4})};
+       },
+       "neg_a", "has 1 nodes"},
+      {"sigma_zero",
+       [](auto& stock, auto&) {
+         stock["grain/rev_a/channel_sigma_48"] = F64Array({3, 4}, std::vector<double>(12, 0.0));
+       },
+       "rev_a", "not above 0"},
+      {"unknown_tier",
+       [](auto&, nlohmann::json& metadata) { metadata["grain"]["neg_a"]["tier"] = "guess"; },
+       "neg_a", "tier 'guess'"},
+      {"no_tier", [](auto&, nlohmann::json& metadata) { metadata["grain"].erase("neg_b"); },
+       "neg_b", "grain metadata"},
+      {"missing_cloud_size",
+       [](auto& stock, auto&) { stock.erase("common/grain_cloud_sigma_um"); }, "",
+       "common/grain_cloud_sigma_um"},
+      {"correlation_of_one",
+       [](auto& stock, auto&) {
+         stock["common/grain_layer_correlation"] = F64Array({3}, {1.0, 0.2, 0.1});
+       },
+       "", "correlation"},
+  };
+  for (const auto& damage : damages) {
+    SCOPED_TRACE(damage.name);
+    const auto directory = root_ / ("grain_" + damage.name);
+    WriteSyntheticResources(directory, 1.0, "negative_scan", 0.48, "photo", damage.edit);
+    const auto error = OpenError(directory);
+    EXPECT_NE(error.find(damage.reason), std::string::npos) << error;
+    if (!damage.film.empty()) {
+      EXPECT_NE(error.find("'" + damage.film + "'"), std::string::npos) << error;
+    }
+  }
 }
 
 TEST_F(FilmPrintTablesTest, ArrayOfTheWrongShapeThrowsWithItsName) {
@@ -2377,6 +2526,29 @@ TEST_F(FilmPrintTablesLabTest, ShippedListsHoldTheStocksOfThePlan) {
   EXPECT_EQ(bundle_->CctGrid().kelvin.back(), 15000.0);
   EXPECT_EQ(bundle_->SceneLights()[0], "reference");
   EXPECT_NO_THROW((void)bundle_->Selection("kodak_5207", "kodak_2383", "reference"));
+}
+
+TEST_F(FilmPrintTablesLabTest, EveryShippedFilmHasAGrainViewOfItsTier) {
+  // Lab step P15 (plan section 4.2): 8 curve, 9 number, 6 family, 7 pgi, and 5 reversal films.
+  std::map<std::string, int> tiers;
+  for (const auto& negative : bundle_->Negatives()) {
+    const auto grain = bundle_->Grain(negative.id);
+    EXPECT_FALSE(grain.reversal) << negative.id;
+    ++tiers[std::string(grain.tier)];
+  }
+  for (const auto& reversal : bundle_->Reversals()) {
+    const auto grain = bundle_->Grain(reversal.id);
+    EXPECT_TRUE(grain.reversal) << reversal.id;
+    EXPECT_EQ(grain.tier, "reversal") << reversal.id;
+    ++tiers[std::string(grain.tier)];
+  }
+  EXPECT_EQ(tiers, (std::map<std::string, int>{
+                       {"curve", 8}, {"number", 9}, {"family", 6}, {"pgi", 7}, {"reversal", 5}}));
+  const auto& common = bundle_->GrainConstants();
+  EXPECT_EQ(std::vector<double>(common.cloud_sigma_um.begin(), common.cloud_sigma_um.end()),
+            (std::vector<double>{2.0, 2.0, 2.8}));
+  EXPECT_NEAR(common.aperture_area_um2, 3.141592653589793 * 24.0 * 24.0, 1e-9);
+  EXPECT_NEAR(common.layer_correlation[0], 0.489, 1e-3);
 }
 
 TEST_F(FilmPrintTablesLabTest, OnlyCineLookHasTheCinemaLook) {
