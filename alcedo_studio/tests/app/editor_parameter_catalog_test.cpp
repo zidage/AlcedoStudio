@@ -1182,6 +1182,40 @@ TEST(EditorParameterCatalogTest, FilmPrintStoredFlareLimitReadsInsideTheUiRange)
   EXPECT_TRUE(EditorParameterCatalog::ToModelJson("odt", *ui, stored, &error).has_value()) << error;
 }
 
+// Issue #718: the Film Grain rule of a method change, which the Display Transform panel and
+// editor.set both call.
+TEST(EditorParameterCatalogTest, MethodChangeToFilmPrintTurnsOnFilmGrainOnlyWhenItIsZero) {
+  const auto grain =
+      EditorParameterCatalog::FilmGrainAfterMethodChange("open_drt", "film_print", 0.0);
+  ASSERT_TRUE(grain.has_value());
+  EXPECT_DOUBLE_EQ(*grain, 100.0);
+  EXPECT_DOUBLE_EQ(*grain, EditorParameterCatalog::kFilmPrintFilmGrainUi);
+  EXPECT_DOUBLE_EQ(
+      EditorParameterCatalog::FilmGrainAfterMethodChange("aces_2_0", "film_print", 0.0).value(),
+      100.0);
+
+  // A stored strength above 0 stays.
+  EXPECT_FALSE(EditorParameterCatalog::FilmGrainAfterMethodChange("open_drt", "film_print", 40.0));
+}
+
+TEST(EditorParameterCatalogTest, MethodChangeFromFilmPrintSetsFilmGrainToZero) {
+  const auto grain =
+      EditorParameterCatalog::FilmGrainAfterMethodChange("film_print", "open_drt", 40.0);
+  ASSERT_TRUE(grain.has_value());
+  EXPECT_DOUBLE_EQ(*grain, 0.0);
+  EXPECT_DOUBLE_EQ(
+      EditorParameterCatalog::FilmGrainAfterMethodChange("film_print", "aces_2_0", 100.0).value(),
+      0.0);
+  // Film Grain 0 already agrees with the rule.
+  EXPECT_FALSE(EditorParameterCatalog::FilmGrainAfterMethodChange("film_print", "open_drt", 0.0));
+}
+
+TEST(EditorParameterCatalogTest, WriteThatKeepsTheMethodWritesNoFilmGrain) {
+  EXPECT_FALSE(EditorParameterCatalog::FilmGrainAfterMethodChange("film_print", "film_print", 0.0));
+  EXPECT_FALSE(EditorParameterCatalog::FilmGrainAfterMethodChange("open_drt", "open_drt", 40.0));
+  EXPECT_FALSE(EditorParameterCatalog::FilmGrainAfterMethodChange("open_drt", "aces_2_0", 40.0));
+}
+
 TEST(EditorParameterCatalogTest, ColorTempKelvinRoundTripsThroughSliderPivot) {
   for (const double kelvin : {2000.0, 6000.0, 15000.0}) {
     const int position = EditorParameterCatalog::KelvinToSliderPosition(kelvin);

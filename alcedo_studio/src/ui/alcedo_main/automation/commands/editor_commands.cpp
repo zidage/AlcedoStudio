@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -301,6 +302,58 @@ void ApplyWrite(ui::EditorSessionController* editor, QObject* context, PreparedW
   wait->Start(result.operation_id);
 }
 
+constexpr std::string_view kOdtField       = "odt";
+constexpr std::string_view kFilmGrainField = "film_grain";
+
+/// `odt.method` in the panel values @p values; empty when the image shows no display transform.
+auto                       OdtMethod(const QVariantMap& values) -> std::string {
+  const auto value = CurrentUiValue(values, *EditorParameterCatalog::Find(kOdtField));
+  if (!value.has_value() || !value->isObject()) {
+    return {};
+  }
+  return value->toObject().value("method").toString().toStdString();
+}
+
+/// The method before a write of @p field: the input of the Film Grain rule of a method change.
+/// Nothing for a write of another field, or when @p explicit_grain (the call also writes
+/// film_grain, and the explicit value wins).
+auto MethodBeforeWrite(const ui::EditorSessionController& editor, std::string_view field,
+                       bool explicit_grain) -> std::optional<std::string> {
+  if (field != kOdtField || explicit_grain) {
+    return std::nullopt;
+  }
+  return OdtMethod(CurrentPanelValues(editor));
+}
+
+/// After an `odt` write on a document with method @p previous_method, writes the Film Grain of
+/// the method rule (EditorParameterCatalog::FilmGrainAfterMethodChange, also the rule of the
+/// Display Transform panel) as a second settled write: the second history entry, as the panel
+/// makes it. Calls @p done with the failure and whether the rule wrote Film Grain.
+void ApplyFilmGrainRule(ui::EditorSessionController* editor, QObject* context,
+                        const std::string& previous_method, EditCommitAttribution attribution,
+                        std::function<void(std::optional<OperationFailure>, bool)> done) {
+  const QVariantMap current = CurrentPanelValues(*editor);
+  const auto        grain = CurrentUiValue(current, *EditorParameterCatalog::Find(kFilmGrainField));
+  const auto        value = grain.has_value() ? EditorParameterCatalog::FilmGrainAfterMethodChange(
+                                             previous_method, OdtMethod(current), grain->toDouble())
+                                              : std::nullopt;
+  if (!value.has_value()) {
+    done(std::nullopt, false);
+    return;
+  }
+  QString    error;
+  const auto field    = Text(kFilmGrainField);
+  auto       prepared = PrepareWrite(*editor, field, QJsonValue(*value), &error);
+  if (!prepared.has_value()) {
+    done(OperationFailure{AutomationErrorCode::Failed, error}, false);
+    return;
+  }
+  ApplyWrite(editor, context, std::move(*prepared), std::move(attribution),
+             [done = std::move(done)](std::optional<OperationFailure> failure) {
+               done(std::move(failure), true);
+             });
+}
+
 /// Answers @p failure of a write, undo, or redo. A committed failure (its frame failed to render)
 /// also carries the head commit, read after the queued history change, so the agent can undo it.
 void SendOperationFailure(const QPointer<AutomationCommandWait>& wait,
@@ -353,7 +406,9 @@ void SendHistoryMove(ui::EditorSessionController* editor, AutomationCommandWait*
 
 /// One editor.batch_set call: applies the changes in order, each after the previous frame.
 /// Agent control is checked again before each change after the first: when the user took
-/// control, the batch stops with the refusal, and the changes before it stay.
+/// control, the batch stops with the refusal, and the changes before it stay. A change of the
+/// display transform method is followed by the Film Grain of the method rule
+/// (ApplyFilmGrainRule) unless a change of the batch writes film_grain.
 class BatchApply final : public std::enable_shared_from_this<BatchApply> {
  public:
   BatchApply(const AutomationCommandRegistry* registry, ui::EditorSessionController* editor,
@@ -362,7 +417,13 @@ class BatchApply final : public std::enable_shared_from_this<BatchApply> {
         editor_(editor),
         wait_(wait),
         changes_(std::move(changes)),
-        attribution_(std::move(attribution)) {}
+        attribution_(std::move(attribution)) {
+    for (const auto& change : changes_) {
+      const auto* entry =
+          EditorParameterCatalog::Find(change.toObject().value("field").toString().toStdString());
+      explicit_grain_ = explicit_grain_ || (entry != nullptr && entry->field == kFilmGrainField);
+    }
+  }
 
   void Next() {
     if (wait_ == nullptr) {
@@ -395,7 +456,8 @@ class BatchApply final : public std::enable_shared_from_this<BatchApply> {
       wait_->SendError(AutomationErrorCode::InvalidParams, error, FailureData(error, pointer));
       return;
     }
-    auto self = shared_from_this();
+    previous_method_ = MethodBeforeWrite(*editor_, prepared->field_, explicit_grain_);
+    auto self        = shared_from_this();
     ApplyWrite(editor_, wait_, std::move(*prepared), attribution_,
                [self](std::optional<OperationFailure> failure) { self->Finished(failure); });
   }
@@ -414,6 +476,43 @@ class BatchApply final : public std::enable_shared_from_this<BatchApply> {
     if (failure.has_value()) {
       // The change is committed and stays, so it counts as applied; only its frame failed. The
       // head is read after the queued history change.
+      AfterQueuedChanges(wait_, [self, failure = *failure] {
+        if (self->wait_ != nullptr) {
+          self->wait_->SendError(failure.code_, failure.message_,
+                                 self->FailureData(failure.message_, {}));
+        }
+      });
+      return;
+    }
+    AfterQueuedChanges(wait_, [self] { self->ApplyRuleThenNext(); });
+  }
+
+  /// After a change of `odt`, the Film Grain write of the method rule; then the next change.
+  void ApplyRuleThenNext() {
+    if (wait_ == nullptr) {
+      return;
+    }
+    const auto previous_method = std::exchange(previous_method_, std::nullopt);
+    if (!previous_method.has_value()) {
+      Next();
+      return;
+    }
+    auto self = shared_from_this();
+    ApplyFilmGrainRule(editor_, wait_, *previous_method, attribution_,
+                       [self](std::optional<OperationFailure> failure, bool wrote) {
+                         self->RuleFinished(failure, wrote);
+                       });
+  }
+
+  /// The Film Grain write of the rule belongs to the change before it, so it does not count in
+  /// `applied`.
+  void RuleFinished(const std::optional<OperationFailure>& failure, bool wrote) {
+    if (wait_ == nullptr) {
+      return;
+    }
+    grain_written_ = grain_written_ || (wrote && (!failure.has_value() || failure->committed_));
+    auto self      = shared_from_this();
+    if (failure.has_value()) {
       AfterQueuedChanges(wait_, [self, failure = *failure] {
         if (self->wait_ != nullptr) {
           self->wait_->SendError(failure.code_, failure.message_,
@@ -446,6 +545,12 @@ class BatchApply final : public std::enable_shared_from_this<BatchApply> {
         }
       }
     }
+    if (grain_written_) {
+      if (const auto value =
+              CurrentUiValue(current, *EditorParameterCatalog::Find(kFilmGrainField))) {
+        values.insert(Text(kFilmGrainField), *value);
+      }
+    }
     wait_->SendResult(QJsonObject{{"applied", applied_},
                                   {"head_commit", HeadValue(editor_->history_snapshot())},
                                   {"values", values}});
@@ -457,7 +562,38 @@ class BatchApply final : public std::enable_shared_from_this<BatchApply> {
   QJsonArray                       changes_;
   EditCommitAttribution            attribution_;
   qsizetype                        applied_ = 0;
+  /// True when a change of the batch writes film_grain: the method rule then writes nothing.
+  bool                             explicit_grain_ = false;
+  /// The method before the change in progress, when it is a change of `odt` that the method
+  /// rule follows.
+  std::optional<std::string>       previous_method_;
+  /// True when the method rule wrote Film Grain; the result then lists film_grain.
+  bool                             grain_written_ = false;
 };
+
+/// Answers editor.set: the UI value of @p field and, in `values`, each field that the call
+/// wrote: @p field, and film_grain when @p grain_written (the method rule wrote it).
+void SendSetResult(const QPointer<AutomationCommandWait>& wait,
+                   const ui::EditorSessionController& editor, const QString& field,
+                   bool grain_written) {
+  const QVariantMap current = CurrentPanelValues(editor);
+  const auto*       entry   = EditorParameterCatalog::Find(field.toStdString());
+  const auto        value   = CurrentUiValue(current, *entry);
+  QJsonObject       values;
+  if (value.has_value()) {
+    values.insert(Text(entry->field), *value);
+  }
+  if (grain_written) {
+    if (const auto grain =
+            CurrentUiValue(current, *EditorParameterCatalog::Find(kFilmGrainField))) {
+      values.insert(Text(kFilmGrainField), *grain);
+    }
+  }
+  wait->SendResult(QJsonObject{{"field", field},
+                               {"value", value.value_or(QJsonValue(QJsonValue::Null))},
+                               {"values", values},
+                               {"head_commit", HeadValue(editor.history_snapshot())}});
+}
 
 auto IsPersistBusy(const ui::EditorSessionController& editor) -> bool {
   const auto state = editor.session_state();
@@ -699,15 +835,19 @@ auto RegisterAutomationEditorCommands(AutomationCommandRegistry& registry,
       "editor now shows (a crop can be constrained). A value equal to the current one makes no "
       "commit. The commit has the author agent and the optional 'note'. When the frame of the "
       "commit fails to render, the commit stays and the error data has 'reason' and "
-      "'head_commit'; editor.undo reverts it.");
+      "'head_commit'; editor.undo reverts it. A write of 'odt' that changes the method follows "
+      "the rule of the Display Transform panel: method film_print turns on film_grain at 100 "
+      "when it is 0, and another method on film_print sets film_grain to 0, in a second commit. "
+      "'values' lists each field that the call wrote.");
   set.params_schema = AutomationClosedParamsSchema(
       QJsonObject{{"field", text_schema}, {"value", ValueSchema()}, {"note", NoteSchema()}},
       QJsonArray{"field", "value"});
   set.result_schema = AutomationObjectSchema(
       QJsonObject{{"field", text_schema},
                   {"value", QJsonObject{{"type", QJsonArray{"number", "object", "null"}}}},
+                  {"values", QJsonObject{{"type", "object"}}},
                   {"head_commit", head_schema}},
-      QJsonArray{"field", "value", "head_commit"});
+      QJsonArray{"field", "value", "values", "head_commit"});
   set.changes_state = true;
   set.handler       = [host](const QJsonObject& params, AutomationReply reply) {
     ui::EditorSessionController* editor = host->editor_session();
@@ -723,27 +863,43 @@ auto RegisterAutomationEditorCommands(AutomationCommandRegistry& registry,
       return;
     }
     QPointer<AutomationCommandWait> wait = new AutomationCommandWait(std::move(reply), host);
-    ApplyWrite(
-        editor, wait, std::move(*prepared), AgentAttribution(params),
-        [wait, editor, field](std::optional<OperationFailure> failure) {
-          if (wait == nullptr) {
-            return;
-          }
-          if (failure.has_value()) {
-            SendOperationFailure(wait, editor, *failure);
-            return;
-          }
-          AfterQueuedChanges(wait, [wait, editor, field] {
-            if (wait == nullptr) {
-              return;
-            }
-            const auto* entry = EditorParameterCatalog::Find(field.toStdString());
-            const auto  value = CurrentUiValue(CurrentPanelValues(*editor), *entry);
-            wait->SendResult(QJsonObject{{"field", field},
-                                               {"value", value.value_or(QJsonValue(QJsonValue::Null))},
-                                               {"head_commit", HeadValue(editor->history_snapshot())}});
-          });
-        });
+    const auto previous_method           = MethodBeforeWrite(*editor, prepared->field_, false);
+    ApplyWrite(editor, wait, std::move(*prepared), AgentAttribution(params),
+               [wait, editor, field, previous_method,
+                attribution = AgentAttribution(params)](std::optional<OperationFailure> failure) {
+                 if (wait == nullptr) {
+                   return;
+                 }
+                 if (failure.has_value()) {
+                   SendOperationFailure(wait, editor, *failure);
+                   return;
+                 }
+                 AfterQueuedChanges(wait, [wait, editor, field, previous_method, attribution] {
+                   if (wait == nullptr) {
+                     return;
+                   }
+                   if (!previous_method.has_value()) {
+                     SendSetResult(wait, *editor, field, false);
+                     return;
+                   }
+                   ApplyFilmGrainRule(
+                       editor, wait, *previous_method, attribution,
+                       [wait, editor, field](std::optional<OperationFailure> failure, bool wrote) {
+                         if (wait == nullptr) {
+                           return;
+                         }
+                         if (failure.has_value()) {
+                           SendOperationFailure(wait, editor, *failure);
+                           return;
+                         }
+                         AfterQueuedChanges(wait, [wait, editor, field, wrote] {
+                           if (wait != nullptr) {
+                             SendSetResult(wait, *editor, field, wrote);
+                           }
+                         });
+                       });
+                 });
+               });
   };
   RegisterOrFail(registry, std::move(set), &ok, error);
 
@@ -755,7 +911,9 @@ auto RegisterAutomationEditorCommands(AutomationCommandRegistry& registry,
       "of the previous one. The first change that fails stops the batch: the error data has "
       "'applied' (the changes before it, which stay) and 'head_commit'. A change whose frame "
       "fails to render is committed and stays, so 'applied' counts it. Each commit has the "
-      "author agent and the optional 'note'.");
+      "author agent and the optional 'note'. A change of the 'odt' method follows the film_grain "
+      "rule of editor.set unless a change of the batch writes film_grain; the rule commit "
+      "belongs to that change and 'values' then lists film_grain.");
   batch.params_schema = AutomationClosedParamsSchema(
       QJsonObject{
           {"changes",

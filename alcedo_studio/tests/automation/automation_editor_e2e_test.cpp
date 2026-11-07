@@ -24,6 +24,7 @@
 #include <cmath>
 #include <functional>
 
+#include "app/editor_parameter_catalog.hpp"
 #include "automation/automation_client.hpp"
 #include "automation/automation_session_file.hpp"
 #include "automation_editor_e2e_session.hpp"
@@ -187,6 +188,201 @@ TEST_F(AutomationEditorE2ETest, EveryValueReadByGetIsAcceptedBySetAndKeepsItsVal
   EXPECT_EQ(error.value("code").toInt(), -32602);
   EXPECT_EQ(error.value("message").toString(),
             QStringLiteral("input_profile: a RAW image has no input profile"));
+  Stop();
+}
+
+// Film simulation (issue #718) ----------------------------------------------------------------
+
+/// The commits of the active Version from the head back to the root (newest first).
+auto AppliedCommits(const QJsonObject& history) -> QJsonArray {
+  QJsonArray applied;
+  for (const auto& commit : history.value("commits").toArray()) {
+    if (commit.toObject().value("position").toString() != QStringLiteral("future")) {
+      applied.push_back(commit);
+    }
+  }
+  return applied;
+}
+
+/// The value of the Display Transform item of adjustments.items for @p element.
+auto DisplayTransformItemText(const QJsonObject& items) -> QString {
+  for (const auto& node : items.value("nodes").toArray()) {
+    for (const auto& item : node.toObject().value("items").toArray()) {
+      if (item.toObject().value("item").toString() == QStringLiteral("drt")) {
+        return item.toObject().value("value").toString();
+      }
+    }
+  }
+  return {};
+}
+
+class AutomationFilmPrintE2ETest : public test::AutomationEditorE2ETestBase {
+ protected:
+  /// The editor_value of the one film.list entry that @p id names.
+  auto FilmEditorValue(const QString& id) -> QJsonObject {
+    const QJsonArray films =
+        Result(QStringLiteral("film.list"), QJsonObject{{"query", id}}).value("films").toArray();
+    for (const auto& film : films) {
+      if (film.toObject().value("id").toString() == id) {
+        return film.toObject().value("editor_value").toObject();
+      }
+    }
+    ADD_FAILURE() << "film.list has no entry " << id.toStdString();
+    return {};
+  }
+
+  /// The odt value of Film Print on Portra 400 and Vision 2383, from the editor_value of film.list.
+  auto PortraOn2383() -> QJsonObject {
+    QJsonObject odt{{"method", "film_print"}};
+    for (const auto& value : {FilmEditorValue(QStringLiteral("kodak_portra_400")),
+                              FilmEditorValue(QStringLiteral("kodak_2383"))}) {
+      for (auto it = value.begin(); it != value.end(); ++it) {
+        odt.insert(it.key(), it.value());
+      }
+    }
+    return odt;
+  }
+
+  auto Values() -> QJsonObject {
+    return Result(QStringLiteral("editor.get")).value("values").toObject();
+  }
+};
+
+// editor.set of method Film Print gives the document and the history entries of the panel: the
+// complete odt state, then a second commit of Film Grain at 100 % (the method rule).
+TEST_F(AutomationFilmPrintE2ETest, FilmPrintSetMatchesThePanelWritesAndTurnsOnFilmGrain) {
+  ASSERT_FALSE(StartWithOnePhoto(QStringLiteral("film_print_project")).isEmpty());
+  OpenPhoto();
+  const QJsonObject before = Values();
+  ASSERT_NE(before.value("odt").toObject().value("method").toString(),
+            QStringLiteral("film_print"));
+  ASSERT_EQ(before.value("film_grain").toDouble(-1), 0.0);
+  const qsizetype applied_before = AppliedCommits(Result(QStringLiteral("editor.history"))).size();
+
+  // The editor_value of film.list sets the property.
+  const QJsonObject odt          = PortraOn2383();
+  EXPECT_EQ(odt, (QJsonObject{{"method", "film_print"},
+                              {"negative", "kodak_portra_400"},
+                              {"print_material", "kodak_2383"}}));
+  const QJsonObject set =
+      Result(QStringLiteral("editor.set"), QJsonObject{{"field", "odt"}, {"value", odt}});
+  const QJsonObject written = set.value("value").toObject();
+  EXPECT_EQ(written.value("method").toString(), QStringLiteral("film_print"));
+  EXPECT_EQ(written.value("negative").toString(), QStringLiteral("kodak_portra_400"));
+  EXPECT_EQ(written.value("print_material").toString(), QStringLiteral("kodak_2383"));
+  const QJsonObject set_values = set.value("values").toObject();
+  EXPECT_EQ(set_values.value("odt").toObject(), written);
+  EXPECT_DOUBLE_EQ(set_values.value("film_grain").toDouble(-1), 100.0);
+
+  const QJsonObject history = Result(QStringLiteral("editor.history"));
+  const QJsonArray  applied = AppliedCommits(history);
+  ASSERT_EQ(applied.size(), applied_before + 2);
+  // The history lists the newest commit first: the Film Grain commit of the rule, then odt.
+  EXPECT_EQ(applied.at(0).toObject().value("field").toString(), QStringLiteral("film_grain"));
+  EXPECT_EQ(applied.at(0).toObject().value("author").toString(), QStringLiteral("agent"));
+  EXPECT_EQ(applied.at(1).toObject().value("field").toString(), QStringLiteral("odt"));
+  EXPECT_EQ(history.value("head_commit"), set.value("head_commit"));
+  const QJsonObject cli_values = Values();
+  EXPECT_DOUBLE_EQ(cli_values.value("film_grain").toDouble(-1), 100.0);
+
+  // The read-back of the summary names the selection.
+  EXPECT_EQ(DisplayTransformItemText(
+                Result(QStringLiteral("adjustments.items"), QJsonObject{{"element_id", element_}})),
+            QStringLiteral("Film Print, Kodak Portra 400, Kodak Vision 2383"));
+
+  // The writes of the panel for the same selection: the complete odt state of its models, then
+  // Film Grain.
+  Result(QStringLiteral("editor.undo"));
+  Result(QStringLiteral("editor.undo"));
+  ASSERT_EQ(Values(), before);
+  QJsonObject panel_odt = before.value("odt").toObject();
+  for (auto it = odt.begin(); it != odt.end(); ++it) {
+    panel_odt.insert(it.key(), it.value());
+  }
+  const QJsonObject batch = Result(
+      QStringLiteral("editor.batch_set"),
+      QJsonObject{
+          {"changes",
+           QJsonArray{QJsonObject{{"field", "odt"}, {"value", panel_odt}},
+                      QJsonObject{{"field", "film_grain"},
+                                  {"value", EditorParameterCatalog::kFilmPrintFilmGrainUi}}}}});
+  EXPECT_EQ(batch.value("applied").toInt(), 2);
+  EXPECT_EQ(Values(), cli_values);
+  EXPECT_EQ(AppliedCommits(Result(QStringLiteral("editor.history"))).size(), applied.size());
+  Stop();
+}
+
+TEST_F(AutomationFilmPrintE2ETest, LeavingFilmPrintSetsFilmGrainToZeroAndAStoredGrainStays) {
+  ASSERT_FALSE(StartWithOnePhoto(QStringLiteral("film_leave_project")).isEmpty());
+  OpenPhoto();
+  // A stored strength above 0 stays when the method changes to Film Print: one commit.
+  Set(QStringLiteral("film_grain"), 40);
+  qsizetype         commits = CommitCount();
+  const QJsonObject enter   = Result(QStringLiteral("editor.set"),
+                                     QJsonObject{{"field", "odt"}, {"value", PortraOn2383()}});
+  EXPECT_FALSE(enter.value("values").toObject().contains("film_grain"));
+  EXPECT_EQ(CommitCount(), commits + 1);
+  EXPECT_NEAR(Value(QStringLiteral("film_grain")), 40.0, 1e-4);
+
+  // Another method on Film Print sets Film Grain to 0 in a second commit.
+  commits = CommitCount();
+  const QJsonObject leave =
+      Result(QStringLiteral("editor.set"),
+             QJsonObject{{"field", "odt"}, {"value", QJsonObject{{"method", "open_drt"}}}});
+  EXPECT_DOUBLE_EQ(leave.value("values").toObject().value("film_grain").toDouble(-1), 0.0);
+  EXPECT_EQ(CommitCount(), commits + 2);
+  EXPECT_DOUBLE_EQ(Value(QStringLiteral("film_grain")), 0.0);
+  EXPECT_EQ(DisplayTransformItemText(
+                Result(QStringLiteral("adjustments.items"), QJsonObject{{"element_id", element_}})),
+            QStringLiteral("OpenDRT"));
+  Stop();
+}
+
+// A batch that also writes film_grain keeps the explicit value: the rule writes nothing.
+TEST_F(AutomationFilmPrintE2ETest, BatchWithAnExplicitFilmGrainKeepsTheExplicitValue) {
+  ASSERT_FALSE(StartWithOnePhoto(QStringLiteral("film_batch_project")).isEmpty());
+  OpenPhoto();
+  ASSERT_EQ(Value(QStringLiteral("film_grain")), 0.0);
+  const qsizetype   commits = CommitCount();
+  const QJsonObject batch   = Result(
+      QStringLiteral("editor.batch_set"),
+      QJsonObject{{"changes", QJsonArray{QJsonObject{{"field", "odt"}, {"value", PortraOn2383()}},
+                                         QJsonObject{{"field", "film_grain"}, {"value", 30}}}}});
+  EXPECT_EQ(batch.value("applied").toInt(), 2);
+  EXPECT_EQ(CommitCount(), commits + 2);
+  EXPECT_NEAR(batch.value("values").toObject().value("film_grain").toDouble(-1), 30.0, 1e-4);
+  EXPECT_NEAR(Value(QStringLiteral("film_grain")), 30.0, 1e-4);
+
+  // Without film_grain in the batch, the rule follows the change of the method, and the result
+  // lists film_grain.
+  const QJsonObject leave =
+      Result(QStringLiteral("editor.batch_set"),
+             QJsonObject{{"changes",
+                          QJsonArray{QJsonObject{
+                              {"field", "odt"}, {"value", QJsonObject{{"method", "aces_2_0"}}}}}}});
+  EXPECT_EQ(leave.value("applied").toInt(), 1);
+  EXPECT_EQ(CommitCount(), commits + 4);
+  EXPECT_DOUBLE_EQ(leave.value("values").toObject().value("film_grain").toDouble(-1), 0.0);
+  Stop();
+}
+
+// The headless host finds the film print resources next to alcedo_main, as Alcedo Studio does.
+TEST_F(AutomationFilmPrintE2ETest, HeadlessPreviewRendersAFilmPrintDocument) {
+  ASSERT_FALSE(StartWithOnePhoto(QStringLiteral("film_preview_project")).isEmpty());
+  OpenPhoto();
+  const QJsonObject films = Result(QStringLiteral("film.list"), QJsonObject{{"list", "negative"}});
+  EXPECT_TRUE(films.value("warnings").toArray().isEmpty())
+      << QJsonDocument(films.value("warnings").toArray()).toJson().toStdString();
+  Result(QStringLiteral("editor.set"), QJsonObject{{"field", "odt"}, {"value", PortraOn2383()}});
+  const QString     out_dir = QDir(root_).filePath(QStringLiteral("film_preview"));
+  const QJsonObject preview = Result(QStringLiteral("render.preview"),
+                                     QJsonObject{{"out_dir", out_dir}, {"long_edge", 512}});
+  const QImage      current(preview.value("current").toObject().value("path").toString());
+  const QImage      root(preview.value("root").toObject().value("path").toString());
+  ASSERT_FALSE(current.isNull());
+  ASSERT_FALSE(root.isNull());
+  EXPECT_EQ(std::max(current.width(), current.height()), 512);
+  EXPECT_NE(current, root) << "the current image has the film print";
   Stop();
 }
 

@@ -429,16 +429,53 @@ TEST(AdjustmentTransferCatalogTest, CatalogListsDevelopRowFirstWithRawAndGeometr
   EXPECT_EQ(develop.items.at(3).display_value, "3.5 deg");
 }
 
-TEST(AdjustmentTransferCatalogTest, CatalogNamesTheFilmPrintMethod) {
-  auto               document = CreateDefaultPipelineDocument();
-  DrtParameterUpdate update;
-  update.method = DrtMethod::FilmPrint;
+/// The Display Transform item text of a default document after @p update.
+auto DisplayTransformText(const DrtParameterUpdate& update) -> std::string {
+  auto document = CreateDefaultPipelineDocument();
   document.Drt()->Params().ApplyUpdate(update);
   std::string error;
   const auto  nodes = AdjustmentTransferCatalogService::BuildNodeDescriptors(document, &error);
-  ASSERT_TRUE(nodes.has_value()) << error;
-  ASSERT_FALSE(nodes->empty());
-  EXPECT_EQ(nodes->back().items.at(0).display_value, "Film Print");
+  EXPECT_TRUE(nodes.has_value()) << error;
+  if (!nodes.has_value() || nodes->empty()) {
+    return {};
+  }
+  return nodes->back().items.at(0).display_value;
+}
+
+// Issue #718: the Film Print item names the selection with the catalog names, so a read-back of
+// adjustments.items confirms a write.
+TEST(AdjustmentTransferCatalogTest, FilmPrintItemNamesTheNegativeAndThePrintMaterial) {
+  DrtParameterUpdate update;
+  update.method              = DrtMethod::FilmPrint;
+  update.film_negative       = "kodak_portra_400";
+  update.film_print_material = "kodak_2383";
+  EXPECT_EQ(DisplayTransformText(update), "Film Print, Kodak Portra 400, Kodak Vision 2383");
+}
+
+TEST(AdjustmentTransferCatalogTest, NegativeScanItemNamesTheNegativeAndNegativeScan) {
+  DrtParameterUpdate update;
+  update.method              = DrtMethod::FilmPrint;
+  update.film_negative       = "kodak_5219";
+  update.film_print_material = "negative_scan";
+  EXPECT_EQ(DisplayTransformText(update), "Film Print, Kodak Vision3 500T 5219, Negative Scan");
+}
+
+// A colour reversal film reads no print material, so the item names the film only.
+TEST(AdjustmentTransferCatalogTest, ReversalFilmItemNamesTheFilmOnly) {
+  DrtParameterUpdate update;
+  update.method              = DrtMethod::FilmPrint;
+  update.film_negative       = "fuji_velvia_50";
+  update.film_print_material = "kodak_2383";
+  EXPECT_EQ(DisplayTransformText(update), "Film Print, Fujichrome Velvia 50");
+}
+
+TEST(AdjustmentTransferCatalogTest, OtherMethodItemsKeepTheMethodText) {
+  DrtParameterUpdate open_drt;
+  open_drt.method = DrtMethod::OpenDrt;
+  EXPECT_EQ(DisplayTransformText(open_drt), "OpenDRT");
+  DrtParameterUpdate aces;
+  aces.method = DrtMethod::Aces20;
+  EXPECT_EQ(DisplayTransformText(aces), "ACES 2.0");
 }
 
 TEST(AdjustmentTransferCatalogTest, CatalogBuildsDrtPostItemsFromCurrentOwners) {

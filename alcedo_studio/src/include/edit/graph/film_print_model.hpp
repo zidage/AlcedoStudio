@@ -275,6 +275,32 @@ template <std::size_t Count>
   return IsFilmIdentifier(kFilmNegativeIds, id) || IsFilmReversalIdentifier(id);
 }
 
+/// The name in @p names at the position of @p id in @p ids; empty when @p id is not in @p ids.
+template <std::size_t Count>
+[[nodiscard]] constexpr auto FilmCatalogName(const std::array<std::string_view, Count>& ids,
+                                             const std::array<std::string_view, Count>& names,
+                                             std::string_view id) -> std::string_view {
+  for (std::size_t i = 0; i < Count; ++i) {
+    if (ids[i] == id) {
+      return names[i];
+    }
+  }
+  return {};
+}
+
+/// Catalog name of a value of the field `negative` (a negative or a colour reversal film), for
+/// example `Kodak Portra 400`. Empty for an unknown identifier.
+[[nodiscard]] constexpr auto FilmStockCatalogName(std::string_view id) -> std::string_view {
+  const std::string_view negative = FilmCatalogName(kFilmNegativeIds, kFilmNegativeNames, id);
+  return negative.empty() ? FilmCatalogName(kFilmReversalIds, kFilmReversalNames, id) : negative;
+}
+
+/// Catalog name of a print material, for example `Kodak Vision 2383`; `Negative Scan` for
+/// @ref kFilmNegativeScanId. Empty for an unknown identifier.
+[[nodiscard]] constexpr auto FilmPrintMaterialCatalogName(std::string_view id) -> std::string_view {
+  return FilmCatalogName(kFilmPrintMaterialIds, kFilmPrintMaterialNames, id);
+}
+
 /// True when @p id is @ref kFilmAsShotLightId.
 [[nodiscard]] constexpr auto IsFilmAsShotLight(std::string_view id) -> bool {
   return id == kFilmAsShotLightId;

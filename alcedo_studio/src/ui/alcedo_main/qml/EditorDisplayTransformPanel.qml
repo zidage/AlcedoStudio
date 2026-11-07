@@ -115,32 +115,29 @@ Item {
         root.selectFilm(last.length > 0 ? last : parameterCatalog.filmDefault(process))
     }
 
-    /// Film Grain strength in UI percent that a selection of method Film Print sets when the
-    /// stored strength is 0: the datasheet granularity of the film.
-    readonly property real filmPrintGrainPercent: 100
-
     /// A selection of method Film Print on another method applies the remembered film print
     /// settings in the same write (issue #672). The film print of a document is not written when
-    /// it has another method, so without them the selection starts at the defaults.
+    /// it has another method, so without them the selection starts at the defaults. The
+    /// remembered settings are a preference of the user, so only the panel applies them.
     ///
-    /// The film print has its grain in the negative, so the selection also turns on Film Grain at
-    /// @ref filmPrintGrainPercent when its stored strength is 0. A stored strength stays. A
-    /// selection of another method on Film Print sets Film Grain to 0: the grain belongs to the
-    /// film, and the other methods show the image with no film. Film Grain is a field of its own,
-    /// so each of these is a second settled write: a second history entry after the method.
+    /// The Film Grain rule of a method change is EditorParameterCatalog::FilmGrainAfterMethodChange,
+    /// which `editor.set` also calls (issue #718): Film Print turns on Film Grain at the datasheet
+    /// granularity when the stored strength is 0, and another method on Film Print sets it to 0.
+    /// Film Grain is a field of its own, so the rule is a second settled write: a second history
+    /// entry after the method.
     function selectMethod(index, value) {
+        const previousMethod = String(root.selectedMethodValue)
         const entersFilmPrint = String(value) === "film_print" && !root.isFilmPrint
-        const leavesFilmPrint = String(value) !== "film_print" && root.isFilmPrint
         if (entersFilmPrint && root.editorBehavior) {
             const remembered = root.editorBehavior.filmPrintUiValue
             if (remembered && remembered.method === "film_print")
                 root.loadFilmValues(remembered)
         }
         methodModel.selectIndex(index)
-        if (entersFilmPrint && !(filmGrainModel.value > 0))
-            root.writeFilmGrain(root.filmPrintGrainPercent)
-        else if (leavesFilmPrint && filmGrainModel.value !== 0)
-            root.writeFilmGrain(0)
+        const grain = parameterCatalog.filmGrainAfterMethodChange(previousMethod, String(value),
+                                                                  filmGrainModel.value)
+        if (grain !== undefined)
+            root.writeFilmGrain(grain)
     }
 
     /// One settled write of Film Grain at @p percent (UI percent).
