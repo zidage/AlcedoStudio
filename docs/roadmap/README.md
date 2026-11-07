@@ -34,6 +34,9 @@ use their own top-level category.
 - [AI Segmentation Mask (EfficientSAM3) Master Plan](alcedo_studio/edit/ai_segmentation_mask_master_plan.md)
 - [Raster Image Input (JPEG, PNG, TIFF, OpenEXR) Plan](alcedo_studio/edit/raster_image_input_plan.md)
 - [Executor Ownership Refactor Review Findings](alcedo_studio/edit/executor_ownership_review_findings.md)
+- [Film Print DRT Plan](alcedo_studio/edit/film_print_drt_plan.md)
+- [Film Simulation Explained (Chinese; explanatory document)](alcedo_studio/edit/film_simulation/film_simulation_explained.md):
+  the spectral film model, its main flow, the GPU implementation, and a comparison with spektrafilm
 
 ## Alcedo Studio — UI
 
