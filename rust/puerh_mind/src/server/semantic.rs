@@ -274,10 +274,9 @@ impl SemanticServiceImpl {
 }
 
 /// Build a success `AiResponseHeader` for a v2 embedding call, echoing the caller's correlation
-/// ids and recording the model that actually served. Mirrors the success-only `ok_header` in
-/// `ai_runtime.rs`; the full structured-error-in-body mapping is deferred to Phase 5 (Phase 0
-/// §1.5), so v2 hard failures still propagate the v1 `tonic::Status` and the header travels only
-/// on success.
+/// ids and recording the model that actually served. The full structured-error-in-body mapping
+/// is deferred to Phase 5 (Phase 0 §1.5), so v2 hard failures still propagate the v1
+/// `tonic::Status` and the header travels only on success.
 fn build_response_header(
     req: &AiRequestHeader,
     model_id: &str,

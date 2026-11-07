@@ -42,8 +42,6 @@ class InteractionPolicyController final : public QObject {
                  NOTIFY PolicyChanged)
   Q_PROPERTY(QVariantList pendingDeleteTargets READ PendingDeleteTargets WRITE
                  SetPendingDeleteTargets NOTIFY PolicyChanged)
-  Q_PROPERTY(QVariantList pendingAnalysisTargets READ PendingAnalysisTargets WRITE
-                 SetPendingAnalysisTargets NOTIFY PolicyChanged)
   // Search-settings natural-language toggle (UI mutual-exclusion input). When
   // true the search field-filter checkboxes are disabled (see
   // CanChangeSearchFieldFilters). This is a UI-only gate — it does NOT go
@@ -62,15 +60,10 @@ class InteractionPolicyController final : public QObject {
   // Pending delete gate (depends on pendingDeleteTargets + locks).
   Q_PROPERTY(bool canDeletePendingTargets READ CanDeletePendingTargets NOTIFY PolicyChanged)
   Q_PROPERTY(QString pendingDeleteReason READ PendingDeleteReason NOTIFY PolicyChanged)
-  // Pending analysis-run gate (depends on pendingAnalysisTargets + locks).
-  Q_PROPERTY(bool canRunAnalysis READ CanRunAnalysis NOTIFY PolicyChanged)
-  Q_PROPERTY(QString runAnalysisReason READ RunAnalysisReason NOTIFY PolicyChanged)
   // Global task gates.
   Q_PROPERTY(bool canChangeSemanticModel READ CanChangeSemanticModel NOTIFY PolicyChanged)
   Q_PROPERTY(bool canRunSemanticGeneration READ CanRunSemanticGeneration NOTIFY PolicyChanged)
   Q_PROPERTY(bool canChangeModelDownloadSettings READ CanChangeModelDownloadSettings NOTIFY
-                 PolicyChanged)
-  Q_PROPERTY(bool canChangeImageAnalysisProvider READ CanChangeImageAnalysisProvider NOTIFY
                  PolicyChanged)
   // Search field-filter gate (depends on naturalLanguageSearchEnabled only).
   Q_PROPERTY(bool canChangeSearchFieldFilters READ CanChangeSearchFieldFilters NOTIFY
@@ -99,8 +92,6 @@ class InteractionPolicyController final : public QObject {
   void             SetFocusedElementId(uint elementId);
   QVariantList     PendingDeleteTargets() const { return pending_delete_targets_; }
   void             SetPendingDeleteTargets(const QVariantList& targets);
-  QVariantList     PendingAnalysisTargets() const { return pending_analysis_targets_; }
-  void             SetPendingAnalysisTargets(const QVariantList& targets);
   bool             NaturalLanguageSearchEnabled() const { return natural_language_search_enabled_; }
   void             SetNaturalLanguageSearchEnabled(bool enabled);
 
@@ -111,12 +102,9 @@ class InteractionPolicyController final : public QObject {
   QString FocusedEditReason() const;
   bool    CanDeletePendingTargets() const;
   QString PendingDeleteReason() const;
-  bool    CanRunAnalysis() const;
-  QString RunAnalysisReason() const;
   bool    CanChangeSemanticModel() const;
   bool    CanRunSemanticGeneration() const;
   bool    CanChangeModelDownloadSettings() const;
-  bool    CanChangeImageAnalysisProvider() const;
   bool    CanChangeSearchFieldFilters() const;
   QString SearchFieldFiltersReason() const;
   bool    CanSelectEditorImage() const;
@@ -138,12 +126,10 @@ class InteractionPolicyController final : public QObject {
   Q_INVOKABLE QVariantMap EvaluateEditImageRating(uint elementId) const;
   Q_INVOKABLE QVariantMap EvaluateEditImageRatings(const QVariantList& targets) const;
   Q_INVOKABLE QVariantMap EvaluateEditImageRatingReason(uint elementId) const;
-  Q_INVOKABLE QVariantMap EvaluateRunImageAnalysis(const QVariantList& targets) const;
   Q_INVOKABLE QVariantMap EvaluateDeleteImages(const QVariantList& targets) const;
   Q_INVOKABLE QVariantMap EvaluateChangeSemanticModel() const;
   Q_INVOKABLE QVariantMap EvaluateRunSemanticGeneration() const;
   Q_INVOKABLE QVariantMap EvaluateChangeModelDownloadSettings() const;
-  Q_INVOKABLE QVariantMap EvaluateChangeImageAnalysisProvider() const;
   Q_INVOKABLE QVariantMap EvaluateSelectEditorImage() const;
   Q_INVOKABLE QVariantMap EvaluateSwitchWorkspace() const;
   Q_INVOKABLE QVariantMap EvaluateCheckoutVersion() const;
@@ -166,7 +152,7 @@ class InteractionPolicyController final : public QObject {
   Answer Eval(InteractionCapability capability, quint64 elementId) const;
   // Global capability (blocks if any lock with this capability is held).
   Answer EvalGlobal(InteractionCapability capability) const;
-  // Target-list capability (RunImageAnalysis / DeleteImages / EditImageRating):
+  // Target-list capability (DeleteImages / EditImageRating):
   // blocked if ANY target elementId is covered by a matching lock.
   Answer EvalTargets(InteractionCapability  capability,
                     const QVariantList&    targets) const;
@@ -179,7 +165,6 @@ class InteractionPolicyController final : public QObject {
   std::vector<ActiveLock>        locks_;
   uint                           focused_element_id_      = 0;
   QVariantList                   pending_delete_targets_  = {};
-  QVariantList                   pending_analysis_targets_ = {};
   bool                           natural_language_search_enabled_ = false;
 };
 

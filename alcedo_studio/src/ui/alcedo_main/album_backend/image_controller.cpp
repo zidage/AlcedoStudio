@@ -649,7 +649,6 @@ auto ImageController::StartDeleteImages(const QVariantList& targetEntries) -> QV
       snapshot.locks_.push_back({InteractionCapability::EditImageRating, element_id, reason});
       snapshot.locks_.push_back({InteractionCapability::EditImageDescription, element_id, reason});
       snapshot.locks_.push_back({InteractionCapability::EditImageRatingReason, element_id, reason});
-      snapshot.locks_.push_back({InteractionCapability::RunImageAnalysis, element_id, reason});
     }
     delete_task_id_ = background_tasks_->RegisterTask(snapshot);
   }

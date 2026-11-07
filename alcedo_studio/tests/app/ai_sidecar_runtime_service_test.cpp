@@ -23,7 +23,6 @@
 #include <vector>
 
 #include "app/project_service.hpp"
-#include "sidecar_client/dto/image_analysis.hpp"
 #include "sidecar_client/dto/model_manager.hpp"
 #include "sidecar_client/dto/semantic_embedding.hpp"
 
@@ -31,128 +30,14 @@ namespace alcedo {
 namespace {
 
 struct FakeSidecarState {
-  std::atomic<bool>              ready{true};
-  std::atomic<bool>              model_info_ready{true};
-  std::atomic<int>               ping_count{0};
-  std::atomic<int>               get_model_info_calls{0};
+  std::atomic<bool> ready{true};
+  std::atomic<bool> model_info_ready{true};
+  std::atomic<int>  ping_count{0};
+  std::atomic<int>  get_model_info_calls{0};
   // Ping blocks this long, like a gRPC call to a process that does not listen yet.
-  std::atomic<int>               ping_delay_ms{0};
-  std::atomic<int>               embed_text_calls{0};
-  std::atomic<int>               embed_image_batch_calls{0};
-  std::atomic<int>               describe_image_calls{0};
-  std::atomic<int>               score_image_calls{0};
-  std::atomic<int>               list_models_calls{0};
-  std::atomic<int>               revoke_calls{0};
-  std::string                    last_revoked_handle;
-  std::vector<AiDiscoveredModel> list_models_canned;
-};
-
-class FakeRuntimeControlClient final : public sidecar_client::RuntimeControlClient {
- public:
-  explicit FakeRuntimeControlClient(std::shared_ptr<FakeSidecarState> state)
-      : state_(std::move(state)) {}
-
-  auto Ping(std::chrono::milliseconds timeout, std::string* error) -> bool override {
-    (void)timeout;
-    state_->ping_count.fetch_add(1);
-    if (const int delay_ms = state_->ping_delay_ms.load(); delay_ms > 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-    }
-    if (!state_->ready.load()) {
-      if (error) *error = "fake runtime is not ready";
-      return false;
-    }
-    return true;
-  }
-
-  auto GetRuntimeStatus(std::chrono::milliseconds timeout, AiSidecarRuntimeRemoteStatus* status,
-                        std::string* error) -> bool override {
-    (void)timeout;
-    (void)error;
-    if (status) {
-      status->state               = "ready";
-      status->provider            = "fake";
-      status->image_batch_cap     = 8;
-      status->image_batch_wait_ms = 2;
-      status->uptime_ms           = 42;
-    }
-    return true;
-  }
-
-  auto ListCapabilities(std::chrono::milliseconds         timeout,
-                        std::vector<AiSidecarCapability>* capabilities, std::string* error)
-      -> bool override {
-    (void)timeout;
-    if (!state_->ready.load()) {
-      if (error) *error = "fake runtime is not ready";
-      return false;
-    }
-    if (capabilities) {
-      capabilities->clear();
-      capabilities->push_back(AiSidecarCapability{
-          .task_id             = "semantic.embed_*",
-          .provider_id         = "local",
-          .model_id            = "test/mobileclip",
-          .input_kinds         = {2, 3},
-          .output_kinds        = {1},
-          .supports_batch      = true,
-          .supports_cancel     = true,
-          .requires_credential = false,
-          .max_payload_bytes   = 0,
-      });
-    }
-    return true;
-  }
-
-  auto CancelTask(const std::string& request_id, std::chrono::milliseconds timeout, bool* cancelled,
-                  std::string* error) -> bool override {
-    (void)timeout;
-    (void)error;
-    if (!state_->ready.load()) {
-      if (error) *error = "fake runtime is not ready";
-      return false;
-    }
-    if (cancelled) *cancelled = request_id == "fake-in-flight";
-    return true;
-  }
-
- private:
-  std::shared_ptr<FakeSidecarState> state_;
-};
-
-class FakeCredentialClient final : public sidecar_client::CredentialClient {
- public:
-  explicit FakeCredentialClient(std::shared_ptr<FakeSidecarState> state)
-      : state_(std::move(state)) {}
-
-  auto RegisterCredential(const std::string& provider_id, const std::string& secret, int64_t ttl_ms,
-                          std::chrono::milliseconds timeout, std::string* handle,
-                          std::string* error) -> bool override {
-    (void)provider_id;
-    (void)secret;
-    (void)ttl_ms;
-    (void)timeout;
-    (void)error;
-    if (!state_->ready.load()) {
-      if (error) *error = "fake runtime is not ready";
-      return false;
-    }
-    if (handle) *handle = "fake-credential-handle";
-    return true;
-  }
-
-  auto RevokeCredential(const std::string& handle, std::chrono::milliseconds timeout, bool* revoked,
-                        std::string* error) -> bool override {
-    (void)timeout;
-    (void)error;
-    state_->revoke_calls.fetch_add(1);
-    state_->last_revoked_handle = handle;
-    if (revoked) *revoked = handle == "fake-credential-handle";
-    return true;
-  }
-
- private:
-  std::shared_ptr<FakeSidecarState> state_;
+  std::atomic<int>  ping_delay_ms{0};
+  std::atomic<int>  embed_text_calls{0};
+  std::atomic<int>  embed_image_batch_calls{0};
 };
 
 class FakeModelManagerClient final : public sidecar_client::ModelManagerClient {
@@ -228,6 +113,33 @@ class FakeSemanticEmbeddingClient final : public sidecar_client::SemanticEmbeddi
  public:
   explicit FakeSemanticEmbeddingClient(std::shared_ptr<FakeSidecarState> state)
       : state_(std::move(state)) {}
+
+  auto Ping(std::chrono::milliseconds timeout, std::string* error) -> bool override {
+    (void)timeout;
+    state_->ping_count.fetch_add(1);
+    if (const int delay_ms = state_->ping_delay_ms.load(); delay_ms > 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+    }
+    if (!state_->ready.load()) {
+      if (error) *error = "fake runtime is not ready";
+      return false;
+    }
+    return true;
+  }
+
+  auto GetRuntimeStatus(std::chrono::milliseconds timeout, AiSidecarRuntimeRemoteStatus* status,
+                        std::string* error) -> bool override {
+    (void)timeout;
+    (void)error;
+    if (status) {
+      status->state               = "ready";
+      status->provider            = "fake";
+      status->image_batch_cap     = 8;
+      status->image_batch_wait_ms = 2;
+      status->uptime_ms           = 42;
+    }
+    return true;
+  }
 
   auto GetModelInfo(std::chrono::milliseconds timeout, AiSidecarRuntimeModelInfo* info,
                     std::string* error) -> bool override {
@@ -309,127 +221,16 @@ class FakeSemanticEmbeddingClient final : public sidecar_client::SemanticEmbeddi
   std::shared_ptr<FakeSidecarState> state_;
 };
 
-class FakeImageAnalysisClient final : public sidecar_client::ImageAnalysisClient {
- public:
-  explicit FakeImageAnalysisClient(std::shared_ptr<FakeSidecarState> state)
-      : state_(std::move(state)) {}
-
-  auto DescribeImage(const ImageAnalysisRequest& request, std::chrono::milliseconds timeout)
-      -> ImageAnalysisUnderstandingResult override {
-    (void)timeout;
-    state_->describe_image_calls.fetch_add(1);
-    ImageAnalysisUnderstandingResult result;
-    result.request_id = request.request_id;
-    result.ok         = true;
-    result.status     = 1;
-    result.caption    = "fake caption";
-    result.tags       = {"fake", "tag"};
-    result.scene      = "fake scene";
-    result.confidence = 0.9;
-    result.provider   = "fake";
-    result.model_id   = request.model_id.empty() ? "fake-model" : request.model_id;
-    result.rendition  = request.rendition;
-    return result;
-  }
-
-  auto ScoreImage(const ImageAnalysisRequest& request, std::chrono::milliseconds timeout)
-      -> ImageAnalysisRatingResult override {
-    (void)timeout;
-    state_->score_image_calls.fetch_add(1);
-    ImageAnalysisRatingResult result;
-    result.request_id     = request.request_id;
-    result.ok             = true;
-    result.status         = 1;
-    result.rating         = 4;
-    result.rubric_id      = "alcedo-default-v1";
-    result.rubric_version = "1";
-    result.provider       = "fake";
-    result.model_id       = request.model_id.empty() ? "fake-model" : request.model_id;
-    result.rendition      = request.rendition;
-    return result;
-  }
-
-  auto AnalyzeImage(const ImageAnalysisRequest& request, std::chrono::milliseconds timeout)
-      -> ImageAnalysisCombinedResult override {
-    (void)timeout;
-    state_->describe_image_calls.fetch_add(1);
-    state_->score_image_calls.fetch_add(1);
-    ImageAnalysisCombinedResult result;
-    result.request_id               = request.request_id;
-    result.ok                       = true;
-    result.status                   = 1;
-    result.provider                 = "fake";
-    result.model_id                 = request.model_id.empty() ? "fake-model" : request.model_id;
-    result.rendition                = request.rendition;
-    result.has_understanding        = true;
-    result.has_rating               = true;
-    result.understanding.request_id = request.request_id;
-    result.understanding.ok         = true;
-    result.understanding.status     = 1;
-    result.understanding.caption    = "fake caption";
-    result.understanding.tags       = {"fake", "tag"};
-    result.understanding.scene      = "fake scene";
-    result.understanding.confidence = 0.9;
-    result.understanding.provider   = "fake";
-    result.understanding.model_id   = result.model_id;
-    result.understanding.rendition  = request.rendition;
-    result.rating.request_id        = request.request_id;
-    result.rating.ok                = true;
-    result.rating.status            = 1;
-    result.rating.rating            = 4;
-    result.rating.rubric_id         = "alcedo-default-v1";
-    result.rating.rubric_version    = "1";
-    result.rating.provider          = "fake";
-    result.rating.model_id          = result.model_id;
-    result.rating.rendition         = request.rendition;
-    return result;
-  }
-
-  auto BatchAnalyzeImage(const std::vector<ImageAnalysisRequest>& requests,
-                         std::chrono::milliseconds                timeout)
-      -> std::vector<ImageAnalysisCombinedResult> override {
-    std::vector<ImageAnalysisCombinedResult> results;
-    results.reserve(requests.size());
-    for (const auto& request : requests) {
-      results.push_back(AnalyzeImage(request, timeout));
-    }
-    return results;
-  }
-
-  auto ListModels(const std::string& provider_id, const std::string& credential_ref,
-                  std::chrono::milliseconds timeout) -> ImageAnalysisListModelsResult override {
-    (void)provider_id;
-    (void)credential_ref;
-    (void)timeout;
-    state_->list_models_calls.fetch_add(1);
-    ImageAnalysisListModelsResult result;
-    result.ok     = true;
-    result.status = 1;
-    result.models = state_->list_models_canned;
-    return result;
-  }
-
- private:
-  std::shared_ptr<FakeSidecarState> state_;
-};
-
 class FakeSidecarClient final : public sidecar_client::Client {
  public:
   explicit FakeSidecarClient(bool ready = true)
-      : state_(std::make_shared<FakeSidecarState>()),
-        runtime_(state_),
-        credentials_(state_),
-        semantic_(state_),
-        image_analysis_(state_) {
+      : state_(std::make_shared<FakeSidecarState>()), semantic_(state_) {
     state_->ready = ready;
   }
 
   auto endpoint() const -> const std::string& override { return endpoint_; }
-  auto runtime() -> sidecar_client::RuntimeControlClient& override { return runtime_; }
-  auto credentials() -> sidecar_client::CredentialClient& override { return credentials_; }
   auto models() -> sidecar_client::ModelManagerClient& override { return models_; }
   auto semantic() -> sidecar_client::SemanticEmbeddingClient& override { return semantic_; }
-  auto image_analysis() -> sidecar_client::ImageAnalysisClient& override { return image_analysis_; }
 
   void SetEndpoint(std::string endpoint) { endpoint_ = std::move(endpoint); }
   void SetReady(bool ready) { state_->ready.store(ready); }
@@ -437,27 +238,16 @@ class FakeSidecarClient final : public sidecar_client::Client {
   void SetPingDelay(std::chrono::milliseconds delay) {
     state_->ping_delay_ms.store(static_cast<int>(delay.count()));
   }
-  void SetListModelsCanned(std::vector<AiDiscoveredModel> models) {
-    state_->list_models_canned = std::move(models);
-  }
   auto PingCount() const -> int { return state_->ping_count.load(); }
   auto GetModelInfoCalls() const -> int { return state_->get_model_info_calls.load(); }
   auto EmbedTextCalls() const -> int { return state_->embed_text_calls.load(); }
   auto EmbedImageBatchCalls() const -> int { return state_->embed_image_batch_calls.load(); }
-  auto DescribeImageCalls() const -> int { return state_->describe_image_calls.load(); }
-  auto ScoreImageCalls() const -> int { return state_->score_image_calls.load(); }
-  auto ListModelsCalls() const -> int { return state_->list_models_calls.load(); }
-  auto RevokeCalls() const -> int { return state_->revoke_calls.load(); }
-  auto LastRevokedHandle() const -> std::string { return state_->last_revoked_handle; }
 
  private:
   std::shared_ptr<FakeSidecarState> state_;
   std::string                       endpoint_;
-  FakeRuntimeControlClient          runtime_;
-  FakeCredentialClient              credentials_;
   FakeModelManagerClient            models_;
   FakeSemanticEmbeddingClient       semantic_;
-  FakeImageAnalysisClient           image_analysis_;
 };
 
 auto FakeFactory(const std::shared_ptr<FakeSidecarClient>& client) -> AiSidecarClientFactory {
@@ -549,25 +339,6 @@ TEST(AiSidecarRuntimeServiceTest, StartStopReportsReadyAndStopped) {
   EXPECT_EQ(status.issue, AiSidecarRuntimeIssue::kNone);
   EXPECT_EQ(status.process_id, 0);
   EXPECT_EQ(service.ClientSession(), nullptr);
-}
-
-TEST(AiSidecarRuntimeServiceTest, StartAndWaitNormalizesSharedProviderConfigDir) {
-  auto                    client = std::make_shared<FakeSidecarClient>();
-  AiSidecarRuntimeService service(FakeFactory(client));
-
-  auto                    options = BaseOptions();
-  options.extra_arguments         = {"--sleep-ms", "30000"};
-
-  ASSERT_TRUE(service.StartAndWait(options));
-  const auto first_pid = service.Status().process_id;
-  ASSERT_GT(first_pid, 0);
-  EXPECT_FALSE(service.Options().provider_config_dir.empty());
-
-  ASSERT_TRUE(service.StartAndWait(options));
-  const auto second_pid = service.Status().process_id;
-  EXPECT_EQ(second_pid, first_pid);
-
-  service.Stop();
 }
 
 TEST(AiSidecarRuntimeServiceTest, RunningSidecarReusesExistingProcessForDifferentOptions) {
@@ -786,7 +557,8 @@ TEST(AiSidecarRuntimeServiceTest, RuntimeArgumentsCarryModelAndDeviceConfigurati
   EXPECT_NE(args.find("--text-idle-unload-seconds\n0\n"), std::string::npos);
   EXPECT_NE(args.find("--vision-idle-unload-seconds\n45\n"), std::string::npos);
   EXPECT_NE(args.find("--no-download"), std::string::npos);
-  EXPECT_NE(args.find("--provider-config-dir\n"), std::string::npos);
+  // Advanced Content Analysis is removed (issue #710): no provider config directory.
+  EXPECT_EQ(args.find("--provider-config-dir"), std::string::npos);
   std::filesystem::remove(record_path);
 }
 
@@ -855,11 +627,7 @@ TEST(AiSidecarRuntimeServiceTest, TextIdleUnloadFollowsIdleStopDelay) {
 }
 
 TEST(AiSidecarRuntimeServiceTest, ClientSessionExposesNarrowModulesWhenReady) {
-  auto client = std::make_shared<FakeSidecarClient>();
-  client->SetListModelsCanned({
-      AiDiscoveredModel{"gpt-4o", "GPT-4o", "opencode_go_openai"},
-      AiDiscoveredModel{"gpt-4o-mini", "GPT-4o mini", "opencode_go_openai"},
-  });
+  auto                    client = std::make_shared<FakeSidecarClient>();
   AiSidecarRuntimeService service(FakeFactory(client));
 
   auto                    options = BaseOptions();
@@ -876,38 +644,11 @@ TEST(AiSidecarRuntimeServiceTest, ClientSessionExposesNarrowModulesWhenReady) {
   EXPECT_EQ(profiles[1].profile_id, "jina-clip-v2-int8-multilingual");
   EXPECT_EQ(profiles[1].native_embedding_dimension, 1024u);
 
-  std::vector<AiSidecarCapability> capabilities;
-  ASSERT_TRUE(
-      session->runtime().ListCapabilities(std::chrono::milliseconds(100), &capabilities, &error))
-      << error;
-  ASSERT_EQ(capabilities.size(), 1u);
-  EXPECT_EQ(capabilities[0].task_id, "semantic.embed_*");
-
   const auto text =
       session->semantic().EmbedText("text-1", "a quiet portrait", std::chrono::milliseconds(100));
   EXPECT_TRUE(text.ok);
   EXPECT_EQ(text.request_id, "text-1");
   EXPECT_EQ(client->EmbedTextCalls(), 1);
-
-  std::string handle;
-  ASSERT_TRUE(session->credentials().RegisterCredential(
-      "remote", "sk-test", 0, std::chrono::milliseconds(100), &handle, &error))
-      << error;
-  EXPECT_EQ(handle, "fake-credential-handle");
-
-  const auto models = session->image_analysis().ListModels("opencode_go_openai", handle,
-                                                           std::chrono::milliseconds(100));
-  ASSERT_TRUE(models.ok) << models.error;
-  ASSERT_EQ(models.models.size(), 2u);
-  EXPECT_EQ(client->ListModelsCalls(), 1);
-
-  bool revoked = false;
-  ASSERT_TRUE(session->credentials().RevokeCredential(handle, std::chrono::milliseconds(100),
-                                                      &revoked, &error))
-      << error;
-  EXPECT_TRUE(revoked);
-  EXPECT_EQ(client->RevokeCalls(), 1);
-  EXPECT_EQ(client->LastRevokedHandle(), "fake-credential-handle");
 
   service.Stop();
 }
@@ -943,86 +684,6 @@ TEST(AiSidecarRuntimeServiceTest, ClientSessionPreservesEmbeddingBatchRequestIds
   }
   EXPECT_EQ(client->EmbedImageBatchCalls(), 1);
   service.Stop();
-}
-
-TEST(AiSidecarRuntimeServiceTest, ClientSessionExposesImageAnalysisAndCancel) {
-  auto                    client = std::make_shared<FakeSidecarClient>();
-  AiSidecarRuntimeService service(FakeFactory(client));
-  auto                    options = BaseOptions();
-  options.extra_arguments         = {"--sleep-ms", "30000"};
-  ASSERT_TRUE(service.StartAndWait(options));
-  auto session = service.ClientSession();
-  ASSERT_NE(session, nullptr);
-
-  ImageAnalysisRequest req;
-  req.request_id        = "ia-describe-1";
-  req.image_bytes       = {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10};
-  req.image_format_hint = "image/jpeg;max_edge=1024";
-  req.provider_id       = "openrouter";
-  req.model_id          = "qwen/qwen3.7-plus";
-  req.rubric_id         = "alcedo-default-v1";
-  req.rendition.kind    = "thumbnail";
-  req.rendition.width   = 1024;
-  req.rendition.height  = 683;
-  req.rendition.bytes   = req.image_bytes.size();
-
-  const auto understanding =
-      session->image_analysis().DescribeImage(req, std::chrono::milliseconds(5000));
-  EXPECT_TRUE(understanding.ok) << understanding.error;
-  EXPECT_EQ(understanding.request_id, "ia-describe-1");
-  EXPECT_FALSE(understanding.caption.empty());
-  EXPECT_EQ(client->DescribeImageCalls(), 1);
-
-  const auto rating = session->image_analysis().ScoreImage(req, std::chrono::milliseconds(5000));
-  EXPECT_TRUE(rating.ok) << rating.error;
-  EXPECT_EQ(rating.rating, 4);
-  EXPECT_EQ(client->ScoreImageCalls(), 1);
-
-  std::string error;
-  bool        cancelled = false;
-  EXPECT_TRUE(session->runtime().CancelTask("fake-in-flight", std::chrono::milliseconds(2000),
-                                            &cancelled, &error));
-  EXPECT_TRUE(cancelled) << error;
-  service.Stop();
-}
-
-TEST(AiSidecarRuntimeServiceTest, RegisteredSecretDoesNotLeakIntoProcessArgsOrCapturedStatus) {
-  auto                    client = std::make_shared<FakeSidecarClient>();
-  AiSidecarRuntimeService service(FakeFactory(client));
-
-  const auto              record_path =
-      std::filesystem::temp_directory_path() / "ai_sidecar_credential_args.txt";
-  std::filesystem::remove(record_path);
-
-  auto options            = BaseOptions();
-  options.extra_arguments = {"--record-args", record_path.string(), "--sleep-ms", "30000"};
-
-  ASSERT_TRUE(service.StartAndWait(options));
-  auto session = service.ClientSession();
-  ASSERT_NE(session, nullptr);
-
-  const std::string secret = "sk-DO-NOT-LEAK-7c3f9a1e-b2d4";
-  std::string       handle;
-  std::string       error;
-  EXPECT_TRUE(session->credentials().RegisterCredential(
-      "remote", secret, 0, std::chrono::milliseconds(2000), &handle, &error));
-  EXPECT_EQ(handle, "fake-credential-handle");
-  EXPECT_TRUE(error.empty()) << error;
-
-  service.Stop();
-
-  std::ifstream in(record_path);
-  ASSERT_TRUE(in.is_open());
-  const std::string args((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  in.close();
-  EXPECT_EQ(args.find(secret), std::string::npos) << args;
-
-  const auto status = service.Status();
-  EXPECT_EQ(status.message.find(secret), std::string::npos) << status.message;
-  EXPECT_EQ(status.stdout_tail.find(secret), std::string::npos) << status.stdout_tail;
-  EXPECT_EQ(status.stderr_tail.find(secret), std::string::npos) << status.stderr_tail;
-
-  std::filesystem::remove(record_path);
 }
 
 TEST(AiSidecarRuntimeServiceTest, EmptyModelRootUsesEnvironmentFallback) {
@@ -1298,48 +959,6 @@ TEST(AiSidecarRuntimeServiceTest, ModelIdentityChangeRestartsProcessWithoutOther
   EXPECT_EQ(service.Status().process_id, status.process_id);
   lease.reset();
   EXPECT_EQ(StateOf(service), AiSidecarRuntimeState::kStopped);
-}
-
-TEST(AiSidecarRuntimeServiceTest, ProviderConfigChangeRestartsProcessAtNextStart) {
-  auto                    client = std::make_shared<FakeSidecarClient>();
-  AiSidecarRuntimeService service(FakeFactory(client));
-
-  auto                    lease   = service.AcquireLease();
-  const auto              options = LongRunningOptions();
-  ASSERT_TRUE(service.StartAndWait(options));
-  const auto first_pid = service.Status().process_id;
-
-  service.MarkProviderConfigsChanged();
-  ASSERT_TRUE(service.StartAndWait(options));
-  const auto second_pid = service.Status().process_id;
-  EXPECT_NE(second_pid, first_pid);
-
-  // The mark is consumed by the restart.
-  ASSERT_TRUE(service.StartAndWait(options));
-  EXPECT_EQ(service.Status().process_id, second_pid);
-  lease.reset();
-}
-
-TEST(AiSidecarRuntimeServiceTest, ProviderConfigChangeWaitsUntilOtherLeasesAreReleased) {
-  auto                    client = std::make_shared<FakeSidecarClient>();
-  AiSidecarRuntimeService service(FakeFactory(client));
-  service.SetIdleStopDelay(std::chrono::seconds(5));
-
-  auto       own_lease   = service.AcquireLease();
-  auto       other_lease = service.AcquireLease();
-  const auto options     = LongRunningOptions();
-  ASSERT_TRUE(service.StartAndWait(options));
-  const auto first_pid = service.Status().process_id;
-
-  service.MarkProviderConfigsChanged();
-  ASSERT_TRUE(service.StartAndWait(options));
-  EXPECT_EQ(service.Status().process_id, first_pid);
-
-  other_lease.reset();
-  ASSERT_TRUE(service.StartAndWait(options));
-  EXPECT_NE(service.Status().process_id, first_pid);
-  own_lease.reset();
-  service.StopForProjectClose();
 }
 
 TEST(AiSidecarRuntimeServiceTest, WorkerStartKeepsOwnerThreadResponsive) {

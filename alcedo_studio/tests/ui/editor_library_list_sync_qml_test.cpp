@@ -216,7 +216,6 @@ QtObject {
     }
     property QtObject folders: QtObject { property int currentFolderId: 0 }
     property QtObject libraryMutations: QtObject { signal deleteTargetsFinished(var result) }
-    property QtObject imageAnalysis: QtObject {}
     property QtObject adjustmentTransfer: QtObject {}
 }
 )";

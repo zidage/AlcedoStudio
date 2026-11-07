@@ -5,7 +5,7 @@
 // QML Connections maps a handler onFoo to the signal foo. A C++ signal that starts with an
 // upper-case letter (DeleteTargetsFinished, StateChanged) gets no handler, and
 // ignoreUnknownSignals hides the warning. These tests drive the production QML files
-// (ImageActionsController, ShellSignals, AdvancedContentAnalysisDialog) through C++ fakes that
+// (ImageActionsController, ShellSignals) through C++ fakes that
 // have the production signal names, and check that every fake signal exists on the production
 // class. A QML fake with lower-case signals would hide a handler that never runs in the
 // application.
@@ -17,13 +17,10 @@
 #include <QMetaMethod>
 #include <QMetaObject>
 #include <QObject>
-#include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlError>
-#include <QQuickStyle>
-#include <QQuickWindow>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
@@ -35,12 +32,10 @@
 #include <memory>
 #include <utility>
 
-#include "ui/alcedo_main/album_backend/image_analysis_controller.hpp"
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
-#include "ui/alcedo_main/app_theme.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -141,77 +136,6 @@ class FakeProject final : public QObject {
   bool accelerator_preparing_ = false;
 };
 
-// ImageAnalysisController: every property notifies through StateChanged. A start can be
-// refused at once with lastError and without running, as StartForTargets does.
-class FakeImageAnalysis final : public QObject {
-  Q_OBJECT
-  Q_PROPERTY(bool running READ running NOTIFY StateChanged)
-  Q_PROPERTY(int analyzed READ analyzed NOTIFY StateChanged)
-  Q_PROPERTY(int failed READ failed NOTIFY StateChanged)
-  Q_PROPERTY(int canceled READ canceled NOTIFY StateChanged)
-  Q_PROPERTY(QString statusText READ statusText NOTIFY StateChanged)
-  Q_PROPERTY(QString lastError READ lastError NOTIFY StateChanged)
-  Q_PROPERTY(QVariantList lastResults READ lastResults NOTIFY StateChanged)
-  Q_PROPERTY(QVariantMap lastUsage READ lastUsage NOTIFY StateChanged)
-  Q_PROPERTY(QString ratingSeverity READ ratingSeverity NOTIFY StateChanged)
-
- public:
-  [[nodiscard]] auto running() const -> bool { return running_; }
-  [[nodiscard]] auto analyzed() const -> int { return analyzed_; }
-  [[nodiscard]] auto failed() const -> int { return 0; }
-  [[nodiscard]] auto canceled() const -> int { return 0; }
-  [[nodiscard]] auto statusText() const -> QString { return {}; }
-  [[nodiscard]] auto lastError() const -> QString { return last_error_; }
-  [[nodiscard]] auto lastResults() const -> QVariantList { return last_results_; }
-  [[nodiscard]] auto lastUsage() const -> QVariantMap { return {}; }
-  [[nodiscard]] auto ratingSeverity() const -> QString { return rating_severity_; }
-  [[nodiscard]] auto startCount() const -> int { return start_count_; }
-
-  void               SetStartRefusal(QString message) { start_refusal_ = std::move(message); }
-
-  void               Start() {
-    ++start_count_;
-    last_error_.clear();
-    if (!start_refusal_.isEmpty()) {
-      last_error_ = start_refusal_;
-      emit StateChanged();
-      return;
-    }
-    running_ = true;
-    emit StateChanged();
-  }
-
-  void Finish(QVariantList results) {
-    running_      = false;
-    analyzed_     = static_cast<int>(results.size());
-    last_results_ = std::move(results);
-    emit StateChanged();
-  }
-
-  Q_INVOKABLE void StartDescribeForTargets(const QVariantList&) { Start(); }
-  Q_INVOKABLE void StartScoreForTargets(const QVariantList&, bool) { Start(); }
-  Q_INVOKABLE void StartAnalyzeForTargets(const QVariantList&, bool) { Start(); }
-  Q_INVOKABLE void CancelAnalysis() {}
-  Q_INVOKABLE void RefreshCredentialState() {}
-  Q_INVOKABLE bool SetRatingSeverity(const QString& value) {
-    rating_severity_ = value;
-    emit StateChanged();
-    return true;
-  }
-
- signals:
-  void StateChanged();
-
- private:
-  bool         running_     = false;
-  int          analyzed_    = 0;
-  int          start_count_ = 0;
-  QString      last_error_;
-  QString      start_refusal_;
-  QString      rating_severity_ = QStringLiteral("normal");
-  QVariantList last_results_;
-};
-
 // Every signal of @p fake must exist with the same signature on @p production.
 void ExpectSignalsOnProductionClass(const QMetaObject& fake, const QMetaObject& production) {
   for (int i = QObject::staticMetaObject.methodCount(); i < fake.methodCount(); ++i) {
@@ -235,7 +159,6 @@ QtObject {
     property QtObject libraryMutations: null
     property QtObject importExport: null
     property QtObject project: null
-    property QtObject imageAnalysis: null
     property QtObject interactionPolicy: QtObject {
         property int focusedElementId: 0
         property var pendingDeleteTargets: []
@@ -267,9 +190,7 @@ constexpr char kImageActionsQml[]    = R"(
 import QtQuick
 
 QtObject {
-    property bool resultTouchesFocusedImage: true
     property int inspectionRefreshCount: 0
-    function analysisResultTouchesFocusedImage() { return resultTouchesFocusedImage }
     function refreshFocusedImageInspection() { inspectionRefreshCount += 1 }
 }
 )";
@@ -315,7 +236,6 @@ class ShellQmlHarness {
     modules_->setProperty("libraryMutations", AsVariant(&mutations_));
     modules_->setProperty("importExport", AsVariant(&import_export_));
     modules_->setProperty("project", AsVariant(&project_));
-    modules_->setProperty("imageAnalysis", AsVariant(&analysis_));
     engine_.rootContext()->setContextProperty(QStringLiteral("appModules"), modules_.get());
     engine_.rootContext()->setContextProperty(QStringLiteral("languageManager"),
                                               language_manager_.get());
@@ -337,7 +257,6 @@ class ShellQmlHarness {
   FakeLibraryMutations     mutations_;
   FakeImportExport         import_export_;
   FakeProject              project_;
-  FakeImageAnalysis        analysis_;
   QQmlEngine               engine_;
   QStringList              warnings_;
   std::unique_ptr<QObject> modules_;
@@ -363,8 +282,6 @@ TEST(UppercaseSignalQmlHandlersTest, FakesUseProductionSignalNames) {
   ExpectSignalsOnProductionClass(FakeImportExport::staticMetaObject,
                                  ImportExportHandler::staticMetaObject);
   ExpectSignalsOnProductionClass(FakeProject::staticMetaObject, ProjectModule::staticMetaObject);
-  ExpectSignalsOnProductionClass(FakeImageAnalysis::staticMetaObject,
-                                 ImageAnalysisController::staticMetaObject);
 }
 
 TEST(UppercaseSignalQmlHandlersTest, DeleteFailureShowsMessageAndClearsDeletedFocusedImage) {
@@ -429,127 +346,6 @@ TEST(UppercaseSignalQmlHandlersTest, AcceleratorPreparationEndRequestsStartupPre
   ProcessEvents();
   EXPECT_EQ(harness.host_->property("startupPreviewRequests").toInt(), 1);
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
-}
-
-TEST(UppercaseSignalQmlHandlersTest, AnalysisEndRefreshesFocusedImageInspectionOnce) {
-  ShellQmlHarness harness(QStringLiteral("ShellSignals.qml"));
-  ASSERT_NE(harness.object_, nullptr) << harness.warnings_.join('\n').toStdString();
-  auto* image_actions = harness.image_actions_.get();
-
-  harness.analysis_.Start();
-  ProcessEvents();
-  EXPECT_EQ(image_actions->property("inspectionRefreshCount").toInt(), 0);
-
-  harness.analysis_.Finish({QVariantMap{{QStringLiteral("elementId"), 7}}});
-  ProcessEvents();
-  EXPECT_EQ(image_actions->property("inspectionRefreshCount").toInt(), 1);
-
-  // A later state change of the idle controller (a settings edit) does not refresh again.
-  harness.analysis_.SetRatingSeverity(QStringLiteral("high"));
-  ProcessEvents();
-  EXPECT_EQ(image_actions->property("inspectionRefreshCount").toInt(), 1);
-  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
-}
-
-// The window creates the production dialog with the fake controller and one selected image.
-constexpr char kDialogWindowQml[] = R"(
-import QtQuick
-import QtQuick.Controls.Basic
-
-ApplicationWindow {
-    id: root
-    width: 1100
-    height: 800
-    visible: true
-    property var dialog: null
-    property string createError: ""
-
-    Component.onCompleted: {
-        var component = Qt.createComponent(dialogComponentUrl)
-        if (component.status === Component.Error) {
-            root.createError = component.errorString()
-            return
-        }
-        root.dialog = component.createObject(root.contentItem, {
-            "analysisController": analysisFake,
-            "selectionTargets": [{ "elementId": 7, "imageId": 70 }],
-            "backendInteractive": true
-        })
-        if (!root.dialog) {
-            root.createError = component.errorString()
-            return
-        }
-        root.dialog.open()
-    }
-}
-)";
-
-class AnalysisDialogHarness {
- public:
-  AnalysisDialogHarness() {
-    AppTheme::RegisterFonts();
-    AppTheme::Instance().setReduceMotion(true);
-    QQuickStyle::setStyle(QStringLiteral("Basic"));
-    engine_.addImportPath(QStringLiteral("qrc:/"));
-    engine_.addImportPath(QmlDirectory());
-    engine_.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
-    engine_.rootContext()->setContextProperty(QStringLiteral("analysisFake"), &analysis_);
-    engine_.rootContext()->setContextProperty(
-        QStringLiteral("dialogComponentUrl"),
-        QUrl::fromLocalFile(QmlDirectory() + QStringLiteral("/AdvancedContentAnalysisDialog.qml")));
-    engine_.loadData(QByteArray{kDialogWindowQml},
-                     QUrl(QStringLiteral("file:///AnalysisDialogWindow.qml")));
-    if (!engine_.rootObjects().empty()) {
-      window_ = qobject_cast<QQuickWindow*>(engine_.rootObjects().front());
-    }
-    ProcessEvents(100);
-  }
-
-  [[nodiscard]] auto dialog() const -> QObject* {
-    return window_ ? window_->property("dialog").value<QObject*>() : nullptr;
-  }
-  [[nodiscard]] auto createError() const -> QString {
-    return window_ ? window_->property("createError").toString() : QStringLiteral("no window");
-  }
-
-  FakeImageAnalysis     analysis_;
-  QQmlApplicationEngine engine_;
-  QQuickWindow*         window_ = nullptr;
-};
-
-// The controller refuses a start (for example, no provider is set up) with lastError and without
-// running. The dialog shows the refusal as its final result instead of waiting for the run.
-TEST(UppercaseSignalQmlHandlersTest, AnalysisDialogShowsRefusedStartAsFinalResult) {
-  AnalysisDialogHarness harness;
-  QObject*              dialog = harness.dialog();
-  ASSERT_NE(dialog, nullptr) << harness.createError().toStdString();
-  const QString refusal =
-      QStringLiteral("Add and use an Advanced Content Analysis provider before analyzing images.");
-  harness.analysis_.SetStartRefusal(refusal);
-
-  ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "startAnalysis"));
-  ProcessEvents();
-
-  EXPECT_EQ(harness.analysis_.startCount(), 1);
-  EXPECT_TRUE(dialog->property("finalReady").toBool());
-  EXPECT_EQ(dialog->property("finalSummary").toString(), refusal);
-}
-
-TEST(UppercaseSignalQmlHandlersTest, AnalysisDialogFinishesOnceWhenRunEnds) {
-  AnalysisDialogHarness harness;
-  QObject*              dialog = harness.dialog();
-  ASSERT_NE(dialog, nullptr) << harness.createError().toStdString();
-
-  ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "startAnalysis"));
-  ProcessEvents();
-  EXPECT_EQ(harness.analysis_.startCount(), 1);
-  EXPECT_FALSE(dialog->property("finalReady").toBool());
-
-  harness.analysis_.Finish({QVariantMap{{QStringLiteral("elementId"), 7}}});
-  ProcessEvents();
-  EXPECT_EQ(harness.analysis_.startCount(), 1);
-  EXPECT_TRUE(dialog->property("finalReady").toBool());
-  EXPECT_EQ(dialog->property("finalSummary").toString(), QStringLiteral("Analysis complete."));
 }
 
 }  // namespace

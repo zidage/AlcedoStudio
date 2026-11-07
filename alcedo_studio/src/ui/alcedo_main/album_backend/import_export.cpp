@@ -24,7 +24,6 @@
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
-#include "ui/alcedo_main/album_backend/project_db_write_barrier.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
@@ -78,13 +77,12 @@ auto ExportStatusKey(const sl_element_id_t elementId, const image_id_t imageId) 
 
 ImportExportHandler::ImportExportHandler(ProjectModule* project, LibraryModule* library,
                                          FolderController* folders, IUiStatusSink* status,
-                                         ProjectDbWriteBarrier* barrier, QObject* parent)
+                                         QObject* parent)
     : QObject(parent),
       project_(project),
       library_(library),
       folders_(folders),
       status_(status),
-      barrier_(barrier),
       folder_scan_(new FolderImportScanModel(this)) {
   // The folder import type selection is an application setting (decision D7).
   folder_scan_->SetAllowedCategories(
@@ -468,18 +466,12 @@ void ImportExportHandler::StartExportWithRecipeOptionsForTargets(
   const int  clamped_png               = std::clamp(sdrPngCompressionLevel, 0, 9);
   const auto tiff_compress             = TiffCompressFromName(sdrTiffCompression);
   esvc->ClearAllExportTasks();
-  // Phase 2 (Step 4): hold the project DB write barrier across the export so
-  // background image-analysis result commits queue in memory and flush after
-  // export releases it. Export itself does not wait for analysis to finish.
-  if (barrier_) barrier_->Acquire();
   const auto queue_result = BuildExportQueue(
       targets, outDirOpt.value(), sdrResizeEnabled, clamped_sdr_max, clamped_ultra_hdr_max,
       sdr_format, clamped_sdr_quality, sdr_bit_depth, clamped_png, tiff_compress,
       clamped_ultra_hdr_quality, ultraHdrDitherEnabled, recipeOptions);
 
   if (queue_result.queued_count_ == 0) {
-    // Nothing to export; release the barrier we just acquired.
-    if (barrier_) barrier_->Release();
     export_status_text_ = PL_TEXT("No export tasks were queued.");
     if (!queue_result.first_error_.isEmpty()) {
       export_error_summary_text_ = PL_TEXT("%1", queue_result.first_error_);
@@ -819,9 +811,6 @@ void ImportExportHandler::JoinFinalizeThread() {
 void ImportExportHandler::FinishExport(const std::shared_ptr<std::vector<ExportResult>>& results,
                                        int skippedCount) {
   export_inflight_ = false;
-  // Phase 2 (Step 4): release the barrier; the 1->0 transition fires on_release_,
-  // which drains any analysis-result writes that queued behind it.
-  if (barrier_) barrier_->Release();
   if (std::exchange(export_gpu_resources_released_, false) &&
       export_gpu_resource_release_.resume_after_export) {
     export_gpu_resource_release_.resume_after_export();

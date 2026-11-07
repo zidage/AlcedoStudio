@@ -191,9 +191,9 @@ TEST_F(DeleteTests, DeleteImages_BlockedByInteractionPolicyLock) {
   ASSERT_NE(registry, nullptr);
 
   BackgroundTaskSnapshot snapshot;
-  snapshot.kind_            = BackgroundTaskKind::ImageAnalysis;
+  snapshot.kind_            = BackgroundTaskKind::AdjustmentPaste;
   snapshot.state_           = BackgroundTaskState::Running;
-  snapshot.title_           = QStringLiteral("analysis");
+  snapshot.title_           = QStringLiteral("paste");
   snapshot.cancelable_      = false;
   snapshot.shutdown_policy_ = BackgroundTaskShutdownPolicy::CancelAndWait;
   snapshot.locks_.push_back(InteractionLock{

@@ -8,11 +8,6 @@ pub struct AppConfig {
     pub allow_remote_bind: bool,
     pub semantic: SemanticConfig,
     pub max_message_bytes: usize,
-    pub credential_ttl_ms: u64,
-    /// Optional directory of user-provider JSON configs, loaded after the built-in
-    /// configs and allowed to add providers or override model defaults. `None`
-    /// means built-ins only. See `service::provider_config`.
-    pub provider_config_dir: Option<String>,
     /// Devices and idle unload times of the CLIP encoders (`service::encoder_residency`).
     pub residency: EncoderResidencyConfig,
 }
@@ -54,7 +49,7 @@ impl EncoderResidencyConfig {
 pub struct SemanticConfig {
     /// The CLIP model profile (profile ID or model ID). Empty when the host passes no
     /// `--model-id`: the open project has no active model, and semantic requests then return
-    /// `AI_ERROR_MODEL_NOT_READY` while segmentation and image analysis run.
+    /// `AI_ERROR_MODEL_NOT_READY` while segmentation runs.
     pub model_id: String,
     pub revision: String,
     pub model_root: String,
@@ -108,13 +103,6 @@ impl AppConfig {
                 "--max-message-bytes" => {
                     config.max_message_bytes = parse_next(&mut args, "--max-message-bytes")?
                 }
-                "--credential-ttl-ms" => {
-                    config.credential_ttl_ms = parse_next(&mut args, "--credential-ttl-ms")?
-                }
-                "--provider-config-dir" => {
-                    config.provider_config_dir =
-                        Some(next_value(&mut args, "--provider-config-dir")?)
-                }
                 "--text-device" => {
                     config.residency.text_device = next_value(&mut args, "--text-device")?
                 }
@@ -157,10 +145,6 @@ impl AppConfig {
                 batch_cap: parse_env("ALCEDO_MIND_BATCH_CAP", 512)?,
                 batch_wait_ms: parse_env("ALCEDO_MIND_BATCH_WAIT_MS", 25)?,
             },
-            credential_ttl_ms: parse_env("ALCEDO_MIND_CREDENTIAL_TTL_MS", 3_600_000)?,
-            provider_config_dir: env::var("ALCEDO_MIND_PROVIDER_CONFIG_DIR")
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
             residency: EncoderResidencyConfig::default(),
         })
     }
@@ -222,7 +206,7 @@ impl AppConfig {
     }
 
     fn usage() -> &'static str {
-        "usage: alcedo_mind [--host HOST] [--allow-remote-bind] [--port PORT] [--model-root PATH] [--model-id ID] [--revision REV] [--hf-endpoint URL] [--device auto|cpu|directml[:N]|coreml[:MODE]] [--no-download] [--allow-download] [--batch-cap N] [--batch-wait-ms N] [--max-message-bytes N] [--credential-ttl-ms N] [--provider-config-dir PATH] [--text-device DEVICE] [--vision-device DEVICE] [--text-idle-unload-seconds N] [--vision-idle-unload-seconds N]"
+        "usage: alcedo_mind [--host HOST] [--allow-remote-bind] [--port PORT] [--model-root PATH] [--model-id ID] [--revision REV] [--hf-endpoint URL] [--device auto|cpu|directml[:N]|coreml[:MODE]] [--no-download] [--allow-download] [--batch-cap N] [--batch-wait-ms N] [--max-message-bytes N] [--text-device DEVICE] [--vision-device DEVICE] [--text-idle-unload-seconds N] [--vision-idle-unload-seconds N]"
     }
 }
 
@@ -402,17 +386,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_provider_config_dir_override() {
-        let config =
-            AppConfig::from_args(["--provider-config-dir", "C:/Users/me/alcedo/providers"])
-                .expect("config should parse");
-        assert_eq!(
-            config.provider_config_dir.as_deref(),
-            Some("C:/Users/me/alcedo/providers")
-        );
-    }
-
-    #[test]
     fn parses_text_and_vision_device_flags() {
         let defaults = AppConfig::from_args(["--device", "directml:1"]).expect("defaults parse");
         assert_eq!(defaults.residency.text_device, "cpu");
@@ -463,11 +436,5 @@ mod tests {
                     .is_err()
             );
         }
-    }
-
-    #[test]
-    fn provider_config_dir_defaults_to_none() {
-        let config = AppConfig::from_env().expect("env config should parse");
-        assert!(config.provider_config_dir.is_none());
     }
 }

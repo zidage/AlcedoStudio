@@ -5,13 +5,11 @@
 #include "app/ai_sidecar_runtime_service.hpp"
 
 #include <QCoreApplication>
-#include <QDir>
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QMetaObject>
 #include <QPointer>
 #include <QProcessEnvironment>
-#include <QStandardPaths>
 #include <QStringList>
 #include <QTcpServer>
 #include <QThread>
@@ -52,22 +50,6 @@ auto BuildEndpoint(const std::string& host, uint16_t port) -> std::string {
   return host + ":" + std::to_string(port);
 }
 
-auto FsPathFromQString(const QString& value) -> std::filesystem::path {
-#ifdef _WIN32
-  return std::filesystem::path(value.toStdWString());
-#else
-  return std::filesystem::path(value.toStdString());
-#endif
-}
-
-auto DefaultProviderConfigDir() -> std::filesystem::path {
-  QString root = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-  if (root.isEmpty()) {
-    root = QDir::homePath() + QStringLiteral("/.alcedo_studio");
-  }
-  return FsPathFromQString(root) / "ai_provider_configs";
-}
-
 auto DefaultRuntimeBinary() -> std::filesystem::path;
 auto DefaultRuntimeModelRoot() -> std::filesystem::path;
 
@@ -86,9 +68,6 @@ auto NormalizeRuntimeOptions(AiSidecarRuntimeOptions options) -> AiSidecarRuntim
   }
   if (options.model_root.empty()) {
     options.model_root = DefaultRuntimeModelRoot();
-  }
-  if (options.provider_config_dir.empty()) {
-    options.provider_config_dir = DefaultProviderConfigDir();
   }
   return options;
 }
@@ -236,12 +215,12 @@ struct ReadinessProbe {
 };
 
 /// GetModelInfo makes the sidecar prepare the CLIP model profile (about 2 s), so a start that
-/// does not need the semantic model (AI Mask, image analysis) does not ask for it.
+/// does not need the semantic model (AI Mask) does not ask for it.
 auto RunReadinessProbe(const std::shared_ptr<sidecar_client::Client>& client,
                        std::chrono::milliseconds ping_timeout, bool require_model_info)
     -> ReadinessProbe {
   ReadinessProbe probe;
-  probe.ping_ok_ = client->runtime().Ping(ping_timeout, &probe.ping_error_);
+  probe.ping_ok_ = client->semantic().Ping(ping_timeout, &probe.ping_error_);
   if (probe.ping_ok_ && require_model_info) {
     probe.model_info_ok_ = client->semantic().GetModelInfo(
         std::chrono::milliseconds(500), &probe.model_info_, &probe.model_info_error_);
@@ -397,15 +376,13 @@ auto AiSidecarRuntimeService::StartAndWaitBody(const AiSidecarRuntimeOptions& op
   }
   if (IsRunning()) {
     const auto requested_options = NormalizeRuntimeOptions(options);
-    // The process stays running between operations, so it can hold an older model or older
-    // provider configs. Restart it when no other operation holds a lease; with other leases
-    // the running process is reused and the caller reports a model mismatch.
-    const bool model_changed     = ModelIdentityDiffers(requested_options);
-    if (active_leases_ <= 1 && (model_changed || provider_configs_changed_)) {
+    // The process stays running between operations, so it can hold an older model. Restart it
+    // when no other operation holds a lease; with other leases the running process is reused
+    // and the caller reports a model mismatch.
+    if (active_leases_ <= 1 && ModelIdentityDiffers(requested_options)) {
       qCInfo(diag::semanticLog).noquote()
-          << QStringLiteral("semantic.runtime.restart pid=%1 reason=%2 model_id=%3")
+          << QStringLiteral("semantic.runtime.restart pid=%1 reason=model model_id=%2")
                  .arg(status_.process_id)
-                 .arg(model_changed ? QStringLiteral("model") : QStringLiteral("provider_configs"))
                  .arg(QString::fromStdString(requested_options.model_id));
       Stop();
       if (IsRunning()) {
@@ -430,8 +407,6 @@ auto AiSidecarRuntimeService::StartAndWaitBody(const AiSidecarRuntimeOptions& op
   }
 
   options_ = NormalizeRuntimeOptions(options);
-  // The new process reads the current provider configs.
-  provider_configs_changed_ = false;
   if (options_.port == 0) {
     options_.port = ChoosePort();
   }
@@ -528,9 +503,8 @@ void AiSidecarRuntimeService::Stop() {
   // The blocking stop below replaces an idle stop that has not finished.
   idle_stop_timer_.stop();
   idle_stop_kill_timer_.stop();
-  idle_stop_pending_        = false;
-  idle_stop_kill_sent_      = false;
-  provider_configs_changed_ = false;
+  idle_stop_pending_   = false;
+  idle_stop_kill_sent_ = false;
 
   if (!IsRunning()) {
     client_.reset();
@@ -611,15 +585,6 @@ void AiSidecarRuntimeService::SetIdleStopDelay(std::chrono::milliseconds delay) 
   }
 }
 
-void AiSidecarRuntimeService::MarkProviderConfigsChanged() {
-  if (QThread::currentThread() != thread()) {
-    QMetaObject::invokeMethod(
-        this, [this]() { MarkProviderConfigsChanged(); }, Qt::BlockingQueuedConnection);
-    return;
-  }
-  provider_configs_changed_ = true;
-}
-
 void AiSidecarRuntimeService::BeginIdleStop() {
   if (idle_stop_pending_ || !IsRunning()) {
     return;
@@ -658,9 +623,8 @@ void AiSidecarRuntimeService::OnIdleStopKillTimeout() {
 
 void AiSidecarRuntimeService::FinishIdleStop() {
   idle_stop_kill_timer_.stop();
-  idle_stop_pending_        = false;
-  idle_stop_kill_sent_      = false;
-  provider_configs_changed_ = false;
+  idle_stop_pending_   = false;
+  idle_stop_kill_sent_ = false;
   AppendStdout(process_.readAllStandardOutput());
   AppendStderr(process_.readAllStandardError());
   ReleaseChildTreeCleanup();
@@ -708,7 +672,7 @@ auto AiSidecarRuntimeService::Status() -> AiSidecarRuntimeStatusSnapshot {
   if (status_.state == AiSidecarRuntimeState::kReady && client_) {
     AiSidecarRuntimeRemoteStatus remote;
     std::string                  error;
-    if (client_->runtime().GetRuntimeStatus(std::chrono::milliseconds(250), &remote, &error)) {
+    if (client_->semantic().GetRuntimeStatus(std::chrono::milliseconds(250), &remote, &error)) {
       status_.remote_status = remote;
     }
   }
@@ -829,10 +793,6 @@ auto AiSidecarRuntimeService::BuildArguments() const -> QStringList {
   args << "--batch-cap" << QString::number(options_.batch_cap);
   args << "--batch-wait-ms" << QString::number(options_.batch_wait_ms);
   args << "--max-message-bytes" << QString::number(options_.max_message_bytes);
-  if (!options_.provider_config_dir.empty()) {
-    args << "--provider-config-dir"
-         << QString::fromStdString(options_.provider_config_dir.string());
-  }
   for (const auto& arg : options_.extra_arguments) {
     args << QString::fromStdString(arg);
   }

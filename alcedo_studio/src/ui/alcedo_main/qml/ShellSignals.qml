@@ -2,7 +2,7 @@ import QtQuick
 import QtQml
 
 // Centralized shell signal routing extracted from Main.qml: language reload,
-// image-analysis completion, project open/close, folder switch, and
+// project open/close, folder switch, and
 // import/export session transitions. The import session bookkeeping
 // (importSessionObserved) lives here. The export queue (appModules.exportQueue)
 // clears itself on a project change and removes the finished entries itself. `host` is Main; the controllers, state objects, and
@@ -15,19 +15,6 @@ Item {
     property var deleteConfirmDialog: null
 
     property bool importSessionObserved: false
-    // ImageAnalysisController publishes all of its state through StateChanged, which starts
-    // with an upper-case letter, so a QML handler for it does not run. This property changes
-    // only when an analysis starts or ends.
-    readonly property bool imageAnalysisRunning: !!appModules.imageAnalysis
-                                                 && appModules.imageAnalysis.running
-
-    onImageAnalysisRunningChanged: {
-        if (!root.imageAnalysisRunning
-                && root.imageActionsController
-                && root.imageActionsController.analysisResultTouchesFocusedImage()) {
-            root.imageActionsController.refreshFocusedImageInspection()
-        }
-    }
 
     Connections {
         target: languageManager

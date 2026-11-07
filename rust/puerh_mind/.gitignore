@@ -28,8 +28,7 @@ target
 
 /testdata/
 
-# Phase 5c live-smoke secrets: .env.test holds real provider API keys for the
-# env-gated live smoke tests (cargo test). It is loaded by dotenvy and MUST NOT be
-# committed. The .env.test.example template (same shape, empty values) IS
-# committed so the expected keys are visible without leaking secrets.
+# .env.test held real provider API keys for the live provider tests of Advanced
+# Content Analysis, which are archived in deprecated/advanced_content_analysis/
+# (#710). A local copy of the file may still exist and MUST NOT be committed.
 .env.test

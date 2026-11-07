@@ -43,16 +43,4 @@ struct AiSidecarRuntimeRemoteStatus {
   std::vector<AiSidecarEncoderResidency> encoders;
 };
 
-struct AiSidecarCapability {
-  std::string      task_id;
-  std::string      provider_id;
-  std::string      model_id;
-  std::vector<int> input_kinds;
-  std::vector<int> output_kinds;
-  bool             supports_batch      = false;
-  bool             supports_cancel     = false;
-  bool             requires_credential = false;
-  int64_t          max_payload_bytes   = 0;
-};
-
 }  // namespace alcedo

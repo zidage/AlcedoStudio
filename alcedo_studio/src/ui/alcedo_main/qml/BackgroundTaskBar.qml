@@ -170,7 +170,6 @@ Item {
     }
 
     function kindLabel(kind) {
-        if (kind === "imageAnalysis") return qsTr("AI Analysis")
         if (kind === "semanticGeneration") return qsTr("Semantic Labels")
         if (kind === "modelActivation") return qsTr("Model Activation")
         if (kind === "modelDownload") return qsTr("Model Download")

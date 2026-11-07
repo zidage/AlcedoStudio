@@ -428,3 +428,34 @@ if(ALCEDO_METAL_ENABLED)
                FAIL_REGULAR_EXPRESSION "misses drt\.metallib"
                LABELS "ci_core_flow;legacy_removal;metal")
 endif()
+
+# Issue #710: Advanced Content Analysis is archived outside the build. No CMake file under src or
+# tests may name an archived file.
+add_test(NAME NoCMakeFileNamesArchivedAdvancedContentAnalysisFile
+  COMMAND ${CMAKE_COMMAND}
+          "-DARCHIVE_ROOT=${ALCEDO_ROOT_DIR}/${_archive_dir}/advanced_content_analysis"
+          "-DSCAN_ROOTS=${ALCEDO_ROOT_DIR}/src;${ALCEDO_TEST_ROOT}"
+          -DCHECK=NoCMakeFileNamesArchivedAdvancedContentAnalysisFile
+          -P ${ALCEDO_TEST_ROOT}/ci/advanced_content_analysis_removal_checks.cmake)
+set_tests_properties(NoCMakeFileNamesArchivedAdvancedContentAnalysisFile
+  PROPERTIES LABELS "ci_core_flow;legacy_removal")
+
+# The same check must report a CMake file that lists an archived source, and must not read
+# third_party. The archived name is assembled here so this file never spells it.
+string(CONCAT _archived_source_name "image_analysis_" "service.cpp")
+set(_acr_fixture_root "${CMAKE_CURRENT_BINARY_DIR}/advanced_content_analysis_reference_fixture")
+file(WRITE "${_acr_fixture_root}/archive/src/app/${_archived_source_name}" "\n")
+file(WRITE "${_acr_fixture_root}/src/app/CMakeLists.txt"
+  "add_library(ImageAnalysisService ${_archived_source_name})\n")
+file(WRITE "${_acr_fixture_root}/src/third_party/lib/CMakeLists.txt"
+  "add_library(Lib ${_archived_source_name})\n")
+add_test(NAME ArchivedAdvancedContentAnalysisCheckRejectsCMakeReference
+  COMMAND ${CMAKE_COMMAND}
+          "-DARCHIVE_ROOT=${_acr_fixture_root}/archive"
+          "-DSCAN_ROOTS=${_acr_fixture_root}/src"
+          -DCHECK=NoCMakeFileNamesArchivedAdvancedContentAnalysisFile
+          -P ${ALCEDO_TEST_ROOT}/ci/advanced_content_analysis_removal_checks.cmake)
+set_tests_properties(ArchivedAdvancedContentAnalysisCheckRejectsCMakeReference
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/CMakeLists\.txt: image_analysis_service\.cpp"
+             FAIL_REGULAR_EXPRESSION "third_party"
+             LABELS "ci_core_flow;legacy_removal")

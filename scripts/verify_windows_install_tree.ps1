@@ -84,8 +84,7 @@ $requiredFiles = @(
     'config\lens_calib\lens_catalog.json',
     'config\nikon_lens\id_map.json',
     'config\models\bayer.safetensors',
-    'config\models\xtrans.safetensors',
-    'configs\prompts\image_analysis_system_prompts.json'
+    'config\models\xtrans.safetensors'
 )
 
 foreach ($file in $requiredFiles) {

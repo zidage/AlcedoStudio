@@ -172,10 +172,9 @@ auto ItemsNeedingSemanticGeneration(const std::vector<SemanticGenerationItem>& i
 
 SemanticGenerationController::SemanticGenerationController(
     ProjectModule* project, LibraryModule* library, ModelDownloadController* model_download,
-    BackgroundTaskController* background_tasks, IUiStatusSink* status,
-    alcedo::AiProviderProfileController* ai_profiles, QObject* parent)
+    BackgroundTaskController* background_tasks, IUiStatusSink* status, QObject* parent)
     : QObject(parent), project_(project), library_(library), model_download_(model_download),
-      background_tasks_(background_tasks), status_(status), ai_profiles_(ai_profiles) {
+      background_tasks_(background_tasks), status_(status) {
   connect(model_download_, &ModelDownloadController::ModelRemoved, this,
           [this](const QString& profileId) { OnModelRemoved(profileId); });
 }
@@ -282,8 +281,6 @@ auto SemanticGenerationController::RuntimeOptionsForCurrentSidecarSnapshot(
   AiSidecarRuntimeOptions options;
   options.model_root  = QStringToPath(model_download_->ModelDownloadDirectory());
   options.hf_endpoint = model_download_->EffectiveModelEndpoint().toStdString();
-  options.provider_config_dir =
-      ai_profiles_ ? ai_profiles_->SidecarConfigDir() : std::filesystem::path{};
   options.allow_download     = false;
   options.require_model_info = false;
   options.startup_timeout    = kAiSidecarRuntimeStartupTimeout;
@@ -981,8 +978,6 @@ auto SemanticGenerationController::RuntimeOptionsForProfile(const ModelProfileSp
   options.model_id    = profile.model_id;
   options.revision    = profile.revision;
   options.hf_endpoint = model_download_->EffectiveModelEndpoint().toStdString();
-  options.provider_config_dir =
-      ai_profiles_ ? ai_profiles_->SidecarConfigDir() : std::filesystem::path{};
   options.allow_download     = false;
   options.require_model_info = true;
   options.startup_timeout    = kAiSidecarRuntimeStartupTimeout;
@@ -1110,10 +1105,6 @@ auto SemanticGenerationController::RegisterBackgroundTask() -> QString {
   snapshot.locks_.push_back(InteractionLock{
       InteractionCapability::ChangeModelDownloadSettings, 0,
       PL_TEXT("Semantic generation is running; don't change model files now.").Render()});
-  snapshot.locks_.push_back(InteractionLock{
-      InteractionCapability::ChangeImageAnalysisProvider, 0,
-      PL_TEXT("Semantic generation is running; change the analysis provider after it finishes.")
-          .Render()});
   QPointer<SemanticGenerationController> self(this);
   return background_tasks_->RegisterTask(snapshot, [self]() {
     if (self) {
@@ -1141,10 +1132,6 @@ auto SemanticGenerationController::RegisterActivationTask(const QString& profile
   snapshot.locks_.push_back(InteractionLock{
       InteractionCapability::ChangeModelDownloadSettings, 0,
       PL_TEXT("A model activation is running; don't change model files now.").Render()});
-  snapshot.locks_.push_back(InteractionLock{
-      InteractionCapability::ChangeImageAnalysisProvider, 0,
-      PL_TEXT("A model activation is running; change the analysis provider after it finishes.")
-          .Render()});
   // Non-cancelable: no cancel callback. The activation finish callback
   // (hopped back to the UI thread) calls FinishTask on this id.
   return background_tasks_->RegisterTask(snapshot);

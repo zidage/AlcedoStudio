@@ -118,31 +118,6 @@ Item {
         })
     }
 
-    function analysisResultTouchesFocusedImage() {
-        if (!root.focusedImageTarget || Number(root.focusedImageTarget.imageId) <= 0
-                || !appModules.imageAnalysis
-                || !appModules.imageAnalysis.lastResults) {
-            return false
-        }
-        const results = appModules.imageAnalysis.lastResults
-        const targetElementId = Number(root.focusedImageTarget.elementId || 0)
-        const targetFileId = Number(root.focusedImageTarget.fileId || 0)
-        const targetImageId = Number(root.focusedImageTarget.imageId || 0)
-        for (let i = 0; i < results.length; ++i) {
-            const row = results[i]
-            if (!row) {
-                continue
-            }
-            const elementId = Number(row.elementId || 0)
-            const imageId = Number(row.imageId || 0)
-            if ((elementId > 0 && (elementId === targetElementId || elementId === targetFileId))
-                    || (imageId > 0 && imageId === targetImageId)) {
-                return true
-            }
-        }
-        return false
-    }
-
     function selectAllCurrentAlbum() {
         if (!host.backendInteractive) {
             return

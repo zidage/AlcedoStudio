@@ -7,15 +7,12 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
-#include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSet>
 #include <QString>
 #include <QTemporaryDir>
-#include <QtGlobal>
 #include <QVariantList>
 #include <QVariantMap>
 #include <filesystem>
@@ -34,12 +31,36 @@ auto FsPathFromQStringForTest(const QString& path) -> std::filesystem::path {
 }
 #endif
 
-auto ReadJsonFile(const QString& path) -> QJsonObject {
-  QFile file(path);
-  EXPECT_TRUE(file.open(QIODevice::ReadOnly)) << path.toStdString();
-  const auto doc = QJsonDocument::fromJson(file.readAll());
-  EXPECT_TRUE(doc.isObject()) << path.toStdString();
-  return doc.object();
+constexpr auto kApiKeyProfileId = "11111111-1111-1111-1111-111111111111";
+constexpr auto kCodexProfileId  = "22222222-2222-2222-2222-222222222222";
+constexpr auto kNoKeyProfileId  = "33333333-3333-3333-3333-333333333333";
+constexpr auto kApiKeySlot      = "alcedo_ai_apikey";
+constexpr auto kCodexSlot       = "alcedo_ai_codex";
+constexpr auto kNoKeySlot       = "alcedo_ai_nokey";
+
+/// A profile object in the format that the earlier Advanced Content Analysis settings wrote.
+auto StoredProfile(const QString& uuid, const QString& display_name, const QString& template_id,
+                   const QString& driver, const QString& base_url, const QString& slot,
+                   const QString& masked_key_label) -> QJsonObject {
+  QJsonObject o;
+  o.insert(QStringLiteral("uuid"), uuid);
+  o.insert(QStringLiteral("display_name"), display_name);
+  o.insert(QStringLiteral("based_on_template"), template_id);
+  o.insert(QStringLiteral("credential_slot"), slot);
+  o.insert(QStringLiteral("masked_key_label"), masked_key_label);
+  o.insert(QStringLiteral("remember_key"), true);
+  o.insert(QStringLiteral("last_used_ms"), 1700000000000LL);
+  o.insert(QStringLiteral("provider_id"), QStringLiteral("profile_") + slot);
+  o.insert(QStringLiteral("driver"), driver);
+  o.insert(QStringLiteral("base_url"), base_url);
+  o.insert(QStringLiteral("endpoint"), QStringLiteral("/responses"));
+  o.insert(QStringLiteral("auth_type"), QStringLiteral("bearer"));
+  o.insert(QStringLiteral("model_id"), QStringLiteral("stored-model"));
+  o.insert(QStringLiteral("timeout_ms"), 60000);
+  QJsonObject model;
+  model.insert(QStringLiteral("slug"), QStringLiteral("stored-model"));
+  o.insert(QStringLiteral("models"), QJsonArray{model});
+  return o;
 }
 
 class AiProviderProfileTest : public ::testing::Test {
@@ -54,470 +75,212 @@ class AiProviderProfileTest : public ::testing::Test {
     QCoreApplication::setApplicationName(QStringLiteral("AiProviderProfileTest"));
   }
 
-  AiProviderProfileTest()
-      : store_(std::make_shared<alcedo::InMemoryAiCredentialStore>()),
-        controller_(StorageFile(), ConfigDir(), store_) {}
-
-  auto StorageFile() const -> std::filesystem::path {
-    return FsPathFromQStringForTest(temp_.filePath(QStringLiteral("ai_providers.json")));
-  }
-
-  auto ConfigDir() const -> std::filesystem::path {
-    return FsPathFromQStringForTest(temp_.filePath(QStringLiteral("provider_configs")));
-  }
+  AiProviderProfileTest() : store_(std::make_shared<alcedo::InMemoryAiCredentialStore>()) {}
 
   auto StorageFileQt() const -> QString {
     return temp_.filePath(QStringLiteral("ai_providers.json"));
   }
 
-  auto ConfigFileQt(const QString& provider_id) const -> QString {
-    return temp_.filePath(QStringLiteral("provider_configs/") + provider_id +
-                          QStringLiteral(".json"));
+  auto StorageFile() const -> std::filesystem::path {
+    return FsPathFromQStringForTest(StorageFileQt());
   }
 
-  auto Profile(const QString& id) const -> QVariantMap { return controller_.Profile(id); }
+  /// Writes a profile file with an API-key profile, a Codex OAuth profile, a profile without a
+  /// saved key, and a profile without a credential slot (which the earlier load did not list).
+  void WriteStoredProfiles() {
+    QJsonArray profiles;
+    profiles.push_back(StoredProfile(QString::fromLatin1(kApiKeyProfileId),
+                                     QStringLiteral("OpenCode"),
+                                     QStringLiteral("opencode_go_openai"),
+                                     QStringLiteral("openai_chat_compatible"),
+                                     QStringLiteral("https://opencode.ai/zen/go/v1"),
+                                     QString::fromLatin1(kApiKeySlot), QStringLiteral("****3456")));
+    profiles.push_back(StoredProfile(
+        QString::fromLatin1(kCodexProfileId), QStringLiteral("OpenAI Codex OAuth"),
+        QStringLiteral("openai_codex_oauth"), QStringLiteral("openai_codex_oauth"),
+        QStringLiteral("https://chatgpt.com/backend-api/codex"), QString::fromLatin1(kCodexSlot),
+        QStringLiteral("Codex OAuth ****abcdef")));
+    profiles.push_back(StoredProfile(QString::fromLatin1(kNoKeyProfileId),
+                                     QStringLiteral("Local"), QStringLiteral("custom"),
+                                     QStringLiteral("openai_chat_compatible"),
+                                     QStringLiteral("http://localhost:11434/v1"),
+                                     QString::fromLatin1(kNoKeySlot), QString{}));
+    profiles.push_back(StoredProfile(QStringLiteral("44444444-4444-4444-4444-444444444444"),
+                                     QStringLiteral("No slot"), QStringLiteral("custom"),
+                                     QStringLiteral("openai_chat_compatible"),
+                                     QStringLiteral("http://localhost:1/v1"), QString{},
+                                     QString{}));
+    QJsonObject root;
+    root.insert(QStringLiteral("schema_version"), 1);
+    root.insert(QStringLiteral("active_profile_id"), QString::fromLatin1(kApiKeyProfileId));
+    root.insert(QStringLiteral("output_language"), QStringLiteral("zh"));
+    root.insert(QStringLiteral("profiles"), profiles);
+    QFile file(StorageFileQt());
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+  }
+
+  void SaveCredential(const char* slot, const std::string& secret) {
+    std::string error;
+    ASSERT_TRUE(store_->SaveCredential(slot, secret, &error)) << error;
+  }
+
+  auto ReadStoredRoot() const -> QJsonObject {
+    QFile file(StorageFileQt());
+    EXPECT_TRUE(file.open(QIODevice::ReadOnly));
+    return QJsonDocument::fromJson(file.readAll()).object();
+  }
+
+  static auto StoredProfileById(const QJsonObject& root, const QString& uuid) -> QJsonObject {
+    for (const auto& value : root.value(QStringLiteral("profiles")).toArray()) {
+      if (value.toObject().value(QStringLiteral("uuid")).toString() == uuid) {
+        return value.toObject();
+      }
+    }
+    return {};
+  }
 
   static QCoreApplication*                           app_;
   QTemporaryDir                                      temp_;
   std::shared_ptr<alcedo::InMemoryAiCredentialStore> store_;
-  alcedo::AiProviderProfileController                controller_;
 };
 
 QCoreApplication* AiProviderProfileTest::app_ = nullptr;
 
-TEST_F(AiProviderProfileTest, StartsEmptyAndOffersProviderTemplates) {
-  EXPECT_TRUE(controller_.Profiles().isEmpty());
-  EXPECT_TRUE(controller_.ActiveProfileId().isEmpty());
-  EXPECT_FALSE(controller_.HasProfiles());
-
-  QSet<QString> ids;
-  for (const auto& option : controller_.TemplateOptions()) {
-    ids.insert(option.toMap().value(QStringLiteral("templateId")).toString());
-  }
-  EXPECT_EQ(ids.size(), 8);
-  EXPECT_TRUE(ids.contains(QStringLiteral("ccswitch_anthropic")));
-  EXPECT_TRUE(ids.contains(QStringLiteral("ccswitch_openai")));
-  EXPECT_TRUE(ids.contains(QStringLiteral("opencode_go_anthropic")));
-  EXPECT_TRUE(ids.contains(QStringLiteral("opencode_go_openai")));
-  EXPECT_TRUE(ids.contains(QStringLiteral("volcengine_ark")));
-  EXPECT_TRUE(ids.contains(QStringLiteral("volcengine_ark_coding")));
-  EXPECT_TRUE(ids.contains(QStringLiteral("openai_codex_oauth")));
-  EXPECT_TRUE(ids.contains(QStringLiteral("custom")));
-  EXPECT_FALSE(ids.contains(QStringLiteral("openrouter")));
+TEST_F(AiProviderProfileTest, MissingProfileFileListsNoProfiles) {
+  alcedo::AiProviderProfileController controller(StorageFile(), store_);
+  EXPECT_TRUE(controller.Profiles().isEmpty());
+  EXPECT_FALSE(controller.HasProfiles());
+  EXPECT_FALSE(controller.HasSavedCredentials());
+  EXPECT_EQ(controller.DeleteAllApiKeys(), 0);
+  EXPECT_FALSE(QFile::exists(StorageFileQt()));
 }
 
-TEST_F(AiProviderProfileTest, AddCreatesActiveProfilesWithUniqueIdsAndCredentialSlots) {
-  const QString first = controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_anthropic"));
-  const QString second =
-      controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_anthropic"));
+TEST_F(AiProviderProfileTest, LoadListsStoredProfilesWithTheirCredentialState) {
+  WriteStoredProfiles();
+  SaveCredential(kApiKeySlot, "sk-stored-api-key-123456");
+  SaveCredential(kCodexSlot, R"({"tokens":{"access_token":"codex"}})");
 
-  ASSERT_FALSE(first.isEmpty());
-  ASSERT_FALSE(second.isEmpty());
-  EXPECT_NE(first, second);
-  EXPECT_EQ(controller_.ActiveProfileId(), second);
-  EXPECT_EQ(controller_.Profiles().size(), 2);
+  alcedo::AiProviderProfileController controller(StorageFile(), store_);
+  ASSERT_EQ(controller.Profiles().size(), 3);
+  EXPECT_TRUE(controller.HasProfiles());
+  EXPECT_TRUE(controller.HasSavedCredentials());
 
-  const QVariantMap p1 = Profile(first);
-  const QVariantMap p2 = Profile(second);
-  EXPECT_NE(p1.value(QStringLiteral("providerId")).toString(),
-            p2.value(QStringLiteral("providerId")).toString());
-  EXPECT_NE(p1.value(QStringLiteral("credentialSlot")).toString(),
-            p2.value(QStringLiteral("credentialSlot")).toString());
-  EXPECT_TRUE(
-      p1.value(QStringLiteral("providerId")).toString().startsWith(QStringLiteral("profile_")));
-  EXPECT_TRUE(p1.value(QStringLiteral("credentialSlot"))
-                  .toString()
-                  .startsWith(QStringLiteral("alcedo_ai_")));
+  const QVariantMap api_key = controller.Profile(QString::fromLatin1(kApiKeyProfileId));
+  EXPECT_EQ(api_key.value(QStringLiteral("displayName")).toString(), QStringLiteral("OpenCode"));
+  EXPECT_EQ(api_key.value(QStringLiteral("baseUrl")).toString(),
+            QStringLiteral("https://opencode.ai/zen/go/v1"));
+  EXPECT_FALSE(api_key.value(QStringLiteral("isCodexOAuth")).toBool());
+  EXPECT_EQ(api_key.value(QStringLiteral("maskedKeyLabel")).toString(), QStringLiteral("****3456"));
+  EXPECT_TRUE(api_key.value(QStringLiteral("credentialAvailable")).toBool());
+
+  const QVariantMap codex = controller.Profile(QString::fromLatin1(kCodexProfileId));
+  EXPECT_TRUE(codex.value(QStringLiteral("isCodexOAuth")).toBool());
+  EXPECT_TRUE(codex.value(QStringLiteral("credentialAvailable")).toBool());
+
+  const QVariantMap no_key = controller.Profile(QString::fromLatin1(kNoKeyProfileId));
+  EXPECT_FALSE(no_key.value(QStringLiteral("credentialAvailable")).toBool());
+
+  EXPECT_TRUE(controller.Profile(QStringLiteral("44444444-4444-4444-4444-444444444444")).isEmpty());
 }
 
-TEST_F(AiProviderProfileTest, CloneCopiesMetadataButNeverCopiesCredential) {
-  const QString source = controller_.AddProfileFromTemplate(QStringLiteral("volcengine_ark"));
-  ASSERT_TRUE(
-      controller_.SaveApiKey(source, QStringLiteral("sk-clone-source-secret-123456")).isEmpty());
-  const QVariantMap source_profile = Profile(source);
-  const QString     source_slot = source_profile.value(QStringLiteral("credentialSlot")).toString();
-  ASSERT_TRUE(store_->HasCredential(source_slot.toStdString()));
+TEST_F(AiProviderProfileTest, DeleteApiKeyDeletesCredentialAndKeepsTheOtherStoredFields) {
+  WriteStoredProfiles();
+  SaveCredential(kApiKeySlot, "sk-stored-api-key-123456");
+  alcedo::AiProviderProfileController controller(StorageFile(), store_);
 
-  const QString clone = controller_.CloneProfile(source);
-  ASSERT_FALSE(clone.isEmpty());
-  EXPECT_EQ(controller_.ActiveProfileId(), source);
+  controller.DeleteApiKey(QString::fromLatin1(kApiKeyProfileId));
 
-  const QVariantMap clone_profile = Profile(clone);
-  EXPECT_EQ(clone_profile.value(QStringLiteral("baseUrl")).toString(),
-            source_profile.value(QStringLiteral("baseUrl")).toString());
-  EXPECT_EQ(clone_profile.value(QStringLiteral("modelId")).toString(),
-            source_profile.value(QStringLiteral("modelId")).toString());
-  EXPECT_NE(clone_profile.value(QStringLiteral("credentialSlot")).toString(), source_slot);
-  EXPECT_FALSE(clone_profile.value(QStringLiteral("credentialAvailable")).toBool());
-  EXPECT_TRUE(clone_profile.value(QStringLiteral("maskedKeyLabel")).toString().isEmpty());
-  EXPECT_FALSE(store_->HasCredential(
-      clone_profile.value(QStringLiteral("credentialSlot")).toString().toStdString()));
+  EXPECT_FALSE(store_->HasCredential(kApiKeySlot));
+  const QVariantMap api_key = controller.Profile(QString::fromLatin1(kApiKeyProfileId));
+  EXPECT_FALSE(api_key.value(QStringLiteral("credentialAvailable")).toBool());
+  EXPECT_TRUE(api_key.value(QStringLiteral("maskedKeyLabel")).toString().isEmpty());
+
+  const QJsonObject root = ReadStoredRoot();
+  EXPECT_EQ(root.value(QStringLiteral("schema_version")).toInt(), 1);
+  EXPECT_EQ(root.value(QStringLiteral("active_profile_id")).toString(),
+            QString::fromLatin1(kApiKeyProfileId));
+  EXPECT_EQ(root.value(QStringLiteral("output_language")).toString(), QStringLiteral("zh"));
+  EXPECT_EQ(root.value(QStringLiteral("profiles")).toArray().size(), 4);
+  const QJsonObject stored = StoredProfileById(root, QString::fromLatin1(kApiKeyProfileId));
+  EXPECT_TRUE(stored.value(QStringLiteral("masked_key_label")).toString().isEmpty());
+  EXPECT_EQ(stored.value(QStringLiteral("model_id")).toString(), QStringLiteral("stored-model"));
+  EXPECT_EQ(stored.value(QStringLiteral("endpoint")).toString(), QStringLiteral("/responses"));
+  EXPECT_EQ(stored.value(QStringLiteral("models")).toArray().size(), 1);
+  EXPECT_EQ(StoredProfileById(root, QString::fromLatin1(kCodexProfileId))
+                .value(QStringLiteral("masked_key_label"))
+                .toString(),
+            QStringLiteral("Codex OAuth ****abcdef"));
 }
 
-TEST_F(AiProviderProfileTest, DeleteActiveProfileCanWipeCredentialAndFallsBackToRemainingProfile) {
-  const QString first = controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_anthropic"));
-  const QString second = controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_openai"));
-  ASSERT_EQ(controller_.ActiveProfileId(), second);
-  ASSERT_TRUE(
-      controller_.SaveApiKey(second, QStringLiteral("sk-delete-me-secret-123456")).isEmpty());
-  const QString slot = Profile(second).value(QStringLiteral("credentialSlot")).toString();
-  ASSERT_TRUE(store_->HasCredential(slot.toStdString()));
+TEST_F(AiProviderProfileTest, DeleteProfileRemovesProfileAndItsCredential) {
+  WriteStoredProfiles();
+  SaveCredential(kCodexSlot, "codex-token-json");
+  alcedo::AiProviderProfileController controller(StorageFile(), store_);
 
-  EXPECT_TRUE(controller_.DeleteProfile(second, true));
-  EXPECT_EQ(controller_.Profiles().size(), 1);
-  EXPECT_EQ(controller_.ActiveProfileId(), first);
-  EXPECT_FALSE(store_->HasCredential(slot.toStdString()));
+  EXPECT_TRUE(controller.DeleteProfile(QString::fromLatin1(kCodexProfileId), true));
+  EXPECT_FALSE(store_->HasCredential(kCodexSlot));
+  EXPECT_EQ(controller.Profiles().size(), 2);
+  EXPECT_TRUE(controller.Profile(QString::fromLatin1(kCodexProfileId)).isEmpty());
+
+  alcedo::AiProviderProfileController reloaded(StorageFile(), store_);
+  EXPECT_EQ(reloaded.Profiles().size(), 2);
+  EXPECT_TRUE(reloaded.Profile(QString::fromLatin1(kCodexProfileId)).isEmpty());
+  EXPECT_FALSE(controller.DeleteProfile(QString::fromLatin1(kCodexProfileId), true));
 }
 
 TEST_F(AiProviderProfileTest, DeleteProfileCanKeepCredentialWhenRequested) {
-  const QString id = controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_openai"));
-  ASSERT_TRUE(controller_.SaveApiKey(id, QStringLiteral("sk-keep-me-secret-123456")).isEmpty());
-  const QString slot = Profile(id).value(QStringLiteral("credentialSlot")).toString();
-  ASSERT_TRUE(store_->HasCredential(slot.toStdString()));
+  WriteStoredProfiles();
+  SaveCredential(kApiKeySlot, "sk-keep-me-secret-123456");
+  alcedo::AiProviderProfileController controller(StorageFile(), store_);
 
-  EXPECT_TRUE(controller_.DeleteProfile(id, false));
-  EXPECT_TRUE(controller_.Profiles().isEmpty());
-  EXPECT_FALSE(controller_.HasProfiles());
-  EXPECT_TRUE(store_->HasCredential(slot.toStdString()));
+  EXPECT_TRUE(controller.DeleteProfile(QString::fromLatin1(kApiKeyProfileId), false));
+  EXPECT_TRUE(store_->HasCredential(kApiKeySlot));
+  EXPECT_TRUE(controller.Profile(QString::fromLatin1(kApiKeyProfileId)).isEmpty());
 }
 
-TEST_F(AiProviderProfileTest, EditingInactiveProfileDoesNotActivateIt) {
-  const QString first = controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_anthropic"));
-  const QString second = controller_.AddProfileFromTemplate(QStringLiteral("volcengine_ark"));
-  ASSERT_EQ(controller_.ActiveProfileId(), second);
+TEST_F(AiProviderProfileTest, DeleteAllApiKeysDeletesEveryStoredCredentialAndReturnsTheCount) {
+  WriteStoredProfiles();
+  SaveCredential(kApiKeySlot, "sk-stored-api-key-123456");
+  SaveCredential(kCodexSlot, "codex-token-json");
+  alcedo::AiProviderProfileController controller(StorageFile(), store_);
+  ASSERT_TRUE(controller.HasSavedCredentials());
 
-  EXPECT_TRUE(controller_.SetProfileField(first, QStringLiteral("displayName"),
-                                          QStringLiteral("Edited inactive profile")));
-  EXPECT_EQ(controller_.ActiveProfileId(), second);
-  EXPECT_EQ(Profile(first).value(QStringLiteral("displayName")).toString(),
-            QStringLiteral("Edited inactive profile"));
-}
+  EXPECT_EQ(controller.DeleteAllApiKeys(), 2);
 
-TEST_F(AiProviderProfileTest, SettingsPersistInOneAiProvidersJsonFile) {
-  const QString id = controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_openai"));
-  ASSERT_TRUE(controller_.SetOutputLanguage(QStringLiteral("zh")));
-  ASSERT_TRUE(controller_.SetProfileField(id, QStringLiteral("baseUrl"),
-                                          QStringLiteral("https://example.test/v1")));
-  ASSERT_TRUE(controller_.SetProfileField(id, QStringLiteral("modelId"),
-                                          QStringLiteral("vision-live-model")));
-
-  alcedo::AiProviderProfileController reloaded(StorageFile(), ConfigDir(), store_);
-  EXPECT_EQ(reloaded.ActiveProfileId(), id);
-  EXPECT_EQ(reloaded.OutputLanguage(), QStringLiteral("zh"));
-  EXPECT_EQ(reloaded.Profiles().size(), 1);
-  const QVariantMap p = reloaded.Profile(id);
-  EXPECT_EQ(p.value(QStringLiteral("baseUrl")).toString(),
-            QStringLiteral("https://example.test/v1"));
-  EXPECT_EQ(p.value(QStringLiteral("modelId")).toString(), QStringLiteral("vision-live-model"));
-
-  const QJsonObject root = ReadJsonFile(StorageFileQt());
-  EXPECT_EQ(root.value(QStringLiteral("schema_version")).toInt(), 1);
-  EXPECT_TRUE(root.contains(QStringLiteral("profiles")));
-}
-
-TEST_F(AiProviderProfileTest, ReloadMigratesOldOpencodeGoDefaultModels) {
-  const QString openai_id =
-      controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_openai"));
-  const QString anthropic_id =
-      controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_anthropic"));
-
-  QFile file(StorageFileQt());
-  ASSERT_TRUE(file.open(QIODevice::ReadOnly));
-  QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
-  file.close();
-
-  QJsonArray profiles = root.value(QStringLiteral("profiles")).toArray();
-  for (auto value : profiles) {
-    QJsonObject profile = value.toObject();
-    if (profile.value(QStringLiteral("uuid")).toString() == openai_id) {
-      profile.insert(QStringLiteral("model_id"), QStringLiteral("gpt-4o"));
-      profile.insert(QStringLiteral("model_display_name"), QStringLiteral("GPT-4o"));
-    } else if (profile.value(QStringLiteral("uuid")).toString() == anthropic_id) {
-      profile.insert(QStringLiteral("model_id"), QStringLiteral("claude-sonnet-4-5"));
-      profile.insert(QStringLiteral("model_display_name"), QStringLiteral("Claude Sonnet 4.5"));
-    }
-    for (int i = 0; i < profiles.size(); ++i) {
-      if (profiles.at(i).toObject().value(QStringLiteral("uuid")) ==
-          profile.value(QStringLiteral("uuid"))) {
-        profiles.replace(i, profile);
-        break;
-      }
-    }
+  EXPECT_FALSE(store_->HasCredential(kApiKeySlot));
+  EXPECT_FALSE(store_->HasCredential(kCodexSlot));
+  EXPECT_FALSE(controller.HasSavedCredentials());
+  const QVariantList profiles = controller.Profiles();
+  ASSERT_EQ(profiles.size(), 3);
+  for (const auto& value : profiles) {
+    EXPECT_FALSE(value.toMap().value(QStringLiteral("credentialAvailable")).toBool());
   }
-  root.insert(QStringLiteral("profiles"), profiles);
-  ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-  file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-  file.close();
-
-  alcedo::AiProviderProfileController reloaded(StorageFile(), ConfigDir(), store_);
-  EXPECT_EQ(reloaded.Profile(openai_id).value(QStringLiteral("modelId")).toString(),
-            QStringLiteral("kimi-k2.7-code"));
-  EXPECT_EQ(reloaded.Profile(anthropic_id).value(QStringLiteral("modelId")).toString(),
-            QStringLiteral("qwen3.7-plus"));
-  EXPECT_EQ(reloaded.Profile(anthropic_id).value(QStringLiteral("authType")).toString(),
-            QStringLiteral("api_key_header"));
-}
-TEST_F(AiProviderProfileTest, PrepareSidecarConfigDirWritesProviderConfigsAndRemovesStaleFiles) {
-  const QString     id      = controller_.AddProfileFromTemplate(QStringLiteral("volcengine_ark"));
-  const QVariantMap profile = Profile(id);
-  const QString     provider_id = profile.value(QStringLiteral("providerId")).toString();
-  const QString     stale_path  = temp_.filePath(QStringLiteral("provider_configs/stale.json"));
-  ASSERT_TRUE(QDir().mkpath(temp_.filePath(QStringLiteral("provider_configs"))));
-  QFile stale(stale_path);
-  ASSERT_TRUE(stale.open(QIODevice::WriteOnly));
-  stale.write("{}");
-  stale.close();
-
-  std::string error;
-  EXPECT_TRUE(controller_.PrepareSidecarConfigDir(&error)) << error;
-  EXPECT_FALSE(QFile::exists(stale_path));
-
-  const QJsonObject root = ReadJsonFile(ConfigFileQt(provider_id));
-  EXPECT_EQ(root.value(QStringLiteral("provider_id")).toString(), provider_id);
-  EXPECT_EQ(root.value(QStringLiteral("base_url")).toString(),
-            profile.value(QStringLiteral("baseUrl")).toString());
-  EXPECT_EQ(root.value(QStringLiteral("endpoint")).toString(),
-            profile.value(QStringLiteral("endpoint")).toString());
-  EXPECT_EQ(root.value(QStringLiteral("auth"))
-                .toObject()
-                .value(QStringLiteral("credential_slot"))
-                .toString(),
-            profile.value(QStringLiteral("credentialSlot")).toString());
-  EXPECT_EQ(
-      root.value(QStringLiteral("defaults")).toObject().value(QStringLiteral("model")).toString(),
-      profile.value(QStringLiteral("modelId")).toString());
-  EXPECT_FALSE(controller_.SidecarConfigsDirty());
+  EXPECT_TRUE(StoredProfileById(ReadStoredRoot(), QString::fromLatin1(kApiKeyProfileId))
+                  .value(QStringLiteral("masked_key_label"))
+                  .toString()
+                  .isEmpty());
 }
 
-TEST_F(AiProviderProfileTest, OpenCodeOpenAiConfigIncludesDocumentedAndDiscoverableKimiIds) {
-  const QString     id = controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_openai"));
-  const QVariantMap profile = Profile(id);
-  std::string       error;
-  ASSERT_TRUE(controller_.PrepareSidecarConfigDir(&error)) << error;
-
-  const QJsonObject root =
-      ReadJsonFile(ConfigFileQt(profile.value(QStringLiteral("providerId")).toString()));
-  QSet<QString> model_ids;
-  for (const auto& value : root.value(QStringLiteral("models")).toArray()) {
-    model_ids.insert(value.toObject().value(QStringLiteral("slug")).toString());
-  }
-  EXPECT_TRUE(model_ids.contains(QStringLiteral("kimi-k2.7-code")));
-  EXPECT_TRUE(model_ids.contains(QStringLiteral("kimi-k2.7")));
-}
-
-TEST_F(AiProviderProfileTest, CcSwitchTemplatesWriteModelsResponsePath) {
-  const QString     id      = controller_.AddProfileFromTemplate(QStringLiteral("ccswitch_openai"));
-  const QVariantMap profile = Profile(id);
-  EXPECT_EQ(profile.value(QStringLiteral("modelsResponseDataJsonPointer")).toString(),
-            QStringLiteral("/models"));
-
-  std::string error;
-  ASSERT_TRUE(controller_.PrepareSidecarConfigDir(&error)) << error;
-
-  const QJsonObject root =
-      ReadJsonFile(ConfigFileQt(profile.value(QStringLiteral("providerId")).toString()));
-  EXPECT_EQ(root.value(QStringLiteral("models_response"))
-                .toObject()
-                .value(QStringLiteral("data_json_pointer"))
-                .toString(),
-            QStringLiteral("/models"));
-}
-
-TEST_F(AiProviderProfileTest, OpenAiCodexOAuthTemplateWritesCodexSidecarConfig) {
-  const QString     id = controller_.AddProfileFromTemplate(QStringLiteral("openai_codex_oauth"));
-  const QVariantMap profile = Profile(id);
-  EXPECT_EQ(profile.value(QStringLiteral("driver")).toString(),
-            QStringLiteral("openai_codex_oauth"));
-  EXPECT_EQ(profile.value(QStringLiteral("baseUrl")).toString(),
-            QStringLiteral("https://chatgpt.com/backend-api/codex"));
-  EXPECT_EQ(profile.value(QStringLiteral("endpoint")).toString(), QStringLiteral("/responses"));
-  EXPECT_EQ(profile.value(QStringLiteral("modelsEndpoint")).toString(), QStringLiteral("/models"));
-  EXPECT_EQ(profile.value(QStringLiteral("modelsResponseDataJsonPointer")).toString(),
-            QStringLiteral("/models"));
-  EXPECT_EQ(profile.value(QStringLiteral("modelId")).toString(), QStringLiteral("gpt-5.3-codex"));
-  EXPECT_TRUE(profile.value(QStringLiteral("credentialRequired")).toBool());
-  EXPECT_FALSE(profile.value(QStringLiteral("credentialAvailable")).toBool());
-
-  std::string error;
-  ASSERT_TRUE(controller_.PrepareSidecarConfigDir(&error)) << error;
-
-  const QJsonObject root =
-      ReadJsonFile(ConfigFileQt(profile.value(QStringLiteral("providerId")).toString()));
-  EXPECT_EQ(root.value(QStringLiteral("driver")).toString(), QStringLiteral("openai_codex_oauth"));
-  EXPECT_EQ(root.value(QStringLiteral("base_url")).toString(),
-            QStringLiteral("https://chatgpt.com/backend-api/codex"));
-  EXPECT_EQ(root.value(QStringLiteral("auth"))
-                .toObject()
-                .value(QStringLiteral("credential_slot"))
-                .toString(),
-            profile.value(QStringLiteral("credentialSlot")).toString());
-  EXPECT_EQ(root.value(QStringLiteral("structured_output"))
-                .toObject()
-                .value(QStringLiteral("mode"))
-                .toString(),
-            QStringLiteral("responses_json_schema"));
-  EXPECT_EQ(root.value(QStringLiteral("response"))
-                .toObject()
-                .value(QStringLiteral("content_json_pointer"))
-                .toString(),
-            QStringLiteral("/output_text"));
-}
-
-TEST_F(AiProviderProfileTest, ImportCodexAuthStoresTokenJsonOnlyInCredentialStore) {
-  const QString     id = controller_.AddProfileFromTemplate(QStringLiteral("openai_codex_oauth"));
-  const QVariantMap profile       = Profile(id);
-  const QString     slot          = profile.value(QStringLiteral("credentialSlot")).toString();
-  const QString     access_token  = QStringLiteral("codex-access-token-never-persist");
-  const QString     refresh_token = QStringLiteral("codex-refresh-token-never-persist");
-  const QString     codex_home    = temp_.filePath(QStringLiteral("codex_home"));
-  ASSERT_TRUE(QDir().mkpath(codex_home));
-
-  QFile auth_file(QDir(codex_home).filePath(QStringLiteral("auth.json")));
-  ASSERT_TRUE(auth_file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-  QJsonObject tokens;
-  tokens.insert(QStringLiteral("access_token"), access_token);
-  tokens.insert(QStringLiteral("refresh_token"), refresh_token);
-  tokens.insert(QStringLiteral("account_id"), QStringLiteral("acct_test_abcdef"));
+TEST_F(AiProviderProfileTest, ProfileListShowsNoTextThatLooksLikeAnApiKey) {
+  QJsonArray profiles;
+  profiles.push_back(StoredProfile(QString::fromLatin1(kApiKeyProfileId),
+                                   QStringLiteral("sk-abcdefghijklmnopqrstuvwx"),
+                                   QStringLiteral("custom"), QStringLiteral("openai_chat_compatible"),
+                                   QStringLiteral("Bearer abcdefghijklmnop"),
+                                   QString::fromLatin1(kApiKeySlot), QString{}));
   QJsonObject root;
-  root.insert(QStringLiteral("tokens"), tokens);
-  auth_file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-  auth_file.close();
-
-  const bool       had_codex_home = qEnvironmentVariableIsSet("CODEX_HOME");
-  const QByteArray old_codex_home = qgetenv("CODEX_HOME");
-  qputenv("CODEX_HOME", codex_home.toUtf8());
-  const QString import_error = controller_.ImportCodexAuth(id);
-  if (had_codex_home) {
-    qputenv("CODEX_HOME", old_codex_home);
-  } else {
-    qunsetenv("CODEX_HOME");
-  }
-  ASSERT_TRUE(import_error.isEmpty()) << import_error.toStdString();
-
-  std::string stored_secret;
-  std::string store_error;
-  ASSERT_TRUE(store_->LoadCredential(slot.toStdString(), &stored_secret, &store_error))
-      << store_error;
-  EXPECT_NE(stored_secret.find(access_token.toStdString()), std::string::npos);
-  EXPECT_NE(stored_secret.find(refresh_token.toStdString()), std::string::npos);
-  EXPECT_TRUE(Profile(id).value(QStringLiteral("credentialAvailable")).toBool());
-  EXPECT_EQ(Profile(id).value(QStringLiteral("maskedKeyLabel")).toString(),
-            QStringLiteral("Codex OAuth ****abcdef"));
-
-  std::string error;
-  ASSERT_TRUE(controller_.PrepareSidecarConfigDir(&error)) << error;
-  QFile store_file(StorageFileQt());
-  ASSERT_TRUE(store_file.open(QIODevice::ReadOnly));
-  const QString stored_json = QString::fromUtf8(store_file.readAll());
-  EXPECT_FALSE(stored_json.contains(access_token));
-  EXPECT_FALSE(stored_json.contains(refresh_token));
-
-  const QString provider_id = Profile(id).value(QStringLiteral("providerId")).toString();
-  QFile         config_file(ConfigFileQt(provider_id));
-  ASSERT_TRUE(config_file.open(QIODevice::ReadOnly));
-  const QString config_json = QString::fromUtf8(config_file.readAll());
-  EXPECT_FALSE(config_json.contains(access_token));
-  EXPECT_FALSE(config_json.contains(refresh_token));
-  EXPECT_TRUE(config_json.contains(slot));
-}
-
-TEST_F(AiProviderProfileTest, ExistingCcSwitchProfilesMigrateModelsResponsePath) {
-  const QString id = controller_.AddProfileFromTemplate(QStringLiteral("ccswitch_openai"));
-
-  QFile         file(StorageFileQt());
-  ASSERT_TRUE(file.open(QIODevice::ReadOnly));
-  QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
-  file.close();
-  QJsonArray profiles = root.value(QStringLiteral("profiles")).toArray();
-  for (int i = 0; i < profiles.size(); ++i) {
-    QJsonObject profile = profiles.at(i).toObject();
-    if (profile.value(QStringLiteral("uuid")).toString() == id) {
-      profile.remove(QStringLiteral("models_response_data_json_pointer"));
-      profiles.replace(i, profile);
-      break;
-    }
-  }
+  root.insert(QStringLiteral("schema_version"), 1);
   root.insert(QStringLiteral("profiles"), profiles);
+  QFile file(StorageFileQt());
   ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-  file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+  file.write(QJsonDocument(root).toJson());
   file.close();
 
-  alcedo::AiProviderProfileController reloaded(StorageFile(), ConfigDir(), store_);
-  EXPECT_EQ(reloaded.Profile(id).value(QStringLiteral("modelsResponseDataJsonPointer")).toString(),
-            QStringLiteral("/models"));
-}
-
-TEST_F(AiProviderProfileTest, DiscoveredModelsPersistAndBecomeSidecarModels) {
-  const QString id = controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_openai"));
-  QVariantMap   discovered;
-  discovered.insert(QStringLiteral("modelId"), QStringLiteral("live-vision-model"));
-  discovered.insert(QStringLiteral("displayName"), QStringLiteral("Live Vision Model"));
-  discovered.insert(QStringLiteral("supportsVision"), true);
-  discovered.insert(QStringLiteral("supportsStructuredOutput"), true);
-  QVariantList models;
-  models.push_back(discovered);
-
-  controller_.SetDiscoveredModels(id, models);
-  ASSERT_TRUE(controller_.SetProfileField(id, QStringLiteral("modelId"),
-                                          QStringLiteral("live-vision-model")));
-  const QVariantMap profile = Profile(id);
-  std::string       error;
-  ASSERT_TRUE(controller_.PrepareSidecarConfigDir(&error)) << error;
-
-  const QJsonObject root =
-      ReadJsonFile(ConfigFileQt(profile.value(QStringLiteral("providerId")).toString()));
-  bool found = false;
-  for (const auto& value : root.value(QStringLiteral("models")).toArray()) {
-    if (value.toObject().value(QStringLiteral("slug")).toString() ==
-        QStringLiteral("live-vision-model")) {
-      found = true;
-    }
-  }
-  EXPECT_TRUE(found);
-
-  alcedo::AiProviderProfileController reloaded(StorageFile(), ConfigDir(), store_);
-  EXPECT_EQ(reloaded.Profile(id).value(QStringLiteral("modelId")).toString(),
-            QStringLiteral("live-vision-model"));
-}
-
-TEST_F(AiProviderProfileTest, DiscoveredModelsDefaultToImageAnalysisCandidate) {
-  const QString id = controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_openai"));
-  QVariantMap   discovered;
-  discovered.insert(QStringLiteral("modelId"), QStringLiteral("listed-code-model"));
-  discovered.insert(QStringLiteral("displayName"), QStringLiteral("Listed Code Model"));
-  QVariantList models;
-  models.push_back(discovered);
-
-  controller_.SetDiscoveredModels(id, models);
-  const auto options = controller_.ModelOptions(id);
-  auto       it      = std::find_if(options.begin(), options.end(), [](const QVariant& value) {
-    return value.toMap().value(QStringLiteral("modelId")).toString() ==
-           QStringLiteral("listed-code-model");
-  });
-  ASSERT_NE(it, options.end());
-  const auto model = it->toMap();
-  EXPECT_TRUE(model.value(QStringLiteral("supportsVision")).toBool());
-  EXPECT_TRUE(model.value(QStringLiteral("supportsStructuredOutput")).toBool());
-}
-TEST_F(AiProviderProfileTest, RawApiKeyNeverEntersProfileJsonOrSidecarConfig) {
-  const QString id  = controller_.AddProfileFromTemplate(QStringLiteral("opencode_go_anthropic"));
-  const QString raw = QStringLiteral("sk-never-persist-this-secret-123456");
-  ASSERT_TRUE(controller_.SaveApiKey(id, raw).isEmpty());
-  std::string error;
-  ASSERT_TRUE(controller_.PrepareSidecarConfigDir(&error)) << error;
-
-  QFile store_file(StorageFileQt());
-  ASSERT_TRUE(store_file.open(QIODevice::ReadOnly));
-  const QString stored_json = QString::fromUtf8(store_file.readAll());
-  EXPECT_FALSE(stored_json.contains(raw));
-  EXPECT_TRUE(stored_json.contains(QStringLiteral("****3456")));
-
-  const QString provider_id = Profile(id).value(QStringLiteral("providerId")).toString();
-  QFile         config_file(ConfigFileQt(provider_id));
-  ASSERT_TRUE(config_file.open(QIODevice::ReadOnly));
-  const QString config_json = QString::fromUtf8(config_file.readAll());
-  EXPECT_FALSE(config_json.contains(raw));
-  EXPECT_TRUE(config_json.contains(Profile(id).value(QStringLiteral("credentialSlot")).toString()));
+  alcedo::AiProviderProfileController controller(StorageFile(), store_);
+  const QVariantMap profile = controller.Profile(QString::fromLatin1(kApiKeyProfileId));
+  EXPECT_TRUE(profile.value(QStringLiteral("displayName")).toString().isEmpty());
+  EXPECT_TRUE(profile.value(QStringLiteral("baseUrl")).toString().isEmpty());
 }
 
 }  // namespace

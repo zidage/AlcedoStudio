@@ -25,7 +25,6 @@ Item {
     property alias adjustmentTransferActions: adjustmentTransferActionsObj
     property alias imageContextMenu: imageContextMenuObj
     property alias nikonHeRecoveryDialog: nikonHeRecoveryDialogObj
-    property alias advancedContentAnalysisDialog: advancedContentAnalysisDialogObj
     property alias semanticGenerationDialog: semanticGenerationDialogObj
     property alias deleteConfirmDialog: deleteConfirmDialogObj
     property alias editorCloseConfirmDialog: editorCloseConfirmDialogObj
@@ -197,9 +196,9 @@ Item {
             {
                 id: "delete",
                 label: Number(appModules.folders.currentFolderId) === 0 ? qsTr("Delete") : qsTr("Remove from Album"),
-                // Phase 2: blocked while the selected images are in an active
-                // analysis set (DeleteImages lock). The reason is exposed on the
-                // policy controller as pendingDeleteReason.
+                // Blocked while a running task holds a DeleteImages lock on the
+                // selected images. The reason is exposed on the policy controller
+                // as pendingDeleteReason.
                 enabled: host.pendingDeleteTargets.length > 0
                           && appModules.interactionPolicy.canDeletePendingTargets
             }
@@ -255,30 +254,11 @@ Item {
         onExitRequested: appModules.nikonHeRecovery.ExitNikonHeRecovery()
     }
 
-    AdvancedContentAnalysisDialog {
-        id: advancedContentAnalysisDialogObj
-        objectName: "advancedContentAnalysisDialog"
-        parent: Overlay.overlay
-        blurSource: root.blurSource
-        imageController: appModules.images
-        analysisController: appModules.imageAnalysis
-        profileController: appModules.aiProviderProfiles
-        interactionPolicy: appModules.interactionPolicy
-        backendInteractive: host.backendInteractive
-        onMessageRequested: function(message) {
-            host.showSnackbar(message)
-        }
-    }
-
     BackgroundTasksDialog {
         id: backgroundTasksDialogObj
         controller: appModules.backgroundTasks
         blurSource: root.blurSource
         cornerRadius: root.host ? root.host.windowCornerRadius : 0
-        onTaskDetailsRequested: function(task) {
-            if (task && task.kind === "imageAnalysis")
-                advancedContentAnalysisDialogObj.openTaskDetails(task)
-        }
     }
 
     SemanticGenerationDialog {
@@ -380,7 +360,6 @@ Item {
                || adjustmentTransferDialogObj.opened
                || nikonHeRecoveryDialogObj.opened
                || semanticGenerationDialogObj.opened
-               || advancedContentAnalysisDialogObj.opened
                || backgroundTasksDialogObj.opened
                || deleteConfirmDialogObj.opened
                || folderImportConfirmDialogObj.opened
@@ -407,14 +386,6 @@ Item {
 
     function openAiModelSettings() {
         openSettingsDialog(settingsDialogObj.aiModelsCategory)
-    }
-
-    function openAdvancedAnalysisDialog() {
-        const targets = root.selectionState.currentSelectedItems()
-        advancedContentAnalysisDialogObj.openWithTargets(targets)
-        if (targets.length <= 0) {
-            host.showSnackbar(qsTr("Select at least one image to analyze."))
-        }
     }
 
     function openBackgroundTasksDialog() {

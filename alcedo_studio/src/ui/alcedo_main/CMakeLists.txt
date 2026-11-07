@@ -72,14 +72,6 @@ def_library(AiModelDownloadTaskPublisher
     PUBLIC_DEPS AiModelPackageService BackgroundTaskController Qt6::Core
 )
 
-def_library(ImageAnalysisController
-    SOURCES
-        "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_analysis_controller.cpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/image_analysis_controller.hpp"
-    PUBLIC_DEPS ImageAnalysisService AiProviderProfile AiCredentialStore BackgroundTaskController
-                UiLocalization Qt6::Core
-)
-
 add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/application_module_host.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_module.cpp"
@@ -88,7 +80,6 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/album_section_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/album_thumbnail_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/interaction_policy_controller.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_db_write_barrier.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_handler.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/thumbnail_manager.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/thumbnail_image_provider.cpp"
@@ -100,8 +91,6 @@ add_library(AlbumBackendLib STATIC
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/system_icon_image_provider.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/folder_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_controller.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_analysis_environment.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_analysis_sink.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/stats_engine.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/search_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/search_request_worker.cpp"
@@ -191,7 +180,6 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/album_types.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_db_write_barrier.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/path_utils.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_handler.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/thumbnail_manager.hpp"
@@ -318,8 +306,6 @@ target_link_libraries(AlbumBackendLib
         ThumbnailService
         MaskThumbnailService
         SemanticGenerationService
-        ImageAnalysisService
-        ImageAnalysisController
         AiProviderProfile
         AiCredentialStore
         ModelDownloadService
@@ -763,7 +749,6 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/CacheSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/NikonHeRecoveryDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationDialog.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/AdvancedContentAnalysisDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/DialogActionButton.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThemeCheckBox.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThemeSwitch.qml"
@@ -777,6 +762,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/SegmentedCardSwitcher.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiProviderSettingsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/SavedAiKeysReminder.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SeveritySegmentedSlider.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/util/SearchComboBox.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AboutPage.qml"
@@ -1028,8 +1014,6 @@ endif()
 
 set(ALCEDO_MIND_SOURCE_DIR "${CMAKE_SOURCE_DIR}/rust/puerh_mind"
     CACHE INTERNAL "Alcedo semantic sidecar source directory.")
-set(ALCEDO_MIND_PROMPTS_DIR "${ALCEDO_MIND_SOURCE_DIR}/configs/prompts"
-    CACHE INTERNAL "Alcedo semantic sidecar prompt profile config directory.")
 set(ALCEDO_MIND_BUILD_PROFILE "release"
     CACHE INTERNAL "Alcedo semantic sidecar cargo profile.")
 set(ALCEDO_MIND_TARGET_DIR "${ALCEDO_MIND_SOURCE_DIR}/target/${ALCEDO_MIND_BUILD_PROFILE}"
@@ -1206,7 +1190,6 @@ if(ALCEDO_BUILD_SEMANTIC_SIDECAR AND TARGET alcedo_mind_sidecar)
         COMMAND ${CMAKE_COMMAND}
             "-DALCEDO_MIND_BINARY=${ALCEDO_MIND_BINARY}"
             "-DALCEDO_MIND_TARGET_DIR=${ALCEDO_MIND_TARGET_DIR}"
-            "-DALCEDO_MIND_PROMPTS_DIR=${ALCEDO_MIND_PROMPTS_DIR}"
             "-DALCEDO_MIND_DEST_DIR=$<TARGET_FILE_DIR:alcedo_main>"
             -P "${CMAKE_SOURCE_DIR}/scripts/cmake/copy_semantic_sidecar.cmake"
         DEPENDS alcedo_mind_sidecar

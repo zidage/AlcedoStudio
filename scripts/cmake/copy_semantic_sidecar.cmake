@@ -10,16 +10,8 @@ if(NOT DEFINED ALCEDO_MIND_DEST_DIR OR ALCEDO_MIND_DEST_DIR STREQUAL "")
     message(FATAL_ERROR "ALCEDO_MIND_DEST_DIR is required")
 endif()
 
-if(NOT DEFINED ALCEDO_MIND_PROMPTS_DIR OR ALCEDO_MIND_PROMPTS_DIR STREQUAL "")
-    message(FATAL_ERROR "ALCEDO_MIND_PROMPTS_DIR is required")
-endif()
-
 if(NOT EXISTS "${ALCEDO_MIND_BINARY}")
     message(FATAL_ERROR "Semantic sidecar binary was not built: ${ALCEDO_MIND_BINARY}")
-endif()
-
-if(NOT IS_DIRECTORY "${ALCEDO_MIND_PROMPTS_DIR}")
-    message(FATAL_ERROR "Semantic sidecar prompt config directory was not found: ${ALCEDO_MIND_PROMPTS_DIR}")
 endif()
 
 file(MAKE_DIRECTORY "${ALCEDO_MIND_DEST_DIR}")
@@ -43,9 +35,9 @@ foreach(_alcedo_mind_runtime_shared_lib IN LISTS _alcedo_mind_runtime_shared_lib
     file(COPY "${_alcedo_mind_runtime_shared_lib}" DESTINATION "${ALCEDO_MIND_DEST_DIR}")
 endforeach()
 
+# The image analysis prompt profiles left the sidecar with Advanced Content Analysis (issue #710).
+# Remove the copy that an earlier build put next to the binary.
 file(REMOVE_RECURSE "${ALCEDO_MIND_DEST_DIR}/configs/prompts")
-file(MAKE_DIRECTORY "${ALCEDO_MIND_DEST_DIR}/configs")
-file(COPY "${ALCEDO_MIND_PROMPTS_DIR}" DESTINATION "${ALCEDO_MIND_DEST_DIR}/configs")
 
 if(APPLE)
     execute_process(COMMAND /bin/chmod u+w "${_alcedo_mind_copied_binary}" ERROR_QUIET)

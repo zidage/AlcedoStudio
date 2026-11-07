@@ -129,7 +129,6 @@ required_files=(
   "${macos_dir}/config/lens_calib/lens_catalog.json"
   "${macos_dir}/config/lens_calib/mil-sony.xml"
   "${macos_dir}/config/nikon_lens/id_map.json"
-  "${macos_dir}/configs/prompts/image_analysis_system_prompts.json"
   "${contents_dir}/Helpers/alcedo_update_installer"
   "${resources_dir}/duckdb_extensions/vss.duckdb_extension"
   "${resources_dir}/duckdb_extensions/fts.duckdb_extension"
