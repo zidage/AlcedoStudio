@@ -1320,8 +1320,16 @@ TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanShowsItsSettingsAndTheOp
 
   session.setAdjustmentSnapshot(ProjectedSnapshot(NegativeScanDocument({})));
   ASSERT_TRUE(WaitFor([&] { return scan_controls->isVisible(); }));
-  ASSERT_TRUE(WaitFor([&] { return open_drt->isVisible() && look_combo->isVisible(); }));
+  ASSERT_TRUE(WaitFor([&] { return open_drt->isVisible(); }));
   EXPECT_TRUE(encoding->isVisible());
+  // The Scanner and OpenDRT sections start folded; unfolded, they show their controls.
+  auto* scanner =
+      harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanScannerControls"));
+  ASSERT_NE(scanner, nullptr);
+  EXPECT_FALSE(look_combo->isVisible());
+  scanner->setProperty("expanded", true);
+  open_drt->setProperty("expanded", true);
+  ASSERT_TRUE(WaitFor([&] { return look_combo->isVisible(); }));
   // Each setting has its control in the group.
   for (const auto& control : ScanControls()) {
     const auto item = QStringLiteral("displayFilm%1%2")
@@ -1335,6 +1343,99 @@ TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanShowsItsSettingsAndTheOp
   // A print hides the controls again.
   session.setAdjustmentSnapshot(MakeFilmPrintSnapshot());
   ASSERT_TRUE(WaitFor([&] { return !scan_controls->isVisible() && !open_drt->isVisible(); }));
+}
+
+// The Negative Scan, Scanner, and OpenDRT groups are folding sections: Negative Scan starts open,
+// the other two start folded. A click on a header folds the section; a click on its info glyph
+// pins the explanation and keeps the fold.
+TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanGroupsFoldAndTheirInfoGlyphPinsTheText) {
+  DisplayTransformSession session(ProjectedSnapshot(NegativeScanDocument({})), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  harness.resizeHeight(1600);
+  auto* scan = harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanControls"));
+  auto* scanner =
+      harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanScannerControls"));
+  auto* open_drt =
+      harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanOpenDrtControls"));
+  auto* exposure = harness.findModel<QQuickItem>(QStringLiteral("displayFilmScanExposureSlider"));
+  auto* red      = harness.findModel<QQuickItem>(QStringLiteral("displayFilmScannerRedSlider"));
+  ASSERT_NE(scan, nullptr);
+  ASSERT_NE(scanner, nullptr);
+  ASSERT_NE(open_drt, nullptr);
+  ASSERT_NE(exposure, nullptr);
+  ASSERT_NE(red, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return scan->isVisible() && exposure->isVisible(); }));
+  EXPECT_TRUE(scan->property("expanded").toBool());
+  EXPECT_FALSE(scanner->property("expanded").toBool());
+  EXPECT_FALSE(open_drt->property("expanded").toBool());
+  EXPECT_FALSE(red->isVisible());
+
+  auto* header = scan->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionHeader"));
+  auto* info   = scan->findChild<QQuickItem*>(QStringLiteral("displayNegativeScanInfoHint"));
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(info, nullptr);
+  ASSERT_TRUE(info->isVisible());
+  EXPECT_FALSE(info->property("text").toString().isEmpty());
+
+  const auto info_center =
+      info->mapToScene(QPointF(info->width() / 2.0, info->height() / 2.0)).toPoint();
+  QTest::mouseClick(harness.window(), Qt::LeftButton, Qt::NoModifier, info_center);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  EXPECT_TRUE(info->property("pinned").toBool());
+  EXPECT_TRUE(scan->property("expanded").toBool());
+
+  const auto header_left = header->mapToScene(QPointF(40, header->height() / 2.0)).toPoint();
+  QTest::mouseClick(harness.window(), Qt::LeftButton, Qt::NoModifier, header_left);
+  ASSERT_TRUE(WaitFor([&] { return !scan->property("expanded").toBool(); }));
+  ASSERT_TRUE(WaitFor([&] { return !exposure->isVisible(); }));
+
+  auto* scanner_header =
+      scanner->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionHeader"));
+  ASSERT_NE(scanner_header, nullptr);
+  QTest::qWait(100);
+  const auto scanner_left =
+      scanner_header->mapToScene(QPointF(40, scanner_header->height() / 2.0)).toPoint();
+  QTest::mouseClick(harness.window(), Qt::LeftButton, Qt::NoModifier, scanner_left);
+  ASSERT_TRUE(WaitFor([&] { return scanner->property("expanded").toBool(); }))
+      << "scanner header at " << scanner_left.x() << ", " << scanner_left.y();
+  ASSERT_TRUE(WaitFor([&] { return red->isVisible(); }));
+}
+
+// Each film print setting with a special function has an info glyph with its explanation, and the
+// panel title has one for the whole panel.
+TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintSettingsHaveInfoGlyphs) {
+  DisplayTransformSession session(ProjectedSnapshot(NegativeScanDocument({})), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* scan = harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanControls"));
+  ASSERT_NE(scan, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return scan->isVisible(); }));
+
+  for (const auto* name :
+       {"displayTransformInfoHint", "displayFilmInfoHint", "displayFilmFormatInfoHint",
+        "displayFilmGrainInfoHint", "displayFilmPrintInfoHint", "displayFilmSceneLightInfoHint",
+        "displayNegativeScanInfoHint", "displayNegativeScanScannerInfoHint",
+        "displayNegativeScanOpenDrtInfoHint", "displayColorEncodingInfoHint"}) {
+    auto* hint = harness.findModel<QQuickItem>(QString::fromLatin1(name));
+    ASSERT_NE(hint, nullptr) << name;
+    EXPECT_TRUE(hint->isVisible()) << name;
+    EXPECT_GT(hint->property("text").toString().size(), 40) << name;
+  }
+  for (const auto* name : {"displayFilmLightSpreadSlider", "displayFilmHalationSlider"}) {
+    auto* slider = harness.findModel<QQuickItem>(QString::fromLatin1(name));
+    ASSERT_NE(slider, nullptr) << name;
+    auto* hint = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderInfoHint"));
+    ASSERT_NE(hint, nullptr) << name;
+    EXPECT_TRUE(hint->isVisible()) << name;
+    EXPECT_GT(hint->property("text").toString().size(), 40) << name;
+  }
+  // A slider with no explanation shows no glyph.
+  auto* exposure = harness.findModel<QQuickItem>(QStringLiteral("displayFilmScanExposureSlider"));
+  ASSERT_NE(exposure, nullptr);
+  auto* none = exposure->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderInfoHint"));
+  ASSERT_NE(none, nullptr);
+  EXPECT_FALSE(none->isVisible());
 }
 
 TEST(EditorDisplayTransformSnapshotQmlTest, EachNegativeScanControlWritesItsKeyWithTheSelection) {
@@ -1720,6 +1821,96 @@ TEST(EditorDisplayTransformSnapshotQmlTest, SelectingFilmPrintKeepsAStoredFilmGr
   ASSERT_EQ(session.submitCount(), 1);
   EXPECT_EQ(session.fieldKeys().back(), QStringLiteral("odt"));
   EXPECT_DOUBLE_EQ(model->value(), 30.0);
+}
+
+// A selection of another method on the film print sets Film Grain to 0: one settled write of the
+// method, then one settled write of Film Grain at 0. A selection with Film Grain at 0 writes only
+// the method.
+TEST(EditorDisplayTransformSnapshotQmlTest, LeavingFilmPrintSetsFilmGrainToZero) {
+  auto snapshot = MakeFilmPrintSnapshot();
+  InsertPostStrength(snapshot, QStringLiteral("film_grain"), 0.6);
+  DisplayTransformSession session(snapshot, 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model =
+      harness.findModel<EditorAdjustmentValueModel>(QStringLiteral("displayFilmGrainModel"));
+  auto* method = harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayMethodModel"));
+  auto* track  = harness.findModel<QQuickItem>(QStringLiteral("displayMethodTrack"));
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(method, nullptr);
+  ASSERT_NE(track, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return model->value() == 60.0; })) << model->value();
+  ASSERT_EQ(method->currentValue(), QStringLiteral("film_print"));
+
+  int open_drt_index = -1;
+  const auto entries = method->property("entries").toList();
+  for (int index = 0; index < entries.size(); ++index) {
+    if (entries[index].toMap().value(QStringLiteral("value")).toString() == "open_drt") {
+      open_drt_index = index;
+    }
+  }
+  ASSERT_GE(open_drt_index, 0);
+  ASSERT_TRUE(QMetaObject::invokeMethod(track, "selected", Q_ARG(int, open_drt_index),
+                                        Q_ARG(QString, QStringLiteral("open_drt"))));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+
+  ASSERT_GE(session.submitCount(), 2);
+  EXPECT_EQ(session.fieldKeys().front(), QStringLiteral("odt"));
+  const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().front());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->method.has_value());
+  EXPECT_EQ(*drt->method, alcedo::DrtMethod::OpenDrt);
+  int settled_grain = 0;
+  for (std::size_t index = 1; index < session.writes().size(); ++index) {
+    EXPECT_EQ(session.fieldKeys()[index], QStringLiteral("film_grain")) << index;
+    settled_grain += session.settled()[index] ? 1 : 0;
+  }
+  EXPECT_EQ(settled_grain, 1);
+  const auto* grain = std::get_if<alcedo::EditorScalarWrite>(&session.writes().back());
+  ASSERT_NE(grain, nullptr);
+  EXPECT_FLOAT_EQ(grain->value, 0.0f);
+  EXPECT_DOUBLE_EQ(model->value(), 0.0);
+
+  // Back to the film print: Film Grain is 0, so it turns on at 100 %. Then OpenDRT again.
+  const int writes_before = session.submitCount();
+  ClickFilmPrintMethod(harness);
+  EXPECT_DOUBLE_EQ(model->value(), 100.0);
+  ASSERT_TRUE(QMetaObject::invokeMethod(track, "selected", Q_ARG(int, open_drt_index),
+                                        Q_ARG(QString, QStringLiteral("open_drt"))));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  EXPECT_DOUBLE_EQ(model->value(), 0.0);
+  EXPECT_GT(session.submitCount(), writes_before);
+}
+
+// A selection of another method that is not on the film print keeps the post Film Grain.
+TEST(EditorDisplayTransformSnapshotQmlTest, ChangingBetweenOtherMethodsKeepsFilmGrain) {
+  auto snapshot = MakeOpenDrtSnapshot();
+  InsertPostStrength(snapshot, QStringLiteral("film_grain"), 0.4);
+  DisplayTransformSession session(snapshot, 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model =
+      harness.findModel<EditorAdjustmentValueModel>(QStringLiteral("displayFilmGrainModel"));
+  auto* method = harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayMethodModel"));
+  auto* track  = harness.findModel<QQuickItem>(QStringLiteral("displayMethodTrack"));
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(method, nullptr);
+  ASSERT_NE(track, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return model->value() == 40.0; })) << model->value();
+
+  const auto entries = method->property("entries").toList();
+  for (int index = 0; index < entries.size(); ++index) {
+    const QString value = entries[index].toMap().value(QStringLiteral("value")).toString();
+    if (value != QStringLiteral("open_drt") && value != QStringLiteral("film_print")) {
+      ASSERT_TRUE(QMetaObject::invokeMethod(track, "selected", Q_ARG(int, index),
+                                            Q_ARG(QString, value)));
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+      break;
+    }
+  }
+  ASSERT_EQ(session.submitCount(), 1);
+  EXPECT_EQ(session.fieldKeys().back(), QStringLiteral("odt"));
+  EXPECT_DOUBLE_EQ(model->value(), 40.0);
 }
 
 }  // namespace alcedo::ui::test

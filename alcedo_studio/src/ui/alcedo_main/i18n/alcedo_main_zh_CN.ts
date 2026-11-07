@@ -3230,6 +3230,62 @@ Original source files on disk will be kept.</source>
         <source>Format</source>
         <translation>画幅</translation>
     </message>
+    <message>
+        <source>The display transform changes the scene-linear image into the image on the display. ACES 2.0 and OpenDRT map the tones and colors to an SDR or HDR display. Film Print simulates film from its spectral data: the scene exposes a film, and the film is printed on a print material, scanned (Negative Scan), or viewed on a light table (reversal film).</source>
+        <translation>显示变换把场景线性的图像变成显示器上的图像。ACES 2.0 和 OpenDRT 把色调和颜色映射到 SDR 或 HDR 显示。Film Print 用胶片的光谱数据模拟胶片：场景曝光到胶片上，胶片再印放到印片材料上、被扫描（负片扫描），或者放在看片台上观看（反转片）。</translation>
+    </message>
+    <message>
+        <source>The film that records the scene. Its spectral sensitivity, characteristic curves, dyes, sharpness, and grain come from the published data of the film. A negative film makes a print or a scan; a reversal (slide) film shows on a light table.</source>
+        <translation>记录场景的胶片。它的光谱灵敏度、特性曲线、染料、锐度和颗粒来自该胶片公开的技术数据。负片用于印放或扫描；反转片（幻灯片）在看片台上观看。</translation>
+    </message>
+    <message>
+        <source>The size of the film frame. The image fills the frame, so a smaller frame enlarges the grain, the light spread, and the halation in the image.</source>
+        <translation>胶片画幅的尺寸。图像充满画幅，所以画幅越小，图像中的颗粒、光扩散和光晕越大。</translation>
+    </message>
+    <message>
+        <source>The grain of the film, in the dyes of the negative. 100 % is the granularity in the datasheet of the film. Method Film Print turns it on at 100 %; another method sets it to 0.</source>
+        <translation>胶片的颗粒，位于负片的染料中。100 % 是该胶片技术手册中的颗粒度。选择 Film Print 方法时颗粒打开为 100 %；选择其他方法时颗粒设为 0。</translation>
+    </message>
+    <message>
+        <source>The material that makes the positive image from the negative. A paper gives a print under D50 viewing light; a cinema print stock gives a projection in a dark theater. Both give Rec. 709 SDR. Negative Scan scans and inverts the negative, and OpenDRT shows the scan in SDR or HDR.</source>
+        <translation>从负片得到正像的材料。相纸在 D50 观看光下成为照片；电影拷贝片在暗的影院中放映。两者输出 Rec. 709 SDR。负片扫描把负片扫描并反相，再由 OpenDRT 以 SDR 或 HDR 显示扫描结果。</translation>
+    </message>
+    <message>
+        <source>The light on the scene when the film is exposed. As Shot uses the color temperature of the RAW white balance. Reference uses the light that the film is balanced for. Another light gives the color cast of real film: a tungsten film turns cool in daylight, and a daylight film turns warm in tungsten light. The print timing or the scan settings set how much of the cast stays.</source>
+        <translation>胶片曝光时照在场景上的光。按拍摄参数使用 RAW 白平衡的色温。参考使用胶片平衡的光。其他光源产生真实胶片的偏色：灯光片在日光下偏冷，日光片在钨丝灯下偏暖。印片平衡或扫描设置决定保留多少偏色。</translation>
+    </message>
+    <message>
+        <source>The spread of light in the emulsion, which sets the sharpness of the film. 1 is the sharpness in the datasheet; a larger value makes the image softer.</source>
+        <translation>光在乳剂中的扩散，它决定胶片的锐度。1 是技术手册中的锐度；值越大，图像越柔和。</translation>
+    </message>
+    <message>
+        <source>Light that the film base reflects back into the red-sensitive layer. It makes a red glow around bright lights. 1 is the standard strength.</source>
+        <translation>片基把光反射回红感层。它在亮光源周围产生红色光晕。1 是标准强度。</translation>
+    </message>
+    <message>
+        <source>Stray light of the enlarger lens on the paper. It adds light where the negative is dense, so the highlights of the print turn gray.</source>
+        <translation>放大机镜头照到相纸上的杂散光。它在负片浓密的区域加光，所以照片的高光变灰。</translation>
+    </message>
+    <message>
+        <source>Stray light of the loupe on the light table. It lifts the shadows of the slide.</source>
+        <translation>看片台上放大镜的杂散光。它提亮幻灯片的暗部。</translation>
+    </message>
+    <message>
+        <source>A virtual scanner reads the negative, and one straight line in log density inverts it, so the toe, the shoulder, and the contrast of the film stay. Auto Color Off keeps the cast of the scene light and the film; the other modes remove part of the cast that a prescan of the frame measures. Scan Exposure, Scan Contrast, and Cyan, Magenta, Yellow change the inversion. Black at Film Base sets the film base to black.</source>
+        <translation>虚拟扫描仪读取负片，一条对数密度上的直线把它反相，所以胶片的趾部、肩部和反差保持不变。自动色彩关闭时保留场景光和胶片的偏色；其他模式按整帧预扫描测得的偏色去掉其中一部分。扫描曝光、扫描反差以及青、品红、黄调整反相。片基黑点把片基设为黑色。</translation>
+    </message>
+    <message>
+        <source>The bands of the virtual scanner: the center wavelengths of the red, green, and blue channels, one band width, and the scanner light. The defaults are an ideal scanner. A change builds the scanner table again.</source>
+        <translation>虚拟扫描仪的波段：红、绿、蓝通道的中心波长，一个带宽，以及扫描仪光源。默认值是一台理想扫描仪。修改后重新构建扫描仪表。</translation>
+    </message>
+    <message>
+        <source>The scan gives linear AP1 with 18 % gray at 0.18. OpenDRT shows it with these settings, which are the settings of method OpenDRT.</source>
+        <translation>扫描结果是线性 AP1，18 % 灰位于 0.18。OpenDRT 用这些设置显示它，这些设置就是 OpenDRT 方法的设置。</translation>
+    </message>
+    <message>
+        <source>The color space, the transfer function (EOTF), and the peak luminance of the output. A print and a slide give Rec. 709 SDR, so Film Print shows this section only with Negative Scan.</source>
+        <translation>输出的色域、传递函数（EOTF）和峰值亮度。照片和幻灯片输出 Rec. 709 SDR，所以 Film Print 只在负片扫描时显示这一节。</translation>
+    </message>
 </context>
 <context>
     <name>EditorEndpointNodeDelegate</name>

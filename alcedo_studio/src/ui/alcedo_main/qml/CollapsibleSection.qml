@@ -27,6 +27,10 @@ Item {
     property color accentColor: appTheme.accentColor
     // Optional default body height when the loader content has no implicit size.
     property real bodyContentHeight: 120
+    // Optional explanation of the section. When set, an "i" glyph at the right end of the header
+    // shows it; a click on the glyph pins it and does not fold the section.
+    property string infoText: ""
+    property string infoObjectName: "collapsibleSectionInfoHint"
 
     // ── Fold driver (test-visible) ──────────────────────────────────────────
     property real foldProgress: expanded ? 1 : 0
@@ -138,7 +142,9 @@ Item {
                     id: headerRow
                     anchors.fill: parent
                     anchors.leftMargin: appTheme.spaceSm
-                    anchors.rightMargin: appTheme.spaceSm
+                    anchors.rightMargin: headerInfo.visible
+                                         ? appTheme.spaceSm * 2 + headerInfo.width
+                                         : appTheme.spaceSm
                     spacing: appTheme.spaceSm
 
                     // Chevron affordance (canvas keeps asset set small).
@@ -184,12 +190,26 @@ Item {
                     }
                 }
 
+                // The fold area ends at the info glyph, so a click on the glyph only pins it.
                 MouseArea {
                     id: headerMouse
-                    anchors.fill: parent
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.right: headerInfo.visible ? headerInfo.left : parent.right
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.toggle()
+                }
+
+                EditorInfoHint {
+                    id: headerInfo
+                    objectName: root.infoObjectName
+                    anchors.right: parent.right
+                    anchors.rightMargin: appTheme.spaceSm
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: root.infoText.length > 0
+                    text: root.infoText
                 }
             }
 

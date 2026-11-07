@@ -23,6 +23,9 @@ Item {
     // Entry key whose text heads each run of entries with the same value (for
     // example Scene / Display). Empty: the popup lists entries without headings.
     property string groupLabelRole: ""
+    // Optional explanation of the setting: an "i" glyph after the field shows it.
+    property string infoText: ""
+    property string infoObjectName: "adjustmentComboInfoHint"
 
     implicitHeight: comboRow.implicitHeight
     Layout.fillWidth: true
@@ -226,6 +229,13 @@ Item {
                     }
                 }
             }
+        }
+
+        EditorInfoHint {
+            objectName: root.infoObjectName
+            Layout.alignment: Qt.AlignVCenter
+            visible: root.infoText.length > 0
+            text: root.infoText
         }
 
         AdjustmentResetButton {
