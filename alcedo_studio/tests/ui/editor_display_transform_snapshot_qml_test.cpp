@@ -33,6 +33,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -241,6 +242,15 @@ auto MakeFilmPrintSnapshot(double         halation       = 2.5,
   odt_wrap.insert(QStringLiteral("odt"), inner);
   snapshot.insert(QStringLiteral("odt"), odt_wrap);
   return snapshot;
+}
+
+/// The snapshot entry of a DRT/Post scalar adjustment @p field with the Model value @p strength.
+void InsertPostStrength(QVariantMap& snapshot, const QString& field, double strength) {
+  QVariantMap inner;
+  inner.insert(QStringLiteral("strength"), strength);
+  QVariantMap wrap;
+  wrap.insert(field, inner);
+  snapshot.insert(field, wrap);
 }
 
 /// Values of the browser entries of a film print picker.
@@ -753,8 +763,11 @@ TEST(EditorDisplayTransformSnapshotQmlTest,
   QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
   EXPECT_EQ(preferences.film_print_ui_value(), remembered);
 
-  // A document of another method shows the defaults of the film print.
-  session.setAdjustmentSnapshot(MakeOpenDrtSnapshot());
+  // A document of another method shows the defaults of the film print. Its stored Film Grain
+  // stays, so the selection of the film print writes only the method.
+  auto open_drt = MakeOpenDrtSnapshot();
+  InsertPostStrength(open_drt, QStringLiteral("film_grain"), 0.5);
+  session.setAdjustmentSnapshot(open_drt);
   ASSERT_TRUE(WaitFor([&] {
     return method->property("currentValue").toString() == QStringLiteral("open_drt") &&
            negative->property("currentValue").toString() == QStringLiteral("kodak_5207");
@@ -787,7 +800,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest,
 
   // Without remembered settings the selection writes the defaults: As Shot (issue #672).
   panel->setProperty("editorBehavior", QVariant::fromValue(static_cast<QObject*>(nullptr)));
-  session.setAdjustmentSnapshot(MakeOpenDrtSnapshot());
+  session.setAdjustmentSnapshot(open_drt);
   ASSERT_TRUE(WaitFor([&] {
     return method->property("currentValue").toString() == QStringLiteral("open_drt") &&
            negative->property("currentValue").toString() == QStringLiteral("kodak_5207");
@@ -1369,59 +1382,82 @@ TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanSettingsFollowTheProject
   }
 }
 
+// The film print takes its halation from the film layers and its grain in the negative, with the
+// Film Grain slider and the Format selector of the Display Transform page. So the Post Processing
+// page has no Texture section with the film print, and it returns with its values with another
+// method.
 TEST(EditorDisplayTransformSnapshotQmlTest,
-     PostHalationSliderHidesForFilmPrintAndReturnsWithItsValue) {
-  auto        open_drt = MakeOpenDrtSnapshot();
-  QVariantMap halation_inner;
-  halation_inner.insert(QStringLiteral("strength"), 0.25);
-  QVariantMap halation_wrap;
-  halation_wrap.insert(QStringLiteral("halation"), halation_inner);
-  open_drt.insert(QStringLiteral("halation"), halation_wrap);
+     PostTextureSectionHidesForFilmPrintAndReturnsWithItsValues) {
+  auto open_drt = MakeOpenDrtSnapshot();
+  InsertPostStrength(open_drt, QStringLiteral("halation"), 0.25);
+  InsertPostStrength(open_drt, QStringLiteral("film_grain"), 0.4);
 
   DisplayTransformSession session(open_drt, 0);
   session.setActiveAdjustmentPanel(QStringLiteral("post"));
   AdjustmentStackHarness harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* section =
+      harness.findModel<QQuickItem>(QStringLiteral("editorAdjustmentGroupShell_post_texture"));
   auto* slider = harness.findModel<QQuickItem>(QStringLiteral("postHalationSlider"));
   auto* model  = harness.findModel<QObject>(QStringLiteral("postHalationModel"));
   auto* grain  = harness.findModel<QQuickItem>(QStringLiteral("postFilmGrainSlider"));
+  auto* grain_model = harness.findModel<QObject>(QStringLiteral("postFilmGrainModel"));
+  auto* format = harness.findModel<QQuickItem>(QStringLiteral("postFilmFormatControl"));
+  ASSERT_NE(section, nullptr);
   ASSERT_NE(slider, nullptr);
   ASSERT_NE(model, nullptr);
   ASSERT_NE(grain, nullptr);
+  ASSERT_NE(grain_model, nullptr);
+  ASSERT_NE(format, nullptr);
   ASSERT_TRUE(WaitFor([&] { return slider->isVisible(); }));
-  const double stored = model->property("value").toDouble();
+  EXPECT_TRUE(grain->isVisible());
+  EXPECT_TRUE(format->isVisible());
+  const double stored       = model->property("value").toDouble();
+  const double stored_grain = grain_model->property("value").toDouble();
   EXPECT_NE(stored, 0.0);
+  EXPECT_DOUBLE_EQ(stored_grain, 40.0);
 
   auto film_print = MakeFilmPrintSnapshot();
-  film_print.insert(QStringLiteral("halation"), halation_wrap);
+  InsertPostStrength(film_print, QStringLiteral("halation"), 0.25);
+  InsertPostStrength(film_print, QStringLiteral("film_grain"), 0.4);
   session.setAdjustmentSnapshot(film_print);
-  ASSERT_TRUE(WaitFor([&] { return !slider->isVisible(); }));
-  EXPECT_TRUE(grain->isVisible());
+  ASSERT_TRUE(WaitFor([&] { return !section->isVisible(); }));
+  EXPECT_FALSE(slider->isVisible());
+  EXPECT_FALSE(grain->isVisible());
+  EXPECT_FALSE(format->isVisible());
   EXPECT_DOUBLE_EQ(model->property("value").toDouble(), stored);
+  EXPECT_DOUBLE_EQ(grain_model->property("value").toDouble(), stored_grain);
   EXPECT_EQ(session.submitCount(), 0);
 
   session.setAdjustmentSnapshot(open_drt);
-  ASSERT_TRUE(WaitFor([&] { return slider->isVisible(); }));
+  ASSERT_TRUE(WaitFor([&] { return section->isVisible(); }));
+  EXPECT_TRUE(slider->isVisible());
+  EXPECT_TRUE(grain->isVisible());
   EXPECT_DOUBLE_EQ(model->property("value").toDouble(), stored);
+  EXPECT_DOUBLE_EQ(grain_model->property("value").toDouble(), stored_grain);
   EXPECT_EQ(session.submitCount(), 0);
 }
 
-/// The panel snapshot of a film print document of Kodak 5207 on 2383 with the format @p format.
-auto FilmFormatSnapshot(alcedo::FilmFormat format) -> QVariantMap {
-  auto                       document = alcedo::CreateDefaultPipelineDocument();
-  alcedo::DrtParameterUpdate update;
-  update.method              = alcedo::DrtMethod::FilmPrint;
-  update.film_negative       = std::string{"kodak_5207"};
-  update.film_print_material = std::string{"kodak_2383"};
-  document.Drt()->Params().ApplyUpdate(update);
+/// The panel snapshot of a document with the format @p format: with @p film_print, a film print of
+/// Kodak 5207 on 2383, else the default OpenDRT.
+auto FilmFormatSnapshot(alcedo::FilmFormat format, bool film_print = true) -> QVariantMap {
+  auto document = alcedo::CreateDefaultPipelineDocument();
+  if (film_print) {
+    alcedo::DrtParameterUpdate update;
+    update.method              = alcedo::DrtMethod::FilmPrint;
+    update.film_negative       = std::string{"kodak_5207"};
+    update.film_print_material = std::string{"kodak_2383"};
+    document.Drt()->Params().ApplyUpdate(update);
+  }
   document.Drt()->Params().ApplyFilmFormat(format);
   return ProjectedSnapshot(document);
 }
 
 // Plan 'film_grain_format_and_stock_plan.md', sections 7.1 and 7.2: the Post Processing page and
-// the Display Transform page show the same stored film format.
+// the Display Transform page show the same stored film format. The Post Processing page shows it
+// with a method other than the film print.
 TEST(EditorDisplayTransformSnapshotQmlTest, FilmFormatSelectorsOfBothPagesShowTheStoredFormat) {
-  DisplayTransformSession session(FilmFormatSnapshot(alcedo::FilmFormat::Film16mm), 0);
+  DisplayTransformSession session(FilmFormatSnapshot(alcedo::FilmFormat::Film16mm, false), 0);
   session.setActiveAdjustmentPanel(QStringLiteral("post"));
   AdjustmentStackHarness harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
@@ -1454,6 +1490,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmFormatSelectorsOfBothPagesShowTh
   // A new projection moves both selectors and writes nothing.
   session.setAdjustmentSnapshot(FilmFormatSnapshot(alcedo::FilmFormat::Film70mm));
   ASSERT_TRUE(WaitFor([&] { return display_model->currentValue() == QStringLiteral("70mm"); }));
+  ASSERT_TRUE(WaitFor([&] { return display_control->isVisible(); }));
   session.setActiveAdjustmentPanel(QStringLiteral("post"));
   ASSERT_TRUE(WaitFor([&] {
     post_model =
@@ -1466,7 +1503,11 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmFormatSelectorsOfBothPagesShowTh
 TEST(EditorDisplayTransformSnapshotQmlTest, FilmFormatSelectionWritesOneSettledFilmFormatWrite) {
   for (const auto* panel : {"post", "display"}) {
     SCOPED_TRACE(panel);
-    DisplayTransformSession session(FilmFormatSnapshot(alcedo::FilmFormat::Film35mm), 0);
+    // The Post Processing page shows the Format with a method other than the film print, and
+    // the Display Transform page with the film print.
+    const bool              film_print = std::string_view{panel} == "display";
+    DisplayTransformSession session(FilmFormatSnapshot(alcedo::FilmFormat::Film35mm, film_print),
+                                    0);
     session.setActiveAdjustmentPanel(QString::fromLatin1(panel));
     AdjustmentStackHarness harness(&session);
     ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
@@ -1497,28 +1538,112 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmFormatSelectionWritesOneSettledF
   }
 }
 
-TEST(EditorDisplayTransformSnapshotQmlTest, FilmGrainCaptionNamesTheFilmOfItsGranularity) {
-  DisplayTransformSession session(MakeOpenDrtSnapshot(), 0);
-  session.setActiveAdjustmentPanel(QStringLiteral("post"));
-  AdjustmentStackHarness harness(&session);
+// With the film print, the Film Grain slider is on the Display Transform page directly under the
+// Format selector, with the stored value. No page shows a caption of the granularity.
+TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintShowsFilmGrainUnderTheFormat) {
+  auto snapshot = MakeFilmPrintSnapshot();
+  InsertPostStrength(snapshot, QStringLiteral("film_grain"), 0.6);
+  DisplayTransformSession session(snapshot, 0);
+  AdjustmentStackHarness  harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
-  auto* caption = harness.findModel<QQuickItem>(QStringLiteral("postFilmGrainStockCaption"));
-  auto* grain = harness.findModel<EditorAdjustmentValueModel>(QStringLiteral("postFilmGrainModel"));
-  ASSERT_NE(caption, nullptr);
+  auto* grain  = harness.findModel<QQuickItem>(QStringLiteral("displayFilmGrainSlider"));
+  auto* format = harness.findModel<QQuickItem>(QStringLiteral("displayFilmFormatControl"));
+  auto* print  = harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintMaterialPicker"));
+  auto* model =
+      harness.findModel<EditorAdjustmentValueModel>(QStringLiteral("displayFilmGrainModel"));
   ASSERT_NE(grain, nullptr);
-  ASSERT_TRUE(WaitFor([&] {
-    return caption->property("text").toString() ==
-           QStringLiteral("Granularity of Kodak Vision3 250D 5207");
-  }));
+  ASSERT_NE(format, nullptr);
+  ASSERT_NE(print, nullptr);
+  ASSERT_NE(model, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return grain->isVisible() && model->value() == 60.0; }))
+      << model->value();
   // 100 % is the datasheet granularity; the slider goes to 200 % (decision U3).
-  EXPECT_DOUBLE_EQ(grain->maximum(), 200.0);
+  EXPECT_DOUBLE_EQ(model->maximum(), 200.0);
+  const auto top = [&](QQuickItem* item) { return item->mapToScene(QPointF()).y(); };
+  EXPECT_GT(top(grain), top(format) + format->height() - 1.0);
+  EXPECT_LT(top(grain), top(print));
+  EXPECT_EQ(harness.findModel<QQuickItem>(QStringLiteral("postFilmGrainStockCaption")), nullptr);
 
-  session.setAdjustmentSnapshot(MakeFilmPrintSnapshot());
+  // Another method has no film print controls, so the slider is on the Post Processing page.
+  session.setAdjustmentSnapshot(MakeOpenDrtSnapshot());
+  ASSERT_TRUE(WaitFor([&] { return !grain->isVisible(); }));
+  session.setActiveAdjustmentPanel(QStringLiteral("post"));
   ASSERT_TRUE(WaitFor([&] {
-    return caption->property("text").toString() ==
-           QStringLiteral("Granularity of Kodak Portra 400");
-  })) << caption->property("text").toString().toStdString();
+    auto* post = harness.findModel<QQuickItem>(QStringLiteral("postFilmGrainSlider"));
+    return post != nullptr && post->isVisible();
+  }));
+  EXPECT_EQ(harness.findModel<QQuickItem>(QStringLiteral("postFilmGrainStockCaption")), nullptr);
   EXPECT_EQ(session.submitCount(), 0);
+}
+
+/// Select method Film Print with the method track, as a click does.
+void ClickFilmPrintMethod(const AdjustmentStackHarness& harness) {
+  auto* track = harness.findModel<QQuickItem>(QStringLiteral("displayMethodTrack"));
+  ASSERT_NE(track, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(track, "selected", Q_ARG(int, 2),
+                                        Q_ARG(QString, QStringLiteral("film_print"))));
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+}
+
+// A selection of the film print turns on Film Grain at the datasheet granularity (100 %) when its
+// stored strength is 0: one settled write of the method, then one settled write of Film Grain.
+TEST(EditorDisplayTransformSnapshotQmlTest, SelectingFilmPrintTurnsOnFilmGrainAtTheDatasheet) {
+  DisplayTransformSession session(MakeOpenDrtSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model =
+      harness.findModel<EditorAdjustmentValueModel>(QStringLiteral("displayFilmGrainModel"));
+  ASSERT_NE(model, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    return harness.findModel<QObject>(QStringLiteral("displayMethodModel"))
+               ->property("currentValue")
+               .toString() == QStringLiteral("open_drt");
+  }));
+  EXPECT_EQ(model->value(), 0.0);
+
+  ClickFilmPrintMethod(harness);
+  ASSERT_GE(session.submitCount(), 2);
+  EXPECT_EQ(session.fieldKeys().front(), QStringLiteral("odt"));
+  EXPECT_TRUE(session.settled().front());
+  const auto* method = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().front());
+  ASSERT_NE(method, nullptr);
+  ASSERT_TRUE(method->method.has_value());
+  EXPECT_EQ(*method->method, alcedo::DrtMethod::FilmPrint);
+  // After the method, Film Grain only, and the last write is settled at 1.0 (100 %).
+  int settled_grain = 0;
+  for (std::size_t index = 1; index < session.writes().size(); ++index) {
+    EXPECT_EQ(session.fieldKeys()[index], QStringLiteral("film_grain")) << index;
+    settled_grain += session.settled()[index] ? 1 : 0;
+  }
+  EXPECT_EQ(settled_grain, 1);
+  EXPECT_TRUE(session.settled().back());
+  const auto* grain = std::get_if<alcedo::EditorScalarWrite>(&session.writes().back());
+  ASSERT_NE(grain, nullptr);
+  EXPECT_FLOAT_EQ(grain->value, 1.0f);
+  EXPECT_DOUBLE_EQ(model->value(), 100.0);
+}
+
+// A stored Film Grain strength stays: the selection of the film print writes only the method.
+// An old document with a strength and no film_format reads the format 35mm.
+TEST(EditorDisplayTransformSnapshotQmlTest, SelectingFilmPrintKeepsAStoredFilmGrain) {
+  auto snapshot = MakeOpenDrtSnapshot();
+  InsertPostStrength(snapshot, QStringLiteral("film_grain"), 0.3);
+  DisplayTransformSession session(snapshot, 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model =
+      harness.findModel<EditorAdjustmentValueModel>(QStringLiteral("displayFilmGrainModel"));
+  auto* format =
+      harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayFilmFormatModel"));
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(format, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return model->value() == 30.0; })) << model->value();
+  EXPECT_EQ(format->currentValue(), QStringLiteral("35mm"));
+
+  ClickFilmPrintMethod(harness);
+  ASSERT_EQ(session.submitCount(), 1);
+  EXPECT_EQ(session.fieldKeys().back(), QStringLiteral("odt"));
+  EXPECT_DOUBLE_EQ(model->value(), 30.0);
 }
 
 }  // namespace alcedo::ui::test

@@ -22,16 +22,11 @@ Item {
     readonly property color colAccent: theme ? theme.colAccentPrimary : appTheme.accentColor
     readonly property color colBase: theme ? theme.colBgBase : appTheme.bgBaseColor
 
-    // The film print takes its halation from the film layers and skips this operator. The stored
-    // value does not change, and the slider returns with another method.
+    // The film print takes its halation from the film layers, and its grain in its negative with
+    // the Film Grain slider and the Format selector of the Display Transform page. So with the
+    // film print this page has no Texture section. The stored values do not change, and the
+    // section returns with another method.
     property bool filmPrintSelected: false
-    /// The film whose datasheet granularity Film Grain shows: the film of the film print, else
-    /// Kodak Vision3 250D 5207 (plan 'film_grain_format_and_stock_plan.md', section 7.1).
-    property string grainFilm: "kodak_5207"
-    readonly property string grainFilmLabel: {
-        const entry = parameterCatalog.filmBrowserEntry(root.grainFilm)
-        return entry && entry.label !== undefined ? String(entry.label) : root.grainFilm
-    }
 
     EditorParameterCatalog {
         id: parameterCatalog
@@ -63,8 +58,6 @@ Item {
         const odtValue = odt !== undefined && odt !== null ? parameterCatalog.uiValue("odt", odt)
                                                            : null
         root.filmPrintSelected = odtValue !== null && odtValue.method === "film_print"
-        root.grainFilm = root.filmPrintSelected && odtValue.negative !== undefined
-                         ? String(odtValue.negative) : "kodak_5207"
         root.loadFilmFormat(snapshot)
         // Each model converts its Model value to UI units through EditorParameterCatalog.
         diffusionModel.loadFromSnapshot(snapshot)
@@ -265,6 +258,7 @@ Item {
             SectionShell {
                 objectName: "editorAdjustmentGroupShell_post_texture"
                 title: qsTr("Texture")
+                visible: !root.filmPrintSelected
                 bodyContentHeight: textureBody.implicitHeight + appTheme.spaceSm
 
                 ColumnLayout {
@@ -306,18 +300,9 @@ Item {
                         onSelected: function(index, value) { filmFormatModel.selectIndex(index) }
                     }
 
-                    Label {
-                        objectName: "postFilmGrainStockCaption"
-                        Layout.fillWidth: true
-                        text: qsTr("Granularity of %1").arg(root.grainFilmLabel)
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
-                        wrapMode: Text.WordWrap
-                    }
                     AdjustmentSlider {
                         objectName: "postHalationSlider"
                         Layout.fillWidth: true
-                        visible: !root.filmPrintSelected
                         model: halationModel
                         flickable: postScroll
                     }

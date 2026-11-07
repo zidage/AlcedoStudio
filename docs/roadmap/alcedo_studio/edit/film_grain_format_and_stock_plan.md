@@ -450,23 +450,39 @@ No fallback grain path exists. A stock with no grain data is a resource defect, 
 
 ## 7. Product design specification
 
-### 7.1 Post Processing page, Film Grain section
+User change (2026-11-06): with the film print, Film Grain moves to the Display Transform panel under Format, the Post Processing
+page does not show it, and no page shows a caption of the granularity. A selection of the film print turns on Film Grain.
+
+### 7.1 Post Processing page, Texture section (a method other than the film print)
 
 ```text
 Film Grain                                   [  48 % ]
   ------------------------------o-------------------------  0 % to 200 %
 Format            ( 16mm | 35mm | 70mm )
-Granularity of Kodak Vision3 250D 5207
+Halation
 ```
 
 - The slider keeps its current position in the page. 100 % is the datasheet granularity.
 - Format is a segmented selector with three buttons. One write per click, one history entry.
-- The caption names the film whose data apply: the selected film of the film print, else Kodak Vision3 250D 5207.
 - The section has the same enabled state as the other post controls (`controlsEnabled`).
+- With the film print the page has no Texture section: the film print takes its halation from the film layers and its grain in
+  the negative (section 7.2). The stored values stay, and the section returns with another method.
 
 ### 7.2 Display Transform panel, Film Print
 
-The panel shows the same Format selector under Film. Both selectors write `film_format`, so they always show the same value.
+```text
+Film              [ Kodak Vision3 250D 5207 ]
+Format            ( 16mm | 35mm | 70mm )
+Film Grain                                   [ 100 % ]
+Print             [ Kodak 2383 ]
+```
+
+- Format and Film Grain write `film_format` and `film_grain`, the same fields as the Post Processing page, so both pages always
+  show the same values.
+- A selection of method Film Print on another method sets Film Grain to 100 % when its stored strength is 0. A stored strength
+  stays. Film Grain is a field of its own, so this is a second settled write, and a second history entry after the method. An
+  open document with the film print and a strength of 0 keeps it: only the selection writes.
+- An old document has a strength and no `film_format`; it reads `35mm` (section 2.4).
 
 ### 7.3 Other surfaces
 
