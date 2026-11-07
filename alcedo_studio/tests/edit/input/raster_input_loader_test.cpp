@@ -24,10 +24,14 @@
 #include <string>
 #include <vector>
 
+#include "color/color_encoding_catalog.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/raster_develop_params.hpp"
+#include "image/icc_profile_reader.hpp"
 #include "image/image_content_class.hpp"
 #include "image/raster_color_description.hpp"
+#include "image/raster_container_reader.hpp"
 
 namespace alcedo {
 namespace {
@@ -267,9 +271,56 @@ TEST(RasterInputLoaderTest, LutBasedIccTiffIsConvertedToLinearRec2020OnTheHost) 
   EXPECT_NEAR(Pixel<float>(input, 15, 0, 1), g2020, 0.02f);
   EXPECT_NEAR(Pixel<float>(input, 15, 0, 2), b2020, 0.02f);
 
+  EXPECT_NO_THROW(RequireRasterPixelsMatchDescription(input, description, "test"));
+
   const auto plain = Load("rec2020_icc_16bit.tif", RasterFileKind::Tiff);
   EXPECT_FALSE(plain.raster_lut_icc_converted);
   EXPECT_EQ(plain.pixels.format, HostPixelFormat::U16Rgba);
+}
+
+// Regression for issue #711: a LUT ICC profile with a cicp tag is described by its cicp tag,
+// so the loader keeps the PQ code values and the develop check accepts the pixels.
+TEST(RasterInputLoaderTest, LutIccWithCicpTagKeepsPqCodeValuesThatMatchTheCicpDescription) {
+  const auto bytes   = Fixture("lut_icc_with_cicp_rec2020_pq_16bit.tif");
+  const auto profile = ReadIccProfile(ReadTiffContainer(bytes).icc_profile_);
+  ASSERT_EQ(profile.layout_, IccProfileLayout::RgbLut);
+  ASSERT_TRUE(profile.cicp_.has_value());
+
+  const auto description = ResolveRasterColorDescription(bytes, RasterFileKind::Tiff);
+  EXPECT_EQ(description.origin_, RasterColorOrigin::IccCicp);
+  for (const auto& transfer : description.transfer_) {
+    EXPECT_EQ(transfer.kind_, RasterTransferKind::St2084);
+  }
+  EXPECT_EQ(description.primaries_xy_, color::GamutPrimariesXy(color::ColorGamutId::Rec2020));
+
+  const auto input = RasterInputLoader::LoadEncoded(bytes, DecodeRes::FULL, RasterFileKind::Tiff);
+  EXPECT_FALSE(input.raster_lut_icc_converted);
+  EXPECT_TRUE(input.raster_icc_sha256.empty());
+  ASSERT_EQ(input.pixels.format, HostPixelFormat::U16Rgba);
+  // The generator writes the same 16-bit gradient into this file without an ICC profile.
+  const auto untagged = Load("uncompressed_rgb16_no_make.tif", RasterFileKind::Tiff);
+  ASSERT_EQ(input.pixels.ByteCount(), untagged.pixels.ByteCount());
+  EXPECT_EQ(std::memcmp(input.pixels.bytes.get(), untagged.pixels.bytes.get(),
+                        untagged.pixels.ByteCount()),
+            0);
+  EXPECT_NO_THROW(RequireRasterPixelsMatchDescription(input, description, "test"));
+}
+
+TEST(RasterInputLoaderTest, PngCicpChunkWinsOverLutIccpProfileInLoaderAndDescription) {
+  const auto bytes       = Fixture("cicp_chunk_with_lut_iccp_16bit.png");
+  const auto description = ResolveRasterColorDescription(bytes, RasterFileKind::Png);
+  EXPECT_EQ(description.origin_, RasterColorOrigin::PngCicp);
+
+  const auto input = RasterInputLoader::LoadEncoded(bytes, DecodeRes::FULL, RasterFileKind::Png);
+  EXPECT_FALSE(input.raster_lut_icc_converted);
+  ASSERT_EQ(input.pixels.format, HostPixelFormat::U16Rgba);
+  // The generator writes the same 16-bit gradient into the cICP PNG with a matrix iCCP profile.
+  const auto matrix_iccp = Load("cicp_rec2020_pq_16bit.png", RasterFileKind::Png);
+  ASSERT_EQ(input.pixels.ByteCount(), matrix_iccp.pixels.ByteCount());
+  EXPECT_EQ(std::memcmp(input.pixels.bytes.get(), matrix_iccp.pixels.bytes.get(),
+                        matrix_iccp.pixels.ByteCount()),
+            0);
+  EXPECT_NO_THROW(RequireRasterPixelsMatchDescription(input, description, "test"));
 }
 
 TEST(RasterInputLoaderTest, CmykJpegPixelsAreRejected) {

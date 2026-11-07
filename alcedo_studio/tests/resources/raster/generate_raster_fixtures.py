@@ -241,7 +241,12 @@ def cmyk_icc() -> bytes:
     return build_icc(tags, device_class=b"prtr", color_space=b"CMYK", pcs=b"Lab ")
 
 
-def lut_based_rgb_icc() -> bytes:
+def lut_based_rgb_icc(
+    description: str = "Synthetic LUT sRGB",
+    *,
+    extra_tags: list[tuple[bytes, bytes]] | None = None,
+    version: int = 0x04400000,
+) -> bytes:
     """RGB profile with only an A2B0 lut16 (sRGB to PCS XYZ D50), no matrix-shaper tags."""
     grid = 9
     srgb_to_d50 = bradford(xy_to_xyz(*SRGB[3]), D50_XYZ) @ rgb_to_xyz_matrix(SRGB)
@@ -255,11 +260,11 @@ def lut_based_rgb_icc() -> bytes:
                 clut[r, g, b] = np.clip(np.round(xyz * 32768.0), 0, 65535)
     curve = srgb_eotf(np.linspace(0.0, 1.0, 256))
     tags = [
-        (b"desc", mluc_type("Synthetic LUT sRGB")),
+        (b"desc", mluc_type(description)),
         (b"wtpt", xyz_type(D50_XYZ)),
         (b"A2B0", lut16_type([curve, curve, curve], clut, grid, 3)),
-    ]
-    return build_icc(tags)
+    ] + (extra_tags or [])
+    return build_icc(tags, version=version)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -395,7 +400,9 @@ def mdcv_chunk(space, max_nits: float, min_nits: float) -> tuple[bytes, bytes]:
 # ---------------------------------------------------------------------------------------------
 
 
-def write_tiff(name: str, pixels: np.ndarray, *, icc: bytes | None = None) -> None:
+def write_tiff(
+    name: str, pixels: np.ndarray, *, icc: bytes | None = None, byteorder: str = "<"
+) -> None:
     extratags = []
     if icc is not None:
         extratags.append((34675, 7, len(icc), icc, True))
@@ -403,6 +410,7 @@ def write_tiff(name: str, pixels: np.ndarray, *, icc: bytes | None = None) -> No
         OUT_DIR / name,
         pixels,
         photometric="rgb",
+        byteorder=byteorder,
         extratags=extratags,
         metadata=None,
         software=None,
@@ -541,6 +549,16 @@ def main() -> None:
             (b"sRGB", b"\0"),
         ],
     )
+    # The cICP chunk takes precedence over the LUT iCCP profile (issue #711).
+    write_png(
+        "cicp_chunk_with_lut_iccp_16bit.png",
+        rgb16,
+        2,
+        chunks=[
+            (b"cICP", bytes([9, 16, 0, 1])),
+            iccp_chunk("Synthetic LUT sRGB", lut_based_rgb_icc()),
+        ],
+    )
     write_png("iccp_display_p3.png", rgb8, 2, chunks=[iccp_chunk("Display P3", display_p3_icc())])
     write_png("srgb_chunk.png", rgb8, 2, chunks=[(b"sRGB", b"\0"), gama_chunk(2.2)])
     write_png("gama_chrm_only.png", rgb8, 2, chunks=[gama_chunk(1.8), chrm_chunk(REC2020)])
@@ -578,6 +596,19 @@ def main() -> None:
     write_tiff("float32_no_icc.tif", linear.astype(np.float32))
     write_tiff("uncompressed_rgb16_no_make.tif", rgb16)
     write_tiff("lut_based_rgb_icc.tif", rgb16, icc=lut_based_rgb_icc())
+    # A v4.0 display profile with LUT tables and a cicp tag (Rec.2020 primaries, ST 2084), stored
+    # big-endian: the layout of the Hasselblad X2D II 100C PQ TIFF of issue #711. The cicp tag
+    # decides the description, so the pixels keep their PQ code values.
+    write_tiff(
+        "lut_icc_with_cicp_rec2020_pq_16bit.tif",
+        rgb16,
+        icc=lut_based_rgb_icc(
+            "Synthetic LUT Rec2020 PQ cicp",
+            extra_tags=[(b"cicp", cicp_type(9, 16)), (b"lumi", xyz_type((0.0, 100.0, 0.0)))],
+            version=0x04000000,
+        ),
+        byteorder=">",
+    )
     write_tiff(
         "icc_v44_cicp_rec2020_pq_16bit.tif",
         rgb16,
