@@ -32,7 +32,6 @@ namespace alcedo::ui {
 class FolderController;
 class LibraryModule;
 class NikonHeRecoveryController;
-class ProjectDbWriteBarrier;
 class ProjectModule;
 class SemanticGenerationController;
 class StatsEngine;
@@ -94,8 +93,7 @@ class ImportExportHandler final : public QObject {
 
  public:
   ImportExportHandler(ProjectModule* project, LibraryModule* library, FolderController* folders,
-                      IUiStatusSink* status, ProjectDbWriteBarrier* barrier,
-                      QObject* parent = nullptr);
+                      IUiStatusSink* status, QObject* parent = nullptr);
   ~ImportExportHandler() override;
 
   void                    BindCollaborators(StatsEngine* stats, NikonHeRecoveryController* nikon,
@@ -281,7 +279,6 @@ class ImportExportHandler final : public QObject {
   FolderController* folders_              = nullptr;
   IUiStatusSink*    status_               = nullptr;
   InteractionPolicyController* interaction_policy_ = nullptr;
-  ProjectDbWriteBarrier*        barrier_  = nullptr;
   ExportGpuResourceRelease      export_gpu_resource_release_;
   /// The running export released the editor GPU resources; FinishExport returns them.
   bool                          export_gpu_resources_released_ = false;

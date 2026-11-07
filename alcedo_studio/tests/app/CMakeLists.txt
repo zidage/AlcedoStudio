@@ -807,7 +807,7 @@ gtest_discover_tests(AiMaskEditSessionTest TEST_PREFIX "AiMaskEditSessionTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(AiMaskEditSessionTest app ci_core)
 
-# Frontend 1b: multi-profile provider cards, JSON persistence, and generated sidecar configs.
+# Saved AI key page: stored provider profiles and the deletion of their saved credentials.
 add_executable(AiProviderProfileTest ${ALCEDO_TEST_ROOT}/app/ai_provider_profile_test.cpp)
 target_include_directories(AiProviderProfileTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(AiProviderProfileTest AiProviderProfile AiCredentialStore GTest::gtest_main)
@@ -843,49 +843,6 @@ target_link_libraries(SemanticGenerationServiceTest
 gtest_discover_tests(SemanticGenerationServiceTest TEST_PREFIX "SemanticGenerationServiceTest."
   PROPERTIES LABELS "ci_raw_flow")
 alcedo_register_test_target(SemanticGenerationServiceTest app ci_raw)
-
-# Phase 5d: encoded-rendition encoder + host image-analysis service tests.
-add_executable(ImageAnalysisEncoderTest ${ALCEDO_TEST_ROOT}/app/image_analysis_encoder_test.cpp)
-target_include_directories(ImageAnalysisEncoderTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ImageAnalysisEncoderTest ImageAnalysisEncoder ImageBuffer
-  GTest::gtest_main)
-gtest_discover_tests(ImageAnalysisEncoderTest TEST_PREFIX "ImageAnalysisEncoderTest.")
-alcedo_register_test_target(ImageAnalysisEncoderTest app)
-
-add_executable(ImageAnalysisServiceTest ${ALCEDO_TEST_ROOT}/app/image_analysis_service_test.cpp)
-target_include_directories(ImageAnalysisServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_compile_definitions(ImageAnalysisServiceTest PRIVATE
-  ALCEDO_REPO_ROOT="${CMAKE_SOURCE_DIR}")
-target_link_libraries(ImageAnalysisServiceTest ImageAnalysisService
-  GTest::gtest_main)
-gtest_discover_tests(ImageAnalysisServiceTest TEST_PREFIX "ImageAnalysisServiceTest."
-  PROPERTIES LABELS "ci_raw_flow")
-alcedo_register_test_target(ImageAnalysisServiceTest app ci_raw)
-
-# Phase 6d: album image-analysis job controller. Standalone QObject module
-# (IImageAnalysisEnvironment seam + AiProviderProfileController) driven by fakes.
-add_executable(ImageAnalysisControllerTest ${ALCEDO_TEST_ROOT}/app/image_analysis_controller_test.cpp)
-target_include_directories(ImageAnalysisControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ImageAnalysisControllerTest ImageAnalysisController AiProviderProfile
-  AiCredentialStore GTest::gtest_main)
-gtest_discover_tests(ImageAnalysisControllerTest TEST_PREFIX "ImageAnalysisControllerTest."
-  PROPERTIES LABELS "ci_core_flow")
-alcedo_register_test_target(ImageAnalysisControllerTest app ci_core)
-
-# Live image analysis (runs only with the environment below): opens a real packed .alcd,
-# materializes one k1024 thumbnail, starts the real Rust sidecar (no CLIP model; describe uses
-# the HTTP provider path), and asks a live LLM to describe the image through ImageAnalysisService.
-# Skipped unless ALCEDO_IA_LIVE_RUNTIME_PATH, ALCEDO_TEST_PACKED_PROJECT_PATH, and
-# ALCEDO_IA_LIVE_ENV_TEST_PATH are set. ProjectService
-# transitively provides ProjectPackageService (unpack), AlbumBrowseService (enumerate), and
-# AiSidecarRuntimeService (sidecar); ThumbnailService provides the k1024 materialization.
-add_executable(ImageAnalysisLiveProviderTest ${ALCEDO_TEST_ROOT}/app/image_analysis_live_provider_test.cpp)
-target_include_directories(ImageAnalysisLiveProviderTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ImageAnalysisLiveProviderTest ImageAnalysisService ProjectService
-  GTest::gtest_main)
-gtest_discover_tests(ImageAnalysisLiveProviderTest TEST_PREFIX "ImageAnalysisLiveProviderTest."
-  PROPERTIES LABELS "ci_raw_flow")
-alcedo_register_test_target(ImageAnalysisLiveProviderTest app ci_raw)
 
 add_executable(ThumbnailServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_service_test.cpp)
 target_include_directories(ThumbnailServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})

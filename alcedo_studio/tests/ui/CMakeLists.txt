@@ -554,8 +554,6 @@ alcedo_register_test_target(AlbumBackendInteractionPolicyTest ui)
 
 def_ui_test(AgentControlOwnerTest agent_control_owner_test.cpp "interaction_policy")
 alcedo_register_test_target(AgentControlOwnerTest ui)
-def_ui_test(AlbumBackendDbWriteBarrierTest album_backend_db_write_barrier_test.cpp)
-alcedo_register_test_target(AlbumBackendDbWriteBarrierTest ui)
 
 def_ui_test(ApplicationModuleHostLifecycleTest application_module_host_lifecycle_test.cpp)
 alcedo_register_test_target(ApplicationModuleHostLifecycleTest ui)
@@ -853,8 +851,8 @@ alcedo_ui_gtest_discover_tests(EditorLibraryListSyncQmlTest
 alcedo_register_test_target(EditorLibraryListSyncQmlTest ui)
 
 # Production QML handlers whose C++ signal starts with an upper-case letter (delete and rating
-# results, export end, accelerator preparation, image analysis), driven through C++ fakes with the
-# production signal names.
+# results, export end, accelerator preparation), driven through C++ fakes with the production
+# signal names.
 add_executable(UppercaseSignalQmlHandlersTest
     ${ALCEDO_TEST_ROOT}/ui/uppercase_signal_qml_handlers_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
@@ -885,6 +883,39 @@ alcedo_ui_gtest_discover_tests(UppercaseSignalQmlHandlersTest
     PROPERTIES LABELS "workspace_qml"
 )
 alcedo_register_test_target(UppercaseSignalQmlHandlersTest ui)
+
+# Issue #710: the Saved AI Keys settings page and the launch reminder, driven through a fake
+# profile controller with the names of AiProviderProfileController.
+add_executable(SavedAiKeysPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/saved_ai_keys_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(SavedAiKeysPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(SavedAiKeysPanelQmlTest
+    PRIVATE
+        AiProviderProfile
+        AppTheme
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(SavedAiKeysPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(SavedAiKeysPanelQmlTest
+    TEST_PREFIX "SavedAiKeysPanelQmlTest."
+    PROPERTIES LABELS "workspace_qml"
+)
+alcedo_register_test_target(SavedAiKeysPanelQmlTest ui)
 
 # Phase A2: RegisteredShortcut wrapper behavior (scope checks, editable-focus
 # suppression, live rebinding, auto-repeat) without booting the full shell.

@@ -100,7 +100,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   const int auto_collapse_ms = AppTheme::Instance().backgroundTaskAutoCollapseMs();
   const auto register_running_task = [&host](const QString& title) {
     BackgroundTaskSnapshot snapshot;
-    snapshot.kind_             = BackgroundTaskKind::ImageAnalysis;
+    snapshot.kind_             = BackgroundTaskKind::SemanticGeneration;
     snapshot.state_            = BackgroundTaskState::Running;
     snapshot.title_            = title;
     snapshot.progress_percent_ = 25;
@@ -202,16 +202,21 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
 
   auto* collections = root->findChild<QObject*>(QStringLiteral("collectionsPanel"));
   auto* search      = root->findChild<QObject*>(QStringLiteral("globalSearchDialog"));
-  auto* analysis    = root->findChild<QObject*>(QStringLiteral("advancedContentAnalysisDialog"));
   auto* background_tasks_dialog =
       root->findChild<QObject*>(QStringLiteral("backgroundTasksDialog"));
   ASSERT_NE(collections, nullptr);
   ASSERT_NE(search, nullptr);
-  ASSERT_NE(analysis, nullptr);
   ASSERT_NE(background_tasks_dialog, nullptr);
+  // Advanced Content Analysis is removed (issue #710): no dialog and no utility tab.
+  EXPECT_EQ(root->findChild<QObject*>(QStringLiteral("advancedContentAnalysisDialog")), nullptr);
+  QStringList utility_tab_ids;
+  for (const QVariant& tab : collections->property("utilityTabs").toList()) {
+    utility_tab_ids.push_back(tab.toMap().value(QStringLiteral("tabId")).toString());
+  }
+  EXPECT_EQ(utility_tab_ids,
+            QStringList({QStringLiteral("search"), QStringLiteral("background-tasks")}));
   EXPECT_EQ(collections->property("folderController").value<QObject*>(), host.folders());
   EXPECT_EQ(search->property("searchController").value<QObject*>(), host.search());
-  EXPECT_EQ(analysis->property("imageController").value<QObject*>(), host.images());
   EXPECT_EQ(background_tasks_dialog->property("controller").value<QObject*>(),
             host.background_tasks());
 

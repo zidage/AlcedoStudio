@@ -15,7 +15,7 @@ namespace alcedo::ui {
 namespace {
 // Parse the {elementId, imageId,...} target-entry maps QML pushes into a set of
 // element ids. Entries with elementId == 0 are skipped. Used by the target-list
-// capabilities (RunImageAnalysis, DeleteImages).
+// capabilities (DeleteImages, EditImageRating).
 auto TargetElementIds(const QVariantList& targets) -> std::set<quint64> {
   std::set<quint64> ids;
   for (const QVariant& entry : targets) {
@@ -52,14 +52,6 @@ void InteractionPolicyController::SetPendingDeleteTargets(const QVariantList& ta
     return;
   }
   pending_delete_targets_ = targets;
-  emit PolicyChanged();
-}
-
-void InteractionPolicyController::SetPendingAnalysisTargets(const QVariantList& targets) {
-  if (pending_analysis_targets_ == targets) {
-    return;
-  }
-  pending_analysis_targets_ = targets;
   emit PolicyChanged();
 }
 
@@ -225,14 +217,6 @@ QString InteractionPolicyController::PendingDeleteReason() const {
   return EvalTargets(InteractionCapability::DeleteImages, pending_delete_targets_).reason_;
 }
 
-bool InteractionPolicyController::CanRunAnalysis() const {
-  return EvalTargets(InteractionCapability::RunImageAnalysis, pending_analysis_targets_).allowed_;
-}
-
-QString InteractionPolicyController::RunAnalysisReason() const {
-  return EvalTargets(InteractionCapability::RunImageAnalysis, pending_analysis_targets_).reason_;
-}
-
 bool InteractionPolicyController::CanChangeSemanticModel() const {
   return EvalGlobal(InteractionCapability::ChangeSemanticModel).allowed_;
 }
@@ -243,10 +227,6 @@ bool InteractionPolicyController::CanRunSemanticGeneration() const {
 
 bool InteractionPolicyController::CanChangeModelDownloadSettings() const {
   return EvalGlobal(InteractionCapability::ChangeModelDownloadSettings).allowed_;
-}
-
-bool InteractionPolicyController::CanChangeImageAnalysisProvider() const {
-  return EvalGlobal(InteractionCapability::ChangeImageAnalysisProvider).allowed_;
 }
 
 bool InteractionPolicyController::CanChangeSearchFieldFilters() const {
@@ -322,11 +302,6 @@ QVariantMap InteractionPolicyController::EvaluateEditImageRatingReason(uint elem
   return ToVariantMap(Eval(InteractionCapability::EditImageRatingReason, elementId));
 }
 
-QVariantMap InteractionPolicyController::EvaluateRunImageAnalysis(
-    const QVariantList& targets) const {
-  return ToVariantMap(EvalTargets(InteractionCapability::RunImageAnalysis, targets));
-}
-
 QVariantMap InteractionPolicyController::EvaluateDeleteImages(const QVariantList& targets) const {
   return ToVariantMap(EvalTargets(InteractionCapability::DeleteImages, targets));
 }
@@ -341,10 +316,6 @@ QVariantMap InteractionPolicyController::EvaluateRunSemanticGeneration() const {
 
 QVariantMap InteractionPolicyController::EvaluateChangeModelDownloadSettings() const {
   return ToVariantMap(EvalGlobal(InteractionCapability::ChangeModelDownloadSettings));
-}
-
-QVariantMap InteractionPolicyController::EvaluateChangeImageAnalysisProvider() const {
-  return ToVariantMap(EvalGlobal(InteractionCapability::ChangeImageAnalysisProvider));
 }
 
 QVariantMap InteractionPolicyController::EvaluateSelectEditorImage() const {

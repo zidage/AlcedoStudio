@@ -394,254 +394,254 @@
     <message>
         <location filename="../qml/AdvancedContentAnalysisDialog.qml" line="+74"/>
         <source>No provider selected</source>
-        <translation>未选择提供商</translation>
+        <translation type="obsolete">未选择提供商</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>No model selected</source>
-        <translation>未选择模型</translation>
+        <translation type="obsolete">未选择模型</translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Chinese</source>
-        <translation>中文</translation>
+        <translation type="obsolete">中文</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>English</source>
-        <translation>English</translation>
+        <translation type="obsolete">English</translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Follow app language</source>
-        <translation>跟随应用语言</translation>
+        <translation type="obsolete">跟随应用语言</translation>
     </message>
     <message>
         <location line="+912"/>
         <source>Move task to background</source>
-        <translation>将任务移至后台</translation>
+        <translation type="obsolete">将任务移至后台</translation>
     </message>
     <message>
         <location line="-895"/>
         <source>评价严苛程度</source>
-        <translation>评价严苛程度</translation>
+        <translation type="obsolete">评价严苛程度</translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Rating strictness</source>
-        <translation>评价严苛程度</translation>
+        <translation type="obsolete">评价严苛程度</translation>
     </message>
     <message>
         <location line="+227"/>
         <source>Analysis</source>
-        <translation>分析</translation>
+        <translation type="obsolete">分析</translation>
     </message>
     <message>
         <location line="+2"/>
         <location line="+386"/>
         <source>Description</source>
-        <translation>描述</translation>
+        <translation type="obsolete">描述</translation>
     </message>
     <message>
         <location line="-386"/>
         <location line="+389"/>
         <source>Rating</source>
-        <translation>评分</translation>
+        <translation type="obsolete">评分</translation>
     </message>
     <message>
         <location line="-373"/>
         <source>provider status %1</source>
-        <translation>提供商状态 %1</translation>
+        <translation type="obsolete">提供商状态 %1</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>error code %1</source>
-        <translation>错误码 %1</translation>
+        <translation type="obsolete">错误码 %1</translation>
     </message>
     <message>
         <location line="+6"/>
         <source>provider %1</source>
-        <translation>提供商 %1</translation>
+        <translation type="obsolete">提供商 %1</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>model %1</source>
-        <translation>模型 %1</translation>
+        <translation type="obsolete">模型 %1</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>request %1</source>
-        <translation>请求 %1</translation>
+        <translation type="obsolete">请求 %1</translation>
     </message>
     <message>
         <location line="+2"/>
         <source>No provider error message was returned.</source>
-        <translation>提供商未返回错误信息。</translation>
+        <translation type="obsolete">提供商未返回错误信息。</translation>
     </message>
     <message>
         <location line="+17"/>
         <source>Image %1</source>
-        <translation>图像 %1</translation>
+        <translation type="obsolete">图像 %1</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>%1: %2</source>
-        <translation>%1：%2</translation>
+        <translation type="obsolete">%1：%2</translation>
     </message>
     <message>
         <location line="+21"/>
         <source>Open a project before running remote analysis.</source>
-        <translation>运行远程分析前请先打开项目。</translation>
+        <translation type="obsolete">运行远程分析前请先打开项目。</translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Select at least one image to analyze.</source>
-        <translation>请至少选择一张图像进行分析。</translation>
+        <translation type="obsolete">请至少选择一张图像进行分析。</translation>
     </message>
     <message>
         <location line="+5"/>
         <source>Choose at least one analysis task.</source>
-        <translation>请至少选择一个分析任务。</translation>
+        <translation type="obsolete">请至少选择一个分析任务。</translation>
     </message>
     <message>
         <location line="+73"/>
         <source>Canceled. Successful results already saved remain in place.</source>
-        <translation>已取消。已保存的成功结果予以保留。</translation>
+        <translation type="obsolete">已取消。已保存的成功结果予以保留。</translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Finished with %1 successful item(s) and %2 failed item(s). First failure: %3</source>
-        <translation>完成：%1 项成功，%2 项失败。首项失败：%3</translation>
+        <translation type="obsolete">完成：%1 项成功，%2 项失败。首项失败：%3</translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Finished with %1 successful item(s) and %2 failed item(s).</source>
-        <translation>完成：%1 项成功，%2 项失败。</translation>
+        <translation type="obsolete">完成：%1 项成功，%2 项失败。</translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Analysis complete. Skipped %1 existing image(s).</source>
-        <translation>分析完成。跳过 %1 张已有结果的图像。</translation>
+        <translation type="obsolete">分析完成。跳过 %1 张已有结果的图像。</translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Analysis complete.</source>
-        <translation>分析完成。</translation>
+        <translation type="obsolete">分析完成。</translation>
     </message>
     <message>
         <location line="+105"/>
         <source>Advanced Content Analysis</source>
-        <translation>高级内容分析</translation>
+        <translation type="obsolete">高级内容分析</translation>
     </message>
     <message>
         <location line="+10"/>
         <source>%1 selected image(s)</source>
-        <translation>已选择 %1 张图像</translation>
+        <translation type="obsolete">已选择 %1 张图像</translation>
     </message>
     <message>
         <location line="+72"/>
         <source>Provider</source>
-        <translation>提供商</translation>
+        <translation type="obsolete">提供商</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Model</source>
-        <translation>模型</translation>
+        <translation type="obsolete">模型</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Output language</source>
-        <translation>输出语言</translation>
+        <translation type="obsolete">输出语言</translation>
     </message>
     <message>
         <location line="+19"/>
         <source>Tasks</source>
-        <translation>任务</translation>
+        <translation type="obsolete">任务</translation>
     </message>
     <message>
         <location line="+26"/>
         <source>Rating reason</source>
-        <translation>评分理由</translation>
+        <translation type="obsolete">评分理由</translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Overwrite</source>
-        <translation>覆盖</translation>
+        <translation type="obsolete">覆盖</translation>
     </message>
     <message>
         <location line="+10"/>
         <source>Overwrite photo rating</source>
-        <translation>覆盖照片评分</translation>
+        <translation type="obsolete">覆盖照片评分</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Overwrite rating reason</source>
-        <translation>覆盖评分理由</translation>
+        <translation type="obsolete">覆盖评分理由</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Overwrite image description</source>
-        <translation>覆盖图像描述</translation>
+        <translation type="obsolete">覆盖图像描述</translation>
     </message>
     <message>
         <location line="+92"/>
         <source>Running %1</source>
-        <translation>正在运行 %1</translation>
+        <translation type="obsolete">正在运行 %1</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Finished</source>
-        <translation>已完成</translation>
+        <translation type="obsolete">已完成</translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Ready</source>
-        <translation>就绪</translation>
+        <translation type="obsolete">就绪</translation>
     </message>
     <message>
         <location line="+9"/>
         <source>%1 / %2 image(s)</source>
-        <translation>%1 / %2 张图像</translation>
+        <translation type="obsolete">%1 / %2 张图像</translation>
     </message>
     <message>
         <location line="+25"/>
         <source>Usage: %1 token(s)</source>
-        <translation>用量：%1 个 token</translation>
+        <translation type="obsolete">用量：%1 个 token</translation>
     </message>
     <message>
         <location line="+29"/>
         <source>Failure details</source>
-        <translation>失败详情</translation>
+        <translation type="obsolete">失败详情</translation>
     </message>
     <message>
         <location line="+39"/>
         <source>Results refresh the focused photo&apos;s Image inspector. Open the Image page to review and edit description, rating, and reasons.</source>
-        <translation>结果会刷新焦点照片的图像检查器。打开图像页面可查看并编辑描述、评分和理由。</translation>
+        <translation type="obsolete">结果会刷新焦点照片的图像检查器。打开图像页面可查看并编辑描述、评分和理由。</translation>
     </message>
     <message>
         <location line="+29"/>
         <source>Protected by interaction locks; safe to continue in the background.</source>
-        <translation>受交互锁保护，可以安全地在后台继续。</translation>
+        <translation type="obsolete">受交互锁保护，可以安全地在后台继续。</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Remote provider calls may incur cost.</source>
-        <translation>远程提供商调用可能产生费用。</translation>
+        <translation type="obsolete">远程提供商调用可能产生费用。</translation>
     </message>
     <message>
         <location line="+33"/>
         <source>Cancel</source>
-        <translation>取消</translation>
+        <translation type="obsolete">取消</translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Done</source>
-        <translation>完成</translation>
+        <translation type="obsolete">完成</translation>
     </message>
     <message>
         <location line="-18"/>
         <source>Analyze Selected</source>
-        <translation>分析所选图像</translation>
+        <translation type="obsolete">分析所选图像</translation>
     </message>
 </context>
 <context>
@@ -649,100 +649,100 @@
     <message>
         <location filename="../qml/AiProviderSettingsPanel.qml" line="+160"/>
         <source>The field value could not be saved.</source>
-        <translation>字段值无法保存。</translation>
+        <translation type="obsolete">字段值无法保存。</translation>
     </message>
     <message>
         <location line="+120"/>
         <source>Follow app language</source>
-        <translation>跟随应用语言</translation>
+        <translation type="obsolete">跟随应用语言</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>English</source>
-        <translation>English</translation>
+        <translation type="obsolete">English</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>中文</source>
-        <translation>中文</translation>
+        <translation type="obsolete">中文</translation>
     </message>
     <message>
         <location line="+16"/>
         <source>Output language</source>
-        <translation>输出语言</translation>
+        <translation type="obsolete">输出语言</translation>
     </message>
     <message>
         <location line="+32"/>
         <source>Provider settings</source>
-        <translation>提供商设置</translation>
+        <translation type="obsolete">提供商设置</translation>
     </message>
     <message>
         <location line="+109"/>
         <source>In use</source>
-        <translation>使用中</translation>
+        <translation type="obsolete">使用中</translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Use</source>
-        <translation>使用</translation>
+        <translation type="obsolete">使用</translation>
     </message>
     <message>
         <location line="+12"/>
         <source>Edit</source>
-        <translation>编辑</translation>
+        <translation type="obsolete">编辑</translation>
     </message>
     <message>
         <location line="+23"/>
         <source>No provider profiles</source>
-        <translation>暂无提供商配置</translation>
+        <translation type="obsolete">暂无提供商配置</translation>
     </message>
     <message>
         <location line="+9"/>
         <source>Use the + button above to create one.</source>
-        <translation>点击上方的“+”按钮创建一个。</translation>
+        <translation type="obsolete">点击上方的“+”按钮创建一个。</translation>
     </message>
     <message>
         <location line="-137"/>
         <location line="+171"/>
         <source>Add provider</source>
-        <translation>添加提供商</translation>
+        <translation type="obsolete">添加提供商</translation>
     </message>
     <message>
         <location line="-447"/>
         <source>Codex login did not finish yet. Complete `codex login`, then use Codex Login again.</source>
-        <translation>Codex 登录尚未完成。请先完成 `codex login`，然后再次使用 Codex 登录。</translation>
+        <translation type="obsolete">Codex 登录尚未完成。请先完成 `codex login`，然后再次使用 Codex 登录。</translation>
     </message>
     <message>
         <location line="+26"/>
         <source>Codex OAuth is connected. Open a project to refresh models.</source>
-        <translation>Codex OAuth 已连接。打开一个项目以刷新模型。</translation>
+        <translation type="obsolete">Codex OAuth 已连接。打开一个项目以刷新模型。</translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Loading Codex models...</source>
-        <translation>正在加载 Codex 模型...</translation>
+        <translation type="obsolete">正在加载 Codex 模型...</translation>
     </message>
     <message>
         <location line="+21"/>
         <source>This build does not include Codex OAuth import. Rebuild Alcedo Studio.</source>
-        <translation>此构建不包含 Codex OAuth 导入功能。请重新构建 Alcedo Studio。</translation>
+        <translation type="obsolete">此构建不包含 Codex OAuth 导入功能。请重新构建 Alcedo Studio。</translation>
     </message>
     <message>
         <location line="+3"/>
         <source>Checking local Codex login...</source>
-        <translation>正在检查本地 Codex 登录...</translation>
+        <translation type="obsolete">正在检查本地 Codex 登录...</translation>
     </message>
     <message>
         <location line="+9"/>
         <location line="+2"/>
         <source>Codex OAuth connected. Loading models...</source>
-        <translation>Codex OAuth 已连接。正在加载模型...</translation>
+        <translation type="obsolete">Codex OAuth 已连接。正在加载模型...</translation>
     </message>
     <message>
         <location line="+21"/>
         <location line="+404"/>
         <source>Finish the current AI task before changing provider settings.</source>
-        <translation>完成当前 AI 任务后再更改提供商设置。</translation>
+        <translation type="obsolete">完成当前 AI 任务后再更改提供商设置。</translation>
     </message>
     <message>
         <location line="-154"/>
@@ -752,37 +752,37 @@
     <message>
         <location line="+120"/>
         <source>Choose a template to create a profile from.</source>
-        <translation>选择一个模板以创建配置。</translation>
+        <translation type="obsolete">选择一个模板以创建配置。</translation>
     </message>
     <message>
         <location line="+97"/>
         <source>Provider</source>
-        <translation>提供商</translation>
+        <translation type="obsolete">提供商</translation>
     </message>
     <message>
         <location line="+30"/>
         <source>OpenAI OAuth</source>
-        <translation>OpenAI OAuth</translation>
+        <translation type="obsolete">OpenAI OAuth</translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Use Codex Login</source>
-        <translation>使用 Codex 登录</translation>
+        <translation type="obsolete">使用 Codex 登录</translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Open Login</source>
-        <translation>打开登录</translation>
+        <translation type="obsolete">打开登录</translation>
     </message>
     <message>
         <location line="+4"/>
         <source>This build does not include Codex login launch. Run `codex login` manually.</source>
-        <translation>此构建不包含 Codex 登录启动功能。请手动运行 `codex login`。</translation>
+        <translation type="obsolete">此构建不包含 Codex 登录启动功能。请手动运行 `codex login`。</translation>
     </message>
     <message>
         <location line="+9"/>
         <source>Codex login started. Complete the browser flow; models will load when login finishes.</source>
-        <translation>Codex 登录已启动。请完成浏览器流程；登录完成后将加载模型。</translation>
+        <translation type="obsolete">Codex 登录已启动。请完成浏览器流程；登录完成后将加载模型。</translation>
     </message>
     <message>
         <location line="+9"/>
@@ -792,37 +792,37 @@
     <message>
         <location line="+5"/>
         <source>Codex OAuth disconnected</source>
-        <translation>Codex OAuth 已断开</translation>
+        <translation type="obsolete">Codex OAuth 已断开</translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Codex OAuth connected</source>
-        <translation>Codex OAuth 已连接</translation>
+        <translation type="obsolete">Codex OAuth 已连接</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>No Codex OAuth credential imported</source>
-        <translation>未导入 Codex OAuth 凭据</translation>
+        <translation type="obsolete">未导入 Codex OAuth 凭据</translation>
     </message>
     <message>
         <location line="+15"/>
         <source>API key</source>
-        <translation>API 密钥</translation>
+        <translation type="obsolete">API 密钥</translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Paste API key</source>
-        <translation>粘贴 API 密钥</translation>
+        <translation type="obsolete">粘贴 API 密钥</translation>
     </message>
     <message>
         <location line="+13"/>
         <source>Save Key</source>
-        <translation>保存密钥</translation>
+        <translation type="obsolete">保存密钥</translation>
     </message>
     <message>
         <location line="+6"/>
         <source>API key saved</source>
-        <translation>API 密钥已保存</translation>
+        <translation type="obsolete">API 密钥已保存</translation>
     </message>
     <message>
         <location line="+6"/>
@@ -832,7 +832,7 @@
     <message>
         <location line="+5"/>
         <source>API key deleted</source>
-        <translation>API 密钥已删除</translation>
+        <translation type="obsolete">API 密钥已删除</translation>
     </message>
     <message>
         <location line="+8"/>
@@ -847,97 +847,97 @@
     <message>
         <location line="+13"/>
         <source>Model</source>
-        <translation>模型</translation>
+        <translation type="obsolete">模型</translation>
     </message>
     <message>
         <location line="+17"/>
         <source>Search models</source>
-        <translation>搜索模型</translation>
+        <translation type="obsolete">搜索模型</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>No matching models</source>
-        <translation>未找到匹配的模型</translation>
+        <translation type="obsolete">未找到匹配的模型</translation>
     </message>
     <message>
         <location line="+22"/>
         <source>Test &amp; Refresh</source>
-        <translation>测试并刷新</translation>
+        <translation type="obsolete">测试并刷新</translation>
     </message>
     <message>
         <location line="+27"/>
         <source>Advanced</source>
-        <translation>高级</translation>
+        <translation type="obsolete">高级</translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Display name</source>
-        <translation>显示名称</translation>
+        <translation type="obsolete">显示名称</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Provider id</source>
-        <translation>提供商 ID</translation>
+        <translation type="obsolete">提供商 ID</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Driver</source>
-        <translation>驱动</translation>
+        <translation type="obsolete">驱动</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Base URL</source>
-        <translation>基础 URL</translation>
+        <translation type="obsolete">基础 URL</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Endpoint</source>
-        <translation>端点</translation>
+        <translation type="obsolete">端点</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Models endpoint</source>
-        <translation>模型端点</translation>
+        <translation type="obsolete">模型端点</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Models response data pointer</source>
-        <translation>模型响应数据指针</translation>
+        <translation type="obsolete">模型响应数据指针</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Auth type</source>
-        <translation>认证类型</translation>
+        <translation type="obsolete">认证类型</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Credential slot</source>
-        <translation>凭证槽位</translation>
+        <translation type="obsolete">凭证槽位</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Structured output</source>
-        <translation>结构化输出</translation>
+        <translation type="obsolete">结构化输出</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Timeout ms</source>
-        <translation>超时（毫秒）</translation>
+        <translation type="obsolete">超时（毫秒）</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Max image bytes</source>
-        <translation>最大图像字节数</translation>
+        <translation type="obsolete">最大图像字节数</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Recommended rendition</source>
-        <translation>推荐渲染版本</translation>
+        <translation type="obsolete">推荐渲染版本</translation>
     </message>
     <message>
         <location line="+12"/>
         <source>Duplicate</source>
-        <translation>复制</translation>
+        <translation type="obsolete">复制</translation>
     </message>
     <message>
         <location line="+13"/>
@@ -964,6 +964,26 @@
         <location line="+11"/>
         <source>Cancel</source>
         <translation>取消</translation>
+    </message>
+    <message>
+        <source>Advanced Content Analysis is removed from this version. The next version also removes this page. Delete your saved API keys and the Codex login now. After that, Alcedo Studio can no longer delete them for you.</source>
+        <translation>高级内容分析功能已从本版本中移除，下个版本将同时移除本页面。请及时删除已保存的 API 密钥和 Codex 登录。之后 Alcedo Studio 将无法再替您清除这些密钥。</translation>
+    </message>
+    <message>
+        <source>No saved keys</source>
+        <translation>没有已保存的密钥</translation>
+    </message>
+    <message>
+        <source>Delete All Saved Keys</source>
+        <translation>删除所有已保存的密钥</translation>
+    </message>
+    <message>
+        <source>Delete every saved API key and the Codex login? The provider profiles stay in the list.</source>
+        <translation>删除所有已保存的 API 密钥和 Codex 登录？提供商配置仍保留在列表中。</translation>
+    </message>
+    <message>
+        <source>Delete All</source>
+        <translation>全部删除</translation>
     </message>
 </context>
 <context>
@@ -1804,7 +1824,7 @@ Alcedo 将改用 %1。</translation>
     <message>
         <location line="+212"/>
         <source>Select at least one image to analyze.</source>
-        <translation>请至少选择一张图像进行分析。</translation>
+        <translation type="obsolete">请至少选择一张图像进行分析。</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -1826,7 +1846,7 @@ Alcedo 将改用 %1。</translation>
     <message>
         <location filename="../qml/BackgroundTaskBar.qml" line="+65"/>
         <source>AI Analysis</source>
-        <translation>AI 分析</translation>
+        <translation type="obsolete">AI 分析</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -1912,7 +1932,7 @@ Alcedo 将改用 %1。</translation>
     <message>
         <location line="+12"/>
         <source>AI Analysis</source>
-        <translation>AI 分析</translation>
+        <translation type="obsolete">AI 分析</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -1982,7 +2002,7 @@ Alcedo 将改用 %1。</translation>
     <message>
         <location line="+170"/>
         <source>Details</source>
-        <translation>详细信息</translation>
+        <translation type="obsolete">详细信息</translation>
     </message>
     <message>
         <location line="+40"/>
@@ -2213,7 +2233,7 @@ Alcedo 将改用 %1。</translation>
     <message>
         <location line="-625"/>
         <source>Advanced Content Analysis</source>
-        <translation>高级内容分析</translation>
+        <translation type="obsolete">高级内容分析</translation>
     </message>
     <message>
         <location line="+39"/>
@@ -2223,12 +2243,12 @@ Alcedo 将改用 %1。</translation>
     <message>
         <location line="+219"/>
         <source>Open a project before running remote analysis.</source>
-        <translation>运行远程分析前请先打开项目。</translation>
+        <translation type="obsolete">运行远程分析前请先打开项目。</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Select one or more images for remote analysis.</source>
-        <translation>请选择一张或多张图像进行远程分析。</translation>
+        <translation type="obsolete">请选择一张或多张图像进行远程分析。</translation>
     </message>
 </context>
 <context>
@@ -6793,6 +6813,13 @@ Create a new layer above it and draw the Mask there?</source>
     </message>
 </context>
 <context>
+    <name>SavedAiKeysReminder</name>
+    <message>
+        <source>Alcedo Studio still holds AI keys that you saved for Advanced Content Analysis, which this version removes. Delete them in Settings &gt; Saved AI Keys.</source>
+        <translation>Alcedo Studio 仍保存着您为高级内容分析保存的 AI 密钥，本版本已移除该功能。请在“设置 &gt; 已保存的 AI 密钥”中删除。</translation>
+    </message>
+</context>
+<context>
     <name>SearchComboBox</name>
     <message>
         <location filename="../qml/util/SearchComboBox.qml" line="+14"/>
@@ -7363,7 +7390,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="-200"/>
         <location line="+201"/>
         <source>Advanced Content Analysis</source>
-        <translation>高级内容分析</translation>
+        <translation type="obsolete">高级内容分析</translation>
     </message>
     <message>
         <location line="-198"/>
@@ -7427,6 +7454,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>AI Models</source>
         <translation>AI 模型</translation>
+    </message>
+    <message>
+        <source>Saved AI Keys</source>
+        <translation>已保存的 AI 密钥</translation>
     </message>
 </context>
 <context>

@@ -370,254 +370,254 @@
     <message>
         <location filename="../qml/AdvancedContentAnalysisDialog.qml" line="+74"/>
         <source>No provider selected</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>No model selected</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Chinese</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>English</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Follow app language</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+17"/>
         <source>评价严苛程度</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Rating strictness</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+227"/>
         <source>Analysis</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <location line="+386"/>
         <source>Description</source>
-        <translation type="unfinished">Description</translation>
+        <translation type="obsolete">Description</translation>
     </message>
     <message>
         <location line="-386"/>
         <location line="+389"/>
         <source>Rating</source>
-        <translation type="unfinished">Rating</translation>
+        <translation type="obsolete">Rating</translation>
     </message>
     <message>
         <location line="-373"/>
         <source>provider status %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>error code %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+6"/>
         <source>provider %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>model %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>request %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <source>No provider error message was returned.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+17"/>
         <source>Image %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>%1: %2</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+21"/>
         <source>Open a project before running remote analysis.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Select at least one image to analyze.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+5"/>
         <source>Choose at least one analysis task.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+73"/>
         <source>Canceled. Successful results already saved remain in place.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Finished with %1 successful item(s) and %2 failed item(s). First failure: %3</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Finished with %1 successful item(s) and %2 failed item(s).</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Analysis complete. Skipped %1 existing image(s).</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+2"/>
         <source>Analysis complete.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+105"/>
         <source>Advanced Content Analysis</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+10"/>
         <source>%1 selected image(s)</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+72"/>
         <source>Provider</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Model</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Output language</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+19"/>
         <source>Tasks</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+26"/>
         <source>Rating reason</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Overwrite</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+10"/>
         <source>Overwrite photo rating</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Overwrite rating reason</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Overwrite image description</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+92"/>
         <source>Running %1</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Finished</source>
-        <translation type="unfinished">Finished</translation>
+        <translation type="obsolete">Finished</translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Ready</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+9"/>
         <source>%1 / %2 image(s)</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+25"/>
         <source>Usage: %1 token(s)</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+29"/>
         <source>Failure details</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+39"/>
         <source>Results refresh the focused photo&apos;s Image inspector. Open the Image page to review and edit description, rating, and reasons.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+29"/>
         <source>Protected by interaction locks; safe to continue in the background.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Remote provider calls may incur cost.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+16"/>
         <source>Move task to background</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+7"/>
         <source>Analyze Selected</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+10"/>
         <source>Cancel</source>
-        <translation type="unfinished">Cancel</translation>
+        <translation type="obsolete">Cancel</translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Done</source>
-        <translation type="unfinished">Done</translation>
+        <translation type="obsolete">Done</translation>
     </message>
 </context>
 <context>
@@ -625,75 +625,75 @@
     <message>
         <location filename="../qml/AiProviderSettingsPanel.qml" line="+70"/>
         <source>Codex login did not finish yet. Complete `codex login`, then use Codex Login again.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+26"/>
         <source>Codex OAuth is connected. Open a project to refresh models.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+4"/>
         <source>Loading Codex models...</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+21"/>
         <source>This build does not include Codex OAuth import. Rebuild Alcedo Studio.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+3"/>
         <source>Checking local Codex login...</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+9"/>
         <location line="+2"/>
         <source>Codex OAuth connected. Loading models...</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+21"/>
         <location line="+404"/>
         <source>Finish the current AI task before changing provider settings.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="-400"/>
         <source>The field value could not be saved.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+120"/>
         <source>Follow app language</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>English</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>中文</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+16"/>
         <source>Output language</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+32"/>
         <source>Provider settings</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+16"/>
         <location line="+171"/>
         <source>Add provider</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="-111"/>
@@ -703,62 +703,62 @@
     <message>
         <location line="+33"/>
         <source>In use</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+0"/>
         <source>Use</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+12"/>
         <source>Edit</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+23"/>
         <source>No provider profiles</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+9"/>
         <source>Use the + button above to create one.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+43"/>
         <source>Choose a template to create a profile from.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+97"/>
         <source>Provider</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+30"/>
         <source>OpenAI OAuth</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Use Codex Login</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Open Login</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+4"/>
         <source>This build does not include Codex login launch. Run `codex login` manually.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+9"/>
         <source>Codex login started. Complete the browser flow; models will load when login finishes.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+9"/>
@@ -768,37 +768,37 @@
     <message>
         <location line="+5"/>
         <source>Codex OAuth disconnected</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Codex OAuth connected</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>No Codex OAuth credential imported</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+15"/>
         <source>API key</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Paste API key</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+13"/>
         <source>Save Key</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+6"/>
         <source>API key saved</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+6"/>
@@ -808,7 +808,7 @@
     <message>
         <location line="+5"/>
         <source>API key deleted</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+8"/>
@@ -823,97 +823,97 @@
     <message>
         <location line="+13"/>
         <source>Model</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+17"/>
         <source>Search models</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>No matching models</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+22"/>
         <source>Test &amp; Refresh</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+27"/>
         <source>Advanced</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+11"/>
         <source>Display name</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Provider id</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Driver</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Base URL</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Endpoint</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Models endpoint</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Models response data pointer</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Auth type</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Credential slot</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Structured output</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Timeout ms</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Max image bytes</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Recommended rendition</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+12"/>
         <source>Duplicate</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+13"/>
@@ -940,6 +940,26 @@
         <location line="+11"/>
         <source>Cancel</source>
         <translation type="unfinished">Cancel</translation>
+    </message>
+    <message>
+        <source>Advanced Content Analysis is removed from this version. The next version also removes this page. Delete your saved API keys and the Codex login now. After that, Alcedo Studio can no longer delete them for you.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No saved keys</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete All Saved Keys</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete every saved API key and the Codex login? The provider profiles stay in the list.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Delete All</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -1457,7 +1477,7 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location line="+212"/>
         <source>Select at least one image to analyze.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <source>Supported images (%1)</source>
@@ -1469,7 +1489,7 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location filename="../qml/BackgroundTaskBar.qml" line="+65"/>
         <source>AI Analysis</source>
-        <translation type="unfinished">AI Analysis</translation>
+        <translation type="obsolete">AI Analysis</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -1543,7 +1563,7 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location line="+12"/>
         <source>AI Analysis</source>
-        <translation type="unfinished">AI Analysis</translation>
+        <translation type="obsolete">AI Analysis</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -1613,7 +1633,7 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location line="+170"/>
         <source>Details</source>
-        <translation type="unfinished">Details</translation>
+        <translation type="obsolete">Details</translation>
     </message>
     <message>
         <location line="+40"/>
@@ -1776,7 +1796,7 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location line="+5"/>
         <source>Advanced Content Analysis</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+5"/>
@@ -1801,12 +1821,12 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location line="+87"/>
         <source>Open a project before running remote analysis.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Select one or more images for remote analysis.</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="+10"/>
@@ -5196,6 +5216,13 @@ Create a new layer above it and draw the Mask there?</source>
     </message>
 </context>
 <context>
+    <name>SavedAiKeysReminder</name>
+    <message>
+        <source>Alcedo Studio still holds AI keys that you saved for Advanced Content Analysis, which this version removes. Delete them in Settings &gt; Saved AI Keys.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>SearchComboBox</name>
     <message>
         <location filename="../qml/util/SearchComboBox.qml" line="+14"/>
@@ -5518,7 +5545,7 @@ Create a new layer above it and draw the Mask there?</source>
         <location line="-200"/>
         <location line="+201"/>
         <source>Advanced Content Analysis</source>
-        <translation type="unfinished"></translation>
+        <translation type="obsolete"></translation>
     </message>
     <message>
         <location line="-190"/>
@@ -5636,6 +5663,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <source>The default adjustment node applies Alcedo&apos;s default adjustments, so it is locked. A Mask drawn on it also limits those defaults to the masked area. Layers you add yourself are not locked and are never affected by this setting.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Saved AI Keys</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

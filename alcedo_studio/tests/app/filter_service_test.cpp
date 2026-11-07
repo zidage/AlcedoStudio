@@ -134,7 +134,7 @@ void StoreAiRating(ProjectService& project, sl_element_id_t file_id, const std::
 }
 
 // Phase 7a: persist a rating's *reasons* only (rating = 0 sentinel) through the new
-// UpsertRatingReasons path — the path AlbumImageAnalysisSink uses. The reasons must still
+// UpsertRatingReasons path, which earlier analysis runs used. The reasons must still
 // be excluded from full-text search.
 void StoreAiRatingReasons(ProjectService& project, sl_element_id_t file_id,
                           const std::string& task_id, const std::string& reasons) {
@@ -799,7 +799,7 @@ TEST_F(FilterServiceTests, AiRatingReasonsAreNotInFullScreenSearch) {
 }
 
 // Phase 7a: the reasons-only path (UpsertRatingReasons, rating = 0 sentinel — the path
-// AlbumImageAnalysisSink uses) still keeps rating reasons out of full-text search. A
+// that earlier analysis runs used) still keeps rating reasons out of full-text search. A
 // distinctive word that appears only in the reasons must not be searchable.
 TEST_F(FilterServiceTests, AiRatingReasonsOnlyRowIsNotInFullScreenSearch) {
   ProjectService project(db_path_, meta_path_);

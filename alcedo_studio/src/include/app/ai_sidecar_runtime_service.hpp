@@ -58,12 +58,11 @@ struct AiSidecarRuntimeStatusSnapshot {
 struct AiSidecarRuntimeOptions {
   std::filesystem::path     runtime_binary;
   std::filesystem::path     model_root;
-  std::filesystem::path     provider_config_dir;
   std::string               host     = "127.0.0.1";
   uint16_t                  port     = 0;
   /// The CLIP model of the open project's active model. Empty starts the sidecar without
-  /// `--model-id`: semantic requests then report that no model is active, and segmentation and
-  /// image analysis run (AI Models plan, P10).
+  /// `--model-id`: semantic requests then report that no model is active, and segmentation
+  /// runs (AI Models plan, P10).
   std::string                         model_id;
   std::string               revision;
   std::string               hf_endpoint        = "https://hf-mirror.com";
@@ -138,13 +137,6 @@ class AiSidecarRuntimeService final : public QObject {
    */
   void               SetIdleStopDelay(std::chrono::milliseconds delay);
   auto               IdleStopDelay() const -> std::chrono::milliseconds { return idle_stop_delay_; }
-  /**
-   * @brief Records that the provider configs changed after the running process read them.
-   *
-   * The next start request made while no lease other than the caller's own is held restarts
-   * the process, so the new process reads the new configs. Runs on the owner thread.
-   */
-  void               MarkProviderConfigsChanged();
 
   auto               Status() -> AiSidecarRuntimeStatusSnapshot;
   auto               Options() const -> const AiSidecarRuntimeOptions& { return options_; }
@@ -200,9 +192,8 @@ class AiSidecarRuntimeService final : public QObject {
   std::chrono::milliseconds               idle_stop_delay_{0};
   QTimer                                  idle_stop_timer_;
   QTimer                                  idle_stop_kill_timer_;
-  bool                                    idle_stop_pending_        = false;
-  bool                                    idle_stop_kill_sent_      = false;
-  bool                                    provider_configs_changed_ = false;
+  bool                                    idle_stop_pending_   = false;
+  bool                                    idle_stop_kill_sent_ = false;
   // Interactive-boot state. `interactive_starting_` is set for the duration of
   // a StartAndWaitInteractive boot so IsStartingInteractive() can report it;
   // `cancel_start_requested_` is the cancel flag checkpointed each poll.

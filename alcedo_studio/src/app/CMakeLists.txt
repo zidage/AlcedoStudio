@@ -242,8 +242,6 @@ set(ALCEDO_SEMANTIC_PROTO_HDRS
 # both generated command dependencies and the semantic target.
 set(ALCEDO_AI_PROTO_DIR "${ALCEDO_SEMANTIC_PROTO_DIR}")
 set(ALCEDO_AI_COMMON_PROTO "${ALCEDO_AI_PROTO_DIR}/ai_common.proto")
-set(ALCEDO_AI_RUNTIME_PROTO "${ALCEDO_AI_PROTO_DIR}/ai_runtime.proto")
-set(ALCEDO_AI_IMAGE_ANALYSIS_PROTO "${ALCEDO_AI_PROTO_DIR}/image_analysis.proto")
 set(ALCEDO_AI_SEGMENTATION_PROTO "${ALCEDO_AI_PROTO_DIR}/segmentation.proto")
 set(ALCEDO_AI_PROTO_GEN_DIR "${ALCEDO_BINARY_ROOT}/generated/ai")
 
@@ -278,44 +276,6 @@ add_custom_command(
 
 add_custom_command(
     OUTPUT
-        "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.pb.cc"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.pb.h"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.grpc.pb.h"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.grpc.pb.cc"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_AI_PROTO_GEN_DIR}"
-    COMMAND ${PUERHLAB_PROTOC_EXECUTABLE}
-        --proto_path=${ALCEDO_AI_PROTO_DIR}
-        --cpp_out=${ALCEDO_AI_PROTO_GEN_DIR}
-        --grpc_out=${ALCEDO_AI_PROTO_GEN_DIR}
-        --plugin=protoc-gen-grpc=${PUERHLAB_GRPC_CPP_PLUGIN_EXECUTABLE}
-        "${ALCEDO_AI_RUNTIME_PROTO}"
-    DEPENDS
-        "${ALCEDO_AI_RUNTIME_PROTO}"
-        "${ALCEDO_AI_COMMON_PROTO}"
-    VERBATIM
-)
-
-add_custom_command(
-    OUTPUT
-        "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.pb.cc"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.pb.h"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.grpc.pb.h"
-        "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.grpc.pb.cc"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_AI_PROTO_GEN_DIR}"
-    COMMAND ${PUERHLAB_PROTOC_EXECUTABLE}
-        --proto_path=${ALCEDO_AI_PROTO_DIR}
-        --cpp_out=${ALCEDO_AI_PROTO_GEN_DIR}
-        --grpc_out=${ALCEDO_AI_PROTO_GEN_DIR}
-        --plugin=protoc-gen-grpc=${PUERHLAB_GRPC_CPP_PLUGIN_EXECUTABLE}
-        "${ALCEDO_AI_IMAGE_ANALYSIS_PROTO}"
-    DEPENDS
-        "${ALCEDO_AI_IMAGE_ANALYSIS_PROTO}"
-        "${ALCEDO_AI_COMMON_PROTO}"
-    VERBATIM
-)
-
-add_custom_command(
-    OUTPUT
         "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.pb.cc"
         "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.pb.h"
         "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.grpc.pb.h"
@@ -335,19 +295,11 @@ add_custom_command(
 
 set(ALCEDO_AI_PROTO_SRCS
     "${ALCEDO_AI_PROTO_GEN_DIR}/ai_common.pb.cc"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.pb.cc"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.grpc.pb.cc"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.pb.cc"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.grpc.pb.cc"
     "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.pb.cc"
     "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.grpc.pb.cc"
 )
 set(ALCEDO_AI_PROTO_HDRS
     "${ALCEDO_AI_PROTO_GEN_DIR}/ai_common.pb.h"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.pb.h"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/ai_runtime.grpc.pb.h"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.pb.h"
-    "${ALCEDO_AI_PROTO_GEN_DIR}/image_analysis.grpc.pb.h"
     "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.pb.h"
     "${ALCEDO_AI_PROTO_GEN_DIR}/segmentation.grpc.pb.h"
 )
@@ -788,21 +740,6 @@ def_library(SemanticGenerationService
         "${ALCEDO_INCLUDE_ROOT}/app/semantic_generation_service.hpp"
         "${ALCEDO_INCLUDE_ROOT}/storage/store/semantic/semantic_label_config.hpp"
     PUBLIC_DEPS AiSidecarRuntimeService ThumbnailService Storage opencv_core opencv_imgproc
-    PRIVATE_DEPS AppDiagnostics
-)
-
-def_library(ImageAnalysisEncoder
-    SOURCES
-        "${ALCEDO_APP_ROOT}/image_analysis_encoder.cpp"
-        "${ALCEDO_INCLUDE_ROOT}/app/image_analysis_encoder.hpp"
-    PUBLIC_DEPS ThumbnailService ImageBuffer OpenImageIO::OpenImageIO opencv_core opencv_imgproc
-)
-
-def_library(ImageAnalysisService
-    SOURCES
-        "${ALCEDO_APP_ROOT}/image_analysis_service.cpp"
-        "${ALCEDO_INCLUDE_ROOT}/app/image_analysis_service.hpp"
-    PUBLIC_DEPS AiSidecarRuntimeService AiCredentialStore ThumbnailService ImageAnalysisEncoder ImageBuffer
     PRIVATE_DEPS AppDiagnostics
 )
 

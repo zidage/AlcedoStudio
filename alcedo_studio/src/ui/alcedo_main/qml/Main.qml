@@ -411,6 +411,13 @@ ApplicationWindow {
         projectLaunchController.welcomeDialog = appDialogs.welcomeDialog
         projectLaunchController.start()
         root.collectionsWorkspaceObservationReady = true
+        Qt.callLater(savedAiKeysReminder.showIfSavedKeys)
+    }
+
+    SavedAiKeysReminder {
+        id: savedAiKeysReminder
+        host: root
+        profileController: appModules.aiProviderProfiles
     }
 
 
@@ -428,10 +435,6 @@ ApplicationWindow {
 
     function openSettingsDialog(category) {
         appDialogs.openSettingsDialog(category)
-    }
-
-    function openAdvancedAnalysisDialog() {
-        appDialogs.openAdvancedAnalysisDialog()
     }
 
     function openBackgroundTasksDialog() {
@@ -622,11 +625,9 @@ ApplicationWindow {
                 theme: root
                 host: root
                 backendInteractive: root.backendInteractive
-                selectedCount: root.selectedCount
                 onImportRequested: root.importDialog.open()
                 onImportFromFolderRequested: root.importFolderDialog.open()
                 onSearchRequested: root.globalSearchDialog.openFromCollection()
-                onAdvancedAnalysisRequested: root.openAdvancedAnalysisDialog()
                 onBackgroundTasksRequested: root.openBackgroundTasksDialog()
 
                 Behavior on width {

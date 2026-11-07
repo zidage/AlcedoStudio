@@ -88,11 +88,6 @@ Dialog {
             cachePanel.refreshStats()
         } else if (currentCategory === 3) {
             appModules.semanticGeneration.RefreshAlbumSummary()
-        } else if (currentCategory === 4) {
-            // Refresh credential/configured state when the Advanced Content
-            // Analysis page is shown, so the API-key label and model box reflect
-            // any changes made since the last visit.
-            appModules.imageAnalysis.RefreshCredentialState()
         } else if (currentCategory === aiModelsCategory) {
             showAiModelsPage()
         }
@@ -160,7 +155,7 @@ Dialog {
             return qsTr("Local Content Recognition")
         }
         if (currentCategory === 4) {
-            return qsTr("Advanced Content Analysis")
+            return qsTr("Saved AI Keys")
         }
         if (currentCategory === 5) {
             return qsTr("Acceleration")
@@ -396,7 +391,7 @@ Dialog {
                                         { label: qsTr("Default Behavior"), icon: "qrc:/panel_icons/zero-config.svg" },
                                         { label: qsTr("Cache"), icon: "qrc:/panel_icons/box.svg" },
                                         { label: qsTr("Local Content Recognition"), icon: "qrc:/panel_icons/search.svg" },
-                                        { label: qsTr("Advanced Content Analysis"), icon: "qrc:/panel_icons/flask.svg" },
+                                        { label: qsTr("Saved AI Keys"), icon: "qrc:/panel_icons/flask.svg" },
                                         { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
                                         { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
                                         { label: qsTr("Keyboard"), icon: "qrc:/panel_icons/keyboard.svg" },
@@ -758,20 +753,14 @@ Dialog {
                             Layout.fillHeight: true
                             width: parent ? parent.width : 0
                             profileController: appModules.aiProviderProfiles
-                            analysisController: appModules.imageAnalysis
-                            interactionPolicy: appModules.interactionPolicy
                             backgroundSource: dialog.blurSource
                             primaryAccent: dialog.primaryAccent
                             secondaryAccent: dialog.secondaryAccent
                             textColor: dialog.textColor
                             mutedTextColor: dialog.mutedTextColor
-                            canvasColor: dialog.canvasColor
                             dividerColor: dialog.dividerColor
                             dangerColor: dialog.dangerColor
                             dataFontFamily: dialog.dataFontFamily
-                            onMessageRequested: function(message) {
-                                dialog.messageRequested(message)
-                            }
                         }
 
                         ScrollView {

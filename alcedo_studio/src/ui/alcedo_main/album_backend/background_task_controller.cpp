@@ -298,8 +298,6 @@ auto BackgroundTaskController::ToVariantMap(const TaskRecord& record) -> QVarian
 
 auto BackgroundTaskController::KindToString(BackgroundTaskKind kind) -> QString {
   switch (kind) {
-    case BackgroundTaskKind::ImageAnalysis:
-      return QStringLiteral("imageAnalysis");
     case BackgroundTaskKind::SemanticGeneration:
       return QStringLiteral("semanticGeneration");
     case BackgroundTaskKind::ModelDownload:
@@ -363,12 +361,6 @@ auto BackgroundTaskController::CapabilityToString(InteractionCapability capabili
       return QStringLiteral("editImageRating");
     case InteractionCapability::EditImageRatingReason:
       return QStringLiteral("editImageRatingReason");
-    case InteractionCapability::RunImageAnalysis:
-      return QStringLiteral("runImageAnalysis");
-    case InteractionCapability::CommitImageAnalysisResults:
-      return QStringLiteral("commitImageAnalysisResults");
-    case InteractionCapability::ChangeImageAnalysisProvider:
-      return QStringLiteral("changeImageAnalysisProvider");
     case InteractionCapability::ChangeSemanticModel:
       return QStringLiteral("changeSemanticModel");
     case InteractionCapability::RunSemanticGeneration:

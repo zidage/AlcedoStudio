@@ -12,7 +12,6 @@ ColumnLayout {
     property var theme
     property var host: null
     property bool backendInteractive: false
-    property int selectedCount: 0
     property var folderRows: []
     property bool sortDescending: false
     property bool draftCollectionVisible: false
@@ -24,11 +23,6 @@ ColumnLayout {
             iconSource: "qrc:/panel_icons/search.svg"
         },
         {
-            tabId: "advanced-analysis",
-            label: qsTr("Advanced Content Analysis"),
-            iconSource: "qrc:/panel_icons/flask.svg"
-        },
-        {
             tabId: "background-tasks",
             label: qsTr("Background Tasks"),
             iconSource: "qrc:/panel_icons/clock-play.svg"
@@ -37,7 +31,6 @@ ColumnLayout {
     signal importRequested()
     signal importFromFolderRequested()
     signal searchRequested()
-    signal advancedAnalysisRequested()
     signal backgroundTasksRequested()
 
     function withAlpha(colorValue, alphaValue) {
@@ -219,10 +212,7 @@ ColumnLayout {
                         Layout.preferredHeight: Math.max(32, utilityTabRow.implicitHeight
                                                          + appTheme.spaceXs)
                         radius: 8
-                        opacity: actionEnabled ? 1.0 : 0.48
-                        readonly property bool actionEnabled: modelData.tabId !== "advanced-analysis"
-                                                               || (panel.backendInteractive && panel.selectedCount > 0)
-                        color: utilityMouse.pressed && actionEnabled
+                        color: utilityMouse.pressed
                                ? panel.withAlpha(theme.colHover, 0.34)
                                : (utilityMouse.containsMouse
                                   ? panel.withAlpha(theme.colHover, 0.24)
@@ -239,7 +229,6 @@ ColumnLayout {
                                 Layout.preferredWidth: 17
                                 Layout.preferredHeight: 17
                                 source: modelData.iconSource
-                                opacity: utilityTab.actionEnabled ? 1.0 : 0.62
                                 sourceSize.width: 17
                                 sourceSize.height: 17
                                 fillMode: Image.PreserveAspectFit
@@ -250,7 +239,7 @@ ColumnLayout {
                             Label {
                                 Layout.fillWidth: true
                                 text: modelData.label
-                                color: panel.withAlpha(theme.colText, utilityTab.actionEnabled ? 0.92 : 0.58)
+                                color: panel.withAlpha(theme.colText, 0.92)
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: 13
                                 font.weight: 600
@@ -263,28 +252,16 @@ ColumnLayout {
                             id: utilityMouse
                             anchors.fill: parent
                             hoverEnabled: true
-                            cursorShape: utilityTab.actionEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                if (!utilityTab.actionEnabled) {
-                                    return
-                                }
                                 panel.activeUtilityTab = modelData.tabId
                                 if (modelData.tabId === "search") {
                                     panel.searchRequested()
-                                } else if (modelData.tabId === "advanced-analysis") {
-                                    panel.advancedAnalysisRequested()
                                 } else if (modelData.tabId === "background-tasks") {
                                     panel.backgroundTasksRequested()
                                 }
                             }
                         }
-
-                        ToolTip.visible: utilityMouse.containsMouse
-                                     && modelData.tabId === "advanced-analysis"
-                                     && (!panel.backendInteractive || panel.selectedCount <= 0)
-                        ToolTip.text: !panel.backendInteractive
-                                      ? qsTr("Open a project before running remote analysis.")
-                                      : qsTr("Select one or more images for remote analysis.")
                     }
                 }
             }

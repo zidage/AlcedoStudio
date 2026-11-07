@@ -80,8 +80,9 @@ TEST_F(ApplicationModuleHostLifecycleTests,
   // The AI model directory is read through ModelDownloadController (AI Models plan, P7).
   EXPECT_LT(index_of("ModelDownloadController"), index_of("AiModelPackageService"));
   EXPECT_LT(index_of("AiModelPackageService"), index_of("AiModelDownloadTaskPublisher"));
-  EXPECT_LT(index_of("ProjectDbWriteBarrier"), index_of("ImageAnalysisSink"));
-  EXPECT_LT(index_of("ImageAnalysisSink"), index_of("ImageAnalysisController"));
+  // Advanced Content Analysis is removed (issue #710).
+  EXPECT_EQ(index_of("ImageAnalysisController"), -1);
+  EXPECT_EQ(index_of("ImageAnalysisSink"), -1);
   EXPECT_LT(index_of("ImportExportHandler"), index_of("NikonHeRecoveryController"));
   EXPECT_LT(index_of("ImportExportHandler"), index_of("AdjustmentTransferController"));
 
@@ -111,7 +112,6 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     EXPECT_EQ(host.project()->lut_resources(), host.lut_library()->Resources());
     EXPECT_NE(host.semantic_generation(), nullptr);
     EXPECT_NE(host.ai_provider_profiles(), nullptr);
-    EXPECT_NE(host.image_analysis(), nullptr);
     EXPECT_NE(host.adjustment_transfer(), nullptr);
     EXPECT_NE(host.editor_session(), nullptr);
     EXPECT_NE(host.editor_comparison(), nullptr);
@@ -147,7 +147,6 @@ TEST_F(ApplicationModuleHostLifecycleTests,
         {"lutPreview", "alcedo::ui::LutPreviewController*"},
         {"semanticGeneration", "alcedo::ui::SemanticGenerationController*"},
         {"aiProviderProfiles", "alcedo::AiProviderProfileController*"},
-        {"imageAnalysis", "alcedo::ui::ImageAnalysisController*"},
         {"adjustmentTransfer", "alcedo::ui::AdjustmentTransferController*"},
         {"workspaceRouter", "alcedo::ui::WorkspaceRouter*"},
         {"editorSession", "alcedo::ui::EditorSessionController*"},
@@ -164,6 +163,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
       ASSERT_GE(index, 0) << name;
       EXPECT_STREQ(meta->property(index).typeName(), type_name) << name;
     }
+    EXPECT_LT(meta->indexOfProperty("imageAnalysis"), 0);
   }
 }
 
@@ -175,14 +175,13 @@ TEST_F(ApplicationModuleHostLifecycleTests, ModulesCanBeConstructedWithoutTheCom
     void ScheduleIdleTaskStateReset(int) override {}
   } status;
 
-  ProjectDbWriteBarrier barrier;
-  ProjectModule         project;
-  LibraryModule         library(nullptr);
-  FolderController      folders(nullptr, nullptr, &status);
-  ImageController       images(nullptr, nullptr, nullptr, &status);
-  StatsEngine           stats(nullptr, nullptr, nullptr);
-  SearchController      search(nullptr, nullptr, nullptr, nullptr);
-  ImportExportHandler   import_export(nullptr, nullptr, nullptr, &status, &barrier);
+  ProjectModule       project;
+  LibraryModule       library(nullptr);
+  FolderController    folders(nullptr, nullptr, &status);
+  ImageController     images(nullptr, nullptr, nullptr, &status);
+  StatsEngine         stats(nullptr, nullptr, nullptr);
+  SearchController    search(nullptr, nullptr, nullptr, nullptr);
+  ImportExportHandler import_export(nullptr, nullptr, nullptr, &status);
 
   EXPECT_EQ(project.parent(), nullptr);
   EXPECT_EQ(library.parent(), nullptr);

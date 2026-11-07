@@ -47,8 +47,6 @@ void RegisterApplicationModuleTypes() {
       "Alcedo.Main", 1, 0, "SemanticGenerationController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<alcedo::AiProviderProfileController>(
       "Alcedo.Main", 1, 0, "AiProviderProfileController", "Owned by ApplicationModuleHost");
-  qmlRegisterUncreatableType<ImageAnalysisController>(
-      "Alcedo.Main", 1, 0, "ImageAnalysisController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<AdjustmentTransferController>(
       "Alcedo.Main", 1, 0, "AdjustmentTransferController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<AdjustmentTransferDialogModel>(

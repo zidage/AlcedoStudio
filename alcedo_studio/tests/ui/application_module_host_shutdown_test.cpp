@@ -96,13 +96,13 @@ auto RunningTask(BackgroundTaskKind kind, bool cancelable,
 }
 
 TEST_F(ApplicationModuleHostShutdownTests,
-       ShutdownCancelsAndWaitsForImageAnalysisSemanticAndModelTasks) {
+       ShutdownCancelsAndWaitsForSemanticAndModelTasks) {
   ApplicationModuleHost host;
   auto*                 tasks = host.background_tasks();
   ASSERT_NE(tasks, nullptr);
 
-  const std::array kinds = {BackgroundTaskKind::ImageAnalysis,
-                            BackgroundTaskKind::SemanticGeneration,
+  const std::array kinds = {BackgroundTaskKind::SemanticGeneration,
+                            BackgroundTaskKind::ModelActivation,
                             BackgroundTaskKind::ModelDownload};
   for (const auto kind : kinds) {
     const auto id = std::make_shared<QString>();
@@ -119,34 +119,22 @@ TEST_F(ApplicationModuleHostShutdownTests,
   EXPECT_EQ(tasks->RunningCount(), 0);
 }
 
-TEST_F(ApplicationModuleHostShutdownTests,
-       ShutdownWaitsForExportBarrierAndDrainsAnalysisCompletion) {
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownWaitsForRunningExportToFinish) {
   ApplicationModuleHost host;
   auto*                 tasks = host.background_tasks();
-  auto*                 sink  = host.image_analysis_sink();
   ASSERT_NE(tasks, nullptr);
-  ASSERT_NE(sink, nullptr);
-
-  host.db_write_barrier().Acquire();
-  ImageAnalysisItemResult result;
-  result.item.element_id = 1;
-  ASSERT_TRUE(sink->PersistUnderstanding(result));
-  ASSERT_TRUE(sink->HasPendingWrites());
 
   const QString export_id = tasks->RegisterTask(
       RunningTask(BackgroundTaskKind::Export, false,
                   BackgroundTaskShutdownPolicy::WaitForFinish));
   ASSERT_FALSE(export_id.isEmpty());
 
-  QTimer::singleShot(0, [&host, tasks, export_id] {
-    host.db_write_barrier().Release();
+  QTimer::singleShot(0, [tasks, export_id] {
     tasks->FinishTask(export_id, BackgroundTaskState::Succeeded);
   });
 
   host.Shutdown();
   EXPECT_EQ(tasks->RunningCount(), 0);
-  EXPECT_FALSE(host.db_write_barrier().IsHeld());
-  EXPECT_FALSE(sink->HasPendingWrites());
 }
 
 // Issue 414: ShutdownModules queues the Shutdown command on the session-owner worker and returns.

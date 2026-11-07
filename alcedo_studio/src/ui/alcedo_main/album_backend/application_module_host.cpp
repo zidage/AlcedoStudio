@@ -282,24 +282,11 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("AiProviderProfileController", ai_provider_profiles_.get());
   semantic_generation_ = std::make_unique<SemanticGenerationController>(
       project_.get(), library_.get(), model_download_.get(), background_tasks_.get(),
-      project_.get(), ai_provider_profiles_.get(), this);
+      project_.get(), this);
   RecordConstruction("SemanticGenerationController", semantic_generation_.get());
-  image_analysis_concurrency_limit_ = std::make_shared<alcedo::ImageAnalysisConcurrencyLimit>();
-  RecordConstruction("ImageAnalysisConcurrencyLimit", image_analysis_concurrency_limit_.get());
-  db_write_barrier_ = std::make_unique<ProjectDbWriteBarrier>();
-  RecordConstruction("ProjectDbWriteBarrier", db_write_barrier_.get());
-  image_analysis_sink_ = MakeAlbumImageAnalysisSink(project_.get(), images_.get(), stats_.get(),
-                                                    db_write_barrier_.get());
-  RecordConstruction("ImageAnalysisSink", image_analysis_sink_.get());
-  image_analysis_ = std::make_unique<ImageAnalysisController>(
-      MakeAlbumImageAnalysisEnvironment(project_.get(), semantic_generation_.get(),
-                                        ai_provider_profiles_.get(),
-                                        image_analysis_concurrency_limit_),
-      ai_provider_profiles_.get(), image_analysis_sink_, background_tasks_.get());
-  RecordConstruction("ImageAnalysisController", image_analysis_.get());
   import_export_ =
       std::make_unique<ImportExportHandler>(project_.get(), library_.get(), folders_.get(),
-                                            project_.get(), db_write_barrier_.get(), this);
+                                            project_.get(), this);
   RecordConstruction("ImportExportHandler", import_export_.get());
   import_export_->SetInteractionPolicy(interaction_policy_.get());
   export_queue_ = std::make_unique<ExportQueue>(project_.get(), import_export_.get(), this);
@@ -718,12 +705,6 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
   };
   project_->SetLifecycleHooks(std::move(lifecycle_hooks));
-
-  db_write_barrier_->SetOnRelease([this] {
-    if (image_analysis_sink_) {
-      image_analysis_sink_->FlushPendingWrites();
-    }
-  });
 }
 
 void ApplicationModuleHost::ShutdownModules() {
@@ -786,14 +767,10 @@ void ApplicationModuleHost::ShutdownModules() {
     }
 
     // Deliver cancellation/finalization callbacks while every module is still
-    // alive. Export is a wait-for-finish task; its completion releases the DB
-    // barrier and the installed callback drains analysis results immediately.
+    // alive. Export is a wait-for-finish task.
     const QDeadlineTimer deadline(15000);
     while (!IsIdle() && !deadline.hasExpired()) {
       QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
-    }
-    if (image_analysis_sink_ && (!db_write_barrier_ || !db_write_barrier_->IsHeld())) {
-      image_analysis_sink_->FlushPendingWrites();
     }
     // The runtime workspace is removed in the destructor, after ProjectModule closes the
     // project database (RemovePendingWorkspace).
@@ -828,11 +805,6 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     pointer.reset();
     RecordDestruction(type_name, object);
   };
-  auto destroy_shared = [this](auto& pointer, const char* type_name) {
-    const void* object = pointer.get();
-    pointer.reset();
-    RecordDestruction(type_name, object);
-  };
   destroy(library_mutations_, "LibraryMutationOperations");
   destroy(application_close_, "ApplicationCloseCoordinator");
   destroy(project_launch_, "ProjectLaunchCoordinator");
@@ -859,10 +831,6 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(export_recipe_, "ExportRecipeBuilder");
   destroy(export_queue_, "ExportQueue");
   destroy(import_export_, "ImportExportHandler");
-  destroy(image_analysis_, "ImageAnalysisController");
-  destroy_shared(image_analysis_sink_, "ImageAnalysisSink");
-  destroy(db_write_barrier_, "ProjectDbWriteBarrier");
-  destroy_shared(image_analysis_concurrency_limit_, "ImageAnalysisConcurrencyLimit");
   destroy(semantic_generation_, "SemanticGenerationController");
   destroy(ai_provider_profiles_, "AiProviderProfileController");
   destroy(ai_model_download_tasks_, "AiModelDownloadTaskPublisher");

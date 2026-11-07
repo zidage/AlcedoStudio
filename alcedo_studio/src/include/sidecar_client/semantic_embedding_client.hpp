@@ -17,6 +17,10 @@ class SemanticEmbeddingClient {
  public:
   virtual ~SemanticEmbeddingClient() = default;
 
+  virtual auto Ping(std::chrono::milliseconds timeout, std::string* error) -> bool = 0;
+  virtual auto GetRuntimeStatus(std::chrono::milliseconds timeout,
+                                AiSidecarRuntimeRemoteStatus* status, std::string* error)
+      -> bool = 0;
   virtual auto GetModelInfo(std::chrono::milliseconds timeout, AiSidecarRuntimeModelInfo* info,
                             std::string* error) -> bool = 0;
   virtual auto EmbedText(const std::string& request_id, const std::string& text,

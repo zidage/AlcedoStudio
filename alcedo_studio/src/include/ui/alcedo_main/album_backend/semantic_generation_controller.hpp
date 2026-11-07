@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "app/ai_provider_profile.hpp"
 #include "app/model_asset_catalog.hpp"
 #include "app/semantic_generation_service.hpp"
 #include "sleeve/storage.hpp"
@@ -62,7 +61,6 @@ class SemanticGenerationController final : public QObject {
   SemanticGenerationController(ProjectModule* project, LibraryModule* library,
                                ModelDownloadController* model_download,
                                BackgroundTaskController* background_tasks, IUiStatusSink* status,
-                               alcedo::AiProviderProfileController* ai_profiles,
                                QObject* parent = nullptr);
 
   void BindCollaborators(NikonHeRecoveryController* nikon);
@@ -161,7 +159,6 @@ class SemanticGenerationController final : public QObject {
   ModelDownloadController*                  model_download_   = nullptr;
   BackgroundTaskController*                 background_tasks_ = nullptr;
   IUiStatusSink*                            status_           = nullptr;
-  alcedo::AiProviderProfileController*      ai_profiles_      = nullptr;
   NikonHeRecoveryController*                nikon_            = nullptr;
   std::vector<SemanticGenerationItem>    pending_items_{};
   std::shared_ptr<SemanticGenerationJob> job_{};

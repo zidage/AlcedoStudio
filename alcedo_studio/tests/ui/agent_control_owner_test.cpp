@@ -308,7 +308,7 @@ TEST(AgentControlOwnerTest, ReleaseFinishesAgentTaskAsSucceeded) {
   const QVariantMap task = FindTask(tasks, task_id);
   EXPECT_EQ(task.value(QStringLiteral("state")).toString(), QStringLiteral("succeeded"));
   EXPECT_TRUE(policy.CanChangeStateAsUser());
-  EXPECT_EQ(tasks.ActiveCountExcept(BackgroundTaskKind::ImageAnalysis), 0);
+  EXPECT_EQ(tasks.ActiveCountExcept(BackgroundTaskKind::SemanticGeneration), 0);
 
   // A released agent can acquire again at once.
   EXPECT_EQ(control.TryAcquire(QStringLiteral("agent")), AgentControlRefusal::None);

@@ -15,11 +15,8 @@
 
 namespace alcedo::ui {
 
-/// Kind of a background task surfaced to the UI. `ModelActivation`, `Import`,
-/// and `Export` are declared for completeness; Phase 1 only registers
-/// `ImageAnalysis`, `SemanticGeneration`, and `ModelDownload`.
+/// Kind of a background task surfaced to the UI.
 enum class BackgroundTaskKind {
-  ImageAnalysis,
   SemanticGeneration,
   ModelDownload,
   ModelActivation,
@@ -63,9 +60,6 @@ enum class InteractionCapability {
   EditImageDescription,
   EditImageRating,
   EditImageRatingReason,
-  RunImageAnalysis,
-  CommitImageAnalysisResults,
-  ChangeImageAnalysisProvider,
   ChangeSemanticModel,
   RunSemanticGeneration,
   ChangeModelDownloadSettings,
@@ -103,7 +97,7 @@ struct ActiveLock {
 /// registry by id.
 struct BackgroundTaskSnapshot {
   QString                      id_;
-  BackgroundTaskKind           kind_            = BackgroundTaskKind::ImageAnalysis;
+  BackgroundTaskKind           kind_            = BackgroundTaskKind::SemanticGeneration;
   BackgroundTaskState          state_           = BackgroundTaskState::Queued;
   QString                      title_;
   QString                      detail_;
@@ -125,8 +119,8 @@ enum class BackgroundTaskActivityState {
   Failed,
 };
 
-/// UI-facing registry of long-running background tasks (advanced image
-/// analysis, semantic generation, model download, ...). Owning controllers
+/// UI-facing registry of long-running background tasks (semantic generation,
+/// model download, export, ...). Owning controllers
 /// keep their existing service jobs and PUSH snapshots/progress into this
 /// registry; QML reads `tasks` / `primaryTask` / `runningCount` and cancels
 /// via `CancelTask`.
@@ -135,8 +129,7 @@ enum class BackgroundTaskActivityState {
 /// interaction locks are published (those land in Phase 2). The controller is
 /// a standalone QObject with no host dependency so it is unit-testable in
 /// isolation; owning controllers receive it via narrow constructor injection
-/// (`ImageAnalysisController`, `SemanticGenerationController`,
-/// `ModelDownloadController`).
+/// (`SemanticGenerationController`, `ModelDownloadController`).
 ///
 /// All register/update/finish/cancel calls happen on the UI thread
 /// (controller progress callbacks hop back via

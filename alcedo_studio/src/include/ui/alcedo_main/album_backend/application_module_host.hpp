@@ -16,7 +16,6 @@ class QQmlEngine;
 #include "app/ai_provider_profile.hpp"
 #include "app/download_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
-#include "app/image_analysis_service.hpp"
 #include "app/lut_library_service.hpp"
 #include "app/lut_package_service.hpp"
 #include "app/model_download_service.hpp"
@@ -34,8 +33,6 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/export_queue.hpp"
 #include "ui/alcedo_main/album_backend/export_recipe_builder.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
-#include "ui/alcedo_main/album_backend/image_analysis_controller.hpp"
-#include "ui/alcedo_main/album_backend/image_analysis_sink.hpp"
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
@@ -46,7 +43,6 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/lut_preview_controller.hpp"
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
-#include "ui/alcedo_main/album_backend/project_db_write_barrier.hpp"
 #include "ui/alcedo_main/album_backend/project_launch_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
@@ -88,7 +84,6 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(SemanticGenerationController* semanticGeneration READ semantic_generation CONSTANT)
   Q_PROPERTY(
       alcedo::AiProviderProfileController* aiProviderProfiles READ ai_provider_profiles CONSTANT)
-  Q_PROPERTY(ImageAnalysisController* imageAnalysis READ image_analysis CONSTANT)
   Q_PROPERTY(AdjustmentTransferController* adjustmentTransfer READ adjustment_transfer CONSTANT)
   Q_PROPERTY(EditorSessionController* editorSession READ editor_session CONSTANT)
   /// The editor comparison of the open image (Compare actions, panel, and view).
@@ -166,17 +161,8 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto ai_provider_profiles() -> alcedo::AiProviderProfileController* {
     return ai_provider_profiles_.get();
   }
-  [[nodiscard]] auto image_analysis() -> ImageAnalysisController* { return image_analysis_.get(); }
   [[nodiscard]] auto adjustment_transfer() -> AdjustmentTransferController* {
     return adjustment_transfer_.get();
-  }
-  [[nodiscard]] auto db_write_barrier() -> ProjectDbWriteBarrier& { return *db_write_barrier_; }
-  [[nodiscard]] auto image_analysis_sink() -> IImageAnalysisSink* {
-    return image_analysis_sink_.get();
-  }
-  [[nodiscard]] auto image_analysis_concurrency_limit()
-      -> const std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit>& {
-    return image_analysis_concurrency_limit_;
   }
 
   [[nodiscard]] auto editor_session() -> EditorSessionController* { return editor_session_.get(); }
@@ -256,10 +242,6 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<AiModelDownloadTaskPublisher>        ai_model_download_tasks_;
   std::unique_ptr<alcedo::AiProviderProfileController> ai_provider_profiles_;
   std::unique_ptr<SemanticGenerationController>        semantic_generation_;
-  std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> image_analysis_concurrency_limit_;
-  std::unique_ptr<ProjectDbWriteBarrier>               db_write_barrier_;
-  std::shared_ptr<IImageAnalysisSink>                  image_analysis_sink_;
-  std::unique_ptr<ImageAnalysisController>             image_analysis_;
   std::unique_ptr<ImportExportHandler>                 import_export_;
   std::unique_ptr<ExportQueue>                         export_queue_;
   std::unique_ptr<ExportRecipeBuilder>                 export_recipe_;

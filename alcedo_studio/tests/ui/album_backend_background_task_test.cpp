@@ -16,7 +16,7 @@ namespace {
 
 using ApplicationModuleHostBackgroundTaskTests = ApplicationModuleHostTestFixture;
 
-auto MakeSnapshot(BackgroundTaskKind kind = BackgroundTaskKind::ImageAnalysis)
+auto MakeSnapshot(BackgroundTaskKind kind = BackgroundTaskKind::SemanticGeneration)
     -> BackgroundTaskSnapshot {
   BackgroundTaskSnapshot s;
   s.kind_            = kind;

@@ -23,7 +23,6 @@ Dialog {
     property var controller: null
     property Item blurSource: null
     property real cornerRadius: 0
-    signal taskDetailsRequested(var task)
 
     readonly property int taskCount: taskModel.count + agentModel.count
     readonly property int runningCount: controller ? controller.runningCount : 0
@@ -113,7 +112,6 @@ Dialog {
     }
 
     function kindLabel(kind) {
-        if (kind === "imageAnalysis") return qsTr("AI Analysis")
         if (kind === "semanticGeneration") return qsTr("Semantic Labels")
         if (kind === "modelActivation") return qsTr("Model Activation")
         if (kind === "modelDownload") return qsTr("Model Download")
@@ -358,7 +356,6 @@ Dialog {
                             readonly property bool showProgress: rowActive
                                                                  && task.progressPercent !== undefined
                                                                  && task.progressPercent >= 0
-                            readonly property bool showDetails: !!task && task.kind === "imageAnalysis"
                             readonly property bool showCancel: !!task && task.cancelable === true
                                                                && (task.state === "running"
                                                                    || task.state === "queued")
@@ -477,48 +474,7 @@ Dialog {
                                 ColumnLayout {
                                     Layout.alignment: Qt.AlignVCenter
                                     spacing: appTheme.spaceXs
-                                    visible: taskRow.showDetails || taskRow.showCancel
-
-                                    Button {
-                                        id: detailsButton
-                                        objectName: "backgroundTaskDetailsButton"
-                                        visible: taskRow.showDetails
-                                        Layout.preferredWidth: Math.max(implicitWidth,
-                                                                        appTheme.iconButtonHitSize * 2)
-                                        Layout.preferredHeight: appTheme.spaceXl + appTheme.spaceSm
-                                        text: qsTr("Details")
-                                        hoverEnabled: true
-                                        activeFocusOnTab: true
-                                        Accessible.name: text
-                                        onClicked: {
-                                            root.taskDetailsRequested(taskRow.task)
-                                            root.close()
-                                        }
-
-                                        contentItem: Label {
-                                            text: detailsButton.text
-                                            color: detailsButton.hovered
-                                                   ? appTheme.textColor : appTheme.textMutedColor
-                                            font.family: appTheme.uiFontFamily
-                                            font.pixelSize: appTheme.fontSizeCaption
-                                            font.weight: appTheme.fontWeightStrong
-                                            horizontalAlignment: Text.AlignHCenter
-                                            verticalAlignment: Text.AlignVCenter
-                                            leftPadding: appTheme.spaceSm
-                                            rightPadding: appTheme.spaceSm
-                                        }
-
-                                        background: Rectangle {
-                                            radius: appTheme.controlRadiusSmall
-                                            color: detailsButton.down
-                                                   ? appTheme.buttonPressedFillColor
-                                                   : (detailsButton.hovered
-                                                      ? appTheme.buttonHoveredFillColor
-                                                      : appTheme.bgBaseColor)
-                                            border.width: 1
-                                            border.color: appTheme.cardBorderColor
-                                        }
-                                    }
+                                    visible: taskRow.showCancel
 
                                     Button {
                                         id: cancelButton
