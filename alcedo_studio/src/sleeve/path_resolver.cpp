@@ -104,6 +104,8 @@ void PathResolver::Invalidate(const std::filesystem::path& path) {
   directory_cache_.RemoveRecord(path.wstring());
 }
 
+void PathResolver::InvalidateAll() { directory_cache_.Flush(); }
+
 auto PathResolver::ResolveForWrite(const std::filesystem::path& path)
     -> std::shared_ptr<SleeveElement> {
   std::shared_ptr<SleeveElement> current        = root_;

@@ -181,6 +181,9 @@ Item {
         id: imageContextMenuObj
         ratingEnabled: Number(host.pendingRatingTarget.imageId) > 0
         currentRating: Math.max(0, Math.min(5, Number(host.pendingRatingTarget.rating || 0)))
+        collectionRows: appModules.folders.folders ? appModules.folders.folders : []
+        currentCollectionId: Number(appModules.folders.currentFolderId)
+        addToEnabled: host.pendingDeleteTargets.length > 0
         actions: root.filmstripDiscardActions().concat([
             {
                 id: "copy-adjustments",
@@ -202,7 +205,7 @@ Item {
                 enabled: host.pendingDeleteTargets.length > 0
                           && appModules.interactionPolicy.canDeletePendingTargets
             }
-        ]).concat(root.imageActionsController.albumTargetActions())
+        ])
         onRatingRequested: function(rating) {
             imageContextMenuObj.close()
             root.imageActionsController.requestSetImageRating(rating)
@@ -226,11 +229,15 @@ Item {
             }
             if (actionId === "delete") {
                 root.imageActionsController.requestDeleteConfirmation()
-                return
             }
-            if (String(actionId).indexOf("add-to-album:") === 0) {
-                root.imageActionsController.runAddTargetsToAlbum(Number(String(actionId).split(":")[1]))
-            }
+        }
+        onExportQueueRequested: {
+            imageContextMenuObj.close()
+            root.imageActionsController.addTargetsToExportQueue()
+        }
+        onCollectionRequested: function(folderId) {
+            imageContextMenuObj.close()
+            root.imageActionsController.runAddTargetsToAlbum(folderId)
         }
     }
 

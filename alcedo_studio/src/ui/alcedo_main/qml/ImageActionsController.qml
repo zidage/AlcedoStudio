@@ -126,27 +126,6 @@ Item {
         appModules.library.SelectAllInCurrentView()
     }
 
-    function albumTargetActions() {
-        const rows = appModules.folders.folders ? appModules.folders.folders : []
-        const actions = []
-        for (let i = 0; i < rows.length; ++i) {
-            const row = rows[i]
-            if (!row) {
-                continue
-            }
-            const folderId = Number(row.folderId)
-            if (folderId === 0 || folderId === Number(appModules.folders.currentFolderId)) {
-                continue
-            }
-            actions.push({
-                id: "add-to-album:" + String(folderId),
-                label: qsTr("Add to %1").arg(row.name ? String(row.name) : qsTr("Album")),
-                enabled: root.pendingDeleteTargets.length > 0
-            })
-        }
-        return actions
-    }
-
     function openImageContextMenu(clickedItem, sceneX, sceneY, origin) {
         if (!host.backendInteractive) {
             return
@@ -202,6 +181,14 @@ Item {
                     : qsTr("Remove %1 images from this album?").arg(count)
         }
         deleteConfirmDialog.openWith(text)
+    }
+
+    // "Add to" > "Export Queue" in the image menu.
+    function addTargetsToExportQueue() {
+        if (!root.pendingDeleteTargets || root.pendingDeleteTargets.length === 0) {
+            return
+        }
+        appModules.exportQueue.AddTargets(root.pendingDeleteTargets)
     }
 
     function runAddTargetsToAlbum(targetFolderId) {

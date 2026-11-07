@@ -459,6 +459,75 @@ void FileSystem::Delete(sl_element_id_t target_id) {
   }
 }
 
+void FileSystem::RenameFolder(const std::filesystem::path& target, const file_name_t& new_name) {
+  if (IsRootPath(target)) {
+    throw std::runtime_error("Filesystem: root cannot be renamed");
+  }
+  if (new_name.empty()) {
+    throw std::runtime_error("Filesystem: folder name cannot be empty");
+  }
+  if (!resolver_.Contains(target, ElementType::FOLDER)) {
+    throw std::runtime_error("Filesystem: Renaming folder does not exist");
+  }
+
+  auto parent = std::static_pointer_cast<SleeveFolder>(resolver_.ResolveForWrite(target.parent_path()));
+  auto folder = resolver_.ResolveForWrite(target);
+  if (folder->element_name_ == new_name) {
+    return;
+  }
+  if (const auto existing = parent->GetElementIdByName(new_name);
+      existing.has_value() && existing.value() != folder->element_id_) {
+    throw std::runtime_error("Filesystem: Folder already contains an element with the new name");
+  }
+
+  // The membership edge of the parent is keyed by id, so the remove and the add cancel out in
+  // the content change sets; only the element row of the folder records the new name.
+  parent->RemoveNameFromMap(folder->element_name_);
+  folder->element_name_ = new_name;
+  parent->AddElementToMap(folder, true, false);
+  folder->SetLastModifiedTime();
+  if (folder->sync_flag_ == SyncFlag::SYNCED) {
+    folder->SetSyncFlag(SyncFlag::MODIFIED);
+  }
+  resolver_.InvalidateAll();
+}
+
+void FileSystem::MoveFolder(const std::filesystem::path& target,
+                            const std::filesystem::path& new_parent) {
+  if (IsRootPath(target)) {
+    throw std::runtime_error("Filesystem: root cannot be moved");
+  }
+  const auto source = target.lexically_normal();
+  const auto destination =
+      IsRootPath(new_parent) ? std::filesystem::path{L"/"}.lexically_normal()
+                             : new_parent.lexically_normal();
+  const auto source_end =
+      std::mismatch(source.begin(), source.end(), destination.begin(), destination.end()).first;
+  if (source_end == source.end()) {
+    throw std::runtime_error("Filesystem: A folder cannot move into itself or into its subfolder");
+  }
+  if (!resolver_.Contains(source, ElementType::FOLDER) ||
+      !resolver_.Contains(destination, ElementType::FOLDER)) {
+    throw std::runtime_error("Filesystem: Moving folder or destination folder does not exist");
+  }
+  if (source.parent_path() == destination) {
+    return;
+  }
+
+  auto old_parent =
+      std::static_pointer_cast<SleeveFolder>(resolver_.ResolveForWrite(source.parent_path()));
+  auto folder = resolver_.ResolveForWrite(source);
+  auto dest   = std::static_pointer_cast<SleeveFolder>(resolver_.ResolveForWrite(destination));
+  storage_handler_.EnsureChildrenLoaded(dest);
+  if (dest->Contains(folder->element_name_)) {
+    throw std::runtime_error("Filesystem: Destination folder already contains an element with name");
+  }
+
+  old_parent->RemoveNameFromMap(folder->element_name_);
+  dest->AddElementToMap(folder, true, false);
+  resolver_.InvalidateAll();
+}
+
 void FileSystem::Copy(std::filesystem::path from, std::filesystem::path dest) {
   // Path resolver will do the sanity check
   if (resolver_.IsSubpath(from, dest)) {

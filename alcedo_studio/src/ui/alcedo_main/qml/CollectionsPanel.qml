@@ -3,7 +3,10 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Controls.impl
 import QtQuick.Layouts
+import "CollectionTree.js" as CollectionTree
 
+// Collections sidebar: wordmark, utility tabs, and a compact file-browser tree of the
+// project collections (expand/collapse, inline create and rename, drag to move, keyboard).
 ColumnLayout {
     id: panel
     objectName: "collectionsPanel"
@@ -12,9 +15,7 @@ ColumnLayout {
     property var theme
     property var host: null
     property bool backendInteractive: false
-    property var folderRows: []
     property bool sortDescending: false
-    property bool draftCollectionVisible: false
     property string activeUtilityTab: "search"
     readonly property var utilityTabs: [
         {
@@ -33,96 +34,430 @@ ColumnLayout {
     signal searchRequested()
     signal backgroundTasksRequested()
 
+    readonly property var foldersModule: folderController
+    readonly property int currentFolderId: foldersModule ? Number(foldersModule.currentFolderId) : 0
+
+    // Display rows in tree order (CollectionTree.orderRows), plus one draft row while a new
+    // collection is named. Every row stays in the model; a collapsed branch hides its rows.
+    property var folderRows: []
+    // elementId -> true for expanded folders. Element ids survive the tree reload that a create,
+    // rename, or move causes; ui folder ids do not.
+    property var expandedIds: ({})
+    property var rowShown: []
+    property string rowsSignature: ""
+
+    // Inline editors. -1 means "none".
+    property int draftParentFolderId: -1
+    property int renamingElementId: -1
+    property int pendingDeleteElementId: -1
+
+    // Drag to move.
+    property var dragSourceRow: null
+    property bool dragActive: false
+    property int dropTargetFolderId: -1
+    property point dragPoint: Qt.point(0, 0)
+
     function withAlpha(colorValue, alphaValue) {
         return Qt.rgba(colorValue.r, colorValue.g, colorValue.b, alphaValue)
     }
 
-    function folderSortKey(folder) {
-        const fullPath = folder.path ? String(folder.path).toLowerCase() : ""
-        const name = folder.name ? String(folder.name).toLowerCase() : ""
-        return fullPath.length > 0 ? fullPath : name
+    function rowIndent(row) {
+        return Math.max(0, Number(row.treeDepth) - 1) * appTheme.collectionIndentStep
+    }
+
+    function indexOfFolder(folderId) {
+        for (let i = 0; i < folderRows.length; ++i) {
+            if (!folderRows[i].isDraft && Number(folderRows[i].folderId) === Number(folderId)) {
+                return i
+            }
+        }
+        return -1
+    }
+
+    function indexOfElement(elementId) {
+        for (let i = 0; i < folderRows.length; ++i) {
+            if (!folderRows[i].isDraft && Number(folderRows[i].elementId) === Number(elementId)) {
+                return i
+            }
+        }
+        return -1
+    }
+
+    function rowForFolder(folderId) {
+        const index = indexOfFolder(folderId)
+        return index >= 0 ? folderRows[index] : null
+    }
+
+    function isExpanded(row) {
+        if (!row || row.isDraft) {
+            return false
+        }
+        // The root row always shows its children.
+        return Number(row.folderId) === 0 || expandedIds[String(Number(row.elementId))] === true
+    }
+
+    function setExpanded(elementId, expanded) {
+        const key = String(Number(elementId))
+        if ((expandedIds[key] === true) === expanded) {
+            return
+        }
+        const next = Object.assign({}, expandedIds)
+        if (expanded) {
+            next[key] = true
+        } else {
+            delete next[key]
+        }
+        expandedIds = next
+        recomputeShownRows()
+    }
+
+    function toggleExpanded(row) {
+        if (!row || row.isDraft || Number(row.folderId) === 0 || !row.hasChildren) {
+            return
+        }
+        setExpanded(row.elementId, !isExpanded(row))
+    }
+
+    function recomputeShownRows() {
+        const byFolderId = CollectionTree.rowsByFolderId(folderRows.filter(function(row) {
+            return !row.isDraft
+        }))
+        const shown = []
+        for (let i = 0; i < folderRows.length; ++i) {
+            const row = folderRows[i]
+            let visible = true
+            let parentId = !row.isDraft && Number(row.folderId) === 0
+                ? -1 : Number(row.parentFolderId)
+            let guard = 0
+            while (visible && parentId >= 0 && guard < 4096) {
+                const parent = byFolderId[String(Number(parentId))]
+                if (!parent || Number(parent.folderId) === 0) {
+                    break
+                }
+                visible = isExpanded(parent)
+                parentId = Number(parent.parentFolderId)
+                ++guard
+            }
+            shown.push(visible)
+        }
+        rowShown = shown
+    }
+
+    // Expands every ancestor of the folder so its row is shown, then scrolls to it.
+    function revealFolder(folderId) {
+        const ordered = folderRows.filter(function(row) { return !row.isDraft })
+        const byFolderId = CollectionTree.rowsByFolderId(ordered)
+        let current = byFolderId[String(Number(folderId))]
+        if (!current) {
+            return
+        }
+        const next = Object.assign({}, expandedIds)
+        let parent = byFolderId[String(Number(current.parentFolderId))]
+        let guard = 0
+        while (Number(current.folderId) !== 0 && parent && Number(parent.folderId) !== 0
+               && guard < 4096) {
+            next[String(Number(parent.elementId))] = true
+            parent = byFolderId[String(Number(parent.parentFolderId))]
+            ++guard
+        }
+        expandedIds = next
+        recomputeShownRows()
+        const index = indexOfFolder(folderId)
+        if (index >= 0) {
+            folderList.positionViewAtIndex(index, ListView.Contain)
+        }
     }
 
     function rebuildFolderRows() {
-        const source = folderController && folderController.folders ? folderController.folders : []
-        let rootRow = null
-        const next = []
-
-        for (let i = 0; i < source.length; ++i) {
-            const row = source[i]
-            if (!row) {
-                continue
+        const source = sourceFolders
+        if (!source || source.length === 0) {
+            expandedIds = ({})
+        }
+        const ordered = CollectionTree.orderRows(source, sortDescending)
+        let rows = ordered
+        if (draftParentFolderId >= 0) {
+            let parentIndex = -1
+            for (let i = 0; i < ordered.length; ++i) {
+                if (Number(ordered[i].folderId) === draftParentFolderId) {
+                    parentIndex = i
+                    break
+                }
             }
-
-            const mapped = {
-                folderId: Number(row.folderId),
-                elementId: Number(row.elementId),
-                name: Number(row.folderId) === 0 ? qsTr("全部图片")
-                                                  : (row.name ? String(row.name) : ""),
-                depth: Number(row.depth),
-                path: row.path ? String(row.path) : "",
-                deletable: row.deletable === true
+            if (parentIndex < 0) {
+                draftParentFolderId = -1
+            } else {
+                const parentRow = ordered[parentIndex]
+                let insertAt = parentIndex + 1
+                while (insertAt < ordered.length
+                       && Number(ordered[insertAt].treeDepth) > Number(parentRow.treeDepth)) {
+                    ++insertAt
+                }
+                rows = ordered.slice(0, insertAt)
+                        .concat([{
+                            isDraft: true,
+                            folderId: -1,
+                            elementId: -1,
+                            parentFolderId: draftParentFolderId,
+                            treeDepth: Number(parentRow.treeDepth) + 1,
+                            hasChildren: false,
+                            name: ""
+                        }])
+                        .concat(ordered.slice(insertAt))
             }
-
-            if (mapped.folderId === 0) {
-                rootRow = mapped
-                continue
-            }
-
-            next.push(mapped)
         }
 
-        next.sort(function(a, b) {
-            const left = folderSortKey(a)
-            const right = folderSortKey(b)
-            if (left === right) {
-                return a.folderId - b.folderId
-            }
-            if (sortDescending) {
-                return right < left ? -1 : 1
-            }
-            return left < right ? -1 : 1
-        })
-
-        folderRows = rootRow ? [rootRow].concat(next) : next
+        const signature = rows.map(function(row) {
+            return [row.isDraft ? "draft" : "", row.folderId, row.elementId, row.parentFolderId,
+                    row.name].join(":")
+        }).join("|")
+        if (signature !== rowsSignature) {
+            const keepY = folderList.contentY
+            rowsSignature = signature
+            folderRows = rows
+            folderList.contentY = Math.max(0, Math.min(keepY,
+                folderList.contentHeight - folderList.height))
+        }
+        recomputeShownRows()
     }
 
-    function beginCreateCollection() {
-        if (draftCollectionVisible) {
-            draftFocusTimer.restart()
+    // Indices of the shown, non-draft rows, top to bottom.
+    function shownFolderIndices() {
+        const out = []
+        for (let i = 0; i < folderRows.length; ++i) {
+            if (rowShown[i] === true && !folderRows[i].isDraft) {
+                out.push(i)
+            }
+        }
+        return out
+    }
+
+    function selectRow(row) {
+        if (!row || row.isDraft || !foldersModule || !backendInteractive) {
             return
         }
-        draftCollectionVisible = true
-        draftCollectionField.text = ""
-        draftFocusTimer.restart()
+        if (Number(row.folderId) !== currentFolderId) {
+            foldersModule.SelectFolder(Number(row.folderId))
+        }
+    }
+
+    function moveSelection(step) {
+        const shown = shownFolderIndices()
+        const currentIndex = indexOfFolder(currentFolderId)
+        let position = shown.indexOf(currentIndex)
+        if (position < 0) {
+            position = 0
+        } else {
+            position = Math.max(0, Math.min(shown.length - 1, position + step))
+        }
+        if (shown.length > 0) {
+            const index = shown[position]
+            selectRow(folderRows[index])
+            folderList.positionViewAtIndex(index, ListView.Contain)
+        }
+    }
+
+    function handleTreeKey(event) {
+        if (renamingElementId >= 0 || draftParentFolderId >= 0) {
+            return false
+        }
+        const row = rowForFolder(currentFolderId)
+        switch (event.key) {
+        case Qt.Key_Up:
+            moveSelection(-1)
+            return true
+        case Qt.Key_Down:
+            moveSelection(1)
+            return true
+        case Qt.Key_Left:
+            if (row && row.hasChildren && isExpanded(row) && Number(row.folderId) !== 0) {
+                setExpanded(row.elementId, false)
+            } else if (row && Number(row.folderId) !== 0) {
+                selectRow(rowForFolder(row.parentFolderId))
+            }
+            return true
+        case Qt.Key_Right:
+            if (row && row.hasChildren && !isExpanded(row)) {
+                setExpanded(row.elementId, true)
+            } else if (row && row.hasChildren) {
+                const index = indexOfFolder(row.folderId)
+                if (index + 1 < folderRows.length) {
+                    selectRow(folderRows[index + 1])
+                }
+            }
+            return true
+        case Qt.Key_F2:
+            beginRename(row)
+            return true
+        case Qt.Key_Delete:
+        case Qt.Key_Backspace:
+            requestDelete(row)
+            return true
+        }
+        return false
+    }
+
+    // ── Create ──────────────────────────────────────────────────────────────
+
+    function beginCreateCollection(parentFolderId) {
+        if (!backendInteractive) {
+            return
+        }
+        cancelRename()
+        const parentRow = rowForFolder(parentFolderId)
+        if (!parentRow) {
+            return
+        }
+        // Open the parent and every folder above it, so the draft row is in view.
+        const byFolderId = CollectionTree.rowsByFolderId(folderRows.filter(function(row) {
+            return !row.isDraft
+        }))
+        const next = Object.assign({}, expandedIds)
+        let current = parentRow
+        let guard = 0
+        while (current && Number(current.folderId) !== 0 && guard < 4096) {
+            next[String(Number(current.elementId))] = true
+            current = byFolderId[String(Number(current.parentFolderId))]
+            ++guard
+        }
+        expandedIds = next
+        draftParentFolderId = Number(parentFolderId)
+        rebuildFolderRows()
+        for (let i = 0; i < folderRows.length; ++i) {
+            if (folderRows[i].isDraft) {
+                folderList.positionViewAtIndex(i, ListView.Contain)
+                break
+            }
+        }
     }
 
     function cancelDraftCollection() {
-        draftCollectionVisible = false
-        draftCollectionField.text = ""
+        if (draftParentFolderId < 0) {
+            return
+        }
+        draftParentFolderId = -1
+        rebuildFolderRows()
     }
 
-    function commitDraftCollection() {
-        if (!draftCollectionVisible) {
+    function commitDraftCollection(text) {
+        if (draftParentFolderId < 0) {
             return
         }
+        const parentFolderId = draftParentFolderId
+        const trimmed = String(text || "").trim()
+        // The tree reloads inside CreateFolderIn and reassigns ui ids, so the draft ends first.
+        draftParentFolderId = -1
+        if (trimmed.length === 0 || !foldersModule) {
+            rebuildFolderRows()
+            return
+        }
+        const createdElementId = Number(foldersModule.CreateFolderIn(parentFolderId, trimmed))
+        rebuildFolderRows()
+        if (createdElementId > 0) {
+            const index = indexOfElement(createdElementId)
+            if (index >= 0) {
+                revealFolder(folderRows[index].folderId)
+            }
+        }
+    }
 
-        const trimmed = draftCollectionField.text.trim()
-        if (trimmed.length === 0) {
-            cancelDraftCollection()
-            return
-        }
+    // ── Rename ──────────────────────────────────────────────────────────────
 
-        if (!folderController) {
+    function beginRename(row) {
+        if (!row || row.isDraft || Number(row.folderId) === 0 || !backendInteractive) {
             return
         }
-        folderController.CreateFolder(trimmed)
         cancelDraftCollection()
+        renamingElementId = Number(row.elementId)
     }
 
-    readonly property var foldersModule: folderController
-    readonly property bool hasSelectedCollection: foldersModule
-        && Number(foldersModule.currentFolderId) !== 0
+    function cancelRename() {
+        renamingElementId = -1
+        folderList.forceActiveFocus()
+    }
+
+    function commitRename(text) {
+        const index = indexOfElement(renamingElementId)
+        renamingElementId = -1
+        folderList.forceActiveFocus()
+        if (index < 0 || !foldersModule) {
+            return
+        }
+        const row = folderRows[index]
+        const trimmed = String(text || "").trim()
+        if (trimmed.length === 0 || trimmed === String(row.name)) {
+            return
+        }
+        foldersModule.RenameFolder(Number(row.folderId), trimmed)
+    }
+
+    // ── Delete ──────────────────────────────────────────────────────────────
+
+    function requestDelete(row) {
+        if (!row || row.isDraft || Number(row.folderId) === 0 || !backendInteractive) {
+            return
+        }
+        pendingDeleteElementId = Number(row.elementId)
+        deleteDialog.openWith(row.hasChildren
+            ? qsTr("Delete the collection \"%1\" and the collections inside it? The images stay in the project.").arg(row.name)
+            : qsTr("Delete the collection \"%1\"? The images stay in the project.").arg(row.name))
+    }
+
+    function confirmDelete() {
+        const index = indexOfElement(pendingDeleteElementId)
+        pendingDeleteElementId = -1
+        if (index >= 0 && foldersModule) {
+            foldersModule.DeleteFolder(Number(folderRows[index].folderId))
+        }
+    }
+
+    // ── Drag to move ────────────────────────────────────────────────────────
+
+    function canDropOn(sourceRow, targetRow) {
+        if (!sourceRow || !targetRow || targetRow.isDraft) {
+            return false
+        }
+        if (Number(targetRow.folderId) === Number(sourceRow.parentFolderId)) {
+            return false
+        }
+        const byFolderId = CollectionTree.rowsByFolderId(folderRows.filter(function(row) {
+            return !row.isDraft
+        }))
+        return !CollectionTree.isAtOrBelow(byFolderId, targetRow.folderId, sourceRow.folderId)
+    }
+
+    function updateDropTarget(listX, listY) {
+        const index = folderList.indexAt(listX, listY + folderList.contentY)
+        const target = index >= 0 ? folderRows[index] : null
+        dropTargetFolderId = canDropOn(dragSourceRow, target) ? Number(target.folderId) : -1
+    }
+
+    function finishDrag() {
+        const source = dragSourceRow
+        const targetFolderId = dropTargetFolderId
+        dragActive = false
+        dragSourceRow = null
+        dropTargetFolderId = -1
+        if (!source || targetFolderId < 0 || !foldersModule) {
+            return
+        }
+        const target = rowForFolder(targetFolderId)
+        const sourceElementId = Number(source.elementId)
+        if (foldersModule.MoveFolder(Number(source.folderId), targetFolderId)) {
+            if (target && Number(target.folderId) !== 0) {
+                setExpanded(target.elementId, true)
+            }
+            const index = indexOfElement(sourceElementId)
+            if (index >= 0) {
+                revealFolder(folderRows[index].folderId)
+            }
+        }
+    }
+
+    function cancelDrag() {
+        dragActive = false
+        dragSourceRow = null
+        dropTargetFolderId = -1
+    }
 
     width: appTheme.collectionsSidebarWidth
     implicitWidth: appTheme.collectionsSidebarWidth
@@ -133,29 +468,33 @@ ColumnLayout {
     spacing: 12
     clip: true
 
-    Component.onCompleted: rebuildFolderRows()
-    onSortDescendingChanged: rebuildFolderRows()
-
-    Connections {
-        target: panel.foldersModule
-        ignoreUnknownSignals: true
-
-        function onFoldersChanged() {
-            panel.rebuildFolderRows()
-        }
-
-        function onFolderSelectionChanged() {
-            panel.rebuildFolderRows()
-        }
+    Component.onCompleted: {
+        rebuildFolderRows()
+        revealFolder(currentFolderId)
     }
-
-    Timer {
-        id: draftFocusTimer
-        interval: 0
-        onTriggered: draftCollectionField.forceActiveFocus()
+    onSortDescendingChanged: rebuildFolderRows()
+    // React to the controller properties (NOTIFY FoldersChanged / FolderSelectionChanged).
+    // A Connections handler named after those PascalCase signals does not reach them.
+    readonly property var sourceFolders: foldersModule && foldersModule.folders
+                                         ? foldersModule.folders : []
+    onSourceFoldersChanged: {
+        rebuildFolderRows()
+        revealFolder(currentFolderId)
+    }
+    onCurrentFolderIdChanged: {
+        rebuildFolderRows()
+        revealFolder(currentFolderId)
+    }
+    onBackendInteractiveChanged: {
+        if (!backendInteractive) {
+            cancelDrag()
+            renamingElementId = -1
+            cancelDraftCollection()
+        }
     }
 
     Rectangle {
+        id: collectionsSurface
         objectName: "collectionsSurface"
         Layout.fillWidth: true
         Layout.fillHeight: true
@@ -338,6 +677,7 @@ ColumnLayout {
 
                 Button {
                     id: addCollectionButton
+                    objectName: "collectionsAddButton"
                     implicitWidth: 28
                     implicitHeight: 28
                     Layout.minimumWidth: 28
@@ -355,14 +695,16 @@ ColumnLayout {
                     rightInset: 0
                     topInset: 0
                     bottomInset: 0
+                    enabled: panel.backendInteractive
                     Material.foreground: theme.colText
-                    onClicked: panel.beginCreateCollection()
+                    // A new collection goes inside the selected one.
+                    onClicked: panel.beginCreateCollection(panel.currentFolderId)
 
                     background: Rectangle {
                         implicitWidth: 28
                         implicitHeight: 28
                         radius: width / 2
-                        color: addCollectionButton.hovered || draftCollectionVisible
+                        color: addCollectionButton.hovered || panel.draftParentFolderId >= 0
                                ? panel.withAlpha(theme.colHover, 0.55)
                                : "transparent"
                     }
@@ -388,62 +730,6 @@ ColumnLayout {
                 }
             }
 
-            Item {
-                Layout.fillWidth: true
-                Layout.preferredHeight: draftCollectionVisible ? 78 : 0
-                clip: true
-
-                Behavior on Layout.preferredHeight {
-                    NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
-                }
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 8
-                    opacity: draftCollectionVisible ? 1.0 : 0.0
-
-                    Behavior on opacity { NumberAnimation { duration: 120 } }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: qsTr("Collection Name")
-                        color: panel.withAlpha(theme.colText, 0.90)
-                        font.pixelSize: 13
-                        font.weight: 700
-                    }
-
-                    TextField {
-                        id: draftCollectionField
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 48
-                        selectByMouse: true
-                        color: theme.colText
-                        font.family: appTheme.dataFontFamily
-                        font.pixelSize: 16
-                        selectedTextColor: appTheme.textColor
-                        selectionColor: panel.withAlpha(appTheme.textMutedColor, 0.6)
-                        Material.foreground: theme.colText
-                        Material.accent: appTheme.textMutedColor
-                        background: Rectangle {
-                            radius: 10
-                            color: panel.withAlpha(theme.colBgBase, 0.72)
-                            border.width: 1
-                            border.color: draftCollectionField.activeFocus
-                                          ? appTheme.textMutedColor
-                                          : panel.withAlpha(theme.colText, 0.12)
-                        }
-
-                        onAccepted: panel.commitDraftCollection()
-                        Keys.onEscapePressed: panel.cancelDraftCollection()
-                        onEditingFinished: {
-                            if (panel.draftCollectionVisible) {
-                                panel.commitDraftCollection()
-                            }
-                        }
-                    }
-                }
-            }
-
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 1
@@ -452,71 +738,315 @@ ColumnLayout {
 
             ListView {
                 id: folderList
+                objectName: "collectionsTree"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                spacing: 2
+                spacing: 0
                 model: panel.folderRows
+                activeFocusOnTab: true
+                keyNavigationEnabled: false
+                boundsBehavior: Flickable.StopAtBounds
+                Accessible.role: Accessible.Tree
+                Accessible.name: qsTr("Collections")
 
-                ScrollIndicator.vertical: ScrollIndicator {}
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                Keys.onShortcutOverride: function(event) {
+                    if (!panel.dragActive && panel.renamingElementId < 0
+                            && panel.draftParentFolderId < 0
+                            && [Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right, Qt.Key_F2,
+                                Qt.Key_Delete, Qt.Key_Backspace].indexOf(event.key) >= 0) {
+                        event.accepted = true
+                    }
+                }
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Escape && panel.dragActive) {
+                        panel.cancelDrag()
+                        event.accepted = true
+                        return
+                    }
+                    event.accepted = panel.handleTreeKey(event)
+                }
 
                 delegate: Item {
+                    id: folderRow
                     required property var modelData
+                    required property int index
 
+                    readonly property bool shown: panel.rowShown[index] === true
+                    readonly property bool isDraft: modelData.isDraft === true
+                    readonly property bool isRoot: !isDraft && Number(modelData.folderId) === 0
+                    readonly property bool selected: !isDraft
+                        && Number(modelData.folderId) === panel.currentFolderId
+                    readonly property bool hovered: !isDraft && treeMouse.hoverIndex === index
+                    readonly property bool dropTarget: panel.dragActive
+                        && Number(modelData.folderId) === panel.dropTargetFolderId
+                    readonly property bool renaming: !isDraft
+                        && Number(modelData.elementId) === panel.renamingElementId
+                    readonly property bool editing: isDraft || renaming
+
+                    objectName: isDraft ? "collectionDraftRow"
+                                        : "collectionRow_" + String(modelData.elementId)
                     width: ListView.view.width
-                    height: Math.max(52, folderRowLayout.implicitHeight + appTheme.spaceMd)
-
-                    readonly property bool selected: modelData.folderId === Number(panel.foldersModule.currentFolderId)
+                    height: shown ? appTheme.collectionRowHeight : 0
+                    visible: shown
 
                     Rectangle {
                         anchors.fill: parent
                         anchors.rightMargin: 2
-                        radius: 10
-                        // Selected row: the monochrome list well with its ink.
-                        color: selected
-                               ? appTheme.editorListSelectedFillColor
-                               : folderMouse.containsMouse
-                                 ? panel.withAlpha(theme.colHover, 0.28)
+                        radius: appTheme.controlRadiusSmall
+                        // Selected: a quiet neutral well (controlHoveredFillColor) under
+                        // unchanged text. Drop target: hover wash plus a 1 px muted outline.
+                        // Hover: the darker hoverColor wash.
+                        color: folderRow.selected && !folderRow.editing
+                               ? appTheme.controlHoveredFillColor
+                               : (folderRow.dropTarget || folderRow.hovered)
+                                 ? appTheme.hoverColor
                                  : "transparent"
+                        border.width: folderRow.dropTarget ? 1 : 0
+                        border.color: appTheme.textMutedColor
+                    }
 
-                        RowLayout {
-                            id: folderRowLayout
-                            anchors.fill: parent
-                            anchors.leftMargin: 10 + modelData.depth * 14
-                            anchors.rightMargin: 10
-                            spacing: 10
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: appTheme.spaceXs + panel.rowIndent(folderRow.modelData)
+                        anchors.rightMargin: appTheme.spaceSm
+                        spacing: appTheme.spaceXs
 
-                            // The SVG stroke is white; tint it with the ink on the light well.
-                            ColorImage {
-                                width: 15
-                                height: 15
-                                source: "qrc:/panel_icons/folder-open.svg"
-                                sourceSize.width: 15
-                                sourceSize.height: 15
-                                fillMode: Image.PreserveAspectFit
-                                mipmap: false
-                                smooth: false
-                                color: selected ? appTheme.editorListSelectedInkColor : "transparent"
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: modelData.name
-                                color: selected ? appTheme.editorListSelectedInkColor
-                                                : panel.withAlpha(theme.colText, 0.92)
-                                font.pixelSize: 15
-                                font.weight: selected ? 600 : 400
-                                wrapMode: Text.Wrap
-                            }
+                        // Disclosure triangle; the same glyphs as the Library section headers.
+                        Label {
+                            Layout.preferredWidth: appTheme.collectionIndentStep
+                            Layout.alignment: Qt.AlignVCenter
+                            horizontalAlignment: Text.AlignHCenter
+                            text: !folderRow.isRoot && folderRow.modelData.hasChildren === true
+                                  ? (panel.isExpanded(folderRow.modelData) ? "▾" : "▸")
+                                  : ""
+                            color: appTheme.textMutedColor
+                            font.pixelSize: appTheme.fontSizeBody
                         }
 
-                        MouseArea {
-                            id: folderMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: panel.foldersModule.SelectFolder(modelData.folderId)
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.alignment: Qt.AlignVCenter
+                            visible: !folderRow.editing
+                            // Uniform fixed-height tree rows elide (DESIGN.md truncation policy).
+                            elide: Text.ElideRight
+                            text: folderRow.isRoot ? qsTr("全部图片") : String(folderRow.modelData.name)
+                            color: appTheme.textColor
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeTitle
+                            font.weight: folderRow.selected ? appTheme.fontWeightStrong
+                                                            : appTheme.fontWeightRegular
                         }
+
+                        Loader {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: appTheme.collectionRowHeight - 4
+                            Layout.alignment: Qt.AlignVCenter
+                            active: folderRow.editing && folderRow.shown
+                            visible: active
+                            // A plain TextInput in a hairline box: no style-provided field chrome.
+                            sourceComponent: Rectangle {
+                                radius: appTheme.controlRadiusSmall
+                                color: appTheme.bgBaseColor
+                                border.width: 1
+                                border.color: nameEditor.activeFocus ? appTheme.textMutedColor
+                                                                     : appTheme.dividerColor
+
+                                TextInput {
+                                    id: nameEditor
+                                    objectName: folderRow.isDraft ? "collectionDraftField"
+                                                                  : "collectionRenameField"
+                                    anchors.fill: parent
+                                    anchors.leftMargin: appTheme.spaceSm
+                                    anchors.rightMargin: appTheme.spaceSm
+                                    verticalAlignment: TextInput.AlignVCenter
+                                    clip: true
+                                    text: folderRow.isDraft ? "" : String(folderRow.modelData.name)
+                                    selectByMouse: true
+                                    color: appTheme.textColor
+                                    font.family: appTheme.uiFontFamily
+                                    font.pixelSize: appTheme.fontSizeTitle
+                                    selectedTextColor: appTheme.textColor
+                                    selectionColor: panel.withAlpha(appTheme.textMutedColor, 0.6)
+                                    property bool finished: false
+
+                                    Text {
+                                        anchors.fill: parent
+                                        verticalAlignment: Text.AlignVCenter
+                                        visible: nameEditor.text.length === 0
+                                                 && nameEditor.preeditText.length === 0
+                                        text: qsTr("Collection Name")
+                                        color: appTheme.textMutedColor
+                                        font: nameEditor.font
+                                        elide: Text.ElideRight
+                                    }
+
+                                    function finish(accept) {
+                                        if (finished) {
+                                            return
+                                        }
+                                        finished = true
+                                        // The commit reloads the tree, which destroys this
+                                        // editor; run it after this handler returns.
+                                        const value = text
+                                        if (folderRow.isDraft) {
+                                            if (accept) {
+                                                Qt.callLater(panel.commitDraftCollection, value)
+                                            } else {
+                                                Qt.callLater(panel.cancelDraftCollection)
+                                            }
+                                        } else if (accept) {
+                                            Qt.callLater(panel.commitRename, value)
+                                        } else {
+                                            Qt.callLater(panel.cancelRename)
+                                        }
+                                    }
+
+                                    // The editor can appear while the tree model is reassigned,
+                                    // which moves focus. It takes focus one turn later; only a
+                                    // focus loss after that commits the name.
+                                    property bool armed: false
+                                    Timer {
+                                        interval: 0
+                                        running: true
+                                        onTriggered: {
+                                            nameEditor.forceActiveFocus()
+                                            nameEditor.selectAll()
+                                            nameEditor.armed = nameEditor.activeFocus
+                                        }
+                                    }
+                                    onAccepted: finish(true)
+                                    Keys.onEscapePressed: finish(false)
+                                    onActiveFocusChanged: {
+                                        if (!activeFocus && armed) {
+                                            finish(true)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // One pointer handler for the whole tree: select, expand, open the row menu,
+                // and drag a collection onto another one. It sits above the rows and steps
+                // aside while an inline editor is open.
+                MouseArea {
+                    id: treeMouse
+                    objectName: "collectionsTreeMouse"
+                    // Declared inside the ListView but parented to the view, not to the
+                    // scrolling content, so the coordinates are viewport coordinates.
+                    parent: folderList
+                    anchors.fill: parent
+                    z: 10
+                    enabled: panel.renamingElementId < 0 && panel.draftParentFolderId < 0
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    preventStealing: true
+
+                    property int hoverIndex: -1
+                    property int pressIndex: -1
+                    property point pressPoint: Qt.point(0, 0)
+                    property bool suppressClick: false
+
+                    function rowIndexAt(mouseX, mouseY) {
+                        return folderList.indexAt(mouseX, mouseY + folderList.contentY)
+                    }
+
+                    function onDisclosure(index, mouseX) {
+                        const row = panel.folderRows[index]
+                        const start = appTheme.spaceXs + panel.rowIndent(row)
+                        return mouseX >= start - 2
+                               && mouseX <= start + appTheme.collectionIndentStep + 2
+                    }
+
+                    onExited: hoverIndex = -1
+                    onPressed: function(mouse) {
+                        folderList.forceActiveFocus()
+                        pressIndex = rowIndexAt(mouse.x, mouse.y)
+                        pressPoint = Qt.point(mouse.x, mouse.y)
+                        suppressClick = false
+                        if (mouse.button === Qt.RightButton) {
+                            suppressClick = true
+                            const row = pressIndex >= 0 ? panel.folderRows[pressIndex] : null
+                            if (row && !row.isDraft && panel.backendInteractive) {
+                                rowMenu.targetRow = row
+                                rowMenu.popup()
+                            }
+                        }
+                    }
+                    onPositionChanged: function(mouse) {
+                        hoverIndex = rowIndexAt(mouse.x, mouse.y)
+                        if (!(mouse.buttons & Qt.LeftButton) || pressIndex < 0) {
+                            return
+                        }
+                        if (!panel.dragActive) {
+                            const dx = mouse.x - pressPoint.x
+                            const dy = mouse.y - pressPoint.y
+                            const row = panel.folderRows[pressIndex]
+                            if (dx * dx + dy * dy > 36 && row && !row.isDraft
+                                    && Number(row.folderId) !== 0 && panel.backendInteractive) {
+                                panel.dragSourceRow = row
+                                panel.dragActive = true
+                                suppressClick = true
+                            }
+                        }
+                        if (panel.dragActive) {
+                            panel.dragPoint = mapToItem(collectionsSurface, mouse.x, mouse.y)
+                            panel.updateDropTarget(mouse.x, mouse.y)
+                            autoScroll.edgeDelta = mouse.y < 24 ? -1
+                                                 : (mouse.y > height - 24 ? 1 : 0)
+                        }
+                    }
+                    onReleased: function(mouse) {
+                        autoScroll.edgeDelta = 0
+                        if (panel.dragActive) {
+                            panel.finishDrag()
+                        }
+                    }
+                    onCanceled: {
+                        autoScroll.edgeDelta = 0
+                        panel.cancelDrag()
+                    }
+                    onClicked: function(mouse) {
+                        if (suppressClick || mouse.button !== Qt.LeftButton) {
+                            return
+                        }
+                        const index = rowIndexAt(mouse.x, mouse.y)
+                        if (index < 0 || index !== pressIndex) {
+                            return
+                        }
+                        const row = panel.folderRows[index]
+                        if (onDisclosure(index, mouse.x) && row.hasChildren === true) {
+                            panel.toggleExpanded(row)
+                            return
+                        }
+                        panel.selectRow(row)
+                    }
+                    onDoubleClicked: function(mouse) {
+                        const index = rowIndexAt(mouse.x, mouse.y)
+                        if (index >= 0 && !onDisclosure(index, mouse.x)) {
+                            panel.toggleExpanded(panel.folderRows[index])
+                        }
+                    }
+                }
+
+                Timer {
+                    id: autoScroll
+                    property int edgeDelta: 0
+                    interval: 30
+                    repeat: true
+                    running: panel.dragActive && edgeDelta !== 0
+                    onTriggered: {
+                        const maxY = Math.max(0, folderList.contentHeight - folderList.height)
+                        folderList.contentY = Math.max(0, Math.min(maxY,
+                            folderList.contentY + edgeDelta * 6))
+                        const local = collectionsSurface.mapToItem(folderList,
+                                                                   panel.dragPoint.x,
+                                                                   panel.dragPoint.y)
+                        panel.updateDropTarget(local.x, local.y)
                     }
                 }
 
@@ -528,37 +1058,33 @@ ColumnLayout {
                     font.pixelSize: 13
                 }
             }
+        }
 
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: hasSelectedCollection ? 38 : 0
-                radius: 10
-                color: hasSelectedCollection ? panel.withAlpha(theme.colDanger, 0.12) : "transparent"
-                border.width: hasSelectedCollection ? 1 : 0
-                border.color: hasSelectedCollection ? panel.withAlpha(theme.colDanger, 0.22) : "transparent"
+        // Floating label of the dragged collection; follows the pointer.
+        Rectangle {
+            objectName: "collectionDragLabel"
+            z: 100
+            visible: panel.dragActive && panel.dragSourceRow !== null
+            x: panel.dragPoint.x + 12
+            y: panel.dragPoint.y - height / 2
+            width: Math.min(dragLabelText.implicitWidth + appTheme.spaceSm * 2, collectionsSurface.width * 0.8)
+            height: appTheme.collectionRowHeight
+            radius: appTheme.controlRadiusSmall
+            color: appTheme.bgBaseColor
+            border.width: 1
+            border.color: appTheme.dividerColor
 
-                Behavior on Layout.preferredHeight {
-                    NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
-                }
-
-                Button {
-                    anchors.fill: parent
-                    visible: hasSelectedCollection
-                    enabled: hasSelectedCollection && backendInteractive
-                    text: qsTr("Delete collection")
-                    Material.foreground: theme.colText
-                    onClicked: panel.foldersModule.DeleteFolder(panel.foldersModule.currentFolderId)
-                    background: Item {}
-
-                    contentItem: Label {
-                        text: parent.text
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        color: panel.withAlpha(theme.colText, 0.84)
-                        font.pixelSize: 12
-                        font.weight: 600
-                    }
-                }
+            Label {
+                id: dragLabelText
+                anchors.fill: parent
+                anchors.leftMargin: appTheme.spaceSm
+                anchors.rightMargin: appTheme.spaceSm
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+                text: panel.dragSourceRow ? String(panel.dragSourceRow.name) : ""
+                color: appTheme.textColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeTitle
             }
         }
     }
@@ -637,5 +1163,44 @@ ColumnLayout {
 
         scale: importImagesBtn.hovered && enabled ? 1.02 : 1.0
         Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
+    }
+
+    AppContextMenu {
+        id: rowMenu
+        objectName: "collectionRowMenu"
+        property var targetRow: null
+        readonly property bool targetIsRoot: targetRow !== null && Number(targetRow.folderId) === 0
+
+        AppMenuItem {
+            objectName: "collectionMenuNewChild"
+            text: rowMenu.targetIsRoot ? qsTr("New collection") : qsTr("New Collection Inside")
+            onTriggered: panel.beginCreateCollection(Number(rowMenu.targetRow.folderId))
+        }
+        AppMenuItem {
+            objectName: "collectionMenuRename"
+            text: qsTr("Rename")
+            enabled: !rowMenu.targetIsRoot
+            onTriggered: panel.beginRename(rowMenu.targetRow)
+        }
+        AppMenuSeparator {}
+        AppMenuItem {
+            objectName: "collectionMenuDelete"
+            text: qsTr("Delete collection")
+            enabled: !rowMenu.targetIsRoot
+            onTriggered: panel.requestDelete(rowMenu.targetRow)
+        }
+    }
+
+    DeleteConfirmDialog {
+        id: deleteDialog
+        objectName: "collectionDeleteDialog"
+        parent: Overlay.overlay
+        theme: panel.host
+        host: panel.host
+        blurSource: panel.host ? panel.host.dialogBlurSource : null
+        appendSourceFilesNote: false
+        confirmEnabled: panel.backendInteractive
+        onCancelled: panel.pendingDeleteElementId = -1
+        onConfirmed: panel.confirmDelete()
     }
 }

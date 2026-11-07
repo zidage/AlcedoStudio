@@ -13,6 +13,10 @@ Popup {
     property var host: null
     property Item blurSource: null
     property string confirmText: ""
+    // Image deletes add the note about source files; a collection delete writes its own text.
+    property bool appendSourceFilesNote: true
+    // Image deletes stay disabled while the targets are analyzed; other hosts bind their own.
+    property bool confirmEnabled: appModules.interactionPolicy.canDeletePendingTargets
     signal cancelled()
     signal confirmed()
     modal: true
@@ -77,10 +81,12 @@ Popup {
         Label {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            text: root.confirmText.length > 0
-                  ? qsTr("%1\nOriginal source files on disk will be kept.")
-                        .arg(root.confirmText)
-                  : ""
+            text: root.confirmText.length === 0
+                  ? ""
+                  : root.appendSourceFilesNote
+                    ? qsTr("%1\nOriginal source files on disk will be kept.")
+                          .arg(root.confirmText)
+                    : root.confirmText
             color: root.theme ? root.theme.colText : appTheme.textColor
         }
 
@@ -104,9 +110,7 @@ Popup {
             Button {
                 id: deleteConfirmButton
                 text: qsTr("Delete")
-                // Gated by the same policy as the context-menu delete action —
-                // stays disabled while the targets are being analyzed.
-                enabled: appModules.interactionPolicy.canDeletePendingTargets
+                enabled: root.confirmEnabled
                 Material.background: root.theme ? root.theme.colDanger : appTheme.dangerColor
                 Material.foreground: root.theme ? root.theme.colText : appTheme.textColor
                 onClicked: {
