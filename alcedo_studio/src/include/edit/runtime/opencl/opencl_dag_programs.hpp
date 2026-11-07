@@ -111,6 +111,13 @@ inline constexpr const char* kFilmPrintScanPrescanColumnsKernelName =
 /// the display transform of that program.
 inline constexpr const char* kFilmPrintScanDisplayKernelName = "film_print_scan_display";
 inline constexpr const char* kFilmGrainPostKernelName        = "film_grain_post_rgba32f";
+/// Phase G6 of the film grain plan: FP6 with the grain of the negative. The print and light table
+/// form is a kernel of @ref kFilmPrintProgramName, the Negative Scan form of @ref kDrtProgramName.
+inline constexpr const char* kFilmPrintDisplayGrainKernelName     = "film_print_display_grain";
+inline constexpr const char* kFilmPrintScanDisplayGrainKernelName = "film_print_scan_display_grain";
+/// The grain of the negative alone on an image of dye amounts, for the backend tests. A kernel of
+/// @ref kFilmPrintProgramName.
+inline constexpr const char* kFilmGrainNegativeAmountsKernelName  = "film_grain_negative_amounts";
 
 }  // namespace alcedo::OpenCL::GpuDag
 

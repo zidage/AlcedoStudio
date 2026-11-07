@@ -45,13 +45,15 @@ TEST(OpenClDrtParameterBytes, OpenClDrtParameterBytesMatchStoredExpectedBytes) {
 // Every OpenCL source of the DRT program lives in the runtime tree: the color encoding curves
 // under include/color, the shaders under edit/runtime/opencl/shader and the shared ACES gamut
 // compression header under include/edit/runtime. The program must also build from those files.
+// FP6 of Negative Scan is a kernel of this program (issue 664), with the film print math and the
+// grain of the negative (phase G6 of the film grain plan), so the program lists 11 sources.
 TEST(OpenClDrtParameterBytes, OpenClDrtProgramBuildsFromRuntimeShaderDirectory) {
   RegisterOpenClGpuDagPrograms();
   OpenClBackendProgramRegistry::Instance().RegisterProgramsForManifest(
       OpenCL::GpuDag::kManifestName);
   const auto paths =
       OpenClProgramLibrary::Instance().RegisteredSourcePaths(OpenCL::GpuDag::kDrtProgramName);
-  ASSERT_EQ(paths.size(), 6U);
+  ASSERT_EQ(paths.size(), 11U);
   EXPECT_NE(paths[0].generic_string().find("src/include/color/color_encoding_math.h"),
             std::string::npos)
       << paths[0].generic_string();
@@ -69,6 +71,11 @@ TEST(OpenClDrtParameterBytes, OpenClDrtProgramBuildsFromRuntimeShaderDirectory) 
   EXPECT_EQ(paths[3].filename(), "common.cl");
   EXPECT_EQ(paths[4].filename(), "cst.cl");
   EXPECT_EQ(paths[5].filename(), "drt.cl");
+  EXPECT_EQ(paths[6].filename(), "film_print_math.h");
+  EXPECT_EQ(paths[7].filename(), "film_grain_field.h");
+  EXPECT_EQ(paths[8].filename(), "film_grain_tile.h");
+  EXPECT_EQ(paths[9].filename(), "film_grain_negative.h");
+  EXPECT_EQ(paths[10].filename(), "film_print_scan.cl");
 
   if (!TryInitializeOpenClRuntime() || !OpenClContext::Instance().Capabilities().image_support) {
     GTEST_SKIP() << "No OpenCL image device available to build the program.";

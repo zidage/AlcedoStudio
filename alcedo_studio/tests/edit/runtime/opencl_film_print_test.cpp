@@ -333,7 +333,8 @@ TEST_F(OpenClFilmPrintFixture, FilmPrintReadsASceneWorkBufferAndWritesAWorkBuffe
                             device_->CommandContext());
   RecordOpenClFilmPrint(*device_, plan_, *document.Drt(), std::nullopt,
                         FrameSceneBinding::WorkImage(SceneWorkMember::Member0),
-                        FrameSceneBinding::WorkImage(SceneWorkMember::Member1), kWidth, kHeight);
+                        FrameSceneBinding::WorkImage(SceneWorkMember::Member1), kWidth, kHeight,
+                        0.0f);
   std::vector<Rgba> buffers(field.size());
   backend.DownloadBufferRange(output.Storage(), 0, std::as_writable_bytes(std::span(buffers)),
                               device_->CommandContext());
@@ -601,9 +602,10 @@ TEST_F(OpenClFilmPrintFixture, FilmPrintFusedSpreadMatchesSeparatePasses) {
                                                device_->CommandContext());
     auto& display = workspace.AcquireImageForWrite(plan_.display_output,
                                                            {kWidth, kHeight, TextureFormat::Rgba32f});
-    RecordOpenClFilmPrint(
-        *device_, plan_, *document.Drt(), std::nullopt, FrameSceneBinding::CachedImage(scene_id),
-        FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight, nullptr, separate);
+    RecordOpenClFilmPrint(*device_, plan_, *document.Drt(), std::nullopt,
+                          FrameSceneBinding::CachedImage(scene_id),
+                          FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight,
+                          0.0f, nullptr, separate);
     std::vector<Rgba> pixels(static_cast<std::size_t>(kWidth) * kHeight);
     workspace.Device().DownloadTexture2D(
         display.Texture(), std::as_writable_bytes(std::span(pixels)), device_->CommandContext());
@@ -716,9 +718,9 @@ TEST_F(OpenClFilmPrintFixture, FilmPrintWithNoImagePartRunsNoInhibitorBlur) {
     const auto display_id = plan_.display_output;
     (void)workspace.AcquireImageForWrite(display_id, {kWidth, kHeight, TextureFormat::Rgba32f});
     std::vector<std::string> names;
-    RecordOpenClFilmPrint(*device_, plan_, *document.Drt(), std::nullopt,
-                          FrameSceneBinding::CachedImage(scene_id),
-                          FrameSceneBinding::CachedImage(display_id), kWidth, kHeight, &names);
+    RecordOpenClFilmPrint(
+        *device_, plan_, *document.Drt(), std::nullopt, FrameSceneBinding::CachedImage(scene_id),
+        FrameSceneBinding::CachedImage(display_id), kWidth, kHeight, 0.0f, &names);
     device_->CancelRender();
     return std::any_of(names.begin(), names.end(), [](const std::string& name) {
       return name.find("inhibitor") != std::string::npos;

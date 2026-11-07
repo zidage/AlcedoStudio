@@ -225,6 +225,43 @@ inline void ExpectViewportRegionEqualsTheSameRegionOfTheFullRender(const Render&
   EXPECT_LE(largest, 1.0e-6f);
 }
 
+/**
+ * The per-pixel standard deviation of each layer of @p render on a flat field is within
+ * @p tolerance of that of @p reference, for the four print stocks at 16mm, 35mm, and 70mm at
+ * 6000 px (phase G6: OpenCL and Metal against CUDA, or against the host form of the CUDA steps).
+ */
+inline void ExpectSigmaMatches(const Render& render, const Render& reference, double tolerance) {
+  constexpr std::uint32_t kSize    = 512;
+  const auto              geometry = TileGeometry(6000, 1.0f, 300.0f, 200.0f, kSize, kSize);
+  for (const std::string film : kPrintStocks) {
+    for (const auto format : film_grain_post_test::kFormats) {
+      const auto           plan    = Plan(film, geometry, format);
+      const auto           dye_max = DyeMaxOf(film);
+      std::array<float, 3> dye{};
+      for (std::size_t layer = 0; layer < 3; ++layer) {
+        dye[layer] = static_cast<float>(0.5 * (plan.curve_low[layer] + plan.curve_high[layer]));
+      }
+      const std::vector<Amounts> record(static_cast<std::size_t>(kSize) * kSize,
+                                        RecordOf(dye, dye_max));
+      const auto                 output   = render(plan, geometry, dye_max, record);
+      const auto                 expected = reference(plan, geometry, dye_max, record);
+      for (std::size_t layer = 0; layer < 3; ++layer) {
+        SCOPED_TRACE(film + " " + std::string(FilmFormatId(format)) + " layer " +
+                     std::to_string(layer));
+        std::vector<double> values(output.size());
+        std::vector<double> reference_values(expected.size());
+        for (std::size_t i = 0; i < output.size(); ++i) {
+          values[i]           = Layer(output[i], layer);
+          reference_values[i] = Layer(expected[i], layer);
+        }
+        EXPECT_NEAR(
+            film_grain_post_test::StdDev(values) / film_grain_post_test::StdDev(reference_values),
+            1.0, tolerance);
+      }
+    }
+  }
+}
+
 /// 16mm at 6000 px rendered at half size: a render of 37 x 29 with partial tiles and an aggregate
 /// of 2, against the host form of the steps, for a negative and a reversal film.
 inline void ExpectKernelEqualsTheHostFormOfItsStepsAtTheTileEdges(const Render& render) {

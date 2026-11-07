@@ -35,8 +35,19 @@ namespace alcedo {
  * read of the prescan commits the recorded work of the frame and waits for it; the host computes
  * the shift of rule 'frame_auto_colour'. With auto colour off, no prescan runs and nothing is read.
  *
+ * With @p grain_strength above 0, the grain of the negative (phase G6 of the plan
+ * 'film_grain_format_and_stock_plan.md', the rules of phase G5 on CUDA): the FP6 kernel is
+ * `film_print_display_grain` or `film_print_scan_display_grain`, with the steps of
+ * film_grain_tile.h, and it adds the grain of the selected film at the film format of @p drt to the
+ * record of each pixel (film_grain_negative.h), before the flare amounts and the read of the print
+ * table, the light table, or the scanner table. A reversal film gets it on `dye_max - record`. The
+ * blurred amounts of the negative grade, the flare canvas, and the prescan read the amounts with
+ * no grain: they are means over many pixels.
+ *
  * @param raw_cct The colour temperature of the RAW decode for scene light As Shot, or none for an
  *        input with no RAW white balance. See `FilmSceneRawCct`.
+ * @param grain_strength The stored value of the Film Grain slider, in [0, 2]; 0 runs no grain
+ *        kernel.
  * @param pass_names When set, this function adds the name of each kernel group that it records.
  *        The render path passes null.
  * @param separate_narrow_spread True runs the narrow Gaussian of FP2 as its own two passes, as the
@@ -47,12 +58,13 @@ namespace alcedo {
  *         black at or above the grey (`film_negative_scan::MakeRenderTerms`), a prescan with too
  *         few valid pixels, or a command buffer error at the read of the prescan. Nothing is
  *         published then; the caller cancels the render.
- *         There is no change of backend.
+ *         There is no change of backend. std::invalid_argument for a grain strength outside
+ *         [0, 2] (`MakeFilmGrainPlan`), before any GPU work.
  */
 void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
                           const DrtNodeModel& drt, std::optional<double> raw_cct,
                           const FrameSceneBinding& scene, const FrameSceneBinding& display,
-                          std::uint32_t width, std::uint32_t height,
+                          std::uint32_t width, std::uint32_t height, float grain_strength,
                           std::vector<std::string>* pass_names             = nullptr,
                           bool                      separate_narrow_spread = false);
 

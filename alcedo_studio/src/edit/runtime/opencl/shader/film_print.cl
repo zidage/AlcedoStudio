@@ -4,16 +4,18 @@
 
 // Film print display transform on OpenCL 1.2: steps FP1 to FP6 of the Film Print DRT Plan, with the
 // same rules as cuda_film_print_pass.cu. This program loads color_encoding_math.h,
-// aces_reference_gamut_compression.h, and film_print_math.h before this file.
+// aces_reference_gamut_compression.h, film_print_math.h, film_grain_field.h, film_grain_tile.h,
+// and film_grain_negative.h before this file. The last three give FP6 the grain of the negative
+// (film_print_display_grain, phase G6 of the film grain plan).
 //
 // The images between the steps are row-major buffers with 3 floats per pixel. They are not float3:
 // a float3 of OpenCL C has 16 bytes. A kernel takes each image as a buffer and a uint offset in
 // floats, because all of them are allocations in the transient arena of the render. The canonical
 // Halation and flare results are RGBA32F images, because they have a place in the result cache.
 //
-// The kernels read the fixed values through `__global` pointers. A FilmBlurKernel has more bytes than
-// the 1024 of CL_DEVICE_MAX_PARAMETER_SIZE that OpenCL 1.2 requires, so it cannot be a by-value
-// argument. opencl_film_print_pass.cpp uploads these values once per render.
+// The kernels read the fixed values through `__global` pointers. A FilmBlurKernel has more bytes
+// than the 1024 of CL_DEVICE_MAX_PARAMETER_SIZE that OpenCL 1.2 requires, so it cannot be a
+// by-value argument. opencl_film_print_pass.cpp uploads these values once per render.
 
 // kFilmBlurMaxRadius + 1 and kFilmNarrowSpreadMaxRadius + 1 of film_print_plan.hpp.
 #define FILM_BLUR_TAPS   129
@@ -40,6 +42,8 @@ typedef struct {
 typedef char FilmBlurKernelSizeCheck[sizeof(FilmBlurKernel) == 1552 ? 1 : -1];
 typedef char FilmNarrowKernelSizeCheck[sizeof(FilmNarrowKernel) == 76 ? 1 : -1];
 typedef char FilmKernelParamsSizeCheck[sizeof(FilmKernelParams) == 416 ? 1 : -1];
+typedef char FilmGrainFieldParamsSizeCheck[sizeof(FilmGrainFieldParams) == 388 ? 1 : -1];
+typedef char FilmGrainNegativeParamsSizeCheck[sizeof(FilmGrainNegativeParams) == 616 ? 1 : -1];
 
 __constant sampler_t kFilmNearestClamp =
     CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
@@ -660,25 +664,20 @@ static inline FilmKernelRgb FilmPrintFinishedLinear(
   return params->cinema_look != 0U ? FilmKernelCinemaLook(finished) : finished;
 }
 
-/// FP6, fused. @p has_flare is 0 when the Enlarger flare is off. Alpha comes from the scene.
-/// @p has_soft is 0 with no image plane; then the graded record reads itself. @p soft is half size
-/// when @p soft_half_size is not 0. On a light table, @p flare is the blurred display light of the
-/// loupe flare, and @p soft is not read.
-__kernel void film_print_display(
-    __global const float* amounts, uint amounts_offset, __read_only image2d_t scene_image,
-    __global const float4* scene_buffer, int scene_is_buffer, __write_only image2d_t dst_image,
-    __global float4* dst_buffer, int dst_is_buffer, int width, int height,
+/// FP6, fused, at pixel (@p x, @p y) with the record @p record of the negative. @p has_flare is 0
+/// when the Enlarger flare is off. Alpha comes from the scene. @p has_soft is 0 with no image
+/// plane; then the graded record reads itself. @p soft is half size when @p soft_half_size is not
+/// 0. On a light table, @p flare is the blurred display light of the loupe flare, and @p soft is
+/// not read.
+static inline void FilmPrintDisplayPixel(
+    __global const FilmKernelParams* params, FilmKernelRgb record, int x, int y, int width,
+    __read_only image2d_t scene_image, __global const float4* scene_buffer, int scene_is_buffer,
+    __write_only image2d_t dst_image, __global float4* dst_buffer, int dst_is_buffer,
     __global const float* print_rgba, __read_only image2d_t flare, int has_flare, int flare_width,
     int flare_height, FilmMatrix render_to_flare, float flare_strength, __global const float* soft,
-    uint soft_offset, int has_soft, int soft_columns, int soft_rows, int soft_half_size,
-    __global const uchar* data, uint params_offset) {
-  const int x = (int)get_global_id(0);
-  const int y = (int)get_global_id(1);
-  if (x >= width || y >= height) return;
-  __global const FilmKernelParams* params = FilmParams(data, params_offset);
-  const uint                       index  = (uint)y * (uint)width + (uint)x;
-  FilmKernelRgb                    record = FilmLoad(amounts, amounts_offset, index);
-  FilmKernelRgb                    linear;
+    uint soft_offset, int has_soft, int soft_columns, int soft_rows, int soft_half_size) {
+  const uint    index = (uint)y * (uint)width + (uint)x;
+  FilmKernelRgb linear;
   if (params->light_table != 0U) {
     // Lab rules 'light_table_view', 'loupe_flare', and 'dark_surround_on_display' in display light.
     FilmKernelRgb light = FilmKernelPrintDisplay(params, print_rgba, record);
@@ -706,5 +705,86 @@ __kernel void film_print_display(
     dst_buffer[index] = output;
   } else {
     write_imagef(dst_image, (int2)(x, y), output);
+  }
+}
+
+__kernel void film_print_display(
+    __global const float* amounts, uint amounts_offset, __read_only image2d_t scene_image,
+    __global const float4* scene_buffer, int scene_is_buffer, __write_only image2d_t dst_image,
+    __global float4* dst_buffer, int dst_is_buffer, int width, int height,
+    __global const float* print_rgba, __read_only image2d_t flare, int has_flare, int flare_width,
+    int flare_height, FilmMatrix render_to_flare, float flare_strength, __global const float* soft,
+    uint soft_offset, int has_soft, int soft_columns, int soft_rows, int soft_half_size,
+    __global const uchar* data, uint params_offset) {
+  const int x = (int)get_global_id(0);
+  const int y = (int)get_global_id(1);
+  if (x >= width || y >= height) return;
+  FilmPrintDisplayPixel(FilmParams(data, params_offset),
+                        FilmLoad(amounts, amounts_offset, (uint)y * (uint)width + (uint)x), x, y,
+                        width, scene_image, scene_buffer, scene_is_buffer, dst_image, dst_buffer,
+                        dst_is_buffer, print_rgba, flare, has_flare, flare_width, flare_height,
+                        render_to_flare, flare_strength, soft, soft_offset, has_soft, soft_columns,
+                        soft_rows, soft_half_size);
+}
+
+/// @p record with the grain @p grain of rule 'grain_layer_mix' (film_grain_negative.h).
+static inline FilmKernelRgb FilmGrainRecord(__local const FilmGrainNegativeParams* params,
+                                            FilmKernelRgb record, FilmGrainNoise3 grain) {
+  FilmGrainNegativeRgb value;
+  value.r                           = record.r;
+  value.g                           = record.g;
+  value.b                           = record.b;
+  const FilmGrainNegativeRgb result = FilmGrainNegativeRecord(params, value, grain);
+  return FilmKernelMakeRgb(result.r, result.g, result.b);
+}
+
+/// Phase G6: FP6 of the print and the light table with the grain of the negative, in the steps of
+/// film_grain_tile.h. Each 16 x 16 work-group covers a tile of 16 x FILM_GRAIN_NEGATIVE_TILE_ROWS
+/// pixels, and each lane applies the grain to two pixels. The grain goes into the record of each
+/// pixel before the flare amounts, the negative grade, and the table read, so the amounts with
+/// grain are never written. @p grain_data holds the FilmGrainFieldParams at @p field_offset and the
+/// FilmGrainNegativeParams at @p negative_offset (opencl_film_print_pass.cpp); the work-group
+/// copies them into local memory. The other arguments are those of film_print_display.
+__kernel __attribute__((reqd_work_group_size(FILM_GRAIN_TILE, FILM_GRAIN_TILE, 1))) void
+film_print_display_grain(
+    __global const float* amounts, uint amounts_offset, __read_only image2d_t scene_image,
+    __global const float4* scene_buffer, int scene_is_buffer, __write_only image2d_t dst_image,
+    __global float4* dst_buffer, int dst_is_buffer, int width, int height,
+    __global const float* print_rgba, __read_only image2d_t flare, int has_flare, int flare_width,
+    int flare_height, FilmMatrix render_to_flare, float flare_strength, __global const float* soft,
+    uint soft_offset, int has_soft, int soft_columns, int soft_rows, int soft_half_size,
+    __global const uchar* data, uint params_offset, __global const uchar* grain_data,
+    uint field_offset, uint negative_offset, __local float* shared) {
+  const int                       local_x = (int)get_local_id(0);
+  const int                       local_y = (int)get_local_id(1);
+  const int                       lane    = local_y * FILM_GRAIN_TILE + local_x;
+  __local FilmGrainFieldParams    field;
+  __local FilmGrainNegativeParams negative;
+  FilmGrainTileCopyWords(grain_data + field_offset, &field, sizeof(FilmGrainFieldParams), lane);
+  FilmGrainTileCopyWords(grain_data + negative_offset, &negative, sizeof(FilmGrainNegativeParams),
+                         lane);
+  // Every lane reads these before the first barrier, so they come from the upload.
+  __global const FilmGrainFieldParams* upload =
+      (__global const FilmGrainFieldParams*)(grain_data + field_offset);
+  const int halo = upload->halo;
+  FilmGrainTileAcross(&field, upload->noise, halo, FILM_GRAIN_NEGATIVE_TILE_ROWS,
+                      (int)get_group_id(0), (int)get_group_id(1), lane, shared);
+
+  const int x = (int)get_group_id(0) * FILM_GRAIN_TILE + local_x;
+  if (x >= width) return;
+  __global const FilmKernelParams* params = FilmParams(data, params_offset);
+  for (int half_index = 0; half_index < FILM_GRAIN_NEGATIVE_TILE_ROWS / FILM_GRAIN_TILE;
+       ++half_index) {
+    const int tile_row = local_y + half_index * FILM_GRAIN_TILE;
+    const int y        = (int)get_group_id(1) * FILM_GRAIN_NEGATIVE_TILE_ROWS + tile_row;
+    if (y >= height) return;
+    const FilmGrainNoise3 grain =
+        FilmGrainTileGrain(&field, halo, FILM_GRAIN_NEGATIVE_TILE_ROWS, tile_row, local_x, shared);
+    const FilmKernelRgb record = FilmGrainRecord(
+        &negative, FilmLoad(amounts, amounts_offset, (uint)y * (uint)width + (uint)x), grain);
+    FilmPrintDisplayPixel(params, record, x, y, width, scene_image, scene_buffer, scene_is_buffer,
+                          dst_image, dst_buffer, dst_is_buffer, print_rgba, flare, has_flare,
+                          flare_width, flare_height, render_to_flare, flare_strength, soft,
+                          soft_offset, has_soft, soft_columns, soft_rows, soft_half_size);
   }
 }

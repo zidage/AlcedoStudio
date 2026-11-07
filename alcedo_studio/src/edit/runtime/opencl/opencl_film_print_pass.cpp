@@ -17,6 +17,7 @@
 
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
+#include "edit/runtime/drt_post_film_grain.hpp"
 #include "edit/runtime/film/film_negative_scan.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
 #include "edit/runtime/film/film_print_math.h"
@@ -25,6 +26,7 @@
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_drt_gpu_params.hpp"
 #include "edit/runtime/opencl/opencl_drt_params.hpp"
+#include "edit/runtime/opencl/opencl_film_grain_pass.hpp"
 #include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -90,6 +92,12 @@ class Arguments {
   }
 
   auto Add(const Plane& plane) -> Arguments& { return Add(plane.native).Add(plane.offset); }
+
+  /// A `__local` argument of @p bytes.
+  auto AddLocal(std::size_t bytes) -> Arguments& {
+    CheckOpenCl(clSetKernelArg(kernel_, index_++, bytes, nullptr), label_);
+    return *this;
+  }
 
   auto AddSceneView(const OpenClSceneView& view, OpenClBackend& backend,
                     OpenClSceneArgAccess access) -> Arguments& {
@@ -277,13 +285,19 @@ auto ReadOrBuildCanvasResult(OpenClRenderDevice& device, const ExecutionPlan& pl
 void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan,
                            const DrtNodeModel& drt, std::optional<double> raw_cct,
                            const FrameSceneBinding& scene, const FrameSceneBinding& display,
-                           std::uint32_t width, std::uint32_t height,
+                           std::uint32_t width, std::uint32_t height, float grain_strength,
                            std::vector<std::string>* pass_names, bool separate_narrow_spread) {
   const auto resolved =
       DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteOpenClDrt");
   const auto  film        = drt.Params().FilmPrint();
   auto&       tables      = SharedFilmPrintTables();
   const auto& bundle      = tables.Bundle();
+  // Phase G6: the grain of the negative. A strength outside [0, 2] stops the render here, before
+  // any GPU work.
+  std::optional<FilmGrainPlan> grain;
+  if (grain_strength != 0.0f) {
+    grain = MakeDrtFilmPrintGrainPlan(drt, grain_strength, plan.geometry);
+  }
   const auto  light       = bundle.SceneLightMix(film.scene_light, raw_cct);
   // Negative Scan reads the scanner table of the scanner of the document. A rendering setting reads
   // the kept table.
@@ -637,6 +651,34 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
         });
     names.Mark("FP6 flare canvas");
   }
+  // Phase G6: the grain of the negative, the rules of RecordCudaFilmPrint. The FP6 kernel adds it
+  // to the record of each pixel, before the flare amounts and the table read. The blurred amounts,
+  // the flare canvas, and the prescan read the amounts with no grain: they are means over many
+  // pixels, where the grain has a mean of 0, so their canonical results do not depend on it.
+  std::optional<OpenClFilmGrainNegative> grain_data;
+  if (grain.has_value() && grain->enabled) {
+    grain_data = UploadOpenClFilmGrainNegative(
+        device, *grain, plan.geometry,
+        grain->reversal ? bundle.Reversal(film.negative).dye_max : std::span<const double>{}, width,
+        height, "RecordOpenClFilmPrint");
+  }
+  // The arguments of the grain after those of the FP6 kernel without grain, and the dispatch.
+  const auto add_grain = [&](Arguments& arguments) {
+    arguments.Add(grain_data->data)
+        .Add(grain_data->field_offset)
+        .Add(grain_data->negative_offset)
+        .AddLocal(grain_data->local_bytes);
+  };
+  const auto dispatch_grain = [&](cl_kernel kernel, const char* label) {
+    const std::size_t local[2] = {16, 16};
+    cl_event          event    = nullptr;
+    CheckOpenCl(clEnqueueNDRangeKernel(backend.NativeQueue(), kernel, 2, nullptr,
+                                       grain_data->global, local, 0, nullptr, &event),
+                label);
+    NoteOpenClEnqueueNdRange();
+    backend.TrackKernelEvent(context, event);
+    ++device.PassStats().film_grain_negative;
+  };
   if (params.scan != 0U) {
     if (auto_colour) {
       // Rule 'frame_auto_colour': the prescan of the full frame, a canonical result. The host reads
@@ -728,10 +770,12 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
     const auto drt_location = upload(std::as_bytes(
         std::span<const OpenCL::Pipeline::OpenClToOutputParams>(&drt_params, 1)));
     auto       kernel       = OpenClKernelCache::Instance().GetKernel(
-        OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kFilmPrintScanDisplayKernelName);
+        OpenCL::GpuDag::kDrtProgramName, grain_data.has_value()
+                                                         ? OpenCL::GpuDag::kFilmPrintScanDisplayGrainKernelName
+                                                         : OpenCL::GpuDag::kFilmPrintScanDisplayKernelName);
     const auto display_view = OpenClBindScene(device, display);
-    Arguments(kernel, "RecordOpenClFilmPrint: scan display")
-        .Add(a)
+    Arguments  arguments(kernel, "RecordOpenClFilmPrint: scan display");
+    arguments.Add(a)
         .AddSceneView(scene_view, backend, OpenClSceneArgAccess::Read)
         .AddSceneView(display_view, backend, OpenClSceneArgAccess::Write)
         .Add(static_cast<cl_uint>(width))
@@ -744,15 +788,22 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
         .Add(drt_location.first)
         .Add(static_cast<cl_uint>(drt_location.second))
         .Add(static_cast<cl_int>(plan.film_scan_linear_output ? 1 : 0));
-    Dispatch(device, kernel, width, height, "RecordOpenClFilmPrint: scan display enqueue");
-    names.Mark("FP6 scan and display transform");
+    if (grain_data.has_value()) {
+      add_grain(arguments);
+      dispatch_grain(kernel, "RecordOpenClFilmPrint: scan display with grain enqueue");
+      names.Mark("FP6 scan and display transform, with the grain of the negative");
+    } else {
+      Dispatch(device, kernel, width, height, "RecordOpenClFilmPrint: scan display enqueue");
+      names.Mark("FP6 scan and display transform");
+    }
     return;
   }
   {
-    auto       kernel       = Kernel(OpenCL::GpuDag::kFilmPrintDisplayKernelName);
+    auto kernel = Kernel(grain_data.has_value() ? OpenCL::GpuDag::kFilmPrintDisplayGrainKernelName
+                                                : OpenCL::GpuDag::kFilmPrintDisplayKernelName);
     const auto display_view = OpenClBindScene(device, display);
-    Arguments(kernel, "RecordOpenClFilmPrint: display")
-        .Add(a)
+    Arguments  arguments(kernel, "RecordOpenClFilmPrint: display");
+    arguments.Add(a)
         .AddSceneView(scene_view, backend, OpenClSceneArgAccess::Read)
         .AddSceneView(display_view, backend, OpenClSceneArgAccess::Write)
         .Add(w)
@@ -772,9 +823,15 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
         .Add(static_cast<cl_int>(image.inhibitor_half_size ? 1 : 0))
         .Add(data.native)
         .Add(params_offset);
-    Dispatch(device, kernel, width, height, "RecordOpenClFilmPrint: display enqueue");
+    if (grain_data.has_value()) {
+      add_grain(arguments);
+      dispatch_grain(kernel, "RecordOpenClFilmPrint: display with grain enqueue");
+      names.Mark("FP6 display, with the grain of the negative");
+    } else {
+      Dispatch(device, kernel, width, height, "RecordOpenClFilmPrint: display enqueue");
+      names.Mark("FP6 display");
+    }
   }
-  names.Mark("FP6 display");
 }
 
 }  // namespace alcedo
