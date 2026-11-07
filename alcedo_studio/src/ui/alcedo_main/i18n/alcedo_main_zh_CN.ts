@@ -2775,6 +2775,14 @@ Original source files on disk will be kept.</source>
         <translation>扫描仪</translation>
     </message>
     <message>
+        <source>Style</source>
+        <translation>风格</translation>
+    </message>
+    <message>
+        <source>Print Setting</source>
+        <translation>印片设置</translation>
+    </message>
+    <message>
         <source>Auto Color</source>
         <translation>自动色彩</translation>
     </message>

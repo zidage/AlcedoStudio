@@ -7,11 +7,12 @@ import Alcedo.Main 1.0
 // ACES tone mapping, transfer function (EOTF), peak luminance, and HDR
 // display intent. Method-specific controls for ACES 2.0 (limiting space) and
 // OpenDRT (look/tonescale/creative-white presets), and the film print (process
-// switch, film browser, Format and Film Grain, print material browser, scene light, three
-// sliders; a print
+// switch, film browser, print material browser, then two folding sections (issue 716):
+// Style, open at start, with Format, Film Grain, and Halation, and Print Setting, folded at
+// start, with Scene Light, Light Spread, and Enlarger Flare; a print
 // has Rec. 709 SDR output, so its page has no encoding controls; print material
-// Negative Scan has three folding sections, Negative Scan, Scanner, and OpenDRT, and the
-// encodings). An info glyph explains the panel and each film print setting with a special
+// Negative Scan has three more folding sections, Negative Scan, Scanner, and OpenDRT, folded at
+// start, and the encodings). An info glyph explains the panel and each film print setting with a special
 // function. All models share fieldKey
 // "odt" with a panel-level paramsBuilder that collects the complete state so
 // every partial edit carries the full ODT JSON. The option lists, the EOTF
@@ -1153,8 +1154,61 @@ Item {
                         onPicked: function(value) { root.selectFilm(value) }
                     }
 
+                    // A colour reversal film has no print: the page has no print section.
                     CaptionRow {
                         Layout.topMargin: appTheme.spaceXs
+                        visible: !root.isReversalFilm
+                        text: qsTr("Print")
+                        captionColor: root.colMuted
+                        infoText: root.printInfoText
+                        infoObjectName: "displayFilmPrintInfoHint"
+                    }
+
+                    FilmStockPicker {
+                        objectName: "displayFilmPrintMaterialPicker"
+                        Layout.fillWidth: true
+                        visible: !root.isReversalFilm
+                        entries: root.printBrowserEntries
+                        brands: root.filmBrands
+                        currentValue: root.selectedPrintMaterialValue
+                        controlsEnabled: root.controlsEnabled
+                        showFamilyOnCard: true
+                        accessibleName: qsTr("Print Material")
+                        searchPlaceholder: qsTr("Search print materials")
+                        emptyText: qsTr("No print materials match")
+                        familyText: root.filmFamilyText
+                        onPicked: function(value) { root.selectPrintMaterial(value) }
+                    }
+                }
+            }
+
+            // Style holds the look of the film: the format, the grain, and the halation. These
+            // change most often, so the section starts open (issue 716).
+            CollapsibleSection {
+                objectName: "displayFilmStyleControls"
+                Layout.fillWidth: true
+                visible: root.isFilmPrint
+                title: qsTr("Style")
+                expanded: true
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: styleBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+
+                ColumnLayout {
+                    id: styleBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
+
+                    CaptionRow {
                         text: qsTr("Format")
                         captionColor: root.colMuted
                         infoText: root.formatInfoText
@@ -1186,31 +1240,41 @@ Item {
                         infoObjectName: "displayFilmGrainInfoHint"
                     }
 
-                    // A colour reversal film has no print: the page has no print section.
-                    CaptionRow {
-                        Layout.topMargin: appTheme.spaceXs
-                        visible: !root.isReversalFilm
-                        text: qsTr("Print")
-                        captionColor: root.colMuted
-                        infoText: root.printInfoText
-                        infoObjectName: "displayFilmPrintInfoHint"
-                    }
-
-                    FilmStockPicker {
-                        objectName: "displayFilmPrintMaterialPicker"
+                    AdjustmentSlider {
+                        objectName: "displayFilmHalationSlider"
                         Layout.fillWidth: true
-                        visible: !root.isReversalFilm
-                        entries: root.printBrowserEntries
-                        brands: root.filmBrands
-                        currentValue: root.selectedPrintMaterialValue
-                        controlsEnabled: root.controlsEnabled
-                        showFamilyOnCard: true
-                        accessibleName: qsTr("Print Material")
-                        searchPlaceholder: qsTr("Search print materials")
-                        emptyText: qsTr("No print materials match")
-                        familyText: root.filmFamilyText
-                        onPicked: function(value) { root.selectPrintMaterial(value) }
+                        model: filmHalationModel
+                        flickable: displayScroll
+                        infoText: root.halationInfoText
                     }
+                }
+            }
+
+            // Print Setting holds the exposure and the printing conditions. They rarely change,
+            // so the section starts folded (issue 716).
+            CollapsibleSection {
+                objectName: "displayFilmPrintSettingControls"
+                Layout.fillWidth: true
+                visible: root.isFilmPrint
+                title: qsTr("Print Setting")
+                expanded: false
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: printSettingBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+
+                ColumnLayout {
+                    id: printSettingBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
 
                     AdjustmentCombo {
                         objectName: "displayFilmSceneLightCombo"
@@ -1229,14 +1293,6 @@ Item {
                     }
 
                     AdjustmentSlider {
-                        objectName: "displayFilmHalationSlider"
-                        Layout.fillWidth: true
-                        model: filmHalationModel
-                        flickable: displayScroll
-                        infoText: root.halationInfoText
-                    }
-
-                    AdjustmentSlider {
                         objectName: "displayFilmEnlargerFlareSlider"
                         Layout.fillWidth: true
                         visible: !root.isNegativeScan
@@ -1249,7 +1305,8 @@ Item {
             }
 
             // Negative Scan: the rendering settings act after the scan; the scanner settings
-            // build the scanner table again (issue 661). Each group folds, so the page stays short.
+            // build the scanner table again (issue 661). Each group folds and starts folded, so
+            // the page stays short (issue 716).
             CollapsibleSection {
                 id: negativeScanSection
                 objectName: "displayNegativeScanControls"
@@ -1258,7 +1315,7 @@ Item {
                 title: qsTr("Negative Scan")
                 infoText: root.negativeScanInfoText
                 infoObjectName: "displayNegativeScanInfoHint"
-                expanded: true
+                expanded: false
                 controlsEnabled: root.controlsEnabled
                 surfaceColor: root.colCardSurface
                 disabledSurfaceColor: root.colCardSurface

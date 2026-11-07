@@ -305,6 +305,14 @@ auto WaitFor(Predicate predicate) -> bool {
   return predicate();
 }
 
+/// Unfold the folding section @p name of the panel, so that its controls show.
+void Unfold(const AdjustmentStackHarness& harness, const char* name) {
+  auto* section = harness.findModel<QQuickItem>(QString::fromLatin1(name));
+  ASSERT_NE(section, nullptr) << name;
+  section->setProperty("expanded", true);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+}
+
 }  // namespace
 
 // Panel loads via EditorAdjustmentStack and models are accessible.
@@ -904,6 +912,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanHidesTheEnlargerFlareAnd
   ASSERT_NE(material_picker, nullptr);
   ASSERT_NE(material, nullptr);
   ASSERT_NE(halation, nullptr);
+  Unfold(harness, "displayFilmPrintSettingControls");
   ASSERT_TRUE(WaitFor([&] { return flare_slider->isVisible(); }));
 
   // The Print material list has Negative Scan first, before Cine Look.
@@ -1322,11 +1331,13 @@ TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanShowsItsSettingsAndTheOp
   ASSERT_TRUE(WaitFor([&] { return scan_controls->isVisible(); }));
   ASSERT_TRUE(WaitFor([&] { return open_drt->isVisible(); }));
   EXPECT_TRUE(encoding->isVisible());
-  // The Scanner and OpenDRT sections start folded; unfolded, they show their controls.
+  // The Negative Scan, Scanner, and OpenDRT sections start folded; unfolded, they show their
+  // controls.
   auto* scanner =
       harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanScannerControls"));
   ASSERT_NE(scanner, nullptr);
   EXPECT_FALSE(look_combo->isVisible());
+  scan_controls->setProperty("expanded", true);
   scanner->setProperty("expanded", true);
   open_drt->setProperty("expanded", true);
   ASSERT_TRUE(WaitFor([&] { return look_combo->isVisible(); }));
@@ -1345,14 +1356,15 @@ TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanShowsItsSettingsAndTheOp
   ASSERT_TRUE(WaitFor([&] { return !scan_controls->isVisible() && !open_drt->isVisible(); }));
 }
 
-// The Negative Scan, Scanner, and OpenDRT groups are folding sections: Negative Scan starts open,
-// the other two start folded. A click on a header folds the section; a click on its info glyph
-// pins the explanation and keeps the fold.
+// The Negative Scan, Scanner, and OpenDRT groups are folding sections that start folded (issue
+// 716). A click on a header unfolds the section; a click on its info glyph pins the explanation
+// and keeps the fold.
 TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanGroupsFoldAndTheirInfoGlyphPinsTheText) {
   DisplayTransformSession session(ProjectedSnapshot(NegativeScanDocument({})), 0);
   AdjustmentStackHarness  harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
-  harness.resizeHeight(1600);
+  // The open Style section and the unfolded Negative Scan section stay above the Scanner header.
+  harness.resizeHeight(2000);
   auto* scan = harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanControls"));
   auto* scanner =
       harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanScannerControls"));
@@ -1365,10 +1377,11 @@ TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanGroupsFoldAndTheirInfoGl
   ASSERT_NE(open_drt, nullptr);
   ASSERT_NE(exposure, nullptr);
   ASSERT_NE(red, nullptr);
-  ASSERT_TRUE(WaitFor([&] { return scan->isVisible() && exposure->isVisible(); }));
-  EXPECT_TRUE(scan->property("expanded").toBool());
+  ASSERT_TRUE(WaitFor([&] { return scan->isVisible(); }));
+  EXPECT_FALSE(scan->property("expanded").toBool());
   EXPECT_FALSE(scanner->property("expanded").toBool());
   EXPECT_FALSE(open_drt->property("expanded").toBool());
+  EXPECT_FALSE(exposure->isVisible());
   EXPECT_FALSE(red->isVisible());
 
   auto* header = scan->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionHeader"));
@@ -1383,12 +1396,14 @@ TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanGroupsFoldAndTheirInfoGl
   QTest::mouseClick(harness.window(), Qt::LeftButton, Qt::NoModifier, info_center);
   QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
   EXPECT_TRUE(info->property("pinned").toBool());
-  EXPECT_TRUE(scan->property("expanded").toBool());
+  EXPECT_FALSE(scan->property("expanded").toBool());
 
   const auto header_left = header->mapToScene(QPointF(40, header->height() / 2.0)).toPoint();
   QTest::mouseClick(harness.window(), Qt::LeftButton, Qt::NoModifier, header_left);
-  ASSERT_TRUE(WaitFor([&] { return !scan->property("expanded").toBool(); }));
-  ASSERT_TRUE(WaitFor([&] { return !exposure->isVisible(); }));
+  ASSERT_TRUE(WaitFor([&] { return scan->property("expanded").toBool(); }));
+  ASSERT_TRUE(WaitFor([&] { return exposure->isVisible(); }));
+  // The Scanner header moves down while Negative Scan unfolds.
+  ASSERT_TRUE(WaitFor([&] { return scan->property("foldProgress").toReal() >= 1.0; }));
 
   auto* scanner_header =
       scanner->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionHeader"));
@@ -1411,6 +1426,9 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintSettingsHaveInfoGlyphs) {
   auto* scan = harness.findModel<QQuickItem>(QStringLiteral("displayNegativeScanControls"));
   ASSERT_NE(scan, nullptr);
   ASSERT_TRUE(WaitFor([&] { return scan->isVisible(); }));
+  // The glyphs of the controls show in the unfolded sections.
+  Unfold(harness, "displayFilmPrintSettingControls");
+  Unfold(harness, "displayNegativeScanControls");
 
   for (const auto* name :
        {"displayTransformInfoHint", "displayFilmInfoHint", "displayFilmFormatInfoHint",
@@ -1435,6 +1453,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintSettingsHaveInfoGlyphs) {
   ASSERT_NE(exposure, nullptr);
   auto* none = exposure->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderInfoHint"));
   ASSERT_NE(none, nullptr);
+  ASSERT_TRUE(exposure->isVisible());
   EXPECT_FALSE(none->isVisible());
 }
 
@@ -1715,8 +1734,65 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmFormatSelectionWritesOneSettledF
   }
 }
 
+// The film print page has the film and the print material at the top, then a Style section that
+// starts open with Format, Film Grain, and Halation, then a Print Setting section that starts
+// folded with Scene Light, Light Spread, and Enlarger Flare (issue 716).
+TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintStyleStartsOpenAndPrintSettingStartsFolded) {
+  DisplayTransformSession session(MakeFilmPrintSnapshot(), 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  harness.resizeHeight(1600);
+  auto* print = harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintMaterialPicker"));
+  auto* style = harness.findModel<QQuickItem>(QStringLiteral("displayFilmStyleControls"));
+  auto* setting =
+      harness.findModel<QQuickItem>(QStringLiteral("displayFilmPrintSettingControls"));
+  ASSERT_NE(print, nullptr);
+  ASSERT_NE(style, nullptr);
+  ASSERT_NE(setting, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return style->isVisible() && setting->isVisible(); }));
+  EXPECT_EQ(style->property("title").toString(), QStringLiteral("Style"));
+  EXPECT_EQ(setting->property("title").toString(), QStringLiteral("Print Setting"));
+  EXPECT_TRUE(style->property("expanded").toBool());
+  EXPECT_FALSE(setting->property("expanded").toBool());
+
+  const auto top = [&](QQuickItem* item) { return item->mapToScene(QPointF()).y(); };
+  EXPECT_GT(top(style), top(print) + print->height() - 1.0);
+  EXPECT_GT(top(setting), top(style) + style->height() - 1.0);
+
+  const auto in = [](QQuickItem* section, QQuickItem* item) {
+    return item != nullptr && section->isAncestorOf(item);
+  };
+  for (const auto* name :
+       {"displayFilmFormatControl", "displayFilmGrainSlider", "displayFilmHalationSlider"}) {
+    auto* item = harness.findModel<QQuickItem>(QString::fromLatin1(name));
+    EXPECT_TRUE(in(style, item)) << name;
+    EXPECT_TRUE(item != nullptr && item->isVisible()) << name;
+  }
+  const std::vector<const char*> settings = {
+      "displayFilmSceneLightCombo", "displayFilmLightSpreadSlider",
+      "displayFilmEnlargerFlareSlider"};
+  for (const auto* name : settings) {
+    auto* item = harness.findModel<QQuickItem>(QString::fromLatin1(name));
+    EXPECT_TRUE(in(setting, item)) << name;
+    EXPECT_TRUE(item != nullptr && !item->isVisible()) << name;
+  }
+
+  setting->setProperty("expanded", true);
+  for (const auto* name : settings) {
+    auto* item = harness.findModel<QQuickItem>(QString::fromLatin1(name));
+    ASSERT_NE(item, nullptr) << name;
+    EXPECT_TRUE(WaitFor([&] { return item->isVisible(); })) << name;
+  }
+
+  // Another method has no film print sections.
+  session.setAdjustmentSnapshot(MakeOpenDrtSnapshot());
+  ASSERT_TRUE(WaitFor([&] { return !style->isVisible() && !setting->isVisible(); }));
+  EXPECT_EQ(session.submitCount(), 0);
+}
+
 // With the film print, the Film Grain slider is on the Display Transform page directly under the
-// Format selector, with the stored value. No page shows a caption of the granularity.
+// Format selector in the Style section, below the print material, with the stored value. No page
+// shows a caption of the granularity.
 TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintShowsFilmGrainUnderTheFormat) {
   auto snapshot = MakeFilmPrintSnapshot();
   InsertPostStrength(snapshot, QStringLiteral("film_grain"), 0.6);
@@ -1738,7 +1814,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, FilmPrintShowsFilmGrainUnderTheForma
   EXPECT_DOUBLE_EQ(model->maximum(), 200.0);
   const auto top = [&](QQuickItem* item) { return item->mapToScene(QPointF()).y(); };
   EXPECT_GT(top(grain), top(format) + format->height() - 1.0);
-  EXPECT_LT(top(grain), top(print));
+  EXPECT_GT(top(format), top(print) + print->height() - 1.0);
   EXPECT_EQ(harness.findModel<QQuickItem>(QStringLiteral("postFilmGrainStockCaption")), nullptr);
 
   // Another method has no film print controls, so the slider is on the Post Processing page.
