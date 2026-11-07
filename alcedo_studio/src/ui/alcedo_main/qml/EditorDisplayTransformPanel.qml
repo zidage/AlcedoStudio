@@ -10,8 +10,9 @@ import Alcedo.Main 1.0
 // switch, film browser, Format and Film Grain, print material browser, scene light, three
 // sliders; a print
 // has Rec. 709 SDR output, so its page has no encoding controls; print material
-// Negative Scan has its scan settings and the OpenDRT settings and encodings). All models share
-// fieldKey
+// Negative Scan has three folding sections, Negative Scan, Scanner, and OpenDRT, and the
+// encodings). An info glyph explains the panel and each film print setting with a special
+// function. All models share fieldKey
 // "odt" with a panel-level paramsBuilder that collects the complete state so
 // every partial edit carries the full ODT JSON. The option lists, the EOTF
 // choices of each encoding space, the peak range, and the parameter object
@@ -122,21 +123,29 @@ Item {
     /// it has another method, so without them the selection starts at the defaults.
     ///
     /// The film print has its grain in the negative, so the selection also turns on Film Grain at
-    /// @ref filmPrintGrainPercent when its stored strength is 0. A stored strength stays. Film
-    /// Grain is a field of its own, so this is a second settled write: a second history entry
-    /// after the method.
+    /// @ref filmPrintGrainPercent when its stored strength is 0. A stored strength stays. A
+    /// selection of another method on Film Print sets Film Grain to 0: the grain belongs to the
+    /// film, and the other methods show the image with no film. Film Grain is a field of its own,
+    /// so each of these is a second settled write: a second history entry after the method.
     function selectMethod(index, value) {
         const entersFilmPrint = String(value) === "film_print" && !root.isFilmPrint
+        const leavesFilmPrint = String(value) !== "film_print" && root.isFilmPrint
         if (entersFilmPrint && root.editorBehavior) {
             const remembered = root.editorBehavior.filmPrintUiValue
             if (remembered && remembered.method === "film_print")
                 root.loadFilmValues(remembered)
         }
         methodModel.selectIndex(index)
-        if (entersFilmPrint && !(filmGrainModel.value > 0)) {
-            filmGrainModel.editValue(root.filmPrintGrainPercent)
-            filmGrainModel.commitImmediately()
-        }
+        if (entersFilmPrint && !(filmGrainModel.value > 0))
+            root.writeFilmGrain(root.filmPrintGrainPercent)
+        else if (leavesFilmPrint && filmGrainModel.value !== 0)
+            root.writeFilmGrain(0)
+    }
+
+    /// One settled write of Film Grain at @p percent (UI percent).
+    function writeFilmGrain(percent) {
+        filmGrainModel.editValue(percent)
+        filmGrainModel.commitImmediately()
     }
 
     /// Remember the film print settings after a settled user write with method Film Print.
@@ -899,6 +908,50 @@ Item {
         }
     }
 
+    // ── Explanations of the info glyphs (issue G8) ──────────────────────────
+    readonly property string panelInfoText: qsTr("The display transform changes the scene-linear image into the image on the display. ACES 2.0 and OpenDRT map the tones and colors to an SDR or HDR display. Film Print simulates film from its spectral data: the scene exposes a film, and the film is printed on a print material, scanned (Negative Scan), or viewed on a light table (reversal film).")
+    readonly property string filmInfoText: qsTr("The film that records the scene. Its spectral sensitivity, characteristic curves, dyes, sharpness, and grain come from the published data of the film. A negative film makes a print or a scan; a reversal (slide) film shows on a light table.")
+    readonly property string formatInfoText: qsTr("The size of the film frame. The image fills the frame, so a smaller frame enlarges the grain, the light spread, and the halation in the image.")
+    readonly property string grainInfoText: qsTr("The grain of the film, in the dyes of the negative. 100 % is the granularity in the datasheet of the film. Method Film Print turns it on at 100 %; another method sets it to 0.")
+    readonly property string printInfoText: qsTr("The material that makes the positive image from the negative. A paper gives a print under D50 viewing light; a cinema print stock gives a projection in a dark theater. Both give Rec. 709 SDR. Negative Scan scans and inverts the negative, and OpenDRT shows the scan in SDR or HDR.")
+    readonly property string sceneLightInfoText: qsTr("The light on the scene when the film is exposed. As Shot uses the color temperature of the RAW white balance. Reference uses the light that the film is balanced for. Another light gives the color cast of real film: a tungsten film turns cool in daylight, and a daylight film turns warm in tungsten light. The print timing or the scan settings set how much of the cast stays.")
+    readonly property string lightSpreadInfoText: qsTr("The spread of light in the emulsion, which sets the sharpness of the film. 1 is the sharpness in the datasheet; a larger value makes the image softer.")
+    readonly property string halationInfoText: qsTr("Light that the film base reflects back into the red-sensitive layer. It makes a red glow around bright lights. 1 is the standard strength.")
+    readonly property string enlargerFlareInfoText: qsTr("Stray light of the enlarger lens on the paper. It adds light where the negative is dense, so the highlights of the print turn gray.")
+    readonly property string loupeFlareInfoText: qsTr("Stray light of the loupe on the light table. It lifts the shadows of the slide.")
+    readonly property string negativeScanInfoText: qsTr("A virtual scanner reads the negative, and one straight line in log density inverts it, so the toe, the shoulder, and the contrast of the film stay. Auto Color Off keeps the cast of the scene light and the film; the other modes remove part of the cast that a prescan of the frame measures. Scan Exposure, Scan Contrast, and Cyan, Magenta, Yellow change the inversion. Black at Film Base sets the film base to black.")
+    readonly property string scannerInfoText: qsTr("The bands of the virtual scanner: the center wavelengths of the red, green, and blue channels, one band width, and the scanner light. The defaults are an ideal scanner. A change builds the scanner table again.")
+    readonly property string scanOpenDrtInfoText: qsTr("The scan gives linear AP1 with 18 % gray at 0.18. OpenDRT shows it with these settings, which are the settings of method OpenDRT.")
+    readonly property string colorEncodingInfoText: qsTr("The color space, the transfer function (EOTF), and the peak luminance of the output. A print and a slide give Rec. 709 SDR, so Film Print shows this section only with Negative Scan.")
+
+    // A muted caption with an info glyph after it. Inline components do not see the ids of the
+    // file, so each instance gives the caption color.
+    component CaptionRow: RowLayout {
+        id: captionRow
+        property string text: ""
+        property string infoText: ""
+        property string infoObjectName: ""
+        property color captionColor: appTheme.textMutedColor
+        Layout.fillWidth: true
+        spacing: appTheme.spaceXs
+
+        Label {
+            text: captionRow.text
+            color: captionRow.captionColor
+            font.pixelSize: appTheme.fontSizeCaption
+            font.weight: appTheme.fontWeightStrong
+        }
+
+        EditorInfoHint {
+            objectName: captionRow.infoObjectName
+            Layout.alignment: Qt.AlignVCenter
+            visible: captionRow.infoText.length > 0
+            text: captionRow.infoText
+        }
+
+        Item { Layout.fillWidth: true }
+    }
+
     // ── Layout ──────────────────────────────────────────────────────────────
     // Grill-locked IA (2026-07-25):
     //   Method first (always expanded) → method params inline → Color & Encoding
@@ -950,12 +1003,24 @@ Item {
             width: displayScroll.width
             spacing: appTheme.spaceSm
 
-            Label {
+            RowLayout {
                 Layout.fillWidth: true
-                text: qsTr("Display Transform")
-                color: root.colText
-                font.pixelSize: appTheme.fontSizeSection
-                font.weight: appTheme.fontWeightHeading
+                spacing: appTheme.spaceXs
+
+                Label {
+                    text: qsTr("Display Transform")
+                    color: root.colText
+                    font.pixelSize: appTheme.fontSizeSection
+                    font.weight: appTheme.fontWeightHeading
+                }
+
+                EditorInfoHint {
+                    objectName: "displayTransformInfoHint"
+                    Layout.alignment: Qt.AlignVCenter
+                    text: root.panelInfoText
+                }
+
+                Item { Layout.fillWidth: true }
             }
 
             // ── Method (always visible; not collapsible) ────────────────────
@@ -1065,13 +1130,12 @@ Item {
                         onSelected: function(index, value) { root.selectFilmProcess(value) }
                     }
 
-                    Label {
-                        Layout.fillWidth: true
+                    CaptionRow {
                         Layout.topMargin: appTheme.spaceXs
                         text: qsTr("Film")
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
-                        font.weight: appTheme.fontWeightStrong
+                        captionColor: root.colMuted
+                        infoText: root.filmInfoText
+                        infoObjectName: "displayFilmInfoHint"
                     }
 
                     FilmStockPicker {
@@ -1089,13 +1153,12 @@ Item {
                         onPicked: function(value) { root.selectFilm(value) }
                     }
 
-                    Label {
-                        Layout.fillWidth: true
+                    CaptionRow {
                         Layout.topMargin: appTheme.spaceXs
                         text: qsTr("Format")
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
-                        font.weight: appTheme.fontWeightStrong
+                        captionColor: root.colMuted
+                        infoText: root.formatInfoText
+                        infoObjectName: "displayFilmFormatInfoHint"
                     }
 
                     // One write of film_format per click. The Post Processing page and the
@@ -1119,17 +1182,18 @@ Item {
                         Layout.fillWidth: true
                         model: filmGrainModel
                         flickable: displayScroll
+                        infoText: root.grainInfoText
+                        infoObjectName: "displayFilmGrainInfoHint"
                     }
 
                     // A colour reversal film has no print: the page has no print section.
-                    Label {
-                        Layout.fillWidth: true
+                    CaptionRow {
                         Layout.topMargin: appTheme.spaceXs
                         visible: !root.isReversalFilm
                         text: qsTr("Print")
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
-                        font.weight: appTheme.fontWeightStrong
+                        captionColor: root.colMuted
+                        infoText: root.printInfoText
+                        infoObjectName: "displayFilmPrintInfoHint"
                     }
 
                     FilmStockPicker {
@@ -1152,6 +1216,8 @@ Item {
                         objectName: "displayFilmSceneLightCombo"
                         Layout.fillWidth: true
                         model: filmSceneLightModel
+                        infoText: root.sceneLightInfoText
+                        infoObjectName: "displayFilmSceneLightInfoHint"
                     }
 
                     AdjustmentSlider {
@@ -1159,6 +1225,7 @@ Item {
                         Layout.fillWidth: true
                         model: filmLightSpreadModel
                         flickable: displayScroll
+                        infoText: root.lightSpreadInfoText
                     }
 
                     AdjustmentSlider {
@@ -1166,6 +1233,7 @@ Item {
                         Layout.fillWidth: true
                         model: filmHalationModel
                         flickable: displayScroll
+                        infoText: root.halationInfoText
                     }
 
                     AdjustmentSlider {
@@ -1174,166 +1242,214 @@ Item {
                         visible: !root.isNegativeScan
                         model: filmEnlargerFlareModel
                         flickable: displayScroll
+                        infoText: root.isReversalFilm ? root.loupeFlareInfoText
+                                                      : root.enlargerFlareInfoText
+                    }
+                }
+            }
+
+            // Negative Scan: the rendering settings act after the scan; the scanner settings
+            // build the scanner table again (issue 661). Each group folds, so the page stays short.
+            CollapsibleSection {
+                id: negativeScanSection
+                objectName: "displayNegativeScanControls"
+                Layout.fillWidth: true
+                visible: root.isFilmPrint && root.isNegativeScan
+                title: qsTr("Negative Scan")
+                infoText: root.negativeScanInfoText
+                infoObjectName: "displayNegativeScanInfoHint"
+                expanded: true
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: scanBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+
+                ColumnLayout {
+                    id: scanBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
+
+                    AdjustmentCombo {
+                        objectName: "displayFilmScanAutoCombo"
+                        Layout.fillWidth: true
+                        model: filmScanAutoModel
                     }
 
-                    // Negative Scan: the rendering settings act after the scan; the scanner
-                    // settings build the scanner table again (issue 661).
-                    ColumnLayout {
-                        objectName: "displayNegativeScanControls"
+                    AdjustmentSlider {
+                        objectName: "displayFilmScanAutoStrengthSlider"
                         Layout.fillWidth: true
-                        spacing: appTheme.spaceSm
-                        visible: root.isNegativeScan
-
-                        Label {
-                            Layout.fillWidth: true
-                            Layout.topMargin: appTheme.spaceXs
-                            text: qsTr("Negative Scan")
-                            color: root.colMuted
-                            font.pixelSize: appTheme.fontSizeCaption
-                            font.weight: appTheme.fontWeightStrong
-                        }
-
-                        AdjustmentCombo {
-                            objectName: "displayFilmScanAutoCombo"
-                            Layout.fillWidth: true
-                            model: filmScanAutoModel
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScanAutoStrengthSlider"
-                            Layout.fillWidth: true
-                            model: filmScanAutoStrengthModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScanAutoDensitySlider"
-                            Layout.fillWidth: true
-                            model: filmScanAutoDensityModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScanContrastSlider"
-                            Layout.fillWidth: true
-                            model: filmScanContrastModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScanExposureSlider"
-                            Layout.fillWidth: true
-                            model: filmScanExposureModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScanCyanSlider"
-                            Layout.fillWidth: true
-                            model: filmScanCyanModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScanMagentaSlider"
-                            Layout.fillWidth: true
-                            model: filmScanMagentaModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScanYellowSlider"
-                            Layout.fillWidth: true
-                            model: filmScanYellowModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScanBlackSlider"
-                            Layout.fillWidth: true
-                            model: filmScanBlackModel
-                            flickable: displayScroll
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            Layout.topMargin: appTheme.spaceXs
-                            text: qsTr("Scanner")
-                            color: root.colMuted
-                            font.pixelSize: appTheme.fontSizeCaption
-                            font.weight: appTheme.fontWeightStrong
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScannerRedSlider"
-                            Layout.fillWidth: true
-                            model: filmScannerRedModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScannerGreenSlider"
-                            Layout.fillWidth: true
-                            model: filmScannerGreenModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScannerBlueSlider"
-                            Layout.fillWidth: true
-                            model: filmScannerBlueModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentSlider {
-                            objectName: "displayFilmScannerWidthSlider"
-                            Layout.fillWidth: true
-                            model: filmScannerWidthModel
-                            flickable: displayScroll
-                        }
-
-                        AdjustmentCombo {
-                            objectName: "displayFilmScannerLightCombo"
-                            Layout.fillWidth: true
-                            model: filmScannerLightModel
-                        }
+                        model: filmScanAutoStrengthModel
+                        flickable: displayScroll
                     }
 
-                    // Negative Scan ends in linear AP1 that OpenDRT shows, with the settings of
-                    // method OpenDRT. The models are those of that method, so a change of method
-                    // keeps the values.
-                    ColumnLayout {
-                        objectName: "displayNegativeScanOpenDrtControls"
+                    AdjustmentSlider {
+                        objectName: "displayFilmScanAutoDensitySlider"
                         Layout.fillWidth: true
-                        spacing: appTheme.spaceSm
-                        visible: root.isNegativeScan
+                        model: filmScanAutoDensityModel
+                        flickable: displayScroll
+                    }
 
-                        Label {
-                            Layout.fillWidth: true
-                            Layout.topMargin: appTheme.spaceXs
-                            text: qsTr("OpenDRT")
-                            color: root.colMuted
-                            font.pixelSize: appTheme.fontSizeCaption
-                            font.weight: appTheme.fontWeightStrong
-                        }
+                    AdjustmentSlider {
+                        objectName: "displayFilmScanContrastSlider"
+                        Layout.fillWidth: true
+                        model: filmScanContrastModel
+                        flickable: displayScroll
+                    }
 
-                        AdjustmentCombo {
-                            objectName: "displayNegativeScanOpenDrtLookCombo"
-                            Layout.fillWidth: true
-                            model: openDrtLookModel
-                        }
+                    AdjustmentSlider {
+                        objectName: "displayFilmScanExposureSlider"
+                        Layout.fillWidth: true
+                        model: filmScanExposureModel
+                        flickable: displayScroll
+                    }
 
-                        AdjustmentCombo {
-                            objectName: "displayNegativeScanOpenDrtTonescaleCombo"
-                            Layout.fillWidth: true
-                            model: openDrtTonescaleModel
-                        }
+                    AdjustmentSlider {
+                        objectName: "displayFilmScanCyanSlider"
+                        Layout.fillWidth: true
+                        model: filmScanCyanModel
+                        flickable: displayScroll
+                    }
 
-                        AdjustmentCombo {
-                            objectName: "displayNegativeScanOpenDrtCreativeWhiteCombo"
-                            Layout.fillWidth: true
-                            model: openDrtCreativeWhiteModel
-                        }
+                    AdjustmentSlider {
+                        objectName: "displayFilmScanMagentaSlider"
+                        Layout.fillWidth: true
+                        model: filmScanMagentaModel
+                        flickable: displayScroll
+                    }
+
+                    AdjustmentSlider {
+                        objectName: "displayFilmScanYellowSlider"
+                        Layout.fillWidth: true
+                        model: filmScanYellowModel
+                        flickable: displayScroll
+                    }
+
+                    AdjustmentSlider {
+                        objectName: "displayFilmScanBlackSlider"
+                        Layout.fillWidth: true
+                        model: filmScanBlackModel
+                        flickable: displayScroll
+                    }
+                }
+            }
+
+            // The scanner settings build the scanner table again; they rarely change, so
+            // the section starts folded.
+            CollapsibleSection {
+                objectName: "displayNegativeScanScannerControls"
+                Layout.fillWidth: true
+                visible: root.isFilmPrint && root.isNegativeScan
+                title: qsTr("Scanner")
+                infoText: root.scannerInfoText
+                infoObjectName: "displayNegativeScanScannerInfoHint"
+                expanded: false
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: scannerBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+
+                ColumnLayout {
+                    id: scannerBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
+
+                    AdjustmentSlider {
+                        objectName: "displayFilmScannerRedSlider"
+                        Layout.fillWidth: true
+                        model: filmScannerRedModel
+                        flickable: displayScroll
+                    }
+
+                    AdjustmentSlider {
+                        objectName: "displayFilmScannerGreenSlider"
+                        Layout.fillWidth: true
+                        model: filmScannerGreenModel
+                        flickable: displayScroll
+                    }
+
+                    AdjustmentSlider {
+                        objectName: "displayFilmScannerBlueSlider"
+                        Layout.fillWidth: true
+                        model: filmScannerBlueModel
+                        flickable: displayScroll
+                    }
+
+                    AdjustmentSlider {
+                        objectName: "displayFilmScannerWidthSlider"
+                        Layout.fillWidth: true
+                        model: filmScannerWidthModel
+                        flickable: displayScroll
+                    }
+
+                    AdjustmentCombo {
+                        objectName: "displayFilmScannerLightCombo"
+                        Layout.fillWidth: true
+                        model: filmScannerLightModel
+                    }
+                }
+            }
+
+            // Negative Scan ends in linear AP1 that OpenDRT shows, with the settings of method
+            // OpenDRT. The models are those of that method, so a change of method keeps the
+            // values. The section starts folded.
+            CollapsibleSection {
+                objectName: "displayNegativeScanOpenDrtControls"
+                Layout.fillWidth: true
+                visible: root.isFilmPrint && root.isNegativeScan
+                title: qsTr("OpenDRT")
+                infoText: root.scanOpenDrtInfoText
+                infoObjectName: "displayNegativeScanOpenDrtInfoHint"
+                expanded: false
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: scanOpenDrtBody.implicitHeight + 2 * (appTheme.spaceSm + appTheme.spaceXs)
+
+                ColumnLayout {
+                    id: scanOpenDrtBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
+
+                    AdjustmentCombo {
+                        objectName: "displayNegativeScanOpenDrtLookCombo"
+                        Layout.fillWidth: true
+                        model: openDrtLookModel
+                    }
+
+                    AdjustmentCombo {
+                        objectName: "displayNegativeScanOpenDrtTonescaleCombo"
+                        Layout.fillWidth: true
+                        model: openDrtTonescaleModel
+                    }
+
+                    AdjustmentCombo {
+                        objectName: "displayNegativeScanOpenDrtCreativeWhiteCombo"
+                        Layout.fillWidth: true
+                        model: openDrtCreativeWhiteModel
                     }
                 }
             }
@@ -1346,6 +1462,8 @@ Item {
                 // A print encodes Rec. 709 SDR only. Negative Scan has the encodings of OpenDRT.
                 visible: !root.isFilmPrint || root.isNegativeScan
                 title: qsTr("Color & Encoding")
+                infoText: root.colorEncodingInfoText
+                infoObjectName: "displayColorEncodingInfoHint"
                 expanded: true
                 controlsEnabled: root.controlsEnabled
                 surfaceColor: root.colCardSurface

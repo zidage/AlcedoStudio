@@ -482,7 +482,14 @@ Print             [ Kodak 2383 ]
 - A selection of method Film Print on another method sets Film Grain to 100 % when its stored strength is 0. A stored strength
   stays. Film Grain is a field of its own, so this is a second settled write, and a second history entry after the method. An
   open document with the film print and a strength of 0 keeps it: only the selection writes.
+- A selection of another method on method Film Print sets Film Grain to 0 (user change of G8, 2026-11-06). The grain belongs
+  to the film, so the other methods start with no grain. This is also a second settled write after the method. A change between
+  two methods that are not Film Print keeps the strength.
 - An old document has a strength and no `film_format`; it reads `35mm` (section 2.4).
+- Negative Scan shows three folding sections under the film print controls: Negative Scan (open at the start), Scanner, and
+  OpenDRT (folded at the start). The fold state belongs to the panel and is not written.
+- An "i" glyph explains the panel (next to the title), Film, Format, Film Grain, Print, Scene Light, Light Spread, Halation,
+  Enlarger Flare (Loupe Flare for a reversal film), and the Negative Scan, Scanner, OpenDRT, and Color & Encoding sections.
 
 ### 7.3 Other surfaces
 
@@ -507,7 +514,7 @@ closed by G3.
 | G5 | [#680](https://github.com/zidage/AlcedoStudio/issues/680) | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Complete (1703 lines) |
 | G6 | [#681](https://github.com/zidage/AlcedoStudio/issues/681) | Grain in the negative on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G4, G5 | 1100 | Complete (1159 product lines; Metal 16mm timing: #696) |
 | G7 | [#682](https://github.com/zidage/AlcedoStudio/issues/682) | Format sets the film print image plane | `film_print_plan.cpp` | G2 | 400 | Complete |
-| G8 | [#683](https://github.com/zidage/AlcedoStudio/issues/683) | Measurements, user review, and documents | docs, lab | G6, G7 | 400 | Planned |
+| G8 | [#683](https://github.com/zidage/AlcedoStudio/issues/683) | User scope: grain switch, film browser, folding sections, info glyphs, illuminant cast study | `ui/alcedo_main/qml`, `edit/runtime/film` | G6, G7 | 600 | In progress |
 
 Each estimate is at or below 2000 lines. One backend group per phase keeps each review small.
 
@@ -1690,21 +1697,41 @@ pixels (half-size radius 34), and Halation on the 2048 canvas from 6.8 to 19.6 t
 
 Remaining gaps: none for G7. The user checked the CUDA result by eye before G6 (2026-11-06).
 
-### G8: measurements, user review, and documents
+### G8: user scope of the film print panel and the illuminant cast
 
-**Objective and deliverables.** The timing record of all backends, the user review, and the grain section of the explanatory
-document.
+User change (2026-11-06): the user set the scope of G8 to the five items below. The timing record of G3 to G6 is in the
+completion records of those phases. The review set and the grain section of the explanatory document move to
+[#683](https://github.com/zidage/AlcedoStudio/issues/683) after G8.
 
-**Steps.**
+**Objective and deliverables.**
 
-1. Record the Release timing of G3 to G6 in this plan.
-2. Render a review set from `sample_image/raw/` (no lab photos): one portrait, one landscape, and one low-light image, with 5207,
-   5219, Portra 400, Ektar 100, and Velvia 50, at 16mm, 35mm, and 70mm, at fit and at 100 %. The user reviews the set.
-3. Add a grain section to `film_simulation/film_simulation_explained.md`, with the parameter table and the sources.
+1. **Film Grain follows the film print.** A selection of method Film Print turns on Film Grain at 100 % when its strength is
+   0 (G7 panel change). A selection of another method on Film Print sets Film Grain to 0. Section 7.2 has the rule.
+2. **Color cast of a film under a light that is not its balance light** (Negative Scan, Auto Color Off). A tungsten film
+   (500T, Eterna 500) in daylight shows a strong blue; a daylight film under warm light shows a strong yellow. Real film shows a
+   small cyan-blue cast for the first case and a yellow-green cast for the second. A separate study finds the cause from the
+   film data and corrects the model; its branch `fix/film-negative-scan-mismatched-illuminant-cast` records the result here.
+3. **Film browser shows its last entry.** The list rows have three heights, so the ListView estimates the height of the rows
+   that it did not make and corrects the estimate through `originY`. The wheel handler kept `contentY` in
+   `0 .. contentHeight - height`, and the last entry stayed 9 px below the end of the list. The handler now keeps `contentY`
+   in `originY .. originY + contentHeight - height`.
+4. **Folding sections.** Negative Scan, Scanner, and OpenDRT of the Negative Scan page are `CollapsibleSection`s (section 7.2).
+5. **Info glyphs.** `CollapsibleSection`, `AdjustmentCombo`, and `AdjustmentSlider` take an optional `infoText`, which shows an
+   `EditorInfoHint` glyph. The fold area of a section header ends at the glyph, so a click on the glyph pins the text and keeps
+   the fold. The panel title, the captions Film, Format, and Print, and the settings of section 7.2 have their texts, with
+   zh_CN translations added by hand to `alcedo_main_zh_CN.ts` (no lupdate run).
 
-**Exit criteria.** The user accepts the review, or the review gives a slider default and no data change.
+**Tests.** `EditorDisplayTransformSnapshotQmlTest`:
 
-**Completion record.** Pending.
+- `LeavingFilmPrintSetsFilmGrainToZero`, `ChangingBetweenOtherMethodsKeepsFilmGrain` (item 1).
+- `BrowserWheelScrollShowsTheWholeLastEntry` (item 3): failed with the last film row at 349 px in a 340 px list before the
+  fix.
+- `NegativeScanGroupsFoldAndTheirInfoGlyphPinsTheText`, `FilmPrintSettingsHaveInfoGlyphs` (items 4 and 5).
+
+**Exit criteria.** The tests pass, the study of item 2 is merged into this branch or its own PR, and the user accepts the panel.
+
+**Completion record.** Items 1, 3, 4, and 5 done on branch `feature/film-grain-panel-user-scope`. Item 2 in progress in its own
+branch.
 
 ---
 

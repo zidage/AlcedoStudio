@@ -23,6 +23,10 @@ Item {
     property var model: null
     /// Optional parent Flickable/ListView to lock while the slider is pressed.
     property var flickable: null
+    /// Optional explanation of the setting: an "i" glyph after the label shows it.
+    property string infoText: ""
+    property string infoObjectName: "adjustmentSliderInfoHint"
+    readonly property bool hasInfo: infoText.length > 0
 
     readonly property color colText: appTheme.textColor
     readonly property color colMuted: appTheme.textMutedColor
@@ -211,13 +215,26 @@ Item {
 
             Label {
                 id: sliderLabel
-                Layout.fillWidth: true
+                // With an info glyph the label keeps its text width and the glyph follows it.
+                Layout.fillWidth: !root.hasInfo
                 text: root.model ? root.model.label : ""
                 color: root.colText
                 font.pixelSize: appTheme.fontSizeCaption
                 wrapMode: Text.Wrap
                 visible: root.model && root.model.label && root.model.label.length > 0
                 Accessible.name: root.model ? root.model.label : ""
+            }
+
+            EditorInfoHint {
+                objectName: root.infoObjectName
+                Layout.alignment: Qt.AlignVCenter
+                visible: root.hasInfo
+                text: root.infoText
+            }
+
+            Item {
+                Layout.fillWidth: true
+                visible: root.hasInfo
             }
 
             TextField {
