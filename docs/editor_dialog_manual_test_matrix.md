@@ -78,7 +78,7 @@ corners.
 | Test | Steps | Expected result |
 | --- | --- | --- |
 | Enter geometry panel | Zoom into an ROI, then switch to geometry. | The view returns to fit. The preview shows the whole source with the current rotation; the crop frame is drawn axis-aligned on it. |
-| View locked to fit | With geometry open, try Ctrl+wheel, pinch, double-click, `1`, and middle-button pan. | The view stays at fit. No detail patch renders. |
+| View locked to fit | With geometry open, try the mouse wheel, Ctrl+wheel, pinch, double-click, `1`, and middle-button pan. | The view stays at fit. No detail patch renders. |
 | Source size | Crop an image, switch to another image and back, reopen geometry. | "Source" shows the image's own pixel size both times; the crop frame sits where it was. |
 | Crop sliders | Drag x, y, width, or height and release. | Overlay follows during the drag; one `Crop / Rotate` history entry is added on release. |
 | Overlay drag | Create, move, or resize the frame on the viewport. | Frame edges move along the screen axes; one history entry on release. |

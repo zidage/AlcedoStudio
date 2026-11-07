@@ -170,12 +170,12 @@ TEST(EditViewerLogicTests, CropGeometryFrameBoxRoundTripsThroughTheDocumentCrop)
   EXPECT_NEAR(back.height(), crop.height(), 1e-5);
 }
 
-TEST(EditViewerLogicTests, ViewTransformControllerCtrlWheelUpdatesZoomAndPan) {
+TEST(EditViewerLogicTests, ViewTransformControllerWheelZoomUpdatesZoomAndPan) {
   ViewerState             state;
   ViewTransformController controller;
 
   const auto              result =
-      controller.HandleCtrlWheel(state, kWidgetInfo, kImageInfo, 120, QPointF(400.0, 300.0));
+      controller.HandleWheelZoom(state, kWidgetInfo, kImageInfo, 120, QPointF(400.0, 300.0));
   EXPECT_TRUE(result.consumed);
   EXPECT_TRUE(result.request_repaint);
   ASSERT_TRUE(result.emitted_zoom.has_value());
@@ -183,7 +183,7 @@ TEST(EditViewerLogicTests, ViewTransformControllerCtrlWheelUpdatesZoomAndPan) {
   EXPECT_GT(state.GetViewZoom(), 1.0f);
 }
 
-TEST(EditViewerLogicTests, ViewTransformControllerCtrlWheelAtMaxZoomIsNoOp) {
+TEST(EditViewerLogicTests, ViewTransformControllerWheelZoomAtMaxZoomIsNoOp) {
   ViewerState             state;
   ViewTransformController controller;
   // Already at the interactive zoom ceiling. A further zoom-in clamps the
@@ -192,20 +192,20 @@ TEST(EditViewerLogicTests, ViewTransformControllerCtrlWheelAtMaxZoomIsNoOp) {
   // DetailRefresh is requested — otherwise the BusyIndicator spins at max zoom.
   state.SetViewTransform(ViewTransformController::kMaxInteractiveZoom, QVector2D(0.0f, 0.0f));
   const auto result =
-      controller.HandleCtrlWheel(state, kWidgetInfo, kImageInfo, 120, QPointF(400.0, 300.0));
+      controller.HandleWheelZoom(state, kWidgetInfo, kImageInfo, 120, QPointF(400.0, 300.0));
   EXPECT_TRUE(result.consumed);
   EXPECT_FALSE(result.request_repaint);
   EXPECT_FALSE(result.emitted_zoom.has_value());
   EXPECT_FLOAT_EQ(state.GetViewZoom(), ViewTransformController::kMaxInteractiveZoom);
 }
 
-TEST(EditViewerLogicTests, ViewTransformControllerCtrlWheelAtFitZoomOutIsNoOp) {
+TEST(EditViewerLogicTests, ViewTransformControllerWheelZoomAtFitZoomOutIsNoOp) {
   ViewerState             state;
   ViewTransformController controller;
   // Already at fit (kMinInteractiveZoom). A zoom-out clamps back to fit and the
   // anchored pan collapses to zero, so nothing repaints.
   const auto result =
-      controller.HandleCtrlWheel(state, kWidgetInfo, kImageInfo, -120, QPointF(400.0, 300.0));
+      controller.HandleWheelZoom(state, kWidgetInfo, kImageInfo, -120, QPointF(400.0, 300.0));
   EXPECT_TRUE(result.consumed);
   EXPECT_FALSE(result.request_repaint);
   EXPECT_FALSE(result.emitted_zoom.has_value());

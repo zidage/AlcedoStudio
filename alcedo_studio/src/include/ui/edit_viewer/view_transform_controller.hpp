@@ -52,7 +52,7 @@ class ViewTransformController {
   // image sizes and viewport DPIs regardless of the 2K preview downsample.
   void SetMaxZoom(float max_zoom) { max_zoom_ = max_zoom > kMinInteractiveZoom ? max_zoom : kMinInteractiveZoom; }
 
-  auto HandleCtrlWheel(ViewerState& state, const ViewportWidgetInfo& widget_info,
+  auto HandleWheelZoom(ViewerState& state, const ViewportWidgetInfo& widget_info,
                        const ViewportImageInfo& image_info, int wheel_delta,
                        const QPointF& anchor_widget_pos) -> ViewTransformResult;
 

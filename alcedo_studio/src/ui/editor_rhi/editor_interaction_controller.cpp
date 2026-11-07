@@ -465,25 +465,26 @@ void EditorInteractionController::handleWheel(qreal x, qreal y, int angleDeltaY,
   const QPointF pos(x, y);
   const auto    qt_modifiers = static_cast<Qt::KeyboardModifiers>(modifiers);
 
-  if ((qt_modifiers & Qt::ControlModifier) == Qt::ControlModifier) {
+  // A mouse wheel step (no pixel delta) zooms with or without Ctrl. A trackpad
+  // scroll (pixel delta) pans, and zooms only with Ctrl. Pinch also zooms.
+  const bool    ctrl_held    = (qt_modifiers & Qt::ControlModifier) == Qt::ControlModifier;
+  if (ctrl_held || !synthesized) {
     interruptZoomAnimation();
-    const auto result = view_transform_controller_.HandleCtrlWheel(
+    const auto result = view_transform_controller_.HandleWheelZoom(
         viewer_state_, widgetInfo(), interactionImageInfo(), angleDeltaY, pos);
     applyViewTransformResult(result);
     return;
   }
 
-  if (synthesized) {
-    QPoint pixel_delta(pixelDeltaX, pixelDeltaY);
-    if (pixel_delta.isNull() && angleDeltaY != 0) {
-      pixel_delta = QPoint(0, angleDeltaY / 4);
-    }
-    if (!pixel_delta.isNull()) {
-      interruptZoomAnimation();
-      const auto result = view_transform_controller_.HandleWheelPan(
-          viewer_state_, widgetInfo(), interactionImageInfo(), pixel_delta);
-      applyViewTransformResult(result);
-    }
+  QPoint pixel_delta(pixelDeltaX, pixelDeltaY);
+  if (pixel_delta.isNull() && angleDeltaY != 0) {
+    pixel_delta = QPoint(0, angleDeltaY / 4);
+  }
+  if (!pixel_delta.isNull()) {
+    interruptZoomAnimation();
+    const auto result = view_transform_controller_.HandleWheelPan(
+        viewer_state_, widgetInfo(), interactionImageInfo(), pixel_delta);
+    applyViewTransformResult(result);
   }
 }
 
