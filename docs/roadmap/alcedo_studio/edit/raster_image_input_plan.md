@@ -254,7 +254,9 @@ A description that fails these checks counts as not present, and `default_reason
       `cmsEvalToneCurveFloat`.
   - **ICC v4.4 `cicp` tag:** it overrides the profile's TRC and primaries. This is how
     `config/icc/rec2020_pq.icc`-style profiles state PQ or HLG.
-  - **LUT-based RGB profile**, meaning `A2B0` with no matrix-shaper tags (decision D4):
+  - **LUT-based RGB profile**, meaning `A2B0` with no matrix-shaper tags (decision D4). This rule
+    applies after the PNG `cICP` chunk and the ICC `cicp` tag: a LUT profile with a usable `cicp`
+    tag gets the `cicp` description, and its pixels keep their code values (issue #711).
     - At decode, lcms2 converts the pixels on the host (relative colorimetric, float) to linear
       Rec.2020.
     - The description becomes Rec.2020 primaries, `Linear` transfer, display-referred, origin
@@ -278,7 +280,9 @@ A description that fails these checks counts as not present, and `default_reason
 Import calls it once (section 7.2). Render does **not** parse the profile again; it reads the
 stored description (section 7.3). The only exception is a LUT-based ICC: the decoder needs the
 profile bytes to run the lcms2 conversion, and it checks that the profile hash equals the stored
-one.
+one. The decoder calls `ResolveRasterColorDescription` on the same file bytes and runs the
+conversion only when the origin is `IccLutConverted`, so one rule decides both the description
+and the pixel conversion (issue #711).
 
 ---
 

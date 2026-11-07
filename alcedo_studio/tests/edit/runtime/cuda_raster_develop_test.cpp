@@ -108,6 +108,7 @@ TEST_F(CudaRasterDevelopTest, DevelopOutputMatchesHostEvaluationForEachRasterKin
                             Case{"gray_gamma22.png", RasterFileKind::Png},
                             Case{"prophoto_icc_16bit.tif", RasterFileKind::Tiff},
                             Case{"lut_based_rgb_icc.tif", RasterFileKind::Tiff},
+                            Case{"lut_icc_with_cicp_rec2020_pq_16bit.tif", RasterFileKind::Tiff},
                             Case{"chromaticities_p3_half.exr", RasterFileKind::OpenExr},
                             Case{"float32_srgb_icc.tif", RasterFileKind::Tiff},
                             Case{"alcedo_export_rec2020_hlg.tif", RasterFileKind::Tiff},

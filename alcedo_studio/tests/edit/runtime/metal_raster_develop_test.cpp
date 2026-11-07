@@ -96,6 +96,7 @@ TEST_F(MetalRasterDevelopTest, DevelopOutputMatchesHostEvaluationForEachRasterKi
                             Case{"cicp_rec2020_pq_16bit.png", RasterFileKind::Png},
                             Case{"prophoto_icc_16bit.tif", RasterFileKind::Tiff},
                             Case{"lut_based_rgb_icc.tif", RasterFileKind::Tiff},
+                            Case{"lut_icc_with_cicp_rec2020_pq_16bit.tif", RasterFileKind::Tiff},
                             Case{"chromaticities_p3_half.exr", RasterFileKind::OpenExr},
                             Case{"alcedo_export_rec2020_hlg.tif", RasterFileKind::Tiff},
                             Case{"alcedo_export_upstream_rec2020_v4.tif", RasterFileKind::Tiff}}) {

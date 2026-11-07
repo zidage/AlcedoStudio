@@ -18,14 +18,14 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "edit/input/detail/prepared_input_finish.hpp"
 #include "edit/input/raw_input_loader.hpp"
-#include "image/icc_profile_reader.hpp"
 #include "image/image_content_class.hpp"
+#include "image/raster_color_description.hpp"
 #include "image/raster_container_reader.hpp"
-#include "utils/hash/sha256.hpp"
 
 namespace alcedo {
 namespace {
@@ -380,11 +380,19 @@ auto RasterInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRe
     throw std::runtime_error(std::string("RasterInputLoader: malformed file: ") + error.what());
   }
 
+  // The color description decides whether the pixels go through the LUT profile, so the loader
+  // and the stored description always agree. A PNG cICP chunk or an ICC `cicp` tag takes
+  // precedence over the LUT tables of the same profile (issue #711).
+  RasterColorDescription description;
+  try {
+    description = ResolveRasterColorDescription(encoded, kind);
+  } catch (const RasterColorDescriptionError& error) {
+    throw std::runtime_error(std::string("RasterInputLoader: color description: ") + error.what());
+  }
   bool        lut_converted = false;
   std::string icc_sha256;
-  if (!decoded.icc_profile.empty() &&
-      ReadIccProfile(decoded.icc_profile).layout_ == IccProfileLayout::RgbLut) {
-    icc_sha256    = ComputeSha256Hex(decoded.icc_profile);
+  if (description.origin_ == RasterColorOrigin::IccLutConverted) {
+    icc_sha256    = std::move(description.icc_sha256_);
     decoded.plane = ConvertWithLutProfile(decoded.plane, decoded.icc_profile, icc_sha256);
     lut_converted = true;
   }
