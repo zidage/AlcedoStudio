@@ -9,6 +9,7 @@
 #include <string>
 
 #include "decoders/processor/raw_color_context.hpp"
+#include "image/lens_identity_resolver.hpp"
 #include "image/metadata.hpp"
 
 /// LibRaw fields of an opened RAW file to RawRuntimeColorContext and ExifDisplayMetaData.
@@ -32,20 +33,24 @@ struct LibRawCaptureTimeText {
 void CollectLibRawCaptureTimeText(void* context, int tag, int type, int len, unsigned int ord,
                                   void* ifp, INT64 base);
 
-/// Populate a RawRuntimeColorContext from LibRaw's opened state. open_file sets every field read
-/// here: imgdata.color (cam_mul, pre_mul, cam_xyz, rgb_cam), imgdata.idata, imgdata.other and
-/// imgdata.lens. unpack() only copies imgdata.color into imgdata.rawdata.color after it decodes
-/// the sensor data, so the metadata path never needs it.
-void PopulateMetadataRuntimeContext(LibRaw& raw_processor, RawRuntimeColorContext& ctx);
+/// Populate a RawRuntimeColorContext from LibRaw's opened state and the lens @p lens that
+/// LensIdentityResolver read. open_file sets every field read here: imgdata.color (cam_mul,
+/// pre_mul, cam_xyz, rgb_cam), imgdata.idata, imgdata.other and imgdata.lens. unpack() only copies
+/// imgdata.color into imgdata.rawdata.color after it decodes the sensor data, so the metadata path
+/// never needs it.
+void PopulateMetadataRuntimeContext(LibRaw& raw_processor, const LensIdentity& lens,
+                                    RawRuntimeColorContext& ctx);
 
 /// Populate ExifDisplayMetaData from a RawRuntimeColorContext + libraw other/sizes data.
 void PopulateDisplayMetadataFromLibRaw(LibRaw& raw_processor, const RawRuntimeColorContext& ctx,
                                        const LibRawCaptureTimeText& capture_time_text,
                                        ExifDisplayMetaData&         display);
 
-/// DNG fast path: replace the Exiv2 values of @p display and @p ctx with the camera, lens and
-/// exposure values that LibRaw open_file read, where LibRaw has a value.
-void PopulateDngMetadataHintFromOpenLibRaw(LibRaw& raw_processor, ExifDisplayMetaData& display,
+/// DNG fast path: replace the Exiv2 values of @p display and @p ctx with the camera and exposure
+/// values that LibRaw open_file read and with the lens @p lens that LensIdentityResolver read,
+/// where these have a value.
+void PopulateDngMetadataHintFromOpenLibRaw(LibRaw& raw_processor, const LensIdentity& lens,
+                                           ExifDisplayMetaData&    display,
                                            RawRuntimeColorContext& ctx);
 
 /// Fill the fields of @p ctx that are still empty or zero from @p metadata_hint. No-op when

@@ -24,6 +24,7 @@
 #include "edit/graph/develop_node_model.hpp"
 #include "image/dng_camera_matrix.hpp"
 #include "image/image.hpp"
+#include "image/lens_identity_resolver.hpp"
 #include "image/raster_color_description.hpp"
 #include "support/non_raw_import_files.hpp"
 #include "utils/import/import_error_code.hpp"
@@ -692,6 +693,44 @@ TEST(MetadataExtractorTest, RasterKeyIsOmittedFromRawImageMetadataJson) {
   EXPECT_EQ(RasterColorDescriptionToJson(reloaded.GetRasterColorDescription()),
             RasterColorDescriptionToJson(raster.GetRasterColorDescription()));
   EXPECT_FALSE(reloaded.ExifDisplayToJson().contains("RasterColorDescription"));
+}
+
+// Issue #714: Panasonic writes the lens name only to its maker note (Exif.Panasonic.LensType),
+// not to Exif.Photo.LensModel.
+TEST(MetadataExtractorTest, ExifLensSourcesPreferPanasonicLensTypeOverPhotoLensModel) {
+  Exiv2::ExifData panasonic;
+  panasonic["Exif.Panasonic.LensType"] = std::string("LEICA DG 12-60/F2.8-4.0");
+  panasonic["Exif.Photo.LensModel"]    = std::string("Other lens name");
+  panasonic["Exif.Photo.LensMake"]     = std::string("Panasonic");
+  const LensIdentity from_maker_note   = LensIdentityResolver::FromExif(panasonic);
+  EXPECT_EQ(from_maker_note.model, "LEICA DG 12-60/F2.8-4.0");
+  EXPECT_EQ(from_maker_note.make, "Panasonic");
+
+  Exiv2::ExifData standard;
+  standard["Exif.Photo.LensModel"] = std::string("FE 20-70mm F4 G");
+  const LensIdentity from_standard = LensIdentityResolver::FromExif(standard);
+  EXPECT_EQ(from_standard.model, "FE 20-70mm F4 G");
+  EXPECT_TRUE(from_standard.make.empty());
+
+  EXPECT_TRUE(LensIdentityResolver::FromExif(Exiv2::ExifData{}).model.empty());
+}
+
+// Issue #714: LibRaw reads no lens name from a DC-G9 RW2. The name is only in the Panasonic maker
+// note of the JPEG that the RW2 embeds (JpgFromRaw), and import must store it.
+TEST(MetadataExtractorTest, Rw2ImportReadsLensNameFromEmbeddedJpegMakerNote) {
+  const auto sample_path =
+      std::filesystem::path(TEST_IMG_PATH) / "raw" / "bad_lens" / "P1832629.RW2";
+  if (!std::filesystem::exists(sample_path)) {
+    GTEST_SKIP() << "Sample RW2 not found: " << sample_path.string();
+  }
+  Image image(17, sample_path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(sample_path, image);
+  ASSERT_TRUE(image.HasRawColorContext());
+  const auto& ctx = image.GetRawColorContext();
+  EXPECT_EQ(ctx.camera_model_, "DC-G9");
+  EXPECT_EQ(ctx.lens_model_, "LEICA DG 12-60/F2.8-4.0");
+  EXPECT_TRUE(ctx.lens_metadata_valid_);
+  EXPECT_EQ(image.ExifDisplayToJson().value("Lens", std::string{}), "LEICA DG 12-60/F2.8-4.0");
 }
 
 }  // namespace

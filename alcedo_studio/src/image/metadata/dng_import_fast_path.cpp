@@ -14,6 +14,7 @@
 
 #include "camera_color_matrix_db.hpp"
 #include "dng_color_metadata.hpp"
+#include "image/lens_identity_resolver.hpp"
 #include "image/metadata_extractor.hpp"
 #include "libraw_metadata_mapper.hpp"
 #include "metadata_values.hpp"
@@ -75,7 +76,9 @@ auto ExtractDngMetadataToImageFast(const image_path_t& image_path, Image& image)
     raw_processor->recycle();
     return false;
   }
-  PopulateDngMetadataHintFromOpenLibRaw(*raw_processor, display, ctx);
+  PopulateDngMetadataHintFromOpenLibRaw(
+      *raw_processor, LensIdentityResolver::Resolve(*raw_processor, exif_image->exifData()),
+      display, ctx);
   raw_processor->recycle();
 
   MergeMetadataHint(&display, ctx);

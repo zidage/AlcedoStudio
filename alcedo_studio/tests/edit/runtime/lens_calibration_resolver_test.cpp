@@ -504,4 +504,30 @@ TEST(LensCalibDevelopResolve, RenamedSony16To50ProfileMatchesVersionOneAndTwoNam
   }
 }
 
+// Issue #714: the Panasonic maker note names the lens with the Lensfun model name.
+TEST(LensCalibDevelopResolve, PanasonicMakerNoteLensNameMatchesLensfunProfile) {
+  ExpectProfileMatches({"Panasonic", "DC-G9", "", "LEICA DG 12-60/F2.8-4.0", 32.0f, 8.0f,
+                        "Panasonic", "LEICA DG 12-60/F2.8-4.0", true});
+}
+
+// Issue #714: Develop reads the lens name of a DC-G9 RW2 from the maker note of the embedded
+// JPEG, so Lens Correction finds the profile without a user lens selection.
+TEST(LensCalibDevelopResolve, Rw2EmbeddedJpegLensNameResolvesProfileWithoutUserSelection) {
+  const auto sample_path =
+      std::filesystem::path(TEST_IMG_PATH) / "raw" / "bad_lens" / "P1832629.RW2";
+  if (!std::filesystem::exists(sample_path)) {
+    GTEST_SKIP() << "Sample RW2 not found: " << sample_path.string();
+  }
+  const auto prepared = RawInputLoader::LoadEncoded(ReadBytes(sample_path), DecodeRes::EIGHTH);
+  EXPECT_EQ(prepared.color_context.lens_model_, "LEICA DG 12-60/F2.8-4.0");
+  EXPECT_TRUE(prepared.color_context.lens_metadata_valid_);
+
+  DevelopPayload payload;
+  payload.lens_enabled         = true;
+  payload.lens_profile_db_path = LensDatabasePath();
+  const auto runtime           = LensCalibrationResolver::Resolve(
+      payload, prepared.color_context, prepared.CompileSource().develop_output_extent, false);
+  EXPECT_TRUE(runtime.has_value());
+}
+
 }  // namespace alcedo

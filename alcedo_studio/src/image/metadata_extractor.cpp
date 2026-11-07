@@ -13,6 +13,7 @@
 #include <string>
 #include <utility>
 
+#include "image/lens_identity_resolver.hpp"
 #include "metadata/dng_color_metadata.hpp"
 #include "metadata/dng_import_fast_path.hpp"
 #include "metadata/exif_display_mapper.hpp"
@@ -25,8 +26,9 @@
 // MetadataExtractor is the entry point of the metadata readers. The readers are in
 // src/image/metadata/: raster files (raster_metadata_reader), DNG color tags and geometry
 // (dng_color_metadata), the DNG import without unpack (dng_import_fast_path), LibRaw fields
-// (libraw_metadata_mapper, with nikon_lens_id_table and camera_color_matrix_db), Exiv2 display
-// values (exif_display_mapper) and HDR markers (hdr_marker_probe).
+// (libraw_metadata_mapper, with camera_color_matrix_db), the lens name (lens_identity_resolver,
+// with nikon_lens_id_table), Exiv2 display values (exif_display_mapper) and HDR markers
+// (hdr_marker_probe).
 
 namespace alcedo {
 namespace {
@@ -56,7 +58,8 @@ void MetadataExtractor::ExtractRasterMetadata_ToImage(const image_path_t& image_
 
 void MetadataExtractor::PopulateRuntimeContextFromOpenLibRaw(LibRaw&                 raw_processor,
                                                              RawRuntimeColorContext& ctx) {
-  PopulateMetadataRuntimeContext(raw_processor, ctx);
+  PopulateMetadataRuntimeContext(raw_processor, LensIdentityResolver::FromLibRaw(raw_processor),
+                                 ctx);
 }
 
 auto MetadataExtractor::ExtractEXIF(const image_path_t& image_path) -> Exiv2::Image::UniquePtr {
@@ -185,19 +188,24 @@ auto MetadataExtractor::ExtractRawMetadata_ToImage(const image_path_t& image_pat
 
   // Metadata only: open_file has parsed every field read below. unpack() would decode the whole
   // sensor image (most of the import time) and contributes no metadata.
+  // The lens identity reads the EXIF only when LibRaw has no lens name. A DNG file reads its EXIF
+  // for the color tags, so its lens identity uses that EXIF.
   RawRuntimeColorContext ctx{};
-  PopulateMetadataRuntimeContext(*raw_processor, ctx);
-
   if (IsDngExtension(image_path)) {
-    if (const auto dng_metadata = ExtractDngGeometryMetadataFromFile(image_path);
-        dng_metadata.has_value()) {
-      ctx.dng_warp_rectilinear_present_ = dng_metadata->warp_rectilinear.has_value();
-    }
     auto exif_data = ExtractEXIF(image_path);
     if (!exif_data || exif_data->exifData().empty()) {
       throw std::runtime_error("DNG color profile metadata could not be read");
     }
+    PopulateMetadataRuntimeContext(
+        *raw_processor, LensIdentityResolver::Resolve(*raw_processor, exif_data->exifData()), ctx);
+    if (const auto dng_metadata = ExtractDngGeometryMetadataFromFile(image_path);
+        dng_metadata.has_value()) {
+      ctx.dng_warp_rectilinear_present_ = dng_metadata->warp_rectilinear.has_value();
+    }
     PopulateDngColorMetadataFromExif(exif_data->exifData(), ctx);
+  } else {
+    PopulateMetadataRuntimeContext(*raw_processor,
+                                   LensIdentityResolver::Resolve(*raw_processor, image_path), ctx);
   }
 
   ExifDisplayMetaData display{};

@@ -137,7 +137,8 @@ class MetadataExtractor {
    * @brief Populate a RawRuntimeColorContext from an already-opened LibRaw instance.
    *        Requires open_file + unpack to have been called.  This is the single source
    *        of truth for raw metadata extraction (camera/lens strings, color matrices,
-   *        Nikon lens ID lookup, etc.).
+   *        Nikon lens ID lookup, etc.). The lens name comes from
+   *        LensIdentityResolver::FromLibRaw; the EXIF lens sources are not read.
    *
    * @param raw_processor  A LibRaw instance after open_file + unpack
    * @param ctx            Output context to populate
