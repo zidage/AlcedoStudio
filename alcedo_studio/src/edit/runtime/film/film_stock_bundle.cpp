@@ -14,6 +14,8 @@
 
 #include "edit/graph/film_format.hpp"
 #include "edit/runtime/film/film_grain_field.h"
+#include "edit/runtime/film/film_negative_scan.hpp"
+#include "edit/runtime/film/film_tables.hpp"
 #include "utils/hash/sha256.hpp"
 
 namespace alcedo {
@@ -127,7 +129,24 @@ auto MixValues(std::span<const double> values, std::int64_t row, std::int64_t li
 }
 
 auto SingleLight(std::string_view scene_light) -> FilmSceneLightMix {
-  return {std::string(scene_light), std::string(scene_light), 0.0};
+  return {std::string(scene_light), std::string(scene_light), 0.0, std::nullopt};
+}
+
+/// The record of an 18 % grey under @p spectrum: the layer exposure of a flat reflectance of 0.18
+/// times the layer gain (lab FilmPreview._camera_filter), then the point form of the curves and
+/// of the inhibition.
+auto GreyRecord(const FilmNegativeView& film, const std::array<double, 3>& gain,
+                std::span<const double> spectrum) -> std::array<double, 3> {
+  const auto            count = spectrum.size();
+  std::array<double, 3> q{};
+  for (std::size_t k = 0; k < 3; ++k) {
+    double sum = 0.0;
+    for (std::size_t w = 0; w < count; ++w) {
+      sum += 0.18 * spectrum[w] * film.exposure_weights[k * count + w];
+    }
+    q[k] = gain[k] * sum;
+  }
+  return film_negative_scan::PointRecord(film, q);
 }
 
 void RequireCurveLengths(std::span<const std::int64_t> lengths, std::int64_t stored_length,
@@ -527,26 +546,39 @@ auto FilmStockBundle::LightIndex(std::string_view scene_light) const -> std::int
   return light - scene_lights_.begin();
 }
 
-auto FilmStockBundle::SceneLightMix(std::string_view      scene_light,
-                                    std::optional<double> raw_cct) const -> FilmSceneLightMix {
+auto FilmStockBundle::SceneLightMix(std::string_view            scene_light,
+                                    std::optional<FilmRawWhite> raw_white) const
+    -> FilmSceneLightMix {
   if (scene_light != "as_shot") {
     (void)LightIndex(scene_light);
     return SingleLight(scene_light);
   }
   // An input with no RAW white balance reads As Shot as the reference (user rule of issue 661).
-  if (!raw_cct.has_value()) {
+  if (!raw_white.has_value()) {
     return SingleLight("reference");
   }
-  if (!std::isfinite(*raw_cct) || !(*raw_cct > 0.0)) {
+  if (!std::isfinite(raw_white->xy[0]) || !std::isfinite(raw_white->xy[1])) {
+    throw std::runtime_error("Film print: the chromaticity of scene light As Shot is not finite");
+  }
+  auto mix      = GridLight(raw_white->cct);
+  mix.raw_white = raw_white;
+  return mix;
+}
+
+auto FilmStockBundle::GridLight(double kelvin) const -> FilmSceneLightMix {
+  if (!std::isfinite(kelvin) || !(kelvin > 0.0)) {
     throw std::runtime_error(
         "Film print: the colour temperature of scene light As Shot is not "
         "finite and above 0");
   }
+  return GridAt(1e6 / kelvin);
+}
+
+auto FilmStockBundle::GridAt(double mired) const -> FilmSceneLightMix {
   // Lab grid_blend: the nodes are the mired of the rounded kelvin of each light, and the share is
   // linear in mired.
   const auto& kelvin = cct_grid_.kelvin;
   const auto& lights = cct_grid_.lights;
-  const auto  mired  = 1e6 / *raw_cct;
   if (mired >= 1e6 / kelvin.front()) {
     return SingleLight(lights.front());
   }
@@ -561,24 +593,169 @@ auto FilmStockBundle::SceneLightMix(std::string_view      scene_light,
     }
   }
   throw std::runtime_error("Film print: the colour temperature grid has no node pair for " +
-                           std::to_string(*raw_cct) + " K");
+                           std::to_string(1e6 / mired) + " K");
+}
+
+auto FilmStockBundle::ResolveLight(std::span<const std::int32_t> spectrum_index, std::int64_t row,
+                                   const FilmSceneLightMix& mix) const -> ResolvedLight {
+  const ResolvedLight start{LightIndex(mix.first), LightIndex(mix.second), mix.share};
+  if (!mix.raw_white.has_value()) {
+    return start;
+  }
+  const auto wavelengths  = WavelengthsNm();
+  const auto chromaticity = [&](const ResolvedLight& light) {
+    return film_scene_tint::Uv1960(
+        film_scene_tint::SpectrumXyz(wavelengths, MixSpectrum(spectrum_index, row, light)));
+  };
+  const auto at = [&](double tint, double mired_shift) {
+    auto light        = start;
+    light.tint        = tint;
+    light.mired_shift = mired_shift;
+    return light;
+  };
+  // The target: the grid light moved across the locus by the Duv of the RAW white minus its own.
+  // The colour temperature that the grid gives stays, so a RAW white of a grid light is that light.
+  const auto grid_uv     = chromaticity(start);
+  const auto grid_offset = film_scene_tint::PlanckianOffset(grid_uv);
+  const auto raw_offset =
+      film_scene_tint::PlanckianOffset(film_scene_tint::Uv1960OfXy(mix.raw_white->xy));
+  const double duv = raw_offset.duv - grid_offset.duv;
+  if (duv == 0.0) {
+    return start;
+  }
+  const auto target   = std::array<double, 2>{grid_uv[0] + duv * grid_offset.normal[0],
+                                              grid_uv[1] + duv * grid_offset.normal[1]};
+  const auto residual = [&](double k, double m) {
+    const auto uv = chromaticity(at(k, m));
+    return std::array<double, 2>{uv[0] - target[0], uv[1] - target[1]};
+  };
+  // The direction of the locus at the grid light: at the limit of k the solve meets the target
+  // along it, so the light keeps the colour temperature of the grid light.
+  const auto tangent = std::array<double, 2>{grid_offset.normal[1], -grid_offset.normal[0]};
+  const auto along   = [&](const std::array<double, 2>& r) {
+    return r[0] * tangent[0] + r[1] * tangent[1];
+  };
+  const auto full_error  = [](const std::array<double, 2>& r) { return std::hypot(r[0], r[1]); };
+  const auto limit_error = [&](const std::array<double, 2>& r) { return std::abs(along(r)); };
+  // Newton steps on (tint gain, mired change), with central differences for the Jacobian. The tint
+  // factor also moves the colour temperature (up to 180 mired on a warm light), and the Wien factor
+  // takes it back. A step starts at most kStepTint in k and kStepMired in mired, and a step that
+  // does not make the error smaller is cut in half until it does: far from the locus (Duv 0.05)
+  // the full step overshoots.
+  constexpr double kTintStep   = 1e-5;
+  constexpr double kMiredStep  = 1e-3;
+  constexpr double kTolerance  = 1e-10;  // CIE 1960 uv
+  constexpr int    kIterations = 100;
+  constexpr int    kHalvings   = 30;
+  constexpr double kStepTint   = 0.25;
+  constexpr double kStepMired  = 50.0;
+  const double     limit       = film_scene_tint::kTintGainLimit;
+  double           tint        = 0.0;
+  double           mired_shift = 0.0;
+  auto             f           = residual(tint, mired_shift);
+  bool             reached     = false;
+  for (int iteration = 0; iteration < kIterations; ++iteration) {
+    if (full_error(f) < kTolerance) {
+      reached = true;
+      break;
+    }
+    const auto   ka     = residual(tint + kTintStep, mired_shift);
+    const auto   kb     = residual(tint - kTintStep, mired_shift);
+    const auto   ma     = residual(tint, mired_shift + kMiredStep);
+    const auto   mb     = residual(tint, mired_shift - kMiredStep);
+    const auto   dk     = std::array<double, 2>{(ka[0] - kb[0]) / (2.0 * kTintStep),
+                                                (ka[1] - kb[1]) / (2.0 * kTintStep)};
+    const auto   dm     = std::array<double, 2>{(ma[0] - mb[0]) / (2.0 * kMiredStep),
+                                                (ma[1] - mb[1]) / (2.0 * kMiredStep)};
+    const double det    = dk[0] * dm[1] - dk[1] * dm[0];
+    double       step_k = 0.0;
+    double       step_m = 0.0;
+    if (std::abs(det) > 0.0) {
+      step_k = (f[0] * dm[1] - f[1] * dm[0]) / det;
+      step_m = (dk[0] * f[1] - dk[1] * f[0]) / det;
+    }
+    // At the limit, a step that goes past it holds k (k falls with +step_k).
+    const bool at_limit = (tint >= limit && !(step_k > 0.0)) || (tint <= -limit && !(step_k < 0.0));
+    if (at_limit) {
+      if (limit_error(f) < kTolerance) {
+        reached = true;
+        break;
+      }
+      const double dm_along = along(dm);
+      if (!(std::abs(dm_along) > 0.0)) break;
+      step_k = 0.0;
+      step_m = along(f) / dm_along;
+    } else if (!(std::abs(det) > 0.0)) {
+      break;
+    }
+    const auto error_of = [&](const std::array<double, 2>& r) {
+      return at_limit ? limit_error(r) : full_error(r);
+    };
+    const double error  = error_of(f);
+    const double cap    = (std::min)(kStepTint / std::abs(step_k), kStepMired / std::abs(step_m));
+    double       scale  = (std::min)(1.0, cap);
+    bool         better = false;
+    for (int halving = 0; halving < kHalvings; ++halving, scale *= 0.5) {
+      const double next_tint  = std::clamp(tint - scale * step_k, -limit, limit);
+      const double next_shift = mired_shift - scale * step_m;
+      const auto   next       = residual(next_tint, next_shift);
+      if (error_of(next) < error) {
+        tint        = next_tint;
+        mired_shift = next_shift;
+        f           = next;
+        better      = true;
+        break;
+      }
+    }
+    if (!better) break;
+  }
+  if (!reached) {
+    throw std::runtime_error(
+        "Film print: the light of scene light As Shot does not reach the "
+        "chromaticity of the RAW white (" +
+        std::to_string(mix.raw_white->cct) + " K, Duv " + std::to_string(raw_offset.duv) +
+        "; stop at k " + std::to_string(tint) + ", mired change " + std::to_string(mired_shift) +
+        ", uv error " + std::to_string(full_error(f)) + ")");
+  }
+  return at(tint, mired_shift);
 }
 
 auto FilmStockBundle::MixSpectrum(std::span<const std::int32_t> spectrum_index, std::int64_t row,
-                                  const FilmSceneLightMix& mix) const -> std::vector<double> {
+                                  const ResolvedLight& light) const -> std::vector<double> {
   const auto lights   = static_cast<std::int64_t>(scene_lights_.size());
-  const auto spectrum = [&](std::string_view light) {
-    const auto  index = spectrum_index[row * lights + LightIndex(light)];
+  const auto spectrum = [&](std::int64_t light_index) {
+    const auto  index = spectrum_index[row * lights + light_index];
     const auto& name  = scene_spectra_[static_cast<std::size_t>(index)];
     return stock_.F64(ArrayName("light", name, "spectrum"), {wavelengths_});
   };
-  const auto          first = spectrum(mix.first);
+  const auto          first = spectrum(light.first);
   std::vector<double> out(first.begin(), first.end());
-  if (mix.share != 0.0) {
-    const auto second = spectrum(mix.second);
+  if (light.share != 0.0) {
+    const auto second = spectrum(light.second);
     for (std::size_t w = 0; w < out.size(); ++w) {
-      out[w] = (1.0 - mix.share) * first[w] + mix.share * second[w];
+      out[w] = (1.0 - light.share) * first[w] + light.share * second[w];
     }
+  }
+  if (light.tint != 0.0 || light.mired_shift != 0.0) {
+    // Rule 'as_shot_tint': the factor 10^(k g) and the Wien factor, then the luminance Y of the
+    // blend.
+    const auto          wavelengths = WavelengthsNm();
+    const auto          before      = film_scene_tint::SpectrumXyz(wavelengths, out)[1];
+    // The natural log of the two factors, less its largest value: the factors stay finite.
+    std::vector<double> log_factor(out.size());
+    for (std::size_t w = 0; w < out.size(); ++w) {
+      log_factor[w] = std::log(10.0) * light.tint * film_scene_tint::TintBand(wavelengths[w]) +
+                      film_scene_tint::WienLogPerMired(wavelengths[w]) * light.mired_shift;
+    }
+    const double peak = *std::max_element(log_factor.begin(), log_factor.end());
+    for (std::size_t w = 0; w < out.size(); ++w) {
+      out[w] *= std::exp(log_factor[w] - peak);
+    }
+    const auto after = film_scene_tint::SpectrumXyz(wavelengths, out)[1];
+    if (!(before > 0.0) || !(after > 0.0)) {
+      throw std::runtime_error("Film print: a scene light with a tint has no luminance");
+    }
+    for (auto& value : out) value *= before / after;
   }
   return out;
 }
@@ -682,17 +859,17 @@ auto FilmStockBundle::ReversalSelection(std::string_view         reversal,
                                         const FilmSceneLightMix& scene_light) const
     -> FilmReversalSetup {
   const auto r         = IndexOf(reversals_, reversal, "reversal film");
-  const auto a         = LightIndex(scene_light.first);
-  const auto b         = LightIndex(scene_light.second);
   const auto reversals = static_cast<std::int64_t>(reversals_.size());
   const auto lights    = static_cast<std::int64_t>(scene_lights_.size());
   const auto gain      = setup_.F64("reversal_layer_gain", {reversals, lights, 3});
   const auto display   = setup_.F64("reversal_xyz_to_display", {reversals, 3, 3});
   const auto spectra   = setup_.I32("reversal_scene_spectrum_index", {reversals, lights});
+  // A slide has no printer lights, so rule 'as_shot_tint' acts through the spectrum only.
+  const auto light     = ResolveLight(spectra, r, scene_light);
   return {
-      .layer_gain     = MixValues<3>(gain, r, lights, a, b, scene_light.share),
+      .layer_gain     = MixValues<3>(gain, r, lights, light.first, light.second, light.share),
       .xyz_to_display = CopyValues<9>(display, r * 9),
-      .scene_spectrum = MixSpectrum(spectra, r, scene_light),
+      .scene_spectrum = MixSpectrum(spectra, r, light),
   };
 }
 
@@ -759,9 +936,6 @@ auto FilmStockBundle::Selection(std::string_view negative, std::string_view prin
                                 const FilmSceneLightMix& scene_light) const -> FilmSelectionSetup {
   const auto n         = IndexOf(negatives_, negative, "negative");
   const auto p         = IndexOf(papers_, print_material, "print material");
-  const auto a         = LightIndex(scene_light.first);
-  const auto b         = LightIndex(scene_light.second);
-  const auto share     = scene_light.share;
   const auto negatives = static_cast<std::int64_t>(negatives_.size());
   const auto papers    = static_cast<std::int64_t>(papers_.size());
   const auto lights    = static_cast<std::int64_t>(scene_lights_.size());
@@ -772,16 +946,48 @@ auto FilmStockBundle::Selection(std::string_view negative, std::string_view prin
   const auto display   = setup_.F64("xyz_to_display", {papers, 3, 3});
   const auto spectra   = setup_.I32("scene_spectrum_index", {negatives, lights});
   const auto grey      = setup_.F64("negative_grade_grey", {negatives, lights, 3});
+  const auto light     = ResolveLight(spectra, n, scene_light);
+  const auto a         = light.first;
+  const auto b         = light.second;
+  const auto share     = light.share;
+
   // The lab check 'Grid blend, print' blends the printer balance of the two lights, in log10.
-  return {
-      .printer_balance_log10 = MixValues<3>(balance, n * papers + p, lights, a, b, share),
-      .negative_grade_grey   = MixValues<3>(grey, n, lights, a, b, share),
-      .layer_gain            = MixValues<3>(gain, n, lights, a, b, share),
-      .printing_gain         = CopyValues<3>(printing, (n * papers + p) * 3),
-      .aim_log_h             = CopyValues<3>(aim, p * 3),
-      .xyz_to_display        = CopyValues<9>(display, p * 9),
-      .scene_spectrum        = MixSpectrum(spectra, n, scene_light),
+  auto       setup     = FilmSelectionSetup{
+                .printer_balance_log10 = MixValues<3>(balance, n * papers + p, lights, a, b, share),
+                .negative_grade_grey   = MixValues<3>(grey, n, lights, a, b, share),
+                .layer_gain            = MixValues<3>(gain, n, lights, a, b, share),
+                .printing_gain         = CopyValues<3>(printing, (n * papers + p) * 3),
+                .aim_log_h             = CopyValues<3>(aim, p * 3),
+                .xyz_to_display        = CopyValues<9>(display, p * 9),
+                .scene_spectrum        = MixSpectrum(spectra, n, light),
   };
+  if (light.tint == 0.0 && light.mired_shift == 0.0) {
+    return setup;
+  }
+  // Rule 'as_shot_tint' on a print. The stored values hold the grid lights only, so the values of
+  // the 18 % grey move by the change of its record from the blend to the light with the tint:
+  // - the printer lights follow the grey on the negative (lab FilmPreview._camera_filter with
+  //   print timing 1): the balance falls by the rise of the log10 paper exposure of the grey;
+  // - rule 'negative_show_grade' reads the record of the grey.
+  auto plain_light        = light;
+  plain_light.tint        = 0.0;
+  plain_light.mired_shift = 0.0;
+  const auto film         = Negative(negative);
+  const auto plain  = GreyRecord(film, setup.layer_gain, MixSpectrum(spectra, n, plain_light));
+  const auto tinted = GreyRecord(film, setup.layer_gain, setup.scene_spectrum);
+  const auto paper  = PrintMaterial(print_material);
+  const film_tables::SpectralBand band{wavelengths_, film.base.data(), film.dyes.data(),
+                                       paper.printing_weights.data()};
+  std::array<double, 6> records{plain[0], plain[1], plain[2], tinted[0], tinted[1], tinted[2]};
+  std::array<double, 6> paper_log{};
+  film_tables::Log10BandResponse(band, records.data(), 2, paper_log.data(), 1);
+  for (std::size_t k = 0; k < 3; ++k) {
+    setup.printer_balance_log10[k] -= paper_log[3 + k] - paper_log[k];
+    if (film.negative_grade) {
+      setup.negative_grade_grey[k] += tinted[k] - plain[k];
+    }
+  }
+  return setup;
 }
 
 auto FilmStockBundle::ScanMedium(std::string_view id) const -> const FilmScanMedium& {
@@ -827,9 +1033,6 @@ auto FilmStockBundle::NegativeScanSelection(std::string_view         negative,
                                             const FilmSceneLightMix& scene_light) const
     -> FilmNegativeScanSetup {
   const auto  n         = IndexOf(negatives_, negative, "negative");
-  const auto  a         = LightIndex(scene_light.first);
-  const auto  b         = LightIndex(scene_light.second);
-  const auto  share     = scene_light.share;
   const auto  negatives = static_cast<std::int64_t>(negatives_.size());
   const auto  lights    = static_cast<std::int64_t>(scene_lights_.size());
   const auto  gain      = setup_.F64("layer_gain", {negatives, lights, 3});
@@ -838,17 +1041,22 @@ auto FilmStockBundle::NegativeScanSelection(std::string_view         negative,
   const auto  spectra   = setup_.I32("scene_spectrum_index", {negatives, lights});
   const auto& medium    = ScanMedium(negative);
   // The lab form of a blend: the blended spectrum and layer gain, and the blend of the stored
-  // values of the two lights.
+  // values of the two lights. D_aim (the grey of the balance light) and the light axis (T3200 to
+  // D65) do not depend on the scene light, so rule 'as_shot_tint' acts through the spectrum only.
+  const auto  light     = ResolveLight(spectra, n, scene_light);
+  const auto  a         = light.first;
+  const auto  b         = light.second;
+  const auto  share     = light.share;
   return {
-      .medium         = medium.id,
-      .balance_light  = negative_balance_lights_[static_cast<std::size_t>(n)],
-      .layer_gain     = MixValues<3>(gain, n, lights, a, b, share),
-      .base_density   = CopyValues<3>(
-          stock_.F64(ArrayName("negative", negative, "scan_base_density"), {3}), 0),
+      .medium        = medium.id,
+      .balance_light = negative_balance_lights_[static_cast<std::size_t>(n)],
+      .layer_gain    = MixValues<3>(gain, n, lights, a, b, share),
+      .base_density =
+          CopyValues<3>(stock_.F64(ArrayName("negative", negative, "scan_base_density"), {3}), 0),
       .aim_density    = MixValues<3>(aim, n, lights, a, b, share),
       .light_axis     = MixValues<3>(axis, n, lights, a, b, share),
       .gamma          = CopyValues<3>(medium.gamma, 0),
-      .scene_spectrum = MixSpectrum(spectra, n, scene_light),
+      .scene_spectrum = MixSpectrum(spectra, n, light),
   };
 }
 

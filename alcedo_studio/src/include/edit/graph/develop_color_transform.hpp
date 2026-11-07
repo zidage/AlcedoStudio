@@ -139,6 +139,16 @@ struct WhiteBalanceTemperatureTint {
 };
 
 /**
+ * @brief The colour temperature and the tint of the RAW white balance of @p develop: the light of
+ *        scene light As Shot of the film print, with its distance from the Planckian locus.
+ *
+ * Mode Custom gives its Kelvin and tint; the other modes give the solved as-shot values. None in
+ * the cases of @ref RawWhiteBalanceCct.
+ */
+[[nodiscard]] auto RawWhiteBalanceWhite(const DevelopPayload& develop)
+    -> std::optional<WhiteBalanceTemperatureTint>;
+
+/**
  * @brief Convert CCT/tint to CIE 1931 xy with the RAW Custom WB mapping.
  *
  * Uses the same CIE 1931 Planckian locus table and tint scale as Develop Custom WB. Inputs are

@@ -1243,7 +1243,7 @@ auto ScanControls() -> std::vector<ScanControl> {
   using U = alcedo::DrtParameterUpdate;
   return {
       {"ScanAuto", true, QStringLiteral("warm"), text(&U::film_scan_auto)},
-      {"ScanAutoStrength", false, 0.5, number(&U::film_scan_auto_strength)},
+      {"ScanAutoStrength", false, 0.75, number(&U::film_scan_auto_strength)},
       {"ScanAutoDensity", false, 0.25, number(&U::film_scan_auto_density)},
       {"ScanContrast", false, 1.25, number(&U::film_scan_contrast)},
       {"ScanExposure", false, -0.75, number(&U::film_scan_exposure_stops)},
@@ -1487,7 +1487,7 @@ TEST(EditorDisplayTransformSnapshotQmlTest, NegativeScanSettingsFollowTheProject
   // then kept the values of the first document.
   alcedo::DrtParameterUpdate scan;
   scan.film_scan_auto           = std::string{"warm"};
-  scan.film_scan_auto_strength  = 0.5f;
+  scan.film_scan_auto_strength  = 0.75f;
   scan.film_scan_auto_density   = 0.25f;
   scan.film_scan_contrast       = 1.25f;
   scan.film_scan_exposure_stops = -0.75f;

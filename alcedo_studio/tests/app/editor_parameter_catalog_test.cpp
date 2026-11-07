@@ -944,7 +944,8 @@ TEST(EditorParameterCatalogTest, NegativeScanPropertiesHaveTheRangesOfTheDocumen
   const auto defaults = EditorParameterCatalog::UiDefault(*entry);
   const FilmNegativeScanParams scan;
   EXPECT_EQ(defaults.at("auto"), scan.auto_colour);
-  EXPECT_EQ(defaults.at("auto_strength").get<double>(), 0.8);
+  EXPECT_EQ(defaults.at("auto"), "neutral");
+  EXPECT_EQ(defaults.at("auto_strength").get<double>(), 0.5);
   EXPECT_FLOAT_EQ(static_cast<float>(defaults.at("auto_strength").get<double>()), scan.auto_strength);
   EXPECT_DOUBLE_EQ(defaults.at("black").get<double>(), 1.0);
   EXPECT_DOUBLE_EQ(defaults.at("scanner_red_nm").get<double>(), 650.0);
@@ -977,10 +978,11 @@ TEST(EditorParameterCatalogTest, NegativeScanWritesTheOpenDrtSettingsAndTheEncod
   EXPECT_TRUE(odt.at("open_drt").contains("creative_white"));
   // Method OpenDRT has no limiting space, so Negative Scan has none.
   EXPECT_FALSE(odt.contains("limiting_space"));
-  // Selecting Negative Scan selects As Shot in the same write, and the scan settings are their
-  // defaults.
+  // Selecting Negative Scan selects As Shot in the same write, and the scan settings are the
+  // defaults of new settings (auto colour neutral at 0.5).
   EXPECT_EQ(odt.at("film_print").at("scene_light"), "as_shot");
-  EXPECT_EQ(odt.at("film_print").at("auto"), "off");
+  EXPECT_EQ(odt.at("film_print").at("auto"), "neutral");
+  EXPECT_DOUBLE_EQ(odt.at("film_print").at("auto_strength").get<double>(), 0.5);
   EXPECT_DOUBLE_EQ(odt.at("film_print").at("black").get<double>(), 1.0);
   EXPECT_EQ(odt.at("film_print").at("scanner_light"), "halogen");
 
@@ -1017,6 +1019,15 @@ TEST(EditorParameterCatalogTest, NegativeScanWritesTheOpenDrtSettingsAndTheEncod
   ASSERT_TRUE(ui.has_value()) << error;
   EXPECT_EQ(ui->at("auto"), "neutral");
   EXPECT_DOUBLE_EQ(ui->at("scanner_width_nm").get<double>(), 60.0);
+  // A stored film print object of a build before G8 has no `auto` and `auto_strength` at Neutral
+  // Scan, and reads as it was: auto colour off at strength 0.8.
+  auto old_model = *model;
+  old_model["odt"]["film_print"].erase("auto");
+  old_model["odt"]["film_print"].erase("auto_strength");
+  const auto old_ui = EditorParameterCatalog::ToUiValue("odt", old_model, &error);
+  ASSERT_TRUE(old_ui.has_value()) << error;
+  EXPECT_EQ(old_ui->at("auto"), "off");
+  EXPECT_DOUBLE_EQ(old_ui->at("auto_strength").get<double>(), 0.8);
   // A later write of another value keeps As Shot: only a change of print material selects it.
   model = EditorParameterCatalog::ToModelJson("odt", {{"scene_light", "daylight"}}, *model, &error);
   ASSERT_TRUE(model.has_value()) << error;
@@ -1082,8 +1093,8 @@ TEST(EditorParameterCatalogTest, FilmPrintWriteHoldsItsFieldsAndRec709SdrOutput)
                                         {"light_spread", 1.0},
                                         {"halation", 2.5},
                                         {"enlarger_flare", 0.01},
-                                        {"auto", "off"},
-                                        {"auto_strength", 0.8},
+                                        {"auto", "neutral"},
+                                        {"auto_strength", 0.5},
                                         {"auto_density", 0.0},
                                         {"scan_contrast", 1.0},
                                         {"scan_exposure_stops", 0.0},

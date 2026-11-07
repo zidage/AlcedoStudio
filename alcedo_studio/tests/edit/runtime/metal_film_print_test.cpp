@@ -160,14 +160,18 @@ class MetalFilmPrintFixture : public ::testing::Test {
    *
    * @p publish ends the render and publishes its results; otherwise the render is cancelled. With
    * @p prescan, the prescan of Negative Scan (the scan density T) that the render built or sampled.
+   * @p persistence is the result persistence of the frame role (QualityBase: SensorDevelopOnly).
    */
   auto RenderView(const PipelineDocument& document, std::span<const Rgba> ap1, bool publish,
-                  std::vector<Rgba>* prescan = nullptr) -> std::vector<Rgba> {
+                  std::vector<Rgba>*     prescan     = nullptr,
+                  ResultPersistenceScope persistence = ResultPersistenceScope::AllCurrentResults)
+      -> std::vector<Rgba> {
     const auto width  = plan_.geometry.render_extent.width;
     const auto height = plan_.geometry.render_extent.height;
     device_->ResetPassStats();
     device_->BeginRender();
     auto& workspace = device_->Workspace();
+    workspace.SetResultPersistence(persistence, plan_.sensor_linear_output);
     workspace.PrepareResultValidity(plan_, document, input_);
     const GraphValueId scene_id{NodeId{"grade.primary"}, PortId{"image"}};
     auto& lease = workspace.AcquireImageForWrite(scene_id, {width, height, TextureFormat::Rgba32f});
@@ -580,16 +584,16 @@ TEST_F(MetalFilmPrintFixture, AsShotFollowsTheColourTemperatureOfTheRawDecode) {
     auto document = FilmPrintDocument("kodak_5207", material, std::string{kFilmAsShotLightId});
     // A RAW file in mode As Shot uses its solved temperature: the same as mode Custom at it.
     film_print_test::SetRawAsShot(document, 5650.0);
-    ASSERT_EQ(FilmSceneRawCct(document), std::optional<double>(5650.0));
+    ASSERT_EQ(FilmSceneRawWhite(document).value().cct, 5650.0);
     const auto as_shot = render(document);
     auto       custom  = FilmPrintDocument("kodak_5207", material, std::string{kFilmAsShotLightId});
     film_print_test::SetRawCustom(custom, 5650.0);
-    ASSERT_EQ(FilmSceneRawCct(custom), std::optional<double>(5650.0));
+    ASSERT_EQ(FilmSceneRawWhite(custom).value().cct, 5650.0);
     EXPECT_EQ(differs(as_shot, render(custom)), 0.0);
 
     // A change of the Kelvin in mode Custom changes the output and the keys of the tables.
     const auto key_of = [&](const PipelineDocument& d) {
-      const auto light = tables.Bundle().SceneLightMix(kFilmAsShotLightId, FilmSceneRawCct(d));
+      const auto light = tables.Bundle().SceneLightMix(kFilmAsShotLightId, FilmSceneRawWhite(d));
       return tables.Resolve("kodak_5207", material, light)->uv_key;
     };
     const auto warm_key = key_of(custom);
@@ -599,7 +603,7 @@ TEST_F(MetalFilmPrintFixture, AsShotFollowsTheColourTemperatureOfTheRawDecode) {
 
     // An input with no RAW white balance renders As Shot as the reference.
     film_print_test::SetRasterInput(document);
-    EXPECT_EQ(FilmSceneRawCct(document), std::nullopt);
+    EXPECT_FALSE(FilmSceneRawWhite(document).has_value());
     const auto raster    = render(document);
     auto       reference = FilmPrintDocument("kodak_5207", material, "reference");
     film_print_test::SetRasterInput(reference);
@@ -614,16 +618,18 @@ TEST_F(MetalFilmPrintFixture, AsShotFollowsTheColourTemperatureOfTheRawDecode) {
   payload.wb_mode   = "as_shot";
   const auto solved = ResolveDevelopColorTransform(payload);
   ASSERT_TRUE(solved.ok);
-  payload.as_shot_cct = solved.transform.resolved_cct;
+  payload.as_shot_cct  = solved.transform.resolved_cct;
+  payload.as_shot_tint = solved.transform.resolved_tint;
   document.Develop()->Params().ReplaceParams(payload);
-  ASSERT_EQ(FilmSceneRawCct(document), std::optional<double>(solved.transform.resolved_cct));
+  ASSERT_EQ(FilmSceneRawWhite(document).value().cct, solved.transform.resolved_cct);
   const auto neutral = render(document);
   for (const auto& pixel : neutral) {
     ASSERT_TRUE(std::isfinite(pixel.r) && std::isfinite(pixel.g) && std::isfinite(pixel.b));
   }
   auto custom =
       FilmPrintDocument("kodak_5219", "kodak_2383", std::string{kFilmAsShotLightId});
-  film_print_test::SetRawCustom(custom, solved.transform.resolved_cct);
+  film_print_test::SetRawCustom(custom, solved.transform.resolved_cct,
+                                solved.transform.resolved_tint);
   EXPECT_EQ(differs(neutral, render(custom)), 0.0);
 }
 
@@ -755,6 +761,35 @@ TEST_F(MetalFilmPrintFixture, NegativeScanAutoColourReadsThePrescanOfTheFullFram
   (void)RenderView(document, field, true);
   EXPECT_EQ(device_->PassStats().film_canvas_rebuild + device_->PassStats().film_canvas_sample, 1U);
   EXPECT_EQ(device_->PassStats().film_scan_prescan_reads, 0U);
+}
+
+TEST_F(MetalFilmPrintFixture, NegativeScanQualityBasePublishesThePrescanForTheDetailPatch) {
+  // A settled edit, an undo, or a redo renders a QualityBase of the full frame and then the Detail
+  // patch, an ROI. The QualityBase keeps only the sensor result and the prescan, so the patch has
+  // the auto colour of the full frame, and not one of the pixels of the viewport.
+  constexpr std::uint32_t kWidth   = 256;
+  constexpr std::uint32_t kHeight  = 192;
+  constexpr std::uint32_t kRoiX    = 80;
+  constexpr std::uint32_t kRoiY    = 64;
+  const auto              field    = PatchField(kWidth, kHeight, 60, 50, 24);
+  auto                    document = NegativeScanDocument("kodak_5207", "neutral");
+  auto&                   images   = device_->Workspace().Images();
+  SetView({kWidth, kHeight}, {kWidth, kHeight}, Matrix3x3::Identity());
+  (void)RenderView(document, field, true, nullptr, ResultPersistenceScope::SensorDevelopOnly);
+  EXPECT_EQ(device_->PassStats().film_scan_prescan_reads, 1U);
+  EXPECT_NE(images.PublishedLastWriter(FilmScanPrescanResultId(plan_.drt.node_id)), 0U);
+  EXPECT_EQ(images.PublishedLastWriter(FilmHalationResultId(plan_.drt.node_id)), 0U);
+  const auto shift = device_->PassStats().film_scan_auto_shift;
+  EXPECT_GT(std::abs(shift[0]) + std::abs(shift[1]) + std::abs(shift[2]), 1e-4);
+
+  SetView({kWidth, kHeight}, {96, 64},
+          Matrix3x3::Translate(static_cast<float>(kRoiX), static_cast<float>(kRoiY)));
+  (void)RenderView(document, CropField(field, kWidth, kRoiX, kRoiY, 96, 64), false);
+  // The patch samples the prescan; only the Halation canvas, which the QualityBase keeps local, is
+  // built from the pixels of the patch.
+  EXPECT_EQ(device_->PassStats().film_canvas_sample, 1U);
+  EXPECT_EQ(device_->PassStats().film_canvas_rebuild, 1U);
+  EXPECT_EQ(device_->PassStats().film_scan_auto_shift, shift);
 }
 
 TEST_F(MetalFilmPrintFixture, NegativeScanRenderingSettingsBuildNoTableAndAScannerSettingDoes) {
@@ -1434,7 +1469,8 @@ TEST_F(MetalFilmPrintFixture, FilmPrintImageMatchesLab) {
       if (automatic) {
         shift = film_print_test::LargestShiftDifference(LastAutoShift(), file.F64("shift", {3}));
         const auto& film  = document.Drt()->Params().FilmPrint();
-        const auto  mix   = tables.Bundle().SceneLightMix(film.scene_light, FilmSceneRawCct(document));
+        const auto  mix =
+            tables.Bundle().SceneLightMix(film.scene_light, FilmSceneRawWhite(document));
         const auto  data  = tables.Resolve(negative, material, mix);
         const auto  lab_x = file.F64("prescan", {64, 96, 3});
         EXPECT_EQ(prescan.size(), 64U * 96U);

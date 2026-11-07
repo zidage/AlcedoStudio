@@ -12,6 +12,7 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/film/film_scene_tint.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 
 namespace alcedo {
@@ -55,8 +56,8 @@ struct FilmPrintPassTime {
  * `dye_max - record`. The blurred amounts of the negative grade, the flare canvas, and the prescan
  * read the amounts with no grain: they are means over many pixels.
  *
- * @param raw_cct The colour temperature of the RAW decode for scene light As Shot, or none for an
- *        input with no RAW white balance. See `FilmSceneRawCct`.
+ * @param raw_white The white of the RAW decode for scene light As Shot, or none for an input
+ *        with no RAW white balance. See `FilmSceneRawWhite`.
  * @param grain_strength The stored value of the Film Grain slider, in [0, 2]; 0 runs no grain
  *        kernel.
  * @param pass_times When set, this function adds the time of each kernel group and waits for the
@@ -71,7 +72,7 @@ struct FilmPrintPassTime {
  *         grain strength outside [0, 2] (`MakeFilmGrainPlan`).
  */
 void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
-                         const DrtNodeModel& drt, std::optional<double> raw_cct,
+                         const DrtNodeModel& drt, std::optional<FilmRawWhite> raw_white,
                          const FrameSceneBinding& scene, const FrameSceneBinding& display,
                          std::uint32_t width, std::uint32_t height, float grain_strength,
                          std::vector<FilmPrintPassTime>* pass_times             = nullptr,

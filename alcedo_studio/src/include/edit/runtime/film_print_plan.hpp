@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "edit/geometry/resolved_render_geometry.hpp"
@@ -17,20 +18,23 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/film/film_stock_bundle.hpp"
+#include "edit/runtime/result_persistence.hpp"
 
 namespace alcedo {
 
 class PipelineDocument;
 
 /**
- * @brief The colour temperature of the RAW decode of @p document, for scene light As Shot.
+ * @brief The white of the RAW decode of @p document, for scene light As Shot.
  *
- * Develop mode Custom gives its Kelvin; the other modes give the solved as-shot temperature. The
- * tint is not read. A raster input (JPEG, PNG, TIFF, OpenEXR), a document with no Develop, or a
- * RAW whose colour transform does not resolve has no RAW white balance, so the result is none, and
- * As Shot reads as the reference. See `RawWhiteBalanceCct`.
+ * Develop mode Custom gives its Kelvin and tint; the other modes give the solved as-shot values.
+ * The chromaticity is that of the Develop white balance (`WhiteBalanceTemperatureTintToXy`), so it
+ * holds the tint (rule 'as_shot_tint'). A raster input (JPEG, PNG, TIFF, OpenEXR), a document
+ * with no Develop, or a RAW whose colour transform does not resolve has no RAW white balance, so
+ * the result is none, and As Shot reads as the reference. See `RawWhiteBalanceWhite`.
  */
-[[nodiscard]] auto FilmSceneRawCct(const PipelineDocument& document) -> std::optional<double>;
+[[nodiscard]] auto FilmSceneRawWhite(const PipelineDocument& document)
+    -> std::optional<FilmRawWhite>;
 
 /**
  * @brief Graph value for the canonical Halation result of the DRT node @p drt_id.
@@ -63,18 +67,19 @@ class PipelineDocument;
  * Rule 'frame_auto_colour' reads a prescan of the frame: the scan density T of the full frame,
  * reduced by area to a long edge of 96 pixels (`film_negative_scan::PrescanPlanOf`). A full-edit
  * render publishes it; a viewport ROI render samples it, so the auto colour of a zoom or a pan is
- * that of the full frame. It reads the negative and the scanner, not the rendering settings. See
- * @ref FilmHalationResultId.
+ * that of the full frame. It reads the negative and the scanner, not the rendering settings. A
+ * QualityBase render also publishes it (@ref kFilmScanPrescanPort), so the Detail patch after a
+ * settled edit samples it too. See @ref FilmHalationResultId.
  */
 [[nodiscard]] inline auto FilmScanPrescanResultId(const NodeId& drt_id) -> GraphValueId {
-  return {drt_id, PortId{"film.scan_prescan.0"}};
+  return {drt_id, PortId{std::string{kFilmScanPrescanPort}}};
 }
 
 /// True when @p id is a canonical film print result.
 [[nodiscard]] inline auto IsFilmPrintResultPort(const GraphValueId& id) -> bool {
   const std::string_view port = id.output_port.Value();
   return port == "film.halation.0" || port == "film.flare.0" || port == "film.loupe_flare.0" ||
-         port == "film.scan_prescan.0";
+         port == kFilmScanPrescanPort;
 }
 
 /// Largest tap distance of one blur pass. The sigma of a blur in pixels is its length on the film

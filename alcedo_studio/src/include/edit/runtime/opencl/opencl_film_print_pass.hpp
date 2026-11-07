@@ -13,6 +13,7 @@
 
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/film/film_scene_tint.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
 
@@ -39,8 +40,8 @@ namespace alcedo {
  * blurred amounts of the negative grade, the flare canvas, and the prescan read the amounts with
  * no grain: they are means over many pixels.
  *
- * @param raw_cct The colour temperature of the RAW decode for scene light As Shot, or none for an
- *        input with no RAW white balance. See `FilmSceneRawCct`.
+ * @param raw_white The white of the RAW decode for scene light As Shot, or none for an input
+ *        with no RAW white balance. See `FilmSceneRawWhite`.
  * @param grain_strength The stored value of the Film Grain slider, in [0, 2]; 0 runs no grain
  *        kernel.
  * @param pass_names When set, this function adds the name of each kernel group that it records.
@@ -55,7 +56,7 @@ namespace alcedo {
  *         [0, 2] (`MakeFilmGrainPlan`), before any GPU work.
  */
 void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                           const DrtNodeModel& drt, std::optional<double> raw_cct,
+                           const DrtNodeModel& drt, std::optional<FilmRawWhite> raw_white,
                            const FrameSceneBinding& scene, const FrameSceneBinding& display,
                            std::uint32_t width, std::uint32_t height, float grain_strength,
                            std::vector<std::string>* pass_names             = nullptr,

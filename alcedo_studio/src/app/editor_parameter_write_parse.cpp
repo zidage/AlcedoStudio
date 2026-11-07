@@ -763,8 +763,13 @@ auto ParseDetailedDrtParameters(const nlohmann::json& value) -> OpenDrtDetailedP
   return result;
 }
 
-/// Fills each film print field that @p update does not set with the default of the Model.
-void CompleteFilmPrintUpdate(DrtParameterUpdate& update) {
+/**
+ * Fills each film print field that @p update does not set as the Model loads it
+ * (`DrtParamsModel::LoadJson`): with no `film_print` object (@p has_film_print false), the defaults
+ * of new settings; in a `film_print` object, the defaults, and the stored defaults
+ * (`kFilmScanAutoStoredDefault`) for `auto` and `auto_strength`.
+ */
+void CompleteFilmPrintUpdate(DrtParameterUpdate& update, bool has_film_print) {
   const FilmPrintParams defaults;
   const auto&           scan = defaults.scan;
   const auto            fill = [](auto& field, const auto& value) {
@@ -776,8 +781,10 @@ void CompleteFilmPrintUpdate(DrtParameterUpdate& update) {
   fill(update.film_light_spread, defaults.light_spread);
   fill(update.film_halation, defaults.halation);
   fill(update.film_enlarger_flare, defaults.enlarger_flare);
-  fill(update.film_scan_auto, scan.auto_colour);
-  fill(update.film_scan_auto_strength, scan.auto_strength);
+  fill(update.film_scan_auto,
+       has_film_print ? std::string{kFilmScanAutoStoredDefault} : scan.auto_colour);
+  fill(update.film_scan_auto_strength,
+       has_film_print ? kFilmScanAutoStrengthStoredDefault : scan.auto_strength);
   fill(update.film_scan_auto_density, scan.auto_density);
   fill(update.film_scan_contrast, scan.contrast);
   fill(update.film_scan_exposure_stops, scan.exposure_stops);
@@ -948,7 +955,7 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, Par
     // The Model omits a film print key at its default (and the film print object of another
     // method), so a complete value reads such a key as the default (issue 661).
     if (form == ParseForm::Value) {
-      CompleteFilmPrintUpdate(update);
+      CompleteFilmPrintUpdate(update, UnwrapObject(params, {"odt"}, "odt").contains("film_print"));
     }
     return update;
   }

@@ -334,13 +334,15 @@ auto ReadFilmIdentifier(const nlohmann::json& film_print, const char* key, std::
   return id;
 }
 
-/// The settings of Negative Scan in the object `film_print`. A missing key reads as its default.
+/// The settings of Negative Scan in the object `film_print`. A missing key reads as its default;
+/// a missing `auto` or `auto_strength` reads as its stored default (@ref
+/// kFilmScanAutoStoredDefault).
 auto ReadFilmNegativeScan(const nlohmann::json& object) -> FilmNegativeScanParams {
   FilmNegativeScanParams scan;
-  scan.auto_colour = ReadFilmIdentifier(object, "auto", scan.auto_colour, [](std::string_view id) {
-    return IsFilmIdentifier(kFilmScanAutoIds, id);
-  });
-  scan.auto_strength  = ReadFilmSlider(object, "auto_strength", scan.auto_strength,
+  scan.auto_colour = ReadFilmIdentifier(
+      object, "auto", std::string{kFilmScanAutoStoredDefault},
+      [](std::string_view id) { return IsFilmIdentifier(kFilmScanAutoIds, id); });
+  scan.auto_strength  = ReadFilmSlider(object, "auto_strength", kFilmScanAutoStrengthStoredDefault,
                                        kFilmScanAutoStrengthMin, kFilmScanAutoStrengthMax);
   scan.auto_density   = ReadFilmSlider(object, "auto_density", scan.auto_density,
                                        kFilmScanAutoDensityMin, kFilmScanAutoDensityMax);
@@ -458,7 +460,8 @@ auto FilmPrintToJson(const FilmPrintParams& params) -> nlohmann::json {
       {"scene_light", params.scene_light}, {"light_spread", params.light_spread},
       {"halation", params.halation},       {"enlarger_flare", params.enlarger_flare}};
   // A key of Negative Scan at its default is not written, so a document with no Negative Scan
-  // keeps its bytes and its root id.
+  // keeps its bytes and its root id. The auto colour compares with its stored default, which a
+  // missing key reads as, so new settings write `auto` and `auto_strength`.
   const FilmNegativeScanParams defaults;
   const auto&                  scan = params.scan;
   const auto put = [&json](const char* key, const auto& value, const auto& fallback) {
@@ -466,8 +469,8 @@ auto FilmPrintToJson(const FilmPrintParams& params) -> nlohmann::json {
       json[key] = value;
     }
   };
-  put("auto", scan.auto_colour, defaults.auto_colour);
-  put("auto_strength", scan.auto_strength, defaults.auto_strength);
+  put("auto", scan.auto_colour, std::string{kFilmScanAutoStoredDefault});
+  put("auto_strength", scan.auto_strength, kFilmScanAutoStrengthStoredDefault);
   put("auto_density", scan.auto_density, defaults.auto_density);
   put("scan_contrast", scan.contrast, defaults.contrast);
   put("scan_exposure_stops", scan.exposure_stops, defaults.exposure_stops);

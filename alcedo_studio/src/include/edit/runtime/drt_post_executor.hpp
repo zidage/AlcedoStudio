@@ -164,7 +164,7 @@ class DrtPostExecutor {
       if (index == 0) {
         if constexpr (Ops::kImplementsFilmPrint) {
           if (film_print) {
-            Ops::DispatchFilmPrint(device, plan, *drt, FilmSceneRawCct(document), current, dest,
+            Ops::DispatchFilmPrint(device, plan, *drt, FilmSceneRawWhite(document), current, dest,
                                    width, height, film_print_grain);
           } else {
             Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), width, height);

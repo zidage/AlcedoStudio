@@ -225,9 +225,8 @@ TEST(RuntimeInvalidation, ScanPrescanFollowsTheAmountsAndTheScannerAndNoRenderin
   expect_invalidates(true, [](DrtParameterUpdate& update) {
     update.film_scanner_light = std::string{"equal_energy"};
   });
-  expect_invalidates(false, [](DrtParameterUpdate& update) {
-    update.film_scan_auto = std::string{"neutral"};
-  });
+  expect_invalidates(
+      false, [](DrtParameterUpdate& update) { update.film_scan_auto = std::string{"warm"}; });
   expect_invalidates(false, [](DrtParameterUpdate& update) { update.film_scan_contrast = 1.2f; });
   expect_invalidates(false, [](DrtParameterUpdate& update) { update.film_scan_cyan = 0.05f; });
   expect_invalidates(false, [](DrtParameterUpdate& update) { update.film_scan_black = 0.5f; });
@@ -690,9 +689,19 @@ TEST(RuntimeInvalidation, RemovingMaskInvalidatesGradeOutputNotDevelop) {
   EXPECT_GT(harness.Required(harness.Primary().scene_output), grade);
 }
 
-TEST(ResultPersistence, QualityBaseRolePersistsOnlySensorDevelop) {
+TEST(ResultPersistence, QualityBaseRolePersistsOnlySensorDevelopAndTheNegativeScanPrescan) {
   const GraphValueId sensor{NodeId{"develop"}, PortId{"sensor_linear"}};
   const GraphValueId geometry{NodeId{"geometry"}, PortId{"scene_source"}};
+  // The prescan of Negative Scan has a fixed size and covers the full frame, so a QualityBase
+  // publishes it, and the Detail patch after a settled edit samples it. The other film print
+  // results stay local to the QualityBase.
+  const NodeId       drt{"drt"};
+  EXPECT_TRUE(PersistsGraphValue(ResultPersistenceScope::SensorDevelopOnly,
+                                 FilmScanPrescanResultId(drt), sensor));
+  EXPECT_FALSE(PersistsGraphValue(ResultPersistenceScope::SensorDevelopOnly,
+                                  FilmHalationResultId(drt), sensor));
+  EXPECT_FALSE(PersistsGraphValue(ResultPersistenceScope::SensorDevelopOnly, FilmFlareResultId(drt),
+                                  sensor));
   EXPECT_EQ(ResultPersistenceScopeForRole(FrameRole::InteractivePrimary),
             ResultPersistenceScope::AllCurrentResults);
   EXPECT_EQ(ResultPersistenceScopeForRole(FrameRole::DetailPatch),

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "edit/runtime/film/film_array_file.hpp"
+#include "edit/runtime/film/film_scene_tint.hpp"
 
 namespace alcedo {
 
@@ -181,11 +182,16 @@ struct FilmNegativeScanSetup {
  * lights of the colour temperature grid around the colour temperature of the RAW decode, linear in
  * mired. Each light has Y = 1, and the layer exposure is linear in the light, so the u'v' table of
  * the blend is the blend of the two tables.
+ *
+ * With @ref raw_white, the light of each film has the chromaticity of the RAW white (rule
+ * 'as_shot_tint'): each selection moves the blend along the grid and applies the tint factor of
+ * `film_scene_tint`, from @ref share as the start. With no RAW white, the blend is the light.
  */
 struct FilmSceneLightMix {
-  std::string first;
-  std::string second;
-  double      share = 0.0;  ///< Share of @ref second, in [0, 1]
+  std::string                 first;
+  std::string                 second;
+  double                      share = 0.0;  ///< Share of @ref second, in [0, 1]
+  std::optional<FilmRawWhite> raw_white;    ///< As Shot of a RAW decode only
 };
 
 /// The colour temperature grid of the scene lights, in the order of falling mired.
@@ -314,15 +320,21 @@ class FilmStockBundle {
    * @brief The scene light of a document field, as lights of this bundle.
    *
    * @param scene_light A light of @ref SceneLights, or `as_shot`.
-   * @param raw_cct The colour temperature of the RAW decode, or none for an input with no RAW
-   *        white balance. Only `as_shot` reads it: with none, `as_shot` is the light `reference`;
-   *        else the blend of the two grid lights around it, linear in mired. A temperature outside
-   *        the grid takes the nearest end.
+   * @param raw_white The white of the RAW decode, or none for an input with no RAW white balance.
+   *        Only `as_shot` reads it: with none, `as_shot` is the light `reference`; else the
+   *        @ref GridLight of its colour temperature, with the RAW white for rule 'as_shot_tint'.
    * @throws std::runtime_error that names @p scene_light when it is unknown, and for a temperature
    *         that is not finite and above 0.
    */
-  [[nodiscard]] auto SceneLightMix(std::string_view      scene_light,
-                                   std::optional<double> raw_cct) const -> FilmSceneLightMix;
+  [[nodiscard]] auto SceneLightMix(std::string_view            scene_light,
+                                   std::optional<FilmRawWhite> raw_white) const
+      -> FilmSceneLightMix;
+  /**
+   * @brief The blend of the two grid lights around @p kelvin, linear in mired (lab `grid_blend`).
+   * A temperature outside the grid takes the nearest end. It has no RAW white.
+   * @throws std::runtime_error for a temperature that is not finite and above 0.
+   */
+  [[nodiscard]] auto GridLight(double kelvin) const -> FilmSceneLightMix;
   [[nodiscard]] auto CctGrid() const -> const FilmCctGrid& { return cct_grid_; }
 
   /// True when @p id is a colour reversal film of this bundle.
@@ -436,9 +448,31 @@ class FilmStockBundle {
   void ReadCctGrid();
   /// Index of a light of @ref SceneLights. @throws std::runtime_error that names an unknown one.
   [[nodiscard]] auto LightIndex(std::string_view scene_light) const -> std::int64_t;
-  /// The spectrum of @p mix, from the spectra that row @p row of @p spectrum_index names per light.
+  /// The grid blend at @p mired (lab `grid_blend`); the nearest end outside the grid.
+  [[nodiscard]] auto GridAt(double mired) const -> FilmSceneLightMix;
+
+  /// The light of one film: the blend of two lights of the bundle, the gain of the tint factor, and
+  /// the mired change of the Wien factor.
+  struct ResolvedLight {
+    std::int64_t first       = 0;
+    std::int64_t second      = 0;
+    double       share       = 0.0;
+    double       tint        = 0.0;  ///< k of the factor 10^(k g(lambda)). 0: no factor
+    double       mired_shift = 0.0;  ///< Mired change of the Wien factor. 0: no factor
+  };
+  /**
+   * @brief The light of the film of row @p row of @p spectrum_index under @p mix. With a RAW white
+   * (rule 'as_shot_tint'), the tint gain and the mired change that give the blend of @p mix the
+   * chromaticity of that blend moved across the Planckian locus by the Duv of the RAW white minus
+   * the Duv of the blend. A RAW white with the Duv of the blend gives the blend with no factor.
+   * @throws std::runtime_error when the solve does not reach the chromaticity.
+   */
+  [[nodiscard]] auto ResolveLight(std::span<const std::int32_t> spectrum_index, std::int64_t row,
+                                  const FilmSceneLightMix& mix) const -> ResolvedLight;
+  /// The spectrum of @p light, from the spectra that row @p row of @p spectrum_index names per
+  /// light. With a tint or a Wien factor, the luminance Y of the blend stays.
   [[nodiscard]] auto MixSpectrum(std::span<const std::int32_t> spectrum_index, std::int64_t row,
-                                 const FilmSceneLightMix& mix) const -> std::vector<double>;
+                                 const ResolvedLight& light) const -> std::vector<double>;
   /// The values of group @p group ('negative' or 'reversal') with the form of a negative.
   [[nodiscard]] auto ReadFilmRecord(std::string_view group, std::string_view id) const
       -> FilmNegativeView;

@@ -721,8 +721,8 @@ auto OdtUiDefault() -> json {
           {"halation", static_cast<double>(film_print.halation)},
           {"enlarger_flare", 0.01},
           {"auto", scan.auto_colour},
-          // The decimal default, as Enlarger flare: the float 0.8f is 0.800000011920929.
-          {"auto_strength", 0.8},
+          // The decimal default of new settings, as Enlarger flare.
+          {"auto_strength", 0.5},
           {"auto_density", static_cast<double>(scan.auto_density)},
           {"scan_contrast", static_cast<double>(scan.contrast)},
           {"scan_exposure_stops", static_cast<double>(scan.exposure_stops)},
@@ -814,16 +814,26 @@ auto OdtModelToUi(const json& model_json, std::string* error) -> std::optional<j
     }
     ui[key] = value;
   }
+  // As the Model loads it: in a stored `film_print` object a missing `auto` or `auto_strength` is
+  // the stored default (off, 0.8) of a build before G8; with no object, the default of new
+  // settings.
+  auto scan_defaults = defaults;
+  if (film_it != odt.end()) {
+    scan_defaults["auto"]          = std::string{kFilmScanAutoStoredDefault};
+    // The decimal of kFilmScanAutoStrengthStoredDefault: the float 0.8f is 0.800000011920929.
+    scan_defaults["auto_strength"] = 0.8;
+  }
   for (const char* key : kOdtFilmScanOptionKeys) {
     std::string value;
-    if (!ReadString(film_print, key, defaults.at(key).get<std::string>(), "odt", &value, error)) {
+    if (!ReadString(film_print, key, scan_defaults.at(key).get<std::string>(), "odt", &value,
+                    error)) {
       return std::nullopt;
     }
     ui[key] = value;
   }
   for (const char* key : kOdtFilmScanNumberKeys) {
     double value = 0.0;
-    if (!ReadNumber(film_print, key, defaults.at(key).get<double>(), "odt", &value, error)) {
+    if (!ReadNumber(film_print, key, scan_defaults.at(key).get<double>(), "odt", &value, error)) {
       return std::nullopt;
     }
     ui[key] = value;

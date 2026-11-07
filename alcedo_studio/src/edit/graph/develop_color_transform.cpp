@@ -677,11 +677,22 @@ void BindRgbWorkingSpaceCameraProfile(DevelopPayload& payload) {
 }
 
 auto RawWhiteBalanceCct(const DevelopPayload& develop) -> std::optional<double> {
+  const auto white = RawWhiteBalanceWhite(develop);
+  if (!white.has_value()) {
+    return std::nullopt;
+  }
+  return white->cct;
+}
+
+auto RawWhiteBalanceWhite(const DevelopPayload& develop)
+    -> std::optional<WhiteBalanceTemperatureTint> {
   if (develop.input.has_value() || !ResolveDevelopColorTransform(develop).ok) {
     return std::nullopt;
   }
-  return static_cast<double>(IsCustomWbMode(develop.wb_mode) ? develop.custom_cct
-                                                             : develop.as_shot_cct);
+  const bool custom = IsCustomWbMode(develop.wb_mode);
+  return WhiteBalanceTemperatureTint{
+      .cct  = static_cast<double>(custom ? develop.custom_cct : develop.as_shot_cct),
+      .tint = static_cast<double>(custom ? develop.custom_tint : develop.as_shot_tint)};
 }
 
 auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransformResult {
