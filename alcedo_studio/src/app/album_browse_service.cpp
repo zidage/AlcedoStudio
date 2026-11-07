@@ -226,6 +226,10 @@ auto AlbumBrowseService::ReadAlbumFileRows(std::span<const sl_element_id_t> file
   return store.ListSearchResultRows(file_ids);
 }
 
+auto AlbumBrowseService::ReadFolderImageCounts() const -> FolderImageCounts {
+  return ElementStoreForRead("ReadFolderImageCounts").ReadFolderImageCounts();
+}
+
 auto AlbumBrowseService::ReadLastEditedFile() const -> std::optional<LastEditedFile> {
   return ElementStoreForRead("ReadLastEditedFile").ReadLastEditedFile();
 }

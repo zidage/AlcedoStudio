@@ -771,6 +771,9 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
     }
   }
 
+  if (!added_ids.empty()) {
+    folders_->RefreshImageCounts();
+  }
   if (folders_->CurrentFolderElementId() == target_folder_id) {
     // The shown album gained photos; the query is the same.
     library_->RequestLibraryContentRefresh();
@@ -969,6 +972,7 @@ auto ImageController::FinishDeleteBatch(const DeleteBatch& batch, const DeleteBa
   if (!outcome.deleted_element_ids_.empty()) {
     library_->selection()->Prune(outcome.deleted_element_ids_);
     library_->RequestLibraryContentRefresh();
+    folders_->RefreshImageCounts();
   }
 
   const bool delete_from_library = batch.delete_from_library_;

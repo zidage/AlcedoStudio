@@ -5,7 +5,9 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
 #include <QVariantList>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <unordered_map>
@@ -34,11 +36,19 @@ class FolderController final : public QObject {
  public:
   FolderController(ProjectModule* project, LibraryModule* library, IUiStatusSink* status,
                    QObject* parent = nullptr);
+  /// Waits for a running photo count read, which posts its result to this object.
+  ~FolderController() override;
 
   void BindCollaborators(StatsEngine* stats, SearchController* search,
                          ImportExportHandler* import_export);
 
+  /// Loads the whole folder tree and starts one photo count read (RefreshImageCounts).
   void               ReloadTree(const std::filesystem::path& preferredFolderPath);
+  /// Reads the photo count of every folder and of the whole project on the library query
+  /// worker, with one statement grouped by folder id, and republishes `folders` with the
+  /// counts on the UI thread. Callers that add photos to a folder or remove them call it after
+  /// the change is written: import, delete, remove from an album, and "Add to".
+  void               RefreshImageCounts();
   void               RebuildFolderView();
   void               ApplyFolderSelection(uint folderUiId, bool emitSignal);
   [[nodiscard]] auto CurrentFolderFsPath() const -> std::filesystem::path;
@@ -118,6 +128,14 @@ class FolderController final : public QObject {
       -> std::optional<std::filesystem::path>;
   [[nodiscard]] auto EnsureNode(const std::filesystem::path& folderPath,
                                 const file_name_t& folderName, int depth) -> FolderNodeState&;
+  /// Photo count of the row of @p folder; -1 before the first count read of the project.
+  [[nodiscard]] auto    RowImageCount(const ExistingFolderEntry& folder) const -> qint64;
+  /// Takes the result of the count read @p generation unless a newer read replaced it. On
+  /// @p error the rows show no count.
+  void                  ApplyImageCounts(std::uint64_t generation, uint64_t project_count,
+                                         std::unordered_map<sl_element_id_t, uint64_t> folder_counts,
+                                         const QString&                                error);
+  void                  DropImageCounts();
 
   ProjectModule*        project_       = nullptr;
   LibraryModule*        library_       = nullptr;
@@ -136,6 +154,11 @@ class FolderController final : public QObject {
   QString                                                     current_folder_path_text_{};
   uint32_t                                                    current_folder_ui_id_ = 0;
   uint32_t                                                    next_folder_ui_id_    = 1;
+  /// Result of the newest applied count read. A tree reload keeps it until the next read
+  /// replaces it; closing the project drops it.
+  bool                                                        image_counts_loaded_  = false;
+  uint64_t                                                    project_image_count_  = 0;
+  std::unordered_map<sl_element_id_t, uint64_t>               image_count_by_folder_{};
 };
 
 }  // namespace alcedo::ui

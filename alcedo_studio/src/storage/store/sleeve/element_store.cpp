@@ -7,6 +7,7 @@
 #include <duckdb.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <format>
 #include <memory>
@@ -1063,6 +1064,43 @@ auto ElementStore::ReadProjectOverview() const -> ProjectOverviewCounts {
     }
   }
   duckdb_destroy_result(&result);
+  return out;
+}
+
+auto ElementStore::ReadFolderImageCounts() const -> FolderImageCounts {
+  // One row per folder that holds a photo, then one row with a NULL folder id for the whole
+  // project. Both parts join the tables of BuildScopedFileQuery, so every count equals the
+  // total of the library view of its folder.
+  static constexpr const char* kFolderCountsQuery =
+      "SELECT fc.folder_id, COUNT(*) "
+      "FROM FolderContent fc "
+      "JOIN Element e ON fc.element_id = e.id "
+      "JOIN FileImage fi ON fi.file_id = e.id "
+      "JOIN Image i ON i.id = fi.image_id "
+      "WHERE e.type = {} GROUP BY fc.folder_id "
+      "UNION ALL SELECT CAST(NULL AS BIGINT), COUNT(*) {}";
+  static constexpr std::array<duckorm::DuckFieldDesc, 2> kFields = {
+      duckorm::DuckFieldDesc{"folder_id", duckorm::DuckDBType::NULLABLE_INT64, 0},
+      duckorm::DuckFieldDesc{"photo_count", duckorm::DuckDBType::INT64, 0}};
+
+  auto              guard   = database_.GetConnectionGuard();
+  auto              db_lock = guard.Lock();
+  const auto        project = BuildScopedFileQuery(0);
+  const auto        sql  = std::format(kFolderCountsQuery, static_cast<uint32_t>(ElementType::FILE),
+                                       project.from_where_);
+  const auto        rows = duckorm::select_by_query(guard.conn_, kFields, kFields.size(),
+                                                    duckorm::SqlFragment{sql, project.binds_.binds_});
+
+  FolderImageCounts out;
+  for (const auto& row : rows) {
+    const auto folder_id = std::get<std::optional<int64_t>>(row[0]);
+    const auto count     = static_cast<uint64_t>(std::get<int64_t>(row[1]));
+    if (folder_id.has_value()) {
+      out.folder_photo_counts_[static_cast<sl_element_id_t>(*folder_id)] = count;
+    } else {
+      out.project_photo_count_ = count;
+    }
+  }
   return out;
 }
 

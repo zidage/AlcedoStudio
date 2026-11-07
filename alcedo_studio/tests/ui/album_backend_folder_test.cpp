@@ -8,24 +8,16 @@
 /// Covers: folder creation, deletion, selection (valid/invalid IDs), and
 /// signal emission.
 
-#include "ui/album_backend_test_fixture.hpp"
-
 #include <QSignalSpy>
+
+#include "app/album_browse_service.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
+#include "ui/album_backend_test_fixture.hpp"
 
 namespace alcedo::ui::test {
 namespace {
 
 using FolderTests = ApplicationModuleHostTestFixture;
-
-auto FindPackedProjectPath(const std::filesystem::path& dir)
-    -> std::optional<std::filesystem::path> {
-  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
-    if (entry.is_regular_file() && entry.path().extension() == ".alcd") {
-      return entry.path();
-    }
-  }
-  return std::nullopt;
-}
 
 // ── Create folder — signal emitted, folder visible ─────────────────────────
 
@@ -437,6 +429,129 @@ TEST_F(FolderTests, RenameAndMove_PersistAfterProjectReopen) {
   ASSERT_FALSE(inner.isEmpty());
   EXPECT_EQ(inner.value("parentElementId").toUInt(), beta.value("elementId").toUInt());
   EXPECT_FALSE(FolderRow(folders, "A").value("hasChildren").toBool());
+}
+
+// ── Photo count of every tree row (issue #733) ─────────────────────────────
+
+/// `imageCount` of the row named @p name (the root row when empty); -2 when no row matches.
+auto RowImageCount(ApplicationModuleHost& backend, const QString& name) -> qint64 {
+  for (const auto& v : backend.folders()->Folders()) {
+    const auto map     = v.toMap();
+    const bool is_root = map.value("folderId").toUInt() == 0u;
+    if (name.isEmpty() ? is_root : (!is_root && map.value("name").toString() == name)) {
+      return map.value("imageCount").toLongLong();
+    }
+  }
+  return -2;
+}
+
+/// Pumps events until the root row and the rows of @p expected show the given counts.
+auto WaitForCounts(ApplicationModuleHost& backend, qint64 root,
+                   const std::vector<std::pair<QString, qint64>>& expected) -> bool {
+  const auto matches = [&] {
+    if (RowImageCount(backend, {}) != root) {
+      return false;
+    }
+    return std::ranges::all_of(expected, [&](const auto& entry) {
+      return RowImageCount(backend, entry.first) == entry.second;
+    });
+  };
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (!matches() && std::chrono::steady_clock::now() < deadline) {
+    ProcessEvents(20);
+  }
+  return matches();
+}
+
+auto CountsText(ApplicationModuleHost& backend) -> std::string {
+  QStringList parts;
+  for (const auto& v : backend.folders()->Folders()) {
+    const auto map = v.toMap();
+    parts << QStringLiteral("%1=%2").arg(map.value("name").toString(),
+                                         map.value("imageCount").toString());
+  }
+  return parts.join(", ").toStdString();
+}
+
+/// Element and image ids of the photos of @p folder_id (0 = the whole project), by element id.
+auto FolderPhotos(ApplicationModuleHost& backend, sl_element_id_t folder_id)
+    -> std::vector<std::pair<sl_element_id_t, image_id_t>> {
+  std::vector<std::pair<sl_element_id_t, image_id_t>> out;
+  const auto browse = backend.project()->handler().project()->GetAlbumBrowseService();
+  for (const auto& file : browse->ListFilesInFolderById(folder_id)) {
+    out.emplace_back(file.element_id_, file.image_id_);
+  }
+  std::ranges::sort(out);
+  return out;
+}
+
+auto TargetEntries(const std::vector<std::pair<sl_element_id_t, image_id_t>>& photos)
+    -> QVariantList {
+  QVariantList list;
+  for (const auto& [element_id, image_id] : photos) {
+    list.push_back(QVariantMap{{"elementId", static_cast<uint>(element_id)},
+                               {"imageId", static_cast<uint>(image_id)}});
+  }
+  return list;
+}
+
+TEST_F(FolderTests, ImageCounts_FollowImportAddRemoveAndDelete) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  backend.folders()->CreateFolder("Trip");
+  ProcessEvents(200);
+  backend.folders()->CreateFolder("Empty");
+  ProcessEvents(200);
+  // An empty project: every row reads 0, the empty collection included.
+  ASSERT_TRUE(WaitForCounts(backend, 0, {{"Trip", 0}, {"Empty", 0}})) << CountsText(backend);
+
+  // Import into the root view.
+  const auto photos = WritePngPhotos(temp_dir_ / "count_source", "count-", 4);
+  ASSERT_EQ(photos.size(), 4u);
+  ASSERT_TRUE(ImportAndWait(backend, photos));
+  ASSERT_TRUE(WaitForCounts(backend, 4, {{"Trip", 0}, {"Empty", 0}})) << CountsText(backend);
+
+  // "Add to" Trip.
+  const auto all = FolderPhotos(backend, 0);
+  ASSERT_EQ(all.size(), 4u);
+  const uint trip = FolderRow(backend.folders()->Folders(), "Trip").value("folderId").toUInt();
+  const auto added =
+      backend.images()->AddImagesToFolder(TargetEntries({all[0], all[1], all[2]}), trip);
+  ASSERT_EQ(added.value("addedCount").toInt(), 3)
+      << added.value("message").toString().toStdString();
+  ASSERT_TRUE(WaitForCounts(backend, 4, {{"Trip", 3}, {"Empty", 0}})) << CountsText(backend);
+
+  // Remove one photo from Trip: it stays in the project.
+  backend.folders()->SelectFolder(
+      FolderRow(backend.folders()->Folders(), "Trip").value("folderId").toUInt());
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  ASSERT_TRUE(DeleteAndWait(backend, {all[0]}));
+  ASSERT_TRUE(WaitForCounts(backend, 4, {{"Trip", 2}, {"Empty", 0}})) << CountsText(backend);
+
+  // Import into Trip: the photos join Trip and the project.
+  const auto more = WritePngPhotos(temp_dir_ / "count_source_trip", "count-trip-", 2);
+  ASSERT_EQ(more.size(), 2u);
+  ASSERT_TRUE(ImportAndWait(backend, more));
+  ASSERT_TRUE(WaitForCounts(backend, 6, {{"Trip", 4}, {"Empty", 0}})) << CountsText(backend);
+
+  // Delete a photo of Trip from the project: both counts drop.
+  backend.folders()->SelectFolder(0);
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  ASSERT_TRUE(DeleteAndWait(backend, {all[1]}));
+  ASSERT_TRUE(WaitForCounts(backend, 5, {{"Trip", 3}, {"Empty", 0}})) << CountsText(backend);
+}
+
+TEST_F(FolderTests, ImageCounts_NewCollectionReadsZeroAfterATreeReload) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  const auto photos = WritePngPhotos(temp_dir_ / "count_reload_source", "reload-", 2);
+  ASSERT_EQ(photos.size(), 2u);
+  ASSERT_TRUE(ImportAndWait(backend, photos));
+  ASSERT_TRUE(WaitForCounts(backend, 2, {})) << CountsText(backend);
+
+  // A create reloads the tree; the new collection reads 0 and the root keeps its count.
+  backend.folders()->CreateFolder("Fresh");
+  ASSERT_TRUE(WaitForCounts(backend, 2, {{"Fresh", 0}})) << CountsText(backend);
 }
 
 // ── Folder operations without project — no crash ───────────────────────────

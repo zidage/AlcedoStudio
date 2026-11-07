@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "sleeve/album_query.hpp"
@@ -174,6 +175,16 @@ struct ProjectOverviewCounts {
   std::optional<std::string> latest_capture_date_{};
 };
 
+/// Photo count of the whole project and of every album folder, read by
+/// ElementStore::ReadFolderImageCounts from one statement. Each count has the scope of the
+/// library view of that folder (BuildScopedFileQuery with no filter).
+struct FolderImageCounts {
+  /// Photos of the whole project: the scope of `CountFilesInFolder(0)`, the root view.
+  uint64_t                                      project_photo_count_ = 0;
+  /// Photos of each folder that holds at least one. A folder without an entry holds none.
+  std::unordered_map<sl_element_id_t, uint64_t> folder_photo_counts_{};
+};
+
 /// The project file whose active Version head is the newest commit. Read by
 /// ElementStore::ReadLastEditedFile.
 struct LastEditedFile {
@@ -272,6 +283,12 @@ class ElementStore {
   /// connection lock and is safe to call from any thread. Throws std::runtime_error with the
   /// DuckDB message when the statement fails.
   auto ReadProjectOverview() const -> ProjectOverviewCounts;
+
+  /// Photo count of the whole project and of every folder (FolderImageCounts), from one
+  /// statement grouped by folder id. Reads only; takes the connection lock and is safe to call
+  /// from any thread. Throws std::runtime_error with the DuckDB message when the statement
+  /// fails.
+  auto ReadFolderImageCounts() const -> FolderImageCounts;
 
   /// The file of the whole project whose active Version head commit is the newest, by the same
   /// edited rule as the library edit groups. Empty when no file is edited. Reads only; takes

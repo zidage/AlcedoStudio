@@ -736,6 +736,46 @@ TEST_F(AlbumQueryTest, AlbumScopeAndEmptyScopeUseTheSameQuery) {
   EXPECT_TRUE(empty.rows_.empty());
 }
 
+// Issue #733: one grouped read gives the Collections tree the photo count of every folder,
+// equal to the total of the library view of that folder; an empty folder has no entry.
+TEST_F(AlbumQueryTest, FolderImageCountsMatchEveryFolderScope) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  auto       sleeve = project.GetSleeveService();
+  const auto trip   = sleeve->CreateFolder(L"/", L"Trip");
+  const auto empty  = sleeve->CreateFolder(L"/", L"Empty");
+  ASSERT_TRUE(trip.second.success_);
+  ASSERT_TRUE(empty.second.success_);
+  const auto day = sleeve->CreateFolder(L"/Trip", L"Day 1");
+  ASSERT_TRUE(day.second.success_);
+  const auto trip_id  = trip.first->element_id_;
+  const auto empty_id = empty.first->element_id_;
+  const auto day_id   = day.first->element_id_;
+  for (const auto index : {0, 3, 5}) {
+    ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[index], trip_id).success_);
+  }
+  // A photo in two folders counts once in each.
+  ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[3], day_id).success_);
+
+  auto&      store  = Store(project);
+  const auto counts = store.ReadFolderImageCounts();
+  EXPECT_EQ(counts.project_photo_count_, ids_.size());
+  EXPECT_EQ(counts.project_photo_count_, store.CountFilesInFolder(0));
+  ASSERT_TRUE(counts.folder_photo_counts_.contains(trip_id));
+  ASSERT_TRUE(counts.folder_photo_counts_.contains(day_id));
+  EXPECT_EQ(counts.folder_photo_counts_.at(trip_id), 3u);
+  EXPECT_EQ(counts.folder_photo_counts_.at(day_id), 1u);
+  EXPECT_FALSE(counts.folder_photo_counts_.contains(empty_id));
+  EXPECT_EQ(store.CountFilesInFolder(empty_id), 0u);
+  for (const auto& [folder_id, count] : counts.folder_photo_counts_) {
+    EXPECT_EQ(count, store.CountFilesInFolder(folder_id)) << "folder " << folder_id;
+  }
+
+  // Removing a photo from a folder is seen by the next read.
+  ASSERT_TRUE(sleeve->DeleteFileFromFolder(ids_[0], trip_id).success_);
+  EXPECT_EQ(store.ReadFolderImageCounts().folder_photo_counts_.at(trip_id), 2u);
+}
+
 TEST_F(AlbumQueryTest, InvalidOptionsAndPageBoundsAreRejectedBeforeSql) {
   ProjectService project(db_path_, meta_path_);
   BuildFixture(project);

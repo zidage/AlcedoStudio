@@ -45,6 +45,10 @@ ColumnLayout {
     property var expandedIds: ({})
     property var rowShown: []
     property string rowsSignature: ""
+    // folderId -> photo count (-1 before the first count read). Kept apart from folderRows: a
+    // count update after an import or a delete changes only the count labels, so it does not
+    // reset the list or close an open inline editor.
+    property var imageCounts: ({})
 
     // Inline editors. -1 means "none".
     property int draftParentFolderId: -1
@@ -168,11 +172,25 @@ ColumnLayout {
         }
     }
 
+    function imageCountOf(row) {
+        if (!row || row.isDraft) {
+            return -1
+        }
+        const count = imageCounts[String(Number(row.folderId))]
+        return count === undefined ? -1 : Number(count)
+    }
+
     function rebuildFolderRows() {
         const source = sourceFolders
         if (!source || source.length === 0) {
             expandedIds = ({})
         }
+        const counts = {}
+        for (let i = 0; i < (source ? source.length : 0); ++i) {
+            const count = source[i].imageCount
+            counts[String(Number(source[i].folderId))] = count === undefined ? -1 : Number(count)
+        }
+        imageCounts = counts
         const ordered = CollectionTree.orderRows(source, sortDescending)
         let rows = ordered
         if (draftParentFolderId >= 0) {
@@ -838,6 +856,21 @@ ColumnLayout {
                             font.pixelSize: appTheme.fontSizeTitle
                             font.weight: folderRow.selected ? appTheme.fontWeightStrong
                                                             : appTheme.fontWeightRegular
+                        }
+
+                        // Photo count of the collection; the root row counts the project.
+                        Label {
+                            readonly property real count: panel.imageCountOf(folderRow.modelData)
+                            objectName: folderRow.isDraft
+                                        ? ""
+                                        : "collectionCount_" + String(folderRow.modelData.elementId)
+                            Layout.alignment: Qt.AlignVCenter
+                            visible: !folderRow.editing && count >= 0
+                            text: count >= 0 ? count.toLocaleString(Qt.locale(), "f", 0) : ""
+                            color: folderRow.selected ? appTheme.editorListSelectedInkColor
+                                                      : appTheme.textMutedColor
+                            font.family: appTheme.dataFontFamily
+                            font.pixelSize: appTheme.fontSizeCaption
                         }
 
                         Loader {

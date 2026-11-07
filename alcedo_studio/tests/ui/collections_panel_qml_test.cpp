@@ -11,9 +11,11 @@
 
 #include <gtest/gtest.h>
 
+#include <QColor>
 #include <QEventLoop>
 #include <QFont>
 #include <QFontMetricsF>
+#include <QLocale>
 #include <QObject>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -28,8 +30,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <algorithm>
-#include <cmath>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -152,6 +154,14 @@ class FakeFolderController final : public QObject {
     calls << QStringLiteral("DeleteFolder:%1").arg(ElementOf(folderUiId));
   }
 
+  /// Publishes photo counts by element id (root = element 0), as a finished count read does:
+  /// the rows are republished with the same ui ids. A row without a count reads -1.
+  void SetImageCounts(std::map<uint, qint64> counts) {
+    counts_ = std::move(counts);
+    Publish();
+    emit FoldersChanged();
+  }
+
  signals:
   void FoldersChanged();
   void FolderSelectionChanged();
@@ -166,28 +176,39 @@ class FakeFolderController final : public QObject {
     for (const auto& node : nodes_) {
       ui_by_element_[node.element_] = generation_ * 1000 + index++;
     }
-    QVariantList rows;
-    rows.push_back(QVariantMap{{"folderId", 0u},
-                               {"elementId", 0u},
-                               {"parentFolderId", 0u},
-                               {"parentElementId", 0u},
-                               {"name", QStringLiteral("Root")}});
-    for (const auto& node : nodes_) {
-      rows.push_back(QVariantMap{{"folderId", UiOf(node.element_)},
-                                 {"elementId", node.element_},
-                                 {"parentFolderId", UiOf(node.parent_element_)},
-                                 {"parentElementId", node.parent_element_},
-                                 {"name", node.name_}});
-    }
-    rows_ = rows;
+    Publish();
     emit FoldersChanged();
     emit FolderSelectionChanged();
     emit folderSelectionChanged();
   }
 
-  std::vector<Node>    nodes_;
-  std::map<uint, uint> ui_by_element_;
-  QVariantList         rows_;
+  void Publish() {
+    const auto count_of = [this](uint element) -> qint64 {
+      const auto it = counts_.find(element);
+      return it == counts_.end() ? -1 : it->second;
+    };
+    QVariantList rows;
+    rows.push_back(QVariantMap{{"folderId", 0u},
+                               {"elementId", 0u},
+                               {"parentFolderId", 0u},
+                               {"parentElementId", 0u},
+                               {"name", QStringLiteral("Root")},
+                               {"imageCount", count_of(0)}});
+    for (const auto& node : nodes_) {
+      rows.push_back(QVariantMap{{"folderId", UiOf(node.element_)},
+                                 {"elementId", node.element_},
+                                 {"parentFolderId", UiOf(node.parent_element_)},
+                                 {"parentElementId", node.parent_element_},
+                                 {"name", node.name_},
+                                 {"imageCount", count_of(node.element_)}});
+    }
+    rows_ = rows;
+  }
+
+  std::vector<Node>      nodes_;
+  std::map<uint, uint>   ui_by_element_;
+  std::map<uint, qint64> counts_;
+  QVariantList           rows_;
   uint                 current_element_ = 0;
   uint                 generation_      = 0;
   uint                 next_element_    = 500;
@@ -468,6 +489,75 @@ TEST(CollectionsPanelQmlTest, KeyboardMovesSelectionExpandsCollapsesAndOpensEdit
   ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "confirmed"));
   ProcessEvents(30);
   EXPECT_TRUE(h.fake.calls.contains(QStringLiteral("DeleteFolder:1")))
+      << h.fake.calls.join(',').toStdString();
+}
+
+// Issue #733: every row shows the photo count of its collection; the root row shows the
+// project count.
+TEST(CollectionsPanelQmlTest, RowsShowThePhotoCountInCaptionInk) {
+  Harness h(SmallTree(), /*current_element=*/4);
+  ASSERT_NE(h.panel, nullptr);
+  auto* root_count = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_0"));
+  auto* a_count    = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_1"));
+  auto* b_count    = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_4"));
+  ASSERT_NE(root_count, nullptr);
+  ASSERT_NE(a_count, nullptr);
+  ASSERT_NE(b_count, nullptr);
+  // No count read yet: no label.
+  EXPECT_FALSE(a_count->isVisible());
+
+  h.fake.SetImageCounts({{0, 1234}, {1, 3}, {2, 2}, {3, 1}, {4, 0}});
+  ASSERT_TRUE(WaitUntil([&] { return a_count->isVisible(); }));
+  EXPECT_EQ(root_count->property("text").toString(), QLocale().toString(1234.0, 'f', 0));
+  EXPECT_EQ(a_count->property("text").toString(), QStringLiteral("3"));
+  EXPECT_TRUE(b_count->isVisible());
+  EXPECT_EQ(b_count->property("text").toString(), QStringLiteral("0"));
+
+  const auto& theme = AppTheme::Instance();
+  EXPECT_EQ(a_count->property("color").value<QColor>(), theme.textMutedColor());
+  EXPECT_EQ(b_count->property("color").value<QColor>(), theme.editorListSelectedInkColor());
+  EXPECT_EQ(a_count->property("font").value<QFont>().pixelSize(), theme.fontSizeCaption());
+  // The count sits right of the name, inside the row.
+  // The row layout places a label that turns visible on its next polish.
+  auto* a_row = h.Row(1);
+  ASSERT_NE(a_row, nullptr);
+  EXPECT_TRUE(WaitUntil([&] {
+    return a_count->mapToItem(a_row, QPointF(0, 0)).x() > a_row->width() / 2.0;
+  })) << "count x " << a_count->mapToItem(a_row, QPointF(0, 0)).x() << " row width "
+      << a_row->width();
+  const QPointF count_right = a_count->mapToItem(a_row, QPointF(a_count->width(), 0));
+  EXPECT_LE(count_right.x(), a_row->width());
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.warnings.join('\n').toStdString();
+}
+
+// A count update republishes the rows with the same ui ids. It changes the labels only: an
+// open rename editor stays open and commits nothing.
+TEST(CollectionsPanelQmlTest, CountUpdateKeepsTheRenameEditorOpen) {
+  Harness h(SmallTree(), /*current_element=*/4);
+  ASSERT_NE(h.panel, nullptr);
+  h.fake.SetImageCounts({{0, 5}, {1, 2}, {4, 3}});
+  auto* a_count = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_1"));
+  ASSERT_NE(a_count, nullptr);
+  ASSERT_TRUE(WaitUntil([&] { return a_count->property("text").toString() == "2"; }));
+
+  h.FocusTree();
+  h.Key(Qt::Key_F2);
+  QQuickItem* field = nullptr;
+  ASSERT_TRUE(WaitUntil([&] {
+    field = FindItem(h.window->contentItem(), QStringLiteral("collectionRenameField"));
+    return field != nullptr && field->hasActiveFocus();
+  }));
+  // The renamed row hides its count while the editor is open.
+  auto* b_count = FindItem(h.window->contentItem(), QStringLiteral("collectionCount_4"));
+  ASSERT_NE(b_count, nullptr);
+  EXPECT_FALSE(b_count->isVisible());
+
+  h.fake.SetImageCounts({{0, 6}, {1, 3}, {4, 3}});
+  ASSERT_TRUE(WaitUntil([&] { return a_count->property("text").toString() == "3"; }));
+  ProcessEvents(50);
+  ASSERT_EQ(FindItem(h.window->contentItem(), QStringLiteral("collectionRenameField")), field);
+  EXPECT_TRUE(field->hasActiveFocus());
+  EXPECT_FALSE(h.fake.calls.join(',').contains(QStringLiteral("RenameFolder")))
       << h.fake.calls.join(',').toStdString();
 }
 
