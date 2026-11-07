@@ -478,53 +478,90 @@ __device__ void ApplyTca(const float2& in, float2& red, float2& blue, const Lens
   }
 }
 
-__device__ auto ReadWithBorder(const cv::cuda::PtrStepSz<float4>& src, int x, int y) -> float4 {
-  if (x < 0 || y < 0 || x >= src.cols || y >= src.rows) {
+// The warp resamples the full sensor image, and auto scale puts almost every output pixel at a
+// fractional source position. The sampler is Lanczos-3 (6 x 6 taps, weights normalized per axis).
+// Each channel of the result is clamped to the min and max of the 2 x 2 source pixels around the
+// position, which removes ringing next to highlights. Taps outside the image read the nearest edge
+// pixel. The result is scaled by the bilinear border coverage, so a position within one pixel
+// outside the image fades to zero and a position farther out returns zero. The OpenCL and Metal
+// kernels and the CPU test reference use the same filter.
+__device__ auto Lanczos3Weight(float t) -> float {
+  if (fabsf(t) < 1.0e-5f) {
+    return 1.0f;
+  }
+  if (fabsf(t) >= 3.0f) {
+    return 0.0f;
+  }
+  constexpr float kPiSquared = kPi * kPi;
+  return 3.0f * sinpif(t) * sinpif(t * (1.0f / 3.0f)) / (kPiSquared * t * t);
+}
+
+__device__ void Lanczos3Weights(float f, float (&w)[6]) {
+  float sum = 0.0f;
+#pragma unroll
+  for (int i = 0; i < 6; ++i) {
+    w[i] = Lanczos3Weight(f - static_cast<float>(i - 2));
+    sum += w[i];
+  }
+  const float inv_sum = 1.0f / sum;
+#pragma unroll
+  for (int i = 0; i < 6; ++i) {
+    w[i] *= inv_sum;
+  }
+}
+
+__device__ auto BorderCoverage(float s, int size) -> float {
+  return fminf(fmaxf(fminf(s + 1.0f, static_cast<float>(size) - s), 0.0f), 1.0f);
+}
+
+__device__ auto ReadClamped(const cv::cuda::PtrStepSz<float4>& src, int x, int y) -> float4 {
+  return src(min(max(y, 0), src.rows - 1), min(max(x, 0), src.cols - 1));
+}
+
+__device__ auto Lanczos3Sample(const cv::cuda::PtrStepSz<float4>& src, float sx, float sy)
+    -> float4 {
+  const float coverage = BorderCoverage(sx, src.cols) * BorderCoverage(sy, src.rows);
+  // The negated test also returns zero for a NaN position.
+  if (!(coverage > 0.0f)) {
     return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
   }
-  return src(y, x);
-}
-
-__device__ auto BilinearSample(const cv::cuda::PtrStepSz<float4>& src, float sx, float sy) -> float4 {
   const int x0 = static_cast<int>(floorf(sx));
   const int y0 = static_cast<int>(floorf(sy));
-  const int x1 = x0 + 1;
-  const int y1 = y0 + 1;
+  float     wx[6];
+  float     wy[6];
+  Lanczos3Weights(sx - static_cast<float>(x0), wx);
+  Lanczos3Weights(sy - static_cast<float>(y0), wy);
 
-  const float fx = sx - static_cast<float>(x0);
-  const float fy = sy - static_cast<float>(y0);
-  const float w00 = (1.0f - fx) * (1.0f - fy);
-  const float w10 = fx * (1.0f - fy);
-  const float w01 = (1.0f - fx) * fy;
-  const float w11 = fx * fy;
-
-  const float4 p00 = ReadWithBorder(src, x0, y0);
-  const float4 p10 = ReadWithBorder(src, x1, y0);
-  const float4 p01 = ReadWithBorder(src, x0, y1);
-  const float4 p11 = ReadWithBorder(src, x1, y1);
-
-  float4 out;
-  out.x = p00.x * w00 + p10.x * w10 + p01.x * w01 + p11.x * w11;
-  out.y = p00.y * w00 + p10.y * w10 + p01.y * w01 + p11.y * w11;
-  out.z = p00.z * w00 + p10.z * w10 + p01.z * w01 + p11.z * w11;
-  out.w = p00.w * w00 + p10.w * w10 + p01.w * w01 + p11.w * w11;
-  return out;
-}
-
-__device__ auto BilinearSampleChannel(const cv::cuda::PtrStepSz<float4>& src, float sx, float sy,
-                                      int channel) -> float {
-  const float4 pixel = BilinearSample(src, sx, sy);
-  switch (channel) {
-    case 0:
-      return pixel.x;
-    case 1:
-      return pixel.y;
-    case 2:
-      return pixel.z;
-    case 3:
-    default:
-      return pixel.w;
+  float4 acc = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#pragma unroll
+  for (int j = 0; j < 6; ++j) {
+    const int yy  = min(max(y0 + j - 2, 0), src.rows - 1);
+    float4    sum = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#pragma unroll
+    for (int i = 0; i < 6; ++i) {
+      const float4 v = src(yy, min(max(x0 + i - 2, 0), src.cols - 1));
+      sum.x += v.x * wx[i];
+      sum.y += v.y * wx[i];
+      sum.z += v.z * wx[i];
+      sum.w += v.w * wx[i];
+    }
+    acc.x += sum.x * wy[j];
+    acc.y += sum.y * wy[j];
+    acc.z += sum.z * wy[j];
+    acc.w += sum.w * wy[j];
   }
+
+  const float4 p00 = ReadClamped(src, x0, y0);
+  const float4 p10 = ReadClamped(src, x0 + 1, y0);
+  const float4 p01 = ReadClamped(src, x0, y0 + 1);
+  const float4 p11 = ReadClamped(src, x0 + 1, y0 + 1);
+  const auto   clamp_2x2 = [](float v, float a, float b, float c, float d) {
+    return fminf(fmaxf(v, fminf(fminf(a, b), fminf(c, d))), fmaxf(fmaxf(a, b), fmaxf(c, d)));
+  };
+  return make_float4(clamp_2x2(acc.x, p00.x, p10.x, p01.x, p11.x) * coverage,
+                     clamp_2x2(acc.y, p00.y, p10.y, p01.y, p11.y) * coverage,
+                     clamp_2x2(acc.z, p00.z, p10.z, p01.z, p11.z) * coverage,
+                     clamp_2x2(acc.w, p00.w, p10.w, p01.w, p11.w) * coverage);
 }
 
 __device__ auto ApplyScaleAndPerspective(const float2& in, const LensCalibGpuParams& p) -> float2 {
@@ -592,7 +629,7 @@ __global__ void LensVignettingKernel(cv::cuda::PtrStepSz<float4> image, LensCali
 
 // Mapping order in inverse lookup space (destination -> source):
 // 1) scaling, 2) perspective (stub), 3) projection conversion,
-// 4) distortion, 5) TCA, 6) sampling from source.
+// 4) distortion, 5) TCA, 6) Lanczos-3 sampling from source.
 __global__ void LensWarpGeometryTcaKernel(const cv::cuda::PtrStepSz<float4> src,
                                           cv::cuda::PtrStepSz<float4> dst,
                                           LensCalibGpuParams p) {
@@ -615,14 +652,11 @@ __global__ void LensWarpGeometryTcaKernel(const cv::cuda::PtrStepSz<float4> src,
   const float2 rp = NormalizedToPixel(r, p);
   const float2 bp = NormalizedToPixel(b, p);
 
-  float4 out{};
+  float4 out = Lanczos3Sample(src, gp.x, gp.y);
   if (p.apply_tca != 0) {
-    out.x = BilinearSampleChannel(src, rp.x, rp.y, 0);
-    out.y = BilinearSampleChannel(src, gp.x, gp.y, 1);
-    out.z = BilinearSampleChannel(src, bp.x, bp.y, 2);
-    out.w = BilinearSampleChannel(src, gp.x, gp.y, 3);
-  } else {
-    out = BilinearSample(src, gp.x, gp.y);
+    // Red and blue each sample at their own TCA position; green and alpha keep the green sample.
+    out.x = Lanczos3Sample(src, rp.x, rp.y).x;
+    out.z = Lanczos3Sample(src, bp.x, bp.y).z;
   }
 
   out      = ApplyCircleCropAlpha(out, x, y, p);

@@ -35,7 +35,7 @@
     "dst_width": 493,
     "fast_path_distortion_only": 0,
     "fast_path_vignetting_only": 0,
-    "interpolation": 0,
+    "interpolation": 2,
     "lens_center_x": 0.0,
     "lens_center_y": 0.0,
     "low_precision_preview": 0,

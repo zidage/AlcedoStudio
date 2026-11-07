@@ -490,49 +490,78 @@ inline void ApplyTca(float2 in, thread float2& red, thread float2& blue,
   }
 }
 
-inline auto ReadWithBorder(device const float4* src, constant LensCalibDispatchParams& params,
-                           int x, int y) -> float4 {
-  if (x < 0 || y < 0 || x >= params.params.src_width || y >= params.params.src_height) {
+// The warp resamples the full sensor image, and auto scale puts almost every output pixel at a
+// fractional source position. The sampler is Lanczos-3 (6 x 6 taps, weights normalized per axis).
+// Each channel of the result is clamped to the min and max of the 2 x 2 source pixels around the
+// position, which removes ringing next to highlights. Taps outside the image read the nearest edge
+// pixel. The result is scaled by the bilinear border coverage, so a position within one pixel
+// outside the image fades to zero and a position farther out returns zero. The CUDA and OpenCL
+// kernels and the CPU test reference use the same filter.
+inline auto Lanczos3Weight(float t) -> float {
+  if (fabs(t) < 1.0e-5f) {
+    return 1.0f;
+  }
+  if (fabs(t) >= 3.0f) {
+    return 0.0f;
+  }
+  return 3.0f * precise::sinpi(t) * precise::sinpi(t * (1.0f / 3.0f)) /
+         (9.8696044010893586f * t * t);
+}
+
+inline void Lanczos3Weights(float f, thread float* w) {
+  float sum = 0.0f;
+  for (int i = 0; i < 6; ++i) {
+    w[i] = Lanczos3Weight(f - static_cast<float>(i - 2));
+    sum += w[i];
+  }
+  const float inv_sum = 1.0f / sum;
+  for (int i = 0; i < 6; ++i) {
+    w[i] *= inv_sum;
+  }
+}
+
+inline auto BorderCoverage(float s, int size) -> float {
+  return clamp(min(s + 1.0f, static_cast<float>(size) - s), 0.0f, 1.0f);
+}
+
+inline auto ReadClamped(device const float4* src, constant LensCalibDispatchParams& params, int x,
+                        int y) -> float4 {
+  const int cx = clamp(x, 0, params.params.src_width - 1);
+  const int cy = clamp(y, 0, params.params.src_height - 1);
+  return src[static_cast<uint>(cy) * params.src_stride + static_cast<uint>(cx)];
+}
+
+inline auto Lanczos3Sample(device const float4* src, constant LensCalibDispatchParams& params,
+                           float sx, float sy) -> float4 {
+  const float coverage = BorderCoverage(sx, params.params.src_width) *
+                         BorderCoverage(sy, params.params.src_height);
+  // The negated test also returns zero for a NaN position.
+  if (!(coverage > 0.0f)) {
     return float4(0.0f);
   }
-  return src[static_cast<uint>(y) * params.src_stride + static_cast<uint>(x)];
-}
-
-inline auto BilinearSample(device const float4* src, constant LensCalibDispatchParams& params,
-                           float sx, float sy) -> float4 {
   const int x0 = static_cast<int>(floor(sx));
   const int y0 = static_cast<int>(floor(sy));
-  const int x1 = x0 + 1;
-  const int y1 = y0 + 1;
+  float     wx[6];
+  float     wy[6];
+  Lanczos3Weights(sx - static_cast<float>(x0), wx);
+  Lanczos3Weights(sy - static_cast<float>(y0), wy);
 
-  const float fx = sx - static_cast<float>(x0);
-  const float fy = sy - static_cast<float>(y0);
-  const float w00 = (1.0f - fx) * (1.0f - fy);
-  const float w10 = fx * (1.0f - fy);
-  const float w01 = (1.0f - fx) * fy;
-  const float w11 = fx * fy;
-
-  const float4 p00 = ReadWithBorder(src, params, x0, y0);
-  const float4 p10 = ReadWithBorder(src, params, x1, y0);
-  const float4 p01 = ReadWithBorder(src, params, x0, y1);
-  const float4 p11 = ReadWithBorder(src, params, x1, y1);
-  return p00 * w00 + p10 * w10 + p01 * w01 + p11 * w11;
-}
-
-inline auto BilinearSampleChannel(device const float4* src, constant LensCalibDispatchParams& params,
-                                  float sx, float sy, int channel) -> float {
-  const float4 pixel = BilinearSample(src, params, sx, sy);
-  switch (channel) {
-    case 0:
-      return pixel.x;
-    case 1:
-      return pixel.y;
-    case 2:
-      return pixel.z;
-    case 3:
-    default:
-      return pixel.w;
+  float4 acc = float4(0.0f);
+  for (int j = 0; j < 6; ++j) {
+    float4 sum = float4(0.0f);
+    for (int i = 0; i < 6; ++i) {
+      sum += ReadClamped(src, params, x0 + i - 2, y0 + j - 2) * wx[i];
+    }
+    acc += sum * wy[j];
   }
+
+  const float4 p00 = ReadClamped(src, params, x0, y0);
+  const float4 p10 = ReadClamped(src, params, x0 + 1, y0);
+  const float4 p01 = ReadClamped(src, params, x0, y0 + 1);
+  const float4 p11 = ReadClamped(src, params, x0 + 1, y0 + 1);
+  const float4 lo  = min(min(p00, p10), min(p01, p11));
+  const float4 hi  = max(max(p00, p10), max(p01, p11));
+  return clamp(acc, lo, hi) * coverage;
 }
 
 inline auto ApplyScaleAndPerspective(float2 in, constant LensCalibGpuParams& p) -> float2 {
@@ -611,14 +640,11 @@ kernel void lens_warp_rgba32f(device const float4* src [[buffer(0)]],
   const float2 rp = NormalizedToPixel(r, p);
   const float2 bp = NormalizedToPixel(b, p);
 
-  float4 out;
+  float4 out = Lanczos3Sample(src, dispatch_params, gp.x, gp.y);
   if (p.apply_tca != 0) {
-    out.x = BilinearSampleChannel(src, dispatch_params, rp.x, rp.y, 0);
-    out.y = BilinearSampleChannel(src, dispatch_params, gp.x, gp.y, 1);
-    out.z = BilinearSampleChannel(src, dispatch_params, bp.x, bp.y, 2);
-    out.w = BilinearSampleChannel(src, dispatch_params, gp.x, gp.y, 3);
-  } else {
-    out = BilinearSample(src, dispatch_params, gp.x, gp.y);
+    // Red and blue each sample at their own TCA position; green and alpha keep the green sample.
+    out.x = Lanczos3Sample(src, dispatch_params, rp.x, rp.y).x;
+    out.z = Lanczos3Sample(src, dispatch_params, bp.x, bp.y).z;
   }
 
   out = ApplyCircleCropAlpha(out, gid.x, gid.y, p);

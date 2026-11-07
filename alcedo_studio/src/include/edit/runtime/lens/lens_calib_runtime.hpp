@@ -44,10 +44,10 @@ enum class LensCalibProjectionType : std::int32_t {
   FISHEYE_THOBY         = 8,
 };
 
+/// Resampling filter of the lens warp. The CUDA, OpenCL, and Metal warp kernels implement
+/// Lanczos-3 (6 x 6 taps) with a clamp to the 2 x 2 nearest source pixels; see issue #713.
 enum class LensCalibInterpolation : std::int32_t {
-  BILINEAR = 0,
-  BICUBIC  = 1,
-  LANCZOS  = 2,
+  LANCZOS3 = 2,
 };
 
 struct LensCalibGpuParams {
@@ -92,7 +92,7 @@ struct LensCalibGpuParams {
   float crop_bounds[4] = {};  // left right top bottom
 
   std::int32_t interpolation =
-      static_cast<std::int32_t>(LensCalibInterpolation::BILINEAR);
+      static_cast<std::int32_t>(LensCalibInterpolation::LANCZOS3);
 
   std::int32_t apply_vignetting  = 0;
   std::int32_t apply_distortion  = 0;
