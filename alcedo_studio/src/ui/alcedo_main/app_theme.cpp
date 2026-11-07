@@ -185,12 +185,13 @@ auto IsChineseLanguageCode(const QString& code) -> bool {
   return code.startsWith(QStringLiteral("zh"), Qt::CaseInsensitive);
 }
 
+// Inter stays the primary UI family in every language; Chinese glyphs come from the Inter ->
+// Noto Sans SC substitution (ApplyUiFontSubstitutions). Noto Sans SC as the primary family laid
+// Latin text out with its taller line box (ascent 1.160 / descent 0.288 em, against Inter's
+// 0.969 / 0.241), which put Latin text about 0.16 em below the vertical center in Chinese mode.
 auto ActiveUiFamily(const FontFamilies& families) -> const QString& {
   if (!families.ui_override.isEmpty()) {
     return families.ui_override;
-  }
-  if (IsChineseLanguageCode(families.effective_language_code)) {
-    return families.ui_zh;
   }
   return families.ui_latin;
 }
@@ -1219,6 +1220,10 @@ auto AppTheme::editorLutTileMinWidth() const -> int { return 128; }
 auto AppTheme::editorLutTileCompactWidth() const -> int { return 88; }
 auto AppTheme::editorLutTileIconSize() const -> int { return 36; }
 auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }
+auto AppTheme::collectionRowHeight() const -> int { return 26; }
+auto AppTheme::collectionIndentStep() const -> int { return 14; }
+auto AppTheme::collectionMenuMaxRows() const -> int { return 12; }
+auto AppTheme::collectionMenuFilterThreshold() const -> int { return 15; }
 // Search palette (DESIGN.md "Search palette"): palette width, window inset.
 auto AppTheme::searchPaletteMaxWidth() const -> int { return 960; }
 auto AppTheme::searchPaletteWindowMarginX() const -> int { return 28; }

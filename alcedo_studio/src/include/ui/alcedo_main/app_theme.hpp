@@ -98,6 +98,10 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorLutTileIconSize READ editorLutTileIconSize CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
   Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
+  Q_PROPERTY(int collectionRowHeight READ collectionRowHeight CONSTANT)
+  Q_PROPERTY(int collectionIndentStep READ collectionIndentStep CONSTANT)
+  Q_PROPERTY(int collectionMenuMaxRows READ collectionMenuMaxRows CONSTANT)
+  Q_PROPERTY(int collectionMenuFilterThreshold READ collectionMenuFilterThreshold CONSTANT)
   // Search palette geometry (see DESIGN.md "Search palette").
   Q_PROPERTY(int searchPaletteMaxWidth READ searchPaletteMaxWidth CONSTANT)
   Q_PROPERTY(int searchPaletteWindowMarginX READ searchPaletteWindowMarginX CONSTANT)
@@ -371,6 +375,10 @@ class AppTheme final : public QObject {
   auto        editorLutTileCompactWidth() const -> int;
   auto        editorLutTileIconSize() const -> int;
   auto        collectionsSidebarWidth() const -> int;
+  auto        collectionRowHeight() const -> int;
+  auto        collectionIndentStep() const -> int;
+  auto        collectionMenuMaxRows() const -> int;
+  auto        collectionMenuFilterThreshold() const -> int;
   auto        searchPaletteMaxWidth() const -> int;
   auto        searchPaletteWindowMarginX() const -> int;
   auto        searchPaletteWindowMarginY() const -> int;

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "ui/alcedo_main/album_backend/album_types.hpp"
+#include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
 
@@ -46,7 +47,17 @@ class FolderController final : public QObject {
       -> std::optional<sl_element_id_t>;
 
   Q_INVOKABLE void SelectFolder(uint folderUiId);
+  /// Creates a folder inside the current folder.
   Q_INVOKABLE void CreateFolder(const QString& folderName);
+  /// Creates a folder inside @p parentFolderUiId (0 = top level). Returns the element id of
+  /// the new folder, or 0 when the folder is not created. The selection does not change.
+  Q_INVOKABLE uint CreateFolderIn(uint parentFolderUiId, const QString& folderName);
+  /// Renames @p folderUiId. The folder keeps its element id; ui ids are reassigned because the
+  /// tree reloads. Returns false and reports the reason through the status sink on refusal.
+  Q_INVOKABLE bool RenameFolder(uint folderUiId, const QString& newName);
+  /// Moves @p folderUiId into @p newParentFolderUiId (0 = top level). The folder keeps its
+  /// element id, children, and images. A move into its own subtree is refused.
+  Q_INVOKABLE bool MoveFolder(uint folderUiId, uint newParentFolderUiId);
   Q_INVOKABLE void DeleteFolder(uint folderUiId);
 
   [[nodiscard]] auto Folders() const -> QVariantList { return folders_; }
@@ -84,7 +95,19 @@ class FolderController final : public QObject {
     bool                  expanded_ = false;
   };
 
+  enum class FolderEdit { Create, Rename, Move, Delete };
+
   [[nodiscard]] auto PathKey(const std::filesystem::path& path) const -> std::wstring;
+  /// Reports the reason through the status sink and returns false while a project loads, no
+  /// project is open, or an import or export runs.
+  [[nodiscard]] bool CheckFolderEditAllowed(FolderEdit edit) const;
+  /// Trimmed @p name, or nothing (with a status message) when it is empty or holds a separator.
+  [[nodiscard]] auto ValidatedFolderName(const QString& name) const -> std::optional<QString>;
+  /// Saves and packages the project; false when either step fails.
+  [[nodiscard]] bool SaveProjectState() const;
+  void               ReportFolderEditDone(const i18n::LocalizedText& message, bool save_ok) const;
+  /// Loads the children of @p folderPath and of every folder below it.
+  void               LoadSubtree(const std::filesystem::path& folderPath);
   void               EnsureRootNode();
   void               ResetTreeState();
   void               EnsurePathExpanded(const std::filesystem::path& folderPath);

@@ -47,6 +47,20 @@ struct AlbumFileView {
   std::filesystem::path file_path_{};
 };
 
+/// Outcome of a folder rename or move.
+enum class AlbumFolderEditStatus {
+  Done,           ///< The change is applied and synced (or it changes nothing).
+  NameTaken,      ///< The destination folder holds another element with the same name.
+  InvalidTarget,  ///< Root folder, empty name, missing folder, or a move into its own subtree.
+  Failed,         ///< The storage write or the sync failed.
+};
+
+struct AlbumFolderEditResult {
+  AlbumFolderEditStatus status_ = AlbumFolderEditStatus::Failed;
+  /// Path of the folder after the change; set only when the status is Done.
+  std::filesystem::path folder_path_{};
+};
+
 struct AlbumDeleteResult {
   std::vector<AlbumFileView>         deleted_files_{};
   std::vector<std::filesystem::path> failed_paths_{};
@@ -132,6 +146,14 @@ class AlbumBrowseService {
   [[nodiscard]] auto CreateFolder(const std::filesystem::path& parent_folder_path,
                                   const file_name_t& name) -> std::optional<AlbumFolderView>;
   [[nodiscard]] bool DeleteFolder(const std::filesystem::path& folder_path);
+  /// Renames the folder at @p folder_path; it keeps its id, children, and album membership.
+  [[nodiscard]] auto RenameFolder(const std::filesystem::path& folder_path,
+                                  const file_name_t& new_name) -> AlbumFolderEditResult;
+  /// Moves the folder at @p folder_path into @p new_parent_path (the root path moves it to the
+  /// top level); it keeps its id, name, children, and album membership.
+  [[nodiscard]] auto MoveFolder(const std::filesystem::path& folder_path,
+                                const std::filesystem::path& new_parent_path)
+      -> AlbumFolderEditResult;
   [[nodiscard]] auto DeleteFiles(const std::vector<std::filesystem::path>& file_paths)
       -> AlbumDeleteResult;
   [[nodiscard]] auto DeleteFilesByElementIds(const std::vector<sl_element_id_t>& element_ids)

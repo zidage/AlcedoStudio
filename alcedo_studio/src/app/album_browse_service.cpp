@@ -39,6 +39,11 @@ auto BuildFileView(const std::filesystem::path&       parent_path,
   return out;
 }
 
+auto IsRootFolderPath(const std::filesystem::path& path) -> bool {
+  const auto normalized = path.lexically_normal();
+  return normalized.empty() || !normalized.has_relative_path();
+}
+
 }  // namespace
 
 auto AlbumBrowseService::ListFolders(const std::filesystem::path& folder_path) const
@@ -252,6 +257,91 @@ bool AlbumBrowseService::DeleteFolder(const std::filesystem::path& folder_path) 
   } catch (...) {
     return false;
   }
+}
+
+auto AlbumBrowseService::RenameFolder(const std::filesystem::path& folder_path,
+                                      const file_name_t& new_name) -> AlbumFolderEditResult {
+  AlbumFolderEditResult out;
+  if (!sleeve_service_) {
+    return out;
+  }
+  if (IsRootFolderPath(folder_path) || new_name.empty()) {
+    out.status_ = AlbumFolderEditStatus::InvalidTarget;
+    return out;
+  }
+
+  const auto parent_path = folder_path.lexically_normal().parent_path();
+  try {
+    std::shared_ptr<SleeveFolder> parent;
+    std::shared_ptr<SleeveFolder> folder;
+    try {
+      parent = sleeve_service_->ResolveFolder(parent_path);
+      folder = sleeve_service_->ResolveFolder(folder_path);
+    } catch (...) {
+      out.status_ = AlbumFolderEditStatus::InvalidTarget;
+      return out;
+    }
+    if (const auto existing = parent->GetElementIdByName(new_name);
+        existing.has_value() && existing.value() != folder->element_id_) {
+      out.status_ = AlbumFolderEditStatus::NameTaken;
+      return out;
+    }
+    if (!sleeve_service_->RenameFolder(folder_path, new_name).success_) {
+      return out;
+    }
+  } catch (...) {
+    return out;
+  }
+
+  out.status_      = AlbumFolderEditStatus::Done;
+  out.folder_path_ = parent_path / new_name;
+  return out;
+}
+
+auto AlbumBrowseService::MoveFolder(const std::filesystem::path& folder_path,
+                                    const std::filesystem::path& new_parent_path)
+    -> AlbumFolderEditResult {
+  AlbumFolderEditResult out;
+  if (!sleeve_service_) {
+    return out;
+  }
+  const auto source      = folder_path.lexically_normal();
+  const auto destination = IsRootFolderPath(new_parent_path)
+                               ? std::filesystem::path{L"/"}.lexically_normal()
+                               : new_parent_path.lexically_normal();
+  const auto source_end =
+      std::mismatch(source.begin(), source.end(), destination.begin(), destination.end()).first;
+  if (IsRootFolderPath(folder_path) || source_end == source.end()) {
+    out.status_ = AlbumFolderEditStatus::InvalidTarget;
+    return out;
+  }
+
+  try {
+    std::shared_ptr<SleeveFolder> folder;
+    std::shared_ptr<SleeveFolder> dest;
+    try {
+      folder = sleeve_service_->ResolveFolder(source);
+      dest   = sleeve_service_->ResolveFolder(destination);
+    } catch (...) {
+      out.status_ = AlbumFolderEditStatus::InvalidTarget;
+      return out;
+    }
+    if (source.parent_path() != destination) {
+      if (dest->Contains(folder->element_name_)) {
+        out.status_ = AlbumFolderEditStatus::NameTaken;
+        return out;
+      }
+      if (!sleeve_service_->MoveFolder(source, destination).success_) {
+        return out;
+      }
+    }
+    out.folder_path_ = destination / folder->element_name_;
+  } catch (...) {
+    return out;
+  }
+
+  out.status_ = AlbumFolderEditStatus::Done;
+  return out;
 }
 
 auto AlbumBrowseService::DeleteFiles(const std::vector<std::filesystem::path>& file_paths)

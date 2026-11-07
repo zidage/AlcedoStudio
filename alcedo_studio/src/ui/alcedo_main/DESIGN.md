@@ -53,6 +53,9 @@ Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checkl
 | Mono | `monoFontFamily` | body/caption | regular | matching | Minigit history/Versions data (commit hashes, before/after delta lines) and the adjustment-header EXIF tokens. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, crop degrees, or the selected node display name. |
 
 Families resolve at runtime from registered Alcedo fonts (`AppTheme::RegisterFonts`).
+`uiFontFamily` is Inter in every language; Chinese glyphs come from the Inter ->
+Noto Sans SC substitution. Do not make Noto Sans SC the primary UI family: its taller line
+box (ascent 1.160 / descent 0.288 em) puts Latin text below the vertical center of a row.
 Do not hardcode Inter, Roboto, Arial, or system UI fonts in feature QML.
 
 ### Monospace typography
@@ -431,8 +434,10 @@ wordmark and the small import progress ring.
 | Surface | Treatment |
 | --- | --- |
 | Neutral filled action: Load Project (empty Library), Import From Folder, Export queue | `editorListSelectedFillColor` fill, `Qt.darker(…, 1.06)` on hover and press; text and icon in `editorListSelectedInkColor`. Disabled: `bgBaseColor` fill with `textMutedColor` ink |
-| Selected collection row | `editorListSelectedFillColor` well; name and folder icon in `editorListSelectedInkColor`. No side stripe. Hover is a quiet `hoverColor` wash |
-| New-collection name field | 1 px `textMutedColor` border on focus; text selection `textMutedColor` (alpha 0.6) with `textColor` text |
+| Collections tree | File-browser rows of `collectionRowHeight`: `collectionIndentStep` indent per level, a `▸`/`▾` disclosure glyph in `textMutedColor` (the Library section-header glyphs), then the name in `fontSizeTitle` `textColor`. No folder icon. Names elide (uniform fixed-height rows). The root row (all images) has no disclosure glyph and aligns with the top-level collections |
+| Selected collection row | Quiet neutral well: `controlHoveredFillColor` with `controlRadiusSmall` corners; the name keeps `textColor` and turns `fontWeightStrong`; the glyph stays `textMutedColor`. This is the per-file exception to the bright `editorListSelectedFillColor` well (user request 2026-11-07: the bright well was too heavy in the dense tree). No side stripe. Hover is the darker `hoverColor` wash |
+| Collection drop target (drag to move) | `hoverColor` wash with a 1 px `textMutedColor` outline; the dragged name follows the pointer on a `bgBaseColor` label with a 1 px `dividerColor` outline. Rows that cannot take the folder (its own subtree, its current parent) show no outline |
+| New-collection and rename name field | Inline in the tree row: a plain `TextInput` (no Controls `TextField`, so no style-provided floating label or underline) in a `collectionRowHeight` - 4 high `bgBaseColor` box with `controlRadiusSmall` corners; 1 px `dividerColor` border, `textMutedColor` on focus; placeholder in `textMutedColor` inside the box; text selection `textMutedColor` (alpha 0.6) with `textColor` text. The "Add to" filter field uses the same construction |
 | Grid zoom slider | `textColor` fill and handle on the `bgBaseColor` track; the handle has no border |
 | Inspector resize handle | `textMutedColor` on hover and drag |
 | Inspector stats cards (date calendar, By Camera Model, By Labels, By Lens) | Neutral bars (`textMutedColor`) and rank dots (`textColor`, then `textMutedColor`). The selected chip, row, or day tile is the `editorListSelectedFillColor` well with `editorListSelectedInkColor` text. Hover stays a `hoverColor` wash |
@@ -630,6 +635,10 @@ the two side columns read as one family.
 | `editorLutTileIconSize` | 36 | LUT tile cube placeholder icon, centered in the preview slot until the preview is ready |
 | `editorAdjustmentHeaderMinHeight` | 58 | Node-name / EXIF header under the scope: EXIF caption line, `spaceXs` gap, compact Mask-tool row |
 | `collectionsSidebarWidth` | 276 | Persistent left collections column |
+| `collectionRowHeight` | 26 | Row of the collections tree, of its inline name field, and of the "Add to" collection list |
+| `collectionIndentStep` | 14 | Indent per tree level in the collections tree and the "Add to" list; also the width of the disclosure-triangle column |
+| `collectionMenuMaxRows` | 12 | Collection rows that the "Add to" sub-menu shows before its list scrolls |
+| `collectionMenuFilterThreshold` | 15 | Collection count at which the "Add to" sub-menu shows its filter field |
 
 ### Search palette
 
@@ -1299,6 +1308,14 @@ toolbar dropdowns) share one dark menu family — no per-site ad-hoc styling.
 Use `AppContextMenu` + `AppMenuItem` + `AppMenuSeparator` for every new menu;
 sub-menus declared as nested `AppContextMenu` with a `title` pick up the same
 row delegate and arrow affordance automatically.
+
+A sub-menu that lists project data of unbounded length (the image menu "Add to"
+collection list) keeps its fixed actions as `AppMenuItem` rows at the top, then a
+separator, then one bounded list: at most `collectionMenuMaxRows` rows of
+`collectionRowHeight`, scrolling inside the menu, with a 1 px-outlined filter
+field above it from `collectionMenuFilterThreshold` entries. List rows use the
+menu row text edge, the `hoverColor` wash, and `textMutedColor` for rows that
+are not a valid target.
 
 ---
 

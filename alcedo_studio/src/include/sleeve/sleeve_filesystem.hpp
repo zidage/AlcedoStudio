@@ -61,6 +61,21 @@ class FileSystem {
       -> std::vector<sl_element_id_t>;
   void Delete(std::filesystem::path target);
   void Delete(sl_element_id_t target_id);
+  /**
+   * @brief Renames the folder at @p target. The folder keeps its id, its child folders, and
+   *        its album membership.
+   * @throws std::runtime_error when @p target is the root or not a live folder, when
+   *         @p new_name is empty, or when the parent holds another element named @p new_name.
+   */
+  void RenameFolder(const std::filesystem::path& target, const file_name_t& new_name);
+  /**
+   * @brief Moves the folder at @p target into the folder at @p new_parent. The folder keeps
+   *        its id, its name, its child folders, and its album membership.
+   * @throws std::runtime_error when @p target is the root or not a live folder, when
+   *         @p new_parent is not a folder, is @p target, or lies inside @p target, or when
+   *         @p new_parent holds another element with the name of the folder.
+   */
+  void MoveFolder(const std::filesystem::path& target, const std::filesystem::path& new_parent);
   auto Get(std::filesystem::path target, bool write) -> std::shared_ptr<SleeveElement>;
   auto Get(sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
   auto ListFolderContent(const std::filesystem::path& folder_path, bool write = false)

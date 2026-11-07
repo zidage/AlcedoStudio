@@ -125,6 +125,12 @@ class SleeveServiceImpl final : public SleeveService {
       -> std::pair<std::shared_ptr<SleeveFile>, SyncResult>;
   auto DeletePath(const std::filesystem::path& target_path) -> SyncResult;
   auto DeleteElement(sl_element_id_t target_id) -> SyncResult;
+  /// See FileSystem::RenameFolder. Throws like it; syncs the change before it returns.
+  auto RenameFolder(const std::filesystem::path& folder_path, const file_name_t& new_name)
+      -> SyncResult;
+  /// See FileSystem::MoveFolder. Throws like it; syncs the change before it returns.
+  auto MoveFolder(const std::filesystem::path& folder_path,
+                  const std::filesystem::path& new_parent_path) -> SyncResult;
 
   auto GetStorage() -> std::shared_ptr<Storage> {
     return storage_;

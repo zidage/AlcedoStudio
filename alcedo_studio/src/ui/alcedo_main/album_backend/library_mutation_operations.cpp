@@ -49,7 +49,9 @@ auto LibraryMutationOperations::ResolveTargets(const QVariantMap& clickedItem,
       {QStringLiteral("imageId"), clickedItem.value(QStringLiteral("imageId")).toUInt()},
       {QStringLiteral("folderId"), folder_id},
       {QStringLiteral("scopeType"), clickedItem.value(QStringLiteral("scopeType")).toString()},
-      {QStringLiteral("fileName"), file_name}}};
+      {QStringLiteral("fileName"), file_name},
+      // The export queue reads it ("Add to" > "Export Queue" on an unselected image).
+      {QStringLiteral("isHdr"), clickedItem.value(QStringLiteral("isHdr")).toBool()}}};
 }
 
 void LibraryMutationOperations::SetInteractionPolicy(

@@ -973,4 +973,126 @@ TEST_F(SleeveServiceTests, FuzzyCreateCopyTest) {
   EXPECT_EQ(conv::ToBytes(first_tree), conv::ToBytes(second_tree));
 }
 
+// ── Folder rename and move (issue #732) ─────────────────────────────────────
+
+TEST_F(SleeveServiceTests, RenamedFolderKeepsIdChildrenAndMembershipAfterReload) {
+  sl_element_id_t album_id = 0;
+  sl_element_id_t child_id = 0;
+  sl_element_id_t file_id  = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+
+    const auto     album   = service->CreateFolder(L"/", L"Album").first;
+    const auto     child   = service->CreateFolder(L"/Album", L"Child").first;
+    const auto     file    = service->CreateFileInLibrary(L"Renamed.arw").first;
+    ASSERT_NE(album, nullptr);
+    ASSERT_NE(child, nullptr);
+    ASSERT_NE(file, nullptr);
+    album_id = album->element_id_;
+    child_id = child->element_id_;
+    file_id  = file->element_id_;
+    ASSERT_TRUE(service->LinkFileToFolder(file_id, album_id).success_);
+    // Resolve the old paths once so the path cache holds them.
+    ASSERT_EQ(service->ResolveFolder(L"/Album/Child")->element_id_, child_id);
+
+    ASSERT_TRUE(service->RenameFolder(L"/Album", L"Trip").success_);
+
+    EXPECT_EQ(service->ResolveFolder(L"/Trip")->element_id_, album_id);
+    EXPECT_EQ(service->ResolveFolder(L"/Trip/Child")->element_id_, child_id);
+    EXPECT_EQ(service->ResolveFile(L"/Trip/Renamed.arw")->element_id_, file_id);
+    EXPECT_THROW(service->ResolveFolder(L"/Album"), std::runtime_error);
+    EXPECT_THROW(service->ResolveFolder(L"/Album/Child"), std::runtime_error);
+
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService reloaded_project(db_path_, meta_path_);
+  auto           service = reloaded_project.GetSleeveService();
+  EXPECT_EQ(service->ResolveFolder(L"/Trip")->element_id_, album_id);
+  EXPECT_EQ(service->ResolveFolder(L"/Trip/Child")->element_id_, child_id);
+  EXPECT_EQ(service->ResolveFile(L"/Trip/Renamed.arw")->element_id_, file_id);
+  EXPECT_THROW(service->ResolveFolder(L"/Album"), std::runtime_error);
+  const auto root_ids = service->Read<std::vector<sl_element_id_t>>(
+      [](FileSystem& fs) { return fs.ListFolderContent(0); });
+  EXPECT_TRUE(ContainsId(root_ids, file_id));
+}
+
+TEST_F(SleeveServiceTests, MovedFolderKeepsIdChildrenAndMembershipAfterReload) {
+  sl_element_id_t inner_id = 0;
+  sl_element_id_t leaf_id  = 0;
+  sl_element_id_t file_id  = 0;
+  sl_element_id_t a_id     = 0;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+
+    a_id                   = service->CreateFolder(L"/", L"A").first->element_id_;
+    ASSERT_NE(service->CreateFolder(L"/", L"B").first, nullptr);
+    inner_id = service->CreateFolder(L"/A", L"Inner").first->element_id_;
+    leaf_id  = service->CreateFolder(L"/A/Inner", L"Leaf").first->element_id_;
+    file_id  = service->CreateFileInLibrary(L"Moved.arw").first->element_id_;
+    ASSERT_TRUE(service->LinkFileToFolder(file_id, inner_id).success_);
+    ASSERT_EQ(service->ResolveFolder(L"/A/Inner/Leaf")->element_id_, leaf_id);
+
+    ASSERT_TRUE(service->MoveFolder(L"/A/Inner", L"/B").success_);
+
+    EXPECT_EQ(service->ResolveFolder(L"/B/Inner")->element_id_, inner_id);
+    EXPECT_EQ(service->ResolveFolder(L"/B/Inner/Leaf")->element_id_, leaf_id);
+    EXPECT_EQ(service->ResolveFile(L"/B/Inner/Moved.arw")->element_id_, file_id);
+    EXPECT_THROW(service->ResolveFolder(L"/A/Inner"), std::runtime_error);
+    EXPECT_THROW(service->ResolveFolder(L"/A/Inner/Leaf"), std::runtime_error);
+    const auto a_ids = service->Read<std::vector<sl_element_id_t>>(
+        [a_id](FileSystem& fs) { return fs.ListFolderContent(a_id); });
+    EXPECT_FALSE(ContainsId(a_ids, inner_id));
+
+    project.SaveProject(meta_path_);
+  }
+
+  {
+    ProjectService reloaded_project(db_path_, meta_path_);
+    auto           service = reloaded_project.GetSleeveService();
+    EXPECT_EQ(service->ResolveFolder(L"/B/Inner")->element_id_, inner_id);
+    EXPECT_EQ(service->ResolveFolder(L"/B/Inner/Leaf")->element_id_, leaf_id);
+    EXPECT_EQ(service->ResolveFile(L"/B/Inner/Moved.arw")->element_id_, file_id);
+    EXPECT_THROW(service->ResolveFolder(L"/A/Inner"), std::runtime_error);
+
+    // Moving to the root path makes it a top-level folder.
+    ASSERT_TRUE(service->MoveFolder(L"/B/Inner", L"/").success_);
+    EXPECT_EQ(service->ResolveFolder(L"/Inner")->element_id_, inner_id);
+    reloaded_project.SaveProject(meta_path_);
+  }
+
+  ProjectService reloaded_again(db_path_, meta_path_);
+  auto           service = reloaded_again.GetSleeveService();
+  EXPECT_EQ(service->ResolveFolder(L"/Inner")->element_id_, inner_id);
+  EXPECT_EQ(service->ResolveFolder(L"/Inner/Leaf")->element_id_, leaf_id);
+  EXPECT_THROW(service->ResolveFolder(L"/B/Inner"), std::runtime_error);
+}
+
+TEST_F(SleeveServiceTests, FolderMoveAndRenameRefuseOwnSubtreeAndTakenNames) {
+  ProjectService project(db_path_, meta_path_);
+  auto           service  = project.GetSleeveService();
+
+  const auto     a_id     = service->CreateFolder(L"/", L"A").first->element_id_;
+  const auto     inner_id = service->CreateFolder(L"/A", L"Inner").first->element_id_;
+  ASSERT_NE(service->CreateFolder(L"/", L"B").first, nullptr);
+  ASSERT_NE(service->CreateFolder(L"/A", L"Same").first, nullptr);
+  ASSERT_NE(service->CreateFolder(L"/B", L"Same").first, nullptr);
+
+  EXPECT_THROW(service->MoveFolder(L"/A", L"/A"), std::runtime_error);
+  EXPECT_THROW(service->MoveFolder(L"/A", L"/A/Inner"), std::runtime_error);
+  EXPECT_THROW(service->MoveFolder(L"/A/Same", L"/B"), std::runtime_error);
+  EXPECT_THROW(service->MoveFolder(L"/", L"/B"), std::runtime_error);
+  EXPECT_THROW(service->RenameFolder(L"/A/Inner", L"Same"), std::runtime_error);
+  EXPECT_THROW(service->RenameFolder(L"/", L"Root"), std::runtime_error);
+  EXPECT_THROW(service->RenameFolder(L"/A", L""), std::runtime_error);
+
+  // A refused change leaves the tree as it was.
+  EXPECT_EQ(service->ResolveFolder(L"/A")->element_id_, a_id);
+  EXPECT_EQ(service->ResolveFolder(L"/A/Inner")->element_id_, inner_id);
+  EXPECT_NE(service->ResolveFolder(L"/A/Same"), nullptr);
+  EXPECT_NE(service->ResolveFolder(L"/B/Same"), nullptr);
+}
+
 }  // namespace alcedo

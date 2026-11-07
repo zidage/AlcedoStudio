@@ -2208,7 +2208,7 @@ Alcedo 将改用 %1。</translation>
     <message>
         <location line="+22"/>
         <source>Collection Name</source>
-        <translation>收藏夹名称</translation>
+        <translation>影集名称</translation>
     </message>
     <message>
         <location line="+128"/>
@@ -2231,24 +2231,29 @@ Alcedo 将改用 %1。</translation>
         <translation>导入图像</translation>
     </message>
     <message>
-        <location line="-625"/>
-        <source>Advanced Content Analysis</source>
-        <translation type="obsolete">高级内容分析</translation>
-    </message>
-    <message>
         <location line="+39"/>
         <source>全部图片</source>
         <translation>全部图片</translation>
     </message>
     <message>
-        <location line="+219"/>
-        <source>Open a project before running remote analysis.</source>
-        <translation type="obsolete">运行远程分析前请先打开项目。</translation>
+        <source>Collections</source>
+        <translation>影集</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Select one or more images for remote analysis.</source>
-        <translation type="obsolete">请选择一张或多张图像进行远程分析。</translation>
+        <source>Delete the collection &quot;%1&quot; and the collections inside it? The images stay in the project.</source>
+        <translation>删除影集“%1”及其中的子影集？图像会保留在项目中。</translation>
+    </message>
+    <message>
+        <source>Delete the collection &quot;%1&quot;? The images stay in the project.</source>
+        <translation>删除影集“%1”？图像会保留在项目中。</translation>
+    </message>
+    <message>
+        <source>New Collection Inside</source>
+        <translation>新建子影集</translation>
+    </message>
+    <message>
+        <source>Rename</source>
+        <translation>重命名</translation>
     </message>
 </context>
 <context>
@@ -5817,6 +5822,30 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <location line="+4"/>
         <source>Unrated</source>
         <translation>未评分</translation>
+    </message>
+    <message>
+        <source>Add to</source>
+        <translation>添加到</translation>
+    </message>
+    <message>
+        <source>Export Queue</source>
+        <translation>导出队列</translation>
+    </message>
+    <message>
+        <source>Filter collections</source>
+        <translation>筛选影集</translation>
+    </message>
+    <message>
+        <source>全部图片</source>
+        <translation>全部图片</translation>
+    </message>
+    <message>
+        <source>No collections yet</source>
+        <translation>还没有影集</translation>
+    </message>
+    <message>
+        <source>No matching collections</source>
+        <translation>没有匹配的影集</translation>
     </message>
 </context>
 <context>

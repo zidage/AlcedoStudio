@@ -2583,6 +2583,41 @@ alcedo_ui_gtest_discover_tests(DateCommitGraphQmlTest
 )
 alcedo_register_test_target(DateCommitGraphQmlTest ui)
 
+# Collections sidebar tree (expand/collapse, inline create and rename, drag to move, keys) and
+# the image-menu "Add to" sub-menu (issue #732), over a C++ fake folder controller.
+add_executable(CollectionsPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/collections_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(CollectionsPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(CollectionsPanelQmlTest
+    PRIVATE
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(CollectionsPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(CollectionsPanelQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(CollectionsPanelQmlTest
+    TEST_PREFIX "CollectionsPanelQmlTest."
+    PROPERTIES LABELS "workspace_qml;collections"
+)
+alcedo_register_test_target(CollectionsPanelQmlTest ui)
+
 # LUT browser rail page QML (LUT library plan L6A): tiles, full titles, filter rows, and tile
 # application over the real LUT library model and target controller.
 add_executable(EditorLutBrowserPanelQmlTest
