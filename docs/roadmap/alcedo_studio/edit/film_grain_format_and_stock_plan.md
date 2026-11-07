@@ -1910,6 +1910,107 @@ does not change: it reads the defaults from the catalog.
   samples the prescan and has the shift of the full frame.
 - The lab comparisons set strength 0.8 (`kLabAutoStrength`): the lab files hold no strength and use the default of the lab viewer.
 
+#### G8 study, part 3: the scanner software reads the light cast of the medium (issue #705, 2026-11-06)
+
+**Request (user, 2026-11-06).** Fix issue #705: a daylight stock under a warm light is too red in some scenes. Keep the
+character of the film.
+
+**Terms.** `B` is the balance light of the stock (D55 or T3200). `L` is the scene light of the selection (for As Shot, the light
+of each film with rule `as_shot_tint`). `x` is the positive in log10 exposure units about the grey (rule
+`generic_density_inversion`), `gamma` the gamma of the medium, and `T_s` the scan density of pool stock `s`. "Less the mean" takes
+the mean of the three channels away, so a vector of three values has a sum of 0. The hue and C* below are the CIELAB values of
+`x` read as linear AP1 with the white AP1 (1, 1, 1) at the luminance of the colour (`ScanHue`, `ScanChroma` of
+`film_print_tables_test.cpp`).
+
+**Measurements.** Lab model probe `build/tmp/i705/probe_cast.py` and `probe_display.py` (local, not in Git), then the product
+tests below. The scan channels read as AP1 give the cast of a warm light 10 to 18 deg redder and 15 to 30 % more saturated than
+the colorimetric cast of the light, on every stock (the cine average 10 deg, Ektar 18 deg). The small cool cast of D65 on a daylight stock (C* 13) is 20 deg
+less blue than the colorimetric cast. Through OpenDRT (CIELAB of
+the sRGB display code) the pattern is the same: Portra 400 under T3200 has 59 deg and C* 35.3 against 70 deg and C* 27.7. The
+difference has the cause of issue #705: the layer sensitivities of a negative are narrower and further apart than the AP1 colour
+matching functions.
+
+Three adaptations of the colorimetric cast give the same warm cast (within 1 deg). For 5219 in D55 they differ: XYZ scaling
+gives the film reading -4 deg (toward cyan), and AP1 channel gains, Bradford, and CAT02 give it +7 to +8 deg (toward blue). The
+reference of part 2 (a digital camera with a white of 3200 K in daylight) is 7 deg bluer than the film reading, in the direction
+of the cone adaptations. The rule uses CAT02, the adaptation of Color Grade white balance (`BuildAp1Cat02WhiteBalanceMatrix`).
+
+**Decision.** A matrix from the scan channels to AP1 changes every colour of the film, and the #705 matrix of the lab
+(`film_primaries`) turns the 500T daylight cast toward purple (part 2). The rule changes only the reading of the cast of the scene
+light, with one term per medium, as the gamma of the medium: the average negative of the medium gets the colorimetric cast, and
+each stock keeps its own difference from the average negative. The rule has no panel setting and applies to every Negative
+Scan render. It is a render-time rule with no persisted field, so the root id and the history do not change.
+
+**Rule `medium_light_cast`.**
+
+1. The colorimetric cast `c_col(L)`: XYZ of `L` and of `B` from the CIE 1931 integral (`film_scene_tint::SpectrumXyz`); the
+   CAT02 adaptation that takes `B` to the AP1 white acts on both; `c_col(L)` is log10 of the AP1 of adapted `L` less log10 of
+   the AP1 of adapted `B`, less the mean (`ColorimetricLightCast`).
+2. The cast of the average negative `c_med(L)`: for each stock of the pool of the medium (rule `generic_density_inversion`, the
+   layer gain of its pool scene light), `(T_s(L) - T_s(B)) / gamma` of an 18 % grey. `T_s` is the spectral integral of the
+   scanner of the point record (`ScanDensityOfExposure`), so the term reads no scanner table. The mean over the pool, less the
+   mean (`MediumFilmCast`).
+3. The term `delta(L) = c_col(L) - c_med(L)`, and `x = contrast ((D - D_aim) / gamma + delta(L)) + shift`. The render and the
+   prescan terms use the aim `D_aim - gamma delta(L)` (`MakeRenderTerms`, `MakePrescanTerms`), so the film base moves with the
+   grey, as with a channel aim of a scanner.
+4. Rule `frame_auto_colour` reads the light axis of this reading: the lab axis plus `delta(D65) - delta(T3200)`
+   (`ReadLightAxis`), so a change of light still moves `x` along the axis.
+
+Properties: `delta(B)` is exactly 0, so a render under the balance light is the same bit for bit; `delta` has a sum of 0, so the
+level of the grey stays; `delta` is the same for all stocks of a medium with one balance light, so the difference of two stocks
+(their sensitivities, dyes, curves, crossover, and inhibition) stays. `FilmPrintTables::ResolveNegativeScan` applies the rule for
+the default scanner and for a scanner of the document (`WithMediumLightCast`), and keeps it with the result of the scene light.
+The kernels do not change: the term reaches them through the offset of the render terms.
+
+**Effect** (`FilmPrintTablesLabTest` output, hue in deg and C*):
+
+| Stock and light | Lab reading (channels as AP1) | With the rule | Colorimetric cast |
+| --- | --- | --- | --- |
+| Photo average negative under 2700 K | 53.1, 83.9 | 66.6, 65.0 | 66.6, 65.0 |
+| Photo average negative under T3200 | 54.2, 58.1 | 68.7, 45.8 | 68.7, 45.8 |
+| Photo average negative under D65 | 246.5, 13.4 | 266.2, 11.4 | 266.2, 11.4 |
+| Portra 400 under T3200 | 56.0, 59.5 | 70.6, 47.7 | 68.7, 45.8 |
+| Portra 160 under T3200 | 52.8, 50.9 | 69.5, 38.6 | 68.7, 45.8 |
+| Ektar 100 under T3200 | 50.5, 64.8 | 62.2, 51.3 | 68.7, 45.8 |
+| Gold 200 under T3200 | 53.1, 52.1 | 69.3, 39.7 | 68.7, 45.8 |
+| 5219 under D55 | 258.3, 56.2 | 264.5, 53.4 | - |
+| 5219 under D65 | 263.5, 71.9 | 269.0, 67.6 | - |
+
+The warm cast of every daylight stock turns 10 to 17 deg toward yellow and loses 20 to 25 % of its chroma; Ektar stays the
+reddest and Portra 800 the most yellow. The 500T cast in daylight keeps its size (C* -5 %, the size that the Wratten 85 confirms
+in part 1) and turns 6 deg toward blue.
+
+**Lab comparisons.** The lab reads the channels as AP1. `ExecutionPlan::film_scan_lab_reading` (tests only) makes the three
+passes read the scan with the terms at 0 (`WithoutMediumLightCast`), and the GPU lab comparisons (`RenderScanLinearAsTheLab`, the
+Negative Scan part of `FilmPrintImageMatchesLab`) and the point form test set it. The lab values of D_aim, the light axis, and
+gamma stay in `SelectionValues`; the terms are the separate fields `light_cast` and `light_axis_cast`.
+
+**Files.** `film_negative_scan.hpp/.cpp` (`ScanDensityOfExposure`, `ColorimetricLightCast`, `MediumFilmCast`,
+`WithMediumLightCast`, `WithoutMediumLightCast`, `ReadLightAxis`, the aim of the terms), `film_print_tables.hpp/.cpp`,
+`execution_plan.hpp` (`film_scan_lab_reading`), and the CUDA, OpenCL, and Metal passes (the values of the reading).
+
+**Tests.**
+
+- `FilmPrintTablesTest.MediumLightCastIsZeroUnderTheBalanceLightAndKeepsTheLevelOfTheGrey` (synthetic bundle): the term is 0 bit
+  for bit under the balance light, is `c_col - c_med` with a sum of 0 under another light, moves the light axis by the term of the
+  axis lights, and moves the offset of the render and prescan terms by `contrast delta`; `Resolve` applies it.
+- `FilmPrintTablesLabTest.MediumLightCastGivesTheAverageNegativeTheColorimetricCast`: for both media under 2700 K, T3200, and D65,
+  the mean over the pool of the change of `x` from D55, read through the scanner tables with the term, is the colorimetric cast to
+  0.004 log10 (measured: 3e-6).
+- `FilmPrintTablesLabTest.MediumLightCastTurnsTheWarmCastOfDaylightStocksTowardYellow`: each photo stock under 2700 K and T3200
+  turns at least 6 deg toward yellow and loses chroma, and all photo stocks get the same term.
+- `FilmPrintTablesLabTest.MediumLightCastKeepsTheSizeOfTheDaylightCastOfTungstenStocks`: 5213 and 5219 under D55 and D65 keep C*
+  within 15 % and the hue within 10 deg.
+- `CudaFilmPrintFixture`, `OpenClFilmPrintFixture`, `MetalFilmPrintFixture`
+  `.NegativeScanReadsTheMediumLightCastOfTheSceneLight`: on the GPU, the product reading over the lab reading of Portra 400 under
+  tungsten (black 0) is `10^delta` in each channel (measured: 1.8e-7 log10 on CUDA, 1.7e-7 on OpenCL, 1.9e-7 on Metal).
+
+**Verification (2026-11-06).** `FilmPrintTablesTest` 82 of 82 (Windows debug). `GpuDagCudaDrtProductTest` with
+`CudaFilmPrint*:CudaFilmGrainNegative*` 37 of 37, `GpuDagOpenClGradeTest` with `OpenClFilmPrint*:OpenClFilmGrainNegative*` 39 of
+39, both with the lab values (the 32 Negative Scan lab comparisons read the scan as the lab). `GpuDagMetalDrtTest` with
+`MetalFilmPrint*:MetalFilmGrainNegative*` on the Mac: 35 pass; the 5 lab image comparisons skip there because the Mac has no lab
+expected files.
+
 ---
 
 ## 9. Test rules for all phases

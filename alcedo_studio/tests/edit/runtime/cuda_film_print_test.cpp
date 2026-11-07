@@ -89,6 +89,18 @@ auto LargestCodeDifference(const std::vector<Rgba>& pixels, std::size_t count, E
 
 class CudaFilmPrintFixture : public ::testing::Test {
  public:
+  /// @ref RenderDrt with the linear AP1 of Negative Scan before the display transform, read as the
+  /// lab reads the scan (rule 'medium_light_cast' off), for a comparison with the lab values.
+  auto RenderScanLinearAsTheLab(const PipelineDocument& document, std::span<const Rgba> ap1)
+      -> std::vector<Rgba> {
+    plan_.film_scan_linear_output = true;
+    plan_.film_scan_lab_reading   = true;
+    auto pixels                   = RenderDrt(document, ap1);
+    plan_.film_scan_linear_output = false;
+    plan_.film_scan_lab_reading   = false;
+    return pixels;
+  }
+
   /// @ref RenderDrt with the linear AP1 of Negative Scan before the display transform.
   auto RenderScanLinear(const PipelineDocument& document, std::span<const Rgba> ap1)
       -> std::vector<Rgba> {
@@ -1041,6 +1053,43 @@ TEST_F(CudaFilmPrintFixture, NegativeScanAndAPrintMaterialChangeKeepTheResultsOf
   EXPECT_EQ(device_.Workspace().Device().LutUploadBytes(), uploaded);
 }
 
+// Rule 'medium_light_cast' (issue 705) reaches the kernel. With black 0 the linear AP1 of the scan
+// is 0.18 10^x, so the product reading over the lab reading is 10^(contrast light_cast) in each
+// channel. Portra 400 is a daylight stock, so tungsten is not its balance light.
+TEST_F(CudaFilmPrintFixture, NegativeScanReadsTheMediumLightCastOfTheSceneLight) {
+  auto document =
+      FilmPrintDocument("kodak_portra_400", std::string{kFilmNegativeScanId}, "tungsten");
+  DrtParameterUpdate update;
+  update.film_scan_auto  = std::string{"off"};
+  update.film_scan_black = 0.0f;
+  document.Drt()->Params().ApplyUpdate(update);
+  std::vector<Rgba> ramp;
+  for (int step = 0; step < 16; ++step) {
+    const float value = 0.18f * std::exp2(0.5f * static_cast<float>(step - 8));
+    ramp.push_back({value, value, value, 1.0f});
+  }
+  const auto product = RenderScanLinear(document, ramp);
+  const auto lab     = RenderScanLinearAsTheLab(document, ramp);
+  const auto cast    = SharedFilmPrintTables()
+                        .Resolve("kodak_portra_400", kFilmNegativeScanId, "tungsten")
+                        ->negative_scan.light_cast;
+  EXPECT_GT(cast[2] - cast[0], 0.02);
+  double largest = 0.0;
+  for (std::size_t index = 0; index < ramp.size(); ++index) {
+    const std::array<float, 3> read{product[index].r, product[index].g, product[index].b};
+    const std::array<float, 3> as_lab{lab[index].r, lab[index].g, lab[index].b};
+    for (std::size_t k = 0; k < 3; ++k) {
+      ASSERT_GT(as_lab[k], 0.0f) << index;
+      const double ratio = std::log10(static_cast<double>(read[k]) / as_lab[k]);
+      largest            = (std::max)(largest, std::abs(ratio - cast[k]));
+    }
+  }
+  std::cout << "Negative Scan of Portra 400 under tungsten: light cast " << cast[0] << " "
+            << cast[1] << " " << cast[2] << ", largest difference of the reading " << largest
+            << " log10\n";
+  EXPECT_LE(largest, 2e-5);
+}
+
 TEST_F(CudaFilmPrintFixture, NegativeScanShowsItsLinearAp1ThroughTheOpenDrtOfTheDocument) {
   // Negative Scan ends in linear AP1. Method OpenDRT with the same settings on that value gives the
   // same display codes, for an SDR and an HDR encoding.
@@ -1171,7 +1220,7 @@ auto CompareScanRow(Fixture& fixture, const DisplaySelection& selection, const s
   const auto count  = selection.file.Shape(part + "_ap1")[0];
   const auto ap1    = selection.file.F32(part + "_ap1", {count, 3});
   const auto lab    = selection.file.F32(part + "_linear", {count, 3});
-  const auto linear = fixture.RenderScanLinear(SelectionDocument(selection), ToRgba(ap1));
+  const auto linear = fixture.RenderScanLinearAsTheLab(SelectionDocument(selection), ToRgba(ap1));
   double     shift  = 0.0;
   if (selection.auto_colour != "off") {
     shift = film_print_test::LargestShiftDifference(fixture.LastAutoShift(),
@@ -1359,8 +1408,10 @@ TEST_F(CudaFilmPrintFixture, FilmPrintImageMatchesLab) {
       const bool automatic = auto_colour != "off";
       std::vector<Rgba> prescan;
       plan_.film_scan_linear_output = true;
+      plan_.film_scan_lab_reading   = true;
       const auto linear = RenderView(document, ap1, automatic, automatic ? &prescan : nullptr);
       plan_.film_scan_linear_output = false;
+      plan_.film_scan_lab_reading   = false;
       const auto stops = film_print_test::ImageStops(linear, file.F32("linear", {rows, columns, 3}));
       double     shift = 0.0;
       double     x     = 0.0;
@@ -1372,8 +1423,10 @@ TEST_F(CudaFilmPrintFixture, FilmPrintImageMatchesLab) {
         const auto  data  = tables.Resolve(negative, material, mix);
         const auto  lab_x = file.F64("prescan", {64, 96, 3});
         EXPECT_EQ(prescan.size(), 64U * 96U);
-        x = PrescanDifference(prescan, lab_x,
-                              film_negative_scan::MakePrescanTerms(data->negative_scan, film.scan));
+        x = PrescanDifference(
+            prescan, lab_x,
+            film_negative_scan::MakePrescanTerms(
+                film_negative_scan::WithoutMediumLightCast(data->negative_scan), film.scan));
         EXPECT_LE(shift, kScanImageShiftLimit);
       }
       std::cout << "image " << negative << " on Negative Scan under " << light << ", auto "

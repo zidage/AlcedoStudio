@@ -582,6 +582,10 @@ auto FilmPrintTables::ResolveNegativeScanLocked(std::string_view                
         film_negative_scan::ScannerTableView{scan_table->values, kFilmPrintTableEdge},
         gamma->second);
   }
+  // Rule 'medium_light_cast' (issue 705): the scanner software of the medium reads the cast of the
+  // scene light on its average negative as the colorimetric cast of the light.
+  result->negative_scan = film_negative_scan::WithMediumLightCast(
+      result->negative_scan, *bundle_, negative, weights, setup.scene_spectrum);
   if (!AllFinite(result->uv_exposure) || !AllFinite(result->print_cube_root_xyz)) {
     throw std::runtime_error("Film print: a table of Negative Scan of " + std::string(negative) +
                              " under " + LightText(scene_light) +

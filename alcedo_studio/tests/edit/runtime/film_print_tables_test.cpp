@@ -1362,9 +1362,11 @@ TEST_F(FilmPrintTablesTest, ScanReadsNoPaperAndSharesTheTablesOfTheNegativeWithA
   EXPECT_EQ(scan->uv_exposure, print->uv_exposure);
   EXPECT_EQ(scan->kernel_values, print->kernel_values);
   EXPECT_NE(scan->print_key, print->print_key);
-  // The default scanner gives the stored values of the selection.
-  EXPECT_EQ(scan->negative_scan, film_negative_scan::StoredSelectionValues(
-                                     bundle->NegativeScanSelection("neg_a", "reference")));
+  // The default scanner gives the stored values of the selection, and the terms of rule
+  // 'medium_light_cast'.
+  EXPECT_EQ(film_negative_scan::WithoutMediumLightCast(scan->negative_scan),
+            film_negative_scan::StoredSelectionValues(
+                bundle->NegativeScanSelection("neg_a", "reference")));
   // The scanner table depends on the negative only.
   const auto daylight = tables.Resolve("neg_a", "negative_scan", "daylight");
   EXPECT_NE(daylight.get(), scan.get());
@@ -1451,6 +1453,68 @@ TEST_F(FilmPrintTablesTest, AnotherScannerDerivesTheValuesOfTheSelectionAgain) {
                                      film_negative_scan::DefaultScanner(bundle->NegativeScanConstants()))
                 .get(),
             stored.get());
+}
+
+// Rule 'medium_light_cast' (issue 705) on the synthetic bundle. neg_a has the medium 'cine' (pool
+// neg_a) and the balance light 'ramp', which is also the first axis light; the second is 'flat'.
+TEST_F(FilmPrintTablesTest, MediumLightCastIsZeroUnderTheBalanceLightAndKeepsTheLevelOfTheGrey) {
+  const auto bundle  = FilmStockBundle::Open(Resources());
+  const auto weights = film_negative_scan::MakeScannerWeights(
+      film_negative_scan::DefaultScanner(bundle->NegativeScanConstants()),
+      bundle->NegativeScanConstants(), bundle->WavelengthsNm());
+  const auto selection = bundle->NegativeScanSelection("neg_a", "reference");
+  const auto stored    = film_negative_scan::StoredSelectionValues(selection);
+  const auto ramp      = bundle->LightSpectrum("ramp");
+  const auto flat      = bundle->LightSpectrum("flat");
+  // Under the balance light the term is 0, bit for bit.
+  const auto balance =
+      film_negative_scan::WithMediumLightCast(stored, *bundle, "neg_a", weights, ramp);
+  EXPECT_EQ(balance.light_cast, (std::array<double, 3>{0.0, 0.0, 0.0}));
+  // Under another light it is the colorimetric cast less the cast of the pool, with a sum of 0, so
+  // the level of the grey stays.
+  const auto other =
+      film_negative_scan::WithMediumLightCast(stored, *bundle, "neg_a", weights, flat);
+  const auto colorimetric = film_negative_scan::ColorimetricLightCast(*bundle, flat, ramp);
+  const auto film         = film_negative_scan::MediumFilmCast(*bundle, bundle->ScanMedium("neg_a"),
+                                                               weights, stored.gamma, flat, ramp);
+  double     sum          = 0.0;
+  double     size         = 0.0;
+  for (std::size_t k = 0; k < 3; ++k) {
+    EXPECT_NEAR(other.light_cast[k], colorimetric[k] - film[k], 1e-15) << k;
+    sum += other.light_cast[k];
+    size = (std::max)(size, std::abs(other.light_cast[k]));
+  }
+  EXPECT_NEAR(sum, 0.0, 1e-14);
+  EXPECT_GT(size, 1e-3);
+  // The axis goes from the balance light (term 0) to 'flat', so its term is the term of 'flat'.
+  EXPECT_EQ(other.light_axis_cast, other.light_cast);
+  EXPECT_EQ(balance.light_axis_cast, other.light_cast);
+  const auto axis = film_negative_scan::ReadLightAxis(other);
+  for (std::size_t k = 0; k < 3; ++k) {
+    EXPECT_EQ(axis[k], stored.light_axis[k] + other.light_cast[k]) << k;
+  }
+  // The rule keeps the other values, and the lab reading has none of it.
+  EXPECT_EQ(film_negative_scan::WithoutMediumLightCast(other), stored);
+  // Resolve applies the rule with the light of the selection.
+  FilmPrintTables tables(bundle);
+  EXPECT_EQ(tables.Resolve("neg_a", "negative_scan", "reference")->negative_scan,
+            film_negative_scan::WithMediumLightCast(stored, *bundle, "neg_a", weights,
+                                                    selection.scene_spectrum));
+  // x = contrast ((D - D_aim) / gamma + light_cast) + shift, in the render and the prescan terms.
+  FilmNegativeScanParams params;
+  params.contrast            = 1.5f;
+  params.black               = 0.0f;
+  const auto with            = film_negative_scan::MakeRenderTerms(other, params, {});
+  const auto without         = film_negative_scan::MakeRenderTerms(stored, params, {});
+  const auto prescan_with    = film_negative_scan::MakePrescanTerms(other, params);
+  const auto prescan_without = film_negative_scan::MakePrescanTerms(stored, params);
+  for (std::size_t k = 0; k < 3; ++k) {
+    EXPECT_EQ(with.slope[k], without.slope[k]) << k;
+    EXPECT_NEAR(with.offset[k] - without.offset[k], 1.5 * other.light_cast[k], 1e-12) << k;
+    EXPECT_NEAR(prescan_with.offset[k] - prescan_without.offset[k], 1.5 * other.light_cast[k],
+                1e-12)
+        << k;
+  }
 }
 
 TEST_F(FilmPrintTablesTest, ScanKernelParamsHaveTheScanForm) {
@@ -2405,7 +2469,8 @@ TEST_F(FilmPrintTablesLabTest, NegativeScanPointFormMatchesTheLab) {
     const auto tables = tables_->Resolve(negative, kFilmNegativeScanId, mix);
     const film_print_reference::FilmPrintPointReference reference(*bundle_, *tables, negative,
                                                                   std::string(kFilmNegativeScanId), mix);
-    const auto& values = tables->negative_scan;
+    // The lab reads the scan channels as AP1, with no term of rule 'medium_light_cast'.
+    const auto values = film_negative_scan::WithoutMediumLightCast(tables->negative_scan);
     EXPECT_LE(LargestOf3(values.light_axis, file.F64("light_axis", {3})), 1e-9);
     // The strength of the lab files is the default of the lab viewer: the files hold no strength.
     FilmNegativeScanParams params;
@@ -2838,9 +2903,10 @@ auto ScanX(const ScanGrey& grey) -> std::array<double, 3> {
   return x;
 }
 
-/// CIELAB hue angle in degrees of the channels of Negative Scan read as linear AP1, with the white
-/// AP1 (1, 1, 1) at the luminance of the colour.
-auto ScanHue(const FilmStockBundle& bundle, const std::array<double, 3>& x) -> double {
+/// CIELAB a* and b* of the channels of Negative Scan read as linear AP1, with the white AP1
+/// (1, 1, 1) at the luminance of the colour.
+auto ScanAb(const FilmStockBundle& bundle, const std::array<double, 3>& x)
+    -> std::array<double, 2> {
   const auto            m = bundle.PointConstants().ap1_to_xyz;
   std::array<double, 3> rgb{};
   for (std::size_t k = 0; k < 3; ++k) rgb[k] = std::pow(10.0, x[k]);
@@ -2860,8 +2926,20 @@ auto ScanHue(const FilmStockBundle& bundle, const std::array<double, 3>& x) -> d
   const double fx    = f(xyz[0] / (white[0] * scale));
   const double fy    = f(xyz[1] / (white[1] * scale));
   const double fz    = f(xyz[2] / (white[2] * scale));
-  const double hue   = std::atan2(200.0 * (fy - fz), 500.0 * (fx - fy)) * 180.0 / std::acos(-1.0);
+  return {500.0 * (fx - fy), 200.0 * (fy - fz)};
+}
+
+/// CIELAB hue angle in degrees of @ref ScanAb.
+auto ScanHue(const FilmStockBundle& bundle, const std::array<double, 3>& x) -> double {
+  const auto   ab  = ScanAb(bundle, x);
+  const double hue = std::atan2(ab[1], ab[0]) * 180.0 / std::acos(-1.0);
   return hue < 0.0 ? hue + 360.0 : hue;
+}
+
+/// CIELAB C* of @ref ScanAb.
+auto ScanChroma(const FilmStockBundle& bundle, const std::array<double, 3>& x) -> double {
+  const auto ab = ScanAb(bundle, x);
+  return std::hypot(ab[0], ab[1]);
 }
 
 // G8 study (plan 'film_grain_format_and_stock_plan.md', G8 section 'Scene light cast of Negative
@@ -2952,6 +3030,144 @@ TEST_F(FilmPrintTablesLabTest, AsShotTintTurnsTheScanCastTowardGreen) {
       EXPECT_GE(hue_after - hue_before, c.degrees);
     } else {
       EXPECT_LE(hue_after - hue_before, c.degrees);
+    }
+  }
+}
+
+/// The scanner weights of the default scanner on the wavelengths of @p bundle.
+auto DefaultScannerWeights(const FilmStockBundle& bundle) -> film_negative_scan::ScannerWeights {
+  const auto& constants = bundle.NegativeScanConstants();
+  return film_negative_scan::MakeScannerWeights(film_negative_scan::DefaultScanner(constants),
+                                                constants, bundle.WavelengthsNm());
+}
+
+/// The terms of rule 'medium_light_cast' of @p negative under @p light, on the stored values of
+/// the default scanner.
+auto MediumLightCastOf(const FilmStockBundle& bundle, std::string_view negative,
+                       std::span<const double> light) -> film_negative_scan::SelectionValues {
+  return film_negative_scan::WithMediumLightCast(
+      film_negative_scan::StoredSelectionValues(
+          bundle.NegativeScanSelection(negative, "reference")),
+      bundle, negative, DefaultScannerWeights(bundle), light);
+}
+
+// Rule 'medium_light_cast' (issue 705). For each medium, the change of x of an 18 % grey from D55
+// to a light, read through the scanner table of each pool stock, with the term of the light: its
+// mean over the pool is the colorimetric cast of the light (CAT02 from D55 to the AP1 white). The
+// term comes from the spectral integral and the check from the scanner tables, so they differ by
+// the error of the tables (lab check A: p99 0.002 density).
+TEST_F(FilmPrintTablesLabTest, MediumLightCastGivesTheAverageNegativeTheColorimetricCast) {
+  const auto  balance   = bundle_->LightSpectrum("D55");
+  const auto& constants = bundle_->NegativeScanConstants();
+  const auto  scanner   = film_negative_scan::DefaultScanner(constants);
+  for (const auto& medium : constants.media) {
+    // A stock of the medium with the balance light D55.
+    const auto daylight = std::ranges::find_if(medium.pool, [&](const std::string& stock) {
+      return bundle_->ScanBalanceLight(stock) == "D55";
+    });
+    ASSERT_NE(daylight, medium.pool.end()) << medium.id;
+    const auto warm = bundle_->NegativeScanSelection(*daylight, bundle_->GridLight(2700.0));
+    for (const auto& [name, light] :
+         {std::pair<std::string, std::span<const double>>{"2700 K", warm.scene_spectrum},
+          {"T3200", bundle_->LightSpectrum("T3200")},
+          {"D65", bundle_->LightSpectrum("D65")}}) {
+      SCOPED_TRACE(medium.id + " under " + name);
+      const auto            values = MediumLightCastOf(*bundle_, *daylight, light);
+      std::array<double, 3> mean{};
+      std::array<double, 3> lab_mean{};
+      for (std::size_t s = 0; s < medium.pool.size(); ++s) {
+        const auto& stock = medium.pool[s];
+        const auto  data  = tables_->ResolveNegativeScan(
+            stock, FilmSceneLightMix{"reference", "reference", 0.0, std::nullopt}, scanner);
+        const film_negative_scan::ScannerTableView table{data->print_cube_root_xyz,
+                                                         static_cast<std::int64_t>(data->edge)};
+        const auto gain = bundle_->LayerGain(stock, medium.pool_scene_lights[s]);
+        const auto grey = [&](std::span<const double> spectrum) {
+          return film_negative_scan::GreyDensity(
+              *bundle_, stock, table, data->negative_scan.base_density, gain, spectrum, 0.18);
+        };
+        const auto lit       = grey(light);
+        const auto reference = grey(balance);
+        for (std::size_t k = 0; k < 3; ++k) {
+          const double change = (lit[k] - reference[k]) / values.gamma[k];
+          lab_mean[k] += change / static_cast<double>(medium.pool.size());
+          mean[k] += (change + values.light_cast[k]) / static_cast<double>(medium.pool.size());
+        }
+      }
+      const auto colorimetric = film_negative_scan::ColorimetricLightCast(*bundle_, light, balance);
+      const auto read         = MinusMean(mean);
+      const auto lab_read     = MinusMean(lab_mean);
+      std::cout << medium.id << " under " << name << ": average negative x - mean, lab reading "
+                << lab_read[0] << " " << lab_read[1] << " " << lab_read[2] << " (hue "
+                << ScanHue(*bundle_, lab_read) << ", C* " << ScanChroma(*bundle_, lab_read)
+                << "), with the rule " << read[0] << " " << read[1] << " " << read[2] << " (hue "
+                << ScanHue(*bundle_, read) << ", C* " << ScanChroma(*bundle_, read)
+                << "); colorimetric " << colorimetric[0] << " " << colorimetric[1] << " "
+                << colorimetric[2] << " (hue " << ScanHue(*bundle_, colorimetric) << ", C* "
+                << ScanChroma(*bundle_, colorimetric) << ")\n";
+      EXPECT_LE(LargestOf3(read, colorimetric), 0.004);
+    }
+  }
+}
+
+// Rule 'medium_light_cast' (issue 705) on the daylight stocks of the photo medium under warm light:
+// read as AP1, the lab reading has the cast about 10 deg redder and more saturated than the light.
+// With the rule, the hue of each stock turns toward yellow and its chroma falls. All stocks of the
+// medium get the same term, so each one keeps its difference from the others (the film
+// character: its sensitivities, dyes, curves, and inhibition).
+TEST_F(FilmPrintTablesLabTest, MediumLightCastTurnsTheWarmCastOfDaylightStocksTowardYellow) {
+  const auto& photo   = bundle_->ScanMedium("kodak_portra_400");
+  const auto  balance = bundle_->LightSpectrum("D55");
+  const auto  warm =
+      bundle_->NegativeScanSelection("kodak_portra_400", bundle_->GridLight(2700.0)).scene_spectrum;
+  for (const auto& [name, light] : {std::pair<std::string, std::span<const double>>{"2700 K", warm},
+                                    {"T3200", bundle_->LightSpectrum("T3200")}}) {
+    const auto colorimetric = film_negative_scan::ColorimetricLightCast(*bundle_, light, balance);
+    std::optional<std::array<double, 3>> shared;
+    for (const auto& stock : photo.pool) {
+      SCOPED_TRACE(stock + " under " + name);
+      ASSERT_EQ(bundle_->ScanBalanceLight(stock), "D55");
+      const auto values = MediumLightCastOf(*bundle_, stock, light);
+      if (!shared.has_value()) shared = values.light_cast;
+      EXPECT_EQ(values.light_cast, *shared);
+      const auto            lab = MinusMean(ScanX(ScanGreyOf(*bundle_, *tables_, stock, light)));
+      std::array<double, 3> read{};
+      for (std::size_t k = 0; k < 3; ++k) read[k] = lab[k] + values.light_cast[k];
+      const double hue_lab    = ScanHue(*bundle_, lab);
+      const double hue_read   = ScanHue(*bundle_, read);
+      const double chroma_lab = ScanChroma(*bundle_, lab);
+      const double chroma     = ScanChroma(*bundle_, read);
+      std::cout << stock << " under " << name << ": lab reading hue " << hue_lab << ", C* "
+                << chroma_lab << "; with the rule hue " << hue_read << ", C* " << chroma
+                << "; colorimetric hue " << ScanHue(*bundle_, colorimetric) << ", C* "
+                << ScanChroma(*bundle_, colorimetric) << "\n";
+      EXPECT_GE(hue_read - hue_lab, 6.0);
+      EXPECT_LT(chroma, chroma_lab);
+    }
+  }
+}
+
+// Rule 'medium_light_cast' (issue 705) on the tungsten stocks of the cine medium in daylight. The
+// datasheet filter (Wratten 85) confirms the size of this cast (G8 study, part 1), and the rule
+// keeps that size within 15 % of C*; the hue moves by less than 10 deg.
+TEST_F(FilmPrintTablesLabTest, MediumLightCastKeepsTheSizeOfTheDaylightCastOfTungstenStocks) {
+  for (const auto* stock : {"kodak_5213", "kodak_5219"}) {
+    ASSERT_EQ(bundle_->ScanBalanceLight(stock), "T3200");
+    for (const auto* name : {"D55", "D65"}) {
+      SCOPED_TRACE(std::string(stock) + " under " + name);
+      const auto            light  = bundle_->LightSpectrum(name);
+      const auto            values = MediumLightCastOf(*bundle_, stock, light);
+      const auto            lab    = MinusMean(ScanX(ScanGreyOf(*bundle_, *tables_, stock, light)));
+      std::array<double, 3> read{};
+      for (std::size_t k = 0; k < 3; ++k) read[k] = lab[k] + values.light_cast[k];
+      const double hue_lab    = ScanHue(*bundle_, lab);
+      const double hue_read   = ScanHue(*bundle_, read);
+      const double chroma_lab = ScanChroma(*bundle_, lab);
+      const double chroma     = ScanChroma(*bundle_, read);
+      std::cout << stock << " under " << name << ": lab reading hue " << hue_lab << ", C* "
+                << chroma_lab << "; with the rule hue " << hue_read << ", C* " << chroma << "\n";
+      EXPECT_LE(std::abs(chroma / chroma_lab - 1.0), 0.15);
+      EXPECT_LE(std::abs(hue_read - hue_lab), 10.0);
     }
   }
 }
