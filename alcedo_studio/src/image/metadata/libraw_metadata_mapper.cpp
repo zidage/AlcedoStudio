@@ -15,7 +15,6 @@
 
 #include "camera_color_matrix_db.hpp"
 #include "metadata_values.hpp"
-#include "nikon_lens_id_table.hpp"
 
 namespace alcedo::metadata_detail {
 namespace {
@@ -156,15 +155,11 @@ void CollectLibRawCaptureTimeText(void* context, int tag, int type, int len, uns
   *target = NormalizeExifDateTimeText(std::string_view(buf, kExifDateTimeLength));
 }
 
-void PopulateDngMetadataHintFromOpenLibRaw(LibRaw& raw_processor, ExifDisplayMetaData& display,
+void PopulateDngMetadataHintFromOpenLibRaw(LibRaw& raw_processor, const LensIdentity& lens,
+                                           ExifDisplayMetaData&    display,
                                            RawRuntimeColorContext& ctx) {
-  const std::string raw_make       = TrimAscii(raw_processor.imgdata.idata.make);
-  const std::string raw_model      = TrimAscii(raw_processor.imgdata.idata.model);
-  const std::string raw_lens_make  = TrimTrailingZeroPadded(raw_processor.imgdata.lens.LensMake);
-  std::string       raw_lens_model = TrimTrailingZeroPadded(raw_processor.imgdata.lens.Lens);
-  if (raw_lens_model.empty()) {
-    raw_lens_model = TrimTrailingZeroPadded(raw_processor.imgdata.lens.makernotes.Lens);
-  }
+  const std::string raw_make  = TrimAscii(raw_processor.imgdata.idata.make);
+  const std::string raw_model = TrimAscii(raw_processor.imgdata.idata.model);
 
   if (!raw_make.empty()) {
     ctx.camera_make_ = raw_make;
@@ -172,11 +167,11 @@ void PopulateDngMetadataHintFromOpenLibRaw(LibRaw& raw_processor, ExifDisplayMet
   if (!raw_model.empty()) {
     ctx.camera_model_ = raw_model;
   }
-  if (!raw_lens_make.empty()) {
-    ctx.lens_make_ = raw_lens_make;
+  if (!lens.make.empty()) {
+    ctx.lens_make_ = lens.make;
   }
-  if (!raw_lens_model.empty()) {
-    ctx.lens_model_ = raw_lens_model;
+  if (!lens.model.empty()) {
+    ctx.lens_model_ = lens.model;
   }
 
   if (!ctx.camera_make_.empty()) {
@@ -231,7 +226,8 @@ void PopulateDngMetadataHintFromOpenLibRaw(LibRaw& raw_processor, ExifDisplayMet
   SetDisplayDimensionsFromLibRaw(raw_processor, display);
 }
 
-void PopulateMetadataRuntimeContext(LibRaw& raw_processor, RawRuntimeColorContext& ctx) {
+void PopulateMetadataRuntimeContext(LibRaw& raw_processor, const LensIdentity& lens,
+                                    RawRuntimeColorContext& ctx) {
   const auto& color = raw_processor.imgdata.color;
   for (int i = 0; i < 3; ++i) {
     ctx.cam_mul_[i] = color.cam_mul[i];
@@ -248,20 +244,8 @@ void PopulateMetadataRuntimeContext(LibRaw& raw_processor, RawRuntimeColorContex
   ctx.camera_make_  = TrimAscii(raw_processor.imgdata.idata.make);
   ctx.camera_model_ = TrimAscii(raw_processor.imgdata.idata.model);
 
-  ctx.lens_make_    = TrimTrailingZeroPadded(raw_processor.imgdata.lens.LensMake);
-  ctx.lens_model_   = TrimTrailingZeroPadded(raw_processor.imgdata.lens.Lens);
-  if (ctx.lens_model_.empty()) {
-    ctx.lens_model_ = TrimTrailingZeroPadded(raw_processor.imgdata.lens.makernotes.Lens);
-  }
-
-  if (IsNikonCamera(ctx.camera_make_, ctx.camera_model_)) {
-    if (ctx.lens_make_.empty()) {
-      ctx.lens_make_ = "Nikon";
-    }
-    if (ctx.lens_model_.empty()) {
-      ctx.lens_model_ = ResolveNikonLensModel(raw_processor.imgdata.lens);
-    }
-  }
+  ctx.lens_make_       = lens.make;
+  ctx.lens_model_      = lens.model;
 
   ctx.focal_length_mm_ = raw_processor.imgdata.other.focal_len;
   if (!IsFinitePositive(ctx.focal_length_mm_)) {

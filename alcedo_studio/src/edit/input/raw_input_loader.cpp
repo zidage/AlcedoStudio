@@ -7,11 +7,9 @@
 #include <libraw/libraw.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <locale>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <stdexcept>
@@ -23,6 +21,7 @@
 #include "decoders/processor/raw_rgb_normalization.hpp"
 #include "edit/input/detail/prepared_input_finish.hpp"
 #include "edit/input/neural_develop_crop.hpp"
+#include "image/lens_identity_resolver.hpp"
 
 namespace alcedo {
 namespace {
@@ -486,19 +485,7 @@ auto SensorFromLibRaw(const LibRaw& raw) -> RawSensorGeometry {
 
 auto IsFinitePositive(float value) -> bool { return std::isfinite(value) && value > 0.0f; }
 
-auto TrimLibRawField(const char* text) -> std::string {
-  if (text == nullptr) {
-    return {};
-  }
-  std::size_t length = std::min(std::strlen(text), static_cast<std::size_t>(256));
-  while (length > 0 &&
-         (text[length - 1] == '\0' || std::isspace(text[length - 1], std::locale::classic()))) {
-    --length;
-  }
-  return {text, length};
-}
-
-void FillColorContext(LibRaw& raw, RawRuntimeColorContext& ctx) {
+void FillColorContext(LibRaw& raw, const LensIdentity& lens, RawRuntimeColorContext& ctx) {
   ctx.valid_                  = true;
   ctx.output_in_camera_space_ = true;
   for (int i = 0; i < 3; ++i) {
@@ -508,13 +495,10 @@ void FillColorContext(LibRaw& raw, RawRuntimeColorContext& ctx) {
   ctx.camera_make_  = raw.imgdata.idata.make;
   ctx.camera_model_ = raw.imgdata.idata.model;
 
-  // Develop lens calibration reads these fields from PreparedRawInput, so LoadEncoded must copy
-  // them from LibRaw.
-  ctx.lens_make_    = TrimLibRawField(raw.imgdata.lens.LensMake);
-  ctx.lens_model_   = TrimLibRawField(raw.imgdata.lens.Lens);
-  if (ctx.lens_model_.empty()) {
-    ctx.lens_model_ = TrimLibRawField(raw.imgdata.lens.makernotes.Lens);
-  }
+  // Develop lens calibration reads these fields from PreparedRawInput. The lens name comes from
+  // the reader that import uses, so the library and Lens Correction name the same lens.
+  ctx.lens_make_       = lens.make;
+  ctx.lens_model_      = lens.model;
 
   ctx.focal_length_mm_ = raw.imgdata.other.focal_len;
   if (!IsFinitePositive(ctx.focal_length_mm_)) {
@@ -678,6 +662,9 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
                        encoded.size()) != LIBRAW_SUCCESS) {
     throw std::runtime_error("RawInputLoader::LoadEncoded: LibRaw open_buffer failed");
   }
+  // open_buffer has parsed the lens fields. Exiv2 reads the buffer only when LibRaw has no lens
+  // name, before unpack allocates the sensor data.
+  const LensIdentity lens = LensIdentityResolver::Resolve(*raw, encoded);
   if (libraw_guard::Unpack(*raw) != LIBRAW_SUCCESS) {
     raw->recycle();
     throw std::runtime_error("RawInputLoader::LoadEncoded: LibRaw unpack failed");
@@ -696,7 +683,7 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
   PreparedRawInput input;
   input.sensor        = SensorFromLibRaw(*raw);
   input.linearization = LinearizationFromLibRaw(*raw);
-  FillColorContext(*raw, input.color_context);
+  FillColorContext(*raw, lens, input.color_context);
   if (dng_metadata.warp_rectilinear.has_value()) {
     input.dng_warp_rectilinear                        = dng_metadata.warp_rectilinear;
     input.color_context.dng_warp_rectilinear_present_ = true;

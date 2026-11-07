@@ -84,6 +84,7 @@ def_library(Image
     ${ALCEDO_SRC_ROOT}/image/metadata/dng_import_fast_path.cpp
     ${ALCEDO_SRC_ROOT}/image/metadata/exif_display_mapper.cpp
     ${ALCEDO_SRC_ROOT}/image/metadata/hdr_marker_probe.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/lens_identity_resolver.cpp
     ${ALCEDO_SRC_ROOT}/image/metadata/libraw_metadata_mapper.cpp
     ${ALCEDO_SRC_ROOT}/image/metadata/metadata_values.cpp
     ${ALCEDO_SRC_ROOT}/image/metadata/nikon_lens_id_table.cpp
