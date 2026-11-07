@@ -15,6 +15,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/graph_validation.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -165,6 +166,10 @@ auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParam
           *json = {{"strength", drt->Params().DiffusionStrength()}};
           return true;
         }
+        if (target.field_key == "film_format") {
+          *json = {{"film_format", std::string{FilmFormatId(drt->Params().FilmFormat())}}};
+          return true;
+        }
         *json = drt->Params().OutputTransformJson();
         return true;
       }
@@ -234,7 +239,8 @@ auto CompleteCurrentPanelParameterTarget(const PipelineDocument& document, std::
     target.node_id    = develop->Id();
     return target;
   }
-  if (target.field_key == "odt" || target.field_key == "diffusion") {
+  if (target.field_key == "odt" || target.field_key == "diffusion" ||
+      target.field_key == "film_format") {
     const auto* drt = document.Drt();
     if (drt == nullptr) {
       SetError(error, "DRT node is missing");

@@ -20,6 +20,7 @@
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -264,14 +265,17 @@ void AppendDrtParameterChanges(const PipelineDocument& root, const TransferDrtPo
   }
   std::string error;
   if (drt_post.params.has_value()) {
-    // The package holds the stored DRT params: the output transform plus the diffusion strength.
-    // History records them as two editor fields, "odt" (output transform only) and "diffusion"
-    // ({"strength"}), so each field gets its own change.
+    // The package holds the stored DRT params: the output transform, the diffusion strength, and
+    // the film format. History records them as three editor fields, "odt" (output transform
+    // only), "diffusion" ({"strength"}), and "film_format" ({"film_format"}), so each field gets
+    // its own change. A package made before the film format reads 35mm.
     DrtParamsModel package_params;
     package_params.LoadJson(*drt_post.params);
     const std::pair<std::string, nlohmann::json> fields[] = {
         {"odt", package_params.OutputTransformJson()},
         {"diffusion", nlohmann::json{{"strength", package_params.DiffusionStrength()}}},
+        {"film_format",
+         nlohmann::json{{"film_format", std::string{FilmFormatId(package_params.FilmFormat())}}}},
     };
     for (const auto& [field_key, after_value] : fields) {
       EditorParameterTarget target;

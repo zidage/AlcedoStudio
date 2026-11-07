@@ -5,7 +5,7 @@ import Alcedo.Main 1.0
 
 // Post Processing page. Every control writes the document DRT node, whichever node is
 // selected: the scene-linear Diffusion filter (before the display transform), then the
-// display-referred Clarity, Sharpen, Film Grain, and Halation adjustments.
+// display-referred Clarity, Sharpen, Film Grain, and Halation adjustments, and the film format.
 Item {
     id: root
     objectName: "editorAdjustmentPanel_post"
@@ -20,10 +20,18 @@ Item {
     readonly property color colCardBorder: theme ? theme.colCardBorder : appTheme.cardBorderColor
     readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
     readonly property color colAccent: theme ? theme.colAccentPrimary : appTheme.accentColor
+    readonly property color colBase: theme ? theme.colBgBase : appTheme.bgBaseColor
 
     // The film print takes its halation from the film layers and skips this operator. The stored
     // value does not change, and the slider returns with another method.
     property bool filmPrintSelected: false
+    /// The film whose datasheet granularity Film Grain shows: the film of the film print, else
+    /// Kodak Vision3 250D 5207 (plan 'film_grain_format_and_stock_plan.md', section 7.1).
+    property string grainFilm: "kodak_5207"
+    readonly property string grainFilmLabel: {
+        const entry = parameterCatalog.filmBrowserEntry(root.grainFilm)
+        return entry && entry.label !== undefined ? String(entry.label) : root.grainFilm
+    }
 
     EditorParameterCatalog {
         id: parameterCatalog
@@ -36,11 +44,13 @@ Item {
         sharpenModel.enabled = on
         filmGrainModel.enabled = on
         halationModel.enabled = on
+        filmFormatModel.enabled = on
     }
 
     onControlsEnabledChanged: wireEnabled()
     Component.onCompleted: {
         wireEnabled()
+        filmFormatModel.currentIndex = filmFormatModel.defaultIndex
         // Bootstrap when the stack has not yet projected. Settled fan-out still
         // owns ongoing echoes via EditorAdjustmentStack.
         loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
@@ -50,8 +60,12 @@ Item {
         if (snapshot === undefined || snapshot === null)
             return
         const odt = snapshot["odt"]
-        root.filmPrintSelected = odt !== undefined && odt !== null
-                                 && parameterCatalog.uiValue("odt", odt).method === "film_print"
+        const odtValue = odt !== undefined && odt !== null ? parameterCatalog.uiValue("odt", odt)
+                                                           : null
+        root.filmPrintSelected = odtValue !== null && odtValue.method === "film_print"
+        root.grainFilm = root.filmPrintSelected && odtValue.negative !== undefined
+                         ? String(odtValue.negative) : "kodak_5207"
+        root.loadFilmFormat(snapshot)
         // Each model converts its Model value to UI units through EditorParameterCatalog.
         diffusionModel.loadFromSnapshot(snapshot)
         clarityModel.loadFromSnapshot(snapshot)
@@ -88,6 +102,43 @@ Item {
         label: qsTr("Film Grain")
         submitter: root.editorSession
     }
+    // The film format of the DRT node: one write of film_format per selection.
+    EditorAdjustmentEnumModel {
+        id: filmFormatModel
+        objectName: "postFilmFormatModel"
+        fieldKey: "film_format"
+        label: qsTr("Format")
+        entries: parameterCatalog.options("film_format", "film_format")
+        defaultIndex: Math.max(0, root.indexOfFilmFormat(
+                                   parameterCatalog.uiDefault("film_format").film_format))
+        submitter: root.editorSession
+        paramsBuilder: function(value) {
+            return parameterCatalog.modelParamsJson("film_format", { film_format: value })
+        }
+    }
+
+    /// Index of the format identifier @p value in the Format entries, or -1.
+    function indexOfFilmFormat(value) {
+        const entries = parameterCatalog.options("film_format", "film_format")
+        for (var i = 0; i < entries.length; ++i) {
+            if (String(entries[i].value) === String(value))
+                return i
+        }
+        return -1
+    }
+
+    /// Load the film format of the snapshot into the Format model. Loading never submits.
+    function loadFilmFormat(snapshot) {
+        if (snapshot === undefined || snapshot === null)
+            return
+        const entry = snapshot["film_format"]
+        if (entry === undefined || entry === null)
+            return
+        const index = root.indexOfFilmFormat(parameterCatalog.uiValue("film_format", entry).film_format)
+        if (index >= 0 && index !== filmFormatModel.currentIndex)
+            filmFormatModel.currentIndex = index
+    }
+
     EditorAdjustmentValueModel {
         id: halationModel
         objectName: "postHalationModel"
@@ -228,6 +279,40 @@ Item {
                         Layout.fillWidth: true
                         model: filmGrainModel
                         flickable: postScroll
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.topMargin: appTheme.spaceXs
+                        text: qsTr("Format")
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeCaption
+                        font.weight: appTheme.fontWeightStrong
+                    }
+
+                    // One write of film_format per click. The Post Processing page and the
+                    // Display Transform page write the same field, so both show its value.
+                    SegmentedCardSwitcher {
+                        objectName: "postFilmFormatControl"
+                        Layout.fillWidth: true
+                        entries: filmFormatModel.entries
+                        currentIndex: filmFormatModel.currentIndex
+                        currentValue: filmFormatModel.currentValue
+                        enabled: root.controlsEnabled
+                        trackColor: root.colBase
+                        trackBorderColor: root.colCardBorder
+                        textColor: root.colText
+                        hoverColor: root.colHover
+                        onSelected: function(index, value) { filmFormatModel.selectIndex(index) }
+                    }
+
+                    Label {
+                        objectName: "postFilmGrainStockCaption"
+                        Layout.fillWidth: true
+                        text: qsTr("Granularity of %1").arg(root.grainFilmLabel)
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeCaption
+                        wrapMode: Text.WordWrap
                     }
                     AdjustmentSlider {
                         objectName: "postHalationSlider"

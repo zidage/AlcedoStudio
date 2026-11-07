@@ -3,7 +3,8 @@
 Date: 2026-11-05
 
 Status: **In progress.** G0 is complete in the lab ([alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2)). G1 is complete
-(2026-11-05): the host plan, the shared grain math, and the bundle schema 11. The user approved the plan and closed decisions U1 to U4 on
+(2026-11-05): the host plan, the shared grain math, and the bundle schema 11. G2 is complete (2026-11-05): the field
+`film_format`, the Film Grain range 0 to 200 %, the Format selector of both panels, and the compatibility tests. The user approved the plan and closed decisions U1 to U4 on
 2026-11-05 (section 2.3). Section 2.4 states the compatibility requirement of the user. The G0 results changed some designs of
 this plan; the sections below hold the changed form, and the G0 completion record lists each change.
 
@@ -112,9 +113,9 @@ Every project made before this plan opens with no error. The rendered look of it
 
 The pre-change documents for these tests come from the build of `main` before G2: one root and one checkpoint with method `film_print`
 and Film Grain 0.6, and one with OpenDRT and Film Grain 0.3, each with one Film Grain history entry. G2 stores them in
-`alcedo_studio/tests/edit/history/expected_serialized/` as `drt_film_grain_root_before_film_format.json` and
-`drt_film_grain_checkpoint_before_film_format.json`, as the existing `raw_root_before_raster_input.json` pattern does. These files hold
-serialized documents, not pixels.
+`alcedo_studio/tests/edit/history/expected_serialized/` as `drt_film_grain_root_before_film_format.json`,
+`drt_film_grain_checkpoint_before_film_format.json`, and `drt_film_grain_history_before_film_format.json` (the stored entries), as the
+existing `raw_root_before_raster_input.json` pattern does. These files hold serialized documents, not pixels.
 
 ---
 
@@ -480,7 +481,7 @@ closed by G3.
 | --- | --- | --- | --- | --- | ---: | --- |
 | G0 | [#675](https://github.com/zidage/AlcedoStudio/issues/675) | Grain data, fits, and reference evaluator in the lab | alcedo-film-lab | none | 1500 (lab) | Complete ([alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2)) |
 | G1 | [#676](https://github.com/zidage/AlcedoStudio/issues/676) | Host plan, shared math, bundle schema 11 | `edit/runtime`, `edit/runtime/film` | G0 | 1100 | Complete (1605 lines) |
-| G2 | [#677](https://github.com/zidage/AlcedoStudio/issues/677) | `film_format`, slider range, panels, catalogs, compatibility tests | `edit/graph`, `app`, `ui` | G1 | 1300 | Planned |
+| G2 | [#677](https://github.com/zidage/AlcedoStudio/issues/677) | `film_format`, slider range, panels, catalogs, compatibility tests | `edit/graph`, `app`, `ui` | G1 | 1300 | Complete (991 lines) |
 | G3 | [#678](https://github.com/zidage/AlcedoStudio/issues/678) | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Planned |
 | G4 | [#679](https://github.com/zidage/AlcedoStudio/issues/679) | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | Planned |
 | G5 | [#680](https://github.com/zidage/AlcedoStudio/issues/680) | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Planned |
@@ -737,7 +738,130 @@ In `PipelineDocumentCheckpointTest`, from the pre-change documents of section 2.
 
 **Exit criteria.** The listed tests pass. Every row of section 2.4 that G2 owns has a passing test.
 
-**Completion record.** Pending.
+**Completion record.** Complete 2026-11-05, branch `feature/film-grain-format-field`, stacked on the G1 branch
+`feature/film-grain-host-plan`. No GPU file changed. The render does not read the format yet.
+
+Step 0: commit `test(film-grain): Store the Film Grain documents written before the film format` holds only the three documents. The
+document code of `6b8eebaf6` (G1) wrote them. That code is the same as `main`: G1 adds only `film_format.hpp`, which no document read.
+
+Files: `drt_node_model.hpp/.cpp` (`DrtPayload::film_format`, `DrtDirty::FilmFormat`, `DrtFilmFormatUpdate`,
+`DrtParamsModel::FilmFormat`, `ApplyFilmFormat`, `ReadFilmFormat`), `scalar_operator_model.hpp` (`FilmGrainTraits::kMax` 2),
+`adjustment_runtime.cpp` (the clamp of the current grain), `editor_adjustment_pipeline.hpp/.cpp` (`EditorAdjustmentField::FilmFormat`),
+`editor_adjustment_context.cpp`, `editor_parameter_write.hpp/.cpp`, `editor_parameter_write_parse.cpp` (`ParseFilmFormatUpdate`),
+`editor_pipeline_command_service.cpp`, `editor_panel_projection.hpp/.cpp` (`EditorPanelFilmFormatValue`, `ReadFilmFormat`),
+`editor_parameter_catalog.cpp` (entry `film_format`, `kFilmGrainRange`), `document_transfer_planner.cpp`,
+`editor_panel_presentation.cpp`, `editor_history_commit_presentation.cpp`, `EditorPostProcessPanel.qml`,
+`EditorDisplayTransformPanel.qml`, `alcedo_main_zh_CN.ts`.
+
+Details that the plan did not give, chosen in G2:
+
+- The editor field `film_format` has its own history entry, as the field `diffusion` has. Its value is `{"film_format": "16mm"}`, also
+  for `35mm`. The field `odt` (`OutputTransformJson`) does not hold the format, so an undo of a Display Transform entry does not change
+  the format, and an old `odt` entry keeps its before value. `film_format` is not in `params.film_print`, so the remembered film
+  print settings of #672 keep their form.
+- The write is the typed operation `DrtFilmFormatUpdate`. The parser accepts `{"film_format": id}` and the enum control form
+  `{"index": n, "value": id}`. An unknown identifier fails with "film_format must be one of 16mm, 35mm, 70mm".
+- `DrtParamsModel::LoadJson` reads a missing key as `35mm`. A key that is not a string or not an identifier stops the load with a
+  `std::runtime_error` that names `film_format`; no field changes. `ToJson` writes the key only when the format is not `35mm`.
+- `DrtDirty::FilmFormat` is bit 9 and is part of `All`. In G2 no runtime pass reads it: a change increments the revision of the DRT
+  params, so the display output renders again. G3 reads the flag to make the grain plan again, and G7 to make the film print canvases
+  again.
+- Range: until G3, the current post grain reads the full range 0 to 2 in place of a clamp to 1. Its amplitude is linear in the
+  amount, so 200 % gives twice the grain of 100 %. A clamp to 1 would show a 200 % slider with the grain of 100 %.
+- Transfer: the package holds `DrtParamsModel::ToJson`, so it holds `film_format` when the format is not `35mm`. The paste planner
+  writes a third change, `film_format`, next to `odt` and `diffusion`. A package of a `35mm` document, or one made before the field,
+  sets `35mm`, as the source renders.
+- `alcedo-cli` reads `EditorParameterCatalog`, so the catalog command lists `film_format` and the Film Grain range 0 to 200 with no
+  CLI code change. The generated reference of the alcedo-skills repository (`editor_fields.md`, `editor_catalog.json`) is made again
+  in that repository.
+- The product has no reset of the complete DRT node. The default of the catalog entry and the reset of the Format model write
+  `35mm`.
+- The Format selector is a `SegmentedCardSwitcher` with an `EditorAdjustmentEnumModel`. Its `paramsBuilder` converts the selection
+  through `EditorParameterCatalog`. The Display Transform page shows it under the film picker of the film print. The history row is
+  "Film Format", with the summary "35mm → 16mm". The caption reads the browser label of the film print negative, else
+  `kodak_5207`.
+- The plan named a new `EditorPostProcessPanelQmlTest`. The tests of the Post Processing page are in
+  `EditorDisplayTransformSnapshotQmlTest`, whose harness loads the adjustment stack and already tests that page
+  (`PostHalationSliderHidesForFilmPrintAndReturnsWithItsValue`). A new executable would copy the harness. Each wait is
+  `ASSERT_TRUE(WaitFor(...))`, so a timeout fails the test (#526).
+- The model tests are in the new file `drt_film_format_model_test.cpp` of `GpuDagModelGraphTest`, next to the diffusion filter tests,
+  in place of `json_roundtrip_test.cpp`. The checks of the stored documents are in `PipelineDocumentCheckpointTest`, which has the
+  directory of the stored documents.
+- The stored documents are three files. The third holds the history entries, because a checkpoint holds only the hash of its head.
+  The `film_print` document has a second entry, Halation 0.6 to 0.4 of the field `odt`, for the DRT node row of section 2.4.
+- The zh_CN translations ("Format", "Granularity of %1") are edited in the `.ts` file by hand, with no `lupdate` run.
+
+Primary success call chain:
+
+```text
+SegmentedCardSwitcher.selected (postFilmFormatControl or displayFilmFormatControl)
+  -> EditorAdjustmentEnumModel::selectIndex -> paramsBuilder -> EditorParameterCatalogAdapter::modelParamsJson
+     -> EditorParameterCatalog::ToModelJson("film_format") -> {"film_format": "16mm"}
+  -> submitPatch (settled) -> ParseEditorParameterWrite -> ParseFilmFormatUpdate -> DrtFilmFormatUpdate
+  -> ApplyEditorParameterWrite (DrtPost) -> DrtParamsModel::ApplyFilmFormat -> DrtDirty::FilmFormat
+  -> history: ReadEditorParameterJson before and after -> MakeSetParameterBatch (field film_format)
+  -> projection: ReadFilmFormat -> EditorPanelFilmFormatValue -> PanelProjectionToVariantMap
+  -> loadFilmFormat of both pages
+Old document
+  -> DrtNodeModel::FromJson -> DrtParamsModel::LoadJson -> ReadFilmFormat (no key: 35mm)
+  -> ToJson writes no key -> same bytes -> same ComputeRootId -> TryDecodeRootState accepts it
+```
+
+Primary failure call chain:
+
+```text
+Write of an unknown format ("8mm")
+  -> ParseFilmFormatUpdate throws std::invalid_argument "film_format must be one of 16mm, 35mm, 70mm"
+  -> ParseEditorParameterWrite returns no write, with the error; no Model changes
+Stored document with "film_format": "8mm" or a number
+  -> ReadFilmFormat throws std::runtime_error "DRT params: film_format has the unknown identifier '8mm'..."
+  -> the load fails before Mutate; no field changes
+```
+
+What was proven (executed tests, debug build):
+
+| Required name / criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Section 2.4, bytes and root id of the old documents | `PipelineDocumentCheckpointFormat.ExistingFilmGrainRootDocumentsSerializeByteIdenticalAfterFormatChange` | `PipelineDocumentCheckpointTest` | PASS |
+| Section 2.4, replay, undo, and redo of the old entries | `PipelineDocumentCheckpointFormat.ExistingFilmGrainHistoryReplaysAfterFormatChange` | `PipelineDocumentCheckpointTest` | PASS |
+| `film_format` only when not `35mm`; each format round-trips | `DrtFilmFormatModel.DefaultDocumentReads35mmAndWritesNoFilmFormatKey`, `EveryFormatRoundTripsThroughDocumentJson`, `Return35mmRemovesTheKeyAndGivesTheDefaultBytes`, `OutputTransformJsonExcludesFilmFormat` | `GpuDagModelGraphTest` | PASS |
+| Dirty flag, revision, and field-named errors | `DrtFilmFormatModel.FormatChangeMarksOnlyTheFilmFormatField`, `ValueOutsideTheEnumThrowsWithTheFieldNameAndChangesNothing`, `LoadRejectsAnInvalidStoredFormatAndNamesTheKey`, `LoadWithoutTheKeyReads35mm` | `GpuDagModelGraphTest` | PASS |
+| Range 0 to 200 %; old values in range, not changed | `EditorParameterCatalogTest.FilmGrainRangeIsTwiceTheDatasheetGranularity`, `ScalarRangesMatchPreviousPanelSliders`, `OutOfRangeValueIsRejectedWithRange` | `EditorParameterCatalogTest` | PASS |
+| The enum `film_format` | `EditorParameterCatalogTest.FilmFormatOptionsAreTheThreeFormatsWithDefault35mm`, `ObjectFieldsAreKnownFieldKeysWithPanels`, `EveryCatalogFieldCoversEveryFieldKey` | `EditorParameterCatalogTest` | PASS |
+| Target, projection, and write of the field | `EditorAdjustmentContextTest.FilmFormatFieldTargetsDocumentDrtAndProjectsTheFormat` | `EditorAdjustmentContextTest` | PASS |
+| History round trip; `odt` does not hold the format | `PipelineHistoryApplierTest.FilmFormatRoundTripsWithoutEnteringOdtHistoryJson` | `PipelineHistoryApplierTest` | PASS |
+| Transfer of the format | `DocumentTransferTest.DrtPasteAppliesSourceFilmFormat`, `DrtPasteFromSourceWith35mmSetsTargetFormatTo35mm` | `DocumentTransferTest` | PASS |
+| Both selectors show the value | `EditorDisplayTransformSnapshotQmlTest.FilmFormatSelectorsOfBothPagesShowTheStoredFormat` | `EditorDisplayTransformSnapshotQmlTest` | PASS |
+| One click, one settled write (one history entry) | `EditorDisplayTransformSnapshotQmlTest.FilmFormatSelectionWritesOneSettledFilmFormatWrite` | `EditorDisplayTransformSnapshotQmlTest` | PASS |
+| Caption and slider maximum of the Post Processing page | `EditorDisplayTransformSnapshotQmlTest.FilmGrainCaptionNamesTheFilmOfItsGranularity`, `EditorAdjustmentModelTest` (maximum 200) | `EditorDisplayTransformSnapshotQmlTest`, `EditorAdjustmentModelTest` | PASS |
+
+Commands (PowerShell, repository root):
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagModelGraphTest EditorParameterCatalogTest
+  EditorAdjustmentContextTest PipelineHistoryApplierTest DocumentTransferTest PipelineDocumentCheckpointTest
+  EditorPanelProjectionTest EditorDisplayTransformSnapshotQmlTest EditorAdjustmentModelTest AdjustmentTransferCatalogTest
+  GpuDagRawInputTest alcedo_main
+<Target>_runtime\<Target>.exe for each target; GpuDagRawInputTest with the filter of G1
+```
+
+Suite totals: `GpuDagModelGraphTest` 182 / 182, `EditorParameterCatalogTest` 40 / 40, `EditorAdjustmentContextTest` 19 / 19,
+`PipelineHistoryApplierTest` 14 / 14, `EditorPanelProjectionTest` 12 / 12, `EditorAdjustmentModelTest` 19 / 19,
+`AdjustmentTransferCatalogTest` 9 / 9, `EditorDisplayTransformSnapshotQmlTest` 30 / 30, `GpuDagRawInputTest` with the filter of G1
+51 / 51. `PipelineDocumentCheckpointTest` 20 / 22 and `DocumentTransferTest` 36 / 37: the failures are older than G2 and have issues.
+`ExistingRawRootDocumentsSerializeByteIdenticalAfterRasterChange` and `ExistingLmtRootDocumentsSerializeByteIdenticalAfterEncodingChange`
+fail on the HLS defaults ([#553](https://github.com/zidage/AlcedoStudio/issues/553)).
+`TransferPackageCarriesOnlyOwnedDevelopKeysAndNoCaches` fails on the color wheel key `version`
+([#484](https://github.com/zidage/AlcedoStudio/issues/484), [#554](https://github.com/zidage/AlcedoStudio/issues/554)).
+
+Checklist / exit condition: steps 0 to 3 done; each row of section 2.4 that G2 owns has a passing test; no GPU file changed.
+
+LOC note: 33 files, 991 added lines in the code and the tests, and the plan record. Product C++ 208, QML 154, translations 12, tests
+614, stored documents 3 (one line each). `pipeline_document_checkpoint_test.cpp` 204, `drt_film_format_model_test.cpp` 123,
+`editor_display_transform_snapshot_qml_test.cpp` 123.
+
+Remaining gaps: none for G2. G3 reads the format and the plan in the CUDA post grain; G7 reads the format in the film print image
+plane.
 
 ### G3: post grain on CUDA
 

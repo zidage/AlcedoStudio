@@ -12,6 +12,7 @@
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
@@ -327,6 +328,20 @@ auto ReadDiffusion(const PipelineDocument& document, const EditorParameterTarget
   return FinishField(target, std::move(nested), out);
 }
 
+auto ReadFilmFormat(const PipelineDocument& document, const EditorParameterTarget& target,
+                    EditorPanelFieldPresentation* out, std::string* error) -> bool {
+  if (target.owner_kind != EditorParameterOwnerKind::DrtPost) {
+    return SetError(error, "Film format panel field requires a DRT target");
+  }
+  const auto* drt = document.Drt();
+  if (drt == nullptr || drt->Id() != target.node_id) {
+    return SetError(error, "DRT node is missing: " + std::string(target.node_id.Value()));
+  }
+  EditorPanelFilmFormatValue value;
+  value.film_format = std::string{FilmFormatId(drt->Params().FilmFormat())};
+  return FinishField(target, std::move(value), out);
+}
+
 auto ReadFilmGrain(const PipelineDocument& document, const EditorParameterTarget& target,
                    EditorPanelFieldPresentation* out, std::string* error) -> bool {
   return ReadDrtNestedScalar<FilmGrainModel>(document, target, "film_grain", "strength", out, error);
@@ -513,6 +528,7 @@ auto EditorPanelAdapterTable::Production() -> EditorPanelAdapterTable {
     table.Add({"film_grain", "look", &ReadFilmGrain});
     table.Add({"halation", "look", &ReadHalation});
     table.Add({"diffusion", "look", &ReadDiffusion});
+    table.Add({"film_format", "look", &ReadFilmFormat});
     table.Add({"odt", "display", &ReadOdt});
     table.Add({"raw_decode", "raw", &ReadRawDecode});
     table.Add({"color_temp", "look", &ReadColorTemp});

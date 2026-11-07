@@ -17,6 +17,7 @@
 #include "edit/geometry/crop_frame.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/develop_raster_input.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/film_print_model.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_tone.hpp"
@@ -35,6 +36,8 @@ using json         = nlohmann::json;
 
 constexpr EditorScalarUiRange kSignedPercentRange{-100.0, 100.0, 0.0, 1.0, 0};
 constexpr EditorScalarUiRange kPercentRange{0.0, 100.0, 0.0, 1.0, 0};
+/// Film Grain: 100 % is the datasheet granularity of the film (decision U3).
+constexpr EditorScalarUiRange kFilmGrainRange{0.0, 200.0, 0.0, 1.0, 0};
 
 constexpr auto Scalar(std::string_view field, std::string_view alias,
                       EditorAdjustmentField adjustment, std::string_view panel,
@@ -1464,6 +1467,39 @@ auto LutModelToUi(const json& model_json, std::string* error) -> std::optional<j
 auto ModelIdentity(const json& ui_value) -> json { return ui_value; }
 
 // ---------------------------------------------------------------------------------------------
+// film_format: the film format of the DRT node (plan 'film_grain_format_and_stock_plan.md',
+// decision U1). The values and the labels are the document identifiers of FilmFormatId, in menu
+// order (EditorParameterCatalogTest.FilmFormatOptionsAreTheThreeFormatsWithDefault35mm).
+
+constexpr std::array kFilmFormatOptions = {
+    EditorParameterOption{"16mm", "16mm"},
+    EditorParameterOption{"35mm", "35mm"},
+    EditorParameterOption{"70mm", "70mm"},
+};
+
+constexpr std::array kFilmFormatProperties = {
+    EditorParameterProperty{"film_format", PropertyType::Option, kFilmFormatOptions},
+};
+
+auto FilmFormatUiDefault() -> json { return {{"film_format", "35mm"}}; }
+
+auto FilmFormatModelToUi(const json& model_json, std::string* error) -> std::optional<json> {
+  const auto& format = UnwrapObject(model_json, "film_format");
+  if (!RequireObject(format, "film_format", error)) {
+    return std::nullopt;
+  }
+  std::string value;
+  if (!ReadString(format, "film_format", "35mm", "film_format", &value, error)) {
+    return std::nullopt;
+  }
+  return json{{"film_format", value}};
+}
+
+auto FilmFormatUiToModel(const json& ui_value) -> json {
+  return {{"film_format", ui_value.at("film_format")}};
+}
+
+// ---------------------------------------------------------------------------------------------
 
 auto ObjectEntry(std::string_view field, EditorAdjustmentField adjustment, std::string_view panel,
                  std::span<const EditorParameterProperty> properties, json (*ui_default)(),
@@ -1509,8 +1545,8 @@ auto ModelEntry(std::string_view field, std::string_view alias, EditorAdjustment
 // Values of the Tone, Look, LUT, Post Processing, RAW Decode, Geometry, and Display Transform
 // panels. The exposure default is the neutral reset value; the product Default document starts
 // at +1.5 EV.
-auto Table() -> const std::array<EditorParameterCatalogEntry, 24>& {
-  static const std::array<EditorParameterCatalogEntry, 24> entries = {
+auto Table() -> const std::array<EditorParameterCatalogEntry, 25>& {
+  static const std::array<EditorParameterCatalogEntry, 25> entries = {
       Scalar("exposure", {}, EditorAdjustmentField::Exposure, "tone", "exposure_ev",
              Conversion::Identity, EditorScalarUiRange{-10.0, 10.0, 0.0, 0.01, 2}),
       Scalar("contrast", {}, EditorAdjustmentField::Contrast, "tone", "contrast",
@@ -1534,7 +1570,9 @@ auto Table() -> const std::array<EditorParameterCatalogEntry, 24>& {
       Scalar("sharpen", {}, EditorAdjustmentField::Sharpen, "post", "offset",
              Conversion::Identity, kPercentRange),
       Scalar("film_grain", {}, EditorAdjustmentField::FilmGrain, "post", "strength",
-             Conversion::Percent, kPercentRange),
+             Conversion::Percent, kFilmGrainRange),
+      ObjectEntry("film_format", EditorAdjustmentField::FilmFormat, "post", kFilmFormatProperties,
+                  &FilmFormatUiDefault, &FilmFormatModelToUi, &FilmFormatUiToModel, nullptr),
       Scalar("halation", {}, EditorAdjustmentField::Halation, "post", "strength",
              Conversion::Percent, kPercentRange),
       ObjectEntry("raw_decode", EditorAdjustmentField::RawDecode, "raw", kRawDecodeProperties,

@@ -200,7 +200,9 @@ struct FilmGrainTraits {
   static constexpr std::string_view kInstanceSuffix = "film_grain";
   static constexpr float            kDefault        = 0.0f;
   static constexpr float            kMin            = 0.0f;
-  static constexpr float            kMax            = 1.0f;
+  /// 1 is the datasheet granularity of the film; 2 is twice that (plan
+  /// 'film_grain_format_and_stock_plan.md', decision U3).
+  static constexpr float            kMax            = 2.0f;
 };
 
 struct TintTraits {

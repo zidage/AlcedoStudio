@@ -226,12 +226,13 @@ auto AdjustmentFieldIsSupported(EditorNodeKind kind, std::string_view field_key)
     case EditorNodeKind::Develop:
       return IsDevelopField(field_key);
     case EditorNodeKind::ColorGrade:
-      // A Grade selection also shows the Post Processing page, whose DRT/Post sliders and
-      // diffusion filter write the document DRT node.
+      // A Grade selection also shows the Post Processing page, whose DRT/Post sliders,
+      // diffusion filter, and film format write the document DRT node.
       return IsColorGradeField(field_key) || IsDrtPostField(field_key) ||
-             field_key == "diffusion";
+             field_key == "diffusion" || field_key == "film_format";
     case EditorNodeKind::Drt:
-      return field_key == "odt" || field_key == "diffusion" || IsDrtPostField(field_key);
+      return field_key == "odt" || field_key == "diffusion" || field_key == "film_format" ||
+             IsDrtPostField(field_key);
   }
   return false;
 }
@@ -307,8 +308,9 @@ auto CompleteSelectedNodeParameterTarget(const PipelineDocument& document,
     target.node_id    = selected_node_id;
     return target;
   }
-  if (target.field_key == "diffusion") {
-    // The diffusion filter always targets the document DRT, like the DRT/Post sliders.
+  if (target.field_key == "diffusion" || target.field_key == "film_format") {
+    // The diffusion filter and the film format always target the document DRT, like the
+    // DRT/Post sliders.
     const auto* drt = document.Drt();
     if (drt == nullptr) {
       SetError(error, "DRT node is missing");

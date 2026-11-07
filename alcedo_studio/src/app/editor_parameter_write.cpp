@@ -249,6 +249,11 @@ auto ApplyEditorParameterWrite(PipelineDocument& document, const EditorParameter
               RequireWrite<EditorScalarWrite>(write, target.field_key).value);
           return true;
         }
+        if (target.field_key == "film_format") {
+          drt->Params().ApplyFilmFormat(
+              RequireWrite<DrtFilmFormatUpdate>(write, target.field_key).format);
+          return true;
+        }
         if (target.field_key != "odt") {
           return SetError(error, "Unsupported DRT parameter field: " + target.field_key);
         }

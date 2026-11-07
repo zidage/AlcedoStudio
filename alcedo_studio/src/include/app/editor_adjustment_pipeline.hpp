@@ -42,6 +42,8 @@ enum class EditorAdjustmentField {
   Diffusion,
   /// Raster input profile override (Develop `input.profile_override`).
   InputProfile,
+  /// The film format of the DRT node (`film_format`: 16mm, 35mm, or 70mm).
+  FilmFormat,
 };
 
 /// Every accepted field key with the adjustment it controls, including the aliases that panels

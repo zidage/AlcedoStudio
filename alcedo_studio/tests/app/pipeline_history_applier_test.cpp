@@ -23,6 +23,8 @@
 #include "app/pipeline_document_history.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/film_print_model.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -173,6 +175,32 @@ TEST(PipelineHistoryApplierTest, DiffusionStrengthRoundTripsWithoutEnteringOdtHi
   EXPECT_FALSE(odt_json.contains("diffusion")) << odt_json.dump();
   RoundTripOwner(&document, *odt, {{"peak_luminance", 400.0}});
   EXPECT_EQ(document.Drt()->Params().DiffusionStrength(), 0.4f);
+}
+
+TEST(PipelineHistoryApplierTest, FilmFormatRoundTripsWithoutEnteringOdtHistoryJson) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  auto        format = CompleteCurrentPanelParameterTarget(document, "film_format", &error);
+  ASSERT_TRUE(format.has_value()) << error;
+  EXPECT_EQ(format->owner_kind, EditorParameterOwnerKind::DrtPost);
+  EXPECT_EQ(format->node_id, document.Drt()->Id());
+  RoundTripOwner(&document, *format, {{"film_format", "16mm"}});
+  RoundTripOwner(&document, *format, {{"film_format", "70mm"}});
+
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, *format, {{"film_format", "16mm"}}, &error))
+      << error;
+  nlohmann::json format_json;
+  ASSERT_TRUE(ReadEditorParameterJson(document, *format, &format_json, &error)) << error;
+  EXPECT_EQ(format_json, (nlohmann::json{{"film_format", "16mm"}}));
+
+  // The output transform field owns only its own keys, so ODT undo never resets the format.
+  auto odt = CompleteCurrentPanelParameterTarget(document, "odt", &error);
+  ASSERT_TRUE(odt.has_value()) << error;
+  nlohmann::json odt_json;
+  ASSERT_TRUE(ReadEditorParameterJson(document, *odt, &odt_json, &error)) << error;
+  EXPECT_FALSE(odt_json.contains("film_format")) << odt_json.dump();
+  RoundTripOwner(&document, *odt, {{"method", "film_print"}});
+  EXPECT_EQ(document.Drt()->Params().FilmFormat(), FilmFormat::Film16mm);
 }
 
 TEST(PipelineHistoryApplierTest, NegativeScanChangesUndoAndRedoToEachStoredValue) {

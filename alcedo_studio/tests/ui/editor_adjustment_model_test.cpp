@@ -342,7 +342,7 @@ TEST(EditorAdjustmentModelTest, CatalogFieldKeyAppliesCatalogRange) {
   EditorAdjustmentValueModel film_grain;
   film_grain.setFieldKey(QStringLiteral("film_grain"));
   EXPECT_DOUBLE_EQ(film_grain.minimum(), 0.0);
-  EXPECT_DOUBLE_EQ(film_grain.maximum(), 100.0);
+  EXPECT_DOUBLE_EQ(film_grain.maximum(), 200.0);
   EXPECT_DOUBLE_EQ(film_grain.step(), 1.0);
   EXPECT_EQ(film_grain.precision(), 0);
 

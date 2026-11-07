@@ -16,6 +16,8 @@
 #include "app/editor_parameter_write.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -401,6 +403,51 @@ TEST(EditorAdjustmentContextTest, CapabilityRegistryMatchesNodeKind) {
   EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::Drt, "diffusion"));
   EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "diffusion"));
   EXPECT_FALSE(AdjustmentFieldIsSupported(EditorNodeKind::Develop, "diffusion"));
+  EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::Drt, "film_format"));
+  EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "film_format"));
+  EXPECT_FALSE(AdjustmentFieldIsSupported(EditorNodeKind::Develop, "film_format"));
+}
+
+TEST(EditorAdjustmentContextTest, FilmFormatFieldTargetsDocumentDrtAndProjectsTheFormat) {
+  auto document = CreateDefaultPipelineDocument();
+  document.Drt()->Params().ApplyFilmFormat(FilmFormat::Film70mm);
+  std::string error;
+  const auto  target =
+      CompleteSelectedNodeParameterTarget(document, NodeId{"grade.primary"}, "film_format", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  EXPECT_EQ(target->owner_kind, EditorParameterOwnerKind::DrtPost);
+  EXPECT_EQ(target->node_id, document.Drt()->Id());
+  EXPECT_TRUE(target->adjustment_instance_id.Empty());
+
+  EditorPanelProjection projection;
+  ASSERT_TRUE(
+      ProjectSelectedNodePanelFields(document, NodeId{"grade.primary"}, 3, &projection, &error))
+      << error;
+  const auto field = std::find_if(projection.fields.begin(), projection.fields.end(),
+                                  [](const auto& f) { return f.field_key == "film_format"; });
+  ASSERT_NE(field, projection.fields.end());
+  const auto* format = std::get_if<EditorPanelFilmFormatValue>(&field->value);
+  ASSERT_NE(format, nullptr);
+  EXPECT_EQ(format->film_format, "70mm");
+
+  const auto write = ParseEditorParameterWrite("film_format", {{"film_format", "16mm"}}, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  ASSERT_TRUE(ApplyEditorParameterWrite(document, *target, *write, &error)) << error;
+  EXPECT_EQ(document.Drt()->Params().FilmFormat(), FilmFormat::Film16mm);
+
+  // The value of an enum control parses to the same write.
+  const auto control =
+      ParseEditorParameterWrite("film_format", {{"index", 1}, {"value", "35mm"}}, &error);
+  ASSERT_TRUE(control.has_value()) << error;
+  ASSERT_TRUE(ApplyEditorParameterWrite(document, *target, *control, &error)) << error;
+  EXPECT_EQ(document.Drt()->Params().FilmFormat(), FilmFormat::Film35mm);
+
+  EXPECT_FALSE(
+      ParseEditorParameterWrite("film_format", {{"film_format", "8mm"}}, &error).has_value());
+  EXPECT_NE(error.find("film_format"), std::string::npos) << error;
+  EXPECT_FALSE(
+      ParseEditorParameterWrite("film_format", {{"film_format", "16mm"}, {"size", 1}}, &error)
+          .has_value());
 }
 
 TEST(EditorAdjustmentContextTest, DiffusionFieldTargetsDocumentDrtAndProjectsStrength) {
