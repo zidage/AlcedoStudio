@@ -123,6 +123,48 @@ TEST(EditorOverlayInteractionTest, CtrlWheelZoomsAtCursorAndClampsPanAtMultipleD
   }
 }
 
+TEST(EditorOverlayInteractionTest, PlainMouseWheelZoomsAtCursorWithoutCtrl) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller);
+
+  // At fit, a zoom-out step stays at fit.
+  controller.handleWheel(400, 300, -120, 0, 0, static_cast<int>(Qt::NoModifier), false);
+  EXPECT_FLOAT_EQ(controller.zoom(), ViewTransformController::kMinInteractiveZoom);
+
+  // An off-center zoom-in step keeps the image point under the cursor, so the
+  // pan moves toward that side.
+  controller.handleWheel(600, 300, 120, 0, 0, static_cast<int>(Qt::NoModifier), false);
+  EXPECT_NEAR(controller.zoom(), ViewTransformController::kWheelZoomStep, 1.0e-4f);
+  EXPECT_NE(controller.panX(), 0.0f);
+
+  // The plain step and the Ctrl step zoom by the same factor.
+  EditorInteractionController ctrl_controller;
+  ctrl_controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(ctrl_controller);
+  ctrl_controller.handleWheel(600, 300, 120, 0, 0, static_cast<int>(Qt::ControlModifier), false);
+  EXPECT_NEAR(ctrl_controller.zoom(), controller.zoom(), 1.0e-5f);
+  EXPECT_NEAR(ctrl_controller.panX(), controller.panX(), 1.0e-5f);
+  EXPECT_NEAR(ctrl_controller.panY(), controller.panY(), 1.0e-5f);
+
+  // A zoom-out step returns to fit.
+  controller.handleWheel(600, 300, -120, 0, 0, static_cast<int>(Qt::NoModifier), false);
+  EXPECT_NEAR(controller.zoom(), ViewTransformController::kMinInteractiveZoom, 1.0e-4f);
+}
+
+TEST(EditorOverlayInteractionTest, PlainTrackpadScrollPansWithoutZoom) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller);
+  controller.applyViewTransformForTest(2.0f, 0.0f, 0.0f);
+
+  const float zoom_before = controller.zoom();
+  const float pan_before  = controller.panY();
+  controller.handleWheel(400, 300, 80, 0, 40, static_cast<int>(Qt::NoModifier), true);
+  EXPECT_FLOAT_EQ(controller.zoom(), zoom_before);
+  EXPECT_NE(controller.panY(), pan_before);
+}
+
 TEST(EditorOverlayInteractionTest, TrueZoomIsOneToOneAtActualPixels) {
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);

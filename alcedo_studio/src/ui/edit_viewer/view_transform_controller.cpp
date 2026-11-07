@@ -11,7 +11,7 @@
 
 namespace alcedo {
 
-auto ViewTransformController::HandleCtrlWheel(ViewerState& state,
+auto ViewTransformController::HandleWheelZoom(ViewerState& state,
                                               const ViewportWidgetInfo& widget_info,
                                               const ViewportImageInfo& image_info, int wheel_delta,
                                               const QPointF& anchor_widget_pos)
@@ -307,7 +307,7 @@ auto ViewTransformController::ApplyViewTransform(ViewerState& state,
   state.SetViewTransform(clamped_zoom, clamped_pan);
 
   // Request a repaint only when the transform actually changed. A zoom input
-  // that clamps to the current limit (e.g. Ctrl+wheel zoom-in already at
+  // that clamps to the current limit (e.g. wheel zoom-in already at
   // kMaxInteractiveZoom, or zoom-out already at fit) leaves zoom and pan
   // unchanged; routing a DetailRefresh for that no-op drives the render
   // coordinator busy and spins the BusyIndicator even though the view never

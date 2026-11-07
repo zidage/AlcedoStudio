@@ -2053,6 +2053,33 @@ alcedo_ui_gtest_discover_tests(EditorCropInteractionTest
     PROPERTIES LABELS "geometry_overlay;interaction")
 alcedo_register_test_target(EditorCropInteractionTest ui)
 
+# Editor viewport pointer input (#708): mouse wheel zoom with and without Ctrl,
+# trackpad pan, pinch, true zoom, and overlay geometry at several DPRs.
+add_executable(EditorOverlayInteractionTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_overlay_interaction_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorOverlayInteractionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorOverlayInteractionTest
+    PRIVATE
+        EditorRhiViewport
+        EditorViewerLogic
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Quick
+        Qt6::Qml
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(EditorOverlayInteractionTest
+    TEST_PREFIX "EditorOverlayInteractionTest."
+    PROPERTIES LABELS "editor_rhi;interaction")
+alcedo_register_test_target(EditorOverlayInteractionTest ui)
+
 # Minimized editor window: the viewport sink refuses frames at once instead of
 # waiting for a scene-graph consumer, and the target is writable after restore.
 add_executable(EditorViewportSuspensionTest
