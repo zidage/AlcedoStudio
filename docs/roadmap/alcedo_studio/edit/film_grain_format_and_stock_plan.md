@@ -1706,6 +1706,122 @@ document.
 
 **Completion record.** Pending.
 
+#### G8 study: scene light cast of Negative Scan (2026-11-06)
+
+**Request (user).** Print material Negative Scan, auto colour off. Tungsten stocks (500T, Eterna 500) look correct at 3200 K and
+3800 K, but too blue in daylight; real 500T in daylight is only a little cyan-blue. Daylight stocks are too yellow in a warm
+scene; real daylight film at night is yellow-green (olive). The report: the cast of a light that is not the balance light is too
+large, and it has no green part. Branch `fix/film-negative-scan-mismatched-illuminant-cast`, base
+`feature/film-grain-opencl-metal-negative-grain`.
+
+**Path of the scene light (before this study).** As Shot reads the colour temperature of the RAW white balance and drops the
+tint. The host blends the two grid lights around that temperature, linear in mired (Planckian at 4000 K and below, CIE daylight at
+5000 K and above). Each pixel gets a reflectance shape from its u'v' (the white-balanced input), and the layer exposure is the sum
+of reflectance x scene light x layer sensitivity. The layer gain sets the 18 % grey of the balance light (D55 or T3200) on the
+criterion point of each curve, and it does not depend on the scene light. The curves and rule `development_inhibition` give the
+dye amounts, the virtual scanner reads them, and Negative Scan gives `x = (D - D_aim) / gamma` with `D_aim` the grey of the balance
+light. So a light that is not the balance light enters only through the spectral integral, and the scan keeps its cast with the
+contrast of the stock about the medium gamma.
+
+**Measurements.**
+
+1. *The size of the cast agrees with the datasheet filters.* Kodak states a Wratten 85 for 500T (5219) in daylight and a Wratten
+   80A for a daylight stock under 3200 K. The 85 and 80A curves come from the Kodak charts (the 85 from the vector path of the
+   chart, the 80A read at 20 nm to +-0.02 density). For each stock, the log10 exposure that the filter takes from each layer (less
+   its mean) cancels the cast of the developed grey in log10 exposure units of the stock (less its mean) to 0.063 log10 or better
+   on all stocks with a correct balance light (`DatasheetConversionFilterTakesTheNegativeCastBack`). Examples, R G B less mean:
+
+   | Stock and light | Cast of the negative | Cast that the filter removes |
+   | --- | --- | --- |
+   | 5219 in D55 (85) | -0.239, -0.023, +0.262 | -0.223, -0.008, +0.231 |
+   | 5213 in D55 (85) | -0.226, -0.031, +0.257 | -0.215, +0.003, +0.212 |
+   | Eterna 500 in D55 (85) | -0.206, -0.024, +0.230 | -0.197, +0.013, +0.185 |
+   | 5207 under T3200 (80A) | +0.228, +0.021, -0.249 | +0.252, +0.033, -0.285 |
+   | Portra 400 under T3200 (80A) | +0.259, +0.015, -0.274 | +0.251, +0.024, -0.275 |
+
+   The blue part that stays for the tungsten stocks is the 85 itself: it converts 5500 K to 3400 K, not 3200 K. With the 85B the
+   green part is +0.010 for 5219. So the exposure stage, the curves, the inhibition, and the scan give the cast of the datasheet,
+   with its green part, to about 1/5 stop. An untimed scan of 500T in D55 has 1.7 stops of blue over red. The datasheet gives no
+   reason to make the cast smaller.
+2. *The hue of the grey is the colorimetric hue of the light.* Read as AP1 (as the product reads the scan channels), the grey of
+   5219 in D55 has the CIELAB hue 258 deg and C* 56. The same light seen with the white of 3200 K has 253 deg and C* 57. For a warm
+   light on a daylight stock the scan is about 10 deg redder and up to 28 % more saturated than the colorimetric cast (Portra 400
+   under 3200 K: 56 deg and 59.6 against 68 deg and 46.5). The cause is the reading of narrow film channels as AP1: issue #705.
+3. *The missing green is the tint of the light.* The RAW whites of `sample_images/raw/` (rawpy, McCamy CCT, CIE 1960 Duv) have a
+   Duv of +0.011 to +0.017 in 5 of the 10 night files (for example `night/2136729222.rw2`: 3538 K, +0.0122; `night/P1031516.RW2`:
+   6588 K, +0.0112). Daylight files have +0.003 to +0.006 (CIE daylight: +0.0034). Fluorescent, mercury, sodium, and LED lights are
+   above the Planckian locus. As Shot dropped this tint, so the film saw a Planckian light at the same temperature: orange in
+   place of yellow-green, blue in place of cyan-blue.
+4. *Candidate causes that the data rejects.* The spectral integral uses the full spectra (no von Kries step), and the blackbody and
+   daylight spectra are correct. The scanner normalization and the inversion keep the cast in log exposure units (x - mean equals
+   the negative cast to 0.01 for most stocks; the rest is the contrast of the stock). Rule `development_inhibition` does not make
+   the cast smaller: a real DIR coupler raises the saturation of a colour, and the model gives the datasheet cast with it.
+
+**Decision (user, 2026-11-06).** Use the tint of the RAW white for all film paths. Keep the size of the cast that the datasheet
+filters confirm. The change is at render time only: no persisted field, no change of the root id or of the history.
+
+**Rule `as_shot_tint`.** The RAW white (Develop: As Shot gives the solved temperature and tint, Custom gives its Kelvin and tint)
+goes to the film print as its colour temperature and its CIE 1931 chromaticity (`FilmSceneRawWhite`,
+`WhiteBalanceTemperatureTintToXy`). For each film (the spectra of the grid are per film), `FilmStockBundle::ResolveLight`:
+
+1. Takes the grid light of the colour temperature (lab `grid_blend`) and its CIE 1960 uv (CMF table `cie1931_cmf_table.hpp`,
+   generated from the CIE 018:2019 file of the Planckian locus table).
+2. Takes the Duv of the RAW white and of the grid light (signed distance to the Planckian locus table of Develop, positive toward
+   green). The target is the grid light moved across the locus by the difference. A RAW white with the Duv of the grid light gives
+   the grid light with no change (the lab parity of the grid stays).
+3. Multiplies the grid light by two factors and solves their two gains so that the light has the target uv:
+   - The tint factor `10^(k g(lambda))`. `g` is a Gaussian at 550 nm with a standard deviation of 50 nm (the green lines of mercury
+     and of the terbium phosphor are at 545 to 546 nm).
+   - The Wien factor `exp(-C2 dm 1e-6 / lambda)`, with `C2` the second radiation constant of the Planck law. In the Wien
+     approximation this factor moves a light by `dm` mired. The tint factor alone moves a warm light by up to 180 mired along the
+     locus, and the Wien factor takes that change back. It has no grid limit, so a RAW white at an end of the grid (2000 K or
+     15000 K) also gets its tint.
+
+   The solve uses Newton steps with central differences. Each step starts at most 0.25 in `k` and 50 in `dm`, and a step that does
+   not make the error smaller is cut in half. The light keeps the luminance Y of the blend. A solve that does not reach 1e-10 in uv
+   stops the render with an error.
+4. Limits `|k|` to 1 (a factor of 10 at 550 nm). The Develop range (2000 to 15000 K, tint -150 to +150, Duv -0.05 to +0.05) has
+   three corners out of the spectrum locus: 2000 K at Duv +0.02 and +0.05, and 3200 K at Duv +0.05 (at 2000 K the Planckian locus is
+   0.0094 from the spectrum locus in CIE 1960 uv). No light has these chromaticities, and `k` grows with no end near them. All the
+   other corners need `|k|` of 0.78 or less. At the limit, the solve holds `k` and moves `dm` until the light is on the locus
+   normal of the grid light: the light keeps the colour temperature of the grid light and moves toward the RAW white by 0.0095
+   (2000 K) or 0.031 (3200 K at Duv +0.05).
+5. Negative Scan and the light table use the light with the tint. `D_aim`, the light axis, and the layer gain do not depend on the
+   scene light. On a print, the printer lights follow the grey of the light on the negative (lab `FilmPreview._camera_filter`, print
+   timing 1): the balance falls by the rise of the log10 paper exposure of the grey record. Rule `negative_show_grade` moves its grey
+   record by the same change. `StoredPrinterLightsFollowTheGreyRecordOfTheLight` checks this rule against the stored balance of two
+   grid lights (2.8 kK and 6.5 kK): the difference is 9e-16 log10.
+
+**Effect on the grey of Negative Scan** (`AsShotTintTurnsTheScanCastTowardGreen`, x less mean, and the hue of the channels read
+as AP1):
+
+| Stock and RAW white | Without the tint | With the tint |
+| --- | --- | --- |
+| 5219, 6588 K, Duv +0.0112 | -0.309, -0.035, +0.344; 264 deg | -0.332, -0.007, +0.339; 256 deg (toward cyan-blue) |
+| Portra 400, 3538 K, Duv +0.0122 | +0.195, +0.011, -0.206; 56 deg | +0.223, +0.092, -0.315; 78 deg (toward yellow-green) |
+| 5207, 3538 K, Duv +0.0122 | +0.172, +0.013, -0.185; 58 deg | +0.196, +0.085, -0.282; 80 deg (toward yellow-green) |
+
+A RAW white on the daylight locus (most daylight files) gives the CIE daylight of the grid, so 500T in that daylight stays blue,
+as the 85 confirms. The difference from the remembered look of real film is the timing of real scans and prints (a lab scanner
+balances each frame) and issue #705.
+
+**Files.** `film_scene_tint.hpp/.cpp` (CMF integral, CIE 1960 uv, Duv, tint band, Wien factor, limit of `k`), `cie1931_cmf_table.hpp` and
+`scripts/generate_cie1931_cmf_table.py`, `film_stock_bundle.cpp` (`SceneLightMix`, `GridLight`, `ResolveLight`, the three
+selections), `film_print_tables.cpp` (keys and messages with the RAW white), `develop_color_transform.cpp`
+(`RawWhiteBalanceWhite`), `film_print_plan.cpp` (`FilmSceneRawWhite`), and the CUDA, OpenCL, and Metal passes (the RAW white in
+place of the colour temperature). The GPU kernels do not change: the light reaches them through the u'v' table and the selection
+values.
+
+**Tests.** `FilmPrintTablesTest`: `AsShotTintGivesEachFilmTheChromaticityOfTheRawWhite` (synthetic bundle: the light of each
+film reaches the target uv to 1e-7, the RAW white of the grid light gives the grid light bit for bit, the print balance moves),
+the three lab tests above, `AsShotTintReachesTheCornersOfTheDevelopRange` (5 temperatures from 2000 to 15000 K, Duv -0.05 to
++0.05, four negatives and a print: the target uv to 1e-7, and the limit form at the three corners out of the spectrum locus), and
+the lab blend tests on `GridLight`. GPU tests: the helpers set the tint of the grid light for the
+lab labels `cct<kelvin>`, and the As Shot tests compare As Shot and Custom with the same temperature and tint.
+
+**Issues.** #704 (the catalog gives a daylight balance to tungsten stocks: 5293 EXR 200T and the Eastman Color Negative stocks;
+the datasheet test skips them). #705 (the reading of the scan channels as AP1).
+
 ---
 
 ## 9. Test rules for all phases
@@ -1753,6 +1869,12 @@ document.
 | strength | Film Grain slider | none | 0 to 2; 1 is the datasheet | U3 |
 | tile | Pixels of one 16 x 16 group of a grain kernel | px | 16 x 16 (post), 16 x 32 (negative) | G5, G6 |
 | band limit | Shared memory of one noise band of the whole tile on OpenCL and Metal | bytes | 28672 | G6 |
+| Duv | Signed distance of a light from the Planckian locus in CIE 1960 uv, positive toward green | none | RAW white: Develop tint / 3000 | G8 study |
+| `g` | Tint band of rule `as_shot_tint` | none | Gaussian, centre 550 nm, standard deviation 50 nm | G8 study (inferred) |
+| `k` | Gain of the tint factor `10^(k g)` | log10 | solved per film, `|k|` at most 1 | G8 study (limit measured on the Develop range) |
+| `dm` | Mired change of the Wien factor `exp(-C2 dm 1e-6 / lambda)` | mired | solved per film | G8 study |
+| `C2` | Second radiation constant of the Planck law | nm K | 1.438777e7 | CODATA 2018 |
+| solve limit | Distance in CIE 1960 uv at which the solve of `as_shot_tint` stops | none | 1e-10 | G8 study |
 
 ---
 
