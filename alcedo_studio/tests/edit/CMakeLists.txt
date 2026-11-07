@@ -441,10 +441,11 @@ alcedo_register_test_target(GpuDagRawInputTest edit)
 # GPU DAG Phase G4: CUDA Develop Endpoint.
 if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaDevelopTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_develop_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_develop_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_lens_calib_test.cpp)
   target_include_directories(GpuDagCudaDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_link_libraries(GpuDagCudaDevelopTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput
-    DemosaicNet Image opencv_imgproc Qt6::Gui)
+  target_link_libraries(GpuDagCudaDevelopTest PRIVATE GTest::gtest_main EditRuntimeCuda
+    EditRuntimeLens EditInput DemosaicNet Image opencv_imgproc Qt6::Gui)
   gtest_discover_tests(GpuDagCudaDevelopTest TEST_PREFIX "GpuDagCudaDevelopTest."
     PROPERTIES LABELS "gpu;edit;runtime")
   alcedo_register_test_target(GpuDagCudaDevelopTest gpu)
@@ -581,10 +582,11 @@ if(ALCEDO_METAL_ENABLED)
   alcedo_register_test_target(GpuDagMetalWorkspaceTest gpu ci_metal)
 
   add_executable(GpuDagMetalDevelopTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_develop_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_develop_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_lens_calib_test.cpp)
   target_include_directories(GpuDagMetalDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalDevelopTest PRIVATE
-    GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry Image
+    GTest::gtest_main EditRuntimeMetal EditRuntimeLens EditInput RawProcessorOp MetalDemosaicNetEntry Image
     opencv_imgproc Qt6::Gui)
   target_compile_definitions(GpuDagMetalDevelopTest PRIVATE
     ALCEDO_METAL_NEURAL_EXPECTED_PIXEL_DIR="${ALCEDO_TEST_ROOT}/resources/expected_pixels/metal_neural_develop"
@@ -716,7 +718,8 @@ if(ALCEDO_OPENCL_ENABLED)
   alcedo_register_test_target(GpuDagOpenClWorkspaceTest gpu)
 
   add_executable(GpuDagOpenClDevelopTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_develop_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_develop_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_lens_calib_test.cpp)
   target_include_directories(GpuDagOpenClDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClDevelopTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditInput RawProcessorOp OpenClDemosaicNet
