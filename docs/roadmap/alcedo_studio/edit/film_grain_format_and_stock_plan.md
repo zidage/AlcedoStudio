@@ -470,11 +470,19 @@ Halation
 
 ### 7.2 Display Transform panel, Film Print
 
+User change (2026-11-06, [#716](https://github.com/zidage/AlcedoStudio/issues/716)): Format, Film Grain, and Halation move to a
+folding Style section below the print material, open at the start. Scene Light, Light Spread, and Enlarger Flare move to a
+folding Print Setting section below Style, folded at the start. Negative Scan also starts folded.
+
 ```text
 Film              [ Kodak Vision3 250D 5207 ]
-Format            ( 16mm | 35mm | 70mm )
-Film Grain                                   [ 100 % ]
 Print             [ Kodak 2383 ]
+v Style
+    Format        ( 16mm | 35mm | 70mm )
+    Film Grain                               [ 100 % ]
+    Halation
+> Print Setting
+    Scene Light, Light Spread, Enlarger Flare
 ```
 
 - Format and Film Grain write `film_format` and `film_grain`, the same fields as the Post Processing page, so both pages always
@@ -486,8 +494,8 @@ Print             [ Kodak 2383 ]
   to the film, so the other methods start with no grain. This is also a second settled write after the method. A change between
   two methods that are not Film Print keeps the strength.
 - An old document has a strength and no `film_format`; it reads `35mm` (section 2.4).
-- Negative Scan shows three folding sections under the film print controls: Negative Scan (open at the start), Scanner, and
-  OpenDRT (folded at the start). The fold state belongs to the panel and is not written.
+- Negative Scan shows three more folding sections under Print Setting: Negative Scan, Scanner, and OpenDRT, all folded at the
+  start. The fold state of each section belongs to the panel and is not written.
 - An "i" glyph explains the panel (next to the title), Film, Format, Film Grain, Print, Scene Light, Light Spread, Halation,
   Enlarger Flare (Loupe Flare for a reversal film), and the Negative Scan, Scanner, OpenDRT, and Color & Encoding sections.
 
