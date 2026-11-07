@@ -41,19 +41,6 @@ auto ColorName(std::uint32_t rgb) -> QString {
   return QStringLiteral("#%1").arg(rgb, 6, 16, QLatin1Char('0'));
 }
 
-/// Catalog name of film or print material @p id: the label of its menu entry.
-template <std::size_t Count>
-auto CatalogName(const std::array<std::string_view, Count>& ids,
-                 const std::array<std::string_view, Count>& names, std::string_view id)
-    -> std::string_view {
-  for (std::size_t i = 0; i < Count; ++i) {
-    if (ids[i] == id) {
-      return names[i];
-    }
-  }
-  return {};
-}
-
 auto FilmListName(FilmBrowserList list) -> QString {
   switch (list) {
     case FilmBrowserList::Negative:
@@ -87,13 +74,9 @@ auto SwatchShapeName(FilmSwatchShape shape) -> QString {
 }
 
 auto ToVariantMap(const FilmPresentation& entry) -> QVariantMap {
-  std::string_view label = CatalogName(kFilmNegativeIds, kFilmNegativeNames, entry.id);
-  if (label.empty()) {
-    label = CatalogName(kFilmReversalIds, kFilmReversalNames, entry.id);
-  }
-  if (label.empty()) {
-    label = CatalogName(kFilmPrintMaterialIds, kFilmPrintMaterialNames, entry.id);
-  }
+  const std::string_view label = entry.list == FilmBrowserList::Print
+                                     ? FilmPrintMaterialCatalogName(entry.id)
+                                     : FilmStockCatalogName(entry.id);
   QVariantList colors;
   for (std::size_t i = 0; i < entry.color_count; ++i) {
     colors.push_back(ColorName(entry.colors[i]));
@@ -228,6 +211,14 @@ QString EditorParameterCatalogAdapter::filmDefault(const QString& list) const {
     return ToQString(kFilmDefaultReversal);
   }
   return ToQString(kFilmDefaultNegative);
+}
+
+QVariant EditorParameterCatalogAdapter::filmGrainAfterMethodChange(const QString& previousMethod,
+                                                                   const QString& method,
+                                                                   double         filmGrain) const {
+  const auto grain = EditorParameterCatalog::FilmGrainAfterMethodChange(
+      previousMethod.toStdString(), method.toStdString(), filmGrain);
+  return grain ? QVariant(*grain) : QVariant{};
 }
 
 QVariantMap EditorParameterCatalogAdapter::uiDefault(const QString& field) const {

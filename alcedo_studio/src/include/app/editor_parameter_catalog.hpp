@@ -267,6 +267,31 @@ class EditorParameterCatalog {
   [[nodiscard]] static auto OdtEotfOptions(std::string_view encoding_space)
       -> std::span<const EditorParameterOption>;
 
+  /// Film Grain strength in UI percent that a change to method `film_print` writes when the
+  /// stored strength is 0: the datasheet granularity of the film.
+  static constexpr double   kFilmPrintFilmGrainUi = 100.0;
+
+  /**
+   * @brief The Film Grain write that follows a change of the display transform method.
+   *
+   * The film print has its grain in the negative. A change of `odt.method` to `film_print` turns
+   * Film Grain on at @ref kFilmPrintFilmGrainUi when the stored strength is 0; a stored strength
+   * above 0 stays. A change from `film_print` to another method sets Film Grain to 0: the other
+   * methods show the image with no film. Film Grain is a field of its own (`film_grain`), so the
+   * caller writes the result as a second settled write after the `odt` write. The Display
+   * Transform panel and `editor.set` / `editor.batch_set` call this rule.
+   *
+   * @param previous_method `odt.method` before the write.
+   * @param method `odt.method` after the write.
+   * @param film_grain_ui The stored Film Grain strength in UI percent.
+   * @return The UI value of `film_grain` to write, or nullopt when the rule writes nothing: the
+   *         method did not change, or the stored strength already agrees with the rule.
+   */
+  [[nodiscard]] static auto FilmGrainAfterMethodChange(std::string_view previous_method,
+                                                       std::string_view method,
+                                                       double           film_grain_ui)
+      -> std::optional<double>;
+
   /// Slider position (0..4096) of @p kelvin on the white balance track. 6000 K is position 2048.
   [[nodiscard]] static auto KelvinToSliderPosition(double kelvin) -> int;
 
