@@ -78,6 +78,16 @@ def_library(RasterColorModel
 def_library(Image
     SOURCES ${ALCEDO_SRC_ROOT}/image/image.cpp 
     ${ALCEDO_SRC_ROOT}/image/metadata_extractor.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/camera_color_matrix_db.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/camera_name_match.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/dng_color_metadata.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/dng_import_fast_path.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/exif_display_mapper.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/hdr_marker_probe.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/libraw_metadata_mapper.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/metadata_values.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/nikon_lens_id_table.cpp
+    ${ALCEDO_SRC_ROOT}/image/metadata/raster_metadata_reader.cpp
     ${ALCEDO_SRC_ROOT}/image/dng_color_profile_import.cpp
     ${ALCEDO_SRC_ROOT}/image/dng_color_profile_cache.cpp
     ${ALCEDO_SRC_ROOT}/image/raster_color_description.cpp
