@@ -91,8 +91,17 @@ struct ScannerTableView {
 struct SelectionValues {
   std::array<double, 3> base_density{};  ///< D_base
   std::array<double, 3> aim_density{};   ///< D_aim, lab rule 'stock_balance'
-  std::array<double, 3> light_axis{};    ///< Lab rule 'frame_auto_colour', contrast 1
-  std::array<double, 3> gamma{};         ///< The gamma of the medium
+  /// Lab rule 'frame_auto_colour', contrast 1: the change of x of an 18 % grey from T3200 to D65,
+  /// with no term of rule 'medium_light_cast'. The auto colour reads @ref ReadLightAxis.
+  std::array<double, 3> light_axis{};
+  std::array<double, 3> gamma{};  ///< The gamma of the medium
+  /// Rule 'medium_light_cast' (issue 705): the term of the scene light that the scanner software
+  /// adds to (D - D_aim) / gamma, in log10 exposure units at contrast 1, with a sum of 0. It is 0
+  /// until @ref WithMediumLightCast sets it.
+  std::array<double, 3> light_cast{};
+  /// Rule 'medium_light_cast': the term of D65 less the term of T3200, the change that the rule
+  /// gives to the light axis.
+  std::array<double, 3> light_axis_cast{};
 
   auto                  operator==(const SelectionValues&) const -> bool = default;
 };
@@ -135,6 +144,75 @@ using ScannerTableOf = std::function<ScannerTableView(std::string_view negative)
 /// The stored values of a selection for the default scanner.
 [[nodiscard]] auto StoredSelectionValues(const FilmNegativeScanSetup& setup) -> SelectionValues;
 
+/**
+ * @brief D - D_base of the uniform layer exposure @p q, from the spectral integral of the scanner
+ * (lab `ScanPreview.apd`), with no scanner table: log10(sum w) - log10(sum w 10^-(base + dyes a))
+ * of the record a = @ref PointRecord.
+ */
+[[nodiscard]] auto ScanDensityOfExposure(const FilmNegativeView&      negative,
+                                         const ScannerWeights&        weights,
+                                         const std::array<double, 3>& q) -> std::array<double, 3>;
+
+/**
+ * @brief Rule 'medium_light_cast' (issue 705): the colorimetric cast of @p light seen with the
+ * white of @p balance, in log10 AP1 with a sum of 0.
+ *
+ * XYZ of each light is the CIE 1931 integral of `film_scene_tint::SpectrumXyz`. The CIE CAT02
+ * adaptation (von Kries in CAT02 LMS, as Color Grade white balance) takes @p balance to the AP1
+ * white, and the same adaptation acts on @p light. The cast is log10 of the AP1 of the adapted
+ * @p light less log10 of the AP1 of the adapted @p balance (the AP1 white up to rounding), less
+ * the mean of the three values. So @p balance itself has a cast of exactly 0.
+ *
+ * @throws std::runtime_error when an AP1 value of the adapted light is not above 0.
+ */
+[[nodiscard]] auto ColorimetricLightCast(const FilmStockBundle&  bundle,
+                                         std::span<const double> light,
+                                         std::span<const double> balance) -> std::array<double, 3>;
+
+/**
+ * @brief Rule 'medium_light_cast': the cast of @p light against @p balance on the average negative
+ * of @p medium, as the scan reads it.
+ *
+ * For each stock of the pool (the pool of rule 'generic_density_inversion', with the layer gain of
+ * its pool scene light), the change of (D - D_base) / gamma of an 18 % grey from @p balance to
+ * @p light, from @ref ScanDensityOfExposure; the mean over the pool, less the mean of the three
+ * values.
+ */
+[[nodiscard]] auto MediumFilmCast(const FilmStockBundle& bundle, const FilmScanMedium& medium,
+                                  const ScannerWeights& weights, const std::array<double, 3>& gamma,
+                                  std::span<const double> light, std::span<const double> balance)
+    -> std::array<double, 3>;
+
+/**
+ * @brief Rule 'medium_light_cast' (issue 705): the scanner software of a medium reads the cast of
+ * a scene light on the average negative of the medium as the colorimetric cast of that light.
+ *
+ * The layer sensitivities of a negative are narrower and further apart than the AP1 colour
+ * matching functions, so the scan channels read as AP1 give the cast of a warm light about 10 deg
+ * redder and up to 30 % more saturated than the light (lab probe of issue 705). This term moves the
+ * x of a grey of each stock by @ref ColorimetricLightCast - @ref MediumFilmCast. So the grey of the
+ * average negative has the colorimetric cast, and each stock keeps its own difference from the
+ * average negative (its sensitivities, dyes, curves, and inhibition). The term has a sum of 0, so
+ * the level of the grey stays. As the gamma of the medium, it is the same for all stocks of a
+ * medium with one balance light: it depends on the medium, the scanner, the balance light, and the
+ * scene light. It is 0 under the balance light, so the film renders the colours of that light as
+ * before.
+ *
+ * @return @p values with @ref SelectionValues::light_cast of @p scene_spectrum and
+ *         @ref SelectionValues::light_axis_cast of the axis lights.
+ */
+[[nodiscard]] auto WithMediumLightCast(const SelectionValues& values, const FilmStockBundle& bundle,
+                                       std::string_view negative, const ScannerWeights& weights,
+                                       std::span<const double> scene_spectrum) -> SelectionValues;
+
+/// @p values with the terms of rule 'medium_light_cast' at 0: the reading of the lab, which takes
+/// the scan channels as AP1. Tests compare this reading with the lab values.
+[[nodiscard]] auto WithoutMediumLightCast(const SelectionValues& values) -> SelectionValues;
+
+/// The light axis of rule 'frame_auto_colour' for the reading of @p values: the lab light axis plus
+/// @ref SelectionValues::light_axis_cast.
+[[nodiscard]] auto ReadLightAxis(const SelectionValues& values) -> std::array<double, 3>;
+
 /// The shift of x before the auto colour: exposure log10(2) - (cyan, magenta, yellow).
 [[nodiscard]] auto ManualShift(const FilmNegativeScanParams& params) -> std::array<double, 3>;
 
@@ -148,7 +226,8 @@ struct RenderTerms {
 
 /**
  * @brief `FilmKernelNegativeScanTerms` of film_print_math.h in double precision, with the shift
- * @p auto_shift + @ref ManualShift.
+ * @p auto_shift + @ref ManualShift, and with the aim D_aim - gamma light_cast, so that
+ * x = contrast ((D - D_aim) / gamma + light_cast) + shift (rule 'medium_light_cast').
  * @throws std::runtime_error that names the black when black E_base is at or above 0.18 in a
  *         channel: the lab stops there ("lower the black share").
  */
@@ -157,7 +236,7 @@ struct RenderTerms {
                                    const std::array<double, 3>&  auto_shift) -> RenderTerms;
 
 /// The terms with a shift of 0 and the contrast of @p params: the x of the prescan of rule
-/// 'frame_auto_colour' is slope T + offset.
+/// 'frame_auto_colour' is slope T + offset, with the light cast of @ref MakeRenderTerms.
 [[nodiscard]] auto MakePrescanTerms(const SelectionValues&        values,
                                     const FilmNegativeScanParams& params) -> RenderTerms;
 
@@ -259,7 +338,8 @@ struct AutoColourResult {
  * The GPU reduces the scan density T, not x: x of the prescan is the affine map slope T + offset of
  * @ref MakePrescanTerms, and the area mean of an affine map is the map of the mean. So the prescan
  * does not depend on the contrast, and a rendering setting reads the kept prescan. The map runs
- * here in double precision; then @ref AutoColourShift with the auto settings of @p params.
+ * here in double precision; then @ref AutoColourShift with the auto settings of @p params and the
+ * light axis @ref ReadLightAxis.
  *
  * @param density_rgba The prescan of T: rows x columns texels of 4 floats, the fourth unused.
  * @throws std::runtime_error as @ref AutoColourShift, and when the size of @p density_rgba is not

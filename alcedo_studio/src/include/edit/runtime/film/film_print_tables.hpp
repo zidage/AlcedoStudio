@@ -57,7 +57,8 @@ struct FilmPrintTableData {
   std::int64_t           print_not_reached = 0;  ///< Nodes where the paper dye solve did not reach
   bool                   light_table       = false;  ///< True for a colour reversal film
   bool                   scan              = false;  ///< True for print material Negative Scan
-  /// Negative Scan: D_base, D_aim, the light axis, and gamma of the selection and scanner.
+  /// Negative Scan: D_base, D_aim, the light axis, and gamma of the selection and scanner, with
+  /// the light cast of the scene light and the light axis of rule 'medium_light_cast'.
   film_negative_scan::SelectionValues negative_scan{};
 
   [[nodiscard]] auto     ByteSize() const -> std::size_t;

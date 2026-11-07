@@ -399,12 +399,17 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
       scan ? tables.ResolveNegativeScan(film.negative, light,
                                         film_negative_scan::ScannerOf(film.scan))
            : tables.Resolve(film.negative, film.print_material, light);
+  // Rule 'medium_light_cast' (issue 705). A lab comparison of a test reads the scan as the lab.
+  const auto scan_values =
+      plan.film_scan_lab_reading
+          ? film_negative_scan::WithoutMediumLightCast(tables_data->negative_scan)
+          : tables_data->negative_scan;
   // With auto colour off the terms are known now, so a black at or above the grey stops the render
   // before any GPU work.
   const bool  auto_colour = scan && film.scan.auto_colour != kFilmScanAutoIds[0];
   std::optional<film_negative_scan::RenderTerms> scan_terms;
   if (scan && !auto_colour) {
-    scan_terms = film_negative_scan::MakeRenderTerms(tables_data->negative_scan, film.scan, {});
+    scan_terms = film_negative_scan::MakeRenderTerms(scan_values, film.scan, {});
   }
 
   auto&       workspace   = device.Workspace();
@@ -735,11 +740,10 @@ void RecordMetalFilmPrint(MetalRenderDevice& device, const ExecutionPlan& plan,
       std::vector<float> texels(static_cast<std::size_t>(extent.width) * extent.height * 4U);
       backend.DownloadTexture2D(prescan, std::as_writable_bytes(std::span(texels)), context);
       const auto result = film_negative_scan::AutoColourOfDensityPrescan(
-          texels, extent.height, extent.width, tables_data->negative_scan, film.scan);
+          texels, extent.height, extent.width, scan_values, film.scan);
       ++device.PassStats().film_scan_prescan_reads;
       device.PassStats().film_scan_auto_shift = result.shift;
-      scan_terms =
-          film_negative_scan::MakeRenderTerms(tables_data->negative_scan, film.scan, result.shift);
+      scan_terms = film_negative_scan::MakeRenderTerms(scan_values, film.scan, result.shift);
       names.Mark("FP6 prescan read and auto colour on the host");
     }
     FilmKernelNegativeScan terms{};

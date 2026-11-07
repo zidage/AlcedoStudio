@@ -319,6 +319,11 @@ struct ExecutionPlan {
   /// (step 5 of the form) to the display output, so a test can compare the form with the lab
   /// values, which are linear AP1. A render never sets it.
   bool                                    film_scan_linear_output = false;
+  /// Tests only: print material Negative Scan reads the scan as the lab, with the terms of rule
+  /// 'medium_light_cast' at 0 (`film_negative_scan::WithoutMediumLightCast`), so a test can
+  /// compare a scene light other than the balance light with the lab values. A render never sets
+  /// it.
+  bool                                    film_scan_lab_reading   = false;
 
   [[nodiscard]] auto                      Contains(GpuPassKind kind) const -> bool {
     for (const auto& pass : passes) {

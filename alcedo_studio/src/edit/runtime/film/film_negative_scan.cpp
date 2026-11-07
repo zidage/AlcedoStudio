@@ -11,6 +11,9 @@
 #include <stdexcept>
 #include <string>
 
+#include "edit/runtime/film/film_scene_tint.hpp"
+#include "edit/runtime/film/film_tables.hpp"
+
 namespace alcedo::film_negative_scan {
 namespace {
 
@@ -19,6 +22,64 @@ namespace {
 #undef FILM_KERNEL_DOUBLE
 
 constexpr double kLog10Of2 = 0.30102999566398119521;
+constexpr double                kGreyValue = 0.18;
+
+/// CIE CAT02 (CIECAM02) XYZ to LMS, row major: the matrix of Color Grade white balance.
+constexpr std::array<double, 9> kCat02     = {0.7328, 0.4296, -0.1624, -0.7036, 1.6975,
+                                              0.0061, 0.0030, 0.0136,  0.9834};
+
+using Matrix33                             = std::array<double, 9>;
+
+auto Multiply(const Matrix33& m, const std::array<double, 3>& v) -> std::array<double, 3> {
+  return {m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+          m[6] * v[0] + m[7] * v[1] + m[8] * v[2]};
+}
+
+/// The inverse of a 3 x 3 matrix by its adjugate.
+auto Inverse(const Matrix33& m) -> Matrix33 {
+  const Matrix33 adjugate = {
+      m[4] * m[8] - m[5] * m[7], m[2] * m[7] - m[1] * m[8], m[1] * m[5] - m[2] * m[4],
+      m[5] * m[6] - m[3] * m[8], m[0] * m[8] - m[2] * m[6], m[2] * m[3] - m[0] * m[5],
+      m[3] * m[7] - m[4] * m[6], m[1] * m[6] - m[0] * m[7], m[0] * m[4] - m[1] * m[3]};
+  const double determinant = m[0] * adjugate[0] + m[1] * adjugate[3] + m[2] * adjugate[6];
+  if (!(std::abs(determinant) > 0.0) || !std::isfinite(determinant)) {
+    throw std::runtime_error("Negative Scan: a colour matrix has no inverse");
+  }
+  Matrix33 inverse{};
+  for (std::size_t i = 0; i < inverse.size(); ++i) inverse[i] = adjugate[i] / determinant;
+  return inverse;
+}
+
+auto LessMean(std::array<double, 3> values) -> std::array<double, 3> {
+  const double mean = (values[0] + values[1] + values[2]) / 3.0;
+  for (auto& value : values) value -= mean;
+  return values;
+}
+
+/// The aim of the inversion with rule 'medium_light_cast': D_aim - gamma light_cast, so that
+/// (D - aim) / gamma = (D - D_aim) / gamma + light_cast.
+auto ReadAim(const SelectionValues& values) -> std::array<double, 3> {
+  std::array<double, 3> aim{};
+  for (std::size_t k = 0; k < 3; ++k) {
+    aim[k] = values.aim_density[k] - values.gamma[k] * values.light_cast[k];
+  }
+  return aim;
+}
+
+/// The layer exposure of a neutral of @p value under @p spectrum with the layer gain @p gain.
+auto GreyExposure(const FilmNegativeView& film, const std::array<double, 3>& gain,
+                  std::span<const double> spectrum, double value) -> std::array<double, 3> {
+  const auto            count = spectrum.size();
+  std::array<double, 3> q{};
+  for (std::size_t k = 0; k < 3; ++k) {
+    double sum = 0.0;
+    for (std::size_t w = 0; w < count; ++w) {
+      sum += value * spectrum[w] * film.exposure_weights[k * count + w];
+    }
+    q[k] = gain[k] * sum;
+  }
+  return q;
+}
 
 /// numpy.interp on a uniform grid: `start + step k` for k < @p length, the end values outside.
 auto InterpUniform(std::span<const double> values, std::int64_t length, double start, double step,
@@ -268,16 +329,8 @@ auto GreyDensity(const FilmStockBundle& bundle, std::string_view negative,
                  const std::array<double, 3>& gain, std::span<const double> spectrum, double value)
     -> std::array<double, 3> {
   const auto film = bundle.Negative(negative);
-  const auto count = spectrum.size();
-  std::array<double, 3> q{};
-  for (std::size_t k = 0; k < 3; ++k) {
-    double sum = 0.0;
-    for (std::size_t w = 0; w < count; ++w) {
-      sum += value * spectrum[w] * film.exposure_weights[k * count + w];
-    }
-    q[k] = gain[k] * sum;
-  }
-  auto density = ReadScannerTable(table, film, PointRecord(film, q));
+  auto       density =
+      ReadScannerTable(table, film, PointRecord(film, GreyExposure(film, gain, spectrum, value)));
   for (std::size_t k = 0; k < 3; ++k) density[k] -= base_density[k];
   return density;
 }
@@ -328,7 +381,115 @@ auto DeriveSelectionValues(const FilmStockBundle& bundle, std::string_view negat
 }
 
 auto StoredSelectionValues(const FilmNegativeScanSetup& setup) -> SelectionValues {
-  return {setup.base_density, setup.aim_density, setup.light_axis, setup.gamma};
+  return {setup.base_density, setup.aim_density, setup.light_axis, setup.gamma, {}, {}};
+}
+
+auto ScanDensityOfExposure(const FilmNegativeView& negative, const ScannerWeights& weights,
+                           const std::array<double, 3>& q) -> std::array<double, 3> {
+  const auto count = negative.base.size();
+  if (weights.weights.size() != 3 * count || negative.dyes.size() != 3 * count) {
+    throw std::runtime_error(
+        "Negative Scan: the scanner weights and the negative have different wavelengths");
+  }
+  const auto                      record = PointRecord(negative, q);
+  const film_tables::SpectralBand band{static_cast<std::int64_t>(count), negative.base.data(),
+                                       negative.dyes.data(), weights.weights.data()};
+  std::array<double, 3>           response{};
+  film_tables::Log10BandResponse(band, record.data(), 1, response.data(), 1);
+  std::array<double, 3> density{};
+  for (std::size_t k = 0; k < 3; ++k) {
+    double sum = 0.0;
+    for (std::size_t w = 0; w < count; ++w) sum += weights.weights[k * count + w];
+    density[k] = std::log10(sum) - response[k];
+  }
+  return density;
+}
+
+auto ColorimetricLightCast(const FilmStockBundle& bundle, std::span<const double> light,
+                           std::span<const double> balance) -> std::array<double, 3> {
+  const auto  wavelengths = bundle.WavelengthsNm();
+  const auto& matrix      = bundle.PointConstants().ap1_to_xyz;
+  Matrix33    ap1_to_xyz{};
+  std::copy_n(matrix.begin(), ap1_to_xyz.size(), ap1_to_xyz.begin());
+  const auto xyz_to_ap1  = Inverse(ap1_to_xyz);
+  const auto lms_to_xyz  = Inverse(kCat02);
+  const auto lms_white   = Multiply(kCat02, Multiply(ap1_to_xyz, {1.0, 1.0, 1.0}));
+  const auto lms_balance = Multiply(kCat02, film_scene_tint::SpectrumXyz(wavelengths, balance));
+  // The AP1 of a light after the adaptation. The balance light goes through the same steps and
+  // the cast is the difference, so @p balance itself gives a cast of exactly 0.
+  const auto adapted     = [&](std::span<const double> spectrum) {
+    auto lms = Multiply(kCat02, film_scene_tint::SpectrumXyz(wavelengths, spectrum));
+    for (std::size_t k = 0; k < 3; ++k) lms[k] *= lms_white[k] / lms_balance[k];
+    const auto ap1 = Multiply(xyz_to_ap1, Multiply(lms_to_xyz, lms));
+    for (const double value : ap1) {
+      if (!(value > 0.0) || !std::isfinite(value)) {
+        throw std::runtime_error(
+            "Negative Scan: a scene light adapted to the balance light has an AP1 value at or "
+                "below 0");
+      }
+    }
+    return ap1;
+  };
+  const auto            lit       = adapted(light);
+  const auto            reference = adapted(balance);
+  std::array<double, 3> cast{};
+  for (std::size_t k = 0; k < 3; ++k) cast[k] = std::log10(lit[k]) - std::log10(reference[k]);
+  return LessMean(cast);
+}
+
+auto MediumFilmCast(const FilmStockBundle& bundle, const FilmScanMedium& medium,
+                    const ScannerWeights& weights, const std::array<double, 3>& gamma,
+                    std::span<const double> light, std::span<const double> balance)
+    -> std::array<double, 3> {
+  if (medium.pool.empty()) {
+    throw std::runtime_error("Negative Scan: the medium '" + medium.id + "' has no pool");
+  }
+  std::array<double, 3> sum{};
+  for (std::size_t s = 0; s < medium.pool.size(); ++s) {
+    const auto film = bundle.Negative(medium.pool[s]);
+    const auto gain = bundle.LayerGain(medium.pool[s], medium.pool_scene_lights[s]);
+    const auto lit =
+        ScanDensityOfExposure(film, weights, GreyExposure(film, gain, light, kGreyValue));
+    const auto reference =
+        ScanDensityOfExposure(film, weights, GreyExposure(film, gain, balance, kGreyValue));
+    for (std::size_t k = 0; k < 3; ++k) sum[k] += (lit[k] - reference[k]) / gamma[k];
+  }
+  for (auto& value : sum) value /= static_cast<double>(medium.pool.size());
+  return LessMean(sum);
+}
+
+auto WithMediumLightCast(const SelectionValues& values, const FilmStockBundle& bundle,
+                         std::string_view negative, const ScannerWeights& weights,
+                         std::span<const double> scene_spectrum) -> SelectionValues {
+  const auto& medium  = bundle.ScanMedium(negative);
+  const auto  balance = bundle.LightSpectrum(bundle.ScanBalanceLight(negative));
+  const auto  term    = [&](std::span<const double> light) {
+    const auto colorimetric = ColorimetricLightCast(bundle, light, balance);
+    const auto film = MediumFilmCast(bundle, medium, weights, values.gamma, light, balance);
+    std::array<double, 3> out{};
+    for (std::size_t k = 0; k < 3; ++k) out[k] = colorimetric[k] - film[k];
+    return out;
+  };
+  const auto&     axis_lights = bundle.NegativeScanConstants().axis_lights;
+  const auto      from        = term(bundle.LightSpectrum(axis_lights[0]));
+  const auto      to          = term(bundle.LightSpectrum(axis_lights[1]));
+  SelectionValues result      = values;
+  result.light_cast           = term(scene_spectrum);
+  for (std::size_t k = 0; k < 3; ++k) result.light_axis_cast[k] = to[k] - from[k];
+  return result;
+}
+
+auto WithoutMediumLightCast(const SelectionValues& values) -> SelectionValues {
+  SelectionValues result = values;
+  result.light_cast      = {};
+  result.light_axis_cast = {};
+  return result;
+}
+
+auto ReadLightAxis(const SelectionValues& values) -> std::array<double, 3> {
+  std::array<double, 3> axis{};
+  for (std::size_t k = 0; k < 3; ++k) axis[k] = values.light_axis[k] + values.light_axis_cast[k];
+  return axis;
 }
 
 auto ManualShift(const FilmNegativeScanParams& params) -> std::array<double, 3> {
@@ -342,9 +503,10 @@ auto MakeRenderTerms(const SelectionValues& values, const FilmNegativeScanParams
   const auto manual = ManualShift(params);
   double     shift[3];
   for (std::size_t k = 0; k < 3; ++k) shift[k] = auto_shift[k] + manual[k];
+  const auto             aim = ReadAim(values);
   FilmKernelNegativeScan terms{};
-  const int valid = FilmKernelNegativeScanTerms(
-      values.base_density.data(), values.aim_density.data(), values.gamma.data(),
+  const int              valid = FilmKernelNegativeScanTerms(
+      values.base_density.data(), aim.data(), values.gamma.data(),
       static_cast<double>(params.contrast), shift, static_cast<double>(params.black), &terms);
   if (valid == 0) {
     throw std::runtime_error(
@@ -363,10 +525,11 @@ auto MakeRenderTerms(const SelectionValues& values, const FilmNegativeScanParams
 
 auto MakePrescanTerms(const SelectionValues& values, const FilmNegativeScanParams& params)
     -> RenderTerms {
+  const auto  aim = ReadAim(values);
   RenderTerms result;
   for (std::size_t k = 0; k < 3; ++k) {
     result.slope[k]  = static_cast<double>(params.contrast) / values.gamma[k];
-    result.offset[k] = -result.slope[k] * (values.base_density[k] + values.aim_density[k]);
+    result.offset[k] = -result.slope[k] * (values.base_density[k] + aim[k]);
     result.scale[k]  = 1.0;
     result.floor[k]  = 0.0;
   }
@@ -526,7 +689,7 @@ auto AutoColourOfDensityPrescan(std::span<const float> density_rgba, std::int64_
           terms.slope[k] * static_cast<double>(density_rgba[p * 4 + k]) + terms.offset[k];
     }
   }
-  return AutoColourShift(prescan, values.light_axis, params.auto_colour,
+  return AutoColourShift(prescan, ReadLightAxis(values), params.auto_colour,
                          static_cast<double>(params.auto_strength),
                          static_cast<double>(params.auto_density));
 }
