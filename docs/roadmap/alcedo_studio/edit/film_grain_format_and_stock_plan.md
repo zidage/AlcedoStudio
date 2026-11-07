@@ -1822,6 +1822,67 @@ lab labels `cct<kelvin>`, and the As Shot tests compare As Shot and Custom with 
 **Issues.** #704 (the catalog gives a daylight balance to tungsten stocks: 5293 EXR 200T and the Eastman Color Negative stocks;
 the datasheet test skips them). #705 (the reading of the scan channels as AP1).
 
+#### G8 study, part 2: default auto colour and the prescan of the Detail patch (2026-11-06)
+
+**Report.** After rule `as_shot_tint`, 500T (5219) in daylight with auto colour off is still too blue
+(`sample_images/raw/film_emulation/2714156037.dng`, As Shot 6350 K, tint -2). The tint of this file is near 0, so rule
+`as_shot_tint` does not change it.
+
+**Measurements** (lab model, `build/tmp/g8_illuminant/daylight_500t.py` and `daylight_500t_auto.py`, CIELAB of the display code):
+
+| Render | C* of an 18 % grey | Hue | Mean C* of the image |
+| --- | --- | --- | --- |
+| Digital, As Shot white | 0 | - | 7.8 |
+| Digital, camera white 3200 K under 6350 K | 21.6 | 249 deg | 18.6 |
+| 5219 Negative Scan, auto colour off | 24.0 | 242 deg | 19.8 |
+| 5219, auto colour off, #705 matrix (`film_primaries`) | 17.7 | 261 deg | 15.3 |
+| 5219, auto colour neutral, strength 0.5 | - | 251 deg | 12.0 |
+| 5219, auto colour neutral, strength 0.8 | - | 27 deg | 9.3 |
+
+- The blue of auto colour off is the blue of a digital camera with a white of 3200 K in this light (difference 10 %). This
+  agrees with the datasheet check of part 1. The #705 matrix makes the cast smaller, but it turns the hue toward purple and away
+  from cyan-blue, so it is not the cause.
+- A lab scanner balances each frame and leaves a part of the cast. Strength 0.5 gives a slight cyan-blue cast. Strength 0.8
+  turns this frame warm, because the skin and the sand move the estimate.
+
+**Decision (user, 2026-11-06).** New settings use auto colour `neutral` at strength 0.5. The auto colour of a zoom or a pan
+must be the auto colour of the full frame.
+
+**Rule `scan_auto_default` (G8).**
+
+- `FilmNegativeScanParams` has the defaults `neutral` and 0.5. A stored `film_print` object with no key `auto` or `auto_strength`
+  reads as the stored defaults `off` and 0.8 (`kFilmScanAutoStoredDefault`, `kFilmScanAutoStrengthStoredDefault`): a build
+  before G8 did not write these keys at those values. The JSON writes the two keys when they differ from the stored defaults, so
+  new settings write them and an old document keeps its image, its bytes, and its root id.
+- The same rule applies where a value reads a model JSON: `DrtParamsModel::LoadJson`, `CompleteFilmPrintUpdate` (history
+  values), and `OdtModelToUi` (the panel). With no `film_print` object, these read the defaults of new settings.
+
+**Rule `prescan_in_quality_base` (G8).** The auto colour reads the canonical prescan of the full frame
+(`FilmScanPrescanResultId`). Before this rule, a QualityBase render kept only the sensor result, so it built the prescan and
+did not publish it. A settled edit, an undo, or a redo renders a QualityBase and then the Detail patch. The patch is an ROI, so
+with no prescan of the current revision it built a prescan from the pixels of the viewport, and the auto colour changed with
+each zoom or pan. Now `PersistsGraphValue` lets a QualityBase also publish the prescan (`kFilmScanPrescanPort`). The prescan has
+a fixed size (96 pixels on the long edge), so it replaces no Interactive result of a higher detail. The other film print results
+(Halation, flare) stay local to the QualityBase.
+
+**Files.** `film_print_model.hpp` (defaults, stored defaults), `drt_node_model.cpp` (read and write), `editor_parameter_write_parse.cpp`
+(`CompleteFilmPrintUpdate`), `editor_parameter_catalog.cpp` (`OdtUiDefault`, `OdtModelToUi`), `result_persistence.hpp`
+(`kFilmScanPrescanPort`, `PersistsGraphValue`), `film_print_plan.hpp`, `basic_render_workspace.hpp` (comment). The film panel QML
+does not change: it reads the defaults from the catalog.
+
+**Tests.**
+
+- `DrtFilmPrintModelTest.AsShotIsASceneLightAndNegativeScanWritesOnlyKeysAwayFromTheDefault`: the new defaults, new settings
+  write `auto` and `auto_strength`, and an object with no such keys reads as `off` and 0.8 and keeps its bytes.
+- `EditorParameterCatalogTest`: the panel defaults are `neutral` and 0.5, a switch to Negative Scan writes them, and an old object
+  reads as `off` and 0.8.
+- `ResultPersistence.QualityBaseRolePersistsOnlySensorDevelopAndTheNegativeScanPrescan`: a QualityBase persists the prescan and
+  not the Halation or flare result.
+- `CudaFilmPrintFixture`, `OpenClFilmPrintFixture`, `MetalFilmPrintFixture`
+  `.NegativeScanQualityBasePublishesThePrescanForTheDetailPatch`: a QualityBase render publishes the prescan, and the ROI after it
+  samples the prescan and has the shift of the full frame.
+- The lab comparisons set strength 0.8 (`kLabAutoStrength`): the lab files hold no strength and use the default of the lab viewer.
+
 ---
 
 ## 9. Test rules for all phases

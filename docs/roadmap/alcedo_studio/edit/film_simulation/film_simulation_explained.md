@@ -445,12 +445,19 @@ B 段采用幂 2 轴的依据：均匀轴在 +5 档附近（染料量趋于零�
 - **γ 按介质取一组**（照相：0.562、0.559、0.620；电影：0.478、0.546、0.528），是该介质片种池（照相：Portra 160/400/800、Ektar 100、Gold 200、C200；
   电影：5203、5207、5213、5219）在 18 % 灰处斜率的平均。反相因此是一条直线，**片种的趾部、肩部、交叉和反差全部保留**，它们正是片种的性格。
 - **D_aim**（规则 `stock_balance`）对应实验室扫描仪"每种胶片一个通道设置"的做法，是唯一依赖片种的阶段。
-- **自动颜色（`frame_auto_colour`，默认关闭，此时称为 Neutral Scan）。** Neutral Scan 保留场景光和片种的偏色。打开时，从缩小到长边 96 像素的预扫描中估计偏色，
+- **自动颜色（`frame_auto_colour`，新设置默认 neutral、强度 0.5，Film Grain 计划 G8）。** 关闭时称为 Neutral Scan，保留场景光和片种的偏色。
+  打开时，从缩小到长边 96 像素的预扫描中估计偏色，
   只使用水平在 -1.6 到 +0.9（log10，相对灰）之间的像素：
   - 近中性估计：从中位数出发，做 4 步高斯加权均值（宽度 0.12）。
   - 白块估计：最亮 5 % 像素的中位数。
   - 规则 `smaller_cast`：取两者中较小的偏色，使大面积的绿色森林等主体保持原色。
-  - 沿光轴（T3200 到 D65 的方向）去掉 `strength` 份偏色（默认 0.8），横向（绿品方向）去掉 `0.5 × strength`；暖、冷模式在光轴上保留 +0.04 或 -0.04。
+  - 沿光轴（T3200 到 D65 的方向）去掉 `strength` 份偏色（新设置默认 0.5），横向（绿品方向）去掉 `0.5 × strength`；暖、冷模式在光轴上保留
+    +0.04 或 -0.04。
+- **默认 neutral、强度 0.5 的理由（用户决定，2026-11-06）。** 冲扫店的扫描仪按帧校正，且校正不完全，留下一部分偏色。5219 在 6350 K 日光下
+  （`sample_images/raw/film_emulation/2714156037.dng`），屏幕上 18 % 灰的 C* 为：Neutral Scan 24.0，相机白平衡设为 3200 K 的数码图 21.6；
+  整幅图的平均 C* 为：Neutral Scan 19.8，强度 0.5 为 12.0（色相 251 度，轻微青蓝），强度 0.8 为 9.3（被肤色和沙滩带向暖色）。强度 0.5 的结果
+  接近真实扫描中 500T 在日光下的观感。旧工程中没有 `auto` 和 `auto_strength` 键的 `film_print` 对象按旧默认值（off、0.8）读取，画面、字节和
+  root id 保持不变（`kFilmScanAutoStoredDefault`）。
 - **Neutral Scan 的偏色大小与数据手册一致（Film Grain 计划 G8）。** Kodak 为日光下的 5219 指定 Wratten 85 滤镜，为 3200 K 下的日光片指定
   Wratten 80A。以片种自身的 log10 曝光计（去掉三层均值），显影后的灰的偏色与滤镜去除的偏色之和在全部片种上都在 0.063（约 1/5 档）以内；5219 在
   D55 下的灰为 R -0.239、G -0.023、B +0.262，85 去除 -0.223、-0.008、+0.231。所以未校正扫描的 500T 在 D55 下蓝比红多约 1.7 档，这是负片记录的
@@ -466,6 +473,9 @@ B 段采用幂 2 轴的依据：均匀轴在 +5 档附近（染料量趋于零�
   （`film_negative_scan::DeriveMediumGamma`、`DeriveSelectionValues`）。
 - 预扫描在自动颜色打开时构建：GPU 把全帧的扫描读数 T 缩小为规范结果 `film.scan_prescan.0`（6000 x 4006 时 96 x 64 texel），主机读回，在双精度下
   计算 shift，显示内核应用它。x 是 T 的仿射函数，面积平均与仿射变换可交换，所以 GPU 缩小 T，主机再换算；改变反差、曝光、C/M/Y 时预扫描保持有效。
+- 自动颜色始终来自全帧：交互帧和 QualityBase 帧覆盖全帧，构建并发布预扫描；视口 ROI（放大后的细节补丁）读取已发布的预扫描，因此放大和平移不改变
+  自动颜色。QualityBase 只保存传感器结果和预扫描（`kFilmScanPrescanPort`）；预扫描尺寸固定，不会替换交互帧的高细节结果。参数确定、撤销和重做
+  只渲染 QualityBase 和细节补丁，因此细节补丁读取 QualityBase 的预扫描。
 - 选择 Negative Scan 时同时选择 As Shot（`OdtConstrain`），一次撤销恢复两者。
 - Negative Scan 的链：FP1 到 FP5（与印放相同），然后扫描、反相、OpenDRT（`ScanDisplayKernel` 调用 `DrtDisplayPixel`）。
 
@@ -581,7 +591,7 @@ Film Print 位于显示变换面板（`EditorDisplayTransformPanel.qml`）：
 
 Negative Scan 另有两组控件：
 
-- **Negative Scan：** Auto Color（off、neutral、warm、cool）、Auto Color Strength（0 到 1，默认 0.8）、Auto Density（0 到 1，默认 0；把整帧的平均水平移向灰的份额）、
+- **Negative Scan：** Auto Color（off、neutral、warm、cool，默认 neutral）、Auto Color Strength（0 到 1，默认 0.5）、Auto Density（0 到 1，默认 0；把整帧的平均水平移向灰的份额）、
   Scan Contrast（0.5 到 1.5，默认 1）、Scan Exposure（±3 档）、Cyan/Magenta/Yellow（±0.3，log10）、Black at Film Base（0 到 1.5，默认 1）。
 - **Scanner：** 三个波段中心（红 600 到 720 nm、绿 500 到 590 nm、蓝 400 到 490 nm）、带宽（10 到 120 nm，默认 40）、扫描仪光源（halogen 或 equal energy）。
 - 另外显示 OpenDRT 的预设和 Color & Encoding 区。
@@ -820,8 +830,8 @@ Negative Scan 另有两组控件：
 | Scan Exposure | 正像的曝光偏移 | 档 | ±3，默认 0 | 用户 |
 | Cyan/Magenta/Yellow | 三个通道的 log10 偏移 | log10 | ±0.3，默认 0 | 用户 |
 | `b` | 黑点系数（Black at Film Base） | 无量纲 | 0 到 1.5，默认 1 | 用户 |
-| Auto Color | 自动颜色模式 | | off（Neutral Scan，默认）、neutral、warm、cool | 用户 |
-| Auto Color Strength | 沿光轴去除的偏色份额；横向为其一半 | 无量纲 | 0 到 1，默认 0.8 | 用户 |
+| Auto Color | 自动颜色模式 | | off（Neutral Scan）、neutral（新设置默认）、warm、cool；旧工程缺省键读作 off | 用户 |
+| Auto Color Strength | 沿光轴去除的偏色份额；横向为其一半 | 无量纲 | 0 到 1，新设置默认 0.5；旧工程缺省键读作 0.8 | 用户（默认值按 G8 评审图决定） |
 | Auto Density | 整帧平均水平移向灰的份额 | 无量纲 | 0 到 1，默认 0 | 用户 |
 | 预扫描尺寸 | 自动颜色读取的缩小图长边 | 像素 | 96 | 推断 |
 | 有效水平范围 | 参与估计的像素水平（相对灰） | log10 | -1.6 到 +0.9 | 推断 |
