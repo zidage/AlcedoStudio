@@ -176,7 +176,7 @@ TEST(FilmGrainPostApply, UnitGrainAtTheGreyGivesTheTargetTimesThePixelFactor) {
   const auto                 plan   = PostPlan(1.3f);
   const auto                 params = MakeFilmGrainPostParams(plan, CE_TF_SRGB, 1.0f);
   const auto                 source = Grey(static_cast<float>(plan.post_grey));
-  const auto                 result = FilmGrainPostPixel(params, source, Unit(1.0f));
+  const auto                 result = FilmGrainPostPixel(&params, source, Unit(1.0f));
   const std::array<float, 3> out{result.r, result.g, result.b};
   for (std::size_t channel = 0; channel < 3; ++channel) {
     const double expected =
@@ -187,12 +187,11 @@ TEST(FilmGrainPostApply, UnitGrainAtTheGreyGivesTheTargetTimesThePixelFactor) {
 
 TEST(FilmGrainPostApply, DensityChangeIsLinearInStrengthAndInTheGrain) {
   const auto source = Grey(0.3f);
-  const auto one    = FilmGrainPostPixel(MakeFilmGrainPostParams(PostPlan(0.5f), CE_TF_SRGB, 1.0f),
-                                         source, Unit(0.8f));
-  const auto two    = FilmGrainPostPixel(MakeFilmGrainPostParams(PostPlan(1.0f), CE_TF_SRGB, 1.0f),
-                                         source, Unit(0.8f));
-  const auto twice  = FilmGrainPostPixel(MakeFilmGrainPostParams(PostPlan(0.5f), CE_TF_SRGB, 1.0f),
-                                         source, Unit(1.6f));
+  const auto half   = MakeFilmGrainPostParams(PostPlan(0.5f), CE_TF_SRGB, 1.0f);
+  const auto full   = MakeFilmGrainPostParams(PostPlan(1.0f), CE_TF_SRGB, 1.0f);
+  const auto one    = FilmGrainPostPixel(&half, source, Unit(0.8f));
+  const auto two    = FilmGrainPostPixel(&full, source, Unit(0.8f));
+  const auto twice  = FilmGrainPostPixel(&half, source, Unit(1.6f));
   EXPECT_GT(DensityChange(source.g, one.g), 0.0);
   EXPECT_NEAR(DensityChange(source.g, two.g), 2.0 * DensityChange(source.g, one.g), 1e-5);
   EXPECT_NEAR(DensityChange(source.g, twice.g), DensityChange(source.g, two.g), 1e-5);
@@ -201,7 +200,7 @@ TEST(FilmGrainPostApply, DensityChangeIsLinearInStrengthAndInTheGrain) {
 TEST(FilmGrainPostApply, BlackAndReferenceWhiteGetNoGrain) {
   const auto params = MakeFilmGrainPostParams(PostPlan(2.0f), CE_TF_SRGB, 1.0f);
   for (const float code : {0.0f, -0.02f, 1.0f, 1.2f}) {
-    const auto result = FilmGrainPostPixel(params, {code, code, code}, Unit(1.5f));
+    const auto result = FilmGrainPostPixel(&params, {code, code, code}, Unit(1.5f));
     EXPECT_FLOAT_EQ(result.r, code) << code;
     EXPECT_FLOAT_EQ(result.g, code) << code;
     EXPECT_FLOAT_EQ(result.b, code) << code;
@@ -211,15 +210,15 @@ TEST(FilmGrainPostApply, BlackAndReferenceWhiteGetNoGrain) {
 TEST(FilmGrainPostApply, BrighteningGrainIsSmallerThanDarkeningGrainNearWhite) {
   const auto params  = MakeFilmGrainPostParams(PostPlan(1.0f), CE_TF_SRGB, 1.0f);
   const auto source  = Grey(0.75f);
-  const auto darker  = FilmGrainPostPixel(params, source, Unit(1.0f));
-  const auto lighter = FilmGrainPostPixel(params, source, Unit(-1.0f));
+  const auto darker  = FilmGrainPostPixel(&params, source, Unit(1.0f));
+  const auto lighter = FilmGrainPostPixel(&params, source, Unit(-1.0f));
   EXPECT_GT(DensityChange(source.g, darker.g), 0.0);
   EXPECT_LT(DensityChange(source.g, lighter.g), 0.0);
   EXPECT_LT(-DensityChange(source.g, lighter.g), 0.5 * DensityChange(source.g, darker.g));
   // In the mid tones both halves have the same size.
   const auto mid      = Grey(0.19f);
-  const auto mid_dark = FilmGrainPostPixel(params, mid, Unit(1.0f));
-  const auto mid_lite = FilmGrainPostPixel(params, mid, Unit(-1.0f));
+  const auto mid_dark = FilmGrainPostPixel(&params, mid, Unit(1.0f));
+  const auto mid_lite = FilmGrainPostPixel(&params, mid, Unit(-1.0f));
   EXPECT_NEAR(-DensityChange(mid.g, mid_lite.g), DensityChange(mid.g, mid_dark.g), 1e-5);
 }
 
@@ -228,8 +227,8 @@ TEST(FilmGrainPostApply, LinearAndSrgbOutputGetTheSameChangeOfLight) {
   const auto srgb   = MakeFilmGrainPostParams(plan, CE_TF_SRGB, 1.0f);
   const auto linear = MakeFilmGrainPostParams(plan, CE_TF_LINEAR, 1.0f);
   for (const float light : {0.05f, 0.19f, 0.5f}) {
-    const auto encoded = FilmGrainPostPixel(srgb, Grey(light), Unit(0.7f));
-    const auto direct  = FilmGrainPostPixel(linear, {light, light, light}, Unit(0.7f));
+    const auto encoded = FilmGrainPostPixel(&srgb, Grey(light), Unit(0.7f));
+    const auto direct  = FilmGrainPostPixel(&linear, {light, light, light}, Unit(0.7f));
     EXPECT_NEAR(CeSrgbDecode(encoded.b), direct.b, 2e-6f * (1.0f + light)) << light;
   }
 }

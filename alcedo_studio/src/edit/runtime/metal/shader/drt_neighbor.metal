@@ -7,13 +7,9 @@
 #include <metal_stdlib>
 using namespace metal;
 
-#include "prng.metal"
-#include "../../../../include/edit/runtime/film/film_grain_math.h"
-
 constant uint kDrtNeighborBehaviorClarity   = 13u;
 constant uint kDrtNeighborBehaviorSharpen   = 14u;
 constant uint kDrtNeighborBehaviorHalation  = 15u;
-constant uint kDrtNeighborBehaviorFilmGrain = 16u;
 constant uint kDrtNeighborMaxTaps           = 64u;
 
 struct GradeNeighborParams {
@@ -24,15 +20,9 @@ struct GradeNeighborParams {
   float threshold;
   float weights[kDrtNeighborMaxTaps];
   uint  enabled;
-  uint  seed_lo;
-  uint  seed_hi;
   float sigma_x;
   float sigma_y;
   float redshift[3];
-  float render_to_reference[6];
-  uint  use_reference_coordinates;
-  int   reference_width;
-  int   reference_height;
 };
 
 static inline float4 DrtNeighborRead(texture2d<float, access::read> image, int2 position) {
@@ -119,83 +109,12 @@ static inline float4 DrtHalationVertical(texture2d<float, access::read> src, int
   return blur;
 }
 
-static inline int2 DrtFilmReferenceCoord(int2 coord, constant GradeNeighborParams& params) {
-  if (params.use_reference_coordinates == 0u) return coord;
-  const float x        = float(coord.x) + 0.5f;
-  const float y        = float(coord.y) + 0.5f;
-  const float mapped_x = params.render_to_reference[0] * x + params.render_to_reference[1] * y +
-                         params.render_to_reference[2] - 0.5f;
-  const float mapped_y = params.render_to_reference[3] * x + params.render_to_reference[4] * y +
-                         params.render_to_reference[5] - 0.5f;
-  return int2(clamp(int(floor(mapped_x + 0.5f)), 0, max(params.reference_width, 1) - 1),
-              clamp(int(floor(mapped_y + 0.5f)), 0, max(params.reference_height, 1) - 1));
-}
-
-static inline float DrtFilmChannel(float4 value, int channel) {
-  return channel == 0 ? value.x : (channel == 1 ? value.y : value.z);
-}
-
-static inline float DrtFilmSample(texture2d<float, access::read> src, int2 coord, int channel,
-                                  constant GradeNeighborParams& params) {
-  const int2 size = int2(int(src.get_width()), int(src.get_height()));
-  coord           = clamp(coord, int2(0), size - int2(1));
-  const int2 ref  = DrtFilmReferenceCoord(coord, params);
-  const ulong seed =
-      (ulong(params.seed_hi) << 32u) | ulong(params.seed_lo);
-  const ulong stream = metal_prng_pixel_stream_2d(ref.x, ref.y, uint(channel));
-  const float draw   = metal_prng_uniform_float01(seed, stream, 0xd1b54a32d192ed03UL);
-  return draw < clamp(DrtFilmChannel(DrtNeighborRead(src, coord), channel), 0.0f, 1.0f) ? 1.0f
-                                                                                         : 0.0f;
-}
-
-static inline float4 DrtFilmHorizontal(texture2d<float, access::read> src, int2 position,
-                                       constant GradeNeighborParams& params) {
-  float3 result = float3(0.0f);
-  for (int channel = 0; channel < 3; ++channel) {
-    float acc = DrtFilmSample(src, position, channel, params) * params.weights[0];
-    for (uint tap = 1u; tap < params.tap_count; ++tap) {
-      const int distance = int(tap);
-      acc += (DrtFilmSample(src, position + int2(-distance, 0), channel, params) +
-              DrtFilmSample(src, position + int2(distance, 0), channel, params)) *
-             params.weights[tap];
-    }
-    result[channel] = acc;
-  }
-  return float4(result, DrtNeighborRead(src, position).w);
-}
-
-static inline float4 DrtFilmVertical(texture2d<float, access::read> src, int2 position,
-                                     constant GradeNeighborParams& params) {
-  float4 blur = DrtNeighborRead(src, position) * params.weights[0];
-  for (uint tap = 1u; tap < params.tap_count; ++tap) {
-    const int distance = int(tap);
-    blur += (DrtNeighborRead(src, position + int2(0, distance)) +
-             DrtNeighborRead(src, position - int2(0, distance))) *
-            params.weights[tap];
-  }
-  blur.w = DrtNeighborRead(src, position).w;
-  return blur;
-}
-
-static inline float4 DrtFilmApply(float4 source, float4 coverage, float amount) {
-  FilmGrainRgb source_rgb;
-  source_rgb.r = source.x;
-  source_rgb.g = source.y;
-  source_rgb.b = source.z;
-  FilmGrainRgb coverage_rgb;
-  coverage_rgb.r            = coverage.x;
-  coverage_rgb.g            = coverage.y;
-  coverage_rgb.b            = coverage.z;
-  const FilmGrainRgb result = FilmGrainDyeClouds(source_rgb, coverage_rgb, amount);
-  return float4(result.r, result.g, result.b, source.w);
-}
-
 /**
  * @brief Horizontal blur of one display-referred DRT/Post neighborhood operator.
  *
  * Writes the separable horizontal result to scratch. Halation uses an exponential
- * window; film grain samples dye coverage before the Gaussian; Clarity and Sharpen
- * use the packed Gaussian weights.
+ * window; Clarity and Sharpen use the packed Gaussian weights. Film Grain has its own kernel
+ * (film_grain_post.metal).
  */
 kernel void drt_neighbor_blur_horizontal(texture2d<float, access::read> src [[texture(0)]],
                                          texture2d<float, access::write> dst [[texture(1)]],
@@ -206,8 +125,6 @@ kernel void drt_neighbor_blur_horizontal(texture2d<float, access::read> src [[te
   float4 result;
   if (params.behavior == kDrtNeighborBehaviorHalation) {
     result = DrtHalationHorizontal(src, position, params);
-  } else if (params.behavior == kDrtNeighborBehaviorFilmGrain) {
-    result = DrtFilmHorizontal(src, position, params);
   } else {
     result = DrtGaussianHorizontal(src, position, params);
   }
@@ -218,7 +135,7 @@ kernel void drt_neighbor_blur_horizontal(texture2d<float, access::read> src [[te
  * @brief Vertical apply of one display-referred DRT/Post neighborhood operator.
  *
  * Reads the unfiltered display image and the horizontal scratch, then writes Sharpen,
- * Clarity, Halation spill, or film-grain dye clouds.
+ * Clarity, or Halation spill.
  */
 kernel void drt_neighbor_apply_vertical(texture2d<float, access::read> original [[texture(0)]],
                                         texture2d<float, access::read> horizontal [[texture(1)]],
@@ -250,9 +167,6 @@ kernel void drt_neighbor_apply_vertical(texture2d<float, access::read> original 
                                       float3(params.redshift[0], params.redshift[1],
                                              params.redshift[2]),
                      source.w),
-              gid);
-  } else {
-    dst.write(DrtFilmApply(source, DrtFilmVertical(horizontal, position, params), params.amount),
               gid);
   }
 }

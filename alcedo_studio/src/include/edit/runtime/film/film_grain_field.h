@@ -24,17 +24,21 @@
 // read it. Metal shaders include it by relative path, after <metal_stdlib>.
 
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
-#define FILM_GRAIN_FIELD_INLINE static inline
-#define FILM_GRAIN_FIELD_UINT   uint
-#define FILM_GRAIN_FIELD_LOG    log
-#define FILM_GRAIN_FIELD_SQRT   sqrt
-#define FILM_GRAIN_FIELD_FLOOR  floor
+#define FILM_GRAIN_FIELD_INLINE  static inline
+#define FILM_GRAIN_FIELD_UINT    uint
+#define FILM_GRAIN_FIELD_LOG     log
+#define FILM_GRAIN_FIELD_SQRT    sqrt
+#define FILM_GRAIN_FIELD_FLOOR   floor
+#define FILM_GRAIN_FIELD_PRIVATE __private
+#define FILM_GRAIN_FIELD_PARAMS  __local const
 #elif defined(__METAL_VERSION__)
-#define FILM_GRAIN_FIELD_INLINE static inline
-#define FILM_GRAIN_FIELD_UINT   uint
-#define FILM_GRAIN_FIELD_LOG    log
-#define FILM_GRAIN_FIELD_SQRT   sqrt
-#define FILM_GRAIN_FIELD_FLOOR  floor
+#define FILM_GRAIN_FIELD_INLINE  static inline
+#define FILM_GRAIN_FIELD_UINT    uint
+#define FILM_GRAIN_FIELD_LOG     log
+#define FILM_GRAIN_FIELD_SQRT    sqrt
+#define FILM_GRAIN_FIELD_FLOOR   floor
+#define FILM_GRAIN_FIELD_PRIVATE thread
+#define FILM_GRAIN_FIELD_PARAMS  constant
 #else
 #include <cmath>
 #ifdef __CUDACC__
@@ -46,6 +50,8 @@
 #define FILM_GRAIN_FIELD_LOG   logf
 #define FILM_GRAIN_FIELD_SQRT  sqrtf
 #define FILM_GRAIN_FIELD_FLOOR floorf
+#define FILM_GRAIN_FIELD_PRIVATE
+#define FILM_GRAIN_FIELD_PARAMS const
 #endif
 
 /// Most nodes of one granularity curve of the stock bundle (schema 11, section 4.1).
@@ -65,7 +71,9 @@ typedef struct {
  *
  * Segment i goes from node i to node i + 1 of the curve. A value below the first node takes the
  * first sigma, and a value above the last node takes the last sigma, as the lab (numpy interp). A
- * segment past the counted nodes has a delta and an inverse width of 0, so it adds 0.
+ * segment past the counted nodes has a delta and an inverse width of 0, so it adds 0. The loop of
+ * @ref FilmGrainCurveSigma has the fixed count FILM_GRAIN_CURVE_SEGMENTS, so the compiler unrolls
+ * it: a loop to the counted segments was slower on OpenCL (phase G4, issue 693).
  */
 typedef struct {
   float first_sigma;
@@ -139,13 +147,15 @@ FILM_GRAIN_FIELD_INLINE float FilmGrainGaussian(FILM_GRAIN_FIELD_UINT bits) {
 }
 
 /// The value of @p curve at @p value: a dye amount (layer curve) or a gross density (channel
-/// curve).
-FILM_GRAIN_FIELD_INLINE float FilmGrainCurveSigma(FilmGrainCurve curve, float value) {
-  float sigma = curve.first_sigma;
+/// curve). @p curve is in the parameter memory of the kernel (FILM_GRAIN_FIELD_PARAMS: local
+/// memory on OpenCL, constant memory on Metal), so no kernel copies the curve for each pixel.
+FILM_GRAIN_FIELD_INLINE float FilmGrainCurveSigma(FILM_GRAIN_FIELD_PARAMS FilmGrainCurve* curve,
+                                                  float                                   value) {
+  float sigma = curve->first_sigma;
   for (int segment = 0; segment < FILM_GRAIN_CURVE_SEGMENTS; ++segment) {
-    float t = (value - curve.start[segment]) * curve.inverse_width[segment];
+    float t = (value - curve->start[segment]) * curve->inverse_width[segment];
     t       = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
-    sigma += curve.delta[segment] * t;
+    sigma += curve->delta[segment] * t;
   }
   return sigma;
 }
@@ -238,8 +248,11 @@ FILM_GRAIN_FIELD_INLINE FilmGrainNoise3 FilmGrainAggregateNoise(FilmGrainNoisePa
   return sum;
 }
 
-/// Rule 'grain_layer_mix': N = L u for the unit fields @p unit of the three layers.
-FILM_GRAIN_FIELD_INLINE FilmGrainNoise3 FilmGrainMix(const float mix[6], FilmGrainNoise3 unit) {
+/// Rule 'grain_layer_mix': N = L u for the unit fields @p unit of the three layers. @p mix holds
+/// the 6 entries of `FilmGrainFieldParams::mix`, in the private memory of the thread: a Metal or
+/// OpenCL kernel copies them from its parameter buffer first.
+FILM_GRAIN_FIELD_INLINE FilmGrainNoise3 FilmGrainMix(const FILM_GRAIN_FIELD_PRIVATE float* mix,
+                                                     FilmGrainNoise3                       unit) {
   FilmGrainNoise3 mixed;
   mixed.x = mix[0] * unit.x;
   mixed.y = mix[1] * unit.x + mix[2] * unit.y;

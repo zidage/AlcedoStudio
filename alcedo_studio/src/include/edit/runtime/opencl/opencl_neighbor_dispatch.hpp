@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 
 #include "edit/graph/graph_ids.hpp"
@@ -20,6 +21,15 @@
 #include "opencl/opencl_kernel_cache.hpp"
 
 namespace alcedo {
+
+/// Film Grain has its own pass (RecordOpenClFilmGrainPost), so these kernels do not take it.
+inline void RequireOpenClNeighborhoodKernelBehavior(const GradeNeighborParams& params,
+                                                    const char*                caller) {
+  if (static_cast<AdjustmentBehavior>(params.behavior) == AdjustmentBehavior::FilmGrain) {
+    throw std::invalid_argument(std::string(caller) +
+                                ": Film Grain runs RecordOpenClFilmGrainPost, not this kernel");
+  }
+}
 
 inline void EnqueueOpenClNeighborRange(OpenClRenderDevice& device, cl_kernel kernel,
                                        std::uint32_t width, std::uint32_t height,
@@ -43,6 +53,7 @@ inline void EnqueueOpenClNeighborHorizontal(OpenClRenderDevice& device,
                                             std::uint32_t height) {
   auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradeNeighborBlurKernelName);
+  RequireOpenClNeighborhoodKernelBehavior(params, "EnqueueOpenClNeighborHorizontal");
   const auto src_mem  = src.Native();
   const auto blur_mem = blur.Native();
   CheckOpenCl(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src_mem),
@@ -63,6 +74,7 @@ inline void EnqueueOpenClNeighborVertical(OpenClRenderDevice& device,
   auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kPrimaryGradeProgramName,
       OpenCL::GpuDag::kPrimaryGradeNeighborApplyKernelName);
+  RequireOpenClNeighborhoodKernelBehavior(params, "EnqueueOpenClNeighborVertical");
   const auto src_mem  = src.Native();
   const auto blur_mem = blur.Native();
   const auto dst_mem  = dst.Native();
@@ -90,6 +102,7 @@ inline void EnqueueOpenClNeighborHorizontalScene(OpenClRenderDevice& device,
   auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kPrimaryGradeProgramName,
       OpenCL::GpuDag::kPrimaryGradeNeighborBlurSceneKernelName);
+  RequireOpenClNeighborhoodKernelBehavior(params, "EnqueueOpenClNeighborHorizontalScene");
   BindOpenClSceneView(kernel, 0, src, device.Workspace().Device(), "OpenCL neighborhood source",
                       OpenClSceneArgAccess::Read);
   auto blur_mem = blur.Native();
@@ -109,6 +122,7 @@ inline void EnqueueOpenClNeighborVerticalScene(
   auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kPrimaryGradeProgramName,
       OpenCL::GpuDag::kPrimaryGradeNeighborApplySceneKernelName);
+  RequireOpenClNeighborhoodKernelBehavior(params, "EnqueueOpenClNeighborVerticalScene");
   auto& backend = device.Workspace().Device();
   BindOpenClSceneView(kernel, 0, src, backend, "OpenCL neighborhood apply source",
                       OpenClSceneArgAccess::Read);

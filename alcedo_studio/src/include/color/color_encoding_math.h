@@ -21,7 +21,17 @@
 
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
 #define CE_INLINE static inline
+#if defined(CE_OPENCL_POW_EXP2_LOG2)
+// x^y as exp2(y log2 x) for x >= 0, with the 3 ulp log2 and exp2 of OpenCL. The relative error
+// grows with |y log2 x|: about 2e-6 for the gamma and sRGB curves (the class of the 16 ulp of pow),
+// and up to about 2e-5 near the black of the ST 2084 decode. The pow of the NVIDIA OpenCL driver
+// costs about 0.16 ms per call and pixel at 24 MP. A program opts in with the build option
+// -DCE_OPENCL_POW_EXP2_LOG2: the DRT/Post Film Grain, whose grain changes the light by about 1 %
+// (issue 693).
+#define CE_POW(x, y) exp2((y) * log2(x))
+#else
 #define CE_POW    pow
+#endif
 #define CE_EXP    exp
 #define CE_EXP2   exp2
 #define CE_LOG    log
@@ -30,7 +40,14 @@
 #elif defined(__METAL_VERSION__)
 // precise:: keeps Metal fast-math from moving the curves away from the CUDA and OpenCL results.
 #define CE_INLINE static inline
+#if defined(CE_METAL_POW_EXP2_LOG2)
+// x^y as exp2(y log2 x) for x >= 0, with the fast log2 and exp2 of Metal: the form of
+// CE_OPENCL_POW_EXP2_LOG2. precise::pow costs about 2 ms per call and pixel at 24 MP on an Apple M4. A shader opts in with -DCE_METAL_POW_EXP2_LOG2 on its own AIR file: the DRT/Post Film Grain,
+// whose grain changes the light by about 1 % (phase G4).
+#define CE_POW(x, y) fast::exp2((y) * fast::log2(x))
+#else
 #define CE_POW    precise::pow
+#endif
 #define CE_EXP    precise::exp
 #define CE_EXP2   precise::exp2
 #define CE_LOG    precise::log

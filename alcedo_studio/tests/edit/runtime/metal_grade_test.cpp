@@ -22,6 +22,7 @@
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
+#include "edit/graph/film_format.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
@@ -713,7 +714,7 @@ TEST_F(MetalGradeFixture, MetalFilmGrainStrengthScalesDeterministicDensityVariat
 }
 
 TEST_F(MetalGradeFixture, MetalFilmGrainColourIsWarmCoolWithTheQuietestGreen) {
-  // film_grain_math.h: the channel mix and weights of real colour negative grain.
+  // film_grain_post.h: the channel correlation and ratio of the 5207 scans of #660.
   constexpr std::uint32_t width  = 128;
   constexpr std::uint32_t height = 128;
   UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
@@ -730,8 +731,20 @@ TEST_F(MetalGradeFixture, MetalFilmGrainColourIsWarmCoolWithTheQuietestGreen) {
   EXPECT_GT(colour.lightness_warmth_correlation, 0.05);
 }
 
-/// Wall time of a full render at 6000 x 4000 with and without film grain, median of 9 renders. The
-/// difference is the cost of the film grain passes. Run it with --gtest_also_run_disabled_tests.
+TEST_F(MetalGradeFixture, MetalFilmGrainAtStrengthZeroRunsNoPostPass) {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
+  auto& grain = ModelByType<FilmGrainModel>(type_ids::FilmGrain());
+  grain.SetValue(0.0f);
+  EXPECT_EQ(RenderThroughDrtPost().post_neighborhood_count, 0U);
+  grain.SetValue(0.5f);
+  EXPECT_EQ(RenderThroughDrtPost().post_neighborhood_count, 1U);
+}
+
+/// Wall time of a full render at 6000 x 4000 with and without film grain, median of 9 renders:
+/// Film Grain 100 % at 35mm and at 16mm (plan 'film_grain_format_and_stock_plan.md', phase G4). The
+/// difference is the cost of the film grain pass. Run it with --gtest_also_run_disabled_tests.
 TEST_F(MetalGradeFixture, DISABLED_FilmGrainCostRecordAt24Megapixels) {
   constexpr std::uint32_t width  = 6000;
   constexpr std::uint32_t height = 4000;
@@ -760,10 +773,13 @@ TEST_F(MetalGradeFixture, DISABLED_FilmGrainCostRecordAt24Megapixels) {
     return runs[runs.size() / 2];
   };
   const double without_grain = median(0.0f);
-  const double with_grain    = median(0.6f);
-  std::cout << "Frame at " << width << " x " << height << ": without grain " << without_grain
-            << " ms, with grain " << with_grain << " ms, grain " << with_grain - without_grain
-            << " ms\n";
+  for (const auto format : {FilmFormat::Film35mm, FilmFormat::Film16mm}) {
+    document_.Drt()->Params().ApplyFilmFormat(format);
+    const double with_grain = median(1.0f);
+    std::cout << "Frame at " << width << " x " << height << ", " << FilmFormatId(format)
+              << ": without grain " << without_grain << " ms, with grain " << with_grain
+              << " ms, grain " << with_grain - without_grain << " ms\n";
+  }
 }
 
 TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) {

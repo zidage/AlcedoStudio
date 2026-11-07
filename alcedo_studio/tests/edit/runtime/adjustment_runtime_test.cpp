@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -72,32 +73,23 @@ TEST(GpuDagAdjustmentRuntime, SharpenAndClarityRadiiScaleWithPreviewResolution) 
   EXPECT_GT(half_clarity.radius, 0U);
 }
 
-TEST(GpuDagAdjustmentRuntime, HalationAndFilmGrainNeighborhoodsScaleWithMaxEdge) {
+TEST(GpuDagAdjustmentRuntime, HalationNeighborhoodScalesWithMaxEdge) {
   HalationModel halation;
   halation.SetValue(1.0f);
-  FilmGrainModel grain;
-  grain.SetValue(0.75f);
 
   const auto full          = MakeGeometry(256);
   const auto full_halation = MakeGradeNeighborParams(halation, AdjustmentBehavior::Halation, full);
-  const auto full_grain    = MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain, full);
 
   ResolutionRequest preview;
   preview.max_edge            = 64;
   const auto preview_geometry = MakeGeometry(256, preview);
   const auto preview_halation =
       MakeGradeNeighborParams(halation, AdjustmentBehavior::Halation, preview_geometry);
-  const auto preview_grain =
-      MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain, preview_geometry);
 
   EXPECT_EQ(preview_geometry.render_extent, (Extent2D{64, 64}));
   EXPECT_NEAR(full_halation.sigma_x, 7.0f, 1.0e-5f);
   EXPECT_NEAR(preview_halation.sigma_x, 1.75f, 1.0e-4f);
   EXPECT_NEAR(preview_halation.sigma_y, preview_halation.sigma_x, 1.0e-5f);
-  EXPECT_NEAR(preview_grain.sigma_x, full_grain.sigma_x * 0.25f, 1.0e-4f);
-  EXPECT_LT(preview_grain.radius, full_grain.radius);
-  EXPECT_EQ(full_grain.radius, 3U);
-  EXPECT_EQ(preview_grain.tap_count, preview_grain.radius + 1U);
 }
 
 TEST(GpuDagAdjustmentRuntime, NativeViewportRoiKeepsFullReferenceNeighborhoodSize) {
@@ -118,34 +110,25 @@ TEST(GpuDagAdjustmentRuntime, NativeViewportRoiKeepsFullReferenceNeighborhoodSiz
   EXPECT_EQ(roi.radius, full.radius);
 }
 
-// Plan 'film_grain_format_and_stock_plan.md', G1 step 5: the current post grain hashes the
-// reference pixel only for a render of the full edit space. A viewport ROI hashes its own render
-// coordinates (FilmReferenceCoordinate of the three backends returns (x, y) for flag 0), so its
-// grain pattern is not the pattern of the same region of the full frame. G3 replaces this.
-TEST(GpuDagAdjustmentRuntime, FilmGrainOfAViewportRoiHashesRenderCoordinates) {
+// Plan 'film_grain_format_and_stock_plan.md', G4: the neighborhood parameters of Film Grain carry
+// the strength for the DRT/Post schedule only. The size, the noise, and the blur of the grain come
+// from the grain plan of the render (MakeFilmGrainPlan), on every backend.
+TEST(GpuDagAdjustmentRuntime, FilmGrainNeighborhoodCarriesOnlyTheStrength) {
   FilmGrainModel grain;
-  grain.SetValue(0.5f);
-
+  grain.SetValue(1.6f);
   ResolutionRequest preview;
   preview.max_edge = 64;
-  const auto full  = MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain, MakeGeometry(256));
-  const auto fit   = MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain,
-                                             MakeGeometry(256, preview));
-
-  ViewRequest view;
-  view.visible_rect_in_edit_space = {0.25f, 0.25f, 0.5f, 0.5f};
-  view.viewport_extent            = {128, 128};
-  const auto roi_geometry         = MakeGeometry(256, {}, view);
-  const auto roi = MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain, roi_geometry);
-
-  EXPECT_EQ(full.use_reference_coordinates, 1U);
-  EXPECT_EQ(fit.use_reference_coordinates, 1U);
-  EXPECT_EQ(roi.use_reference_coordinates, 0U);
-  // The ROI starts at reference pixel 64, so its render pixel (0, 0) is reference pixel (64, 64),
-  // but the hash reads (0, 0).
-  EXPECT_NEAR(roi.render_to_reference[2], 64.0f, 1.0e-3f);
-  EXPECT_NEAR(roi.render_to_reference[5], 64.0f, 1.0e-3f);
-  EXPECT_EQ(roi.reference_width, 256);
+  for (const auto& geometry : {MakeGeometry(256), MakeGeometry(256, preview)}) {
+    const auto params = MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain, geometry);
+    EXPECT_EQ(params.behavior, static_cast<std::uint32_t>(AdjustmentBehavior::FilmGrain));
+    EXPECT_EQ(params.enabled, 1U);
+    EXPECT_FLOAT_EQ(params.amount, 1.6f);
+    EXPECT_EQ(params.radius, 0U);
+    EXPECT_EQ(params.tap_count, 0U);
+  }
+  grain.SetValue(0.0f);
+  EXPECT_EQ(MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain, MakeGeometry(256)).enabled,
+            0U);
 }
 
 class DtoOnlyExposureModel : public IOperatorModel {

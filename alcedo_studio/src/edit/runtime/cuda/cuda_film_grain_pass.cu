@@ -17,79 +17,77 @@ namespace alcedo {
 namespace {
 
 /// The side of the render tile of one block.
-constexpr int kTile             = 16;
-constexpr int kThreads          = kTile * kTile;
-/// The side of the noise tile at the largest halo.
-constexpr int kMaxSpan          = kTile + 2 * FILM_GRAIN_MAX_BLUR_RADIUS;
-/// Horizontal blur outputs of one thread at the largest halo: kMaxSpan rows of kTile columns.
-constexpr int kMaxBlurPerThread = (kMaxSpan * kTile + kThreads - 1) / kThreads;
+constexpr int kTile    = 16;
+constexpr int kThreads = kTile * kTile;
 
-/// Shared memory of one block: three channels of the noise tile of side kTile + 2 halo. The
-/// horizontal blur overwrites the noise in place, row major with kTile columns.
+/// Dynamic shared memory of one block: the noise band (kTile rows of kTile + 2 halo columns) and
+/// the horizontal blur (kTile + 2 halo rows of kTile columns), three channels each. At the radius
+/// 24 that is 24 KB; with the apply parameters it stays inside the 48 KB of every CUDA device.
 auto          SharedBytes(int halo) -> std::size_t {
-  const auto span = static_cast<std::size_t>(kTile + 2 * halo);
-  return 3U * span * span * sizeof(float);
+  const auto band = static_cast<std::size_t>(kTile) * static_cast<std::size_t>(kTile + 2 * halo);
+  return 2U * 3U * band * sizeof(float);
 }
 
 /**
  * The post grain of one 16 x 16 tile, in one kernel: the noise of the tile and its halo (G-noise),
  * the horizontal blur (G-blur-x), the vertical blur with the division by the sum of w^2 and the
  * mix (G-blur-y), and the apply step. The noise reads the reference pixels of the render pixels,
- * so a tile at the edge of a viewport region reads the same noise as in the full frame. The
- * weights past the radius of a channel are 0.
+ * so a tile at the edge of a viewport region reads the same noise as in the full frame. The block
+ * makes the noise one band of kTile rows at a time and blurs each band across, the layout of
+ * film_grain_post.cl and film_grain_post.metal. The weights past the radius of a channel are 0.
  */
 __global__ void FilmGrainPostKernel(const float4* src, float4* dst, int width, int height,
                                     FilmGrainFieldParams field, FilmGrainPostParams post) {
-  extern __shared__ float shared[];
-  const int               halo  = field.halo;
-  const int               span  = kTile + 2 * halo;
-  const int               area  = span * span;
-  float*                  red   = shared;
-  float*                  green = shared + area;
-  float*                  blue  = shared + 2 * area;
-  const int               local = static_cast<int>(threadIdx.y * kTile + threadIdx.x);
-  const int               x0    = static_cast<int>(blockIdx.x) * kTile - halo;
-  const int               y0    = static_cast<int>(blockIdx.y) * kTile - halo;
+  extern __shared__ float        shared[];
+  // The apply step reads its parameters through a pointer. A pointer to a kernel parameter would
+  // make a copy for each thread, so one thread copies them once into shared memory.
+  __shared__ FilmGrainPostParams post_shared;
+  const int                      halo   = field.halo;
+  const int                      span   = kTile + 2 * halo;
+  // One band of the noise (kTile rows of span columns) and the horizontal blur (span rows of kTile
+  // columns) have the same number of texels.
+  const int                      band   = kTile * span;
+  float*                         noise  = shared;
+  float*                         across = shared + 3 * band;
+  const int                      local  = static_cast<int>(threadIdx.y * kTile + threadIdx.x);
+  const int                      x0     = static_cast<int>(blockIdx.x) * kTile - halo;
+  const int                      y0     = static_cast<int>(blockIdx.y) * kTile - halo;
+  // A plain assignment reads the parameter space; the first __syncthreads publishes it.
+  if (local == 0) post_shared = post;
 
-  // G-noise: one aggregate noise for each pixel of the tile and its halo.
-  for (int index = local; index < area; index += kThreads) {
-    const FilmGrainNoise3 noise =
-        FilmGrainAggregateNoise(field.noise, x0 + index % span, y0 + index / span);
-    red[index]   = noise.x;
-    green[index] = noise.y;
-    blue[index]  = noise.z;
-  }
-  __syncthreads();
-
-  // G-blur-x: span rows of kTile columns. The results stay in registers until every thread has
-  // read its taps, then overwrite the noise.
-  const int outputs = span * kTile;
-  float     blur_r[kMaxBlurPerThread];
-  float     blur_g[kMaxBlurPerThread];
-  float     blur_b[kMaxBlurPerThread];
-  int       count = 0;
-  for (int index = local; index < outputs; index += kThreads, ++count) {
-    const int centre = (index / kTile) * span + index % kTile + halo;
-    float     r      = red[centre] * field.weights[0][0];
-    float     g      = green[centre] * field.weights[1][0];
-    float     b      = blue[centre] * field.weights[2][0];
-    for (int tap = 1; tap <= halo; ++tap) {
-      r += (red[centre - tap] + red[centre + tap]) * field.weights[0][tap];
-      g += (green[centre - tap] + green[centre + tap]) * field.weights[1][tap];
-      b += (blue[centre - tap] + blue[centre + tap]) * field.weights[2][tap];
+  for (int band_row = 0; band_row < span; band_row += kTile) {
+    const int rows = min(kTile, span - band_row);
+    // G-noise: one aggregate noise for each texel of the band.
+    for (int index = local; index < rows * span; index += kThreads) {
+      const FilmGrainNoise3 value =
+          FilmGrainAggregateNoise(field.noise, x0 + index % span, y0 + band_row + index / span);
+      noise[index]            = value.x;
+      noise[band + index]     = value.y;
+      noise[2 * band + index] = value.z;
     }
-    blur_r[count] = r;
-    blur_g[count] = g;
-    blur_b[count] = b;
+    __syncthreads();
+    // G-blur-x of the band at the kTile centre columns.
+    for (int index = local; index < rows * kTile; index += kThreads) {
+      const int row    = index / kTile;
+      const int column = index % kTile;
+      const int centre = row * span + column + halo;
+      float     r      = noise[centre] * field.weights[0][0];
+      float     g      = noise[band + centre] * field.weights[1][0];
+      float     b      = noise[2 * band + centre] * field.weights[2][0];
+      for (int tap = 1; tap <= halo; ++tap) {
+        r += (noise[centre - tap] + noise[centre + tap]) * field.weights[0][tap];
+        g += (noise[band + centre - tap] + noise[band + centre + tap]) * field.weights[1][tap];
+        b += (noise[2 * band + centre - tap] + noise[2 * band + centre + tap]) *
+             field.weights[2][tap];
+      }
+      const int out          = (band_row + row) * kTile + column;
+      across[out]            = r;
+      across[band + out]     = g;
+      across[2 * band + out] = b;
+    }
+    // The next band overwrites the noise, and the vertical blur reads every band.
+    __syncthreads();
   }
-  __syncthreads();
-  count = 0;
-  for (int index = local; index < outputs; index += kThreads, ++count) {
-    red[index]   = blur_r[count];
-    green[index] = blur_g[count];
-    blue[index]  = blur_b[count];
-  }
-  __syncthreads();
 
   const int x = static_cast<int>(blockIdx.x) * kTile + static_cast<int>(threadIdx.x);
   const int y = static_cast<int>(blockIdx.y) * kTile + static_cast<int>(threadIdx.y);
@@ -97,15 +95,15 @@ __global__ void FilmGrainPostKernel(const float4* src, float4* dst, int width, i
 
   // G-blur-y, the unit field, and the mix of rule 'grain_layer_mix'.
   const int centre = (static_cast<int>(threadIdx.y) + halo) * kTile + static_cast<int>(threadIdx.x);
-  float     r      = red[centre] * field.weights[0][0];
-  float     g      = green[centre] * field.weights[1][0];
-  float     b      = blue[centre] * field.weights[2][0];
+  float     r      = across[centre] * field.weights[0][0];
+  float     g      = across[band + centre] * field.weights[1][0];
+  float     b      = across[2 * band + centre] * field.weights[2][0];
   for (int tap = 1; tap <= halo; ++tap) {
     const int above = centre - tap * kTile;
     const int below = centre + tap * kTile;
-    r += (red[above] + red[below]) * field.weights[0][tap];
-    g += (green[above] + green[below]) * field.weights[1][tap];
-    b += (blue[above] + blue[below]) * field.weights[2][tap];
+    r += (across[above] + across[below]) * field.weights[0][tap];
+    g += (across[band + above] + across[band + below]) * field.weights[1][tap];
+    b += (across[2 * band + above] + across[2 * band + below]) * field.weights[2][tap];
   }
   FilmGrainNoise3 unit;
   unit.x                       = r * field.inverse_weight_square_sum[0];
@@ -116,7 +114,7 @@ __global__ void FilmGrainPostKernel(const float4* src, float4* dst, int width, i
   const auto             index = static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + x;
   const float4           pixel = src[index];
   const FilmGrainPostRgb result =
-      FilmGrainPostPixel(post, FilmGrainPostRgb{pixel.x, pixel.y, pixel.z}, grain);
+      FilmGrainPostPixel(&post_shared, FilmGrainPostRgb{pixel.x, pixel.y, pixel.z}, grain);
   dst[index] = make_float4(result.r, result.g, result.b, pixel.w);
 }
 

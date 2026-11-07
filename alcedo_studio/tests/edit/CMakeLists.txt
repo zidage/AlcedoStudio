@@ -401,7 +401,6 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/diffusion_filter_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_print_plan_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_math_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_post_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
@@ -609,6 +608,15 @@ if(ALCEDO_METAL_ENABLED)
     ALCEDO_METAL_LOCAL_TONE_METALLIB_PATH="${METAL_LOCAL_TONE_METALLIB}"
     ALCEDO_METAL_MASK_METALLIB_PATH="${METAL_MASK_METALLIB}")
   add_dependencies(GpuDagMetalGradeTest GpuDagMetalShaders)
+  # The DRT/Post Film Grain reads the 5207 grain data of the film stock bundle, as the product
+  # does, from config/film_print next to the executable.
+  if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+    add_custom_command(TARGET GpuDagMetalGradeTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+        "$<TARGET_FILE_DIR:GpuDagMetalGradeTest>/config/film_print"
+      VERBATIM)
+  endif()
   gtest_discover_tests(GpuDagMetalGradeTest TEST_PREFIX "GpuDagMetalGradeTest."
     PROPERTIES LABELS "gpu;edit;runtime;metal")
   alcedo_register_test_target(GpuDagMetalGradeTest gpu ci_metal)
@@ -616,6 +624,7 @@ if(ALCEDO_METAL_ENABLED)
   add_executable(GpuDagMetalDrtTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_drt_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_diffusion_filter_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_grain_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_film_print_test.cpp)
   target_include_directories(GpuDagMetalDrtTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalDrtTest PRIVATE
@@ -720,6 +729,7 @@ if(ALCEDO_OPENCL_ENABLED)
   add_executable(GpuDagOpenClGradeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_diffusion_filter_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_grain_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_film_print_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp
@@ -727,6 +737,11 @@ if(ALCEDO_OPENCL_ENABLED)
   target_include_directories(GpuDagOpenClGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClGradeTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditRuntimeFilm EditInput OpenClProgramLibrary)
+  # OpenClFilmGrainPostTest compares the standard deviation of the grain with the CUDA pass.
+  if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(GpuDagOpenClGradeTest PRIVATE EditRuntimeCuda)
+    target_compile_definitions(GpuDagOpenClGradeTest PRIVATE HAVE_CUDA)
+  endif()
   target_compile_definitions(GpuDagOpenClGradeTest PRIVATE
     ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}")
   # The film print cases read the resources from config/film_print next to the executable, as the

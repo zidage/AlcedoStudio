@@ -234,7 +234,7 @@ auto MakeFilmGrainPlan(const ResolvedRenderGeometry& geometry, FilmFormat format
       negative
           ? CorrelationCholesky(stock.common.layer_correlation, "grain_layer_correlation")
           : CorrelationCholesky(kFilmGrainPostScanCorrelation, "kFilmGrainPostScanCorrelation");
-  const auto& curves  = negative ? stock.layer : stock.channel;
+  const auto& curves = negative ? stock.layer : stock.channel;
   for (std::size_t layer = 0; layer < 3; ++layer) {
     plan.curves[layer] =
         MakeFilmGrainCurve(curves, layer, negative ? "grain layer curve" : "grain channel curve");
@@ -310,7 +310,7 @@ auto MakeFilmGrainPostParams(const FilmGrainPlan& plan, int transfer, float deco
     params.high[channel]         = static_cast<float>(plan.curve_high[channel]);
     params.curves[channel]       = plan.curves[channel];
     const double tone =
-        FilmGrainPostTone(params.curves[channel], params.low[channel], params.high[channel], grey);
+        FilmGrainPostTone(&params.curves[channel], params.low[channel], params.high[channel], grey);
     if (!(tone > 0.0)) {
       FailField("grain channel curve", "gives no grain at the grey of the post target");
     }

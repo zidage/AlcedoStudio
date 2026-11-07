@@ -5,7 +5,6 @@
 #define GRADE_BEHAVIOR_CLARITY    13u
 #define GRADE_BEHAVIOR_SHARPEN    14u
 #define GRADE_BEHAVIOR_HALATION   15u
-#define GRADE_BEHAVIOR_FILM_GRAIN 16u
 
 typedef struct {
   uint  behavior;
@@ -15,15 +14,9 @@ typedef struct {
   float threshold;
   float weights[GRADE_NEIGHBOR_MAX_TAPS];
   uint  enabled;
-  uint  seed_lo;
-  uint  seed_hi;
   float sigma_x;
   float sigma_y;
   float redshift[3];
-  float render_to_reference[6];
-  uint  use_reference_coordinates;
-  int   reference_width;
-  int   reference_height;
 } GradeNeighborParams;
 
 static inline float4 GradeNeighborRead(read_only image2d_t src, int2 coord) {
@@ -105,76 +98,6 @@ static inline float4 GradeHalationVertical(__local const float4* tile, int cente
   return blur;
 }
 
-static inline int2 GradeFilmReferenceCoord(int2 coord, const GradeNeighborParams* params) {
-  if (params->use_reference_coordinates == 0u) return coord;
-  const float x        = (float)coord.x + 0.5f;
-  const float y        = (float)coord.y + 0.5f;
-  const float mapped_x = params->render_to_reference[0] * x + params->render_to_reference[1] * y +
-                         params->render_to_reference[2] - 0.5f;
-  const float mapped_y = params->render_to_reference[3] * x + params->render_to_reference[4] * y +
-                         params->render_to_reference[5] - 0.5f;
-  return (int2)(clamp((int)floor(mapped_x + 0.5f), 0, max(params->reference_width, 1) - 1),
-                clamp((int)floor(mapped_y + 0.5f), 0, max(params->reference_height, 1) - 1));
-}
-
-static inline float GradeFilmChannel(float4 value, int channel) {
-  return channel == 0 ? value.x : (channel == 1 ? value.y : value.z);
-}
-
-static inline float GradeFilmSample(read_only image2d_t src, int2 coord, int channel,
-                                    const GradeNeighborParams* params) {
-  const int2 size       = get_image_dim(src);
-  coord                 = clamp(coord, (int2)(0), size - (int2)(1));
-  const int2  ref       = GradeFilmReferenceCoord(coord, params);
-  const ulong prng_seed = ((ulong)params->seed_hi << 32u) | (ulong)params->seed_lo;
-  const ulong stream    = opencl_prng_pixel_stream_2d(ref.x, ref.y, (uint)channel);
-  const float draw      = opencl_prng_uniform_float01(prng_seed, stream, 0xd1b54a32d192ed03UL);
-  return draw < clamp(GradeFilmChannel(GradeNeighborRead(src, coord), channel), 0.0f, 1.0f) ? 1.0f
-                                                                                            : 0.0f;
-}
-
-static inline float4 GradeFilmHorizontal(read_only image2d_t src, int2 coord,
-                                         const GradeNeighborParams* params) {
-  float result[3];
-  for (int channel = 0; channel < 3; ++channel) {
-    float acc = GradeFilmSample(src, coord, channel, params) * params->weights[0];
-    for (uint tap = 1u; tap < params->tap_count; ++tap) {
-      const int distance = (int)tap;
-      acc += (GradeFilmSample(src, coord + (int2)(-distance, 0), channel, params) +
-              GradeFilmSample(src, coord + (int2)(distance, 0), channel, params)) *
-             params->weights[tap];
-    }
-    result[channel] = acc;
-  }
-  return (float4)(result[0], result[1], result[2], GradeNeighborRead(src, coord).w);
-}
-
-static inline float4 GradeFilmVertical(__local const float4* tile, int center, int tile_stride,
-                                       const GradeNeighborParams* params) {
-  float4 blur = tile[center] * params->weights[0];
-  for (uint tap = 1u; tap < params->tap_count; ++tap) {
-    const int distance = (int)tap * tile_stride;
-    blur += (tile[center - distance] + tile[center + distance]) * params->weights[tap];
-  }
-  blur.w = tile[center].w;
-  return blur;
-}
-
-// The dye clouds are FilmGrainDyeClouds of film_grain_math.h, which the program lists before this
-// file.
-static inline float4 GradeFilmApply(float4 source, float4 coverage, float amount) {
-  FilmGrainRgb source_rgb;
-  source_rgb.r = source.x;
-  source_rgb.g = source.y;
-  source_rgb.b = source.z;
-  FilmGrainRgb coverage_rgb;
-  coverage_rgb.r            = coverage.x;
-  coverage_rgb.g            = coverage.y;
-  coverage_rgb.b            = coverage.z;
-  const FilmGrainRgb result = FilmGrainDyeClouds(source_rgb, coverage_rgb, amount);
-  return (float4)(result.r, result.g, result.b, source.w);
-}
-
 static inline int GradeVerticalRadius(const GradeNeighborParams* params) {
   if (params->behavior == GRADE_BEHAVIOR_HALATION) {
     return GradeHalationRadius(params->sigma_y);
@@ -191,8 +114,6 @@ __kernel void primary_grade_neighbor_blur_h_rgba32f(read_only image2d_t  src,
   float4 result;
   if (params.behavior == GRADE_BEHAVIOR_HALATION) {
     result = GradeHalationHorizontal(src, gid, &params);
-  } else if (params.behavior == GRADE_BEHAVIOR_FILM_GRAIN) {
-    result = GradeFilmHorizontal(src, gid, &params);
   } else {
     result = GradeGaussianHorizontal(src, gid, &params);
   }
@@ -248,11 +169,6 @@ __kernel void primary_grade_neighbor_apply_v_rgba32f(read_only image2d_t  origin
         source.xyz + spill * params.amount *
                          (float3)(params.redshift[0], params.redshift[1], params.redshift[2]);
     write_imagef(dst, gid, (float4)(result, source.w));
-  } else {
-    write_imagef(dst, gid,
-                 GradeFilmApply(source,
-                                GradeFilmVertical(vertical_tile, center, tile_width, &params),
-                                params.amount));
   }
 }
 
@@ -264,41 +180,6 @@ static inline float4 SceneTap(read_only image2d_t image, __global const float4* 
     return buffer[(uint)coord.y * (uint)width + (uint)coord.x];
   }
   return GradeNeighborRead(image, coord);
-}
-
-static inline float SceneFilmSample(read_only image2d_t image, __global const float4* buffer,
-                                    int is_buffer, int2 coord, int channel,
-                                    const GradeNeighborParams* params, int width, int height) {
-  coord.x = clamp(coord.x, 0, width - 1);
-  coord.y = clamp(coord.y, 0, height - 1);
-  const int2  ref       = GradeFilmReferenceCoord(coord, params);
-  const ulong prng_seed = ((ulong)params->seed_hi << 32u) | (ulong)params->seed_lo;
-  const ulong stream    = opencl_prng_pixel_stream_2d(ref.x, ref.y, (uint)channel);
-  const float draw      = opencl_prng_uniform_float01(prng_seed, stream, 0xd1b54a32d192ed03UL);
-  const float signal    = GradeFilmChannel(SceneTap(image, buffer, is_buffer, coord, width, height),
-                                           channel);
-  return draw < clamp(signal, 0.0f, 1.0f) ? 1.0f : 0.0f;
-}
-
-static inline float4 SceneFilmHorizontal(read_only image2d_t image,
-                                         __global const float4* buffer, int is_buffer, int2 coord,
-                                         const GradeNeighborParams* params, int width, int height) {
-  float result[3];
-  for (int channel = 0; channel < 3; ++channel) {
-    float acc = SceneFilmSample(image, buffer, is_buffer, coord, channel, params, width, height) *
-                params->weights[0];
-    for (uint tap = 1u; tap < params->tap_count; ++tap) {
-      const int distance = (int)tap;
-      acc += (SceneFilmSample(image, buffer, is_buffer, coord - (int2)(distance, 0), channel,
-                              params, width, height) +
-              SceneFilmSample(image, buffer, is_buffer, coord + (int2)(distance, 0), channel,
-                              params, width, height)) *
-             params->weights[tap];
-    }
-    result[channel] = acc;
-  }
-  return (float4)(result[0], result[1], result[2],
-                  SceneTap(image, buffer, is_buffer, coord, width, height).w);
 }
 
 static inline float4 SceneMix(float4 adjusted, read_only image2d_t mix_image,
@@ -335,9 +216,6 @@ __kernel void primary_grade_neighbor_blur_h_scene_rgba32f(
                           (int)height)) *
                 weight;
     }
-  } else if (params.behavior == GRADE_BEHAVIOR_FILM_GRAIN) {
-    result = SceneFilmHorizontal(src_image, src_buffer, src_is_buffer, gid, &params, (int)width,
-                                 (int)height);
   } else {
     result = SceneTap(src_image, src_buffer, src_is_buffer, gid, (int)width, (int)height) *
              params.weights[0];
@@ -382,7 +260,8 @@ __kernel void primary_grade_neighbor_apply_v_scene_rgba32f(
   const float4 source =
       SceneTap(original_image, original_buffer, original_is_buffer, gid, (int)width, (int)height);
   const int center = ((int)get_local_id(1) + radius) * tile_width + (int)get_local_id(0);
-  float4 adjusted;
+  // The host sends no other behavior (RequireOpenClNeighborhoodKernelBehavior).
+  float4 adjusted = source;
   if (params.behavior == GRADE_BEHAVIOR_SHARPEN) {
     const float4 blur = GradeGaussianVertical(vertical_tile, center, tile_width, &params);
     float4       high = (float4)(source.xyz - blur.xyz, 0.0f);
@@ -405,9 +284,6 @@ __kernel void primary_grade_neighbor_apply_v_scene_rgba32f(
         source.xyz + spill * params.amount *
                          (float3)(params.redshift[0], params.redshift[1], params.redshift[2]);
     adjusted = (float4)(result, source.w);
-  } else {
-    adjusted = GradeFilmApply(source, GradeFilmVertical(vertical_tile, center, tile_width, &params),
-                              params.amount);
   }
   adjusted = SceneMix(adjusted, mix_image, mix_buffer, mix_is_buffer, mask, has_mask, grade_mix, gid,
                       (int)width, (int)height);
