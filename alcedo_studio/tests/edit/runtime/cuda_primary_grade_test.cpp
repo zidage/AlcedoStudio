@@ -710,7 +710,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaFilmGrainStrengthScalesDeterministicDensityV
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaFilmGrainColourIsWarmCoolWithTheQuietestGreen) {
-  // film_grain_math.h: the channel mix and weights of real colour negative grain.
+  // film_grain_post.h: the channel correlation and ratio of the 5207 scans of #660.
   constexpr std::uint32_t width  = 128;
   constexpr std::uint32_t height = 128;
   UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
@@ -725,6 +725,26 @@ TEST_F(CudaPrimaryGradeFixture, CudaFilmGrainColourIsWarmCoolWithTheQuietestGree
   EXPECT_LT(colour.std_dev[1], colour.std_dev[2]);
   // Grain that darkens is cool, so cyan grain is not brighter than its surround.
   EXPECT_GT(colour.lightness_warmth_correlation, 0.05);
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaFilmGrainAtStrengthZeroRunsNoPostPass) {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
+  auto& grain = ModelByType<FilmGrainModel>(type_ids::FilmGrain());
+  grain.SetValue(0.0f);
+  const auto off = RenderThroughDrtPost();
+  EXPECT_EQ(off.post_neighborhood_count, 0U);
+  const auto off_pixels = Download(off.display_post);
+  const auto base       = Download(plan_.drt.scene_output);
+  ASSERT_EQ(off_pixels.size(), base.size());
+  for (std::size_t index = 0; index < base.size(); ++index) {
+    ASSERT_EQ(off_pixels[index].r, base[index].r);
+    ASSERT_EQ(off_pixels[index].g, base[index].g);
+    ASSERT_EQ(off_pixels[index].b, base[index].b);
+  }
+  grain.SetValue(0.5f);
+  EXPECT_EQ(RenderThroughDrtPost().post_neighborhood_count, 1U);
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaNeighborStagesReuseWorkspaceTexturesAfterFirstRender) {

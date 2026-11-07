@@ -285,4 +285,20 @@ auto DrtOutputResolver::ResolveNode(const DrtNodeModel&                         
   return resolved;
 }
 
+auto DrtOutputResolver::ResolveNodeEotf(
+    const DrtNodeModel& drt, const std::optional<ExportColorProfileConfig>& export_encoding,
+    std::string_view caller) -> ColorUtils::EOTF {
+  if (export_encoding.has_value()) {
+    return export_encoding->encoding_eotf;
+  }
+  const DrtEotf    eotf = drt.Params().EncodingEotf();
+  ColorUtils::EOTF resolved{};
+  if (!ToEotf(eotf, &resolved)) {
+    throw std::runtime_error(std::string(caller) +
+                             ": DrtOutputResolver: unsupported DRT encoding EOTF " +
+                             std::to_string(static_cast<int>(eotf)) + ".");
+  }
+  return resolved;
+}
+
 }  // namespace alcedo

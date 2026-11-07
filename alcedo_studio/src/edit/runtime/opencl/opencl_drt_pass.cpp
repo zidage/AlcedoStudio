@@ -108,6 +108,9 @@ struct OpenClDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteOpenClDrt";
   static constexpr bool        kImplementsFilmPrint = true;
+  /// Film Grain still runs the neighborhood kernels with the Bernoulli field; phase G4 of the
+  /// film grain plan ports the grain field.
+  static constexpr bool        kImplementsFilmGrainField = false;
 
   /// Post neighborhood parameters travel in the command, not in an arena slot.
   static void RefreshNeighborhoodAdjustment(OpenClRenderDevice&, const IOperatorModel&,

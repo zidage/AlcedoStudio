@@ -9,10 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "cuda/prng.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/cuda/cuda_detail_math.cuh"
-#include "edit/runtime/cuda/cuda_film_grain_math.cuh"
 
 namespace alcedo::cuda_neighbor_grade {
 
@@ -82,48 +80,6 @@ __device__ __forceinline__ auto HalationBlurVertical(const float4* src, int x, i
   return blur;
 }
 
-__device__ __forceinline__ auto FilmReferenceCoordinate(int x, int y,
-                                                        const GradeNeighborParams& params) -> int2 {
-  if (params.use_reference_coordinates == 0U) return make_int2(x, y);
-  const float mapped_x = params.render_to_reference[0] * (static_cast<float>(x) + 0.5f) +
-                         params.render_to_reference[1] * (static_cast<float>(y) + 0.5f) +
-                         params.render_to_reference[2] - 0.5f;
-  const float mapped_y = params.render_to_reference[3] * (static_cast<float>(x) + 0.5f) +
-                         params.render_to_reference[4] * (static_cast<float>(y) + 0.5f) +
-                         params.render_to_reference[5] - 0.5f;
-  return make_int2(
-      min(max(static_cast<int>(floorf(mapped_x + 0.5f)), 0), max(params.reference_width, 1) - 1),
-      min(max(static_cast<int>(floorf(mapped_y + 0.5f)), 0), max(params.reference_height, 1) - 1));
-}
-
-__device__ __forceinline__ auto FilmSampleAt(const float4* src, int x, int y, int channel,
-                                             int width, int height,
-                                             const GradeNeighborParams& params) -> float {
-  const int  clamped_x = min(max(x, 0), width - 1);
-  const int  clamped_y = min(max(y, 0), height - 1);
-  const auto signal    = ReadClamped(src, clamped_x, clamped_y, width, height);
-  const auto ref       = FilmReferenceCoordinate(clamped_x, clamped_y, params);
-  const auto prng_seed = (static_cast<std::uint64_t>(params.seed_hi) << 32U) | params.seed_lo;
-  return CUDA::FilmGrainSample(CUDA::FilmGrainChannel(signal, channel), ref.x, ref.y, channel,
-                               prng_seed);
-}
-
-__device__ __forceinline__ auto FilmBlurHorizontal(const float4* src, int x, int y, int width,
-                                                   int height, const GradeNeighborParams& params)
-    -> float4 {
-  float result[3]{};
-  for (int channel = 0; channel < 3; ++channel) {
-    float acc = FilmSampleAt(src, x, y, channel, width, height, params) * params.weights[0];
-    for (int tap = 1; tap < static_cast<int>(params.tap_count); ++tap) {
-      acc += (FilmSampleAt(src, x - tap, y, channel, width, height, params) +
-              FilmSampleAt(src, x + tap, y, channel, width, height, params)) *
-             params.weights[tap];
-    }
-    result[channel] = acc;
-  }
-  return make_float4(result[0], result[1], result[2], ReadClamped(src, x, y, width, height).w);
-}
-
 __device__ __forceinline__ auto VerticalRadius(const GradeNeighborParams& params) -> int {
   const auto behavior = static_cast<AdjustmentBehavior>(params.behavior);
   if (behavior == AdjustmentBehavior::Halation) {
@@ -141,8 +97,6 @@ __global__ void BlurHorizontal(const float4* src, float4* dst, int width, int he
   float4     result;
   if (behavior == AdjustmentBehavior::Halation) {
     result = HalationBlurHorizontal(src, x, y, width, height, params);
-  } else if (behavior == AdjustmentBehavior::FilmGrain) {
-    result = FilmBlurHorizontal(src, x, y, width, height, params);
   } else {
     result = CUDA::detail_blur_horizontal(x, y, src, width, height, width,
                                           static_cast<int>(params.tap_count), params.weights);
@@ -258,22 +212,7 @@ __global__ void ApplyVertical(const float4* original, const float4* blur_horizon
                     source.y + spill_g * params.amount * params.redshift[1],
                     source.z + spill_b * params.amount * params.redshift[2], source.w),
         mix_original, mix, mask, index);
-    return;
   }
-
-  const auto c0 = tile[center];
-  float4     blur = Scale(c0, params.weights[0]);
-  for (int tap = 1; tap < static_cast<int>(params.tap_count); ++tap) {
-    const auto top    = tile[center - tap * tile_width];
-    const auto bottom = tile[center + tap * tile_width];
-    const auto weight = params.weights[tap];
-    blur.x += (top.x + bottom.x) * weight;
-    blur.y += (top.y + bottom.y) * weight;
-    blur.z += (top.z + bottom.z) * weight;
-  }
-  blur.w     = c0.w;
-  dst[index] = MixIfNeeded(CUDA::FilmGrainApplyDyeClouds(source, blur, params.amount), mix_original,
-                           mix, mask, index);
 }
 
 }  // namespace alcedo::cuda_neighbor_grade

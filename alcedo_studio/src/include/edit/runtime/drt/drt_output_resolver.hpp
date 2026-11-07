@@ -58,6 +58,19 @@ class DrtOutputResolver {
   [[nodiscard]] static auto ResolveNode(
       const DrtNodeModel& drt, const std::optional<ExportColorProfileConfig>& export_encoding,
       std::string_view caller) -> ColorUtils::TO_OUTPUT_Params;
+
+  /**
+   * @brief The EOTF of the display encoding of @p drt for one DRT pass: the export encoding when
+   *        it is set, else the payload encoding. The value equals the `eotf_` of @ref ResolveNode.
+   *
+   * Reads one field and runs no precompute, so a Post operator can call it for each frame.
+   *
+   * @throws std::runtime_error that starts with @p caller when the payload EOTF is not a known
+   *         enumerator.
+   */
+  [[nodiscard]] static auto ResolveNodeEotf(
+      const DrtNodeModel& drt, const std::optional<ExportColorProfileConfig>& export_encoding,
+      std::string_view caller) -> ColorUtils::EOTF;
 };
 
 }  // namespace alcedo
