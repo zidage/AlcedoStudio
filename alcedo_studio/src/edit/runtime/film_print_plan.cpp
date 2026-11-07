@@ -17,12 +17,16 @@
 
 namespace alcedo {
 
-auto FilmSceneRawCct(const PipelineDocument& document) -> std::optional<double> {
+auto FilmSceneRawWhite(const PipelineDocument& document) -> std::optional<FilmRawWhite> {
   const auto* develop = document.Develop();
   if (develop == nullptr) {
     return std::nullopt;
   }
-  return RawWhiteBalanceCct(develop->Params().Params());
+  const auto white = RawWhiteBalanceWhite(develop->Params().Params());
+  if (!white.has_value()) {
+    return std::nullopt;
+  }
+  return FilmRawWhite{white->cct, WhiteBalanceTemperatureTintToXy(white->cct, white->tint)};
 }
 
 namespace {

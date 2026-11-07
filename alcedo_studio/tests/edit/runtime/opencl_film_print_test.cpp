@@ -800,16 +800,16 @@ TEST_F(OpenClFilmPrintFixture, AsShotFollowsTheColourTemperatureOfTheRawDecode) 
     auto document = FilmPrintDocument("kodak_5207", material, std::string{kFilmAsShotLightId});
     // A RAW file in mode As Shot uses its solved temperature: the same as mode Custom at it.
     film_print_test::SetRawAsShot(document, 5650.0);
-    ASSERT_EQ(FilmSceneRawCct(document), std::optional<double>(5650.0));
+    ASSERT_EQ(FilmSceneRawWhite(document).value().cct, 5650.0);
     const auto as_shot = render(document);
     auto       custom  = FilmPrintDocument("kodak_5207", material, std::string{kFilmAsShotLightId});
     film_print_test::SetRawCustom(custom, 5650.0);
-    ASSERT_EQ(FilmSceneRawCct(custom), std::optional<double>(5650.0));
+    ASSERT_EQ(FilmSceneRawWhite(custom).value().cct, 5650.0);
     EXPECT_EQ(differs(as_shot, render(custom)), 0.0);
 
     // A change of the Kelvin in mode Custom changes the output and the keys of the tables.
     const auto key_of = [&](const PipelineDocument& d) {
-      const auto light = tables.Bundle().SceneLightMix(kFilmAsShotLightId, FilmSceneRawCct(d));
+      const auto light = tables.Bundle().SceneLightMix(kFilmAsShotLightId, FilmSceneRawWhite(d));
       return tables.Resolve("kodak_5207", material, light)->uv_key;
     };
     const auto warm_key = key_of(custom);
@@ -819,7 +819,7 @@ TEST_F(OpenClFilmPrintFixture, AsShotFollowsTheColourTemperatureOfTheRawDecode) 
 
     // An input with no RAW white balance renders As Shot as the reference.
     film_print_test::SetRasterInput(document);
-    EXPECT_EQ(FilmSceneRawCct(document), std::nullopt);
+    EXPECT_FALSE(FilmSceneRawWhite(document).has_value());
     const auto raster    = render(document);
     auto       reference = FilmPrintDocument("kodak_5207", material, "reference");
     film_print_test::SetRasterInput(reference);
@@ -834,16 +834,18 @@ TEST_F(OpenClFilmPrintFixture, AsShotFollowsTheColourTemperatureOfTheRawDecode) 
   payload.wb_mode   = "as_shot";
   const auto solved = ResolveDevelopColorTransform(payload);
   ASSERT_TRUE(solved.ok);
-  payload.as_shot_cct = solved.transform.resolved_cct;
+  payload.as_shot_cct  = solved.transform.resolved_cct;
+  payload.as_shot_tint = solved.transform.resolved_tint;
   document.Develop()->Params().ReplaceParams(payload);
-  ASSERT_EQ(FilmSceneRawCct(document), std::optional<double>(solved.transform.resolved_cct));
+  ASSERT_EQ(FilmSceneRawWhite(document).value().cct, solved.transform.resolved_cct);
   const auto neutral = render(document);
   for (const auto& pixel : neutral) {
     ASSERT_TRUE(std::isfinite(pixel.r) && std::isfinite(pixel.g) && std::isfinite(pixel.b));
   }
   auto custom =
       FilmPrintDocument("kodak_5219", "kodak_2383", std::string{kFilmAsShotLightId});
-  film_print_test::SetRawCustom(custom, solved.transform.resolved_cct);
+  film_print_test::SetRawCustom(custom, solved.transform.resolved_cct,
+                                solved.transform.resolved_tint);
   EXPECT_EQ(differs(neutral, render(custom)), 0.0);
 }
 
@@ -1362,7 +1364,8 @@ TEST_F(OpenClFilmPrintFixture, FilmPrintImageMatchesLab) {
       if (automatic) {
         shift = film_print_test::LargestShiftDifference(LastAutoShift(), file.F64("shift", {3}));
         const auto& film  = document.Drt()->Params().FilmPrint();
-        const auto  mix   = tables.Bundle().SceneLightMix(film.scene_light, FilmSceneRawCct(document));
+        const auto  mix =
+            tables.Bundle().SceneLightMix(film.scene_light, FilmSceneRawWhite(document));
         const auto  data  = tables.Resolve(negative, material, mix);
         const auto  lab_x = file.F64("prescan", {64, 96, 3});
         EXPECT_EQ(prescan.size(), 64U * 96U);

@@ -23,14 +23,16 @@ namespace alcedo {
 class PipelineDocument;
 
 /**
- * @brief The colour temperature of the RAW decode of @p document, for scene light As Shot.
+ * @brief The white of the RAW decode of @p document, for scene light As Shot.
  *
- * Develop mode Custom gives its Kelvin; the other modes give the solved as-shot temperature. The
- * tint is not read. A raster input (JPEG, PNG, TIFF, OpenEXR), a document with no Develop, or a
- * RAW whose colour transform does not resolve has no RAW white balance, so the result is none, and
- * As Shot reads as the reference. See `RawWhiteBalanceCct`.
+ * Develop mode Custom gives its Kelvin and tint; the other modes give the solved as-shot values.
+ * The chromaticity is that of the Develop white balance (`WhiteBalanceTemperatureTintToXy`), so it
+ * holds the tint (rule 'as_shot_tint'). A raster input (JPEG, PNG, TIFF, OpenEXR), a document
+ * with no Develop, or a RAW whose colour transform does not resolve has no RAW white balance, so
+ * the result is none, and As Shot reads as the reference. See `RawWhiteBalanceWhite`.
  */
-[[nodiscard]] auto FilmSceneRawCct(const PipelineDocument& document) -> std::optional<double>;
+[[nodiscard]] auto FilmSceneRawWhite(const PipelineDocument& document)
+    -> std::optional<FilmRawWhite>;
 
 /**
  * @brief Graph value for the canonical Halation result of the DRT node @p drt_id.

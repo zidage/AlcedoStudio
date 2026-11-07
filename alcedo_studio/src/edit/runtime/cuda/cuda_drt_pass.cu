@@ -162,10 +162,11 @@ struct CudaDrtOps {
   }
 
   static void DispatchFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
-                                const DrtNodeModel& drt, std::optional<double> raw_cct,
+                                const DrtNodeModel& drt, std::optional<FilmRawWhite> raw_white,
                                 const FrameSceneBinding& scene, const FrameSceneBinding& display,
                                 std::uint32_t width, std::uint32_t height, float grain_strength) {
-    RecordCudaFilmPrint(device, plan, drt, raw_cct, scene, display, width, height, grain_strength);
+    RecordCudaFilmPrint(device, plan, drt, raw_white, scene, display, width, height,
+                        grain_strength);
   }
 
   static void CheckAfterEncode(CudaRenderDevice&) {

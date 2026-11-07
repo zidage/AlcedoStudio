@@ -137,15 +137,27 @@ auto AllFinite(std::span<const double> values) -> bool {
 
 /// The scene light of a key: the two lights and the share of the second.
 auto MixLight(ContentHash hash, const FilmSceneLightMix& light) -> ContentHash {
-  return hash.MixText(light.first).MixText(light.second).MixF64(light.share);
+  hash.MixText(light.first).MixText(light.second).MixF64(light.share);
+  // Rule 'as_shot_tint': the light of each film follows from the blend and the RAW white.
+  if (light.raw_white.has_value()) {
+    hash.MixText("raw white")
+        .MixF64(light.raw_white->cct)
+        .MixF64(light.raw_white->xy[0])
+        .MixF64(light.raw_white->xy[1]);
+  }
+  return hash;
 }
 
 /// The scene light of a message.
 auto LightText(const FilmSceneLightMix& light) -> std::string {
-  if (light.share == 0.0) {
-    return light.first;
+  std::string text = light.share == 0.0 ? light.first
+                                        : light.first + " and " + light.second + " (share " +
+                                              std::to_string(light.share) + ")";
+  if (light.raw_white.has_value()) {
+    text += " with the RAW white x " + std::to_string(light.raw_white->xy[0]) + ", y " +
+            std::to_string(light.raw_white->xy[1]);
   }
-  return light.first + " and " + light.second + " (share " + std::to_string(light.share) + ")";
+  return text;
 }
 
 }  // namespace

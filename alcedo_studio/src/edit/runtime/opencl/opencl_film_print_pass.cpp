@@ -283,7 +283,7 @@ auto ReadOrBuildCanvasResult(OpenClRenderDevice& device, const ExecutionPlan& pl
 }  // namespace
 
 void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                           const DrtNodeModel& drt, std::optional<double> raw_cct,
+                           const DrtNodeModel& drt, std::optional<FilmRawWhite> raw_white,
                            const FrameSceneBinding& scene, const FrameSceneBinding& display,
                            std::uint32_t width, std::uint32_t height, float grain_strength,
                            std::vector<std::string>* pass_names, bool separate_narrow_spread) {
@@ -298,7 +298,7 @@ void RecordOpenClFilmPrint(OpenClRenderDevice& device, const ExecutionPlan& plan
   if (grain_strength != 0.0f) {
     grain = MakeDrtFilmPrintGrainPlan(drt, grain_strength, plan.geometry);
   }
-  const auto  light       = bundle.SceneLightMix(film.scene_light, raw_cct);
+  const auto  light       = bundle.SceneLightMix(film.scene_light, raw_white);
   // Negative Scan reads the scanner table of the scanner of the document. A rendering setting reads
   // the kept table.
   const bool  scan        = IsFilmNegativeScan(film.negative, film.print_material);

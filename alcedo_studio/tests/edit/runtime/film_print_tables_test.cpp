@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "edit/graph/film_print_model.hpp"
@@ -30,6 +31,7 @@
 #include "edit/runtime/film/film_negative_scan.hpp"
 #include "edit/runtime/film/film_print_kernel_tables.hpp"
 #include "edit/runtime/film/film_print_math.h"
+#include "edit/runtime/film/film_scene_tint.hpp"
 #include "edit/runtime/film/film_stock_bundle.hpp"
 #include "edit/runtime/film/film_tables.hpp"
 #include "film_print_reference.hpp"
@@ -989,32 +991,39 @@ TEST_F(FilmPrintTablesTest, NegativeScanSelectionReadsTheValuesOfItsNegativeAndL
 TEST_F(FilmPrintTablesTest, AsShotBlendsTheTwoGridLightsLinearInMired) {
   const auto bundle = FilmStockBundle::Open(Resources());
   ASSERT_EQ(bundle->CctGrid().kelvin, (std::vector<double>{3000.0, 6000.0}));
-  // A named light is that light.
-  const auto named = bundle->SceneLightMix("daylight", 4000.0);
+  const auto white = [](double kelvin) { return FilmRawWhite{kelvin, {0.38, 0.38}}; };
+  // A named light is that light, with no RAW white.
+  const auto named = bundle->SceneLightMix("daylight", white(4000.0));
   EXPECT_EQ(named.first, "daylight");
   EXPECT_EQ(named.second, "daylight");
   EXPECT_EQ(named.share, 0.0);
+  EXPECT_FALSE(named.raw_white.has_value());
   // As Shot with no RAW white balance is the reference.
   const auto raster = bundle->SceneLightMix("as_shot", std::nullopt);
   EXPECT_EQ(raster.first, "reference");
   EXPECT_EQ(raster.share, 0.0);
+  EXPECT_FALSE(raster.raw_white.has_value());
   // 4000 K is 250 mired, the middle of 333.3 and 166.7 mired.
-  const auto middle = bundle->SceneLightMix("as_shot", 4000.0);
+  const auto middle = bundle->SceneLightMix("as_shot", white(4000.0));
   EXPECT_EQ(middle.first, "reference");
   EXPECT_EQ(middle.second, "daylight");
   EXPECT_NEAR(middle.share, 0.5, 1e-12);
-  EXPECT_NEAR(bundle->SceneLightMix("as_shot", 1e6 / 300.0).share,
+  ASSERT_TRUE(middle.raw_white.has_value());
+  EXPECT_EQ(middle.raw_white->xy, (std::array<double, 2>{0.38, 0.38}));
+  EXPECT_NEAR(bundle->GridLight(1e6 / 300.0).share,
               (1e6 / 3000.0 - 300.0) / (1e6 / 3000.0 - 1e6 / 6000.0), 1e-12);
   // Outside the grid: the nearest end.
-  EXPECT_EQ(bundle->SceneLightMix("as_shot", 2000.0).first, "reference");
-  EXPECT_EQ(bundle->SceneLightMix("as_shot", 2000.0).share, 0.0);
-  EXPECT_EQ(bundle->SceneLightMix("as_shot", 15000.0).first, "daylight");
-  EXPECT_THROW((void)bundle->SceneLightMix("no_light", 4000.0), std::runtime_error);
-  EXPECT_THROW((void)bundle->SceneLightMix("as_shot", std::nan("")), std::runtime_error);
-  EXPECT_THROW((void)bundle->SceneLightMix("as_shot", 0.0), std::runtime_error);
+  EXPECT_EQ(bundle->GridLight(2000.0).first, "reference");
+  EXPECT_EQ(bundle->GridLight(2000.0).share, 0.0);
+  EXPECT_EQ(bundle->GridLight(15000.0).first, "daylight");
+  EXPECT_THROW((void)bundle->SceneLightMix("no_light", white(4000.0)), std::runtime_error);
+  EXPECT_THROW((void)bundle->SceneLightMix("as_shot", white(std::nan(""))), std::runtime_error);
+  EXPECT_THROW((void)bundle->SceneLightMix("as_shot", white(0.0)), std::runtime_error);
+  EXPECT_THROW((void)bundle->SceneLightMix("as_shot", FilmRawWhite{4000.0, {std::nan(""), 0.3}}),
+               std::runtime_error);
 
   // Each value that depends on the light is the blend of its values under the two lights.
-  const auto mix = FilmSceneLightMix{"reference", "daylight", 0.25};
+  const auto mix = FilmSceneLightMix{"reference", "daylight", 0.25, std::nullopt};
   const auto a   = bundle->Selection("neg_b", "paper_b", "reference");
   const auto b   = bundle->Selection("neg_b", "paper_b", "daylight");
   const auto ab  = bundle->Selection("neg_b", "paper_b", mix);
@@ -1049,6 +1058,70 @@ TEST_F(FilmPrintTablesTest, AsShotBlendsTheTwoGridLightsLinearInMired) {
   EXPECT_NEAR(rab.layer_gain[1], 0.75 * ra.layer_gain[1] + 0.25 * rb.layer_gain[1], 1e-15);
   EXPECT_NEAR(rab.scene_spectrum[0], 0.75 * ra.scene_spectrum[0] + 0.25 * rb.scene_spectrum[0],
               1e-15);
+}
+
+/// CIE 1931 xy of a CIE 1960 uv.
+auto XyOfUv1960(const std::array<double, 2>& uv) -> std::array<double, 2> {
+  const double den = 2.0 * uv[0] - 8.0 * uv[1] + 4.0;
+  return {3.0 * uv[0] / den, 2.0 * uv[1] / den};
+}
+
+auto SpectrumUv(const FilmStockBundle& bundle, std::span<const double> spectrum)
+    -> std::array<double, 2> {
+  return film_scene_tint::Uv1960(film_scene_tint::SpectrumXyz(bundle.WavelengthsNm(), spectrum));
+}
+
+/// The RAW white of rule 'as_shot_tint' that moves the grid light of @p kelvin by @p duv across the
+/// Planckian locus, for the spectrum @p grid of that light.
+auto TintedWhite(const FilmStockBundle& bundle, double kelvin, std::span<const double> grid,
+                 double duv) -> FilmRawWhite {
+  const auto uv     = SpectrumUv(bundle, grid);
+  const auto normal = film_scene_tint::PlanckianOffset(uv).normal;
+  return {kelvin, XyOfUv1960({uv[0] + duv * normal[0], uv[1] + duv * normal[1]})};
+}
+
+TEST_F(FilmPrintTablesTest, AsShotTintGivesEachFilmTheChromaticityOfTheRawWhite) {
+  const auto bundle = FilmStockBundle::Open(Resources());
+  const auto grid   = bundle->GridLight(4000.0);
+  const auto scan   = bundle->NegativeScanSelection("neg_a", grid);
+  const auto print  = bundle->Selection("neg_b", "paper_b", grid);
+  const auto slide  = bundle->ReversalSelection("rev_a", grid);
+  // A RAW white with the Duv of the grid light is the grid light: the rule adds no factor.
+  const auto same =
+      bundle->SceneLightMix("as_shot", TintedWhite(*bundle, 4000.0, scan.scene_spectrum, 0.0));
+  EXPECT_EQ(bundle->NegativeScanSelection("neg_a", same).scene_spectrum, scan.scene_spectrum);
+
+  for (const double duv : {0.012, -0.008}) {
+    SCOPED_TRACE(duv);
+    // Each film reaches the chromaticity of its own grid light moved by the Duv. The synthetic
+    // films have their own reference light, so each film has its own target.
+    const auto check = [&](std::span<const double> plain, const auto& tinted_of) {
+      const auto white  = TintedWhite(*bundle, 4000.0, plain, duv);
+      const auto mix    = bundle->SceneLightMix("as_shot", white);
+      const auto tinted = tinted_of(mix);
+      const auto uv     = SpectrumUv(*bundle, tinted);
+      const auto target = film_scene_tint::Uv1960OfXy(white.xy);
+      EXPECT_NEAR(uv[0], target[0], 1e-7);
+      EXPECT_NEAR(uv[1], target[1], 1e-7);
+      EXPECT_NE(std::vector<double>(tinted.begin(), tinted.end()),
+                std::vector<double>(plain.begin(), plain.end()));
+      return mix;
+    };
+    check(scan.scene_spectrum, [&](const FilmSceneLightMix& mix) {
+      return bundle->NegativeScanSelection("neg_a", mix).scene_spectrum;
+    });
+    check(slide.scene_spectrum, [&](const FilmSceneLightMix& mix) {
+      return bundle->ReversalSelection("rev_a", mix).scene_spectrum;
+    });
+    const auto print_mix    = check(print.scene_spectrum, [&](const FilmSceneLightMix& mix) {
+      return bundle->Selection("neg_b", "paper_b", mix).scene_spectrum;
+    });
+    // On a print, the printer lights follow the grey of the light with the tint.
+    const auto tinted_print = bundle->Selection("neg_b", "paper_b", print_mix);
+    EXPECT_NE(tinted_print.printer_balance_log10, print.printer_balance_log10);
+    // neg_b has no rule 'negative_show_grade', so its grade grey stays 0.
+    EXPECT_EQ(tinted_print.negative_grade_grey, print.negative_grade_grey);
+  }
 }
 
 TEST_F(FilmPrintTablesTest, UvTableOfABlendIsTheBlendOfTheTables) {
@@ -2160,7 +2233,7 @@ TEST_F(FilmPrintTablesLabTest, AsShotBlendMatchesTheLabBlend) {
   for (const auto& blend : blends) {
     SCOPED_TRACE(blend.negative + " at " + std::to_string(blend.kelvin) + " K");
     const auto file = FilmArrayFile::Parse(ReadBytes(blend.path), blend.path);
-    const auto mix  = bundle_->SceneLightMix(kFilmAsShotLightId, blend.kelvin);
+    const auto mix  = bundle_->GridLight(blend.kelvin);
     EXPECT_EQ(mix.first, blend.node_a);
     EXPECT_EQ(mix.second, blend.node_b);
     EXPECT_NEAR(mix.share, file.F64("blend_share", {})[0], 1e-12);
@@ -2325,11 +2398,10 @@ TEST_F(FilmPrintTablesLabTest, NegativeScanPointFormMatchesTheLab) {
     const auto  file     = FilmArrayFile::Parse(ReadBytes(path), path);
     const auto& metadata = file.Metadata();
     const auto  negative = metadata.at("negative").get<std::string>();
-    const auto  mix =
-        metadata.contains("kelvin")
-            ? bundle_->SceneLightMix(kFilmAsShotLightId, metadata.at("kelvin").get<double>())
-            : FilmSceneLightMix{metadata.at("scene_light").get<std::string>(),
-                                metadata.at("scene_light").get<std::string>(), 0.0};
+    const auto  mix      = metadata.contains("kelvin")
+                               ? bundle_->GridLight(metadata.at("kelvin").get<double>())
+                               : FilmSceneLightMix{metadata.at("scene_light").get<std::string>(),
+                                             metadata.at("scene_light").get<std::string>(), 0.0};
     const auto tables = tables_->Resolve(negative, kFilmNegativeScanId, mix);
     const film_print_reference::FilmPrintPointReference reference(*bundle_, *tables, negative,
                                                                   std::string(kFilmNegativeScanId), mix);
@@ -2676,6 +2748,324 @@ TEST_F(FilmPrintTablesLabTest, RecordsTheHostTimeOfEachStage) {
   std::cout << "scan u'v' table: " << scan.last_uv_seconds
             << " s; scanner table: " << scan.last_scan_table_seconds << " s\n";
   EXPECT_GT(scan.last_scan_table_seconds, 0.0);
+}
+
+/// Kodak Wratten 2 conversion filters, diffuse density, from 400 nm. 85 (amber; datasheet of
+/// Vision3 500T 5219: daylight, filter 85): the curve of the Kodak chart 'KODAK WRATTEN2 Optical
+/// Filter / Conversion 85 Series', read from its vector path, 10 nm steps. 80A (blue; daylight
+/// stocks under 3200 K): the chart 'Conversion 80 Series', read at 20 nm steps to +-0.02 density.
+/// Outside a chart the curve keeps its end value.
+constexpr std::array<double, 31> kWratten85Density = {
+    1.222, 0.745, 0.547, 0.476, 0.442, 0.419, 0.394, 0.366, 0.344, 0.326, 0.311,
+    0.309, 0.317, 0.316, 0.309, 0.293, 0.253, 0.190, 0.125, 0.081, 0.060, 0.052,
+    0.046, 0.043, 0.042, 0.041, 0.041, 0.041, 0.041, 0.041, 0.041};
+constexpr std::array<double, 16> kWratten80aDensity = {0.19, 0.13, 0.14,  0.18, 0.24, 0.31,
+                                                       0.41, 0.49, 0.565, 0.62, 0.66, 0.70,
+                                                       0.73, 0.73, 0.735, 0.75};
+
+auto FilterDensity(std::span<const double> curve, double step_nm, double nm) -> double {
+  const double position = (nm - 400.0) / step_nm;
+  if (position <= 0.0) return curve.front();
+  if (position >= static_cast<double>(curve.size() - 1)) return curve.back();
+  const auto   low = static_cast<std::size_t>(position);
+  const double t   = position - static_cast<double>(low);
+  return curve[low] + t * (curve[low + 1] - curve[low]);
+}
+
+auto MinusMean(std::array<double, 3> values) -> std::array<double, 3> {
+  const double mean = (values[0] + values[1] + values[2]) / 3.0;
+  for (auto& value : values) value -= mean;
+  return values;
+}
+
+/// log10 of the layer exposure of @p film under @p light through a filter, minus with no filter.
+auto FilterLogExposure(const FilmNegativeView& film, std::span<const double> wavelengths,
+                       std::span<const double> light, std::span<const double> filter,
+                       double step_nm) -> std::array<double, 3> {
+  const auto            count = wavelengths.size();
+  std::array<double, 3> out{};
+  for (std::size_t k = 0; k < 3; ++k) {
+    double open     = 0.0;
+    double filtered = 0.0;
+    for (std::size_t w = 0; w < count; ++w) {
+      const double exposure = light[w] * film.exposure_weights[k * count + w];
+      open += exposure;
+      filtered += exposure * std::pow(10.0, -FilterDensity(filter, step_nm, wavelengths[w]));
+    }
+    out[k] = std::log10(filtered / open);
+  }
+  return out;
+}
+
+/// The scan density of an 18 % grey of Negative Scan with the default scanner.
+struct ScanGrey {
+  std::array<double, 3> density{};  ///< D above the film base, under the light
+  std::array<double, 3> aim{};      ///< D_aim
+  std::array<double, 3> gamma{};    ///< The gamma of the medium
+  std::array<double, 3> own{};      ///< The gamma of the stock at its grey, under its balance light
+};
+
+auto ScanGreyOf(const FilmStockBundle& bundle, FilmPrintTables& tables, std::string_view negative,
+                std::span<const double> spectrum) -> ScanGrey {
+  const auto data = tables.ResolveNegativeScan(
+      negative, FilmSceneLightMix{"reference", "reference", 0.0, std::nullopt},
+      film_negative_scan::DefaultScanner(bundle.NegativeScanConstants()));
+  const auto& values = data->negative_scan;
+  const auto  gain   = bundle.NegativeScanSelection(negative, "reference").layer_gain;
+  const film_negative_scan::ScannerTableView table{data->print_cube_root_xyz,
+                                                   static_cast<std::int64_t>(data->edge)};
+  const auto grey = [&](std::span<const double> light, double value) {
+    return film_negative_scan::GreyDensity(bundle, negative, table, values.base_density, gain,
+                                           light, value);
+  };
+  ScanGrey   result{grey(spectrum, 0.18), values.aim_density, values.gamma, {}};
+  // The central difference of rule generic_density_inversion (lab grey_gamma).
+  const auto balance = bundle.LightSpectrum(bundle.ScanBalanceLight(negative));
+  const auto high    = grey(balance, 0.36);
+  const auto low     = grey(balance, 0.09);
+  for (std::size_t k = 0; k < 3; ++k) {
+    result.own[k] = (high[k] - low[k]) / (2.0 * std::log10(2.0));
+  }
+  return result;
+}
+
+/// The x of Negative Scan (contrast 1, no shift): (D - D_aim) / gamma of the medium.
+auto ScanX(const ScanGrey& grey) -> std::array<double, 3> {
+  std::array<double, 3> x{};
+  for (std::size_t k = 0; k < 3; ++k) x[k] = (grey.density[k] - grey.aim[k]) / grey.gamma[k];
+  return x;
+}
+
+/// CIELAB hue angle in degrees of the channels of Negative Scan read as linear AP1, with the white
+/// AP1 (1, 1, 1) at the luminance of the colour.
+auto ScanHue(const FilmStockBundle& bundle, const std::array<double, 3>& x) -> double {
+  const auto            m = bundle.PointConstants().ap1_to_xyz;
+  std::array<double, 3> rgb{};
+  for (std::size_t k = 0; k < 3; ++k) rgb[k] = std::pow(10.0, x[k]);
+  std::array<double, 3> xyz{};
+  std::array<double, 3> white{};
+  for (std::size_t r = 0; r < 3; ++r) {
+    for (std::size_t c = 0; c < 3; ++c) {
+      xyz[r] += m[r * 3 + c] * rgb[c];
+      white[r] += m[r * 3 + c];
+    }
+  }
+  const auto f = [](double t) {
+    return t > std::pow(6.0 / 29.0, 3.0) ? std::cbrt(t)
+                                         : t / (3.0 * std::pow(6.0 / 29.0, 2.0)) + 4.0 / 29.0;
+  };
+  const double scale = xyz[1] / white[1];
+  const double fx    = f(xyz[0] / (white[0] * scale));
+  const double fy    = f(xyz[1] / (white[1] * scale));
+  const double fz    = f(xyz[2] / (white[2] * scale));
+  const double hue   = std::atan2(200.0 * (fy - fz), 500.0 * (fx - fy)) * 180.0 / std::acos(-1.0);
+  return hue < 0.0 ? hue + 360.0 : hue;
+}
+
+// G8 study (plan 'film_grain_format_and_stock_plan.md', G8 section 'Scene light cast of Negative
+// Scan'): the datasheet filter of a stock takes the cast of the other light back. The developed
+// grey of a tungsten stock in daylight (and of a daylight stock under 3200 K), in log10 exposure
+// units of the stock ((D - D_aim) / gamma of the stock), holds the cast that the filter removes:
+// these values less their mean, plus the log10 exposure that the filter takes from each layer less
+// its mean, are near 0. Negative Scan shows this cast with the contrast of the stock about the
+// medium gamma (stock character), printed here as x.
+// Limit 0.10 log10 (1/3 stop) per channel: the 85 converts 5500 K to 3400 K (not 3200 K) and the
+// 80A curve is read to +-0.02. A cast of the wrong size by 1/3 stop or more fails.
+// The catalog gives a daylight balance to stocks that are tungsten-balanced (issue 704), so the
+// filter of their datasheet is not known here; the test skips them.
+TEST_F(FilmPrintTablesLabTest, DatasheetConversionFilterTakesTheNegativeCastBack) {
+  constexpr double                          kLimit             = 0.10;
+  constexpr std::array<std::string_view, 5> kBalanceOfIssue704 = {
+      "kodak_5293", "kodak_5247", "kodak_5247_II", "kodak_5248", "kodak_5250"};
+  const auto wavelengths = bundle_->WavelengthsNm();
+  double     largest     = 0.0;
+  for (const auto& negative : bundle_->Negatives()) {
+    if (std::ranges::find(kBalanceOfIssue704, negative.id) != kBalanceOfIssue704.end()) continue;
+    SCOPED_TRACE(negative.id);
+    const bool            tungsten = bundle_->ScanBalanceLight(negative.id) == "T3200";
+    const auto            light    = bundle_->LightSpectrum(tungsten ? "D55" : "T3200");
+    const auto            grey     = ScanGreyOf(*bundle_, *tables_, negative.id, light);
+    std::array<double, 3> stock{};
+    for (std::size_t k = 0; k < 3; ++k) stock[k] = (grey.density[k] - grey.aim[k]) / grey.own[k];
+    const auto cast = MinusMean(stock);
+    const auto x    = MinusMean(ScanX(grey));
+    const auto filter =
+        MinusMean(FilterLogExposure(bundle_->Negative(negative.id), wavelengths, light,
+                                    tungsten ? std::span<const double>(kWratten85Density)
+                                             : std::span<const double>(kWratten80aDensity),
+                                    tungsten ? 10.0 : 20.0));
+    std::cout << negative.id << (tungsten ? " in D55 + 85" : " under T3200 + 80A")
+              << ": negative cast " << cast[0] << " " << cast[1] << " " << cast[2]
+              << "; filter takes " << -filter[0] << " " << -filter[1] << " " << -filter[2]
+              << "; scan x " << x[0] << " " << x[1] << " " << x[2] << "\n";
+    for (std::size_t k = 0; k < 3; ++k) {
+      EXPECT_LE(std::abs(cast[k] + filter[k]), kLimit) << "channel " << k;
+      largest = (std::max)(largest, std::abs(cast[k] + filter[k]));
+    }
+  }
+  std::cout << "largest |cast + filter| " << largest << " log10\n";
+}
+
+// Rule 'as_shot_tint' on the grey of Negative Scan, with the white of two RAW files of
+// sample_images/raw: night/P1031516.RW2 (6588 K, Duv +0.0112) and night/2136729222.rw2 (3538 K,
+// Duv +0.0122). The green of the light raises the green channel of the scan against the mean of
+// the other two, and turns the hue of the grey (CIELAB of the channels read as AP1, as the
+// product reads them) toward green: 500T in this daylight from blue toward cyan-blue (the hue
+// falls), and a daylight stock under this night light from orange toward yellow-green (the hue
+// rises). This model gives a green rise of 0.042, 0.121, and 0.108 log10 and a turn of -7.5,
+// +21.7, and +21.9 degrees; the limits are about half of these, so they hold the direction and the
+// size of the change.
+TEST_F(FilmPrintTablesLabTest, AsShotTintTurnsTheScanCastTowardGreen) {
+  struct Case {
+    std::string_view negative;
+    double           kelvin;
+    double           duv;
+    double           rise;     // least rise of G - (R + B) / 2, log10
+    double           degrees;  // least turn of the hue toward green: + up (warm), - down (cool)
+  };
+  for (const auto& c : {Case{"kodak_5219", 6588.0, 0.0112, 0.03, -4.0},
+                        Case{"kodak_portra_400", 3538.0, 0.0122, 0.08, 10.0},
+                        Case{"kodak_5207", 3538.0, 0.0122, 0.08, 10.0}}) {
+    SCOPED_TRACE(c.negative);
+    const auto grid       = bundle_->GridLight(c.kelvin);
+    const auto plain      = bundle_->NegativeScanSelection(c.negative, grid).scene_spectrum;
+    const auto grid_duv   = film_scene_tint::PlanckianOffset(SpectrumUv(*bundle_, plain)).duv;
+    const auto white      = TintedWhite(*bundle_, c.kelvin, plain, c.duv - grid_duv);
+    const auto mix        = bundle_->SceneLightMix("as_shot", white);
+    const auto tinted     = bundle_->NegativeScanSelection(c.negative, mix).scene_spectrum;
+    const auto raw_offset = film_scene_tint::PlanckianOffset(SpectrumUv(*bundle_, tinted));
+    EXPECT_NEAR(raw_offset.duv, c.duv, 2e-5);
+    const auto   before = ScanX(ScanGreyOf(*bundle_, *tables_, c.negative, plain));
+    const auto   after  = ScanX(ScanGreyOf(*bundle_, *tables_, c.negative, tinted));
+    const auto   green  = [](const std::array<double, 3>& x) { return x[1] - 0.5 * (x[0] + x[2]); };
+    const auto   b      = MinusMean(before);
+    const auto   a      = MinusMean(after);
+    const double hue_before = ScanHue(*bundle_, before);
+    const double hue_after  = ScanHue(*bundle_, after);
+    std::cout << c.negative << " at " << c.kelvin << " K: x - mean " << b[0] << " " << b[1] << " "
+              << b[2] << " (hue " << hue_before << "), with Duv " << c.duv << " " << a[0] << " "
+              << a[1] << " " << a[2] << " (hue " << hue_after << ")\n";
+    EXPECT_GE(green(after) - green(before), c.rise);
+    if (c.degrees > 0.0) {
+      EXPECT_GE(hue_after - hue_before, c.degrees);
+    } else {
+      EXPECT_LE(hue_after - hue_before, c.degrees);
+    }
+  }
+}
+
+// Rule 'as_shot_tint' over the corners of the white balance range of Develop: 2000 K to 15000 K,
+// and a tint of -150 to +150 (Duv -0.05 to +0.05). A corner with a chromaticity in the spectrum
+// locus gets that chromaticity, also at the ends of the grid of lights (500 and 70 mired): the Wien
+// factor moves the colour temperature with no grid limit. Three corners are out of the spectrum
+// locus (2000 K at Duv +0.02 and +0.05, 3200 K at Duv +0.05; build/tmp/g8_illuminant/locus_gap.py),
+// so no light has them: there k is at its limit, the light keeps the colour temperature of the grid
+// light (it is on the locus normal of the grid light), and it moves toward the RAW white (this
+// model: 0.0095 at 2000 K, 0.031 at 3200 K). No corner stops the render.
+TEST_F(FilmPrintTablesLabTest, AsShotTintReachesTheCornersOfTheDevelopRange) {
+  for (const double kelvin : {2000.0, 3200.0, 5500.0, 9654.0, 15000.0}) {
+    for (const double duv : {-0.05, -0.02, 0.02, 0.05}) {
+      SCOPED_TRACE(std::to_string(kelvin) + " K, Duv " + std::to_string(duv));
+      const bool out_of_locus =
+          (kelvin == 2000.0 && duv > 0.0) || (kelvin == 3200.0 && duv == 0.05);
+      const auto check = [&](std::span<const double> plain, const auto& tinted_of) {
+        const auto          grid_uv     = SpectrumUv(*bundle_, plain);
+        const auto          grid_offset = film_scene_tint::PlanckianOffset(grid_uv);
+        const auto          white  = TintedWhite(*bundle_, kelvin, plain, duv - grid_offset.duv);
+        const auto          target = film_scene_tint::Uv1960OfXy(white.xy);
+        std::vector<double> tinted;
+        ASSERT_NO_THROW(tinted = tinted_of(bundle_->SceneLightMix("as_shot", white)));
+        const auto uv = SpectrumUv(*bundle_, tinted);
+        if (!out_of_locus) {
+          EXPECT_LT(std::hypot(uv[0] - target[0], uv[1] - target[1]), 1e-7);
+          return;
+        }
+        // On the locus normal of the grid light, part of the way to the target.
+        const auto&  n      = grid_offset.normal;
+        const double du     = uv[0] - grid_uv[0];
+        const double dv     = uv[1] - grid_uv[1];
+        const double moved  = du * n[0] + dv * n[1];
+        const double needed = (target[0] - grid_uv[0]) * n[0] + (target[1] - grid_uv[1]) * n[1];
+        std::cout << kelvin << " K, Duv " << duv << ": moved " << moved << " of " << needed << "\n";
+        EXPECT_LT(std::abs(du * n[1] - dv * n[0]), 1e-7);
+        EXPECT_GT(moved, 0.004);
+        EXPECT_LT(moved, needed);
+      };
+      for (const std::string_view negative :
+           {"kodak_5207", "kodak_5219", "kodak_portra_400", "fuji_eterna_500"}) {
+        SCOPED_TRACE(negative);
+        check(bundle_->NegativeScanSelection(negative, bundle_->GridLight(kelvin)).scene_spectrum,
+              [&](const FilmSceneLightMix& mix) {
+                const auto s = bundle_->NegativeScanSelection(negative, mix).scene_spectrum;
+                return std::vector<double>(s.begin(), s.end());
+              });
+      }
+      check(
+          bundle_->Selection("kodak_5207", "kodak_2383", bundle_->GridLight(kelvin)).scene_spectrum,
+          [&](const FilmSceneLightMix& mix) {
+            const auto s = bundle_->Selection("kodak_5207", "kodak_2383", mix).scene_spectrum;
+            return std::vector<double>(s.begin(), s.end());
+          });
+    }
+  }
+}
+
+// The printer lights of a print follow the grey of the scene light on the negative (lab
+// FilmPreview._camera_filter, print timing 1). Rule 'as_shot_tint' moves the stored balance by
+// the change of the log10 paper exposure of the grey record. This checks that rule on the stored
+// lights: from a grid node near 2800 K to one near 6500 K, the change of the stored balance is
+// minus the change of the paper exposure of the grey record. The lab goes from the record to
+// Status M and back, so the two differ by a little.
+TEST_F(FilmPrintTablesLabTest, StoredPrinterLightsFollowTheGreyRecordOfTheLight) {
+  const auto& kelvin  = bundle_->CctGrid().kelvin;
+  const auto  nearest = [&](double target) {
+    return *std::ranges::min_element(kelvin, {}, [&](double k) { return std::abs(k - target); });
+  };
+  // At a node the blend is that one light: a share of 0, or 1 when it closes the pair below it.
+  const auto warm = bundle_->GridLight(nearest(2800.0));
+  const auto cool = bundle_->GridLight(nearest(6500.0));
+  ASSERT_TRUE(warm.share == 0.0 || warm.share == 1.0);
+  ASSERT_TRUE(cool.share == 0.0 || cool.share == 1.0);
+  double largest = 0.0;
+  for (const auto& [negative, paper] :
+       {std::pair<std::string_view, std::string_view>{"kodak_5207", "kodak_2383"},
+        {"kodak_5219", "kodak_2383"},
+        {"kodak_portra_400", "kodak_endura_premier"},
+        {"fuji_eterna_500", "kodak_portra_endura"}}) {
+    SCOPED_TRACE(negative);
+    const auto film              = bundle_->Negative(negative);
+    const auto material          = bundle_->PrintMaterial(paper);
+    const auto paper_log_of_grey = [&](const FilmSelectionSetup& setup) {
+      const auto            count = setup.scene_spectrum.size();
+      std::array<double, 3> q{};
+      for (std::size_t k = 0; k < 3; ++k) {
+        double sum = 0.0;
+        for (std::size_t w = 0; w < count; ++w) {
+          sum += 0.18 * setup.scene_spectrum[w] * film.exposure_weights[k * count + w];
+        }
+        q[k] = setup.layer_gain[k] * sum;
+      }
+      const auto                      record = film_negative_scan::PointRecord(film, q);
+      const film_tables::SpectralBand band{static_cast<std::int64_t>(count), film.base.data(),
+                                           film.dyes.data(), material.printing_weights.data()};
+      std::array<double, 3>           out{};
+      film_tables::Log10BandResponse(band, record.data(), 1, out.data(), 1);
+      return out;
+    };
+    const auto a  = bundle_->Selection(negative, paper, warm);
+    const auto b  = bundle_->Selection(negative, paper, cool);
+    const auto la = paper_log_of_grey(a);
+    const auto lb = paper_log_of_grey(b);
+    for (std::size_t k = 0; k < 3; ++k) {
+      const double stored = b.printer_balance_log10[k] - a.printer_balance_log10[k];
+      const double rule   = -(lb[k] - la[k]);
+      std::cout << negative << " channel " << k << ": stored " << stored << ", rule " << rule
+                << "\n";
+      EXPECT_NEAR(stored, rule, 0.01);
+      largest = (std::max)(largest, std::abs(stored - rule));
+    }
+  }
+  std::cout << "largest |stored - rule| " << largest << " log10\n";
 }
 
 #else
