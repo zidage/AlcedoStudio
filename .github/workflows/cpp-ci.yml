@@ -109,13 +109,38 @@ jobs:
           echo "ALCEDO_DUCKDB_VSS_EXTENSION=${vss_path}" >> "$GITHUB_ENV"
           echo "ALCEDO_DUCKDB_FTS_EXTENSION=${fts_path}" >> "$GITHUB_ENV"
 
+      - name: Download film print resources
+        # The film print resources are not in Git. build_product_resources.py of alcedo-film-lab
+        # makes them; a release of that repository holds the files of one schema and lab commit.
+        # With ALCEDO_FILM_PRINT_RESOURCE_DIR the build copies them to config/film_print next to
+        # alcedo_main and the film print test executables, so the film print tests render.
+        # A new resource schema needs a new release and new hashes here.
+        env:
+          FILM_PRINT_RESOURCES_TAG: product-resources-s11-d98712f
+          FILM_PRINT_RESOURCES_SHA256: |
+            c6f7f5de64e23f2176ae6640a3f9aed898653d2f432c907420766543e7f8612d  manifest.json
+            1edff3a9fdc4603adbaf4eea2361b5e1900396fb843e1bdb781e1337b7257a81  film_stock_bundle.bin
+            3cb09cc05843e808bba6b9288343425558297cc37a66d097e3cdacc92e0e6bc8  film_print_setup.bin
+            f364a60c8581f14abc72259dfa24109a1ae40d94ed2bc805979660dfb1533071  film_reflectance_table.bin
+        run: |
+          set -euo pipefail
+          resource_dir="${RUNNER_TEMP}/film_print"
+          mkdir -p "${resource_dir}"
+          release_url="https://github.com/zidage/alcedo-film-lab/releases/download/${FILM_PRINT_RESOURCES_TAG}"
+          for file in manifest.json film_stock_bundle.bin film_print_setup.bin film_reflectance_table.bin; do
+            curl -fsSL --retry 3 -o "${resource_dir}/${file}" "${release_url}/${file}"
+          done
+          (cd "${resource_dir}" && printf '%s' "${FILM_PRINT_RESOURCES_SHA256}" | shasum -a 256 -c -)
+          echo "ALCEDO_FILM_PRINT_RESOURCE_DIR=${resource_dir}" >> "$GITHUB_ENV"
+
       - name: Configure
         run: |
           cmake --preset macos_arm_metal_ci \
             -DDUCKDB_INC="${ALCEDO_DUCKDB_INC}" \
             -DDUCKDB_LIB="${ALCEDO_DUCKDB_LIB}" \
             -DALCEDO_DUCKDB_VSS_EXTENSION="${ALCEDO_DUCKDB_VSS_EXTENSION}" \
-            -DALCEDO_DUCKDB_FTS_EXTENSION="${ALCEDO_DUCKDB_FTS_EXTENSION}"
+            -DALCEDO_DUCKDB_FTS_EXTENSION="${ALCEDO_DUCKDB_FTS_EXTENSION}" \
+            -DALCEDO_FILM_PRINT_RESOURCE_DIR="${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
 
       - name: Build CI targets
         run: cmake --build --preset macos_arm_metal_ci --parallel 4

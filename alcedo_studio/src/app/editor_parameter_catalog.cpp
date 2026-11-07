@@ -2069,6 +2069,20 @@ auto EditorParameterCatalog::OdtEotfOptions(std::string_view encoding_space)
   return {};
 }
 
+auto EditorParameterCatalog::FilmGrainAfterMethodChange(std::string_view previous_method,
+                                                        std::string_view method,
+                                                        double           film_grain_ui)
+    -> std::optional<double> {
+  constexpr std::string_view kFilmPrint = "film_print";
+  if (method == kFilmPrint && previous_method != kFilmPrint && !(film_grain_ui > 0.0)) {
+    return kFilmPrintFilmGrainUi;
+  }
+  if (method != kFilmPrint && previous_method == kFilmPrint && film_grain_ui != 0.0) {
+    return 0.0;
+  }
+  return std::nullopt;
+}
+
 auto EditorParameterCatalog::KelvinToSliderPosition(double kelvin) -> int {
   return ui::color_temp::CctToSliderPos(static_cast<float>(kelvin));
 }

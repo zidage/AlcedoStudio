@@ -64,6 +64,12 @@ class EditorParameterCatalogAdapter : public QObject {
   /// The film that a change to film list @p list ("negative" or "reversal") selects first.
   Q_INVOKABLE QString      filmDefault(const QString& list) const;
 
+  /// The Film Grain value (UI percent) that a change of the display transform method from
+  /// @p previousMethod to @p method writes after the method, or undefined when the rule writes
+  /// nothing. See EditorParameterCatalog::FilmGrainAfterMethodChange.
+  Q_INVOKABLE QVariant     filmGrainAfterMethodChange(const QString& previousMethod,
+                                                      const QString& method, double filmGrain) const;
+
   /// UI value of the default of object field @p field.
   Q_INVOKABLE QVariantMap  uiDefault(const QString& field) const;
 

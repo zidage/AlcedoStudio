@@ -148,12 +148,17 @@ alcedo_add_automation_test(AutomationLutCommandsTest
     LABEL ci_automation_flow
     CATEGORIES ci_automation)
 
-# editor.* commands through the command registry.
+# editor.catalog and film.list through the command registry. With the film print resources the
+# balance lights of film.list are checked against the stock bundle.
 alcedo_add_automation_test(AutomationEditorCommandsTest
     SOURCES automation_editor_commands_test.cpp
     LIBRARIES AutomationHostLib
     LABEL ci_automation_flow
     CATEGORIES ci_automation)
+if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+  target_compile_definitions(AutomationEditorCommandsTest PRIVATE
+      ALCEDO_FILM_PRINT_RESOURCE_DIR="${ALCEDO_FILM_PRINT_RESOURCE_DIR}")
+endif()
 
 # The library workflow through real alcedo-cli and alcedo_main --headless processes. A failed
 # test copies the session logs to automation-failures/ in the build tree; CI uploads them.

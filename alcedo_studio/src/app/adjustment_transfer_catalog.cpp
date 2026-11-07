@@ -18,6 +18,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/film_print_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/lmt_model.hpp"
@@ -231,12 +232,23 @@ auto BuildDevelopItems(const PipelineDocument& document, const DevelopNodeModel&
   return items;
 }
 
-auto DrtMethodText(DrtMethod method) -> std::string {
-  switch (method) {
+/// The method of the display transform. Film Print adds its selection: `Film Print, <negative>,
+/// <print material>` with the catalog names (`Film Print, <negative>, Negative Scan` for Negative
+/// Scan), and `Film Print, <film>` for a colour reversal film, which has no print (issue #718).
+auto DrtMethodText(const DrtParamsModel& params) -> std::string {
+  switch (params.Method()) {
     case DrtMethod::Aces20:
       return "ACES 2.0";
-    case DrtMethod::FilmPrint:
-      return "Film Print";
+    case DrtMethod::FilmPrint: {
+      const FilmPrintParams film_print = params.FilmPrint();
+      std::string           text       = "Film Print, ";
+      text += FilmStockCatalogName(film_print.negative);
+      if (!IsFilmReversalIdentifier(film_print.negative)) {
+        text += ", ";
+        text += FilmPrintMaterialCatalogName(film_print.print_material);
+      }
+      return text;
+    }
     case DrtMethod::OpenDrt:
     default:
       return "OpenDRT";
@@ -326,7 +338,7 @@ auto BuildDrtPostItems(const DrtNodeModel& drt, std::string* error)
   params.kind          = AdjustmentTransferItemKind::DrtParameters;
   params.section       = AdjustmentTransferItemSection::DisplayTransform;
   params.display_name  = "Display Transform";
-  params.display_value = DrtMethodText(drt.Params().Method());
+  params.display_value = DrtMethodText(drt.Params());
   params.source_order  = 0;
   items.push_back(std::move(params));
 
