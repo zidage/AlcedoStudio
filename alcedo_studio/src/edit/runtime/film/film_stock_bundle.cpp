@@ -9,8 +9,10 @@
 #include <cstddef>
 #include <json.hpp>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
+#include "edit/graph/film_format.hpp"
 #include "edit/runtime/film/film_grain_field.h"
 #include "utils/hash/sha256.hpp"
 
@@ -398,10 +400,17 @@ void FilmStockBundle::ReadCommonValues() {
   print_contrast_        = stock_.F64("common/print_contrast", {})[0];
   print_flash_           = stock_.F64("common/print_flash", {})[0];
   viewing_flare_         = stock_.F64("common/viewing_flare", {})[0];
+  // The film format of the document sets the frame of the image plane. The lab values hold for
+  // the frame of the bundle, so that frame must be the frame of `35mm`.
+  const double frame_mm = stock_.F64("common/frame_mm", {})[0];
+  if (frame_mm != FilmFrameLongSideMm(FilmFormat::Film35mm)) {
+    throw std::runtime_error("Film print resource: the frame common/frame_mm of " +
+                             std::to_string(frame_mm) + " mm is not the frame of 35mm, " +
+                             std::to_string(FilmFrameLongSideMm(FilmFormat::Film35mm)) + " mm");
+  }
   image_plane_constants_ = {
       .halation_strength   = stock_.F64("common/halation_strength", {3}),
       .spread_gaussians    = stock_.F64("common/spread_gaussians", {2, 2}),
-      .frame_mm            = stock_.F64("common/frame_mm", {})[0],
       .halation_um         = stock_.F64("common/halation_um", {})[0],
       .inhibition_um       = stock_.F64("common/inhibition_um", {})[0],
       .enlarger_flare_size = stock_.F64("common/enlarger_flare_size", {})[0],

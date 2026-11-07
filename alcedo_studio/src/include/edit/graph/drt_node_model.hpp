@@ -144,8 +144,9 @@ enum class DrtDirty : std::uint32_t {
   Encoding     = 1U << 1,
   OpenDrt      = 1U << 2,
   Diffusion    = 1U << 3,
-  /// The Film Print fields that change the exposure of the negative: the negative, the print
-  /// material, the scene light, and Light spread.
+  /// The fields that change the exposure of the film print negative: the negative, the print
+  /// material, the scene light, Light spread, and the film format, which sets the frame of the
+  /// image plane.
   FilmExposure = 1U << 4,
   FilmHalation = 1U << 5,  ///< Halation of Film Print.
   FilmFlare    = 1U << 6,  ///< Enlarger flare of Film Print.
@@ -155,7 +156,8 @@ enum class DrtDirty : std::uint32_t {
   /// The scanner settings of Negative Scan (band centres, width, light). They choose the scanner
   /// table, so the prescan of rule 'frame_auto_colour' (`FilmScanPrescanResultId`) reads them.
   FilmScanner  = 1U << 8,
-  /// The film format. It sets the size and the strength of the grain on the film.
+  /// The film format. It sets the size and the strength of the grain on the film. A format change
+  /// also marks @ref FilmExposure.
   FilmFormat   = 1U << 9,
   All          = Method | Encoding | OpenDrt | Diffusion | FilmExposure | FilmHalation | FilmFlare |
         FilmScan | FilmScanner | FilmFormat,
@@ -250,7 +252,9 @@ class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload
   void               ApplyDiffusionStrength(float strength);
 
   /**
-   * @brief Set the film format and mark @ref DrtDirty::FilmFormat when it changes.
+   * @brief Set the film format. A change marks @ref DrtDirty::FilmFormat and
+   *        @ref DrtDirty::FilmExposure, because the format sets the frame of the film print image
+   *        plane, so the canonical film print results are made again.
    *
    * @throws std::invalid_argument that names the field `film_format` for a value outside the enum.
    *         No field changes.

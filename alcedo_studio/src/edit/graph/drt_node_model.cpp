@@ -562,7 +562,9 @@ void DrtParamsModel::ApplyFilmFormat(alcedo::FilmFormat format) {
       return DirtyFieldMask{};
     }
     payload.film_format = format;
-    return DirtyFieldMask{DrtDirty::FilmFormat};
+    // The format sets the frame of the film print image plane, so it changes the exposure of the
+    // negative after Light spread and Halation (phase G7).
+    return DirtyFieldMask{DrtDirty::FilmFormat} | DirtyFieldMask{DrtDirty::FilmExposure};
   });
 }
 

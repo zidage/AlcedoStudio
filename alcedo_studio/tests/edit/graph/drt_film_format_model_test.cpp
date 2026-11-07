@@ -63,15 +63,21 @@ TEST(DrtFilmFormatModel, OutputTransformJsonExcludesFilmFormat) {
   EXPECT_EQ(document.Drt()->Params().OutputTransformJson(), without);
 }
 
-TEST(DrtFilmFormatModel, FormatChangeMarksOnlyTheFilmFormatField) {
-  auto       document      = CreateDefaultPipelineDocument();
-  auto&      params        = document.Drt()->Params();
-  const auto other_fields  = DirtyFieldMask{static_cast<std::uint64_t>(DrtDirty::All) &
-                                           ~static_cast<std::uint64_t>(DrtDirty::FilmFormat)};
-  const auto other_before  = params.FieldsRevision(other_fields);
-  const auto format_before = params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmFormat});
+TEST(DrtFilmFormatModel, FormatChangeMarksTheFilmFormatAndTheFilmExposure) {
+  auto       document        = CreateDefaultPipelineDocument();
+  auto&      params          = document.Drt()->Params();
+  // Phase G7: the format sets the frame of the film print image plane, so the canonical film print
+  // results that FilmExposure invalidates are made again.
+  const auto marked          = DirtyFieldMask{DrtDirty::FilmFormat} |
+                      DirtyFieldMask{DrtDirty::FilmExposure};
+  const auto other_fields    = DirtyFieldMask{static_cast<std::uint64_t>(DrtDirty::All) &
+                                           ~marked.Bits()};
+  const auto other_before    = params.FieldsRevision(other_fields);
+  const auto format_before   = params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmFormat});
+  const auto exposure_before = params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmExposure});
   params.ApplyFilmFormat(FilmFormat::Film16mm);
   EXPECT_GT(params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmFormat}), format_before);
+  EXPECT_GT(params.FieldsRevision(DirtyFieldMask{DrtDirty::FilmExposure}), exposure_before);
   EXPECT_EQ(params.FieldsRevision(other_fields), other_before);
 
   const auto revision = params.Revision();

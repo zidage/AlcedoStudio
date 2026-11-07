@@ -1033,7 +1033,8 @@ TEST_F(MetalFilmPrintFixture, FilmPrintHalfSizeCellsStayOnTheirPixelsAtAnOddSize
   const auto  film     = document.Drt()->Params().FilmPrint();
   const auto  negative = bundle.Negative(film.negative);
   EXPECT_TRUE(MakeFilmPrintImagePlan(plan_.geometry, bundle.ImagePlaneConstants(),
-                                     negative.layer_spread_um, true, film)
+                                     negative.layer_spread_um, true, film,
+                                     document.Drt()->Params().FilmFormat())
                   .inhibitor_half_size);
   const auto even = RenderView(document, bars(kEven), false);
   SetView({kWidth, kOdd}, {kWidth, kOdd}, Matrix3x3::Identity());

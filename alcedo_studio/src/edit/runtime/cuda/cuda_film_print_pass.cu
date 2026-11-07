@@ -911,7 +911,8 @@ void RecordCudaFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto negative     = bundle.Film(film.negative);
   const auto image =
       MakeFilmPrintImagePlan(plan.geometry, bundle.ImagePlaneConstants(), negative.layer_spread_um,
-                             params.inhibition_has_image != 0U || params.negative_grade != 0U, film);
+                             params.inhibition_has_image != 0U || params.negative_grade != 0U, film,
+                             drt.Params().FilmFormat());
   // With no blur, one dispatch computes the final amounts, so FP4 and FP5 need no other image.
   const bool inhibitor_blur = image.image_plane && params.inhibition_has_image != 0U;
 

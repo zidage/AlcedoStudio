@@ -6,7 +6,8 @@ Status: **In progress.** G0 is complete in the lab ([alcedo-film-lab #2](https:/
 (2026-11-05): the host plan, the shared grain math, and the bundle schema 11. G2 is complete (2026-11-05): the field
 `film_format`, the Film Grain range 0 to 200 %, the Format selector of both panels, and the compatibility tests. G3 is complete
 (2026-11-05): the CUDA post grain with the size and the strength of the plan, and decision U5 (the #660 colour). G5 is complete
-(2026-11-06): on CUDA the film print adds the grain to the dye amounts of its negative and skips the post Film Grain. The user approved the plan and closed decisions U1 to U4 on
+(2026-11-06): on CUDA the film print adds the grain to the dye amounts of its negative and skips the post Film Grain. G7 is complete
+(2026-11-06): the film format sets the frame of the film print image plane on all backends. The user approved the plan and closed decisions U1 to U4 on
 2026-11-05 (section 2.3). Section 2.4 states the compatibility requirement of the user. The G0 results changed some designs of
 this plan; the sections below hold the changed form, and the G0 completion record lists each change.
 
@@ -489,7 +490,7 @@ closed by G3.
 | G4 | [#679](https://github.com/zidage/AlcedoStudio/issues/679) | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | Complete (Metal 16mm timing: #696) |
 | G5 | [#680](https://github.com/zidage/AlcedoStudio/issues/680) | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Complete (1703 lines) |
 | G6 | [#681](https://github.com/zidage/AlcedoStudio/issues/681) | Grain in the negative on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G4, G5 | 1100 | Planned |
-| G7 | [#682](https://github.com/zidage/AlcedoStudio/issues/682) | Format sets the film print image plane | `film_print_plan.cpp` | G2 | 400 | Planned |
+| G7 | [#682](https://github.com/zidage/AlcedoStudio/issues/682) | Format sets the film print image plane | `film_print_plan.cpp` | G2 | 400 | Complete |
 | G8 | [#683](https://github.com/zidage/AlcedoStudio/issues/683) | Measurements, user review, and documents | docs, lab | G6, G7 | 400 | Planned |
 
 Each estimate is at or below 2000 lines. One backend group per phase keeps each review small.
@@ -1442,7 +1443,74 @@ times the `35mm` value. `GpuDagCudaDrtProductTest`: a format change rebuilds the
 
 **Exit criteria.** The tests pass. The lab expected values at `35mm` still pass.
 
-**Completion record.** Pending.
+**Completion record.** Complete (2026-11-06), on all backends: the image plan is backend-neutral, so CUDA, OpenCL, and Metal
+read the format with no kernel change.
+
+Design decisions of this phase:
+
+- `MakeFilmPrintImagePlan` takes the format as a parameter (`FilmFormat format`), and the three backends pass
+  `drt.Params().FilmFormat()`. The format is a field of the DRT node and not of `FilmPrintParams`, so the remembered film print
+  settings of #672 keep their form.
+- `FilmImagePlaneConstants` no longer holds `frame_mm`. The bundle keeps `common/frame_mm` as the frame of the lab values, and
+  `FilmStockBundle::ReadCommonValues` throws when it is not `FilmFrameLongSideMm(Film35mm)` (36 mm). So a `35mm` document gets the
+  lab values: the arithmetic of the plan is the same as before (36.0 * 1000 / long edge), so the `35mm` plan is bit-equal.
+- `ApplyFilmFormat` marks `FilmFormat` and `FilmExposure`. `FilmExposure` already invalidates the Halation, flare, loupe flare, and
+  prescan results, which all read the amounts after Light spread and Halation. No new invalidation rule.
+- Enlarger flare is a share of the frame (`enlarger_flare_size`), so the format does not change it.
+
+Primary call chain:
+
+```text
+ApplyFilmFormat(format) -> DrtDirty::FilmFormat | DrtDirty::FilmExposure
+  -> RuntimeInvalidationState::CollectDrtChanges -> Halation, flare, loupe flare, prescan results invalid
+RecordCudaFilmPrint / OpenCL / Metal film print pass
+  -> MakeFilmPrintImagePlan(geometry, constants, layer_spread_um, has_inhibitor_blur, film, drt.Params().FilmFormat())
+     -> pixel_um = FilmFrameLongSideMm(format) * 1000 / long edge -> PlanSpread, PlanInhibitor, PlanHalation, PlanFlare
+```
+
+Primary failure call chain:
+
+```text
+Format outside the enum          -> FilmFrameLongSideMm throws std::invalid_argument naming film_format, also with no image plane
+Bundle frame not 36 mm           -> FilmStockBundle::Open throws, naming common/frame_mm and 35mm
+Blur past kFilmBlurMaxRadius     -> FillLayer throws std::runtime_error with the sigma (no substitute blur)
+```
+
+What was proven (executed tests, debug build, RTX 3080 Laptop):
+
+| Required name / criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| At `35mm` the plan equals the current plan exactly | `FilmPrintImagePlan.A24MegapixelFrameHasTheSizesOfTheLab` and the other 12 plan tests, unchanged values | `GpuDagRawInputTest` | PASS |
+| At `16mm` (and `70mm`) the sigma in pixels is 36 / frame times the `35mm` value: spread, inhibitor, Halation; flare unchanged | `FilmPrintImagePlan.TheFormatScalesEachLengthOnTheFilmBy36OverItsFrame` (1e-4 relative) | `GpuDagRawInputTest` | PASS |
+| A format outside the enum throws with the field name | `FilmPrintImagePlan.AFormatOutsideTheEnumThrowsWithTheFieldName` | `GpuDagRawInputTest` | PASS |
+| The bundle frame is the frame of `35mm` | `FilmPrintTablesTest.FrameThatIsNotTheFrameOf35mmThrows` | `FilmPrintTablesTest` | PASS |
+| A format change marks the film exposure | `DrtFilmFormatModel.FormatChangeMarksTheFilmFormatAndTheFilmExposure` | `GpuDagModelGraphTest` | PASS |
+| A format change rebuilds the canvases once; a change back gives the first render bit-equal | `CudaFilmPrintFixture.FormatChangeBuildsTheCanvasesOnce` | `GpuDagCudaDrtProductTest` | PASS |
+| The lab expected values at `35mm` still pass | `FilmPrintTablesTest` (all, with the lab resources) and `GpuDagCudaDrtProductTest` (all) | both | PASS |
+
+Suite totals: `GpuDagCudaDrtProductTest` 130 / 130. `FilmPrintTablesTest` 73 / 73. `GpuDagModelGraphTest` with the filter `DrtFilm*:Drt*Model*`
+35 / 35. `GpuDagRawInputTest` with the filter `FilmPrintImagePlan*:FilmGrainPlan*:FilmFormatTest*:DrtPost*:FilmGrainNegative*` 40 / 40.
+`GpuDagOpenClGradeTest` 127 / 133; the 6 failures are `OpenClMultiGradeFixture.*` of issue
+[#496](https://github.com/zidage/AlcedoStudio/issues/496). Metal was not built (no Mac in this phase); its change is the format
+argument of `MakeFilmPrintImagePlan` in `metal_film_print_pass.mm` and `metal_film_print_test.cpp`.
+
+Commands (PowerShell, repository root):
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --parallel 8 --target FilmPrintTablesTest GpuDagModelGraphTest
+  GpuDagRawInputTest GpuDagCudaDrtProductTest GpuDagOpenClGradeTest
+FilmPrintTablesTest.exe; GpuDagCudaDrtProductTest.exe; GpuDagOpenClGradeTest.exe
+GpuDagModelGraphTest.exe --gtest_filter="DrtFilm*:Drt*Model*"
+GpuDagRawInputTest.exe --gtest_filter="FilmPrintImagePlan*:FilmGrainPlan*:FilmFormatTest*:DrtPost*:FilmGrainNegative*"
+```
+
+Effect at `16mm` (6000 px frame): the wide red spread goes from a sigma of 1.18 to 3.39 pixels, the inhibitor from 5.83 to 16.8
+pixels (half-size radius 34), and Halation on the 2048 canvas from 6.8 to 19.6 texels (radius 79). The tap limit
+`kFilmBlurMaxRadius` (128) then holds the widest spread at slider 3 up to a long edge of about 13900 pixels at `16mm`, against about
+40000 at `35mm`; a larger render at `16mm` stops with the sigma in the message (issue
+[#698](https://github.com/zidage/AlcedoStudio/issues/698)).
+
+Remaining gaps: none for G7. The user checks the CUDA result by eye before G6.
 
 ### G8: measurements, user review, and documents
 

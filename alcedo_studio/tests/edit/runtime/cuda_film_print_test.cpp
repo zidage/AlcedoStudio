@@ -487,6 +487,36 @@ TEST_F(CudaFilmPrintFixture, LoupeFlareChangeKeepsTheCanvasesThatDoNotReadIt) {
   }
 }
 
+TEST_F(CudaFilmPrintFixture, FormatChangeBuildsTheCanvasesOnce) {
+  // Phase G7: the film format sets the frame of the image plane, so a format change makes the
+  // Halation and flare results again, once.
+  constexpr std::uint32_t kWidth   = 256;
+  constexpr std::uint32_t kHeight  = 192;
+  const auto              field    = PatchField(kWidth, kHeight, 80, 90, 16);
+  auto                    document = FilmPrintDocument();
+  SetView({kWidth, kHeight}, {kWidth, kHeight}, Matrix3x3::Identity());
+  const auto frame_35mm = RenderView(document, field, true);
+  EXPECT_EQ(device_.PassStats().film_canvas_rebuild, 2U);
+
+  const auto render_format = [&](FilmFormat format, std::uint64_t rebuilds) {
+    document.Drt()->Params().ApplyFilmFormat(format);
+    auto pixels = RenderView(document, field, true);
+    EXPECT_EQ(device_.PassStats().film_canvas_rebuild, rebuilds);
+    EXPECT_EQ(device_.PassStats().film_canvas_sample, 2U - rebuilds);
+    return pixels;
+  };
+  const auto differs = [](const std::vector<Rgba>& a, const std::vector<Rgba>& b) {
+    return LargestCodeDifference(a, a.size(), [&b](std::size_t index) { return b[index]; });
+  };
+  const auto frame_16mm = render_format(FilmFormat::Film16mm, 2U);
+  // The light of the patch reaches 36 / 12.52 times as far in pixels.
+  EXPECT_GT(differs(frame_16mm, frame_35mm), 0.5);
+  // The next render reads the results of the format.
+  EXPECT_EQ(differs(render_format(FilmFormat::Film16mm, 0U), frame_16mm), 0.0);
+  // Back at 35mm the render is the first one again.
+  EXPECT_EQ(differs(render_format(FilmFormat::Film35mm, 2U), frame_35mm), 0.0);
+}
+
 TEST_F(CudaFilmPrintFixture, FilmPrintSliderBuildsNoTable) {
   // At this size the spread of slider 2.5 has a sigma of about 0.5 pixels, so it has taps.
   const auto field    = PatchField(1024, 768, 400, 400, 8);
@@ -592,7 +622,8 @@ TEST_F(CudaFilmPrintFixture, FilmPrintHalfSizeCellsStayOnTheirPixelsAtAnOddSize)
   const auto  film     = document.Drt()->Params().FilmPrint();
   const auto  negative = bundle.Negative(film.negative);
   EXPECT_TRUE(MakeFilmPrintImagePlan(plan_.geometry, bundle.ImagePlaneConstants(),
-                                     negative.layer_spread_um, true, film)
+                                     negative.layer_spread_um, true, film,
+                                     document.Drt()->Params().FilmFormat())
                   .inhibitor_half_size);
   const auto even = RenderView(document, bars(kEven), false);
   SetView({kWidth, kOdd}, {kWidth, kOdd}, Matrix3x3::Identity());

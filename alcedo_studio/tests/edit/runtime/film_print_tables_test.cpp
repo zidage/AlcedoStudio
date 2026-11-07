@@ -607,6 +607,19 @@ TEST_F(FilmPrintTablesTest, DamagedGrainDataThrowsWithTheFilmAndTheReason) {
   }
 }
 
+TEST_F(FilmPrintTablesTest, FrameThatIsNotTheFrameOf35mmThrows) {
+  // Phase G7: the film format sets the frame of the image plane, and `35mm` gets the lab values,
+  // so the frame of the lab values must be the frame of `35mm`.
+  const auto directory = root_ / "frame_24mm";
+  WriteSyntheticResources(directory, 1.0, "negative_scan", 0.48, "photo",
+                          [](auto& stock, auto&) {
+                            stock["common/frame_mm"] = F64Array({}, {24.0});
+                          });
+  const auto error = OpenError(directory);
+  EXPECT_NE(error.find("common/frame_mm"), std::string::npos) << error;
+  EXPECT_NE(error.find("35mm"), std::string::npos) << error;
+}
+
 TEST_F(FilmPrintTablesTest, ArrayOfTheWrongShapeThrowsWithItsName) {
   const auto directory = CopyOfResources("wrong_shape");
   WriteArrayFile(directory / "film_print_setup.bin",
