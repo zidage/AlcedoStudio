@@ -515,7 +515,7 @@ TEST(CollectionsPanelQmlTest, RowsShowThePhotoCountInCaptionInk) {
 
   const auto& theme = AppTheme::Instance();
   EXPECT_EQ(a_count->property("color").value<QColor>(), theme.textMutedColor());
-  EXPECT_EQ(b_count->property("color").value<QColor>(), theme.editorListSelectedInkColor());
+  EXPECT_EQ(b_count->property("color").value<QColor>(), theme.textColor());
   EXPECT_EQ(a_count->property("font").value<QFont>().pixelSize(), theme.fontSizeCaption());
   // The count sits right of the name, inside the row.
   // The row layout places a label that turns visible on its next polish.

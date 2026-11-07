@@ -867,7 +867,8 @@ ColumnLayout {
                             Layout.alignment: Qt.AlignVCenter
                             visible: !folderRow.editing && count >= 0
                             text: count >= 0 ? count.toLocaleString(Qt.locale(), "f", 0) : ""
-                            color: folderRow.selected ? appTheme.editorListSelectedInkColor
+                            // Selected: brightens to the name ink on the neutral well.
+                            color: folderRow.selected ? appTheme.textColor
                                                       : appTheme.textMutedColor
                             font.family: appTheme.dataFontFamily
                             font.pixelSize: appTheme.fontSizeCaption
