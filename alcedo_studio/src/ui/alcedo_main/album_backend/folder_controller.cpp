@@ -4,18 +4,22 @@
 
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 
+#include <QDebug>
 #include <algorithm>
+#include <cstdint>
+#include <exception>
 #include <iostream>
 
-#include "ui/alcedo_main/album_backend/folder_controller.hpp"
-#include "ui/alcedo_main/album_backend/project_module.hpp"
-#include "ui/alcedo_main/album_backend/library_module.hpp"
-#include "ui/alcedo_main/album_backend/stats_engine.hpp"
-#include "ui/alcedo_main/album_backend/search_controller.hpp"
-#include "ui/alcedo_main/album_backend/import_export.hpp"
-#include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
-#include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "app/album_browse_service.hpp"
+#include "ui/alcedo_main/album_backend/folder_controller.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/search_controller.hpp"
+#include "ui/alcedo_main/album_backend/search_request_worker.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo::ui {
@@ -29,6 +33,12 @@ FolderController::FolderController(ProjectModule* project, LibraryModule* librar
     : QObject(parent), project_(project), library_(library), status_(status) {
   current_folder_path_      = album_util::RootFsPath();
   current_folder_path_text_ = album_util::RootPathText();
+}
+
+FolderController::~FolderController() {
+  if (library_ != nullptr) {
+    library_->query_worker().InvalidateAndWait(SearchRequestKind::kFolderCounts);
+  }
 }
 
 void FolderController::BindCollaborators(StatsEngine* stats, SearchController* search,
@@ -255,11 +265,80 @@ void FolderController::RebuildFolderView() {
                                {"deletable", folder.ui_id_ != 0},
                                {"childCount", child_count},
                                {"hasChildren", child_count > 0},
+                               {"imageCount", RowImageCount(folder)},
                                {"expanded", folder.expanded_}});
   }
 
   folders_ = std::move(next);
   emit FoldersChanged();
+}
+
+auto FolderController::RowImageCount(const ExistingFolderEntry& folder) const -> qint64 {
+  if (!image_counts_loaded_) {
+    return -1;
+  }
+  // The root row is the library view of the whole project.
+  if (folder.ui_id_ == 0) {
+    return static_cast<qint64>(project_image_count_);
+  }
+  const auto it = image_count_by_folder_.find(folder.element_id_);
+  return it != image_count_by_folder_.end() ? static_cast<qint64>(it->second) : 0;
+}
+
+void FolderController::RefreshImageCounts() {
+  auto proj   = project_ != nullptr ? project_->handler().project() : nullptr;
+  auto browse = proj ? proj->GetAlbumBrowseService() : nullptr;
+  if (library_ == nullptr || !browse) {
+    return;
+  }
+  // The destructor waits for a running job, and Qt drops the posted result of a destroyed
+  // receiver, so the job and the result may use `this`.
+  auto job = [this, browse = std::move(browse)](std::uint64_t generation) {
+    FolderImageCounts counts;
+    QString           error;
+    try {
+      counts = browse->ReadFolderImageCounts();
+    } catch (const std::exception& e) {
+      error = QString::fromUtf8(e.what());
+    }
+    QMetaObject::invokeMethod(
+        this,
+        [this, generation, counts = std::move(counts), error]() mutable {
+          ApplyImageCounts(generation, counts.project_photo_count_,
+                           std::move(counts.folder_photo_counts_), error);
+        },
+        Qt::QueuedConnection);
+  };
+  library_->query_worker().Submit(SearchRequestKind::kFolderCounts, std::move(job));
+}
+
+void FolderController::ApplyImageCounts(std::uint64_t generation, uint64_t project_count,
+                                        std::unordered_map<sl_element_id_t, uint64_t> folder_counts,
+                                        const QString&                                error) {
+  if (!library_->query_worker().IsCurrent(SearchRequestKind::kFolderCounts, generation)) {
+    // A newer read, or a project close, replaced this one.
+    return;
+  }
+  if (!error.isEmpty()) {
+    // A failed read shows no count rather than an old one.
+    qWarning().noquote() << "Collection photo count read failed:" << error;
+    image_counts_loaded_ = false;
+    image_count_by_folder_.clear();
+  } else {
+    image_counts_loaded_   = true;
+    project_image_count_   = project_count;
+    image_count_by_folder_ = std::move(folder_counts);
+  }
+  RebuildFolderView();
+}
+
+void FolderController::DropImageCounts() {
+  if (library_ != nullptr) {
+    library_->query_worker().Invalidate(SearchRequestKind::kFolderCounts);
+  }
+  image_counts_loaded_ = false;
+  project_image_count_ = 0;
+  image_count_by_folder_.clear();
 }
 
 auto FolderController::TryGetPathForUiId(uint folderUiId) const
@@ -372,6 +451,7 @@ void FolderController::ReloadTree(const std::filesystem::path& preferredFolderPa
 
   auto node_it = nodes_by_path_.find(PathKey(target_path));
   ApplyFolderSelection(node_it != nodes_by_path_.end() ? node_it->second.ui_id_ : 0, true);
+  RefreshImageCounts();
 }
 
 void FolderController::SelectFolder(uint folderUiId) {
@@ -671,6 +751,7 @@ void FolderController::ClearState() {
   current_folder_path_text_ = album_util::RootPathText();
   current_folder_ui_id_     = 0;
   next_folder_ui_id_        = 1;
+  DropImageCounts();
 }
 
 }  // namespace alcedo::ui

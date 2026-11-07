@@ -90,6 +90,10 @@ class AlbumBrowseService {
   /// Unlike the listing reads, it does not hide a failure: it throws std::runtime_error when the
   /// sleeve service is absent or the statement fails.
   [[nodiscard]] auto ReadProjectOverview() const -> ProjectOverviewCounts;
+  /// Photo count of the whole project and of every folder from one grouped statement (see
+  /// ElementStore::ReadFolderImageCounts). Throws like ReadAlbumQuery.
+  /// Thread: may run on a worker thread.
+  [[nodiscard]] auto ReadFolderImageCounts() const -> FolderImageCounts;
 
   /**
    * @brief The one library read: Inspector filters and search, sort, groups, statistics, and

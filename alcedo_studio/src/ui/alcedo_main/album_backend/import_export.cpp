@@ -737,6 +737,7 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
     library_->RequestLibraryContentRefresh();
   }
   if (stats_) emit stats_->StatsFilterChanged();
+  folders_->RefreshImageCounts();
 
   import_target_folder_id_   = folders_->CurrentFolderElementId().value_or(0);
   import_target_folder_path_ = folders_->CurrentFolderFsPath();
