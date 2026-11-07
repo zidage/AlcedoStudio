@@ -144,15 +144,5 @@ class MetadataExtractor {
    */
   static void PopulateRuntimeContextFromOpenLibRaw(LibRaw&                 raw_processor,
                                                    RawRuntimeColorContext& ctx);
-
-  /**
-   * @brief Merge an Exiv2-based ExifDisplayMetaData hint into a RawRuntimeColorContext,
-   *        filling in any fields that are still empty/zero.
-   *
-   * @param metadata_hint  The Exiv2-based metadata (may be nullptr — no-op in that case)
-   * @param ctx            Context to merge into
-   */
-  static void MergeMetadataHint(const ExifDisplayMetaData* metadata_hint,
-                                RawRuntimeColorContext&    ctx);
 };
 }  // namespace alcedo
