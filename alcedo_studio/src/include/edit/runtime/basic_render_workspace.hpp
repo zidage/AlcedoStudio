@@ -366,7 +366,8 @@ class BasicRenderWorkspace {
   /**
    * @brief Publish recorded writes allowed by the current result persistence.
    *
-   * QualityBase publishes only `develop:sensor_linear`. Other recorded writes
+   * QualityBase publishes only `develop:sensor_linear` and the prescan of Negative Scan
+   * (@ref kFilmScanPrescanPort). Other recorded writes
    * stay until @ref DiscardUnpublished after present/download. Interactive
    * publishes every recorded write and drops leftover slots.
    */

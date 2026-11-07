@@ -87,18 +87,24 @@ inline auto KelvinOfLabel(const std::string& label) -> std::optional<double> {
   return std::stod(label.substr(3));
 }
 
+/// The auto colour strength of the lab files: the default of the lab viewer
+/// (`mvp_pipeline.RenderSettings.neg_scan_auto_strength`). The files hold no strength.
+inline constexpr float kLabAutoStrength = 0.8f;
+
 /**
- * @brief Print material Negative Scan on @p document with auto colour @p auto_colour, under the
- * light of the lab label @p scene_light: a named light, or As Shot with the solved temperature of
- * the RAW decode at the Kelvin of a `cct<kelvin>` label (a blend of the grid).
+ * @brief Print material Negative Scan on @p document with auto colour @p auto_colour at the
+ * strength of the lab files, under the light of the lab label @p scene_light: a named light, or As
+ * Shot with the solved temperature of the RAW decode at the Kelvin of a `cct<kelvin>` label (a
+ * blend of the grid).
  */
 inline void SetNegativeScan(PipelineDocument& document, const std::string& scene_light,
                             const std::string& auto_colour) {
+  const auto         kelvin = KelvinOfLabel(scene_light);
   DrtParameterUpdate update;
-  update.film_print_material = std::string{kFilmNegativeScanId};
-  const auto kelvin          = KelvinOfLabel(scene_light);
-  update.film_scene_light    = kelvin.has_value() ? std::string{kFilmAsShotLightId} : scene_light;
-  update.film_scan_auto      = auto_colour;
+  update.film_print_material     = std::string{kFilmNegativeScanId};
+  update.film_scan_auto          = auto_colour;
+  update.film_scan_auto_strength = kLabAutoStrength;
+  update.film_scene_light = kelvin.has_value() ? std::string{kFilmAsShotLightId} : scene_light;
   document.Drt()->Params().ApplyUpdate(update);
   if (kelvin.has_value()) {
     const auto& negative = document.Drt()->Params().FilmPrint().negative;

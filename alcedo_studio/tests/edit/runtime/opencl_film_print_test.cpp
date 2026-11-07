@@ -154,14 +154,18 @@ class OpenClFilmPrintFixture : public ::testing::Test {
    *
    * @p publish ends the render and publishes its results; otherwise the render is cancelled. With
    * @p prescan, the prescan of Negative Scan (the scan density T) that the render built or sampled.
+   * @p persistence is the result persistence of the frame role (QualityBase: SensorDevelopOnly).
    */
   auto RenderView(const PipelineDocument& document, std::span<const Rgba> ap1, bool publish,
-                  std::vector<Rgba>* prescan = nullptr) -> std::vector<Rgba> {
+                  std::vector<Rgba>*     prescan     = nullptr,
+                  ResultPersistenceScope persistence = ResultPersistenceScope::AllCurrentResults)
+      -> std::vector<Rgba> {
     const auto width  = plan_.geometry.render_extent.width;
     const auto height = plan_.geometry.render_extent.height;
     device_->ResetPassStats();
     device_->BeginRender();
     auto& workspace = device_->Workspace();
+    workspace.SetResultPersistence(persistence, plan_.sensor_linear_output);
     workspace.PrepareResultValidity(plan_, document, input_);
     const GraphValueId scene_id{NodeId{"grade.primary"}, PortId{"image"}};
     auto& lease = workspace.AcquireImageForWrite(scene_id, {width, height, TextureFormat::Rgba32f});
@@ -977,6 +981,35 @@ TEST_F(OpenClFilmPrintFixture, NegativeScanAutoColourReadsThePrescanOfTheFullFra
   (void)RenderView(document, field, true);
   EXPECT_EQ(device_->PassStats().film_canvas_rebuild + device_->PassStats().film_canvas_sample, 1U);
   EXPECT_EQ(device_->PassStats().film_scan_prescan_reads, 0U);
+}
+
+TEST_F(OpenClFilmPrintFixture, NegativeScanQualityBasePublishesThePrescanForTheDetailPatch) {
+  // A settled edit, an undo, or a redo renders a QualityBase of the full frame and then the Detail
+  // patch, an ROI. The QualityBase keeps only the sensor result and the prescan, so the patch has
+  // the auto colour of the full frame, and not one of the pixels of the viewport.
+  constexpr std::uint32_t kWidth   = 256;
+  constexpr std::uint32_t kHeight  = 192;
+  constexpr std::uint32_t kRoiX    = 80;
+  constexpr std::uint32_t kRoiY    = 64;
+  const auto              field    = PatchField(kWidth, kHeight, 60, 50, 24);
+  auto                    document = NegativeScanDocument("kodak_5207", "neutral");
+  auto&                   images   = device_->Workspace().Images();
+  SetView({kWidth, kHeight}, {kWidth, kHeight}, Matrix3x3::Identity());
+  (void)RenderView(document, field, true, nullptr, ResultPersistenceScope::SensorDevelopOnly);
+  EXPECT_EQ(device_->PassStats().film_scan_prescan_reads, 1U);
+  EXPECT_NE(images.PublishedLastWriter(FilmScanPrescanResultId(plan_.drt.node_id)), 0U);
+  EXPECT_EQ(images.PublishedLastWriter(FilmHalationResultId(plan_.drt.node_id)), 0U);
+  const auto shift = device_->PassStats().film_scan_auto_shift;
+  EXPECT_GT(std::abs(shift[0]) + std::abs(shift[1]) + std::abs(shift[2]), 1e-4);
+
+  SetView({kWidth, kHeight}, {96, 64},
+          Matrix3x3::Translate(static_cast<float>(kRoiX), static_cast<float>(kRoiY)));
+  (void)RenderView(document, CropField(field, kWidth, kRoiX, kRoiY, 96, 64), false);
+  // The patch samples the prescan; only the Halation canvas, which the QualityBase keeps local, is
+  // built from the pixels of the patch.
+  EXPECT_EQ(device_->PassStats().film_canvas_sample, 1U);
+  EXPECT_EQ(device_->PassStats().film_canvas_rebuild, 1U);
+  EXPECT_EQ(device_->PassStats().film_scan_auto_shift, shift);
 }
 
 TEST_F(OpenClFilmPrintFixture, NegativeScanRenderingSettingsBuildNoTableAndAScannerSettingDoes) {

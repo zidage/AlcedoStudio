@@ -2407,8 +2407,10 @@ TEST_F(FilmPrintTablesLabTest, NegativeScanPointFormMatchesTheLab) {
                                                                   std::string(kFilmNegativeScanId), mix);
     const auto& values = tables->negative_scan;
     EXPECT_LE(LargestOf3(values.light_axis, file.F64("light_axis", {3})), 1e-9);
+    // The strength of the lab files is the default of the lab viewer: the files hold no strength.
     FilmNegativeScanParams params;
-    params.auto_colour   = metadata.at("auto").get<std::string>();
+    params.auto_colour       = metadata.at("auto").get<std::string>();
+    params.auto_strength     = 0.8f;
     const auto prescan_terms = film_negative_scan::MakePrescanTerms(values, params);
     for (const std::string part : {"ramp", "chart"}) {
       const auto count = file.Shape(part + "_ap1")[0];

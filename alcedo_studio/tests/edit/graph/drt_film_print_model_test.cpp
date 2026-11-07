@@ -68,7 +68,11 @@ TEST(DrtFilmPrintModelTest, FieldsRoundTripThroughDocumentJson) {
                                                    {"scene_light", "tungsten"},
                                                    {"light_spread", 2.5f},
                                                    {"halation", 4.0f},
-                                                   {"enlarger_flare", 0.05f}}));
+                                                   {"enlarger_flare", 0.05f},
+                                                   // New settings write the auto colour: it is
+                                                   // not kFilmScanAutoStoredDefault.
+                                                   {"auto", "neutral"},
+                                                   {"auto_strength", 0.5f}}));
 
   const auto restored = PipelineDocument::FromJson(document.ToJson());
   const auto film     = restored.Drt()->Params().FilmPrint();
@@ -105,7 +109,8 @@ TEST(DrtFilmPrintModelTest, ReversalFilmIsAValueOfTheNegativeKeyAndKeepsThePrint
     // The same key holds the reversal film. There is no new key, and the print material stays.
     EXPECT_EQ(json.at("film_print").at("negative"), std::string{id});
     EXPECT_EQ(json.at("film_print").at("print_material"), "fuji_ca_dpII");
-    EXPECT_EQ(json.at("film_print").size(), 6u);
+    // Six fields and the auto colour of new settings.
+    EXPECT_EQ(json.at("film_print").size(), 8u);
 
     const auto restored = PipelineDocument::FromJson(document.ToJson());
     EXPECT_EQ(restored.Drt()->Params().FilmPrint().negative, id);
@@ -132,10 +137,10 @@ TEST(DrtFilmPrintModelTest, NegativeScanIsAValueOfThePrintMaterialKeyAndKeepsThe
   update.film_print_material  = std::string{kFilmNegativeScanId};
   document.Drt()->Params().ApplyUpdate(update);
   const auto json = document.Drt()->Params().ToJson();
-  // The same key holds Negative Scan. Its settings at their defaults write no key, and the stored
-  // flare stays.
+  // The same key holds Negative Scan. Its settings at their defaults write no key except the auto
+  // colour of new settings, and the stored flare stays.
   EXPECT_EQ(json.at("film_print").at("print_material"), "negative_scan");
-  EXPECT_EQ(json.at("film_print").size(), 6u);
+  EXPECT_EQ(json.at("film_print").size(), 8u);
   EXPECT_FLOAT_EQ(json.at("film_print").at("enlarger_flare").get<float>(), 0.05f);
   const auto restored = PipelineDocument::FromJson(document.ToJson());
   EXPECT_EQ(restored.Drt()->Params().FilmPrint().print_material, kFilmNegativeScanId);
@@ -374,8 +379,8 @@ TEST(DrtFilmPrintModelTest, FieldChangeMarksOnlyItsFilmPrintField) {
   // again, and the prescan of the auto colour reads them. The others mark FilmScan and act after
   // the scan.
   std::vector<DrtParameterUpdate> scan_changes(14);
-  scan_changes[0].film_scan_auto           = std::string{"neutral"};
-  scan_changes[1].film_scan_auto_strength  = 0.5f;
+  scan_changes[0].film_scan_auto           = std::string{"warm"};
+  scan_changes[1].film_scan_auto_strength  = 0.75f;
   scan_changes[2].film_scan_auto_density   = 0.25f;
   scan_changes[3].film_scan_contrast       = 1.2f;
   scan_changes[4].film_scan_exposure_stops = -1.0f;
@@ -419,11 +424,14 @@ TEST(DrtFilmPrintModelTest, AsShotIsASceneLightAndNegativeScanWritesOnlyKeysAway
   EXPECT_EQ(kFilmSceneLightIds[1], kFilmAsShotLightId);
   EXPECT_TRUE(IsFilmAsShotLight(kFilmAsShotLightId));
   EXPECT_FALSE(IsFilmAsShotLight("daylight"));
-  // The defaults of the lab (P14 report, section 6): auto colour off, the scanner 650/545/450 nm,
-  // 40 nm, halogen, and black 1.
+  // The defaults of new settings: auto colour neutral at strength 0.5 (user decision of
+  // 2026-11-06, G8 study), and the defaults of the lab (P14 report, section 6): the scanner
+  // 650/545/450 nm, 40 nm, halogen, and black 1.
   const FilmNegativeScanParams defaults;
-  EXPECT_EQ(defaults.auto_colour, "off");
-  EXPECT_EQ(defaults.auto_strength, 0.8f);
+  EXPECT_EQ(defaults.auto_colour, "neutral");
+  EXPECT_EQ(defaults.auto_strength, 0.5f);
+  EXPECT_EQ(kFilmScanAutoStoredDefault, "off");
+  EXPECT_EQ(kFilmScanAutoStrengthStoredDefault, 0.8f);
   EXPECT_EQ(defaults.auto_density, 0.0f);
   EXPECT_EQ(defaults.contrast, 1.0f);
   EXPECT_EQ(defaults.exposure_stops, 0.0f);
@@ -438,32 +446,48 @@ TEST(DrtFilmPrintModelTest, AsShotIsASceneLightAndNegativeScanWritesOnlyKeysAway
   EXPECT_EQ(kFilmScanAutoIds.front(), "off");
   EXPECT_EQ(kFilmScannerLightIds.front(), "halogen");
 
-  // A document with the settings at their defaults has the bytes, so the root id, of a document
-  // with no Negative Scan keys.
+  // New settings write the auto colour: a missing `auto` or `auto_strength` reads as the stored
+  // default (off, 0.8), the value of a document of a build before G8.
   auto document              = CreateDefaultPipelineDocument();
   auto update                = FilmPrintUpdate();
   update.film_print_material = std::string{kFilmNegativeScanId};
   update.film_scene_light    = std::string{kFilmAsShotLightId};
   document.Drt()->Params().ApplyUpdate(update);
   const auto plain = document.Drt()->Params().ToJson();
-  EXPECT_EQ(plain.at("film_print").size(), 6u);
+  EXPECT_EQ(plain.at("film_print").size(), 8u);
   EXPECT_EQ(plain.at("film_print").at("scene_light"), "as_shot");
-  auto explicit_defaults                      = plain;
-  auto& keys                                  = explicit_defaults["film_print"];
-  keys["auto"]                                = "off";
-  keys["auto_strength"]                       = 0.8;
-  keys["auto_density"]                        = 0.0;
-  keys["scan_contrast"]                       = 1.0;
-  keys["scan_exposure_stops"]                 = 0.0;
-  keys["cyan"]                                = 0.0;
-  keys["magenta"]                             = 0.0;
-  keys["yellow"]                              = 0.0;
-  keys["black"]                               = 1.0;
-  keys["scanner_red_nm"]                      = 650.0;
-  keys["scanner_green_nm"]                    = 545.0;
-  keys["scanner_blue_nm"]                     = 450.0;
-  keys["scanner_width_nm"]                    = 40.0;
-  keys["scanner_light"]                       = "halogen";
+  EXPECT_EQ(plain.at("film_print").at("auto"), "neutral");
+  EXPECT_EQ(plain.at("film_print").at("auto_strength").get<float>(), 0.5f);
+
+  // A stored object of an old build, with no Negative Scan keys, is Neutral Scan (auto colour off,
+  // strength 0.8), and it keeps its bytes, so its root id.
+  auto old_json = plain;
+  old_json["film_print"].erase("auto");
+  old_json["film_print"].erase("auto_strength");
+  DrtParamsModel old_document;
+  old_document.LoadJson(old_json);
+  EXPECT_EQ(old_document.FilmPrint().scan.auto_colour, "off");
+  EXPECT_EQ(old_document.FilmPrint().scan.auto_strength, 0.8f);
+  EXPECT_EQ(old_document.ToJson().dump(), old_json.dump());
+
+  // A document with the settings at their defaults written out has the bytes of the document that
+  // omits them.
+  auto  explicit_defaults     = plain;
+  auto& keys                  = explicit_defaults["film_print"];
+  keys["auto"]                = "neutral";
+  keys["auto_strength"]       = 0.5;
+  keys["auto_density"]        = 0.0;
+  keys["scan_contrast"]       = 1.0;
+  keys["scan_exposure_stops"] = 0.0;
+  keys["cyan"]                = 0.0;
+  keys["magenta"]             = 0.0;
+  keys["yellow"]              = 0.0;
+  keys["black"]               = 1.0;
+  keys["scanner_red_nm"]      = 650.0;
+  keys["scanner_green_nm"]    = 545.0;
+  keys["scanner_blue_nm"]     = 450.0;
+  keys["scanner_width_nm"]    = 40.0;
+  keys["scanner_light"]       = "halogen";
   DrtParamsModel read_defaults;
   read_defaults.LoadJson(explicit_defaults);
   EXPECT_EQ(read_defaults.ToJson().dump(), plain.dump());

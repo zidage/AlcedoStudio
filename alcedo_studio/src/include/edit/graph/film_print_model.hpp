@@ -201,17 +201,28 @@ inline constexpr float kFilmScannerWidthMinNm     = 10.0f;
 inline constexpr float kFilmScannerWidthMaxNm     = 120.0f;
 
 /**
+ * The auto colour of a stored `film_print` object with no key `auto` or `auto_strength`. A build
+ * before the G8 study (Film Grain plan) did not write these keys at the old defaults, so the
+ * missing keys read as those defaults, and an old document keeps its image, its bytes, and its root
+ * id. @ref FilmNegativeScanParams writes these two keys when they differ from these values.
+ */
+inline constexpr std::string_view kFilmScanAutoStoredDefault         = "off";
+inline constexpr float            kFilmScanAutoStrengthStoredDefault = 0.8f;
+
+/**
  * @brief Stored settings of Negative Scan (lab step P14, issue 661).
  *
  * The rendering settings act after the scan, so a change of one of them keeps the scanner table.
- * The scanner settings (the bands and the light) choose the scanner table. The defaults are those
- * of the lab viewer: Neutral Scan (auto colour off), contrast 1, no key, black at the film base,
- * and the default scanner (650, 545, and 450 nm, 40 nm wide, halogen). A key at its default is not
- * written to JSON.
+ * The scanner settings (the bands and the light) choose the scanner table. The defaults of new
+ * settings: auto colour `neutral` at strength 0.5 (user decision of 2026-11-06, G8 study: a lab
+ * scan removes part of the cast of a mismatched light), contrast 1, no key, black at the film
+ * base, and the default scanner (650, 545, and 450 nm, 40 nm wide, halogen). A key at its default
+ * is not written to JSON; for `auto` and `auto_strength` the default of JSON is
+ * @ref kFilmScanAutoStoredDefault and @ref kFilmScanAutoStrengthStoredDefault.
  */
 struct FilmNegativeScanParams {
-  std::string auto_colour      = "off";  ///< JSON key `auto`, one of @ref kFilmScanAutoIds
-  float       auto_strength    = 0.8f;
+  std::string auto_colour      = "neutral";  ///< JSON key `auto`, one of @ref kFilmScanAutoIds
+  float       auto_strength    = 0.5f;
   float       auto_density     = 0.0f;
   float       contrast         = 1.0f;  ///< JSON key `scan_contrast`
   float       exposure_stops   = 0.0f;  ///< JSON key `scan_exposure_stops`
