@@ -545,9 +545,10 @@ TEST_F(CudaFilmPrintFixture, FilmPrintFusedSpreadMatchesSeparatePasses) {
                                                device_.CommandContext());
     auto& display = workspace.AcquireImageForWrite(plan_.display_output,
                                                            {kWidth, kHeight, TextureFormat::Rgba32f});
-    RecordCudaFilmPrint(
-        device_, plan_, *document.Drt(), std::nullopt, FrameSceneBinding::CachedImage(scene_id),
-        FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight, nullptr, separate);
+    RecordCudaFilmPrint(device_, plan_, *document.Drt(), std::nullopt,
+                        FrameSceneBinding::CachedImage(scene_id),
+                        FrameSceneBinding::CachedImage(plan_.display_output), kWidth, kHeight, 0.0f,
+                        nullptr, separate);
     std::vector<Rgba> pixels(static_cast<std::size_t>(kWidth) * kHeight);
     workspace.Device().DownloadTexture2D(
         display.Texture(), std::as_writable_bytes(std::span(pixels)), device_.CommandContext());
@@ -660,7 +661,7 @@ TEST_F(CudaFilmPrintFixture, FilmPrintWithNoImagePartRunsNoInhibitorBlur) {
     std::vector<FilmPrintPassTime> times;
     RecordCudaFilmPrint(device_, plan_, *document.Drt(), std::nullopt,
                         FrameSceneBinding::CachedImage(scene_id),
-                        FrameSceneBinding::CachedImage(display_id), kWidth, kHeight, &times);
+                        FrameSceneBinding::CachedImage(display_id), kWidth, kHeight, 0.0f, &times);
     device_.CancelRender();
     return std::any_of(times.begin(), times.end(), [](const FilmPrintPassTime& time) {
       return time.name.find("inhibitor") != std::string::npos;
@@ -1624,6 +1625,23 @@ TEST_F(CudaFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
     record("OpenDRT, Film Grain 100 %, 16mm", grain_document(FilmFormat::Film16mm), false);
     record("OpenDRT, Film Grain 0 %, post adjustments compiled",
            method_document(DrtMethod::OpenDrt), false);
+    // The film print with the grain in its negative at 100 % next to the film print with Film Grain
+    // at 0 % (phase G5): the difference is the time of the grain.
+    const auto film_grain_document = [](FilmFormat format, float strength) {
+      auto document = FilmPrintDocument();
+      document.Drt()->Params().ApplyFilmFormat(format);
+      auto* grain = dynamic_cast<FilmGrainModel*>(
+          document.Drt()->FindAdjustmentByType(type_ids::FilmGrain()));
+      if (grain == nullptr) throw std::runtime_error("The document has no Film Grain");
+      grain->SetValue(strength);
+      return document;
+    };
+    record("film print, Film Grain 0 %, post adjustments compiled",
+           film_grain_document(FilmFormat::Film35mm, 0.0f), false);
+    record("film print, Film Grain 100 %, 35mm", film_grain_document(FilmFormat::Film35mm, 1.0f),
+           false);
+    record("film print, Film Grain 100 %, 16mm", film_grain_document(FilmFormat::Film16mm, 1.0f),
+           false);
     plan_.drt.post_adjustments.clear();
     record("film print, results valid", FilmPrintDocument(), false);
     record("film print, slider change", FilmPrintDocument(), true);
@@ -1671,7 +1689,7 @@ TEST_F(CudaFilmPrintFixture, DISABLED_DrtCostRecordAtEditorSizes) {
       (void)workspace.AcquireImageForWrite(display_id, {width, height, TextureFormat::Rgba32f});
       RecordCudaFilmPrint(device_, plan_, *document.Drt(), std::nullopt,
                           FrameSceneBinding::CachedImage(scene_id),
-                          FrameSceneBinding::CachedImage(display_id), width, height, &times);
+                          FrameSceneBinding::CachedImage(display_id), width, height, 0.0f, &times);
       device_.EndRender();
       device_.PublishResults();
       std::cout << "  passes of " << document.Drt()->Params().FilmPrint().print_material << ":\n";

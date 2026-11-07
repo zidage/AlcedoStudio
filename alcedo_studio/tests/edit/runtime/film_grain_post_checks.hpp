@@ -192,15 +192,13 @@ inline auto PostGrey(const FilmGrainPlan& plan, const ResolvedRenderGeometry& ge
 }
 
 /**
- * The steps of the kernel on the host, in their mathematical order: noise, horizontal blur,
- * vertical blur, unit field, mix, apply. Every backend kernel equals this within the rounding of
- * its sums.
+ * The mixed grain N of each render pixel, from the steps of the kernel on the host in their
+ * mathematical order: noise, horizontal blur, vertical blur, unit field, mix. The post grain and
+ * the grain in the negative share these steps.
  */
-inline auto HostForm(const FilmGrainPlan& plan, const ResolvedRenderGeometry& geometry,
-                     const std::vector<Rgba>& input, FilmGrainDisplayEncoding encoding = kSrgb)
-    -> std::vector<Rgba> {
-  const auto field  = MakeFilmGrainFieldParams(plan, geometry);
-  const auto post   = MakeFilmGrainPostParams(plan, encoding.transfer, encoding.decode_scale);
+inline auto HostMixedGrain(const FilmGrainPlan& plan, const ResolvedRenderGeometry& geometry)
+    -> std::vector<FilmGrainNoise3> {
+  const auto                        field  = MakeFilmGrainFieldParams(plan, geometry);
   const int  width  = static_cast<int>(geometry.render_extent.width);
   const int  height = static_cast<int>(geometry.render_extent.height);
   const int  halo   = field.halo;
@@ -229,7 +227,7 @@ inline auto HostForm(const FilmGrainPlan& plan, const ResolvedRenderGeometry& ge
       }
     }
   }
-  std::vector<Rgba> output(input.size());
+  std::vector<FilmGrainNoise3> grain(static_cast<std::size_t>(width) * height);
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
       float unit[3];
@@ -243,11 +241,28 @@ inline auto HostForm(const FilmGrainPlan& plan, const ResolvedRenderGeometry& ge
         }
         unit[c] = sum * field.inverse_weight_square_sum[c];
       }
-      const auto  grain  = FilmGrainMix(field.mix, FilmGrainNoise3{unit[0], unit[1], unit[2]});
-      const auto& source = input[static_cast<std::size_t>(y) * width + x];
-      const auto  result = FilmGrainPostPixel(&post, {source.r, source.g, source.b}, grain);
-      output[static_cast<std::size_t>(y) * width + x] = {result.r, result.g, result.b, source.a};
+      grain[static_cast<std::size_t>(y) * width + x] =
+          FilmGrainMix(field.mix, FilmGrainNoise3{unit[0], unit[1], unit[2]});
     }
+  }
+  return grain;
+}
+
+/**
+ * The steps of the kernel on the host, in their mathematical order: noise, horizontal blur,
+ * vertical blur, unit field, mix, apply. Every backend kernel equals this within the rounding of
+ * its sums.
+ */
+inline auto HostForm(const FilmGrainPlan& plan, const ResolvedRenderGeometry& geometry,
+                     const std::vector<Rgba>& input, FilmGrainDisplayEncoding encoding = kSrgb)
+    -> std::vector<Rgba> {
+  const auto        post  = MakeFilmGrainPostParams(plan, encoding.transfer, encoding.decode_scale);
+  const auto        grain = HostMixedGrain(plan, geometry);
+  std::vector<Rgba> output(input.size());
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    const auto& source = input[index];
+    const auto  result = FilmGrainPostPixel(&post, {source.r, source.g, source.b}, grain[index]);
+    output[index]      = {result.r, result.g, result.b, source.a};
   }
   return output;
 }

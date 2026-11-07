@@ -403,6 +403,7 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_print_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_post_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/film_grain_negative_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/renderer_metal_instantiate_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/result_content_key_test.cpp
@@ -481,6 +482,7 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_expected_output_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_diffusion_filter_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_grain_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_grain_negative_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_film_print_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp

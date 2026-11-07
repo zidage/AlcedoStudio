@@ -5,7 +5,8 @@ Date: 2026-11-05
 Status: **In progress.** G0 is complete in the lab ([alcedo-film-lab #2](https://github.com/zidage/alcedo-film-lab/pull/2)). G1 is complete
 (2026-11-05): the host plan, the shared grain math, and the bundle schema 11. G2 is complete (2026-11-05): the field
 `film_format`, the Film Grain range 0 to 200 %, the Format selector of both panels, and the compatibility tests. G3 is complete
-(2026-11-05): the CUDA post grain with the size and the strength of the plan, and decision U5 (the #660 colour). The user approved the plan and closed decisions U1 to U4 on
+(2026-11-05): the CUDA post grain with the size and the strength of the plan, and decision U5 (the #660 colour). G5 is complete
+(2026-11-06): on CUDA the film print adds the grain to the dye amounts of its negative and skips the post Film Grain. The user approved the plan and closed decisions U1 to U4 on
 2026-11-05 (section 2.3). Section 2.4 states the compatibility requirement of the user. The G0 results changed some designs of
 this plan; the sections below hold the changed form, and the G0 completion record lists each change.
 
@@ -486,7 +487,7 @@ closed by G3.
 | G2 | [#677](https://github.com/zidage/AlcedoStudio/issues/677) | `film_format`, slider range, panels, catalogs, compatibility tests | `edit/graph`, `app`, `ui` | G1 | 1300 | Complete (991 lines) |
 | G3 | [#678](https://github.com/zidage/AlcedoStudio/issues/678) | Post grain on CUDA with the new passes | `edit/runtime/cuda` | G1, G2 | 900 | Complete (1492 lines) |
 | G4 | [#679](https://github.com/zidage/AlcedoStudio/issues/679) | Post grain on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G3 | 1200 | Complete (Metal 16mm timing: #696) |
-| G5 | [#680](https://github.com/zidage/AlcedoStudio/issues/680) | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Planned |
+| G5 | [#680](https://github.com/zidage/AlcedoStudio/issues/680) | Grain in the negative on CUDA, post skip | `edit/runtime/cuda`, `drt_post_schedule.cpp` | G3 | 1000 | Complete (1703 lines) |
 | G6 | [#681](https://github.com/zidage/AlcedoStudio/issues/681) | Grain in the negative on OpenCL and Metal | `edit/runtime/opencl`, `edit/runtime/metal` | G4, G5 | 1100 | Planned |
 | G7 | [#682](https://github.com/zidage/AlcedoStudio/issues/682) | Format sets the film print image plane | `film_print_plan.cpp` | G2 | 400 | Planned |
 | G8 | [#683](https://github.com/zidage/AlcedoStudio/issues/683) | Measurements, user review, and documents | docs, lab | G6, G7 | 400 | Planned |
@@ -1250,7 +1251,165 @@ uses the halo rule, so an ROI equals the full frame.
 
 **Exit criteria.** The tests pass. The film print tests of F4 and F10 still pass with strength 0.
 
-**Completion record.** Pending.
+**Completion record.** Complete 2026-11-06, branch `feature/film-grain-cuda-negative-grain`, stacked on the G4 branch
+`feature/film-grain-opencl-metal-post-grain`. OpenCL and Metal keep the post grain under the film print until G6.
+
+Files: the new `include/edit/runtime/film/film_grain_negative.h` (`FilmGrainNodeCurve`, `FilmGrainNodeCurveSigma`,
+`FilmGrainNegativeParams`, `FilmGrainNegativeRecord`); the new `include/edit/runtime/cuda/cuda_film_grain_tile.cuh`
+(`FilmGrainTileKernel`, `FieldParamsFor`, `Launch`: the tile kernel of G3 and G4, moved out of `cuda_film_grain_pass.cu` so the
+film print instantiates it); `film_grain_plan.hpp/.cpp` (`FilmGrainPlan::reversal`, the counted nodes of each curve,
+`MakeFilmGrainNegativeParams`); `drt_post_film_grain.hpp` (`DrtFilmGrainStrength`, `MakeDrtFilmPrintGrainPlan`);
+`drt_post_schedule.hpp/.cpp` and `drt_post_executor.hpp` (`Ops::kFilmPrintGrainInNegative`, the strength for
+`Ops::DispatchFilmPrint`); `cuda_drt_pass.cu`, `opencl_drt_pass.cpp`, `metal_drt_pass.mm` (the constant: true on CUDA, false on
+OpenCL and Metal); `cuda_film_print_pass.cu/.hpp` (the parameter `grain_strength`, `DisplayArgs`, `ScanDisplayArgs`,
+`GrainDisplayApply`, `GrainScanDisplayApply`); `cuda_film_grain_pass.cu/.hpp` (`RecordCudaFilmGrainNegative`);
+`gpu_node_pass_stats.hpp` (`film_grain_negative`). Tests: the new `film_grain_negative_test.cpp` (host),
+`cuda_film_grain_negative_test.cpp`, and `film_grain_negative_checks.hpp` (the kernel checks that G6 shares);
+`film_grain_post_checks.hpp` (`HostMixedGrain`, the field steps of the host form, shared by both apply steps).
+
+Details that the plan did not give, or changes to the plan, chosen in G5:
+
+- Place of the grain. The FP6 kernel adds the grain to the record of each pixel, in the print, light table, and Negative Scan
+  forms, before `FilmKernelFlareAmounts`, the negative grade, and the table read. The FP6 kernel is the grain tile kernel with the
+  display step as its apply step, so the amounts with grain are never written. The blurred amounts of the negative grade, the flare
+  canvas, the loupe flare canvas, and the prescan read the amounts with no grain: they are means over many pixels, where the grain
+  has a mean of 0, so their canonical results do not depend on the Film Grain and need no new invalidation rule. The first form, a
+  separate in-place kernel on the amounts before FP6, added 3.57 ms (35mm) and 4.91 ms (16mm) at 6000 px; it read and wrote the
+  whole amounts image once more. The plan files `film_print_math.h` (`FilmKernelGrainAmounts`), `film_print_kernel_tables.hpp`,
+  and `film_print_plan.cpp` did not change: the grain plan of G1 holds the curves, and `film_grain_negative.h` holds the step.
+- The node form of the layer curve (`FilmGrainNodeCurve`). The segment form of `FilmGrainCurveSigma` adds all 15 segments for each
+  value; for the three layers of the FP6 kernel that was about 1.2 ms at 6000 x 4000. The node form finds the segment in 4 reads
+  of the 16 nodes and reads one segment; it equals the segment form within 1e-6 relative
+  (`FilmGrainNegativePlan.NodeCurveEqualsTheSegmentCurveOfThePlan`). The post grain keeps the segment form of G4, so OpenCL and
+  Metal did not change.
+- The tile of the film print has 16 columns and 32 rows: each thread of the 16 x 16 block applies the grain to two pixels, so the
+  noise of the halo and the horizontal blur serve twice as many pixels (`Apply::kTileRows`). A band holds the whole tile with its
+  halo up to 48 rows (one barrier pair). The post grain keeps 16 rows: with 32 rows its apply step took twice as long (+6.9 ms at
+  35mm). The single band also takes about 0.2 ms from the post grain at 6000 px.
+- Backends. The DRT/Post schedule skips Film Grain under the film print only on a backend with
+  `Ops::kFilmPrintGrainInNegative` (CUDA). OpenCL and Metal keep the post grain under the film print until G6, as G3 kept the old
+  grain on them until G4, so no backend loses the grain. Until G6 `DrtPostDecisionTrace` of a film print with grain differs
+  between CUDA and the other backends by the Film Grain write.
+- The strength. The executor passes the stored value of the enabled Film Grain to `DispatchFilmPrint` (0 when it is disabled), and
+  `RecordCudaFilmPrint` makes the plan with `MakeDrtFilmPrintGrainPlan` before any GPU work, so a strength outside [0, 2] stops
+  the render first. The Film Grain Model keeps its value (U4).
+- Reversal films. The record is `dye_max - dye amount` (lab rule 'removed_dye_record'), so the step reads the curve at
+  `dye_max - record` and subtracts the change from the record (`record_sign` -1).
+- The 48 um check. A box of 48 um area is near the size of the dye cloud, where Selwyn's law does not hold (the pixel integral at
+  42.5 um is about 5 % below 1 / B for sigma_c 2 um), so the box would be about 5 % below the datasheet value by the model itself.
+  The test averages boxes of 32 px at 6 um (192 um) and takes the box value to 48 um by Selwyn's law,
+  sigma_48 = sigma_box * B / sqrt(A_48).
+- The Negative Scan correlation is the mean over the AP1 greys 0.03, 0.09, 0.25, and 0.7, as the lab fit of R averaged net green
+  densities 0.1 to 0.7, of the correlation of ln of the linear AP1 of the scan.
+
+Mean shift (risk of section 10), 5207 on 2383, 100 %, 6000 px, the change of the mean display light of a flat grey, in stops
+(R, G, B; `CudaFilmPrintGrainTest.GrainMovesTheMeanOfAGreyRampOnlyInThePrintShadows`):
+
+| AP1 grey | 35mm | 16mm |
+| ---: | --- | --- |
+| 0.005 | +0.048, +0.043, +0.054 | +0.085, +0.071, +0.075 |
+| 0.02 | +0.120, +0.072, +0.148 | +0.201, +0.113, +0.199 |
+| 0.06 | +0.078, +0.049, +0.125 | +0.133, +0.077, +0.166 |
+| 0.18 | +0.038, +0.012, +0.035 | +0.058, +0.016, +0.047 |
+| 0.5 | +0.001, -0.001, +0.002 | -0.000, -0.004, +0.005 |
+| 1.5 | -0.001, -0.002, -0.004 | -0.002, -0.005, -0.005 |
+| 4.0 | -0.001, -0.002, -0.003 | -0.002, -0.003, -0.004 |
+
+The print makes light from density through a convex curve, so the grain makes the mean light of a print shadow brighter, as on a
+real print. The test bounds are the measured values with a margin (35mm: 0.2 stop below the grey 0.18, 0.06 at and above; 16mm:
+0.35 and 0.1).
+
+Primary success call chain:
+
+```text
+DrtPostExecutor<CudaDrtOps>::Execute
+  -> MakeGradeNeighborParams -> DrtPostNeighborhoodRuns(FilmPrint, Film Grain, true) is false
+     -> DrtFilmGrainStrength(model)                       (the stored value stays)
+  -> CudaDrtOps::DispatchFilmPrint(..., strength) -> RecordCudaFilmPrint(..., grain_strength)
+     -> MakeDrtFilmPrintGrainPlan(drt, strength, geometry)
+        -> bundle.Grain(film.negative) -> MakeFilmGrainPlan(..., Negative, strength)
+     -> FP1 to FP5 -> blurred amounts, flare canvas, prescan (no grain)
+     -> cuda_film_grain::FieldParamsFor, MakeFilmGrainNegativeParams (dye_max of a reversal film)
+     -> cuda_film_grain::Launch(GrainDisplayApply or GrainScanDisplayApply)
+        -> FilmGrainTileKernel: noise, blur x, blur y, unit field, FilmGrainMix
+        -> FilmGrainNegativeRecord (FilmGrainNodeCurveSigma) -> DisplayPixel or ScanDisplayPixel
+```
+
+Primary failure call chain:
+
+```text
+Strength outside [0, 2]        -> MakeFilmGrainPlan throws std::invalid_argument before any GPU work; the render fails
+Strength 0                     -> no plan; DisplayKernel or ScanDisplayKernel as before G5 (film_grain_negative stays 0)
+Missing bundle or unknown film -> SharedFilmPrintTables / FilmStockBundle::Grain throws with the file or the film name
+Reversal dye_max missing       -> MakeFilmGrainNegativeParams throws std::invalid_argument
+Disabled or Post plan          -> RecordCudaFilmGrainNegative throws std::invalid_argument before any kernel
+```
+
+What was proven (executed tests, debug build, RTX 3080 Laptop):
+
+| Required name / criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Dye amounts on a flat field, box-averaged and taken to 48 um, equal `sigma_a` within 5 % at three amounts, for 5207, 5219, Portra 400, Velvia 50 | `CudaFilmGrainNegativeTest.DyeAmountSigmaMatchesTheDatasheetForEachPrintStock` | `GpuDagCudaDrtProductTest` | PASS |
+| Pixel sigma of each layer equals the plan within 5 % at 16mm, 35mm, 70mm | `CudaFilmGrainNegativeTest.PixelSigmaFollowsThePlanForEachFormat` | `GpuDagCudaDrtProductTest` | PASS |
+| Negative Scan of 5207: rg within 0.05 of 0.661 (also gb of 0.41, rb of 0.246) | `CudaFilmPrintGrainTest.NegativeScanChannelCorrelationIsTheScanCorrelationOf660` (rg 0.661 to 0.673, gb 0.405 to 0.411, rb 0.248 to 0.267) | `GpuDagCudaDrtProductTest` | PASS |
+| Strength 0 equals the film print without grain, no grain pass, in the three forms | `CudaFilmPrintGrainTest.StrengthZeroEqualsTheFilmPrintWithNoGrainKernel` | `GpuDagCudaDrtProductTest` | PASS |
+| The schedule skips Film Grain under the film print and keeps the stored value; the grain follows the slider | `CudaFilmPrintGrainTest.FilmPrintSkipsThePostFilmGrainAndKeepsItsStoredValue`, `DrtPostSchedule.FilmPrintWithGrainInTheNegativeHasNoFilmGrainWrite` | `GpuDagCudaDrtProductTest`, `GpuDagRawInputTest` | PASS |
+| An ROI equals the full frame (halo rule) | `CudaFilmGrainNegativeTest.ViewportRegionEqualsTheSameRegionOfTheFullRender` (1e-6) | `GpuDagCudaDrtProductTest` | PASS |
+| The kernel equals the host form at partial tiles, aggregate 2, negative and reversal | `CudaFilmGrainNegativeTest.KernelEqualsTheHostFormOfItsStepsAtTheTileEdges` (1e-5) | `GpuDagCudaDrtProductTest` | PASS |
+| Mean shift on a grey ramp (risk of section 10) | `CudaFilmPrintGrainTest.GrainMovesTheMeanOfAGreyRampOnlyInThePrintShadows` | `GpuDagCudaDrtProductTest` | PASS |
+| Apply parameters, node curve, reversal record, rejected inputs | `FilmGrainNegativePlan.*` (5), `FilmGrainNegativeApply.*` (2) | `GpuDagRawInputTest` | PASS |
+| F4 and F10 film print tests with strength 0; the post grain after the tile change | `GpuDagCudaDrtProductTest` (all) | `GpuDagCudaDrtProductTest` | PASS (129 / 129) |
+
+Suite totals: `GpuDagCudaDrtProductTest` 129 / 129 (the two cost records are disabled). `GpuDagRawInputTest` with the filter of the
+commands 71 / 71. `GpuDagCudaPrimaryGradeTest` with the grain filter 8 / 10; the 2 failures are those of issue
+[#690](https://github.com/zidage/AlcedoStudio/issues/690). `GpuDagOpenClGradeTest` 127 / 133; the 6 failures are
+`OpenClMultiGradeFixture.*` of issue [#496](https://github.com/zidage/AlcedoStudio/issues/496). Metal was not built (no Mac in this
+phase); its change is the constant `kFilmPrintGrainInNegative = false`.
+
+Timing (Release, RTX 3080 Laptop, `CudaFilmPrintFixture.DISABLED_DrtCostRecordAtEditorSizes`, median of 9 GPU times of the DRT
+pass; the grain is the difference against the film print with Film Grain 0 % and the post adjustments compiled):
+
+| Render | Film print, 0 % | Grain, 35mm | Grain, 16mm |
+| --- | ---: | ---: | ---: |
+| 2560 x 1709 | 3.78 ms | +0.44 ms | +0.60 ms |
+| 4096 x 2735 | 11.30 ms | +0.77 ms | +1.08 ms |
+| 6000 x 4006 | 16.61 ms | +1.90 ms | +2.92 ms |
+
+The limit of 3 ms at 6000 px holds at both formats. Steps of the tuning at 6000 px (35mm / 16mm): the separate kernel +3.57 /
++4.91 ms; FP6 as the apply step +2.82 / +4.10; one band (the kernel alone from 3.41 / 4.67 to 3.09 / 4.21 ms); the node curve +1.51 / +3.20;
+the tile of 32 rows +1.90 / +2.92 (between runs the values vary by about 0.25 ms). `__logf` in the Gaussian gave 0.2 ms at 16mm
+and nothing at 35mm, and blurs with a loop to the radius of each channel were 0.3 ms slower (the compiler does not unroll them);
+neither is in the product. `CudaFilmGrainNegativeTest.DISABLED_KernelCostRecordAt24Megapixels` times the grain step alone on
+6000 x 4000 amounts: 1.76 ms (35mm) and 2.75 ms (16mm). The post grain at 6000 px after this phase: +3.52 ms (35mm) and +4.56 ms
+(16mm), against +3.74 and +4.72 in G4. Release built with `-DALCEDO_BUILD_TESTS=ON` for these records only; `build/release` is back
+at `OFF`.
+
+Commands (PowerShell, repository root):
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 6 --target GpuDagRawInputTest GpuDagCudaDrtProductTest
+  GpuDagCudaPrimaryGradeTest GpuDagOpenClGradeTest
+GpuDagRawInputTest.exe --gtest_filter="FilmGrainPlan*:FilmGrainField*:FilmGrainPost*:FilmGrainNegative*:FilmFormatTest*:
+  GpuDagAdjustmentRuntime*:FilmPrintImagePlan*:DrtPost*:DrtWriteSequence*:NeighborExecutor*"
+GpuDagCudaDrtProductTest.exe; GpuDagOpenClGradeTest.exe
+GpuDagCudaPrimaryGradeTest.exe --gtest_filter="*Grain*:*Neighbor*:*DrtPost*:*Halation*"
+cmd /c scripts\msvc_env.cmd --preset win_release -DALCEDO_BUILD_TESTS=ON   (timing only, then OFF again)
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target GpuDagCudaDrtProductTest
+GpuDagCudaDrtProductTest.exe --gtest_filter="*KernelCostRecordAt24Megapixels:CudaFilmPrintFixture.DISABLED_DrtCostRecordAtEditorSizes"
+  --gtest_also_run_disabled_tests
+```
+
+Checklist / exit condition: the tests of the section pass; the film print tests of F4 and F10 pass with strength 0 (the full
+`GpuDagCudaDrtProductTest`); the timing limit holds.
+
+LOC note: 24 files, 1703 added and 232 removed lines against `f1c39fad7`, without this record. Product code 765 added (the tile
+kernel moved from `cuda_film_grain_pass.cu` to `cuda_film_grain_tile.cuh`, 191 lines), tests 934 (`cuda_film_grain_negative_test.cpp`
+398, `film_grain_negative_checks.hpp` 254, `film_grain_negative_test.cpp` 200). `cuda_film_print_pass.cu` is 1245 lines; the FP6
+kernels are split into their pixel functions for the apply steps.
+
+Remaining gaps: OpenCL and Metal add the post grain under the film print until G6. G6 sets `kFilmPrintGrainInNegative` on them,
+ports the FP6 apply step with `film_grain_negative.h`, and runs `film_grain_negative_checks.hpp` and the film print checks of
+`cuda_film_grain_negative_test.cpp`.
 
 ### G6: grain in the negative on OpenCL and Metal
 
@@ -1320,7 +1479,7 @@ document.
 | --- | --- | --- |
 | No absolute anchor for the PGI films | Portra, Ektar, Gold, Ultramax, and Vericolor III have one common external scale | G0: no collected sheet gives both values; the recorded fotufilm value; the user review of G8 |
 | The 3200 dpi scan cannot resolve a 2 um cloud | `sigma_c` keeps the literature values | G0: the scans give an upper limit only (5.9 to 7.8 um). An 8000 dpi Flextight scan of a 5207 frame with a sharp film edge gives the scanner MTF and a fit |
-| Grain in the negative moves the mean through the print curve | A small tone shift in the shadows of the print | G5 measures the mean shift on a grey ramp and records it |
+| Grain in the negative moves the mean through the print curve | A small tone shift in the shadows of the print | G5 measured it (G5 completion record): at 100 % the mean light of a print shadow rises by up to 0.15 stop at 35mm and 0.20 stop at 16mm (6000 px); from the mid grey up the shift is below 0.005 stop. This is the convex print curve acting on the grain, as on a real print. `GrainMovesTheMeanOfAGreyRampOnlyInThePrintShadows` keeps the bounds |
 | The halo adds memory | One more float4 image at full size | The pool releases it at the end of the pass; Metal uses half4 |
 
 ---

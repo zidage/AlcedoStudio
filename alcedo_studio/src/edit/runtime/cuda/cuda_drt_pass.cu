@@ -56,6 +56,8 @@ struct CudaDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteCudaDrt";
   static constexpr bool        kImplementsFilmPrint = true;
+  /// The film print adds the Film Grain to the dye amounts of its negative (phase G5).
+  static constexpr bool        kFilmPrintGrainInNegative = true;
 
   static void DispatchFilmGrain(CudaRenderDevice& device, const FrameSceneBinding& src,
                                 const FrameSceneBinding& dst, const FilmGrainPlan& grain,
@@ -164,8 +166,8 @@ struct CudaDrtOps {
   static void DispatchFilmPrint(CudaRenderDevice& device, const ExecutionPlan& plan,
                                 const DrtNodeModel& drt, std::optional<double> raw_cct,
                                 const FrameSceneBinding& scene, const FrameSceneBinding& display,
-                                std::uint32_t width, std::uint32_t height) {
-    RecordCudaFilmPrint(device, plan, drt, raw_cct, scene, display, width, height);
+                                std::uint32_t width, std::uint32_t height, float grain_strength) {
+    RecordCudaFilmPrint(device, plan, drt, raw_cct, scene, display, width, height, grain_strength);
   }
 
   static void CheckAfterEncode(CudaRenderDevice&) {

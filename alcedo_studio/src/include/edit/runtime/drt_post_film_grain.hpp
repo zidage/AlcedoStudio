@@ -26,6 +26,18 @@ struct FilmGrainDisplayEncoding {
 };
 
 /**
+ * @brief The stored value of the Film Grain slider of @p model.
+ * @throws std::runtime_error when @p model is not a Film Grain Model.
+ */
+[[nodiscard]] inline auto DrtFilmGrainStrength(const IOperatorModel& model) -> float {
+  const auto* grain = dynamic_cast<const FilmGrainModel*>(&model);
+  if (grain == nullptr) {
+    throw std::runtime_error("DRT/Post Film Grain: the Model is not a Film Grain Model");
+  }
+  return grain->Read([](const ScalarFloatPayload& payload) { return payload.value; });
+}
+
+/**
  * @brief The grain plan of the DRT/Post Film Grain of @p drt for one render: the 5207 data
  *        (@ref kFilmGrainPostFilm), the film format of @p drt, and the strength of @p model.
  *
@@ -40,15 +52,27 @@ struct FilmGrainDisplayEncoding {
                                                    const IOperatorModel&         model,
                                                    const ResolvedRenderGeometry& geometry)
     -> FilmGrainPlan {
-  const auto* grain = dynamic_cast<const FilmGrainModel*>(&model);
-  if (grain == nullptr) {
-    throw std::runtime_error("DRT/Post Film Grain: the Model is not a Film Grain Model");
-  }
-  const float strength =
-      grain->Read([](const ScalarFloatPayload& payload) { return payload.value; });
-  const auto& bundle = SharedFilmPrintTables().Bundle();
+  const float strength = DrtFilmGrainStrength(model);
+  const auto& bundle   = SharedFilmPrintTables().Bundle();
   return MakeFilmGrainPlan(geometry, drt.Params().FilmFormat(), bundle.Grain(kFilmGrainPostFilm),
                            FilmGrainTarget::Post, strength);
+}
+
+/**
+ * @brief The grain plan of the negative of the film print of @p drt for one render (phase G5): the
+ *        layer data of the selected film, the film format of @p drt, and @p strength, the stored
+ *        value of the Film Grain slider (decision U4).
+ *
+ * @throws std::runtime_error that names the film or the file for an unknown film or a missing
+ *         bundle, and std::invalid_argument from `MakeFilmGrainPlan`.
+ */
+[[nodiscard]] inline auto MakeDrtFilmPrintGrainPlan(const DrtNodeModel& drt, float strength,
+                                                    const ResolvedRenderGeometry& geometry)
+    -> FilmGrainPlan {
+  const auto& bundle = SharedFilmPrintTables().Bundle();
+  return MakeFilmGrainPlan(geometry, drt.Params().FilmFormat(),
+                           bundle.Grain(drt.Params().FilmPrint().negative),
+                           FilmGrainTarget::Negative, strength);
 }
 
 /**

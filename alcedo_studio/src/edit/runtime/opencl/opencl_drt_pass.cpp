@@ -109,6 +109,8 @@ struct OpenClDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteOpenClDrt";
   static constexpr bool        kImplementsFilmPrint = true;
+  /// The film print keeps the DRT/Post Film Grain until its negative has the grain (phase G6).
+  static constexpr bool        kFilmPrintGrainInNegative = false;
 
   static void DispatchFilmGrain(OpenClRenderDevice& device, const FrameSceneBinding& src,
                                 const FrameSceneBinding& dst, const FilmGrainPlan& grain,

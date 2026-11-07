@@ -218,6 +218,7 @@ auto MakeFilmGrainPlan(const ResolvedRenderGeometry& geometry, FilmFormat format
   plan.target   = target;
   plan.format   = format;
   plan.strength = strength;
+  plan.reversal = stock.reversal;
   plan.enabled  = strength > 0.0f;
   plan.reference_pitch_um =
       frame_mm * 1000.0 / static_cast<double>((std::max)(reference.width, reference.height));
@@ -242,6 +243,11 @@ auto MakeFilmGrainPlan(const ResolvedRenderGeometry& geometry, FilmFormat format
     plan.curve_low[layer] = curves.x[first];
     plan.curve_high[layer] =
         curves.x[first + static_cast<std::size_t>(curves.node_count[layer]) - 1];
+    plan.node_count[layer] = static_cast<std::uint32_t>(curves.node_count[layer]);
+    for (std::size_t node = 0; node < plan.node_count[layer]; ++node) {
+      plan.node_x[layer][node]     = curves.x[first + node];
+      plan.node_sigma[layer][node] = curves.sigma[first + node];
+    }
   }
   if (!negative) {
     if (stock.common.post_display_value.size() != 3 ||
@@ -315,6 +321,44 @@ auto MakeFilmGrainPostParams(const FilmGrainPlan& plan, int transfer, float deco
       FailField("grain channel curve", "gives no grain at the grey of the post target");
     }
     params.tone_scale[channel] = static_cast<float>(plan.post_relative_sigma_48[channel] / tone);
+  }
+  return params;
+}
+
+auto MakeFilmGrainNegativeParams(const FilmGrainPlan&    plan,
+                                 std::span<const double> reversal_dye_max)
+    -> FilmGrainNegativeParams {
+  if (plan.target != FilmGrainTarget::Negative) {
+    FailField("target", "is not the negative of the film print");
+  }
+  if (plan.reversal) {
+    if (reversal_dye_max.size() != 3 ||
+        !std::all_of(reversal_dye_max.begin(), reversal_dye_max.end(),
+                     [](double value) { return std::isfinite(value); })) {
+      FailField("reversal_dye_max", "does not hold the 3 dye_max values of the reversal film");
+    }
+  } else if (!reversal_dye_max.empty()) {
+    FailField("reversal_dye_max", "is set for a negative");
+  }
+  FilmGrainNegativeParams params{};
+  params.record_sign = plan.reversal ? -1.0f : 1.0f;
+  for (std::size_t layer = 0; layer < 3; ++layer) {
+    params.scale[layer]   = static_cast<float>(plan.strength * plan.layers[layer].pixel_factor);
+    params.dye_max[layer] = plan.reversal ? static_cast<float>(reversal_dye_max[layer]) : 0.0f;
+    // The node form of the layer curve (film_grain_negative.h). MakeFilmGrainCurve checked the
+    // count and the rising x.
+    auto&      curve      = params.curves[layer];
+    const auto count      = plan.node_count[layer];
+    curve.last_segment    = static_cast<int>(count) - 2;
+    for (std::size_t node = 0; node < FILM_GRAIN_CURVE_NODES; ++node) {
+      const bool counted = node < count;
+      curve.x[node] = counted ? static_cast<float>(plan.node_x[layer][node]) : FILM_GRAIN_NODE_PAST;
+      curve.sigma[node] = static_cast<float>(plan.node_sigma[layer][counted ? node : count - 1]);
+      curve.inverse_width[node] =
+          node + 1 < count
+              ? static_cast<float>(1.0 / (plan.node_x[layer][node + 1] - plan.node_x[layer][node]))
+              : 0.0f;
+    }
   }
   return params;
 }

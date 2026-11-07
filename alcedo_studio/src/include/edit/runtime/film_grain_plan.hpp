@@ -7,11 +7,13 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/graph/film_format.hpp"
 #include "edit/runtime/film/film_grain_field.h"
+#include "edit/runtime/film/film_grain_negative.h"
 #include "edit/runtime/film/film_grain_post.h"
 #include "edit/runtime/film/film_stock_bundle.hpp"
 
@@ -84,6 +86,8 @@ struct FilmGrainPlan {
   FilmGrainTarget target             = FilmGrainTarget::Post;
   FilmFormat      format             = FilmFormat::Film35mm;
   double          strength           = 0.0;  ///< The slider value: 1 is the datasheet granularity
+  /// True for a colour reversal film: its layer curves read the dye amount `dye_max - record`.
+  bool            reversal           = false;
 
   /// Rule 'grain_pitch': the frame long side / the long side of the full reference image.
   double          reference_pitch_um = 0.0;
@@ -103,6 +107,10 @@ struct FilmGrainPlan {
   /// The first and the last counted node of each curve of @ref curves.
   std::array<double, 3>               curve_low{};
   std::array<double, 3>               curve_high{};
+  /// The counted nodes of each curve of @ref curves: `node_count[k]` values of x and of sigma.
+  std::array<std::array<double, FILM_GRAIN_CURVE_NODES>, 3> node_x{};
+  std::array<std::array<double, FILM_GRAIN_CURVE_NODES>, 3> node_sigma{};
+  std::array<std::uint32_t, 3>                              node_count{};
 
   /// Target Post only: the linear display light of the neutral mid grey of the post target
   /// (`common/grain_post_display_value` of green), and the relative standard deviation of the
@@ -182,5 +190,20 @@ struct FilmGrainPlan {
  */
 [[nodiscard]] auto MakeFilmGrainPostParams(const FilmGrainPlan& plan, int transfer,
                                            float decode_scale) -> FilmGrainPostParams;
+
+/**
+ * @brief The apply parameters of the grain in the negative of the film print
+ *        (film_grain_negative.h) for @p plan.
+ *
+ * Each layer has the scale `strength * pixel_factor` and the layer curve of the plan.
+ *
+ * @param reversal_dye_max The `dye_max` of the colour reversal film of the plan (3 values), or an
+ *        empty span for a negative.
+ * @throws std::invalid_argument when @p plan is not a Negative plan, or when @p reversal_dye_max
+ *         does not hold 3 finite values for a reversal plan or is not empty for a negative.
+ */
+[[nodiscard]] auto MakeFilmGrainNegativeParams(const FilmGrainPlan&    plan,
+                                               std::span<const double> reversal_dye_max)
+    -> FilmGrainNegativeParams;
 
 }  // namespace alcedo

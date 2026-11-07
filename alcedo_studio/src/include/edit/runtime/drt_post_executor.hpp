@@ -61,7 +61,9 @@ class DrtPostExecutor {
    * the display parameter bind and the display transform dispatch, and it receives the colour
    * temperature of the RAW decode of @p document for scene light As Shot. The Film Grain write
    * runs Ops::DispatchFilmGrain with the grain plan of this render; the other writes run the
-   * neighborhood kernels.
+   * neighborhood kernels. With Ops::kFilmPrintGrainInNegative, the film print skips the Film Grain
+   * write, and Ops::DispatchFilmPrint receives the stored strength of Film Grain (0 when it is
+   * disabled) for the grain of its negative (decision U4).
    */
   static auto Execute(Device& device, const ExecutionPlan& plan, const PipelineDocument& document,
                       const FrameSceneBinding& scene) -> DrtPostExecutionResult {
@@ -92,6 +94,8 @@ class DrtPostExecutor {
     command_offsets.reserve(plan.drt.post_adjustments.size());
     // The grain plan of the Film Grain write (Ops::DispatchFilmGrain).
     std::optional<FilmGrainPlan> film_grain;
+    // The Film Grain strength of the negative of the film print; 0 with no enabled Film Grain.
+    float                        film_print_grain = 0.0f;
     for (const auto& compiled : plan.drt.post_adjustments) {
       const auto* model = drt->FindAdjustment(compiled.instance_id);
       if (model == nullptr || model->Type() != compiled.type) {
@@ -107,7 +111,12 @@ class DrtPostExecutor {
       Ops::RefreshNeighborhoodAdjustment(device, *model, key, *behavior);
       auto neighbor = MakeGradeNeighborParams(*model, *behavior, plan.geometry);
       compiled_order.push_back(neighbor);
-      if (!DrtPostNeighborhoodRuns(method, neighbor)) {
+      if (!DrtPostNeighborhoodRuns(method, neighbor, Ops::kFilmPrintGrainInNegative)) {
+        // Decision U4: the film print reads the stored value of Film Grain for its negative.
+        if (Ops::kFilmPrintGrainInNegative && method == DrtMethod::FilmPrint &&
+            neighbor.enabled != 0U && *behavior == AdjustmentBehavior::FilmGrain) {
+          film_print_grain = DrtFilmGrainStrength(*model);
+        }
         continue;
       }
       if (*behavior == AdjustmentBehavior::FilmGrain) {
@@ -131,7 +140,8 @@ class DrtPostExecutor {
     workspace.Parameters().UploadDirty(device.CommandContext());
     Ops::PrepareNeighborCommands(device, drt->Id(), command_offsets);
 
-    const auto             schedule = MakeDrtPostSchedule(compiled_order, method);
+    const auto schedule =
+        MakeDrtPostSchedule(compiled_order, method, Ops::kFilmPrintGrainInNegative);
     DrtPostExecutionResult result;
     result.output                  = plan.display_output;
     result.display_post            = plan.display_output;
@@ -155,8 +165,13 @@ class DrtPostExecutor {
       if (index == 0) {
         if constexpr (Ops::kImplementsFilmPrint) {
           if (film_print) {
-            Ops::DispatchFilmPrint(device, plan, *drt, FilmSceneRawCct(document), current, dest,
-                                   width, height);
+            if constexpr (Ops::kFilmPrintGrainInNegative) {
+              Ops::DispatchFilmPrint(device, plan, *drt, FilmSceneRawCct(document), current, dest,
+                                     width, height, film_print_grain);
+            } else {
+              Ops::DispatchFilmPrint(device, plan, *drt, FilmSceneRawCct(document), current, dest,
+                                     width, height);
+            }
           } else {
             Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), width, height);
           }
