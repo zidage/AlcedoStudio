@@ -109,17 +109,9 @@ Assert-MinSize (Join-Path $binDir 'config\models\xtrans.safetensors') 10240
 
 if ($RequireFilmPrintResources) {
     $filmPrintDir = Join-Path $binDir 'config\film_print'
-    $filmPrintManifestPath = Join-Path $filmPrintDir 'manifest.json'
-    Assert-File $filmPrintManifestPath
-    $filmPrintManifest = Get-Content -LiteralPath $filmPrintManifestPath -Raw | ConvertFrom-Json
-    foreach ($resource in $filmPrintManifest.resources.PSObject.Properties.Value) {
-        $resourcePath = Join-Path $filmPrintDir $resource.file
-        Assert-File $resourcePath
-        $digest = (Get-FileHash -LiteralPath $resourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($digest -ne $resource.sha256) {
-            throw "SHA-256 $digest is not the manifest value $($resource.sha256): $resourcePath"
-        }
-    }
+    & (Join-Path $PSScriptRoot 'msvc_env.cmd') "-DALCEDO_FILM_PRINT_RESOURCE_DIR=$filmPrintDir" `
+        -P (Join-Path $PSScriptRoot 'cmake\verify_film_print_resources.cmake')
+    if ($LASTEXITCODE -ne 0) { throw 'Installed film print resource verification failed.' }
 }
 
 Assert-AnyFile -Directory $binDir -Filter 'cudart64_*.dll'
@@ -234,7 +226,13 @@ try {
     $cliStartExit = $LASTEXITCODE
     $cliStop = ''
     $cliStopExit = 0
+    $cliFilmExit = 0
+    $cliFilm = ''
     if ($cliStartExit -eq 0) {
+        if ($RequireFilmPrintResources) {
+            $cliFilm = & $cliExe @cliSessionArgs --json call film.list 2>&1 | Out-String
+            $cliFilmExit = $LASTEXITCODE
+        }
         $cliStop = & $cliExe @cliSessionArgs session stop 2>&1 | Out-String
         $cliStopExit = $LASTEXITCODE
     }
@@ -250,6 +248,14 @@ if ($cliStartExit -ne 0) {
 }
 if ($cliStopExit -ne 0) {
     throw "Installed alcedo-cli.exe could not stop the headless session (exit $cliStopExit): $cliStop"
+}
+if ($RequireFilmPrintResources) {
+    if ($cliFilmExit -ne 0) { throw "Installed film.list failed: $cliFilm" }
+    $filmList = $cliFilm | ConvertFrom-Json
+    if ($filmList.total -lt 1 -or $null -eq $filmList.warnings -or $filmList.warnings.Count -ne 0) {
+        throw "Installed film.list did not load the film resources: $cliFilm"
+    }
+    Write-Host "[alcedo] Installed film resources loaded: $($filmList.total) catalog entries."
 }
 Remove-Item -LiteralPath $cliProbeDir -Recurse -Force -ErrorAction SilentlyContinue
 
