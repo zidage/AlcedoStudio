@@ -35,6 +35,7 @@
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
+#include "ui/alcedo_main/app_theme.hpp"
 #include "ui/main_qml_test_fixture.hpp"
 
 namespace alcedo::ui::test {
@@ -214,6 +215,62 @@ TEST_F(EditorWorkspaceSwitchQmlTest, HiddenWorkspaceKeepsItsSizeWhileSidebarFold
   EXPECT_DOUBLE_EQ(library_loader->width(), host->width());
   EXPECT_DOUBLE_EQ(library_loader->width(), library_width);
   EXPECT_DOUBLE_EQ(editor_loader->width(), editor_width);
+  EXPECT_EQ(AppQmlWarnings(*loaded), QString());
+}
+
+// The fold animates (no Reduce Motion). The shown workspace takes its width after the fold at
+// once and keeps it while the host width animates: it lays out once per switch instead of on
+// every frame (the Library grid took 30-40 ms a frame, and each editor viewport size started a
+// render). It stays aligned to the right edge of the host.
+TEST_F(EditorWorkspaceSwitchQmlTest, ShownWorkspaceLaysOutOnceWhileSidebarFolds) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, {}, 2);
+  ASSERT_TRUE(populated.has_value());
+  auto loaded = LoadMainWindowWithPackedProject(populated->packed_path_);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(200);
+  AppTheme::Instance().setReduceMotion(false);
+  const std::unique_ptr<void, void (*)(void*)> restore_motion(
+      &loaded, [](void*) { AppTheme::Instance().setReduceMotion(true); });
+
+  auto* host           = loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceHost"));
+  auto* library_loader =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryWorkspaceLoader"));
+  auto* editor_loader =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceLoader"));
+  ASSERT_NE(host, nullptr);
+  ASSERT_NE(library_loader, nullptr);
+  ASSERT_NE(editor_loader, nullptr);
+
+  int        host_width_changes   = 0;
+  int        editor_width_changes = 0;
+  const auto host_connection      = QObject::connect(host, &QQuickItem::widthChanged,
+                                                     [&]() { ++host_width_changes; });
+  const auto editor_connection    = QObject::connect(editor_loader, &QQuickItem::widthChanged,
+                                                     [&]() { ++editor_width_changes; });
+  auto*      router               = loaded->host.workspace_router();
+  router->OpenEditor(static_cast<uint>(populated->images_[0].file_id_),
+                     static_cast<uint>(populated->images_[0].image_id_));
+  ProcessEvents(800);
+  QObject::disconnect(host_connection);
+  QObject::disconnect(editor_connection);
+  ASSERT_EQ(router->workspace(), QStringLiteral("editor"));
+  // The fold changed the host width more than once; the editor took one width.
+  EXPECT_GE(host_width_changes, 2);
+  EXPECT_LE(editor_width_changes, 1);
+  EXPECT_DOUBLE_EQ(editor_loader->width(), host->width());
+  EXPECT_DOUBLE_EQ(editor_loader->x(), 0.0);
+
+  int        library_width_changes = 0;
+  const auto library_connection    = QObject::connect(library_loader, &QQuickItem::widthChanged,
+                                                      [&]() { ++library_width_changes; });
+  router->OpenLibrary();
+  ProcessEvents(800);
+  QObject::disconnect(library_connection);
+  EXPECT_LE(library_width_changes, 1);
+  EXPECT_DOUBLE_EQ(library_loader->width(), host->width());
+  EXPECT_DOUBLE_EQ(library_loader->x(), 0.0);
   EXPECT_EQ(AppQmlWarnings(*loaded), QString());
 }
 

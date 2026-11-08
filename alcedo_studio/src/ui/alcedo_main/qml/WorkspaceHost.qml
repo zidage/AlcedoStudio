@@ -56,9 +56,17 @@ Item {
                 ? String(root.workspaceRouter.workspace || "library")
                 : "library"
         const shown = workspace === "editor" ? editorLoader : libraryLoader
-        shown.width = root.width
+        shown.width = root.layoutWidth > 0 ? root.layoutWidth : root.width
         shown.height = root.height
     }
+
+    // The width of the shown workspace after the collections sidebar fold (Main.qml); -1 uses
+    // the host width. While the fold animates the host width, the shown workspace keeps this
+    // width and stays aligned to the right edge: the sidebar slides over or out of it, and the
+    // workspace lays out once instead of on every frame (the Library grid layout took 30-40 ms
+    // a frame, and each editor viewport size started a render).
+    property real layoutWidth: -1
+    onLayoutWidthChanged: root.syncWorkspaceSizes()
 
     onWidthChanged: root.syncWorkspaceSizes()
     onHeightChanged: root.syncWorkspaceSizes()
@@ -94,6 +102,7 @@ Item {
     Loader {
         id: libraryLoader
         objectName: "libraryWorkspaceLoader"
+        x: root.width - width
         active: root.libraryActive || root.libraryRetained
         asynchronous: false
         visible: status === Loader.Ready && root.libraryActive
@@ -109,6 +118,7 @@ Item {
     Loader {
         id: editorLoader
         objectName: "editorWorkspaceLoader"
+        x: root.width - width
         active: root.editorActive || root.editorRetained
         asynchronous: false
         visible: status === Loader.Ready && root.editorActive

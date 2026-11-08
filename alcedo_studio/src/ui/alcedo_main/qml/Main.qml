@@ -633,6 +633,7 @@ ApplicationWindow {
         }
 
         Item {
+            id: workspaceArea
             Layout.fillWidth: true
             Layout.fillHeight: true
 
@@ -686,6 +687,12 @@ ApplicationWindow {
                     theme: root
                     host: root
                     workspaceRouter: appModules.workspaceRouter
+                    // The width after the collections sidebar fold: the workspace lays out
+                    // once at this width instead of on every frame of the fold.
+                    layoutWidth: workspaceArea.width
+                                 - (root.collectionsSidebarExpanded
+                                    ? appTheme.collectionsSidebarWidth + appTheme.spaceMd
+                                    : 0)
                 }
             }
         }
