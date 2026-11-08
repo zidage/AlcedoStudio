@@ -1,0 +1,52 @@
+Alcedo Studio 0.3.5
+
+Before you upgrade
+------------------
+- Advanced Content Analysis is removed. Existing results stay in your projects.
+  In Settings > Saved AI Keys, delete saved API keys and disconnect the Codex
+  login used by that feature. This cleanup page is available for this release
+  only and will be removed in the next version.
+
+New
+---
+- Film Print: simulate 30 negative films and five color reversal films, with
+  searchable stock browsers, brand filters, and color swatches. Combine negatives
+  with photographic papers and cinema print stocks, including a separate Cine
+  Look (2383), or view reversal films on a light table. Print and slide output
+  uses Rec. 709 SDR. The panel remembers your last film settings and groups its
+  controls into folding sections with help text. CUDA, OpenCL, and Metal support
+  the film workflow, with the film data included in the installer. alcedo-cli
+  adds film.list to select films for scripted editing and rendering.
+- Negative Scan: scan and invert the simulated negative, then use OpenDRT for
+  SDR or HDR output. Adjust scan exposure, contrast, cyan, magenta, yellow, black,
+  and the virtual scanner. New scans use Neutral auto color at 50% strength;
+  zooming and panning keep the color balance of the full frame. Scene Light
+  defaults to As Shot and follows the RAW white balance temperature and tint
+  across prints, scans, and reversal films.
+- Film format and grain: choose 16mm, 35mm, or 70mm. Grain size follows the frame
+  and image size, and Film Print uses the selected stock's granularity data.
+  Smaller formats also enlarge light spread and halation in Film Print. Grain
+  strength ranges from 0 to 200%, and its scale stays consistent as you zoom.
+  Film Print puts grain into the film layers before printing or scanning. It
+  enables grain at 100% when its strength is zero; switching to another method
+  clears the grain. Other display methods keep grain in Post Processing.
+- Collections and navigation: manage nested collections in a compact tree with
+  inline create and rename, drag to move, keyboard controls, and photo counts
+  that update after photo changes. The photo menu's Add to submenu contains the
+  Export Queue and a scrolling collection tree, with filtering for longer lists.
+  In the editor, the mouse wheel zooms at the cursor without Ctrl; trackpad
+  scrolling still pans the image.
+
+Fixed
+-----
+- Lens correction and image loading: preserve more detail during distortion and
+  chromatic aberration correction with Lanczos-3 resampling and limited ringing
+  near bright edges. Improve automatic lens identification for Panasonic RW2
+  files and Nikon lenses identified by lens ID. Fix loading of HDR TIFF files
+  whose embedded ICC profile contains both LUT tables and a color-description
+  tag, including affected Hasselblad X2D II files.
+- Large projects and saves: open .alcd projects with database payloads above
+  2 GiB. Save and open stream the database instead of holding a whole copy in
+  memory. A failed database snapshot no longer blocks later saves. Failed saves
+  remove their temporary package files, and startup removes abandoned project
+  workspaces and database snapshots while keeping workspaces in use.
