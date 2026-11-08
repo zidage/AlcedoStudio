@@ -27,23 +27,21 @@ namespace alcedo::ui {
 
 ProjectHandler::ProjectHandler(ProjectModule& project_module) : project_module_(project_module) {}
 
-bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
-                                        const std::filesystem::path& metaPath,
-                                        ProjectOpenMode              openMode,
-                                        const std::filesystem::path& packagePath,
-                                        const std::filesystem::path& workspaceDir,
-                                        const std::filesystem::path& recentProjectPath,
-                                        ProjectEntryMode             entryMode) {
-  return StartProjectLoad(dbPath, metaPath, openMode, packagePath, workspaceDir, recentProjectPath,
-                          std::nullopt, entryMode);
+bool ProjectHandler::InitializeServices(
+    const std::filesystem::path& dbPath, const std::filesystem::path& metaPath,
+    ProjectOpenMode openMode, const std::filesystem::path& packagePath,
+    const std::filesystem::path& workspaceDir, project_pack::ProjectWorkspaceLock workspaceLock,
+    const std::filesystem::path& recentProjectPath, ProjectEntryMode entryMode) {
+  return StartProjectLoad(dbPath, metaPath, openMode, packagePath, workspaceDir,
+                          std::move(workspaceLock), recentProjectPath, std::nullopt, entryMode);
 }
 
-bool ProjectHandler::OpenPackedProject(const std::filesystem::path& packagePath,
-                                       const std::filesystem::path& workspaceDir,
-                                       const QString&               projectName,
-                                       ProjectEntryMode             entryMode) {
+bool ProjectHandler::OpenPackedProject(const std::filesystem::path&       packagePath,
+                                       const std::filesystem::path&       workspaceDir,
+                                       project_pack::ProjectWorkspaceLock workspaceLock,
+                                       const QString& projectName, ProjectEntryMode entryMode) {
   return StartProjectLoad({}, {}, ProjectOpenMode::kLoadExisting, packagePath, workspaceDir,
-                          packagePath, projectName, entryMode);
+                          std::move(workspaceLock), packagePath, projectName, entryMode);
 }
 
 bool ProjectHandler::RequestEnterLoadedProject() {
@@ -65,14 +63,12 @@ bool ProjectHandler::RequestEnterLoadedProject() {
   return true;
 }
 
-bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
-                                      const std::filesystem::path& metaPath,
-                                      ProjectOpenMode              openMode,
-                                      const std::filesystem::path& packagePath,
-                                      const std::filesystem::path& workspaceDir,
-                                      const std::filesystem::path& recentProjectPath,
-                                      std::optional<QString>       unpackProjectName,
-                                      ProjectEntryMode             entryMode) {
+bool ProjectHandler::StartProjectLoad(
+    const std::filesystem::path& dbPath, const std::filesystem::path& metaPath,
+    ProjectOpenMode openMode, const std::filesystem::path& packagePath,
+    const std::filesystem::path& workspaceDir, project_pack::ProjectWorkspaceLock workspaceLock,
+    const std::filesystem::path& recentProjectPath, std::optional<QString> unpackProjectName,
+    ProjectEntryMode entryMode) {
   if (project_loading_) {
     project_module_.SetServiceMessageForCurrentProject(PL_TEXT("A project load is already in progress."));
     return false;
@@ -117,7 +113,8 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
                old_workspace = std::move(old_workspace), old_project_entered,
                started_as_preview = entryMode == ProjectEntryMode::kPreview, dbPath = std::filesystem::path(dbPath),
                metaPath = std::filesystem::path(metaPath), packagePath, workspaceDir,
-               recentProjectPath, openMode, accelerator_preference,
+               workspace_lock = std::move(workspaceLock), recentProjectPath, openMode,
+               accelerator_preference,
                lut_resources     = std::move(lut_resources),
                unpackProjectName = std::move(unpackProjectName)]() mutable {
     struct LoadResult {
@@ -132,6 +129,7 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
       std::filesystem::path                   meta_path_{};
       std::filesystem::path                   package_path_{};
       std::filesystem::path                   workspace_dir_{};
+      project_pack::ProjectWorkspaceLock      workspace_lock_{};
       std::filesystem::path                   recent_project_path_{};
       std::filesystem::path                   workspace_to_cleanup_{};
       ProjectOverviewCounts                   overview_{};
@@ -227,6 +225,7 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
       }
       result->package_path_  = packagePath;
       result->workspace_dir_ = workspaceDir;
+      result->workspace_lock_ = std::move(workspace_lock);
       result->recent_project_path_ = recentProjectPath;
       result->success_       = true;
     } catch (const std::exception& e) {
@@ -238,7 +237,8 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
     }
 
     if (!result->success_ && !workspaceDir.empty()) {
-      album_util::CleanupWorkspaceDirectory(workspaceDir);
+      workspace_lock.Release();
+      (void)album_util::CleanupWorkspaceDirectory(workspaceDir);
     }
 
     if (!self) {
@@ -289,6 +289,8 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
           ph.meta_path_             = std::move(result->meta_path_);
           ph.project_package_path_  = std::move(result->package_path_);
           ph.project_workspace_dir_ = std::move(result->workspace_dir_);
+          retired->workspace_lock_   = std::move(ph.project_workspace_lock_);
+          ph.project_workspace_lock_ = std::move(result->workspace_lock_);
           ph.mask_thumbnail_service_ = std::make_shared<alcedo::MaskThumbnailService>();
           ph.recent_project_path_    = result->recent_project_path_.empty()
                                            ? (!ph.project_package_path_.empty()
@@ -351,8 +353,9 @@ void ProjectHandler::RetireProject(std::shared_ptr<RetiredProject> retired) {
     retired->mask_thumbnail_service_.reset();
     retired->pipeline_service_.reset();
     retired->project_.reset();
+    retired->workspace_lock_.Release();
     if (!retired->workspace_dir_.empty()) {
-      album_util::CleanupWorkspaceDirectory(retired->workspace_dir_);
+      (void)album_util::CleanupWorkspaceDirectory(retired->workspace_dir_);
     }
   });
 }
@@ -464,6 +467,7 @@ void ProjectHandler::CloseProject() {
   retired->import_service_         = std::move(import_service_);
   retired->export_service_         = std::move(export_service_);
   retired->workspace_dir_          = project_workspace_dir_;
+  retired->workspace_lock_         = std::move(project_workspace_lock_);
   db_path_.clear();
   meta_path_.clear();
   project_package_path_.clear();

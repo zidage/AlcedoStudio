@@ -10,6 +10,8 @@
 #include <string>
 #include <utility>
 
+#include "app/project_package_backend.hpp"
+
 class QString;
 
 namespace alcedo {
@@ -29,8 +31,9 @@ class ProjectPackageService {
   [[nodiscard]] auto BuildBundlePathFromMetaPath(const std::filesystem::path& meta_path) const
       -> std::filesystem::path;
 
-  [[nodiscard]] auto CreateProjectWorkspace(const QString& project_name,
-                                            std::filesystem::path* workspace_out,
+  [[nodiscard]] auto CreateProjectWorkspace(const QString&                      project_name,
+                                            std::filesystem::path*              workspace_out,
+                                            project_pack::ProjectWorkspaceLock* lock_out,
                                             QString* error_out) const -> bool;
   [[nodiscard]] auto BuildRuntimeProjectPair(const std::filesystem::path& workspace,
                                              const QString& project_name) const

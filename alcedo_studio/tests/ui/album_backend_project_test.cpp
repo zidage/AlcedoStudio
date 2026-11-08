@@ -512,14 +512,17 @@ TEST_F(ProjectTests, PackUnpack_RoundTrip_Succeeds) {
   ASSERT_TRUE(project_pack::WritePackedProject(packedPath, metaPath, snapshotPath, nullptr));
 
   // Read back and verify the binary header.
-  std::string metaBytes, dbBytes;
-  ASSERT_TRUE(project_pack::ReadPackedProject(packedPath, &metaBytes, &dbBytes, nullptr));
+  std::string metaBytes;
+  const auto  readDbPath = temp_dir_ / "roundtrip_read.db";
+  ASSERT_TRUE(project_pack::ReadPackedProject(packedPath, &metaBytes, readDbPath, nullptr));
   EXPECT_FALSE(metaBytes.empty());
-  EXPECT_FALSE(dbBytes.empty());
+  EXPECT_GT(std::filesystem::file_size(readDbPath), 0U);
 
   // Unpack to workspace and verify the project loads without warnings.
-  std::filesystem::path workspaceDir;
-  ASSERT_TRUE(project_pack::CreateProjectWorkspace("roundtrip_test", &workspaceDir, nullptr));
+  std::filesystem::path              workspaceDir;
+  project_pack::ProjectWorkspaceLock workspaceLock;
+  ASSERT_TRUE(project_pack::CreateProjectWorkspace("roundtrip_test", &workspaceDir, &workspaceLock,
+                                                   nullptr));
   std::filesystem::path unpackedDbPath, unpackedMetaPath;
   ASSERT_TRUE(project_pack::UnpackProjectToWorkspace(packedPath, workspaceDir,
                                                       "roundtrip_test", &unpackedDbPath,
@@ -544,6 +547,7 @@ TEST_F(ProjectTests, PackUnpack_RoundTrip_Succeeds) {
   EXPECT_TRUE(meta.contains("data_summary"));
   EXPECT_TRUE(meta["data_summary"].contains("tables"));
 
+  workspaceLock.Release();
   std::error_code ec;
   std::filesystem::remove_all(workspaceDir, ec);
   std::filesystem::remove(snapshotPath, ec);
@@ -577,8 +581,10 @@ TEST_F(ProjectTests, PackUnpack_CorruptHeader_Detected) {
     f.close();
   }
 
-  std::string metaBytes, dbBytes;
-  EXPECT_FALSE(project_pack::ReadPackedProject(packedPath, &metaBytes, &dbBytes, nullptr));
+  std::string metaBytes;
+  const auto  readDbPath = temp_dir_ / "corrupt_hdr_read.db";
+  EXPECT_FALSE(project_pack::ReadPackedProject(packedPath, &metaBytes, readDbPath, nullptr));
+  EXPECT_FALSE(std::filesystem::exists(readDbPath));
 
   std::error_code ec;
   std::filesystem::remove(snapshotPath, ec);
@@ -610,8 +616,11 @@ TEST_F(ProjectTests, PackUnpack_CorruptChecksum_Detected) {
     f.close();
   }
 
-  std::string metaBytes, dbBytes;
-  EXPECT_FALSE(project_pack::ReadPackedProject(packedPath, &metaBytes, &dbBytes, nullptr));
+  // The database payload is copied before the checksum is known; the failed read removes it.
+  std::string metaBytes;
+  const auto  readDbPath = temp_dir_ / "corrupt_cs_read.db";
+  EXPECT_FALSE(project_pack::ReadPackedProject(packedPath, &metaBytes, readDbPath, nullptr));
+  EXPECT_FALSE(std::filesystem::exists(readDbPath));
 
   std::error_code ec2;
   std::filesystem::remove(snapshotPath, ec2);
@@ -651,8 +660,10 @@ TEST_F(ProjectTests, DataSummary_WarnsOnTamperedMetadata) {
   ASSERT_TRUE(project_pack::WritePackedProject(packedPath, metaPath, snapshotPath, nullptr));
 
   // Unpack to workspace.
-  std::filesystem::path workspaceDir;
-  ASSERT_TRUE(project_pack::CreateProjectWorkspace("tamper_test", &workspaceDir, nullptr));
+  std::filesystem::path              workspaceDir;
+  project_pack::ProjectWorkspaceLock workspaceLock;
+  ASSERT_TRUE(
+      project_pack::CreateProjectWorkspace("tamper_test", &workspaceDir, &workspaceLock, nullptr));
   std::filesystem::path unpackedDbPath, unpackedMetaPath;
   ASSERT_TRUE(project_pack::UnpackProjectToWorkspace(packedPath, workspaceDir,
                                                       "tamper_test", &unpackedDbPath,
@@ -671,6 +682,7 @@ TEST_F(ProjectTests, DataSummary_WarnsOnTamperedMetadata) {
         << "stderr: " << output;
   }
 
+  workspaceLock.Release();
   std::error_code ec;
   std::filesystem::remove_all(workspaceDir, ec);
   std::filesystem::remove(snapshotPath, ec);

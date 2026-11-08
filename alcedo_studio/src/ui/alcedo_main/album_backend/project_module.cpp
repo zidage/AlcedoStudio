@@ -17,7 +17,9 @@
 #include <QUrl>
 #include <algorithm>
 #include <thread>
+#include <utility>
 
+#include "app/project_package_backend.hpp"
 #include "app/project_package_service.hpp"
 #ifdef HAVE_OPENCL
 #include "opencl/opencl_program_library.hpp"
@@ -700,16 +702,18 @@ bool ProjectModule::StartPackedProjectLoad(const std::filesystem::path& projectP
 
   const QString         project_name = QFileInfo(PathToQString(projectPath)).completeBaseName();
   std::filesystem::path workspace_dir;
-  QString               workspace_error;
-  if (!package_service.CreateProjectWorkspace(project_name, &workspace_dir, &workspace_error)) {
+  project_pack::ProjectWorkspaceLock workspace_lock;
+  QString                            workspace_error;
+  if (!package_service.CreateProjectWorkspace(project_name, &workspace_dir, &workspace_lock,
+                                              &workspace_error)) {
     *error = workspace_error.isEmpty() ? PL_TEXT("Failed to prepare project temp workspace.")
                                        : PL_TEXT("%1", workspace_error);
     return false;
   }
 
   // The loader thread unpacks the package, so the UI shows the loading state meanwhile.
-  const bool started =
-      handler_.OpenPackedProject(projectPath, workspace_dir, project_name, entryMode);
+  const bool started = handler_.OpenPackedProject(
+      projectPath, workspace_dir, std::move(workspace_lock), project_name, entryMode);
   if (!started) {
     CleanupWorkspaceDirectory(workspace_dir);
   }
@@ -746,9 +750,11 @@ bool ProjectModule::CreateProjectInFolderNamed(const QString& folderUrlOrPath,
     return false;
   }
 
-  std::filesystem::path workspace_dir;
-  QString               workspace_error;
-  if (!package_service.CreateProjectWorkspace(projectName, &workspace_dir, &workspace_error)) {
+  std::filesystem::path              workspace_dir;
+  project_pack::ProjectWorkspaceLock workspace_lock;
+  QString                            workspace_error;
+  if (!package_service.CreateProjectWorkspace(projectName, &workspace_dir, &workspace_lock,
+                                              &workspace_error)) {
     SetServiceMessageForCurrentProject(workspace_error.isEmpty()
                                            ? PL_TEXT("Failed to prepare project temp workspace.")
                                            : PL_TEXT("%1", workspace_error));
@@ -758,7 +764,7 @@ bool ProjectModule::CreateProjectInFolderNamed(const QString& folderUrlOrPath,
   const auto runtime_pair = package_service.BuildRuntimeProjectPair(workspace_dir, projectName);
   const bool started      = handler_.InitializeServices(
       runtime_pair.first, runtime_pair.second, ProjectOpenMode::kCreateNew, packed_path_opt.value(),
-      workspace_dir, packed_path_opt.value(), ProjectEntryMode::kEnter);
+      workspace_dir, std::move(workspace_lock), packed_path_opt.value(), ProjectEntryMode::kEnter);
   if (!started) {
     CleanupWorkspaceDirectory(workspace_dir);
   }

@@ -36,10 +36,11 @@ auto ProjectPackageService::BuildBundlePathFromMetaPath(const std::filesystem::p
   return project_pack::BuildBundlePathFromMetaPath(meta_path);
 }
 
-auto ProjectPackageService::CreateProjectWorkspace(const QString& project_name,
-                                                   std::filesystem::path* workspace_out,
+auto ProjectPackageService::CreateProjectWorkspace(const QString&                      project_name,
+                                                   std::filesystem::path*              workspace_out,
+                                                   project_pack::ProjectWorkspaceLock* lock_out,
                                                    QString* error_out) const -> bool {
-  return project_pack::CreateProjectWorkspace(project_name, workspace_out, error_out);
+  return project_pack::CreateProjectWorkspace(project_name, workspace_out, lock_out, error_out);
 }
 
 auto ProjectPackageService::BuildRuntimeProjectPair(const std::filesystem::path& workspace,
