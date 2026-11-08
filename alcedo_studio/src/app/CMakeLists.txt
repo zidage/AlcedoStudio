@@ -387,6 +387,11 @@ def_library(ProjectService
         Qt6::Gui
         opencv_core
 )
+if(WIN32)
+    # Restart Manager names the processes that hold a runtime workspace file open
+    # (CleanupWorkspaceDirectory in path_utils.cpp).
+    target_link_libraries(ProjectService PRIVATE Rstrtmgr)
+endif()
 
 def_library(PipelineMgmtService
     SOURCES "${ALCEDO_APP_ROOT}/pipeline_service.cpp"

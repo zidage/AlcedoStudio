@@ -370,10 +370,6 @@ target_link_libraries(AlcedoQanGraph
 # the native project and Nikon recovery file dialogs.
 target_link_libraries(AlbumBackendLib PRIVATE Qt6::Widgets)
 target_link_libraries(AlbumBackendLib PUBLIC AlcedoQanGraph)
-if(WIN32)
-    # Restart Manager names the processes that hold a runtime workspace file open.
-    target_link_libraries(AlbumBackendLib PRIVATE Rstrtmgr)
-endif()
 
 # Automation command surface: JSON-RPC command registry, schema validation, the local socket
 # server, the session commands, and the headless host. alcedo_main hosts it; alcedo-cli talks to

@@ -769,6 +769,13 @@ gtest_discover_tests(ProjectServiceTest TEST_PREFIX "ProjectServiceTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(ProjectServiceTest app ci_core)
 
+add_executable(ProjectPackageBackendTest ${ALCEDO_TEST_ROOT}/app/project_package_backend_test.cpp)
+target_include_directories(ProjectPackageBackendTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ProjectPackageBackendTest ProjectService GTest::gtest_main)
+gtest_discover_tests(ProjectPackageBackendTest TEST_PREFIX "ProjectPackageBackendTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(ProjectPackageBackendTest app ci_core)
+
 add_executable(AiSidecarFakeRuntime ${ALCEDO_TEST_ROOT}/app/ai_sidecar_fake_runtime_main.cpp)
 alcedo_register_test_target(AiSidecarFakeRuntime app)
 

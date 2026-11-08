@@ -60,7 +60,10 @@ auto EscapeSqlStringLiteral(const std::string& text) -> std::string;
 auto EscapeSqlIdentifier(const std::string& text) -> std::string;
 
 auto ValidateProjectName(const QString& rawName, QString* errorOut) -> std::optional<QString>;
-void CleanupWorkspaceDirectory(const std::filesystem::path& dir);
+/// Removes @p dir and everything in it. On a failure, logs the OS error, then removes the files
+/// that are left one by one and logs each file that still cannot be removed, with its OS error
+/// and (on Windows) the processes that hold it. Returns true when @p dir no longer exists.
+auto CleanupWorkspaceDirectory(const std::filesystem::path& dir) -> bool;
 auto EnsureDirectoryExists(const std::filesystem::path& dir) -> bool;
 
 }  // namespace alcedo::ui::album_util

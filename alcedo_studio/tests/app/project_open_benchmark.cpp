@@ -30,6 +30,7 @@
 #include "app/export_service.hpp"
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
+#include "app/project_package_backend.hpp"
 #include "app/project_package_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
@@ -97,6 +98,7 @@ TEST(ProjectOpenBenchmark, OpensPackedProjectAndReportsPerStepLatency) {
   for (int round = 0; round < runs; ++round) {
     StepTimer                            timer(round);
     std::filesystem::path                workspace_dir;
+    project_pack::ProjectWorkspaceLock   workspace_lock;
     std::filesystem::path                db_path;
     std::filesystem::path                meta_path;
 
@@ -108,7 +110,8 @@ TEST(ProjectOpenBenchmark, OpensPackedProjectAndReportsPerStepLatency) {
 
     timer.Run("unpack", [&] {
       QString error;
-      ASSERT_TRUE(package_service.CreateProjectWorkspace(project_name, &workspace_dir, &error))
+      ASSERT_TRUE(package_service.CreateProjectWorkspace(project_name, &workspace_dir,
+                                                         &workspace_lock, &error))
           << error.toStdString();
       ASSERT_TRUE(package_service.UnpackProjectToWorkspace(
           project_file, workspace_dir, project_name, &db_path, &meta_path, &error))
@@ -164,6 +167,7 @@ TEST(ProjectOpenBenchmark, OpensPackedProjectAndReportsPerStepLatency) {
     });
 
     std::error_code ec;
+    workspace_lock.Release();
     std::filesystem::remove_all(workspace_dir, ec);
   }
 }

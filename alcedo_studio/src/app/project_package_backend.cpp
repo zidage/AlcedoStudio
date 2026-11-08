@@ -6,6 +6,7 @@
 
 #include <QDateTime>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QRandomGenerator>
 #include <QStandardPaths>
@@ -17,17 +18,33 @@
 #include <cwctype>
 #include <fstream>
 #include <iomanip>
-#include <limits>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include <duckdb.h>
 #include <json.hpp>
 #include <xxhash.h>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
+#include <cerrno>
+#endif
 
 #include "app/project_service.hpp"
 #include "storage/store/duckdb_extension.hpp"
@@ -141,43 +158,196 @@ auto PackedProjectHeaderIsSupported(const std::filesystem::path& path) -> bool {
   return ReadU32Le(in, &version) && version == kPackedProjectVersion;
 }
 
-/**
- * @brief Checksum stored in the packed project header.
- *
- * XXH3-64 of magic (8B) || version (4B LE) || meta_size (8B LE) || db_size (8B LE) ||
- * meta bytes || db bytes. The parts are streamed into one hash state, so the payloads are not
- * copied into a concatenated buffer. Returns std::nullopt when XXH3 cannot allocate its state.
- */
-auto PackedProjectChecksum(std::string_view meta_bytes, std::string_view db_bytes)
-    -> std::optional<uint64_t> {
-  XXH3_state_t* state = XXH3_createState();
-  if (state == nullptr) {
-    return std::nullopt;
+constexpr size_t kPackedProjectCopyChunkBytes = 1024 * 1024;
+
+using Xxh3State = std::unique_ptr<XXH3_state_t, decltype(&XXH3_freeState)>;
+
+auto MakeXxh3State() -> Xxh3State {
+  Xxh3State state(XXH3_createState(), &XXH3_freeState);
+  if (state && XXH3_64bits_reset(state.get()) == XXH_ERROR) {
+    state.reset();
   }
+  return state;
+}
+
+/**
+ * @brief Starts the checksum stored in the packed project header.
+ *
+ * The checksum is XXH3-64 of magic (8B) || version (4B LE) || meta_size (8B LE) ||
+ * db_size (8B LE) || meta bytes || db bytes. This feeds the fixed fields; the payload bytes
+ * follow chunk by chunk as CopyPayloadChunks copies them.
+ */
+auto HashPackedProjectHeaderFields(XXH3_state_t* state, uint64_t meta_size, uint64_t db_size)
+    -> bool {
   std::array<unsigned char, 4 + 8 + 8> sizes{};
   for (size_t i = 0; i < 4; ++i) {
     sizes[i] = static_cast<unsigned char>((kPackedProjectVersion >> (i * 8U)) & 0xFFU);
   }
-  const auto meta_size = static_cast<uint64_t>(meta_bytes.size());
-  const auto db_size   = static_cast<uint64_t>(db_bytes.size());
   for (size_t i = 0; i < 8; ++i) {
     sizes[4 + i]  = static_cast<unsigned char>((meta_size >> (i * 8ULL)) & 0xFFULL);
     sizes[12 + i] = static_cast<unsigned char>((db_size >> (i * 8ULL)) & 0xFFULL);
   }
-  const bool hashed =
-      XXH3_64bits_reset(state) != XXH_ERROR &&
-      XXH3_64bits_update(state, kPackedProjectMagic.data(), kPackedProjectMagic.size()) !=
-          XXH_ERROR &&
-      XXH3_64bits_update(state, sizes.data(), sizes.size()) != XXH_ERROR &&
-      XXH3_64bits_update(state, meta_bytes.data(), meta_bytes.size()) != XXH_ERROR &&
-      XXH3_64bits_update(state, db_bytes.data(), db_bytes.size()) != XXH_ERROR;
-  const uint64_t checksum = hashed ? XXH3_64bits_digest(state) : 0;
-  XXH3_freeState(state);
-  if (!hashed) {
-    return std::nullopt;
-  }
-  return checksum;
+  return XXH3_64bits_update(state, kPackedProjectMagic.data(), kPackedProjectMagic.size()) !=
+             XXH_ERROR &&
+         XXH3_64bits_update(state, sizes.data(), sizes.size()) != XXH_ERROR;
 }
+
+enum class PayloadCopyResult : uint8_t { kCopied, kReadFailed, kWriteFailed, kHashFailed };
+
+/// Copies exactly @p size bytes from @p in to @p out in chunks of @p buffer and feeds the same
+/// bytes to @p state.
+auto CopyPayloadChunks(std::istream& in, std::ostream& out, uint64_t size, XXH3_state_t* state,
+                       std::vector<char>* buffer) -> PayloadCopyResult {
+  uint64_t remaining = size;
+  while (remaining > 0) {
+    const auto chunk = static_cast<std::streamsize>(
+        std::min<uint64_t>(remaining, static_cast<uint64_t>(buffer->size())));
+    if (!ReadExact(in, buffer->data(), chunk)) {
+      return PayloadCopyResult::kReadFailed;
+    }
+    if (XXH3_64bits_update(state, buffer->data(), static_cast<size_t>(chunk)) == XXH_ERROR) {
+      return PayloadCopyResult::kHashFailed;
+    }
+    out.write(buffer->data(), chunk);
+    if (!out) {
+      return PayloadCopyResult::kWriteFailed;
+    }
+    remaining -= static_cast<uint64_t>(chunk);
+  }
+  return PayloadCopyResult::kCopied;
+}
+
+/**
+ * @brief Reads a packed project from its file: the header and the metadata first, then the
+ * database payload as a stream.
+ *
+ * Open checks the header against the file size and reads the metadata, so the caller can
+ * reject an unsupported metadata version before any database byte is written. The checksum
+ * covers both payloads and is verified at the end of CopyDatabaseTo.
+ */
+class PackedProjectReader {
+ public:
+  auto Open(const std::filesystem::path& packed_path, QString* errorOut) -> bool {
+    auto fail = [errorOut](const QString& text) {
+      if (errorOut) {
+        *errorOut = text;
+      }
+      return false;
+    };
+
+    std::error_code ec;
+    const uint64_t  file_size = std::filesystem::file_size(packed_path, ec);
+    in_.open(packed_path, std::ios::binary);
+    if (ec || !in_.is_open()) {
+      if (errorOut) {
+        *errorOut =
+            Tr("Failed to open packed project: %1").arg(album_util::PathToQString(packed_path));
+      }
+      return false;
+    }
+
+    std::array<char, kPackedProjectMagic.size()> magic{};
+    if (!ReadExact(in_, magic.data(), static_cast<std::streamsize>(magic.size())) ||
+        !std::equal(magic.begin(), magic.end(), kPackedProjectMagic.begin())) {
+      return fail(Tr("Packed project signature is invalid."));
+    }
+
+    uint32_t version = 0;
+    if (!ReadU32Le(in_, &version) || version != kPackedProjectVersion) {
+      return fail(Tr("Packed project version is not supported."));
+    }
+
+    uint64_t meta_size = 0;
+    if (!ReadU64Le(in_, &meta_size) || !ReadU64Le(in_, &db_size_) || !ReadU64Le(in_, &checksum_)) {
+      return fail(Tr("Packed project header is corrupted."));
+    }
+    // The header sizes must describe the file exactly. The sums are checked in this order so
+    // that no subtraction can wrap. A file shorter than the header failed the reads above.
+    if (file_size < kPackedProjectHeaderBytes) {
+      return fail(Tr("Packed project header is corrupted."));
+    }
+    const uint64_t payload_bytes = file_size - kPackedProjectHeaderBytes;
+    if (meta_size > payload_bytes || db_size_ > payload_bytes - meta_size) {
+      return fail(Tr("Packed project header is corrupted."));
+    }
+    if (db_size_ < payload_bytes - meta_size) {
+      return fail(Tr("Packed project contains unexpected trailing data."));
+    }
+    if (meta_size > kMaxPackedMetadataBytes) {
+      return fail(Tr("Packed project metadata is too large."));
+    }
+
+    state_ = MakeXxh3State();
+    if (!state_ || !HashPackedProjectHeaderFields(state_.get(), meta_size, db_size_)) {
+      return fail(Tr("Failed to compute packed project checksum."));
+    }
+
+    meta_.assign(static_cast<size_t>(meta_size), '\0');
+    if (meta_size > 0 && !ReadExact(in_, meta_.data(), static_cast<std::streamsize>(meta_size))) {
+      return fail(Tr("Failed to read packed metadata payload."));
+    }
+    if (XXH3_64bits_update(state_.get(), meta_.data(), meta_.size()) == XXH_ERROR) {
+      return fail(Tr("Failed to compute packed project checksum."));
+    }
+    return true;
+  }
+
+  [[nodiscard]] auto metadata() const -> const std::string& { return meta_; }
+
+  /// Copies the database payload to @p db_path and verifies the checksum. A failure removes
+  /// @p db_path.
+  auto CopyDatabaseTo(const std::filesystem::path& db_path, QString* errorOut) -> bool {
+    const bool copied = CopyAndVerify(db_path, errorOut);
+    if (!copied) {
+      std::error_code ec;
+      std::filesystem::remove(db_path, ec);
+    }
+    return copied;
+  }
+
+ private:
+  auto CopyAndVerify(const std::filesystem::path& db_path, QString* errorOut) -> bool {
+    std::ofstream out(db_path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      if (errorOut) {
+        *errorOut = Tr("Failed to materialize project database: %1")
+                        .arg(album_util::PathToQString(db_path));
+      }
+      return false;
+    }
+    std::vector<char> buffer(kPackedProjectCopyChunkBytes);
+    const auto        result = CopyPayloadChunks(in_, out, db_size_, state_.get(), &buffer);
+    out.close();
+    if (result == PayloadCopyResult::kReadFailed) {
+      if (errorOut) {
+        *errorOut = Tr("Failed to read packed database payload.");
+      }
+      return false;
+    }
+    if (result != PayloadCopyResult::kCopied || out.fail()) {
+      if (errorOut) {
+        *errorOut = result == PayloadCopyResult::kHashFailed
+                        ? Tr("Failed to compute packed project checksum.")
+                        : Tr("Failed to materialize project database: %1")
+                              .arg(album_util::PathToQString(db_path));
+      }
+      return false;
+    }
+    if (XXH3_64bits_digest(state_.get()) != checksum_) {
+      if (errorOut) {
+        *errorOut = Tr("Packed project checksum verification failed.");
+      }
+      return false;
+    }
+    return true;
+  }
+
+  std::ifstream in_{};
+  uint64_t      db_size_  = 0;
+  uint64_t      checksum_ = 0;
+  std::string   meta_{};
+  Xxh3State     state_{nullptr, &XXH3_freeState};
+};
 
 }  // namespace
 
@@ -352,15 +522,228 @@ auto BuildBundlePathFromMetaPath(const std::filesystem::path& metaPath) -> std::
          (metaPath.stem().wstring() + std::wstring(kPackedProjectExtension));
 }
 
-auto CreateProjectWorkspace(const QString& projectName,
-                            std::filesystem::path* workspaceOut,
-                            QString* errorOut) -> bool {
+ProjectWorkspaceLock::~ProjectWorkspaceLock() { Release(); }
+
+ProjectWorkspaceLock::ProjectWorkspaceLock(ProjectWorkspaceLock&& other) noexcept {
+  *this = std::move(other);
+}
+
+auto ProjectWorkspaceLock::operator=(ProjectWorkspaceLock&& other) noexcept
+    -> ProjectWorkspaceLock& {
+  if (this != &other) {
+    Release();
+#ifdef _WIN32
+    handle_       = other.handle_;
+    other.handle_ = nullptr;
+#else
+    fd_       = other.fd_;
+    other.fd_ = -1;
+#endif
+  }
+  return *this;
+}
+
+auto ProjectWorkspaceLock::Acquire(const std::filesystem::path& workspace, QString* errorOut)
+    -> bool {
+  Release();
+  const auto lock_path = workspace / std::filesystem::path(kProjectWorkspaceLockFileName);
+#ifdef _WIN32
+  HANDLE handle = CreateFileW(lock_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle != INVALID_HANDLE_VALUE) {
+    handle_ = handle;
+    return true;
+  }
+#else
+  const int fd = open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+  if (fd >= 0 && flock(fd, LOCK_EX | LOCK_NB) == 0) {
+    fd_ = fd;
+    return true;
+  }
+  if (fd >= 0) {
+    close(fd);
+  }
+#endif
+  if (errorOut) {
+    *errorOut =
+        Tr("Unable to lock project temp directory: %1").arg(album_util::PathToQString(lock_path));
+  }
+  return false;
+}
+
+auto ProjectWorkspaceLock::held() const -> bool {
+#ifdef _WIN32
+  return handle_ != nullptr;
+#else
+  return fd_ >= 0;
+#endif
+}
+
+void ProjectWorkspaceLock::Release() {
+#ifdef _WIN32
+  if (handle_ != nullptr) {
+    CloseHandle(static_cast<HANDLE>(handle_));
+    handle_ = nullptr;
+  }
+#else
+  if (fd_ >= 0) {
+    close(fd_);  // also releases the flock
+    fd_ = -1;
+  }
+#endif
+}
+
+auto ProjectTempRoot() -> std::filesystem::path {
   const QString temp_dir_text =
       QStandardPaths::writableLocation(QStandardPaths::TempLocation).isEmpty()
           ? QDir::tempPath()
           : QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-  const auto temp_dir = album_util::QStringToFsPath(temp_dir_text);
-  const auto root     = temp_dir / L"alcedo_main";
+  return album_util::QStringToFsPath(temp_dir_text) / L"alcedo_main";
+}
+
+namespace {
+
+// Captured when this library is loaded at process start, before the process creates any
+// workspace or snapshot. The sweep leaves every entry modified after it alone.
+const std::filesystem::file_time_type kProcessStartFileTime =
+    std::filesystem::file_time_type::clock::now();
+
+auto PathText(const std::filesystem::path& path) -> QString {
+  return album_util::PathToQString(path);
+}
+
+#ifdef _WIN32
+// Every open with data access conflicts with share mode 0, whatever its own share mode.
+auto FileIsOpenElsewhere(const std::filesystem::path& path) -> bool {
+  HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    return GetLastError() == ERROR_SHARING_VIOLATION;
+  }
+  CloseHandle(handle);
+  return false;
+}
+#endif
+
+auto OwnerLockIsHeld(const std::filesystem::path& lock_path) -> bool {
+#ifdef _WIN32
+  return FileIsOpenElsewhere(lock_path);
+#else
+  const int fd = open(lock_path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    return false;
+  }
+  const bool held = flock(fd, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK;
+  close(fd);
+  return held;
+#endif
+}
+
+// DuckDB holds its database file open (Windows) and with an fcntl write lock (macOS). On macOS
+// F_GETLK reports the locks of other processes only; the sweep never reads a file that this
+// process opened, because such a file is newer than kProcessStartFileTime.
+auto DatabaseFileIsHeld(const std::filesystem::path& db_path) -> bool {
+#ifdef _WIN32
+  return FileIsOpenElsewhere(db_path);
+#else
+  const int fd = open(db_path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    return false;
+  }
+  struct flock lock_query{};
+  lock_query.l_type   = F_WRLCK;
+  lock_query.l_whence = SEEK_SET;
+  const bool held     = fcntl(fd, F_GETLK, &lock_query) == 0 && lock_query.l_type != F_UNLCK;
+  close(fd);
+  return held;
+#endif
+}
+
+auto WorkspaceIsInUse(const std::filesystem::path& workspace) -> bool {
+  if (OwnerLockIsHeld(workspace / std::filesystem::path(kProjectWorkspaceLockFileName))) {
+    return true;
+  }
+  // A workspace of an Alcedo version without owner locks: its open database tells that it is
+  // live.
+  std::error_code ec;
+  for (auto it = std::filesystem::directory_iterator(workspace, ec);
+       !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+    std::error_code type_error;
+    if (it->is_regular_file(type_error) && it->path().extension() == ".db" &&
+        DatabaseFileIsHeld(it->path())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+auto StartsWith(const std::wstring& text, std::wstring_view prefix) -> bool {
+  return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
+}
+
+auto EndsWith(const std::wstring& text, std::wstring_view suffix) -> bool {
+  return text.size() >= suffix.size() &&
+         text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+}  // namespace
+
+void RemoveAbandonedProjectTempFiles(const std::filesystem::path& root) {
+  std::error_code ec;
+  if (!std::filesystem::is_directory(root, ec) || ec) {
+    return;
+  }
+  std::vector<std::filesystem::directory_entry> entries;
+  for (auto it = std::filesystem::directory_iterator(root, ec);
+       !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+    entries.push_back(*it);
+  }
+  if (ec) {
+    qWarning().noquote() << "Project temp sweep cannot list" << PathText(root)
+                         << QString::fromStdString(ec.message());
+  }
+
+  for (const auto& entry : entries) {
+    const std::wstring name         = entry.path().filename().wstring();
+    const bool         is_workspace = StartsWith(name, L"runtime_");
+    const bool         is_snapshot  = StartsWith(name, L"pack_snapshot_") &&
+                             (EndsWith(name, L".db") || EndsWith(name, L".db.wal"));
+    if (!is_workspace && !is_snapshot) {
+      continue;
+    }
+    std::error_code entry_error;
+    const auto      modified = std::filesystem::last_write_time(entry.path(), entry_error);
+    if (entry_error || modified >= kProcessStartFileTime) {
+      continue;
+    }
+
+    if (is_workspace) {
+      if (!entry.is_directory(entry_error) || entry_error || WorkspaceIsInUse(entry.path())) {
+        continue;
+      }
+      if (album_util::CleanupWorkspaceDirectory(entry.path())) {
+        qInfo().noquote() << "Removed abandoned runtime workspace:" << PathText(entry.path());
+      }
+      continue;
+    }
+
+    if (!entry.is_regular_file(entry_error) || entry_error || DatabaseFileIsHeld(entry.path())) {
+      continue;
+    }
+    std::error_code remove_error;
+    if (std::filesystem::remove(entry.path(), remove_error)) {
+      qInfo().noquote() << "Removed abandoned DB snapshot:" << PathText(entry.path());
+    } else if (remove_error) {
+      qWarning().noquote() << "Abandoned DB snapshot removal failed:" << PathText(entry.path())
+                           << QString::fromStdString(remove_error.message());
+    }
+  }
+}
+
+auto CreateProjectWorkspace(const QString& projectName, std::filesystem::path* workspaceOut,
+                            ProjectWorkspaceLock* lockOut, QString* errorOut) -> bool {
+  const auto root = ProjectTempRoot();
+  RemoveAbandonedProjectTempFiles(root);
   if (!album_util::EnsureDirectoryExists(root)) {
     if (errorOut) {
       *errorOut = Tr("Unable to create project temp directory.");
@@ -391,11 +774,15 @@ auto CreateProjectWorkspace(const QString& projectName,
 
     const auto candidate = root / dir_name;
     std::error_code ec;
-    std::filesystem::create_directories(candidate, ec);
-    if (!ec) {
-      *workspaceOut = candidate;
-      return true;
+    if (!std::filesystem::create_directory(candidate, ec) || ec) {
+      continue;
     }
+    if (!lockOut->Acquire(candidate, errorOut)) {
+      std::filesystem::remove_all(candidate, ec);
+      return false;
+    }
+    *workspaceOut = candidate;
+    return true;
   }
 
   if (errorOut) {
@@ -569,12 +956,7 @@ auto QueryCurrentCatalog(duckdb_connection conn, std::string* catalogOut,
 
 auto BuildTempDbSnapshotPath(std::filesystem::path* snapshotPathOut,
                              QString* errorOut) -> bool {
-  const QString temp_dir_text =
-      QStandardPaths::writableLocation(QStandardPaths::TempLocation).isEmpty()
-          ? QDir::tempPath()
-          : QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-  const auto temp_dir = album_util::QStringToFsPath(temp_dir_text);
-  const auto root     = temp_dir / L"alcedo_main";
+  const auto root = ProjectTempRoot();
   if (!album_util::EnsureDirectoryExists(root)) {
     if (errorOut) {
       *errorOut = Tr("Unable to prepare temp folder for DB snapshot.");
@@ -628,12 +1010,19 @@ auto CreateLiveDbSnapshot(const std::shared_ptr<ProjectService>& project,
     auto  db_lock = guard.Lock();
 
     std::error_code ec;
-    std::filesystem::remove(snapshotPath, ec);
+    auto            wal_path = snapshotPath;
+    wal_path += ".wal";
+    auto remove_snapshot_files = [&snapshotPath, &wal_path]() {
+      std::error_code remove_error;
+      std::filesystem::remove(snapshotPath, remove_error);
+      std::filesystem::remove(wal_path, remove_error);
+    };
+    remove_snapshot_files();
 
     bool has_hnsw_index = false;
     if (!QueryHasHnswIndex(guard.conn_, &has_hnsw_index, errorOut) ||
         (has_hnsw_index && !LoadVssExtension(guard.conn_, errorOut))) {
-      std::filesystem::remove(snapshotPath, ec);
+      remove_snapshot_files();
       return false;
     }
 
@@ -641,7 +1030,7 @@ auto CreateLiveDbSnapshot(const std::shared_ptr<ProjectService>& project,
     const std::string escaped   = album_util::EscapeSqlStringLiteral(path_utf8);
     std::string       source_catalog;
     if (!QueryCurrentCatalog(guard.conn_, &source_catalog, errorOut)) {
-      std::filesystem::remove(snapshotPath, ec);
+      remove_snapshot_files();
       return false;
     }
     const std::string source_ident =
@@ -649,14 +1038,22 @@ auto CreateLiveDbSnapshot(const std::shared_ptr<ProjectService>& project,
 
     if (!RunDuckDbQuery(guard.conn_, "CHECKPOINT;", "checkpoint", errorOut) ||
         !RunDuckDbQuery(guard.conn_, "ATTACH '" + escaped + "' AS pack_snapshot;",
-                        "attach snapshot", errorOut) ||
-        !RunDuckDbQuery(guard.conn_,
-                        "COPY FROM DATABASE " + source_ident + " TO pack_snapshot;",
+                        "attach snapshot", errorOut)) {
+      remove_snapshot_files();
+      return false;
+    }
+    if (!RunDuckDbQuery(guard.conn_, "COPY FROM DATABASE " + source_ident + " TO pack_snapshot;",
                         "copy database", errorOut) ||
         !RunDuckDbQuery(guard.conn_, "CHECKPOINT pack_snapshot;", "checkpoint snapshot",
                         errorOut) ||
         !RunDuckDbQuery(guard.conn_, "DETACH pack_snapshot;", "detach snapshot", errorOut)) {
-      std::filesystem::remove(snapshotPath, ec);
+      // The attached snapshot keeps its file open, and its alias would make the ATTACH of
+      // every later snapshot on this connection fail. The error of this DETACH is not
+      // reported: errorOut already holds the failure, and a failed DETACH (the snapshot was
+      // already detached) changes nothing.
+      (void)RunDuckDbQuery(guard.conn_, "DETACH DATABASE IF EXISTS pack_snapshot;",
+                           "detach failed snapshot", nullptr);
+      remove_snapshot_files();
       return false;
     }
 
@@ -682,39 +1079,114 @@ auto CreateLiveDbSnapshot(const std::shared_ptr<ProjectService>& project,
   }
 }
 
-auto WritePackedProject(const std::filesystem::path& packedPath,
-                        const std::filesystem::path& metaPath,
-                        const std::filesystem::path& dbPath,
-                        QString* errorOut) -> bool {
-  std::string meta_bytes;
-  if (!ReadFileBytes(metaPath, &meta_bytes)) {
+namespace {
+
+/// Writes the complete package to @p temp_path. The checksum field is written as zero first and
+/// filled in after both payloads were copied through the hash state.
+auto WritePackedProjectFile(const std::filesystem::path& temp_path,
+                            const std::filesystem::path& meta_path,
+                            const std::filesystem::path& db_path, QString* errorOut) -> bool {
+  std::ifstream   meta_in(meta_path, std::ios::binary);
+  std::error_code ec;
+  const uint64_t  meta_size = std::filesystem::file_size(meta_path, ec);
+  if (!meta_in.is_open() || ec) {
     if (errorOut) {
-      *errorOut = Tr("Failed to read project metadata: %1")
-                      .arg(album_util::PathToQString(metaPath));
+      *errorOut =
+          Tr("Failed to read project metadata: %1").arg(album_util::PathToQString(meta_path));
+    }
+    return false;
+  }
+  std::ifstream  db_in(db_path, std::ios::binary);
+  const uint64_t db_size = std::filesystem::file_size(db_path, ec);
+  if (!db_in.is_open() || ec) {
+    if (errorOut) {
+      *errorOut = Tr("Failed to read project database: %1").arg(album_util::PathToQString(db_path));
     }
     return false;
   }
 
-  std::string db_bytes;
-  if (!ReadFileBytes(dbPath, &db_bytes)) {
-    if (errorOut) {
-      *errorOut = Tr("Failed to read project database: %1")
-                      .arg(album_util::PathToQString(dbPath));
-    }
-    return false;
-  }
-  const uint64_t meta_size = static_cast<uint64_t>(meta_bytes.size());
-  const uint64_t db_size   = static_cast<uint64_t>(db_bytes.size());
-
-  const auto     checksum_opt = PackedProjectChecksum(meta_bytes, db_bytes);
-  if (!checksum_opt.has_value()) {
+  auto state = MakeXxh3State();
+  if (!state || !HashPackedProjectHeaderFields(state.get(), meta_size, db_size)) {
     if (errorOut) {
       *errorOut = Tr("Failed to compute packed project checksum.");
     }
     return false;
   }
-  const uint64_t checksum = *checksum_opt;
 
+  std::ofstream out(temp_path, std::ios::binary | std::ios::trunc);
+  if (!out.is_open()) {
+    if (errorOut) {
+      *errorOut = Tr("Failed to open packed project file for writing: %1")
+                      .arg(album_util::PathToQString(temp_path));
+    }
+    return false;
+  }
+
+  out.write(kPackedProjectMagic.data(),
+            static_cast<std::streamsize>(kPackedProjectMagic.size()));
+  if (!out || !WriteU32Le(out, kPackedProjectVersion) || !WriteU64Le(out, meta_size) ||
+      !WriteU64Le(out, db_size) || !WriteU64Le(out, 0)) {
+    if (errorOut) {
+      *errorOut = Tr("Failed to write packed project header.");
+    }
+    return false;
+  }
+
+  std::vector<char> buffer(kPackedProjectCopyChunkBytes);
+  const struct {
+    std::ifstream*               in;
+    uint64_t                     size;
+    const std::filesystem::path* path;
+    const char*                  read_error;
+  } payloads[] = {
+      {&meta_in, meta_size, &meta_path,
+       QT_TRANSLATE_NOOP(ALCEDO_I18N_CONTEXT, "Failed to read project metadata: %1")},
+      {&db_in, db_size, &db_path,
+       QT_TRANSLATE_NOOP(ALCEDO_I18N_CONTEXT, "Failed to read project database: %1")},
+  };
+  for (const auto& payload : payloads) {
+    const auto result = CopyPayloadChunks(*payload.in, out, payload.size, state.get(), &buffer);
+    if (result == PayloadCopyResult::kCopied) {
+      continue;
+    }
+    if (errorOut) {
+      switch (result) {
+        case PayloadCopyResult::kReadFailed:
+          *errorOut = Tr(payload.read_error).arg(album_util::PathToQString(*payload.path));
+          break;
+        case PayloadCopyResult::kHashFailed:
+          *errorOut = Tr("Failed to compute packed project checksum.");
+          break;
+        default:
+          *errorOut = Tr("Failed to write packed project payload.");
+          break;
+      }
+    }
+    return false;
+  }
+
+  out.seekp(static_cast<std::streamoff>(kPackedProjectChecksumOffset));
+  if (!out || !WriteU64Le(out, XXH3_64bits_digest(state.get()))) {
+    if (errorOut) {
+      *errorOut = Tr("Failed to write packed project header.");
+    }
+    return false;
+  }
+  out.close();
+  if (out.fail()) {
+    if (errorOut) {
+      *errorOut = Tr("Failed to write packed project payload.");
+    }
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+auto WritePackedProject(const std::filesystem::path& packedPath,
+                        const std::filesystem::path& metaPath, const std::filesystem::path& dbPath,
+                        QString* errorOut) -> bool {
   if (!album_util::EnsureDirectoryExists(packedPath.parent_path())) {
     if (errorOut) {
       *errorOut = Tr("Packed project destination folder is not writable.");
@@ -722,43 +1194,14 @@ auto WritePackedProject(const std::filesystem::path& packedPath,
     return false;
   }
 
-  const auto temp_path = packedPath.wstring() + L".tmp";
-  std::ofstream out(std::filesystem::path(temp_path), std::ios::binary | std::ios::trunc);
-  if (!out.is_open()) {
-    if (errorOut) {
-      *errorOut = Tr("Failed to open packed project file for writing: %1")
-                      .arg(album_util::PathToQString(packedPath));
-    }
-    return false;
-  }
-
-  out.write(kPackedProjectMagic.data(),
-            static_cast<std::streamsize>(kPackedProjectMagic.size()));
-  if (!WriteU32Le(out, kPackedProjectVersion) ||
-      !WriteU64Le(out, meta_size) || !WriteU64Le(out, db_size) ||
-      !WriteU64Le(out, checksum)) {
-    if (errorOut) {
-      *errorOut = Tr("Failed to write packed project header.");
-    }
-    return false;
-  }
-
-  if (!meta_bytes.empty()) {
-    out.write(meta_bytes.data(), static_cast<std::streamsize>(meta_bytes.size()));
-  }
-  if (!db_bytes.empty()) {
-    out.write(db_bytes.data(), static_cast<std::streamsize>(db_bytes.size()));
-  }
-  out.flush();
-  if (!out.good()) {
-    if (errorOut) {
-      *errorOut = Tr("Failed to write packed project payload.");
-    }
-    return false;
-  }
-  out.close();
-
+  auto temp_path = packedPath;
+  temp_path += ".tmp";
   std::error_code ec;
+  if (!WritePackedProjectFile(temp_path, metaPath, dbPath, errorOut)) {
+    std::filesystem::remove(temp_path, ec);
+    return false;
+  }
+
   if (std::filesystem::exists(packedPath, ec) && !ec) {
     std::filesystem::remove(packedPath, ec);
     if (ec) {
@@ -766,108 +1209,31 @@ auto WritePackedProject(const std::filesystem::path& packedPath,
         *errorOut = Tr("Failed to replace existing packed project file: %1")
                         .arg(album_util::PathToQString(packedPath));
       }
-      std::filesystem::remove(std::filesystem::path(temp_path), ec);
+      std::filesystem::remove(temp_path, ec);
       return false;
     }
   }
   ec.clear();
-  std::filesystem::rename(std::filesystem::path(temp_path), packedPath, ec);
+  std::filesystem::rename(temp_path, packedPath, ec);
   if (ec) {
     if (errorOut) {
       *errorOut = Tr("Failed to finalize packed project file: %1")
                       .arg(album_util::PathToQString(packedPath));
     }
-    std::filesystem::remove(std::filesystem::path(temp_path), ec);
+    std::filesystem::remove(temp_path, ec);
     return false;
   }
 
   return true;
 }
 
-auto ReadPackedProject(const std::filesystem::path& packedPath,
-                       std::string* metaBytes, std::string* dbBytes,
-                       QString* errorOut) -> bool {
-  std::ifstream in(packedPath, std::ios::binary);
-  if (!in.is_open()) {
-    if (errorOut) {
-      *errorOut = Tr("Failed to open packed project: %1")
-                      .arg(album_util::PathToQString(packedPath));
-    }
+auto ReadPackedProject(const std::filesystem::path& packedPath, std::string* metaBytes,
+                       const std::filesystem::path& dbOutPath, QString* errorOut) -> bool {
+  PackedProjectReader reader;
+  if (!reader.Open(packedPath, errorOut) || !reader.CopyDatabaseTo(dbOutPath, errorOut)) {
     return false;
   }
-
-  std::array<char, kPackedProjectMagic.size()> magic{};
-  if (!ReadExact(in, magic.data(), static_cast<std::streamsize>(magic.size())) ||
-      !std::equal(magic.begin(), magic.end(), kPackedProjectMagic.begin())) {
-    if (errorOut) {
-      *errorOut = Tr("Packed project signature is invalid.");
-    }
-    return false;
-  }
-
-  uint32_t version = 0;
-  if (!ReadU32Le(in, &version) || version != kPackedProjectVersion) {
-    if (errorOut) {
-      *errorOut = Tr("Packed project version is not supported.");
-    }
-    return false;
-  }
-
-  uint64_t meta_size = 0;
-  uint64_t db_size   = 0;
-  uint64_t checksum  = 0;
-  if (!ReadU64Le(in, &meta_size) || !ReadU64Le(in, &db_size) ||
-      !ReadU64Le(in, &checksum)) {
-    if (errorOut) {
-      *errorOut = Tr("Packed project header is corrupted.");
-    }
-    return false;
-  }
-  if (meta_size > kMaxPackedComponentBytes || db_size > kMaxPackedComponentBytes) {
-    if (errorOut) {
-      *errorOut = Tr("Packed project is too large.");
-    }
-    return false;
-  }
-  if (meta_size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
-      db_size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-    if (errorOut) {
-      *errorOut = Tr("Packed project is too large for this build.");
-    }
-    return false;
-  }
-
-  metaBytes->assign(static_cast<size_t>(meta_size), '\0');
-  if (meta_size > 0 &&
-      !ReadExact(in, metaBytes->data(), static_cast<std::streamsize>(meta_size))) {
-    if (errorOut) {
-      *errorOut = Tr("Failed to read packed metadata payload.");
-    }
-    return false;
-  }
-
-  dbBytes->assign(static_cast<size_t>(db_size), '\0');
-  if (db_size > 0 && !ReadExact(in, dbBytes->data(), static_cast<std::streamsize>(db_size))) {
-    if (errorOut) {
-      *errorOut = Tr("Failed to read packed database payload.");
-    }
-    return false;
-  }
-  if (in.peek() != std::char_traits<char>::eof()) {
-    if (errorOut) {
-      *errorOut = Tr("Packed project contains unexpected trailing data.");
-    }
-    return false;
-  }
-
-  const auto actual_checksum = PackedProjectChecksum(*metaBytes, *dbBytes);
-  if (!actual_checksum.has_value() || *actual_checksum != checksum) {
-    if (errorOut) {
-      *errorOut = Tr("Packed project checksum verification failed.");
-    }
-    return false;
-  }
-
+  *metaBytes = reader.metadata();
   return true;
 }
 
@@ -877,9 +1243,8 @@ auto UnpackProjectToWorkspace(const std::filesystem::path& packedPath,
                               std::filesystem::path* dbPathOut,
                               std::filesystem::path* metaPathOut,
                               QString* errorOut) -> bool {
-  std::string meta_bytes;
-  std::string db_bytes;
-  if (!ReadPackedProject(packedPath, &meta_bytes, &db_bytes, errorOut)) {
+  PackedProjectReader reader;
+  if (!reader.Open(packedPath, errorOut)) {
     return false;
   }
 
@@ -887,9 +1252,12 @@ auto UnpackProjectToWorkspace(const std::filesystem::path& packedPath,
   const auto db_path      = runtime_pair.first;
   const auto meta_path    = runtime_pair.second;
 
+  // The metadata version is read before the checksum is verified, so an unsupported package
+  // is rejected before its database payload is copied. The checksum is verified before any
+  // metadata value is used.
   nlohmann::json metadata;
   try {
-    metadata = nlohmann::json::parse(meta_bytes);
+    metadata = nlohmann::json::parse(reader.metadata());
   } catch (...) {
     if (errorOut) {
       *errorOut = Tr("Packed project metadata JSON is invalid.");
@@ -923,11 +1291,7 @@ auto UnpackProjectToWorkspace(const std::filesystem::path& packedPath,
     return false;
   }
 
-  if (!WriteFileBytes(db_path, db_bytes)) {
-    if (errorOut) {
-      *errorOut = Tr("Failed to materialize project database: %1")
-                      .arg(album_util::PathToQString(db_path));
-    }
+  if (!reader.CopyDatabaseTo(db_path, errorOut)) {
     return false;
   }
 

@@ -18,6 +18,7 @@
 #include "app/export_service.hpp"
 #include "app/import_service.hpp"
 #include "app/mask_thumbnail_service.hpp"
+#include "app/project_package_backend.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/thumbnail_service.hpp"
@@ -39,19 +40,25 @@ class ProjectHandler {
  public:
   explicit ProjectHandler(ProjectModule& project_module);
 
-  bool InitializeServices(const std::filesystem::path& dbPath,
-                          const std::filesystem::path& metaPath,
-                          ProjectOpenMode              openMode,
-                          const std::filesystem::path& packagePath,
-                          const std::filesystem::path& workspaceDir,
-                          const std::filesystem::path& recentProjectPath,
-                          ProjectEntryMode             entryMode);
+  bool InitializeServices(const std::filesystem::path&       dbPath,
+                          const std::filesystem::path&       metaPath,
+                          ProjectOpenMode                    openMode,
+                          const std::filesystem::path&       packagePath,
+                          const std::filesystem::path&       workspaceDir,
+                          project_pack::ProjectWorkspaceLock workspaceLock,
+                          const std::filesystem::path&       recentProjectPath,
+                          ProjectEntryMode                   entryMode);
   // Opens the packed project at @p packagePath: the loader thread unpacks it into
   // @p workspaceDir (created by the caller) and then starts the services as
   // InitializeServices does for an existing project.
-  bool OpenPackedProject(const std::filesystem::path& packagePath,
-                         const std::filesystem::path& workspaceDir, const QString& projectName,
-                         ProjectEntryMode entryMode);
+  //
+  // Both take the owner lock of @p workspaceDir. The handler keeps it while the project uses
+  // the workspace and releases it before the workspace is removed. When the call returns false,
+  // the lock is already released, so the caller can remove the workspace.
+  bool OpenPackedProject(const std::filesystem::path&       packagePath,
+                         const std::filesystem::path&       workspaceDir,
+                         project_pack::ProjectWorkspaceLock workspaceLock,
+                         const QString& projectName, ProjectEntryMode entryMode);
   /// Enters the previewed project. UI thread only.
   /// - Loaded, unentered project and no running load: sets the entered state and registers the
   ///   recent entry.
@@ -142,6 +149,7 @@ class ProjectHandler {
     std::unique_ptr<ImportServiceImpl>    import_service_{};
     std::shared_ptr<ExportService>        export_service_{};
     std::filesystem::path                 workspace_dir_{};
+    project_pack::ProjectWorkspaceLock    workspace_lock_{};
   };
 
   /// Stop @p retired's AI sidecar on this (UI) thread, then destroy its services and remove its
@@ -153,8 +161,9 @@ class ProjectHandler {
   // instead of @p dbPath and @p metaPath.
   bool StartProjectLoad(const std::filesystem::path& dbPath, const std::filesystem::path& metaPath,
                         ProjectOpenMode openMode, const std::filesystem::path& packagePath,
-                        const std::filesystem::path& workspaceDir,
-                        const std::filesystem::path& recentProjectPath,
+                        const std::filesystem::path&       workspaceDir,
+                        project_pack::ProjectWorkspaceLock workspaceLock,
+                        const std::filesystem::path&       recentProjectPath,
                         std::optional<QString> unpackProjectName, ProjectEntryMode entryMode);
 
   ProjectModule& project_module_;
@@ -170,6 +179,8 @@ class ProjectHandler {
   std::filesystem::path meta_path_{};
   std::filesystem::path project_package_path_{};
   std::filesystem::path project_workspace_dir_{};
+  // Owner lock of project_workspace_dir_; RetireProject releases it before the removal.
+  project_pack::ProjectWorkspaceLock project_workspace_lock_{};
   std::filesystem::path recent_project_path_{};
   // Two packers would share the same "<package>.tmp" file, so packing is serialized.
   std::shared_ptr<std::mutex> package_mutex_ = std::make_shared<std::mutex>();

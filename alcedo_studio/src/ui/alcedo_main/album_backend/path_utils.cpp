@@ -7,15 +7,31 @@
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
+#include <QStringList>
 #include <QUrl>
 
 #include <algorithm>
 #include <cmath>
 #include <cwctype>
+#include <system_error>
+#include <vector>
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/imgproc.hpp>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+// RestartManager.h needs the Windows types above.
+#include <RestartManager.h>
+#endif
 
 #include "ui/alcedo_main/i18n.hpp"
 
@@ -386,12 +402,95 @@ auto ValidateProjectName(const QString& rawName, QString* errorOut) -> std::opti
   return trimmed;
 }
 
-void CleanupWorkspaceDirectory(const std::filesystem::path& dir) {
+namespace {
+
+#ifdef _WIN32
+// Names the processes that hold @p file open, as Restart Manager reports them.
+auto DescribeFileHolders(const std::filesystem::path& file) -> QString {
+  DWORD session                             = 0;
+  WCHAR session_key[CCH_RM_SESSION_KEY + 1] = {};
+  if (RmStartSession(&session, 0, session_key) != ERROR_SUCCESS) {
+    return QStringLiteral("holders unknown (RmStartSession failed)");
+  }
+  const std::wstring           file_text = file.wstring();
+  LPCWSTR                      files[]   = {file_text.c_str()};
+  std::vector<RM_PROCESS_INFO> holders;
+  DWORD status = RmRegisterResources(session, 1, files, 0, nullptr, 0, nullptr);
+  if (status == ERROR_SUCCESS) {
+    UINT  needed  = 0;
+    UINT  count   = 0;
+    DWORD reasons = 0;
+    status        = RmGetList(session, &needed, &count, nullptr, &reasons);
+    if (status == ERROR_MORE_DATA) {
+      holders.resize(needed);
+      count  = needed;
+      status = RmGetList(session, &needed, &count, holders.data(), &reasons);
+      holders.resize(status == ERROR_SUCCESS ? count : 0);
+    }
+  }
+  RmEndSession(session);
+  if (status != ERROR_SUCCESS) {
+    return QStringLiteral("holders unknown (Restart Manager error %1)").arg(status);
+  }
+  if (holders.empty()) {
+    return QStringLiteral("no process holds it");
+  }
+  const DWORD self = GetCurrentProcessId();
+  QStringList names;
+  for (const auto& holder : holders) {
+    names << QStringLiteral("%1 pid=%2%3")
+                 .arg(QString::fromWCharArray(holder.strAppName))
+                 .arg(holder.Process.dwProcessId)
+                 .arg(holder.Process.dwProcessId == self ? QStringLiteral(" (this process)")
+                                                         : QString());
+  }
+  return QStringLiteral("held by ") + names.join(QStringLiteral(", "));
+}
+#endif
+
+// Removes the files that remove_all left in @p root one by one and writes each file that
+// still cannot be removed, with the OS error and (on Windows) the processes that hold it.
+void ReportUnremovableWorkspaceFiles(const std::filesystem::path& root) {
+  std::error_code iterate_error;
+  for (auto it = std::filesystem::recursive_directory_iterator(root, iterate_error);
+       !iterate_error && it != std::filesystem::recursive_directory_iterator();
+       it.increment(iterate_error)) {
+    std::error_code type_error;
+    if (it->is_directory(type_error)) {
+      continue;
+    }
+    std::error_code remove_error;
+    if (std::filesystem::remove(it->path(), remove_error) || !remove_error) {
+      continue;
+    }
+    QString detail = QString::fromStdString(remove_error.message());
+#ifdef _WIN32
+    detail += QStringLiteral("; ") + DescribeFileHolders(it->path());
+#endif
+    qWarning().noquote() << "Runtime workspace file is locked:" << PathToQString(it->path())
+                         << detail;
+  }
+}
+
+}  // namespace
+
+auto CleanupWorkspaceDirectory(const std::filesystem::path& dir) -> bool {
   if (dir.empty()) {
-    return;
+    return true;
   }
   std::error_code ec;
   std::filesystem::remove_all(dir, ec);
+  if (!ec) {
+    return true;
+  }
+  qWarning().noquote() << "Runtime workspace removal failed:" << PathToQString(dir)
+                       << QString::fromStdString(ec.message());
+  ReportUnremovableWorkspaceFiles(dir);
+  // The file-by-file pass can remove what remove_all left; the empty folders then remain.
+  ec.clear();
+  std::filesystem::remove_all(dir, ec);
+  std::error_code exists_error;
+  return !std::filesystem::exists(dir, exists_error) && !exists_error;
 }
 
 auto EnsureDirectoryExists(const std::filesystem::path& dir) -> bool {

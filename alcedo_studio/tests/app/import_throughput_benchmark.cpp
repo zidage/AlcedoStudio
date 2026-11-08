@@ -43,6 +43,7 @@
 #include "app/export_service.hpp"
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
+#include "app/project_package_backend.hpp"
 #include "app/project_package_service.hpp"
 #include "app/project_service.hpp"
 #include "app/thumbnail_service.hpp"
@@ -462,10 +463,11 @@ TEST(ImportThroughputBenchmark, OpensProjectAndReportsStepTimings) {
     ProjectPackageService package_service;
     const auto            open_start = BenchClock::now();
     auto                  step_start = open_start;
-    std::filesystem::path workspace;
-    QString               error;
-    ASSERT_TRUE(package_service.CreateProjectWorkspace(QStringLiteral("open_benchmark"),
-                                                       &workspace, &error))
+    std::filesystem::path              workspace;
+    project_pack::ProjectWorkspaceLock workspace_lock;
+    QString                            error;
+    ASSERT_TRUE(package_service.CreateProjectWorkspace(QStringLiteral("open_benchmark"), &workspace,
+                                                       &workspace_lock, &error))
         << error.toStdString();
     std::filesystem::path db_path;
     std::filesystem::path meta_path;
@@ -538,6 +540,7 @@ TEST(ImportThroughputBenchmark, OpensProjectAndReportsStepTimings) {
               << "  close               : " << close_ms << " ms\n"
               << "  peak working set    : " << PeakWorkingSetMiB() << " MiB\n";
     std::error_code ec;
+    workspace_lock.Release();
     std::filesystem::remove_all(workspace, ec);
   }
   std::filesystem::remove_all(work_dir);
@@ -573,10 +576,11 @@ TEST(ImportThroughputBenchmark, ReportsFirstPageThumbnailTimings) {
   std::filesystem::create_directories(cache_root);
   for (const bool warm : {false, true}) {
     ProjectPackageService package_service;
-    std::filesystem::path workspace;
-    QString               error;
+    std::filesystem::path              workspace;
+    project_pack::ProjectWorkspaceLock workspace_lock;
+    QString                            error;
     ASSERT_TRUE(package_service.CreateProjectWorkspace(QStringLiteral("thumbnail_benchmark"),
-                                                       &workspace, &error));
+                                                       &workspace, &workspace_lock, &error));
     std::filesystem::path db_path;
     std::filesystem::path meta_path;
     ASSERT_TRUE(package_service.UnpackProjectToWorkspace(package_path, workspace,
@@ -644,6 +648,7 @@ TEST(ImportThroughputBenchmark, ReportsFirstPageThumbnailTimings) {
     pipeline.reset();
     project.reset();
     std::error_code ec;
+    workspace_lock.Release();
     std::filesystem::remove_all(workspace, ec);
   }
   std::filesystem::remove_all(work_dir);
