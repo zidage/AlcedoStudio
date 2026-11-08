@@ -120,7 +120,7 @@ Each node provides standard tone and color controls, tone curves, Lift/Gamma/Gai
 
 ### AI Masks and Range Masks
 
-A Color Grade node can use gradient, radial, brush, and AI Masks. AI Masks select the subject, background, sky, or people, or any object you mark with points, a drawn path, or a box. You can add and subtract selections, include or exclude individual people, and adjust Feather and Expand; a red overlay shows the selection. The tool keeps its own Undo and Redo, and Confirm saves the result as one history step. Saved AI Masks stay in the project and render without running the models again.
+A Color Grade node can use gradient, radial, and AI Masks. AI Masks select the subject, background, sky, or people, or any object you mark with points, a drawn path, or a box. You can add and subtract selections, include or exclude individual people, and adjust Feather and Expand; a red overlay shows the selection. The tool keeps its own Undo and Redo, and Confirm saves the result as one history step. Saved AI Masks stay in the project and render without running the models again.
 
 Any mask can be restricted by a Luminance/Hue Range, with two-handle bars, numeric fields, softness, and a saturation threshold. Show selection displays the resulting coverage.
 
