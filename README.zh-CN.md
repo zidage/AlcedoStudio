@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://aoraw.org/zh-cn/">项目网站</a> · <a href="https://aoraw.org/">Project website</a> · <a href="https://zidage.github.io/AlcedoStudio_docs/docs/intro">文档</a> · <a href="https://github.com/zidage/AlcedoStudio/releases/tag/v0.3.3">下载 v0.3.3</a>
+  <a href="https://aoraw.org/zh-cn/">项目网站</a> · <a href="https://aoraw.org/">Project website</a> · <a href="https://zidage.github.io/AlcedoStudio_docs/docs/intro">文档</a> · <a href="https://github.com/zidage/AlcedoStudio/releases/tag/v0.3.5">下载 v0.3.5</a>
 </p>
 
 <p align="right"><a href="./README.md">English</a> | <a href="./README.zh-CN.md"><strong>简体中文</strong></a></p>
@@ -38,13 +38,19 @@ https://github.com/user-attachments/assets/ae0d9773-220e-4901-90f6-1989f58b0462
 ## 核心特性
 
 - **场景参考的节点式色彩管线**  
-  全链路基于 32 位浮点场景线性空间，内置 ACES 2.0 与 OpenDRT 显示渲染变换。调色过程组织为直观的节点图：`Develop` 节点完成 RAW 解码与色彩空间转换，后续可串联任意数量带独立蒙版的 `Color Grade` 节点。支持 113 款胶片 LUT 及任意色彩空间的自定义 3D CUBE LUT。
+  全链路基于 32 位浮点场景线性空间。调色过程组织为直观的节点图：`Develop` 节点完成 RAW 解码与色彩空间转换，后续可串联任意数量带独立蒙版的 `Color Grade` 节点。最终画面由内置的 ACES 2.0 或 OpenDRT 显示渲染变换形成，也可以交给光谱胶片模拟 Film Print（胶片印片）。
 
 - **基于 DAG 的 GPU 交互管线**  
   调色处理采用有向无环图（DAG）架构，全链路基于原生 CUDA / OpenCL（Windows）与 Metal（macOS）的 32 位浮点计算。每个节点与蒙版独立缓存中间结果，调整滑块时只重算后面的变化，而不需要从头重跑整张照片。拖动时即时响应，松开后自动呈现完整画质；放大查看时也仅对当前屏幕区域渲染 1:1 细节，处理高像素大文件完全不需要等待漫长的离线代理。
 
+- **风格化工具箱：光谱胶片模拟、胶片 LUT 与颗粒**  
+  胶片印片以光谱方式模拟 30 款彩色负片和 5 款彩色反转片：场景光让各感光层曝光，显影形成染料，负片再印放到摄影相纸或电影印片胶片上，或经扫描反相后输出 SDR 或 HDR；反转片以灯箱观看方式呈现。颗粒随 16mm、35mm、70mm 片幅和各片种的颗粒度数据变化。另有 113 款胶片 LUT，并支持任意色彩空间的自定义 3D CUBE LUT。
+
+- **AI 蒙版**  
+  一键选择主体、背景、天空或人物，也可以通过点选、绘制路径或框选来选择任意物体。支持添加、减去选区，调整羽化和扩展，并可按明度和色相范围限制任意蒙版。模型在本机运行；已保存的蒙版存放在项目中，渲染时无需重新运行模型。
+
 - **轻量本地图库（DuckDB + 本地 CLIP）**  
-  相册数据直接由内嵌的 DuckDB 驱动，在海量图库下依然支持复杂的毫秒级条件筛选；结合本地运行的多语言 CLIP 模型，导入即可自动为照片生成语义标签，支持自然语言检索，全程零云端依赖。
+  相册数据直接由内嵌的 DuckDB 驱动，在海量图库下依然支持复杂的毫秒级条件筛选；结合本地运行的多语言 CLIP 模型，导入即可自动为照片生成语义标签，支持自然语言检索，全程零云端依赖。层级影集、星级和编辑标记帮助整理图库。
 
 - **类似 Git 的分支化历史**  
   每次修改都记录在非线性的版本树中，可随时从任意历史步骤切出新版本进行比对，所有操作均可永久撤销，并支持将 Look 局部或完整批量应用至其他照片。
@@ -58,7 +64,7 @@ https://github.com/user-attachments/assets/ae0d9773-220e-4901-90f6-1989f58b0462
 
 Alcedo 可以读取 Canon、Nikon、Sony、Fujifilm、Panasonic、OM System、Leica、Hasselblad、Phase One（包括 1.5 亿像素的 IQ4）、Pentax、Sigma 的 RAW 文件，以及手机和无人机生成的 DNG，详见[支持的格式](docs/supported_raw_formats.md)和[支持的相机](docs/supported_cameras.md)。借助项目维护的 [LibRaw 分支](https://github.com/zidage/LibRaw)，它也能打开 Z 8、Z 9、Z 6 III 和 Z 50 II 拍摄的 Nikon 高效率（HE）NEF 文件。
 
-它提供两种去马赛克方法。Bayer 传感器默认使用 RCD；Fujifilm X-Trans 默认使用 Neural Engine，这是一个从 [DemosaicNet](https://groups.csail.mit.edu/graphics/demosaicnet/) 蒸馏而来、在 GPU 上运行的精简神经网络，同样适用于 Bayer 文件。Alcedo 还支持基于 darktable 与 RawTherapee 的 inpaint-opposed 方法改进而来的高光重建、基于 Lensfun 配置文件的镜头校正，以及 DNG 文件内嵌的色彩配置文件。
+它提供两种去马赛克方法。Bayer 传感器默认使用 RCD；Fujifilm X-Trans 默认使用 Neural Engine，这是一个从 [DemosaicNet](https://groups.csail.mit.edu/graphics/demosaicnet/) 蒸馏而来、在 GPU 上运行的精简神经网络，同样适用于 Bayer 文件。Alcedo 还支持基于 darktable 与 RawTherapee 的 inpaint-opposed 方法改进而来的高光重建、基于 Lensfun 配置文件和 Lanczos-3 重采样的镜头校正，以及 DNG 文件内嵌的色彩配置文件。
 
 ### 场景参考的色彩管线
 
@@ -69,11 +75,34 @@ flowchart LR
     A[RAW 文件] --> B[解码与去马赛克]
     B --> C[场景线性图像]
     C --> D[在 ACEScc 中调色]
-    D --> E[显示渲染变换]
+    D --> E[显示渲染变换：<br/>ACES 2.0、OpenDRT 或胶片印片]
     E --> F[SDR、广色域或 HDR 显示器]
 ```
 
-显示渲染变换可以选择 ACES 2.0 输出变换或 OpenDRT，并设置目标色彩空间、传递函数和峰值亮度。在配备 HDR 显示屏的 Mac 上，编辑器可以直接预览 HDR 效果。
+显示渲染变换可以选择 ACES 2.0 输出变换、OpenDRT 或胶片印片。使用 ACES 2.0 和 OpenDRT 时，可以设置目标色彩空间、传递函数和峰值亮度。在配备 HDR 显示屏的 Mac 上，编辑器可以直接预览 HDR 效果。
+
+胶片印片是一种光谱胶片模拟。它把调色后的场景线性图像当作照到胶片上的光：为每个像素重建光谱，按各感光层的光谱灵敏度计算曝光，模拟乳剂中的光扩散和光晕，再按特性曲线和层间抑制完成显影。显影后的胶片进入三种输出之一：
+
+```mermaid
+flowchart LR
+    A[场景线性图像] --> B[光谱重建]
+    B --> C[各感光层曝光]
+    C --> D[光扩散与光晕]
+    D --> E[显影与<br/>层间抑制]
+    E --> F[负片密度]
+    F --> G[印放到相纸<br/>或电影印片胶片]
+    F --> H[负片扫描]
+    E --> I[反转片<br/>灯箱观看]
+    G --> J[Rec. 709 SDR]
+    I --> J
+    H --> K[OpenDRT：SDR 或 HDR]
+```
+
+- **印片**：30 款负片可以搭配任一摄影相纸或电影印片胶片，包括 Cine Look（Kodak Vision 2383）。
+- **负片扫描**：虚拟扫描器读取并反转负片，再由 OpenDRT 形成 SDR 或 HDR 画面。可以调整扫描曝光、对比度、青、品、黄和黑位。“中性”自动校色在缩放和平移时保持全画面的色彩平衡。
+- **反转片**：5 款彩色反转片以灯箱观看方式呈现。
+
+“场景光”默认使用“按拍摄参数”，读取 RAW 白平衡的色温与色调。片幅（16mm、35mm 或 70mm）决定颗粒相对画面的大小，较小片幅也会放大光扩散和光晕。颗粒在印片或扫描之前形成于胶片层中，并使用所选片种的颗粒度数据。胶片浏览器可以按工艺和品牌筛选，并显示每款胶片的色卡。胶片印片支持 CUDA、OpenCL 和 Metal，所需胶片数据随安装包提供。物理原理、数据来源和 GPU 实现请参阅[胶片模拟说明](docs/roadmap/alcedo_studio/edit/film_simulation/film_simulation_explained.md)。
 
 ### 基于节点的调色
 
@@ -87,7 +116,15 @@ flowchart LR
     G3 --> T[Display Transform]
 ```
 
-每个节点内都有常用的影调和色彩控制、色调曲线、Lift/Gamma/Gain 色轮、可选颜色和细节工具，阴影与高光由局部色调映射处理。Alcedo 还内置了[根据真实胶片光谱响应生成的 CUBE LUT](https://github.com/JanLohse/spectral_film_lut)，以及基于物理模型的胶片颗粒和光晕。
+每个节点内都有常用的影调和色彩控制、色调曲线、Lift/Gamma/Gain 与 Offset 色轮、可选颜色和细节工具，阴影与高光由局部色调映射处理。Alcedo 还内置了[根据真实胶片光谱响应生成的 CUBE LUT](https://github.com/JanLohse/spectral_film_lut)，以及基于物理模型的胶片颗粒和光晕。颗粒强度范围为 0 至 200%，缩放时颗粒尺度保持一致。
+
+### AI 蒙版与范围蒙版
+
+Color Grade 节点可以使用渐变、径向、画笔和 AI 蒙版。AI 蒙版可以选择主体、背景、天空或人物，也可以选择你通过点选、绘制路径或框选标出的任意物体。支持添加、减去选区，单独加入或移除人物，以及调整羽化和扩展；红色叠层显示当前选区。工具内有独立的撤销与重做，点击“确认”后将结果保存为一条历史记录。已保存的 AI 蒙版存放在项目中，渲染时无需重新运行模型。
+
+任意蒙版都可以用明度/色相范围进一步限制，提供双滑块范围条、数值输入、柔和度和饱和度门槛。“显示选区”可查看实际覆盖范围。
+
+AI 蒙版模型在本机运行，可在“设置 > AI 模型”中下载，每张模型卡片显示许可证、大小和下载进度。
 
 ### 任意色彩空间的 LUT
 
@@ -99,11 +136,9 @@ flowchart LR
 
 ### 图库与搜索
 
-图库存储在 [DuckDB](https://duckdb.org/) 数据库中，照片越来越多时，浏览、筛选和搜索依然流畅。相册检查器按拍摄日期、相机、镜头、标签和评分对照片分组，选中某个分组即可筛选相册。
+图库存储在 [DuckDB](https://duckdb.org/) 数据库中，照片越来越多时，浏览、筛选和搜索依然流畅。相册检查器按拍摄日期、相机、镜头、标签和评分对照片分组，选中某个分组即可筛选相册。层级影集以紧凑的树形显示，支持就地新建和重命名、拖动移动，并显示照片数量。照片卡片显示编辑标记和星级，较大的卡片支持点击星星评分。
 
-Alcedo 支持三种搜索：按相机、镜头、日期、ISO、焦距和光圈进行 EXIF 搜索；使用在本地运行的多语言 CLIP 模型进行自然语言搜索，这些模型也可以在导入后自动为照片打标签；以及对 Alcedo 生成的描述和标签进行全文搜索。
-
-它还可以通过兼容 OpenAI 或 Anthropic 的接口，连接你已经在使用的 AI 服务，为每张照片撰写描述，并给出 1–5 星评分和简短理由。评片的严格程度和使用的语言都可以设置。API 密钥保存在 Windows 凭据管理器或 macOS 钥匙串中，分析在后台运行，不影响你继续工作。
+Alcedo 支持按相机、镜头、日期、ISO、焦距和光圈进行 EXIF 搜索，以及使用在本地运行的多语言 CLIP 模型进行自然语言搜索，这些模型也可以在导入后自动为照片打标签。CLIP 模型在“设置 > AI 模型”中下载和激活。搜索面板把最近搜索、命令、筛选项和照片预览集中在一个窗口，按 Enter 即可将搜索应用到图库。
 
 ### 导出
 
@@ -114,7 +149,7 @@ Alcedo 可以导出 JPEG、PNG、TIFF、OpenEXR 和 Ultra HDR JPEG，并根据�
 alcedo-cli 安装在应用程序旁边（macOS 上位于应用包内）。无论是智能体、脚本，还是在终端里操作的你，都能通过它做到界面能做的事：
 
 - **项目与图库**：创建、打开和保存项目；导入文件夹；列出、评分、选择和删除照片；读取拍摄元数据和缩略图；并按搜索对话框的规则搜索，包括自然语言搜索。
-- **编辑**：打开照片，读取和设置编辑器中的任意调整，一步设置多个字段，操作节点和 LUT，撤销与重做，读取编辑历史。
+- **编辑**：打开照片，读取和设置编辑器中的任意调整，一步设置多个字段，操作节点和 LUT，列出胶片印片可用的胶片，撤销与重做，读取编辑历史。
 - **版本**：创建、分支、切换、重命名和删除版本，在照片之间复制和粘贴调整。
 - **输出**：渲染预览供智能体查看，使用与导出面板相同的选项导出，并跟踪后台任务直到完成。
 
@@ -141,7 +176,7 @@ alcedo-cli session stop
     <td width="50%"><img src="docs/images/masks.jpg" alt="蒙版编辑器，画面上显示蒙版"/></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/images/search.jpg" alt="自然语言搜索结果，检查器中显示 AI 描述"/></td>
+    <td width="50%"><img src="docs/images/search.jpg" alt="图库中的自然语言搜索结果"/></td>
     <td width="50%"><img src="docs/images/export.jpg" alt="导出面板，显示格式、尺寸和文件命名选项"/></td>
   </tr>
 </table>
@@ -161,6 +196,8 @@ alcedo-cli session stop
 Alcedo Studio 基于许多开源项目及其作者的工作。
 
 - 胶片模拟 LUT 来自 [JanLohse/spectral_film_lut](https://github.com/JanLohse/spectral_film_lut) 和 [andreavolpato/spektrafilm](https://github.com/andreavolpato/spektrafilm)。
+- 胶片印片的光谱模拟受 [andreavolpato/spektrafilm](https://github.com/andreavolpato/spektrafilm) 和 [DhaliwalX/fotufilm-engine](https://github.com/DhaliwalX/fotufilm-engine) 启发。胶片数据使用 [spectral_film_lut](https://github.com/JanLohse/spectral_film_lut) 数字化的数据手册，以及 fotufilm 的 Astia 100F 配置文件（CC BY-SA 4.0）。
+- AI 蒙版使用 [SAM 2.1](https://github.com/facebookresearch/sam2)（Hiera tiny）完成点选、路径和框选，使用 [S3OD](https://github.com/KupynOrest/s3od)（[s3od-synth 权重](https://huggingface.co/okupyn/s3od-synth)，图像编码器为 [DINOv3](https://github.com/facebookresearch/dinov3)）完成主体抠图（matting）。
 - 部分相机色彩矩阵来自 [rawtoaces-data](https://github.com/AcademySoftwareFoundation/rawtoaces-data)。
 - 神经网络去马赛克模型蒸馏自 [mgharbi/demosaicnet](https://github.com/mgharbi/demosaicnet)（[Gharbi 等，2016](https://groups.csail.mit.edu/graphics/demosaicnet/)）。
 - Inpaint-opposed 高光重建改编自 [darktable](https://github.com/darktable-org/darktable/blob/master/src/iop/hlreconstruct/opposed.c) 和 [RawTherapee](https://github.com/RawTherapee/RawTherapee/blob/dev/rtengine/hilite_recon.cc)。
@@ -172,7 +209,7 @@ Alcedo Studio 基于许多开源项目及其作者的工作。
 
 完整的第三方组件及其许可证列表请参阅 [THIRD_PARTY_NOTICE.txt](THIRD_PARTY_NOTICE.txt) 和 [third_party_licenses/](third_party_licenses/)。
 
-ACES 是美国电影艺术与科学学院（A.M.P.A.S.）的商标。Alcedo Studio 是独立项目，与 A.M.P.A.S.、Academy Software Foundation、Jed Smith 以及上文提到的其他上游作者均无关联，也未获得其认证或背书。文中提及这些名称仅用于标明相应的技术。
+ACES 是美国电影艺术与科学学院（A.M.P.A.S.）的商标。Alcedo Studio 是独立项目，与 A.M.P.A.S.、Academy Software Foundation、Jed Smith 以及上文提到的其他上游作者均无关联，也未获得其认证或背书。文中提及这些名称仅用于标明相应的技术。Kodak、Fujifilm 等胶片名称是其所有者的商标，在此仅用于标明胶片印片所模拟的胶片。
 
 ## 许可证
 
