@@ -1132,21 +1132,21 @@ ColumnLayout {
         icon.source: "qrc:/panel_icons/folder-open.svg"
         icon.width: 16
         icon.height: 16
-        // Neutral filled action: the light list well with its ink. A disabled action drops to
-        // the sunken base fill with muted ink.
-        readonly property color inkColor: enabled ? appTheme.editorListSelectedInkColor
-                                                  : appTheme.textMutedColor
+        // Neutral filled action: the light list well with its ink (colours from the Main shell).
+        readonly property color inkColor: theme.filledActionInk(enabled)
         icon.color: inkColor
         display: AbstractButton.TextBesideIcon
         onClicked: panel.importFromFolderRequested()
 
         background: Rectangle {
             radius: 8
-            color: !importFromFolderBtn.enabled
-                   ? appTheme.bgBaseColor
-                   : importFromFolderBtn.hovered || importFromFolderBtn.down
-                     ? Qt.darker(appTheme.editorListSelectedFillColor, 1.06)
-                     : appTheme.editorListSelectedFillColor
+            color: theme.filledActionFill(importFromFolderBtn.enabled,
+                                          importFromFolderBtn.hovered,
+                                          importFromFolderBtn.down)
+            Behavior on color {
+                enabled: !appTheme.reduceMotion
+                ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
+            }
         }
 
         contentItem: IconLabel {
@@ -1158,9 +1158,6 @@ ColumnLayout {
             font: importFromFolderBtn.font
             color: importFromFolderBtn.inkColor
         }
-
-        scale: importFromFolderBtn.hovered && enabled ? 1.03 : 1.0
-        Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
     }
 
     Button {
@@ -1180,23 +1177,14 @@ ColumnLayout {
         background: Rectangle {
             radius: 8
             opacity: importImagesBtn.enabled ? 1.0 : 0.5
-            color: {
-                if (!importImagesBtn.enabled) {
-                    return Qt.rgba(theme.colButtonSecondary.r, theme.colButtonSecondary.g,
-                                   theme.colButtonSecondary.b, 0.55)
-                }
-                if (importImagesBtn.pressed) {
-                    return Qt.darker(theme.colButtonSecondary, 1.14)
-                }
-                if (importImagesBtn.hovered) {
-                    return Qt.lighter(theme.colButtonSecondary, 1.08)
-                }
-                return theme.colButtonSecondary
+            color: theme.secondaryButtonFill(importImagesBtn.enabled,
+                                             importImagesBtn.hovered,
+                                             importImagesBtn.pressed)
+            Behavior on color {
+                enabled: !appTheme.reduceMotion
+                ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
             }
         }
-
-        scale: importImagesBtn.hovered && enabled ? 1.02 : 1.0
-        Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
     }
 
     AppContextMenu {

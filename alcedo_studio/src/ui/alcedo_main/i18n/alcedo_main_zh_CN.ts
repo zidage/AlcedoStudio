@@ -6166,6 +6166,25 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
 </context>
 <context>
+    <name>LibraryInspectorActions</name>
+    <message>
+        <source>Add to Export Queue (%1)</source>
+        <translation>加入到导出队列 (%1)</translation>
+    </message>
+    <message>
+        <source>Exporting...</source>
+        <translation>正在导出...</translation>
+    </message>
+    <message>
+        <source>Export 1 File</source>
+        <translation>导出 1 个文件</translation>
+    </message>
+    <message>
+        <source>Export %1 Files</source>
+        <translation>导出 %1 个文件</translation>
+    </message>
+</context>
+<context>
     <name>LibraryWorkspace</name>
     <message>
         <location filename="../qml/LibraryWorkspace.qml" line="+255"/>
@@ -6196,26 +6215,6 @@ Refresh the library afterwards; they are listed under the User category. Import 
         <location line="+7"/>
         <source>Load Project</source>
         <translation>加载项目</translation>
-    </message>
-    <message>
-        <location line="+70"/>
-        <source>Add to Queue</source>
-        <translation>加入队列</translation>
-    </message>
-    <message>
-        <location line="+31"/>
-        <source>Exporting...</source>
-        <translation>正在导出...</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Export 1 File</source>
-        <translation>导出 1 个文件</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Export %1 Files</source>
-        <translation>导出 %1 个文件</translation>
     </message>
     <message>
         <source>Library query failed: %1</source>

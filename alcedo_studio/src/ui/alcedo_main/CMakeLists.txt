@@ -788,6 +788,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/RotatingTaskBorder.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WorkspaceHost.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryWorkspace.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryInspectorActions.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspace.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspaceNavigation.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorSaveRecoveryBar.qml"

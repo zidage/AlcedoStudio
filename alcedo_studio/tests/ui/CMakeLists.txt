@@ -721,6 +721,35 @@ target_compile_definitions(AlbumSectionQmlTest
 alcedo_ui_gtest_discover_tests(AlbumSectionQmlTest TEST_PREFIX "AlbumSectionQmlTest.")
 alcedo_register_test_target(AlbumSectionQmlTest ui)
 
+# Library inspector button row QML (#731): Add to Export Queue opens the Export tab.
+add_executable(LibraryInspectorActionsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/library_inspector_actions_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LibraryInspectorActionsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(LibraryInspectorActionsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(LibraryInspectorActionsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(LibraryInspectorActionsQmlTest
+    TEST_PREFIX "LibraryInspectorActionsQmlTest.")
+alcedo_register_test_target(LibraryInspectorActionsQmlTest ui)
+
 add_executable(MainQmlWorkflowTest
     ${ALCEDO_TEST_ROOT}/ui/main_qml_workflow_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp

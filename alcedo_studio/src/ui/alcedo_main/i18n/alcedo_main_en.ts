@@ -4908,6 +4908,25 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>LibraryInspectorActions</name>
+    <message>
+        <source>Add to Export Queue (%1)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Exporting...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Export 1 File</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Export %1 Files</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>LibraryWorkspace</name>
     <message>
         <location filename="../qml/LibraryWorkspace.qml" line="+255"/>
@@ -4938,26 +4957,6 @@ Original source files on disk will be kept.</source>
         <location line="+7"/>
         <source>Load Project</source>
         <translation type="unfinished">Load Project</translation>
-    </message>
-    <message>
-        <location line="+70"/>
-        <source>Add to Queue</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+31"/>
-        <source>Exporting...</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Export 1 File</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Export %1 Files</source>
-        <translation type="unfinished"></translation>
     </message>
     <message>
         <source>Library query failed: %1</source>

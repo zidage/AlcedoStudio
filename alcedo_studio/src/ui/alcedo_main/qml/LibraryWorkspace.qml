@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
-import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
 
@@ -45,16 +44,18 @@ Item {
         return colButtonSecondary
     }
 
-    // Neutral filled action (Load Project, Export queue): the light list well with its ink.
-    // A disabled action drops to the sunken base fill with muted ink.
+    // Neutral filled action (Load Project, Export): the Main shell owns its colours.
     function filledActionFill(enabled, hovered, pressed) {
-        if (!enabled)
-            return appTheme.bgBaseColor
-        return hovered || pressed ? Qt.darker(appTheme.editorListSelectedFillColor, 1.06)
-                                  : appTheme.editorListSelectedFillColor
+        if (theme && theme.filledActionFill) {
+            return theme.filledActionFill(enabled, hovered, pressed)
+        }
+        return enabled ? appTheme.editorListSelectedFillColor : appTheme.bgBaseColor
     }
 
     function filledActionInk(enabled) {
+        if (theme && theme.filledActionInk) {
+            return theme.filledActionInk(enabled)
+        }
         return enabled ? appTheme.editorListSelectedInkColor : appTheme.textMutedColor
     }
 
@@ -512,6 +513,10 @@ RowLayout {
                             color: root.filledActionFill(emptyStateLoadButton.enabled,
                                                          emptyStateLoadButton.hovered,
                                                          emptyStateLoadButton.down)
+                            Behavior on color {
+                                enabled: !appTheme.reduceMotion
+                                ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
+                            }
                         }
                         contentItem: Label {
                             text: emptyStateLoadButton.text
@@ -575,79 +580,15 @@ RowLayout {
                 }
             }
 
-            RowLayout {
+            LibraryInspectorActions {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 52
-                spacing: 10
-
-                Button {
-                    id: addSelectedBtn
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 52
-                    text: qsTr("Add to Queue") + " (" + host.selectedCount + ")"
-                    enabled: host.backendInteractive && host.selectedCount > 0
-                    icon.source: "qrc:/panel_icons/queue-add.svg"
-                    icon.width: 16
-                    icon.height: 16
-                    icon.color: root.colText
-                    display: AbstractButton.TextBesideIcon
-                    background: Rectangle {
-                        radius: root.controlRadius
-                        color: root.secondaryButtonFill(
-                            addSelectedBtn.enabled,
-                            addSelectedBtn.hovered,
-                            addSelectedBtn.down)
-                        border.width: 1
-                        border.color: root.colButtonSecondaryBorder
-                    }
-                    Material.foreground: root.colText
-                    scale: addSelectedBtn.hovered && enabled ? 1.03 : 1.0
-                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
-                    onClicked: {
-                        appModules.exportQueue.AddTargets(host.selectionState.currentSelectedItems())
-                        host.selectionState.clearSelectedImages()
-                    }
-                }
-
-                Button {
-                    id: exportQueueBtn
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 52
-                    visible: inspectorPanel.exportPageActive
-                    text: appModules.importExport.exportInFlight
-                          ? qsTr("Exporting...")
-                          : host.exportQueueCount === 1
-                            ? qsTr("Export 1 File")
-                            : qsTr("Export %1 Files").arg(host.exportQueueCount)
-                    enabled: host.backendInteractive
-                             && appModules.interactionPolicy.canChangeStateAsUser
-                             && !appModules.importExport.exportInFlight
-                             && host.exportQueueCount > 0
-                             && inspectorPanel.exportSettingsValid
-                    icon.source: "qrc:/panel_icons/export.svg"
-                    icon.width: 16
-                    icon.height: 16
-                    icon.color: root.filledActionInk(exportQueueBtn.enabled)
-                    display: AbstractButton.TextBesideIcon
-                    background: Rectangle {
-                        radius: 8
-                        color: root.filledActionFill(exportQueueBtn.enabled,
-                                                     exportQueueBtn.hovered,
-                                                     exportQueueBtn.down)
-                    }
-                    contentItem: IconLabel {
-                        spacing: exportQueueBtn.spacing
-                        mirrored: exportQueueBtn.mirrored
-                        display: exportQueueBtn.display
-                        icon: exportQueueBtn.icon
-                        text: exportQueueBtn.text
-                        font: exportQueueBtn.font
-                        color: root.filledActionInk(exportQueueBtn.enabled)
-                    }
-                    scale: exportQueueBtn.hovered && enabled ? 1.03 : 1.0
-                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
-                    onClicked: inspectorPanel.startExport()
-                }
+                inspectorPanel: inspectorPanel
+                selectionState: host.selectionState
+                selectedCount: host.selectedCount
+                backendInteractive: host.backendInteractive
+                exportQueueCount: host.exportQueueCount
+                theme: root
             }
         }
 
