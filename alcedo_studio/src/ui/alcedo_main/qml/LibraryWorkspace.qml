@@ -44,16 +44,18 @@ Item {
         return colButtonSecondary
     }
 
-    // Neutral filled action (Load Project, Export queue): the light list well with its ink.
-    // A disabled action drops to the sunken base fill with muted ink.
+    // Neutral filled action (Load Project, Export): the Main shell owns its colours.
     function filledActionFill(enabled, hovered, pressed) {
-        if (!enabled)
-            return appTheme.bgBaseColor
-        return hovered || pressed ? Qt.darker(appTheme.editorListSelectedFillColor, 1.06)
-                                  : appTheme.editorListSelectedFillColor
+        if (theme && theme.filledActionFill) {
+            return theme.filledActionFill(enabled, hovered, pressed)
+        }
+        return enabled ? appTheme.editorListSelectedFillColor : appTheme.bgBaseColor
     }
 
     function filledActionInk(enabled) {
+        if (theme && theme.filledActionInk) {
+            return theme.filledActionInk(enabled)
+        }
         return enabled ? appTheme.editorListSelectedInkColor : appTheme.textMutedColor
     }
 
@@ -511,6 +513,10 @@ RowLayout {
                             color: root.filledActionFill(emptyStateLoadButton.enabled,
                                                          emptyStateLoadButton.hovered,
                                                          emptyStateLoadButton.down)
+                            Behavior on color {
+                                enabled: !appTheme.reduceMotion
+                                ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
+                            }
                         }
                         contentItem: Label {
                             text: emptyStateLoadButton.text

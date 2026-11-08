@@ -187,17 +187,40 @@ ApplicationWindow {
         return colButtonPrimary
     }
 
+    // Button hover and press change only the fill colour; the button keeps its size.
+    // Dark secondary action (Add to Export Queue, Import Images): hover lifts the fill,
+    // press sinks it below the idle fill.
     function secondaryButtonFill(enabled, hovered, pressed) {
         if (!enabled) {
             return withAlpha(colButtonSecondary, 0.55)
         }
         if (pressed) {
-            return Qt.darker(colButtonSecondary, 1.14)
+            return Qt.darker(colButtonSecondary, 1.2)
         }
         if (hovered) {
-            return Qt.lighter(colButtonSecondary, 1.08)
+            return Qt.lighter(colButtonSecondary, 1.34)
         }
         return colButtonSecondary
+    }
+
+    // Neutral filled action (Load Project, Export, Import From Folder): the light list well
+    // with its ink. Hover darkens the well, press darkens it more. A disabled action drops to
+    // the sunken base fill with muted ink.
+    function filledActionFill(enabled, hovered, pressed) {
+        if (!enabled) {
+            return appTheme.bgBaseColor
+        }
+        if (pressed) {
+            return Qt.darker(appTheme.editorListSelectedFillColor, 1.24)
+        }
+        if (hovered) {
+            return Qt.darker(appTheme.editorListSelectedFillColor, 1.14)
+        }
+        return appTheme.editorListSelectedFillColor
+    }
+
+    function filledActionInk(enabled) {
+        return enabled ? appTheme.editorListSelectedInkColor : appTheme.textMutedColor
     }
 
     Material.theme: Material.Dark

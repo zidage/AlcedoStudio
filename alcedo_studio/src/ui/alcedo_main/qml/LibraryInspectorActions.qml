@@ -90,10 +90,12 @@ RowLayout {
                                             addSelectedBtn.down)
             border.width: 1
             border.color: root.secondaryBorderColor
+            Behavior on color {
+                enabled: !appTheme.reduceMotion
+                ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
+            }
         }
         Material.foreground: root.textColor
-        scale: addSelectedBtn.hovered && enabled ? 1.03 : 1.0
-        Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
         onClicked: root.addSelectedToExportQueue()
     }
 
@@ -119,6 +121,10 @@ RowLayout {
             color: root.filledActionFill(exportQueueBtn.enabled,
                                          exportQueueBtn.hovered,
                                          exportQueueBtn.down)
+            Behavior on color {
+                enabled: !appTheme.reduceMotion
+                ColorAnimation { duration: 120; easing.type: Easing.OutCubic }
+            }
         }
         contentItem: IconLabel {
             spacing: exportQueueBtn.spacing
@@ -129,8 +135,6 @@ RowLayout {
             font: exportQueueBtn.font
             color: root.filledActionInk(exportQueueBtn.enabled)
         }
-        scale: exportQueueBtn.hovered && enabled ? 1.03 : 1.0
-        Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
         onClicked: root.startExport()
     }
 }

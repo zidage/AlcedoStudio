@@ -238,6 +238,16 @@ ApplicationWindow {
     property color colDanger: "#d9534f"
     property Item dialogBlurSource: null
 
+    function secondaryButtonFill(enabled, hovered, pressed) {
+        return hovered ? Qt.lighter(colButtonSecondary, 1.34) : colButtonSecondary
+    }
+    function filledActionFill(enabled, hovered, pressed) {
+        return enabled ? appTheme.editorListSelectedFillColor : appTheme.bgBaseColor
+    }
+    function filledActionInk(enabled) {
+        return enabled ? appTheme.editorListSelectedInkColor : appTheme.textMutedColor
+    }
+
     property var panelItem: panelLoader.item
     property var menuItem: null
     property string lastMenuSignal: ""
