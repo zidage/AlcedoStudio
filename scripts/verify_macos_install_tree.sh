@@ -147,13 +147,8 @@ required_files=(
 
 if [[ "$require_film_print_resources" -eq 1 ]]; then
   film_print_dir="${macos_dir}/config/film_print"
-  assert_file "${film_print_dir}/manifest.json"
-  for film_print_file in film_stock_bundle.bin film_print_setup.bin film_reflectance_table.bin; do
-    assert_file "${film_print_dir}/${film_print_file}"
-    film_print_digest="$(shasum -a 256 "${film_print_dir}/${film_print_file}" | cut -d' ' -f1)"
-    grep -q "\"sha256\": \"${film_print_digest}\"" "${film_print_dir}/manifest.json" ||
-      fail "SHA-256 is not in the manifest: ${film_print_dir}/${film_print_file}"
-  done
+  cmake "-DALCEDO_FILM_PRINT_RESOURCE_DIR=${film_print_dir}" \
+    -P "$(dirname "${BASH_SOURCE[0]}")/cmake/verify_film_print_resources.cmake"
 fi
 
 for file in "${required_files[@]}"; do
@@ -335,8 +330,22 @@ if ! cli_start="$(run_cli "${cli_session_args[@]}" session start --headless \
     --settings-dir "${cli_probe_dir}/settings" 2>&1)"; then
   fail "installed alcedo-cli could not start a headless session: ${cli_start}"
 fi
+cli_film_status=0
+if [[ "$require_film_print_resources" -eq 1 ]]; then
+  cli_film="$(run_cli "${cli_session_args[@]}" --json call film.list 2>&1)" || cli_film_status=$?
+fi
 if ! cli_stop="$(run_cli "${cli_session_args[@]}" session stop 2>&1)"; then
   fail "installed alcedo-cli could not stop the headless session: ${cli_stop}"
+fi
+if [[ "$require_film_print_resources" -eq 1 ]]; then
+  [[ "$cli_film_status" -eq 0 ]] || fail "installed film.list failed: ${cli_film}"
+  # Parse the actual result, including warnings: film.list can return success when resources fail.
+  printf '%s\n' "$cli_film" > "${cli_probe_dir}/films.json"
+  film_total="$(plutil -extract total raw -o - "${cli_probe_dir}/films.json")"
+  film_warnings="$(plutil -extract warnings json -o - "${cli_probe_dir}/films.json")"
+  [[ "$film_total" -gt 0 && "$film_warnings" == '[]' ]] ||
+    fail "installed film.list did not load the film resources: ${cli_film}"
+  echo "[alcedo] Installed film resources loaded: ${film_total} catalog entries."
 fi
 rm -rf "$cli_probe_dir"
 

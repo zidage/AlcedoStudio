@@ -885,6 +885,7 @@ function(alcedo_install_film_print_resources destination)
     if("${ALCEDO_FILM_PRINT_RESOURCE_DIR}" STREQUAL "")
         return()
     endif()
+    include("${CMAKE_SOURCE_DIR}/scripts/cmake/verify_film_print_resources.cmake")
     set(_alcedo_film_print_files "")
     foreach(_alcedo_file IN ITEMS manifest.json film_stock_bundle.bin film_print_setup.bin
             film_reflectance_table.bin)
@@ -1978,6 +1979,7 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
         COMMAND "${CMAKE_SOURCE_DIR}/scripts/verify_macos_install_tree.sh"
                 --install-dir "${CMAKE_INSTALL_PREFIX}"
                 --bundle-name "${ALCEDO_MACOS_BUNDLE_NAME}"
+                --require-film-print-resources
         COMMAND "${CMAKE_CPACK_COMMAND}" --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake" -B "${CMAKE_INSTALL_PREFIX}"
         DEPENDS ${ALCEDO_MAIN_BIN}
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"

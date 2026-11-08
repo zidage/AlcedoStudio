@@ -139,6 +139,9 @@ if [[ -z "$film_print_resource_dir" ]]; then
   exit 2
 fi
 
+cmake "-DALCEDO_FILM_PRINT_RESOURCE_DIR=${film_print_resource_dir}" \
+  -P "${script_dir}/cmake/verify_film_print_resources.cmake"
+
 # publish_update.py refuses a package whose recorded commit differs from the manifest commit,
 # so a package from another checkout or from uncommitted changes cannot be published.
 packaged_commit="$(git -C "$repo_root" rev-parse HEAD)"

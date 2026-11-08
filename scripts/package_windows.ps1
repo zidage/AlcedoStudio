@@ -34,6 +34,10 @@ $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $PackageOutDir = [IO.Path]::GetFullPath($PackageOutDir)
 Set-Location -LiteralPath $repoRoot
 
+& (Join-Path $repoRoot 'scripts\msvc_env.cmd') "-DALCEDO_FILM_PRINT_RESOURCE_DIR=$FilmPrintResourceDir" `
+    -P (Join-Path $repoRoot 'scripts\cmake\verify_film_print_resources.cmake')
+if ($LASTEXITCODE -ne 0) { throw 'Input film print resource verification failed.' }
+
 function Invoke-BuildNumberState {
     param([ValidateSet('resolve','commit')][string]$Mode)
 
