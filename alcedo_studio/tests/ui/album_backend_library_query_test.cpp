@@ -9,6 +9,7 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QThread>
 #include <QTimeZone>
@@ -25,6 +26,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -831,6 +833,109 @@ TEST_F(LibraryQueryTests, AlbumQuerySqlRunsOnWorkerThread) {
 
   EXPECT_GE(observer.Operations().size(), 6u);
   EXPECT_TRUE(observer.UiThreadOperations().empty());
+}
+
+// Issue 747: the editor list check of a photo outside the loaded pages reads the position on the
+// query worker. While another thread holds the project database lock (a save, an import, or a
+// page read in progress), the request returns at once on the UI thread; the answer arrives when
+// the lock is free. 130 photos and a search, so a page holds 120 rows.
+TEST_F(LibraryQueryTests, EditorListPositionDoesNotWaitForDatabaseLockOnUiThread) {
+  ApplicationModuleHost         backend;
+  LoadedLibrary                 library;
+  std::vector<LibraryPhotoSpec> specs(130);
+  for (size_t index = 0; index < 10; ++index) {
+    specs[index].rating_ = 5;
+  }
+  ASSERT_TRUE(library.Load(temp_dir_, backend, specs));
+  auto* module = backend.library();
+  backend.search()->ApplyFuzzySearch(QStringLiteral("album-delete"));
+  ASSERT_TRUE(Settle(backend));
+  ASSERT_EQ(module->ShownCount(), 120);
+  const auto target = static_cast<uint>(library.ids()[125]);
+  ASSERT_LT(module->model().rowByElementId(target), 0);
+  WorkerHold observer(library.browse());
+
+  // A helper thread holds the database lock. It releases the lock after 30 s at the latest, so
+  // a read on the UI thread fails the test instead of hanging it.
+  auto&      database = backend.project()->handler().project()->GetStorage()->GetDatabase();
+  std::mutex hold_mutex;
+  std::condition_variable hold_changed;
+  bool                    held    = false;
+  bool                    release = false;
+  std::thread             holder([&]() {
+    auto             guard   = database.GetConnectionGuard();
+    auto             db_lock = guard.Lock();
+    std::unique_lock lock(hold_mutex);
+    held = true;
+    hold_changed.notify_all();
+    hold_changed.wait_for(lock, std::chrono::seconds(30), [&]() { return release; });
+  });
+  const auto              release_holder = [&]() {
+    {
+      std::lock_guard lock(hold_mutex);
+      release = true;
+    }
+    hold_changed.notify_all();
+    if (holder.joinable()) {
+      holder.join();
+    }
+  };
+  const std::unique_ptr<void, std::function<void(void*)>> join_holder(
+      &holder, [&](void*) { release_holder(); });
+  {
+    std::unique_lock lock(hold_mutex);
+    ASSERT_TRUE(hold_changed.wait_for(lock, std::chrono::seconds(10), [&]() { return held; }));
+  }
+
+  QSignalSpy    answers(module, &LibraryModule::editorListPositionReady);
+  QElapsedTimer timer;
+  timer.start();
+  const qulonglong request_id = module->RequestEditorListPosition(target);
+  const qint64     request_ms = timer.elapsed();
+  EXPECT_GT(request_id, 0u);
+  EXPECT_LT(request_ms, 1000);
+  ProcessEvents(200);
+  EXPECT_EQ(answers.count(), 0);  // the worker waits for the lock, the UI thread does not
+
+  release_holder();
+  ASSERT_TRUE(WaitUntil([&]() { return answers.count() == 1; }));
+  const auto args = answers.takeFirst();
+  EXPECT_EQ(args.at(0).toULongLong(), request_id);
+  EXPECT_EQ(args.at(1).toUInt(), target);
+  EXPECT_EQ(args.at(2).toLongLong(), 125);
+  // The check alone loads no page.
+  EXPECT_LT(module->model().rowByElementId(target), 0);
+
+  // A rating filter that the photo does not match: the list does not hold it.
+  backend.stats()->ToggleStatsFilter(QStringLiteral("rating"), QStringLiteral("5"));
+  ASSERT_TRUE(Settle(backend));
+  module->RequestEditorListPosition(target);
+  ASSERT_TRUE(WaitUntil([&]() { return answers.count() == 1; }));
+  EXPECT_EQ(answers.takeFirst().at(2).toLongLong(), -1);
+  EXPECT_TRUE(observer.UiThreadOperations().empty());
+}
+
+// A newer editor list request replaces an older one: only the newest request is answered.
+TEST_F(LibraryQueryTests, NewerEditorListRequestReplacesOlderOne) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto*      module = backend.library();
+  WorkerHold hold(library.browse());
+  hold.ArmNext();
+
+  QSignalSpy       answers(module, &LibraryModule::editorListPositionReady);
+  const qulonglong first = module->RequestEditorListPosition(static_cast<uint>(library.ids()[1]));
+  ASSERT_TRUE(hold.WaitHeld());
+  const qulonglong second = module->RequestEditorListPosition(static_cast<uint>(library.ids()[3]));
+  hold.Release();
+  ASSERT_TRUE(WaitUntil([&]() { return answers.count() >= 1; }));
+  ProcessEvents(100);
+  ASSERT_EQ(answers.count(), 1);
+  const auto args = answers.takeFirst();
+  EXPECT_NE(first, second);
+  EXPECT_EQ(args.at(0).toULongLong(), second);
+  EXPECT_EQ(args.at(2).toLongLong(), 3);
 }
 
 TEST_F(LibraryQueryTests, QueryFailureKeepsAcceptedContentAndRetryRepeatsTheRequest) {

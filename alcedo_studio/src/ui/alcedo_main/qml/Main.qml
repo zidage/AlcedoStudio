@@ -569,8 +569,8 @@ ApplicationWindow {
         imageActionsController.requestSaveFocusedRatingReason(reasons)
     }
 
-    function editorImageStillExists(elementId) {
-        return imageActionsController.editorImageStillExists(elementId)
+    function openLastEditorImage(elementId, imageId) {
+        imageActionsController.openLastEditorImage(elementId, imageId)
     }
 
     function firstLibraryImage() {

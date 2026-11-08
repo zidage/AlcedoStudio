@@ -31,6 +31,14 @@ Item {
     property string menuOrigin: "library"
     property bool _pendingEditorLibraryListSync: false
     property bool _pendingEditorLibraryListReveal: false
+    // The position read of the list check that runs on the query worker (0: none).
+    property real _editorListRequestId: 0
+    property int _editorListRequestElementId: 0
+    // Its answer, { elementId, row }, kept while the close waits for the save check.
+    property var _editorListAnswer: null
+    // The last photo that a return to the editor opens when the list holds it,
+    // { elementId, imageId } (see openLastEditorImage).
+    property var _pendingEditorReentry: null
     // The workspace of the previous route, to detect a return to the editor.
     property string _lastWorkspace: appModules.workspaceRouter
                                     ? String(appModules.workspaceRouter.workspace || "library")
@@ -76,6 +84,18 @@ Item {
         if (!item || Number(item.imageId) <= 0) {
             root.focusedImageTarget = ({})
             root.focusedImageInspection = ({ success: false, tiles: [] })
+            return
+        }
+        // The same photo again, for example the second click of a double-click that opens the
+        // editor: its inspection is already read, so no database read runs again. A change of
+        // the photo's data refreshes the inspection with refreshFocusedImageInspection.
+        const current = root.focusedImageTarget
+        if (root.focusedImageInspection && root.focusedImageInspection.success === true
+                && Number(current.elementId || 0) === Number(item.elementId || item.fileId)
+                && Number(current.imageId || 0) === Number(item.imageId)
+                && Number(current.folderId || 0)
+                   === Number(item.folderId || appModules.folders.currentFolderId)
+                && String(current.scopeType || "") === (item.scopeType ? String(item.scopeType) : "")) {
             return
         }
         root.focusedImageTarget = {
@@ -201,32 +221,46 @@ Item {
         }
     }
 
-    // Phase 4A-Fix: a deleted image is only "still in the library" if the
-    // current folder's thumbnail model still lists it. The check is deliberately
-    // folder-scoped (the editor filmstrip will be the current library list, so a
-    // restored image must be in view); a global existence query belongs with the
-    // Phase 5B first-frame loader.
-    function editorImageStillExists(elementId) {
-        return root.rowInCurrentLibraryList(elementId) >= 0
-    }
-
-    function rowInCurrentLibraryList(elementId) {
+    // Row of the photo among the loaded rows of the current Library list, or -1. A photo
+    // outside the loaded pages needs the position read (RequestEditorListPosition).
+    function loadedLibraryRow(elementId) {
         const target = Number(elementId || 0)
         if (target <= 0 || !appModules || !appModules.library
                 || !appModules.library.thumbnailModel) {
             return -1
         }
         const model = appModules.library.thumbnailModel
-        if (model.rowByElementId) {
-            const loaded = Number(model.rowByElementId(target))
-            if (loaded >= 0) {
-                return loaded
-            }
+        return model.rowByElementId ? Number(model.rowByElementId(target)) : -1
+    }
+
+    // Return to the editor from the toolbar with the last edited photo. The editor list check
+    // decides on the query worker whether the photo is in the current Library list: no
+    // database read runs on the GUI thread here.
+    // - The session still has the photo open, or its row is loaded: the editor shows it, and
+    //   the list check closes it when the list does not hold it.
+    // - Otherwise the editor opens with no image, and the photo opens when the list check
+    //   finds it in the list. A photo that the list does not hold is never loaded.
+    function openLastEditorImage(elementId, imageId) {
+        const router = appModules ? appModules.workspaceRouter : null
+        const lastElementId = Number(elementId || 0)
+        const lastImageId = Number(imageId || 0)
+        if (!router || lastElementId <= 0 || lastImageId <= 0) {
+            return
         }
-        if (appModules.library.IndexOfElementInCurrentView) {
-            return Number(appModules.library.IndexOfElementInCurrentView(target))
+        const session = appModules.editorSession
+        const sessionHoldsImage = session && Boolean(session.hasImage)
+                && Number(session.elementId || 0) === lastElementId
+                && Number(session.imageId || 0) === lastImageId
+        root._pendingEditorReentry = null
+        if (sessionHoldsImage || root.loadedLibraryRow(lastElementId) >= 0) {
+            router.openEditor(lastElementId, lastImageId)
+            return
         }
-        return -1
+        if (!router.openEditor(0, 0)) {
+            return
+        }
+        root._pendingEditorReentry = { elementId: lastElementId, imageId: lastImageId }
+        root.requestEditorLibraryListSync(false)
     }
 
     function firstLibraryImage() {
@@ -264,17 +298,31 @@ Item {
         if (revealOpenImage !== false) {
             root._pendingEditorLibraryListReveal = true
         }
+        // A new check: a position read or answer of an earlier check is not used.
+        root._editorListRequestId = 0
+        root._editorListAnswer = null
         Qt.callLater(root.flushEditorLibraryListSync)
     }
 
+    function finishEditorLibraryListSync() {
+        root._pendingEditorLibraryListSync = false
+        root._pendingEditorLibraryListReveal = false
+        root._editorListRequestId = 0
+        root._editorListAnswer = null
+    }
+
+    // The editor list check. It runs no database read on the GUI thread: a photo outside the
+    // loaded rows is found with a position read on the query worker
+    // (LibraryModule::RequestEditorListPosition), and the check continues when the answer
+    // arrives (onEditorListPositionReady).
     function flushEditorLibraryListSync() {
         if (!root._pendingEditorLibraryListSync) {
             return
         }
-        if (!appModules || !appModules.workspaceRouter
-                || String(appModules.workspaceRouter.workspace || "") !== "editor") {
-            root._pendingEditorLibraryListSync = false
-            root._pendingEditorLibraryListReveal = false
+        const router = appModules ? appModules.workspaceRouter : null
+        if (!router || String(router.workspace || "") !== "editor") {
+            root.finishEditorLibraryListSync()
+            root._pendingEditorReentry = null
             return
         }
         // Compare against the accepted result only: wait while a library query
@@ -289,13 +337,59 @@ Item {
         if (state === "Saving" || state === "Switching") {
             return
         }
-        if (!root.applyEditorLibraryListSync(root._pendingEditorLibraryListReveal)) {
+        // The check is about the route target, the photo that the user opened. The router
+        // publishes the route before the session runs the queued Open or Switch, so the
+        // session can still show the previous photo: wait until it has the route target.
+        const targetElementId = Number(router.elementId || 0)
+        const targetImageId = Number(router.imageId || 0)
+        if (targetElementId > 0) {
+            root._pendingEditorReentry = null
+            if (session && (Number(session.elementId || 0) !== targetElementId
+                            || Number(session.imageId || 0) !== targetImageId)) {
+                return
+            }
+        }
+        const reentry = root._pendingEditorReentry
+        const checkElementId = targetElementId > 0
+                ? targetElementId
+                : (reentry ? Number(reentry.elementId) : 0)
+        if (checkElementId <= 0) {
+            root.finishEditorLibraryListSync()
+            return
+        }
+
+        let row = root.loadedLibraryRow(checkElementId)
+        if (row < 0) {
+            const answer = root._editorListAnswer
+            if (!answer || Number(answer.elementId) !== checkElementId) {
+                if (root._editorListRequestId > 0
+                        && root._editorListRequestElementId === checkElementId) {
+                    return
+                }
+                const requestId = library && library.RequestEditorListPosition
+                        ? Number(library.RequestEditorListPosition(
+                                     checkElementId, root._pendingEditorLibraryListReveal))
+                        : 0
+                if (requestId <= 0) {
+                    root.finishEditorLibraryListSync()
+                    return
+                }
+                root._editorListRequestId = requestId
+                root._editorListRequestElementId = checkElementId
+                return
+            }
+            row = Number(answer.row)
+        }
+        const done = targetElementId > 0
+                ? root.applyEditorLibraryListSync(targetElementId, row,
+                                                  root._pendingEditorLibraryListReveal)
+                : root.applyEditorReentry(row)
+        if (!done) {
             // The close waits for the save check; a change of canSelectImage or
             // sessionState flushes again.
             return
         }
-        root._pendingEditorLibraryListSync = false
-        root._pendingEditorLibraryListReveal = false
+        root.finishEditorLibraryListSync()
     }
 
     // After collection or filter changes, the editor must follow the same
@@ -305,33 +399,26 @@ Item {
     // an image switch to no image, so it waits for the same save check as a
     // filmstrip switch (actions.canSelectImage), and the session saves the
     // image before it closes. Returns false when the close must wait.
-    function applyEditorLibraryListSync(revealOpenImage) {
-        if (!appModules || !appModules.workspaceRouter
-                || String(appModules.workspaceRouter.workspace || "") !== "editor") {
-            return true
-        }
-        const model = appModules.library ? appModules.library.thumbnailModel : null
-        if (!model) {
-            return true
-        }
-        const session = appModules.editorSession
-        const currentElementId = session ? Number(session.elementId || 0) : 0
-        if (currentElementId <= 0) {
-            return true
-        }
-        const row = root.rowInCurrentLibraryList(currentElementId)
+    // row: the row of the route target in the list, -1 when the list does not hold it, or -2
+    // when the position read failed (the image stays open).
+    function applyEditorLibraryListSync(elementId, row, revealOpenImage) {
         if (row >= 0) {
             if (revealOpenImage) {
-                const item = model.getItemAt ? model.getItemAt(row) : null
-                root.revealLibraryListImage(currentElementId, row)
-                if (item) {
+                const model = appModules.library ? appModules.library.thumbnailModel : null
+                const item = model && model.getItemAt ? model.getItemAt(row) : null
+                root.revealLibraryListImage(elementId, row)
+                if (item && Number(item.elementId || 0) === elementId) {
                     root.setFocusedImage(root.selectionItemFromThumbnailRow(item))
                 }
             }
             return true
         }
+        if (row !== -1) {
+            return true
+        }
 
-        if (session.actions && !Boolean(session.actions.canSelectImage)) {
+        const session = appModules.editorSession
+        if (session && session.actions && !Boolean(session.actions.canSelectImage)) {
             return false
         }
         if (!appModules.workspaceRouter.openEditor(0, 0)) {
@@ -339,6 +426,18 @@ Item {
             return true
         }
         root.setFocusedImage(null)
+        return true
+    }
+
+    // The return to the editor whose last photo was not open (openLastEditorImage): open it
+    // when the list holds it; otherwise the editor stays empty.
+    function applyEditorReentry(row) {
+        const reentry = root._pendingEditorReentry
+        root._pendingEditorReentry = null
+        if (reentry && row >= 0) {
+            appModules.workspaceRouter.openEditor(Number(reentry.elementId),
+                                                  Number(reentry.imageId))
+        }
         return true
     }
 
@@ -370,6 +469,14 @@ Item {
             }
             root.flushEditorLibraryListSync()
         }
+        function onEditorListPositionReady(requestId, fileId, occurrence) {
+            if (root._editorListRequestId <= 0 || Number(requestId) !== root._editorListRequestId) {
+                return
+            }
+            root._editorListRequestId = 0
+            root._editorListAnswer = { elementId: Number(fileId), row: Number(occurrence) }
+            root.flushEditorLibraryListSync()
+        }
     }
 
     Connections {
@@ -388,7 +495,10 @@ Item {
             const workspace = String(appModules.workspaceRouter.workspace || "library")
             const entered = workspace === "editor" && root._lastWorkspace !== "editor"
             root._lastWorkspace = workspace
-            if (entered) {
+            if (workspace !== "editor") {
+                root._pendingEditorReentry = null
+                root.finishEditorLibraryListSync()
+            } else if (entered) {
                 root.requestEditorLibraryListSync(false)
             }
         }

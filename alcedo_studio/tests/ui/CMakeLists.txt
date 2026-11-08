@@ -810,6 +810,39 @@ alcedo_ui_gtest_discover_tests(EditorCheckpointQmlIntegrationTest
 alcedo_register_test_target(EditorCheckpointQmlIntegrationTest ui)
 alcedo_link_quickqanava_qml(EditorCheckpointQmlIntegrationTest)
 
+# Issue 747: the Library/editor switch on Main.qml runs no database read on the UI thread,
+# and the hidden workspace keeps its size while the collections sidebar folds.
+add_executable(EditorWorkspaceSwitchQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_workspace_switch_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorWorkspaceSwitchQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorWorkspaceSwitchQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorWorkspaceSwitchQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(EditorWorkspaceSwitchQmlTest
+    TEST_PREFIX "EditorWorkspaceSwitchQmlTest."
+    PROPERTIES LABELS "workspace_qml")
+alcedo_register_test_target(EditorWorkspaceSwitchQmlTest ui)
+alcedo_link_quickqanava_qml(EditorWorkspaceSwitchQmlTest)
+
 # WorkspaceShellTest is retired: its monolithic workspace coverage accumulated
 # offscreen pointer/focus cases that cannot run reliably, so the suite is no
 # longer built or registered. Focused replacement coverage lives in the

@@ -191,9 +191,6 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
    * view is empty. Every Ctrl+A path (library, section view, editor filmstrip) calls this.
    */
   Q_INVOKABLE void SelectAllInCurrentView();
-  /// Row in the current collection + filter listing, not just the loaded page.
-  /// Returns -1 when the element is outside that listing.
-  Q_INVOKABLE int IndexOfElementInCurrentView(uint elementId);
   Q_INVOKABLE void SetThumbnailDiskCacheEnabled(bool enabled);
   Q_INVOKABLE void SetThumbnailDiskCacheRoot(const QString& rootPath);
   Q_INVOKABLE void SetThumbnailDiskCacheMaxEntries(int maxEntries);
@@ -229,6 +226,17 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   /// The occurrence arrives with FocusPositionReady (-1 when the file no longer matches).
   Q_INVOKABLE void       RequestFocusPosition(uint fileId, const QString& preferredGroupTitle = {},
                                               bool preferredGroupUnknown = false);
+  /**
+   * @brief Editor list check: find @p fileId in the accepted result on the query worker.
+   *
+   * @details The answer arrives with editorListPositionReady(requestId, fileId, occurrence):
+   * the occurrence index of the file, -1 when the accepted result does not hold it, or -2 when
+   * the read failed. With @p loadPage the page that holds the file loads when it is found. A
+   * newer request replaces an older one, and a library refresh drops a running request, so a
+   * caller sends a new request after each accepted result. While a refresh runs, the read waits
+   * for the refreshed result. Returns the request id (> 0), or 0 for @p fileId 0.
+   */
+  Q_INVOKABLE qulonglong RequestEditorListPosition(uint fileId, bool loadPage = false);
   /// Grouped-view visibility of one occurrence (see ThumbnailManager).
   Q_INVOKABLE void       SetOccurrenceThumbnailVisible(const QString& groupTitle, bool groupUnknown,
                                                        uint elementId, uint imageId, bool visible,
@@ -328,6 +336,8 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   void orderedFileIdsReady(qulonglong requestId, const QVariantList& fileIds);
   void FocusPositionReady(uint fileId, qint64 occurrence, int sectionRow);
   void focusPositionReady(uint fileId, qint64 occurrence, int sectionRow);
+  /// Answer of RequestEditorListPosition.
+  void editorListPositionReady(qulonglong requestId, uint fileId, qint64 occurrence);
   void PendingRevealChanged();
   void pendingRevealChanged();
   /// The project's last edited photo was read (see RevealLastEditedFile).
@@ -401,6 +411,8 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
                                      const std::filesystem::path& filePath) -> AlbumItem&;
   void               SetQueryError(const QString& message);
   void               RunAfterRefresh(std::function<void()> action);
+  /// Run request @p requestId of RequestEditorListPosition unless a newer one replaced it.
+  void                SubmitEditorListPosition(qulonglong requestId, uint fileId, bool loadPage);
   void                SetPendingReveal(uint fileId);
   /// Position read of @p fileId finished (@p found). Returns true when it started a second
   /// read in the root folder, so the miss is not delivered.
@@ -448,6 +460,8 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   uint                                     pending_reveal_file_id_ = 0;
   /// The pending reveal already selected the root folder after a miss.
   bool                                     reveal_scope_widened_   = false;
+  /// Id of the newest RequestEditorListPosition request.
+  qulonglong                               editor_list_request_id_ = 0;
   /// Last member: destroyed first, so no job outlives the state it posts to.
   std::unique_ptr<SearchRequestWorker> query_worker_;
 };

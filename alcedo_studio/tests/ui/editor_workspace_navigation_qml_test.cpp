@@ -70,6 +70,14 @@ ApplicationWindow {
         property int lastImageId: 7
     }
 
+    // ImageActionsController.openLastEditorImage: records the call and routes to the photo.
+    property QtObject lastImageOpener: QtObject {
+        objectName: "lastImageOpener"
+        property int callCount: 0
+        property int elementId: 0
+        property int imageId: 0
+    }
+
     property QtObject firstImageProvider: QtObject {
         objectName: "firstImageProvider"
         property int elementId: 0
@@ -92,7 +100,12 @@ ApplicationWindow {
             item.interactionPolicy = policy
             item.editorSession = editorSession
             item.navigationEnabled = true
-            item.editorImageExists = function(elementId) { return elementId !== 99 }
+            item.openLastEditorImage = function(elementId, imageId) {
+                lastImageOpener.callCount += 1
+                lastImageOpener.elementId = elementId
+                lastImageOpener.imageId = imageId
+                router.openEditor(elementId, imageId)
+            }
             item.firstEditorImage = function() {
                 if (firstImageProvider.elementId <= 0 || firstImageProvider.imageId <= 0) {
                     return null
@@ -252,31 +265,10 @@ TEST(EditorWorkspaceNavigationQmlTest, PolicyBlockDisablesBothButtonsWithoutRout
   EXPECT_EQ(router->property("editorOpenCount").toInt(), 1);
 }
 
-TEST(EditorWorkspaceNavigationQmlTest, MissingLastImageFallsBackToEmptyEditor) {
-  EditorWorkspaceNavigationQmlHarness harness;
-  ASSERT_NE(harness.window, nullptr)
-      << "root=" << (harness.root_object ? harness.root_object->metaObject()->className() : "none")
-      << " warnings=" << harness.warnings.join('\n').toStdString();
-  ASSERT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
-
-  auto* editor  = harness.button(QStringLiteral("editorNavButton"));
-  auto* session = harness.window->findChild<QObject*>(QStringLiteral("editorSession"));
-  auto* router  = harness.router();
-  ASSERT_NE(editor, nullptr);
-  ASSERT_NE(session, nullptr);
-  ASSERT_NE(router, nullptr);
-
-  session->setProperty("lastElementId", 99);
-  session->setProperty("lastImageId", 7);
-  ClickButton(editor);
-  ProcessEvents(20);
-  EXPECT_EQ(router->property("lastElementId").toInt(), 0);
-  EXPECT_EQ(router->property("lastImageId").toInt(), 0);
-}
-
-// A Library filter removed the last image: the editor opens with no image,
-// even when the filtered list has other images.
-TEST(EditorWorkspaceNavigationQmlTest, FilteredOutLastImageOpensEmptyEditorNotFirstLibraryImage) {
+// Issue 747: the last image goes to the list check (openLastEditorImage), which decides on the
+// query worker whether the Library list holds it; the toolbar runs no existence lookup. The
+// first library image does not replace a last image.
+TEST(EditorWorkspaceNavigationQmlTest, LastImageGoesToListCheckNotFirstLibraryImage) {
   EditorWorkspaceNavigationQmlHarness harness;
   ASSERT_NE(harness.window, nullptr)
       << "root=" << (harness.root_object ? harness.root_object->metaObject()->className() : "none")
@@ -296,11 +288,16 @@ TEST(EditorWorkspaceNavigationQmlTest, FilteredOutLastImageOpensEmptyEditorNotFi
   session->setProperty("lastImageId", 7);
   first->setProperty("elementId", 11);
   first->setProperty("imageId", 22);
+  auto* opener = harness.window->findChild<QObject*>(QStringLiteral("lastImageOpener"));
+  ASSERT_NE(opener, nullptr);
   ClickButton(editor);
   ProcessEvents(20);
+  EXPECT_EQ(opener->property("callCount").toInt(), 1);
+  EXPECT_EQ(opener->property("elementId").toInt(), 99);
+  EXPECT_EQ(opener->property("imageId").toInt(), 7);
   EXPECT_EQ(router->property("editorOpenCount").toInt(), 1);
-  EXPECT_EQ(router->property("lastElementId").toInt(), 0);
-  EXPECT_EQ(router->property("lastImageId").toInt(), 0);
+  EXPECT_EQ(router->property("lastElementId").toInt(), 99);
+  EXPECT_EQ(router->property("lastImageId").toInt(), 7);
 }
 
 TEST(EditorWorkspaceNavigationQmlTest, NoLastImageOpensFirstLibraryImage) {

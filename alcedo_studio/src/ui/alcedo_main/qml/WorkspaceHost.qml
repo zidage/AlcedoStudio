@@ -43,6 +43,35 @@ Item {
         }
     }
 
+    // A hidden workspace keeps its last size. Each workspace switch folds or opens the
+    // collections sidebar, and its width animation changes this host on every frame; a hidden
+    // workspace that followed it would lay out on every frame as well (grid relayout, thumbnail
+    // cache size, editor viewport metrics). The shown workspace takes the current size, once
+    // when it is shown and then on each change.
+    // The workspace is read from the router, not from libraryActive/editorActive: Main.qml
+    // folds the sidebar in its own handler of the same route change, which can run before
+    // these bindings follow the route.
+    function syncWorkspaceSizes() {
+        const workspace = root.workspaceRouter
+                ? String(root.workspaceRouter.workspace || "library")
+                : "library"
+        const shown = workspace === "editor" ? editorLoader : libraryLoader
+        shown.width = root.width
+        shown.height = root.height
+    }
+
+    onWidthChanged: root.syncWorkspaceSizes()
+    onHeightChanged: root.syncWorkspaceSizes()
+    onActiveWorkspaceChanged: root.syncWorkspaceSizes()
+    Component.onCompleted: root.syncWorkspaceSizes()
+
+    Connections {
+        target: root.workspaceRouter
+        ignoreUnknownSignals: true
+        // RouteChanged notifies the workspace property (an upper-case signal has no QML handler).
+        function onWorkspaceChanged() { root.syncWorkspaceSizes() }
+    }
+
     onLibraryActiveChanged: {
         if (libraryActive) {
             libraryRetained = true
@@ -65,7 +94,6 @@ Item {
     Loader {
         id: libraryLoader
         objectName: "libraryWorkspaceLoader"
-        anchors.fill: parent
         active: root.libraryActive || root.libraryRetained
         asynchronous: false
         visible: status === Loader.Ready && root.libraryActive
@@ -81,7 +109,6 @@ Item {
     Loader {
         id: editorLoader
         objectName: "editorWorkspaceLoader"
-        anchors.fill: parent
         active: root.editorActive || root.editorRetained
         asynchronous: false
         visible: status === Loader.Ready && root.editorActive

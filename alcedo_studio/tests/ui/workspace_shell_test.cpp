@@ -1450,7 +1450,7 @@ TEST_F(WorkspaceShellTests, WorkspaceRouteRoundTripPreservesLastEditedTarget) {
   auto loaded = LoadMainWindow();
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
-  // Seed the library model so editorImageStillExists(lastEl) resolves in-view.
+  // Seed the library model so the list check finds lastEl among the loaded rows.
   SeedLibraryThumbnails(loaded->host, 8);
   ProcessEvents(80);
 
@@ -1763,8 +1763,7 @@ TEST_F(WorkspaceShellTests, EditorCollectionChangeOpensFirstImageWhenCurrentMiss
   loaded->host.folders()->SelectFolder(album_id);
   ProcessEvents(400);
   EXPECT_EQ(loaded->host.library()->ShownCount(), 1);
-  EXPECT_EQ(loaded->host.library()->IndexOfElementInCurrentView(static_cast<uint>(first.file_id_)),
-            -1);
+  EXPECT_EQ(loaded->host.library()->model().rowByElementId(static_cast<uint>(first.file_id_)), -1);
   EXPECT_EQ(loaded->host.editor_session()->last_element_id(), static_cast<uint>(second.file_id_));
   EXPECT_EQ(loaded->host.workspace_router()->element_id(), static_cast<uint>(second.file_id_));
 
@@ -1813,7 +1812,7 @@ TEST_F(WorkspaceShellTests, EditorCollectionChangeRevealsCurrentImageWhenStillPr
   ProcessEvents(400);
   EXPECT_EQ(loaded->host.library()->ShownCount(), 2);
   const int row =
-      loaded->host.library()->IndexOfElementInCurrentView(static_cast<uint>(second.file_id_));
+      loaded->host.library()->model().rowByElementId(static_cast<uint>(second.file_id_));
   EXPECT_GE(row, 0);
   EXPECT_EQ(loaded->host.editor_session()->last_element_id(), static_cast<uint>(second.file_id_));
   EXPECT_EQ(loaded->host.workspace_router()->element_id(), static_cast<uint>(second.file_id_));
