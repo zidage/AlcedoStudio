@@ -38,7 +38,8 @@ constexpr uint64_t kPackedProjectChecksumOffset = 8 + 4 + 8 + 8;
 constexpr uint64_t kMaxPackedMetadataBytes = 256ULL * 1024ULL * 1024ULL;
 // 0.10.0 is a destructive cutover: project data stores DNG color profile
 // fingerprints instead of the profile tables, and 0.9.0 or older project
-// metadata is rejected at the versioned read boundary with no migration.
+// metadata is rejected at the versioned read boundary with no migration. 0.11.0 adds the
+// library mark columns; 0.10.0 opens and gains them (see pipeline_history_format.hpp).
 constexpr std::string_view kProjectFileVersion = ::alcedo::kProjectFileVersion;
 constexpr std::string_view kMinSupportedProjectFileVersion =
     ::alcedo::kMinSupportedProjectFileVersion;

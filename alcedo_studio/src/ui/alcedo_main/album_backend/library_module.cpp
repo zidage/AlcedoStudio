@@ -500,6 +500,17 @@ auto FilterReadsRating(const FilterNode& node) -> bool {
                      [](const FilterNode& child) { return FilterReadsRating(child); });
 }
 
+/// True when @p node reads a library mark (the raw SQL of BuildColorLabelFilter or
+/// BuildDeleteMarkFilter).
+auto FilterReadsMarks(const FilterNode& node) -> bool {
+  if (node.raw_sql_.has_value() && (node.raw_sql_->find(L"color_labels") != std::wstring::npos ||
+                                    node.raw_sql_->find(L"delete_mark") != std::wstring::npos)) {
+    return true;
+  }
+  return std::any_of(node.children_.begin(), node.children_.end(),
+                     [](const FilterNode& child) { return FilterReadsMarks(child); });
+}
+
 auto OptionsReadRating(const AlbumQueryOptions& options) -> bool {
   return options.sort_field_ == AlbumSortField::kRating ||
          options.group_field_ == AlbumGroupField::kRating;
@@ -586,8 +597,22 @@ void LibraryModule::ScheduleRefresh(RefreshKind kind) {
   QMetaObject::invokeMethod(this, [this]() { SubmitPendingRefresh(); }, Qt::QueuedConnection);
 }
 
-void LibraryModule::NoteRatingsChanged() {
-  if (!accepted_input_ || PresentationReadsRating()) {
+void LibraryModule::NoteRatingsChanged() { RefreshAfterColumnWrite(PresentationReadsRating()); }
+
+void LibraryModule::NoteMarksChanged() { RefreshAfterColumnWrite(PresentationReadsMarks()); }
+
+auto LibraryModule::PresentationReadsMarks() const -> bool {
+  if (!accepted_input_) {
+    return false;
+  }
+  const auto& stats_filter  = accepted_input_->stats_filter_;
+  const auto& search_filter = accepted_input_->search_.filter_;
+  return (stats_filter.has_value() && FilterReadsMarks(*stats_filter)) ||
+         (search_filter.has_value() && FilterReadsMarks(*search_filter));
+}
+
+void LibraryModule::RefreshAfterColumnWrite(bool reads_changed_column) {
+  if (!accepted_input_ || reads_changed_column) {
     RequestLibraryRefresh();
     return;
   }
@@ -770,6 +795,8 @@ auto LibraryModule::ItemFromRow(const AlbumQueryRow& query_row, const AlbumItem&
   item.camera_model = QString::fromUtf8(row.camera_model_.c_str());
   item.lens         = QString::fromUtf8(row.lens_.c_str());
   item.rating       = row.rating_;
+  item.color_labels = row.color_labels_;
+  item.delete_mark  = row.delete_mark_;
   item.edited_at_ns      = query_row.edited_at_ns_;
   item.edit_version_name = query_row.edited_at_ns_.has_value()
                                ? QString::fromUtf8(query_row.edit_version_name_.c_str())
@@ -1461,6 +1488,8 @@ void LibraryModule::AddOrUpdateAlbumItem(sl_element_id_t elementId, image_id_t i
         item->aperture          = static_cast<double>(exif.aperture_);
         item->focal_length      = static_cast<double>(exif.focal_);
         item->rating            = exif.rating_;
+        item->color_labels      = image->color_labels_;
+        item->delete_mark       = image->delete_mark_;
         item->is_hdr            = exif.is_hdr_;
         const QDate captureDate = DateFromExifString(exif.date_time_str_);
         if (captureDate.isValid()) {

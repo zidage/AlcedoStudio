@@ -302,6 +302,10 @@ QVariantMap InteractionPolicyController::EvaluateEditImageRatingReason(uint elem
   return ToVariantMap(Eval(InteractionCapability::EditImageRatingReason, elementId));
 }
 
+QVariantMap InteractionPolicyController::EvaluateEditImageMarks(const QVariantList& targets) const {
+  return ToVariantMap(EvalTargets(InteractionCapability::EditImageMarks, targets));
+}
+
 QVariantMap InteractionPolicyController::EvaluateDeleteImages(const QVariantList& targets) const {
   return ToVariantMap(EvalTargets(InteractionCapability::DeleteImages, targets));
 }

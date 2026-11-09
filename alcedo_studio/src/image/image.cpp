@@ -154,7 +154,9 @@ Image::Image(Image&& other)
       exif_data_(std::move(other.exif_data_)),
       image_data_(std::move(other.image_data_)),
       thumbnail_(std::move(other.thumbnail_)),
-      image_type_(other.image_type_) {}
+      image_type_(other.image_type_),
+      color_labels_(other.color_labels_),
+      delete_mark_(other.delete_mark_) {}
 
 std::wostream& operator<<(std::wostream& os, const Image& img) {
   os << "img_id: " << img.image_id_ << "\timage_path: " << img.image_path_.wstring()
@@ -249,6 +251,27 @@ void Image::SetExifDisplayMetaData(ExifDisplayMetaData&& exif_display) {
   exif_display_     = std::move(exif_display);
   has_exif_display_ = true;
   has_exif_json_    = false;
+  if (sync_state_.load() == ImageSyncState::SYNCED) {
+    sync_state_ = ImageSyncState::MODIFIED;
+  }
+}
+
+void Image::SetColorLabel(ColorLabel code, bool on) {
+  const ColorLabelMask next = WithColorLabel(color_labels_, code, on);
+  if (next == color_labels_) {
+    return;
+  }
+  color_labels_ = next;
+  if (sync_state_.load() == ImageSyncState::SYNCED) {
+    sync_state_ = ImageSyncState::MODIFIED;
+  }
+}
+
+void Image::SetDeleteMark(bool on) {
+  if (delete_mark_ == on) {
+    return;
+  }
+  delete_mark_ = on;
   if (sync_state_.load() == ImageSyncState::SYNCED) {
     sync_state_ = ImageSyncState::MODIFIED;
   }

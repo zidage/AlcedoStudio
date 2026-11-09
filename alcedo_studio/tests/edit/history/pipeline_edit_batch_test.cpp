@@ -361,7 +361,7 @@ TEST(PipelineEditBatch, TypedCommitAndChainExpectedSerializedIdentitySurvivesLeg
 /// below were read from the expected-serialized files at `aa604b0a` (G10.3), so a change to
 /// those files alone cannot hide an identity change.
 TEST(PipelineEditBatch, TypedCommitAndChainIdentityUnchangedAfterFormatCut) {
-  EXPECT_EQ(kProjectFileVersion, "0.10.0");
+  EXPECT_EQ(kProjectFileVersion, "0.11.0");
   EXPECT_EQ(kCommitFormatVersion, 5u);
   EXPECT_EQ(kChainFormatVersion, 5u);
   EXPECT_EQ(kPipelineEditBatchFormatVersion, 4u);

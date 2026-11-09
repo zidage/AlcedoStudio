@@ -36,6 +36,7 @@
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "image/color_label.hpp"
 #include "image/image.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "ui/album_backend_test_fixture.hpp"
@@ -102,6 +103,8 @@ struct LibraryPhotoSpec {
   std::optional<std::time_t> added_time_{};  ///< Element.added_time; creation time when empty.
   uint32_t                   width_  = 0;     ///< Oriented photo width; 0 is unknown.
   uint32_t                   height_ = 0;     ///< Oriented photo height; 0 is unknown.
+  ColorLabelMask             color_labels_ = 0;  ///< Library color label code bits.
+  bool                       delete_mark_  = false;
 };
 
 /// Build a packed project with one synthetic DNG image (no real pixels, no GPU),
@@ -158,6 +161,8 @@ inline auto CreatePopulatedPackedProject(
     metadata.width_         = spec.width_;
     metadata.height_        = spec.height_;
     image->SetExifDisplayMetaData(std::move(metadata));
+    image->color_labels_ = spec.color_labels_;
+    image->delete_mark_  = spec.delete_mark_;
 
     auto file = project->GetSleeveService()->Write<std::shared_ptr<SleeveFile>>(
         [image, &spec](FileSystem& fs) -> std::shared_ptr<SleeveFile> {

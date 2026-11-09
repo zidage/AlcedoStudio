@@ -82,6 +82,7 @@ void Database::InitializeDB() {
   if (!initialized_) {
     RunDdl(guard.conn_, init_table_query);
   }
+  RunDdl(guard.conn_, image_marks_migration_query);
   RunDdl(guard.conn_, semantic_table_query);
   RunDdl(guard.conn_, semantic_migration_query);
   RunDdl(guard.conn_, ai_annotation_table_query);

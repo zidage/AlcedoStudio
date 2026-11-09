@@ -14,6 +14,7 @@
 #include <type/type.hpp>
 
 #include "decoders/processor/raw_color_context.hpp"
+#include "image/color_label.hpp"
 #include "image/image_buffer.hpp"
 #include "image/metadata.hpp"
 #include "image/raster_color_description.hpp"
@@ -59,6 +60,11 @@ class Image {
 
   p_hash_t                    checksum_;
 
+  /// Library marks (#768), stored in `Image.color_labels` and `Image.delete_mark`. Change them
+  /// with SetColorLabel and SetDeleteMark, under the image pool write lock.
+  ColorLabelMask              color_labels_ = 0;
+  bool                        delete_mark_  = false;
+
   std::atomic<bool>           has_full_img_;
   std::atomic<bool>           has_thumb_;
   std::atomic<bool>           has_exif_;
@@ -88,6 +94,10 @@ class Image {
   void                  SetId(image_id_t image_id);
   void                  SetExifDisplayMetaData(ExifDisplayMetaData&& exif_display);
   void                  SetHdrDisplayMetadata(bool is_hdr);
+  /// Set (@p on) or clear @p code; the other codes stay. A change marks the image MODIFIED.
+  void                  SetColorLabel(ColorLabel code, bool on);
+  /// Set or clear the Delete mark. A change marks the image MODIFIED.
+  void                  SetDeleteMark(bool on);
   void                  SetRawColorContext(RawRuntimeColorContext&& ctx);
   auto                  GetRawColorContext() const -> const RawRuntimeColorContext&;
   auto                  HasRawColorContext() const -> bool;

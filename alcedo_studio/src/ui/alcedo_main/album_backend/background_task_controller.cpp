@@ -314,6 +314,8 @@ auto BackgroundTaskController::KindToString(BackgroundTaskKind kind) -> QString 
       return QStringLiteral("adjustmentPaste");
     case BackgroundTaskKind::RatingUpdate:
       return QStringLiteral("ratingUpdate");
+    case BackgroundTaskKind::LibraryMarkUpdate:
+      return QStringLiteral("libraryMarkUpdate");
     case BackgroundTaskKind::ImageDelete:
       return QStringLiteral("imageDelete");
     case BackgroundTaskKind::AgentControl:
@@ -361,6 +363,8 @@ auto BackgroundTaskController::CapabilityToString(InteractionCapability capabili
       return QStringLiteral("editImageRating");
     case InteractionCapability::EditImageRatingReason:
       return QStringLiteral("editImageRatingReason");
+    case InteractionCapability::EditImageMarks:
+      return QStringLiteral("editImageMarks");
     case InteractionCapability::ChangeSemanticModel:
       return QStringLiteral("changeSemanticModel");
     case InteractionCapability::RunSemanticGeneration:

@@ -21,10 +21,10 @@ namespace alcedo {
 /**
  * @brief One Image row (see the `Image` table in database.hpp).
  *
- * The first five fields are the stored Image. The other fields are search columns that
- * ImageMapper::ToParams derives from the Image on every insert and update (see
- * image_search_columns.hpp). Library search, library stats, and the thumbnail filter read
- * these columns instead of the metadata JSON. FromParams ignores them.
+ * The first five fields and the last two (the library marks) are the stored Image. The other
+ * fields are search columns that ImageMapper::ToParams derives from the Image on every insert and
+ * update (see image_search_columns.hpp). Library search, library stats, and the thumbnail filter
+ * read these columns instead of the metadata JSON. FromParams ignores them.
  */
 struct ImageMapperParams {
   image_id_t                   id;
@@ -48,6 +48,9 @@ struct ImageMapperParams {
   std::string                  file_search_text_;
   std::string                  exif_search_text_;
   std::string                  exif_search_words_;
+  /// Library marks (#768): stored state of the Image, read back by FromParams.
+  int32_t                      color_labels_ = 0;
+  bool                         delete_mark_  = false;
 };
 
 /**
@@ -57,7 +60,7 @@ class ImageMapper
     : public Mapper<ImageMapper, std::shared_ptr<Image>, ImageMapperParams, image_id_t>,
       public FieldReflectable<ImageMapper> {
  private:
-  static constexpr uint32_t                                         field_count_      = 20;
+  static constexpr uint32_t                                         field_count_      = 22;
   static constexpr const char*                                      table_name_       = "Image";
   static constexpr const char*                                      prime_key_clause_ = "id={}";
   // Order matches the `Image` table DDL, because duckorm select reads `SELECT *`.
@@ -81,7 +84,9 @@ class ImageMapper
       FIELD_AS(ImageMapperParams, pixel_count_, "pixel_count", NULLABLE_INT64),
       FIELD_AS(ImageMapperParams, file_search_text_, "file_search_text", STRING),
       FIELD_AS(ImageMapperParams, exif_search_text_, "exif_search_text", STRING),
-      FIELD_AS(ImageMapperParams, exif_search_words_, "exif_search_words", STRING)};
+      FIELD_AS(ImageMapperParams, exif_search_words_, "exif_search_words", STRING),
+      FIELD_AS(ImageMapperParams, color_labels_, "color_labels", INT32),
+      FIELD_AS(ImageMapperParams, delete_mark_, "delete_mark", BOOLEAN)};
 
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> ImageMapperParams;

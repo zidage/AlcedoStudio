@@ -21,6 +21,7 @@
 #include <variant>
 #include <vector>
 
+#include "image/color_label.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
@@ -91,12 +92,14 @@ auto RunScalarInt64(duckdb_connection conn, const std::string& sql,
 // BuildScopedFileQuery (`e` Element, `fi` FileImage, `i` Image).
 constexpr const char* kSearchResultColumns =
     "e.id, fi.image_id, i.file_name, i.camera_model, i.lens, "
-    "CAST(i.capture_date AS VARCHAR), i.rating, CAST(epoch(e.added_time) AS BIGINT)";
-constexpr idx_t       kSearchResultColumnCount = 8;
+    "CAST(i.capture_date AS VARCHAR), i.rating, CAST(epoch(e.added_time) AS BIGINT), "
+    "i.color_labels, i.delete_mark";
+constexpr idx_t       kSearchResultColumnCount = 10;
 // The same columns read from the match set table (alias `s`).
 constexpr const char* kMatchSetResultColumns =
     "s.file_id, s.image_id, s.file_name, s.camera_model, s.lens, "
-    "CAST(s.capture_date AS VARCHAR), s.rating, CAST(epoch(s.added_time) AS BIGINT)";
+    "CAST(s.capture_date AS VARCHAR), s.rating, CAST(epoch(s.added_time) AS BIGINT), "
+    "s.color_labels, s.delete_mark";
 
 auto            ReadVarchar(duckdb_result* result, idx_t column, idx_t row) -> std::string {
   std::string value;
@@ -123,6 +126,9 @@ auto ReadSearchResultRow(duckdb_result* result, idx_t row) -> SearchResultRow {
   if (!duckdb_value_is_null(result, 7, row)) {
     out.added_time_ = duckdb_value_int64(result, 7, row);
   }
+  out.color_labels_ =
+      static_cast<ColorLabelMask>(duckdb_value_uint8(result, 8, row)) & kColorLabelMaskAll;
+  out.delete_mark_ = duckdb_value_boolean(result, 9, row);
   return out;
 }
 
@@ -160,7 +166,8 @@ class MatchSetTable {
     namespace expr = duckorm::expr;
     const std::vector<duckorm::SqlFragment> projection{
         expr::raw("e.id AS file_id, fi.image_id, i.file_name, i.camera_model, i.lens, "
-                  "i.capture_date, i.capture_at, i.rating, e.added_time"),
+                  "i.capture_date, i.capture_at, i.rating, e.added_time, i.color_labels, "
+                  "i.delete_mark"),
         duckorm::clause::as(album_sql::ImportDayColumn(import_day_time_zone), "import_day"),
         duckorm::clause::as(expr::raw(scope.joins_relevance_ ? "CAST(rel.relevance AS DOUBLE)"
                                                              : "CAST(NULL AS DOUBLE)"),
@@ -255,6 +262,25 @@ void ReadMatchSetBuckets(duckdb_connection conn, FolderStatsView& out, bool read
   duckdb_destroy_result(&result);
 }
 
+/// Photos of each color label code and photos with the Delete mark in the match set, in one scan.
+/// A photo counts once for each code it holds.
+void ReadMatchSetMarkCounts(duckdb_connection conn, FolderStatsView& out) {
+  std::string sql = "SELECT ";
+  for (int code = 0; code < kColorLabelCount; ++code) {
+    sql += std::format("COALESCE(SUM((color_labels >> {}) & 1), 0), ", code);
+  }
+  sql += std::format("COUNT_IF(delete_mark) FROM {}", kMatchSetTable);
+  duckdb_result result;
+  ExecuteQueryOrThrow(conn, sql, {}, &result);
+  for (int code = 0; code < kColorLabelCount; ++code) {
+    out.color_label_counts_[static_cast<size_t>(code)] =
+        static_cast<int>(duckdb_value_int64(&result, static_cast<idx_t>(code), 0));
+  }
+  out.delete_mark_count_ =
+      static_cast<int>(duckdb_value_int64(&result, static_cast<idx_t>(kColorLabelCount), 0));
+  duckdb_destroy_result(&result);
+}
+
 /// Semantic label buckets of the match set for the active model: files for each canonical
 /// label key (the same relation as the label group), by count descending, then by key.
 auto ReadMatchSetLabelBuckets(duckdb_connection conn, const std::string& active_semantic_model_key)
@@ -291,6 +317,7 @@ auto ReadMatchSet(duckdb_connection conn, sl_element_id_t folder_id,
 
   FolderStatsView     out;
   ReadMatchSetBuckets(conn, out, false);
+  ReadMatchSetMarkCounts(conn, out);
   if (!active_semantic_model_key.empty()) {
     out.label_stats_ = ReadMatchSetLabelBuckets(conn, active_semantic_model_key);
   }
@@ -461,6 +488,7 @@ auto ReadAlbumQueryFromMatchSet(duckdb_connection conn, const AlbumQueryOptions&
   if (read.read_statistics_) {
     FolderStatsView statistics;
     ReadMatchSetBuckets(conn, statistics, !options.local_day_time_zone_.empty());
+    ReadMatchSetMarkCounts(conn, statistics);
     if (!active_semantic_model_key.empty()) {
       statistics.label_stats_ = ReadMatchSetLabelBuckets(conn, active_semantic_model_key);
     }

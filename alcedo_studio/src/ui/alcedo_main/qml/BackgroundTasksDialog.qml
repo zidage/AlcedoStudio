@@ -120,6 +120,7 @@ Dialog {
         if (kind === "export") return qsTr("Export")
         if (kind === "adjustmentPaste") return qsTr("Paste Adjustments")
         if (kind === "ratingUpdate") return qsTr("Ratings")
+        if (kind === "libraryMarkUpdate") return qsTr("Labels and Marks")
         if (kind === "imageDelete") return qsTr("Delete Images")
         if (kind === "agentControl") return qsTr("Agent")
         return qsTr("Task")

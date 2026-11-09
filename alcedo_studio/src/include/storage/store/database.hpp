@@ -47,7 +47,11 @@ class Database {
       "pixel_count BIGINT,"
       "file_search_text VARCHAR NOT NULL DEFAULT '',"
       "exif_search_text VARCHAR NOT NULL DEFAULT '',"
-      "exif_search_words VARCHAR NOT NULL DEFAULT '');"
+      "exif_search_words VARCHAR NOT NULL DEFAULT '',"
+      // Library marks (#768): color label code bits (bit k = ColorLabel k) and the Delete mark.
+      // Last, in the order image_marks_migration_query appends them to older databases.
+      "color_labels UTINYINT NOT NULL DEFAULT 0,"
+      "delete_mark BOOLEAN NOT NULL DEFAULT FALSE);"
       "CREATE TABLE SleeveRoot (id BIGINT PRIMARY KEY);"
       "CREATE TABLE Element (id BIGINT PRIMARY KEY, type INTEGER, element_name TEXT, added_time "
       "TIMESTAMP, modified_time "
@@ -93,6 +97,14 @@ class Database {
       "root_id VARCHAR PRIMARY KEY,"
       "element_id BIGINT UNIQUE NOT NULL,"
       "serialized_pipeline_state JSON NOT NULL);";
+
+  // Project file 0.10.0 databases have no library mark columns (#768). ADD COLUMN appends them
+  // after exif_search_words, the order of init_table_query, and fills every row with the
+  // default. DuckDB adds no NOT NULL constraint to an existing table; ImageMapper always writes a
+  // value.
+  constexpr static const char* image_marks_migration_query =
+      "ALTER TABLE Image ADD COLUMN IF NOT EXISTS color_labels UTINYINT DEFAULT 0;"
+      "ALTER TABLE Image ADD COLUMN IF NOT EXISTS delete_mark BOOLEAN DEFAULT FALSE;";
 
   constexpr static const char* semantic_table_query =
       "CREATE TABLE IF NOT EXISTS SemanticModel ("

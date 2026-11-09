@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -13,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "image/color_label.hpp"
 #include "sleeve/album_query.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
@@ -41,6 +43,9 @@ struct FolderStatsView {
   /// Local import-day buckets (`YYYY-MM-DD`; an empty label for no import time). Read only by
   /// ElementStore::ReadAlbumQuery when the options name an import-day time zone.
   std::vector<StorageStatsBucket> import_date_stats_{};
+  /// Photos of each color label code (index = ColorLabel), and photos with the Delete mark.
+  std::array<int, kColorLabelCount> color_label_counts_{};
+  int                               delete_mark_count_ = 0;
 };
 
 /**
@@ -91,6 +96,8 @@ struct SearchResultRow {
   std::string     lens_{};          ///< Empty when unknown.
   std::string     capture_date_{};  ///< `YYYY-MM-DD`; empty when unknown.
   int             rating_ = 0;
+  ColorLabelMask  color_labels_ = 0;      ///< `Image.color_labels`.
+  bool            delete_mark_  = false;  ///< `Image.delete_mark`.
   /// `Element.added_time` (the file's import time, stored as UTC) as Unix seconds; empty when
   /// the row has no import time.
   std::optional<int64_t> added_time_{};

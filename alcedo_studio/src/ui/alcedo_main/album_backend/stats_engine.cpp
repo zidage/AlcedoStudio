@@ -125,6 +125,8 @@ void StatsEngine::ClearStats() {
   label_stats_.clear();
   rating_stats_.clear();
   import_date_stats_.clear();
+  color_label_counts_.clear();
+  delete_mark_count_ = 0;
   total_photo_count_ = 0;
   emit StatsChanged();
 }
@@ -141,6 +143,12 @@ void StatsEngine::ApplyFolderStats(const AlbumStatsView& stats, bool emit_change
   label_stats_       = ToStatsRows(stats.label_stats_, true, true);
   rating_stats_      = ToStatsRows(stats.rating_stats_);
   import_date_stats_ = ToStatsRows(stats.import_date_stats_);
+  color_label_counts_.clear();
+  color_label_counts_.reserve(kColorLabelCount);
+  for (const int count : stats.color_label_counts_) {
+    color_label_counts_.push_back(count);
+  }
+  delete_mark_count_ = stats.delete_mark_count_;
   if (emit_changed) {
     emit StatsChanged();
   }
@@ -167,6 +175,8 @@ auto StatsEngine::MakeThumbMap(const AlbumItem& image, int index) const -> QVari
       {"captureDate",
        image.capture_date.isValid() ? image.capture_date.toString("yyyy-MM-dd") : "--"},
       {"rating", image.rating},
+      {"colorLabels", static_cast<int>(image.color_labels)},
+      {"deleteMark", image.delete_mark},
       {"tags", image.tags},
       {"accent", image.accent.isEmpty() ? album_util::AccentForIndex(static_cast<size_t>(index))
                                         : image.accent},
@@ -202,6 +212,15 @@ void StatsEngine::ToggleFilter(const QString& category, const QString& label) {
     filter_rating_ = (filter_rating_ == label) ? QString{} : label;
   } else if (category == u"import") {
     filter_import_date_ = (filter_import_date_ == label) ? QString{} : label;
+  } else if (category == u"colorLabel") {
+    bool       ok   = false;
+    const auto code = ColorLabelFromIndex(label.toInt(&ok));
+    if (!ok || !code.has_value()) {
+      return;
+    }
+    filter_color_label_ = filter_color_label_ == code ? std::optional<ColorLabel>{} : code;
+  } else if (category == u"deleted") {
+    filter_delete_mark_ = !filter_delete_mark_;
   }
 }
 
@@ -212,11 +231,14 @@ void StatsEngine::ClearFilters() {
   filter_label_.clear();
   filter_rating_.clear();
   filter_import_date_.clear();
+  filter_color_label_.reset();
+  filter_delete_mark_ = false;
 }
 
 bool StatsEngine::HasActiveFilter() const {
   return !filter_date_.isEmpty() || !filter_camera_.isEmpty() || !filter_lens_.isEmpty() ||
-         !filter_label_.isEmpty() || !filter_rating_.isEmpty() || !filter_import_date_.isEmpty();
+         !filter_label_.isEmpty() || !filter_rating_.isEmpty() || !filter_import_date_.isEmpty() ||
+         filter_color_label_.has_value() || filter_delete_mark_;
 }
 
 auto StatsEngine::BuildStatsFilterNode() const -> std::optional<FilterNode> {
@@ -258,6 +280,14 @@ auto StatsEngine::BuildStatsFilterNode() const -> std::optional<FilterNode> {
       children.push_back(sleeve_filter::BuildImportDateBucketFilter(
           filter_import_date_.toStdWString(), CurrentLocalDayTimeZone()));
     }
+  }
+
+  if (filter_color_label_.has_value()) {
+    children.push_back(sleeve_filter::BuildColorLabelFilter(*filter_color_label_));
+  }
+
+  if (filter_delete_mark_) {
+    children.push_back(sleeve_filter::BuildDeleteMarkFilter());
   }
 
   if (children.empty()) {
@@ -304,6 +334,15 @@ bool StatsEngine::MatchesActiveFilters(const AlbumItem& image) const {
     bool ok        = false;
     int  filterVal = filter_rating_.toInt(&ok);
     if (ok && image.rating != filterVal) return false;
+  }
+
+  if (filter_color_label_.has_value() &&
+      !HasColorLabel(image.color_labels, *filter_color_label_)) {
+    return false;
+  }
+
+  if (filter_delete_mark_ && !image.delete_mark) {
+    return false;
   }
 
   return true;
