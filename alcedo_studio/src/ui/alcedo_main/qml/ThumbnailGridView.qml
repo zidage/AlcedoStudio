@@ -70,6 +70,12 @@ Item {
     // their new cells; they slide from their old viewport positions instead.
     property var _changeCapture: null
     property bool _changeLayoutAnimating: false
+    // True while the view width follows the collections sidebar fold. The cards take their new
+    // cells directly (a spring per card restarted on every frame), and the thumbnail cache size
+    // waits for the final size.
+    property bool geometryAnimating: false
+    // Calls of LibraryModule::SetThumbnailCacheHint; read by tests.
+    property int cacheHintUpdateCount: 0
     // When more cards than this appear or disappear in the view, the change is shown without
     // animation; the scroll anchor stays.
     readonly property int changeAnimationLimit: 48
@@ -180,6 +186,13 @@ Item {
     onHeightChanged: {
         root.clampContentY()
         root.updateCacheHint()
+    }
+    // The fold ends: one cache size for the final size. A relayout queued by the last frame
+    // sets it when it runs (finishRelayoutAndClamp).
+    onGeometryAnimatingChanged: {
+        if (!geometryAnimating && !relayoutAndClampTimer.running) {
+            root.updateCacheHint()
+        }
     }
 
     function modelCount() {
@@ -593,7 +606,7 @@ Item {
     }
 
     function updateCacheHint() {
-        if (thumbnailBindingSuspended) {
+        if (thumbnailBindingSuspended || geometryAnimating) {
             return
         }
         if (grid.width <= 0 || grid.cellWidth <= 0 || grid.cellHeight <= 0) {
@@ -601,6 +614,7 @@ Item {
         }
         const cols = effectiveColumnCount()
         const rows = Math.max(1, Math.ceil(grid.height / grid.cellHeight))
+        root.cacheHintUpdateCount += 1
         appModules.library.SetThumbnailCacheHint(cols * rows, root.desiredMaxEdge)
     }
 
@@ -1185,10 +1199,12 @@ Item {
             Behavior on border.width { NumberAnimation { duration: 150 } }
             Behavior on x {
                 enabled: !root._zoomLayoutAnimating && !root._changeLayoutAnimating
+                         && !root.geometryAnimating
                 SpringAnimation { spring: 2.5; damping: 0.42; epsilon: 0.25 }
             }
             Behavior on y {
                 enabled: !root._zoomLayoutAnimating && !root._changeLayoutAnimating
+                         && !root.geometryAnimating
                 SpringAnimation { spring: 2.5; damping: 0.42; epsilon: 0.25 }
             }
             opacity: zoomOpacity
@@ -1300,12 +1316,11 @@ Item {
                     border.width: root.columns >= 11 ? 1 : 2
                     border.color: appTheme.dividerColor
                 }
-                BusyIndicator {
+                ThumbnailLoadingSpinner {
                     anchors.centerIn: parent
                     width: 28
                     height: 28
                     visible: thumbnailLoadingState
-                    running: visible
                 }
                 Image {
                     id: thumbImage

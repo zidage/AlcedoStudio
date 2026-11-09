@@ -25,8 +25,19 @@ ApplicationWindow {
     property bool collectionsSidebarExpanded: true
     property bool collectionsSidebarUserAdjusted: false
     property bool collectionsWorkspaceObservationReady: false
-    property real collectionsSidebarGap: collectionsSidebarExpanded
-                                                 ? appTheme.spaceMd : 0
+    // How far the collections sidebar is open: 0 folded, 1 open. One animation drives the slide
+    // and the fade of the sidebar and the left edge of the workspace (issue 751). Only
+    // setCollectionsSidebarExpanded writes it; it starts open, as collectionsSidebarExpanded.
+    property real collectionsSidebarReveal: 1.0
+    // The width of the open sidebar and its gap to the workspace.
+    readonly property real collectionsSidebarOpenExtent: appTheme.collectionsSidebarWidth
+                                                         + appTheme.spaceMd
+    // The left edge of the workspace: the shown part of the sidebar and its gap.
+    readonly property real collectionsSidebarExtent: collectionsSidebarReveal
+                                                     * collectionsSidebarOpenExtent
+    // True while a manual toggle folds or opens the sidebar. The shown workspace follows the
+    // sidebar edge on every frame and defers the work that only its final size needs.
+    readonly property bool collectionsSidebarFolding: collectionsSidebarFoldAnimation.running
     property bool editorAdjustmentStackExpanded: true
     // Luminance/Hue Range section of the Mask panel (#605): collapsed at the start of the session;
     // the user's choice survives the editor Loader.
@@ -139,14 +150,43 @@ ApplicationWindow {
 
     function toggleCollectionsSidebar() {
         root.collectionsSidebarUserAdjusted = true
-        root.collectionsSidebarExpanded = !root.collectionsSidebarExpanded
+        root.setCollectionsSidebarExpanded(!root.collectionsSidebarExpanded, true)
     }
 
-    function applyDefaultCollectionsSidebarForWorkspace() {
-        if (root.collectionsSidebarUserAdjusted) {
+    // Opens or folds the collections sidebar. @p animated slides it over the fold duration;
+    // otherwise the sidebar and the workspace edge take the new state at once, and a running
+    // fold stops at its end.
+    function setCollectionsSidebarExpanded(expanded, animated) {
+        root.collectionsSidebarExpanded = expanded
+        const target = expanded ? 1.0 : 0.0
+        if (!animated || appTheme.reduceMotion) {
+            collectionsSidebarFoldAnimation.stop()
+            root.collectionsSidebarReveal = target
             return
         }
-        root.collectionsSidebarExpanded = root.activeWorkspace === "library"
+        if (collectionsSidebarFoldAnimation.running
+                && collectionsSidebarFoldAnimation.to === target) {
+            return
+        }
+        collectionsSidebarFoldAnimation.stop()
+        if (root.collectionsSidebarReveal === target) {
+            return
+        }
+        collectionsSidebarFoldAnimation.from = root.collectionsSidebarReveal
+        collectionsSidebarFoldAnimation.to = target
+        collectionsSidebarFoldAnimation.duration = expanded ? appTheme.motionFoldOpenMs
+                                                            : appTheme.motionFoldCloseMs
+        collectionsSidebarFoldAnimation.start()
+    }
+
+    // A workspace switch replaces the whole content: the sidebar state of the new workspace
+    // applies at once, and the workspace fades in at its final size (WorkspaceHost). The user's
+    // own choice stays, and a fold in progress ends at once.
+    function applyDefaultCollectionsSidebarForWorkspace(workspace) {
+        const expanded = root.collectionsSidebarUserAdjusted
+                ? root.collectionsSidebarExpanded
+                : workspace === "library"
+        root.setCollectionsSidebarExpanded(expanded, false)
     }
 
     function toggleActiveRightSidebar() {
@@ -157,21 +197,11 @@ ApplicationWindow {
         root.libraryInspectorVisible = !root.libraryInspectorVisible
     }
 
-    onActiveWorkspaceChanged: {
-        if (!root.collectionsWorkspaceObservationReady) {
-            return
-        }
-        root.applyDefaultCollectionsSidebarForWorkspace()
-    }
-
-    Behavior on collectionsSidebarGap {
-        NumberAnimation {
-            duration: appTheme.reduceMotion ? 0
-                      : (root.collectionsSidebarExpanded
-                         ? appTheme.motionFoldOpenMs
-                         : appTheme.motionFoldCloseMs)
-            easing.type: appTheme.motionEasing
-        }
+    NumberAnimation {
+        id: collectionsSidebarFoldAnimation
+        target: root
+        property: "collectionsSidebarReveal"
+        easing.type: appTheme.motionEasing
     }
 
     function nauticalButtonFill(enabled, hovered, pressed) {
@@ -569,8 +599,8 @@ ApplicationWindow {
         imageActionsController.requestSaveFocusedRatingReason(reasons)
     }
 
-    function editorImageStillExists(elementId) {
-        return imageActionsController.editorImageStillExists(elementId)
+    function openLastEditorImage(elementId, imageId) {
+        imageActionsController.openLastEditorImage(elementId, imageId)
     }
 
     function firstLibraryImage() {
@@ -636,56 +666,54 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
-            CollectionsPanel {
-                id: collectionsSidebar
+            // The shown part of the sidebar and its gap. The panel keeps its full width and
+            // slides inside this clip, so its folder list and text never reflow during a fold.
+            Item {
+                id: collectionsSidebarSlot
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                width: root.collectionsSidebarExpanded ? appTheme.collectionsSidebarWidth : 0
-                opacity: root.collectionsSidebarExpanded ? 1.0 : 0.0
-                enabled: root.collectionsSidebarExpanded
-                folderController: appModules.folders
-                theme: root
-                host: root
-                backendInteractive: root.backendInteractive
-                onImportRequested: root.importDialog.open()
-                onImportFromFolderRequested: root.importFolderDialog.open()
-                onSearchRequested: root.globalSearchDialog.openFromCollection()
-                onBackgroundTasksRequested: root.openBackgroundTasksDialog()
+                width: root.collectionsSidebarExtent
+                clip: true
+                visible: root.collectionsSidebarReveal > 0
 
-                Behavior on width {
-                    NumberAnimation {
-                        duration: appTheme.reduceMotion ? 0
-                                  : (root.collectionsSidebarExpanded
-                                     ? appTheme.motionFoldOpenMs
-                                     : appTheme.motionFoldCloseMs)
-                        easing.type: appTheme.motionEasing
-                    }
-                }
-                Behavior on opacity {
-                    NumberAnimation {
-                        duration: appTheme.reduceMotion ? 0 : appTheme.motionFadeMs
-                        easing.type: appTheme.motionEasing
-                    }
+                CollectionsPanel {
+                    id: collectionsSidebar
+                    objectName: "collectionsSidebar"
+                    x: collectionsSidebarSlot.width - root.collectionsSidebarOpenExtent
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    opacity: root.collectionsSidebarReveal
+                    enabled: root.collectionsSidebarExpanded
+                    folderController: appModules.folders
+                    theme: root
+                    host: root
+                    backendInteractive: root.backendInteractive
+                    onImportRequested: root.importDialog.open()
+                    onImportFromFolderRequested: root.importFolderDialog.open()
+                    onSearchRequested: root.globalSearchDialog.openFromCollection()
+                    onBackgroundTasksRequested: root.openBackgroundTasksDialog()
                 }
             }
 
-            ColumnLayout {
-                anchors.left: collectionsSidebar.right
+            // Anchored, not in a layout: the host width follows the sidebar edge in the same
+            // event, so a workspace switch sizes the shown workspace once (WorkspaceHost).
+            WorkspaceHost {
+                id: workspaceHost
+                objectName: "workspaceHost"
+                anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                anchors.leftMargin: root.collectionsSidebarGap
-                spacing: appTheme.spaceMd
-
-                WorkspaceHost {
-                    id: workspaceHost
-                    objectName: "workspaceHost"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    theme: root
-                    host: root
-                    workspaceRouter: appModules.workspaceRouter
+                anchors.leftMargin: root.collectionsSidebarExtent
+                theme: root
+                host: root
+                workspaceRouter: appModules.workspaceRouter
+                geometryAnimating: root.collectionsSidebarFolding
+                onWorkspaceShowing: function(workspace) {
+                    if (root.collectionsWorkspaceObservationReady) {
+                        root.applyDefaultCollectionsSidebarForWorkspace(workspace)
+                    }
                 }
             }
         }

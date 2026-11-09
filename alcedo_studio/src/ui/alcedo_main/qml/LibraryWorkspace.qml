@@ -82,6 +82,8 @@ Item {
                                             && contentViewLoader.item.desiredMaxEdge !== undefined
                                             ? contentViewLoader.item.desiredMaxEdge : 0
     property int gridZoomLevel: defaultGridZoomLevel
+    // True while the workspace width follows the collections sidebar fold (WorkspaceHost).
+    property bool geometryAnimating: false
     property bool _viewStateReady: false
     property real libraryGridRevealOpacity: 1
     property real libraryGridRevealShift: 0
@@ -679,6 +681,7 @@ RowLayout {
             objectName: "libraryThumbnailGridView"
             zoomLevel: root.gridZoomLevel
             zoomAdjusting: zoomSlider.pressed
+            geometryAnimating: root.geometryAnimating
             onZoomLevelChanged: root.gridZoomLevel = zoomLevel
             onContentYChanged: {
                 if (host) {

@@ -22,6 +22,7 @@
 #include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
 
 namespace alcedo::ui::test {
@@ -266,7 +267,19 @@ TEST_F(DeleteTests, AddToAlbumThenDeleteFromAlbum_KeepsRootFile) {
   (void)image_id;
 }
 
-TEST_F(DeleteTests, IndexOfElementInCurrentViewFollowsCollectionMembership) {
+/// The editor list check of @p fileId (LibraryModule::RequestEditorListPosition): the
+/// occurrence that the query worker answers, or -3 when no answer arrives.
+auto EditorListPosition(ApplicationModuleHost& backend, uint fileId) -> qint64 {
+  QSignalSpy       answers(backend.library(), &LibraryModule::editorListPositionReady);
+  const qulonglong request_id = backend.library()->RequestEditorListPosition(fileId);
+  if (request_id == 0 || !WaitUntil([&]() { return answers.count() > 0; })) {
+    return -3;
+  }
+  const auto args = answers.takeFirst();
+  return args.at(0).toULongLong() == request_id ? args.at(2).toLongLong() : -3;
+}
+
+TEST_F(DeleteTests, EditorListPositionFollowsCollectionMembership) {
   const auto populated = CreatePopulatedPackedProject(temp_dir_, {}, 2);
   ASSERT_TRUE(populated.has_value());
   ASSERT_EQ(populated->images_.size(), 2u);
@@ -278,8 +291,8 @@ TEST_F(DeleteTests, IndexOfElementInCurrentViewFollowsCollectionMembership) {
 
   const auto first_id  = static_cast<uint>(populated->images_[0].file_id_);
   const auto second_id = static_cast<uint>(populated->images_[1].file_id_);
-  EXPECT_GE(backend.library()->IndexOfElementInCurrentView(first_id), 0);
-  EXPECT_GE(backend.library()->IndexOfElementInCurrentView(second_id), 0);
+  EXPECT_GE(EditorListPosition(backend, first_id), 0);
+  EXPECT_GE(EditorListPosition(backend, second_id), 0);
 
   backend.folders()->CreateFolder("AlbumOnlySecond");
   ProcessEvents(500);
@@ -295,13 +308,13 @@ TEST_F(DeleteTests, IndexOfElementInCurrentViewFollowsCollectionMembership) {
   backend.folders()->SelectFolder(album_ui_id);
   ProcessEvents(500);
   ASSERT_EQ(backend.library()->ShownCount(), 1);
-  EXPECT_EQ(backend.library()->IndexOfElementInCurrentView(second_id), 0);
-  EXPECT_EQ(backend.library()->IndexOfElementInCurrentView(first_id), -1);
+  EXPECT_EQ(EditorListPosition(backend, second_id), 0);
+  EXPECT_EQ(EditorListPosition(backend, first_id), -1);
 
   backend.folders()->SelectFolder(0);
   ProcessEvents(500);
-  EXPECT_GE(backend.library()->IndexOfElementInCurrentView(first_id), 0);
-  EXPECT_GE(backend.library()->IndexOfElementInCurrentView(second_id), 0);
+  EXPECT_GE(EditorListPosition(backend, first_id), 0);
+  EXPECT_GE(EditorListPosition(backend, second_id), 0);
 }
 
 TEST_F(DeleteTests, AddToAlbumTwiceIsIdempotent) {

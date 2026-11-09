@@ -269,36 +269,6 @@ void LibraryModule::SelectAllInCurrentView() {
   });
 }
 
-int LibraryModule::IndexOfElementInCurrentView(uint elementId) {
-  if (elementId == 0) {
-    return -1;
-  }
-  const int loaded = thumbnail_model_.rowByElementId(elementId);
-  if (loaded >= 0) {
-    return loaded;
-  }
-  const auto input = AcceptedReadInput({});
-  if (!input) {
-    return -1;
-  }
-  // The editor restore asks synchronously whether a file is still in the list. One scalar
-  // position read answers it; the page that holds the file then loads on the worker.
-  try {
-    const auto position = input->browse_->ReadAlbumFilePosition(
-        input->folder_id_, MergeFilterNodes(input->stats_filter_, input->search_.filter_),
-        input->options_, input->active_model_key_, static_cast<sl_element_id_t>(elementId),
-        std::nullopt, RelevanceSelectOf(*input, input->search_.semantic_query_));
-    if (!position.has_value()) {
-      return -1;
-    }
-    LoadThumbnailsThroughIndex(static_cast<int>(position->occurrence_index_));
-    return static_cast<int>(position->occurrence_index_);
-  } catch (const std::exception& e) {
-    SetQueryError(QString::fromUtf8(e.what()));
-    return -1;
-  }
-}
-
 // ── Q_INVOKABLE: Project I/O ────────────────────────────────────────────────
 
 
@@ -682,6 +652,7 @@ void LibraryModule::SubmitPendingRefresh() {
     query_worker_->Invalidate(SearchRequestKind::kApply);
     query_worker_->Invalidate(SearchRequestKind::kLibraryPage);
     query_worker_->Invalidate(SearchRequestKind::kLibraryIds);
+    query_worker_->Invalidate(SearchRequestKind::kEditorList);
     query_worker_->Invalidate(SearchRequestKind::kSelectAll);
     query_worker_->Invalidate(SearchRequestKind::kStatistics);
     ResetThumbnailWindow();
@@ -752,6 +723,9 @@ void LibraryModule::SubmitPendingRefresh() {
   // rows stay as they are until this refresh publishes: no page read runs meanwhile
   // (refresh_in_flight_), so an in-place change is planned against the state it changes.
   query_worker_->Invalidate(SearchRequestKind::kLibraryPage);
+  // An editor list check of the old result is dropped; the check asks again after this
+  // refresh is accepted.
+  query_worker_->Invalidate(SearchRequestKind::kEditorList);
   page_in_flight_                                    = false;
   std::shared_ptr<const LibraryQueryInput> submitted = input;
   query_worker_->Submit(
@@ -1343,6 +1317,76 @@ void LibraryModule::RequestFocusPosition(uint fileId, const QString& preferredGr
           const int row = section_model_.RowForOccurrence(occurrence);
           emit      FocusPositionReady(fileId, occurrence, row);
           emit      focusPositionReady(fileId, occurrence, row);
+        },
+        Qt::QueuedConnection);
+  });
+}
+
+auto LibraryModule::RequestEditorListPosition(uint fileId, bool loadPage) -> qulonglong {
+  if (fileId == 0) {
+    return 0;
+  }
+  const qulonglong request_id = ++editor_list_request_id_;
+  SubmitEditorListPosition(request_id, fileId, loadPage);
+  return request_id;
+}
+
+void LibraryModule::SubmitEditorListPosition(qulonglong requestId, uint fileId, bool loadPage) {
+  if (requestId != editor_list_request_id_) {
+    return;
+  }
+  if (refresh_in_flight_) {
+    RunAfterRefresh([this, requestId, fileId, loadPage]() {
+      SubmitEditorListPosition(requestId, fileId, loadPage);
+    });
+    return;
+  }
+  auto input = AcceptedReadInput({});
+  if (!input) {
+    // No accepted result: the list holds no file. Answer on the next event, like a read.
+    QMetaObject::invokeMethod(
+        this,
+        [this, requestId, fileId]() {
+          if (requestId == editor_list_request_id_) {
+            emit editorListPositionReady(requestId, fileId, -1);
+          }
+        },
+        Qt::QueuedConnection);
+    return;
+  }
+  query_worker_->Submit(SearchRequestKind::kEditorList, [this, input, requestId, fileId,
+                                                         loadPage](std::uint64_t generation) {
+    std::optional<AlbumFilePosition> position;
+    QString                          error;
+    try {
+      position = input->browse_->ReadAlbumFilePosition(
+          input->folder_id_, MergeFilterNodes(input->stats_filter_, input->search_.filter_),
+          input->options_, input->active_model_key_, static_cast<sl_element_id_t>(fileId),
+          std::nullopt, RelevanceSelectOf(*input, input->search_.semantic_query_));
+    } catch (const std::exception& e) {
+      error = QString::fromUtf8(e.what());
+    }
+    QMetaObject::invokeMethod(
+        this,
+        [this, generation, requestId, fileId, loadPage, position, error]() {
+          if (!query_worker_->IsCurrent(SearchRequestKind::kEditorList, generation) ||
+              requestId != editor_list_request_id_) {
+            return;
+          }
+          if (!error.isEmpty()) {
+            SetQueryError(error);
+            emit editorListPositionReady(requestId, fileId, -2);
+            return;
+          }
+          if (!position.has_value()) {
+            emit editorListPositionReady(requestId, fileId, -1);
+            return;
+          }
+          const auto occurrence = position->occurrence_index_;
+          if (loadPage) {
+            LoadThumbnailsThroughIndex(static_cast<int>(occurrence));
+          }
+          emit editorListPositionReady(requestId, fileId, occurrence);
         },
         Qt::QueuedConnection);
   });

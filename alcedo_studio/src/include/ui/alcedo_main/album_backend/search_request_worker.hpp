@@ -25,6 +25,7 @@ enum class SearchRequestKind : std::uint8_t {
   kPrewarm      = 5,  ///< Sidecar start and neutral text embedding before the first search.
   kStatistics   = 6,  ///< Statistics of the accepted library query, with no photo rows.
   kFolderCounts = 7,  ///< Photo count of every folder for the Collections tree.
+  kEditorList   = 8,  ///< Position read of the editor's open photo (editor list check).
 };
 
 /// One worker thread that runs search requests in submit order with latest-wins coalescing.
@@ -81,7 +82,7 @@ class SearchRequestWorker {
   std::condition_variable      wake_;
   std::deque<PendingRequest>   pending_{};
   std::condition_variable      idle_;
-  std::array<std::uint64_t, 8> newest_generation_{};
+  std::array<std::uint64_t, 9> newest_generation_{};
   std::uint64_t                last_generation_ = 0;
   bool                         stopping_        = false;
   bool                         running_         = false;

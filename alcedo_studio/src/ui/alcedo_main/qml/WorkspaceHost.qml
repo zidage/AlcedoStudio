@@ -12,6 +12,10 @@ Item {
     property var theme: null
     property var host: null
     property var workspaceRouter: appModules.workspaceRouter
+    // True while the host width follows an animation (the manual fold of the collections
+    // sidebar). The shown workspace follows the width on every frame and defers the work that
+    // only its final size needs (thumbnail cache size, editor render size).
+    property bool geometryAnimating: false
 
     readonly property string activeWorkspace: workspaceRouter
                                               ? String(workspaceRouter.workspace || "library")
@@ -35,12 +39,87 @@ Item {
     property int libraryDestroyCount: 0
     property int editorCreateCount: 0
     property int editorDestroyCount: 0
+    readonly property bool revealRunning: revealAnimation.running
+
+    // The workspace that this host sizes; "" before the first sync.
+    property string _shownWorkspace: ""
+    // Horizontal travel of the fade-in after a switch, toward the side of the toolbar button
+    // (the editor comes from the right, the Library from the left).
+    readonly property real revealTravel: 10
+
+    // The router has published a new workspace. Main.qml applies the collections sidebar
+    // state of @p workspace at once in its handler, so the host width is final before the
+    // shown workspace is sized.
+    signal workspaceShowing(string workspace)
 
     function focusActiveWorkspace() {
         const item = root.libraryActive ? libraryLoader.item : editorLoader.item
         if (item && item.forceActiveFocus) {
             item.forceActiveFocus()
         }
+    }
+
+    function routerWorkspace() {
+        return root.workspaceRouter ? String(root.workspaceRouter.workspace || "library")
+                                    : "library"
+    }
+
+    // Sizes the shown workspace. A hidden workspace keeps its last size: a manual fold of the
+    // collections sidebar changes this host on every frame, and a hidden workspace that
+    // followed it would lay out on every frame as well (grid relayout, thumbnail cache size,
+    // editor viewport metrics).
+    // The workspace is read from the router, not from libraryActive/editorActive, so that the
+    // first handler of a route change sees it. On a switch, workspaceShowing runs first: the
+    // sidebar takes its new state, the host width changes in the same call (anchors), and the
+    // shown workspace takes its final width once. It then fades in.
+    function syncWorkspaceSizes() {
+        const workspace = root.routerWorkspace()
+        if (workspace === root._shownWorkspace) {
+            root.sizeShownWorkspace()
+            return
+        }
+        const switched = root._shownWorkspace.length > 0
+        root._shownWorkspace = workspace
+        root.workspaceShowing(workspace)
+        root.sizeShownWorkspace()
+        if (switched) {
+            root.revealShownWorkspace()
+        }
+    }
+
+    function sizeShownWorkspace() {
+        const shown = root._shownWorkspace === "editor" ? editorLoader : libraryLoader
+        shown.width = root.width
+        shown.height = root.height
+    }
+
+    // The new workspace fades in at its final size with a short slide. Its layout does not
+    // change: only opacity and x move.
+    function revealShownWorkspace() {
+        revealAnimation.stop()
+        libraryLoader.opacity = 1
+        libraryLoader.x = 0
+        editorLoader.opacity = 1
+        editorLoader.x = 0
+        if (appTheme.reduceMotion) {
+            return
+        }
+        const editor = root._shownWorkspace === "editor"
+        revealAnimation.target = editor ? editorLoader : libraryLoader
+        revealAnimation.fromX = editor ? root.revealTravel : -root.revealTravel
+        revealAnimation.start()
+    }
+
+    onWidthChanged: root.syncWorkspaceSizes()
+    onHeightChanged: root.syncWorkspaceSizes()
+    onActiveWorkspaceChanged: root.syncWorkspaceSizes()
+    Component.onCompleted: root.syncWorkspaceSizes()
+
+    Connections {
+        target: root.workspaceRouter
+        ignoreUnknownSignals: true
+        // RouteChanged notifies the workspace property (an upper-case signal has no QML handler).
+        function onWorkspaceChanged() { root.syncWorkspaceSizes() }
     }
 
     onLibraryActiveChanged: {
@@ -56,6 +135,28 @@ Item {
         }
     }
 
+    ParallelAnimation {
+        id: revealAnimation
+        property Item target: null
+        property real fromX: 0
+        NumberAnimation {
+            target: revealAnimation.target
+            property: "opacity"
+            from: 0
+            to: 1
+            duration: appTheme.motionFadeMs
+            easing.type: appTheme.motionEasing
+        }
+        NumberAnimation {
+            target: revealAnimation.target
+            property: "x"
+            from: revealAnimation.fromX
+            to: 0
+            duration: appTheme.motionFadeMs
+            easing.type: appTheme.motionEasing
+        }
+    }
+
     // Lazy-load / retain rules:
     // - First visit creates the tree (synchronous so tests and first paint see it).
     // - Later switches keep the inactive tree and only hide it.
@@ -65,7 +166,6 @@ Item {
     Loader {
         id: libraryLoader
         objectName: "libraryWorkspaceLoader"
-        anchors.fill: parent
         active: root.libraryActive || root.libraryRetained
         asynchronous: false
         visible: status === Loader.Ready && root.libraryActive
@@ -81,7 +181,6 @@ Item {
     Loader {
         id: editorLoader
         objectName: "editorWorkspaceLoader"
-        anchors.fill: parent
         active: root.editorActive || root.editorRetained
         asynchronous: false
         visible: status === Loader.Ready && root.editorActive
@@ -99,6 +198,7 @@ Item {
         LibraryWorkspace {
             theme: root.theme
             host: root.host
+            geometryAnimating: root.geometryAnimating && root.libraryActive
             Component.onCompleted: root.libraryCreateCount += 1
             Component.onDestruction: root.libraryDestroyCount += 1
         }
@@ -112,6 +212,7 @@ Item {
             workspaceRouter: root.workspaceRouter
             editorSession: appModules.editorSession
             blurSource: root.host ? root.host.dialogBlurSource : null
+            geometryAnimating: root.geometryAnimating && root.editorActive
             Component.onCompleted: root.editorCreateCount += 1
             Component.onDestruction: root.editorDestroyCount += 1
         }

@@ -76,7 +76,7 @@ Rectangle {
             workspaceRouter: appModules.workspaceRouter
             interactionPolicy: appModules.interactionPolicy
             editorSession: appModules.editorSession
-            editorImageExists: root.host ? root.host.editorImageStillExists : null
+            openLastEditorImage: root.host ? root.host.openLastEditorImage : null
             firstEditorImage: root.host ? root.host.firstLibraryImage : null
             navigationEnabled: appModules.project.serviceReady
         }
