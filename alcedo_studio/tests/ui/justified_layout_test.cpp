@@ -4,14 +4,16 @@
 
 // Justified-rows Library layout (issue 745): the row geometry of JustifiedRowLayout, the window
 // of JustifiedLayoutModel over an AlbumThumbnailModel, and the stored layout choice of
-// LibraryViewPreferences.
+// LibraryViewPreferences. Also the color label names of LibraryViewPreferences (issue 770).
 
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QStringList>
 #include <QTemporaryDir>
+#include <QTranslator>
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -22,6 +24,7 @@
 #include "ui/alcedo_main/album_backend/justified_layout_model.hpp"
 #include "ui/alcedo_main/album_backend/justified_row_layout.hpp"
 #include "ui/alcedo_main/album_backend/library_view_preferences.hpp"
+#include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -365,6 +368,103 @@ TEST_F(LibraryViewPreferencesTest, UnknownGridLayoutIsRejectedAndUnknownStoredVa
   QSettings{}.setValue("library/gridLayout", QStringLiteral("masonry"));
   LibraryViewPreferences reread;
   EXPECT_EQ(reread.grid_layout(), QStringLiteral("classic"));
+}
+
+// ── Color label names (#770) ────────────────────────────────────────────────
+
+auto ColorNames() -> QStringList {
+  return {QStringLiteral("Red"),    QStringLiteral("Orange"), QStringLiteral("Yellow"),
+          QStringLiteral("Green"),  QStringLiteral("Blue"),   QStringLiteral("Purple"),
+          QStringLiteral("Gray")};
+}
+
+/// Translates the color names of LibraryViewPreferences, like an installed language catalog.
+class ColorNameTranslator final : public QTranslator {
+ public:
+  auto translate(const char* context, const char* source_text, const char* disambiguation,
+                 int n) const -> QString override {
+    Q_UNUSED(disambiguation);
+    Q_UNUSED(n);
+    if (QLatin1String(context) == QLatin1String("alcedo::ui::LibraryViewPreferences") &&
+        QLatin1String(source_text) == QLatin1String("Red")) {
+      return QStringLiteral("红色");
+    }
+    return {};
+  }
+  [[nodiscard]] auto isEmpty() const -> bool override { return false; }
+};
+
+TEST_F(LibraryViewPreferencesTest, ColorLabelNamesDefaultToTheColorNames) {
+  LibraryViewPreferences preferences;
+  EXPECT_EQ(preferences.color_label_names(), ColorNames());
+  EXPECT_EQ(preferences.color_label_default_names(), ColorNames());
+  EXPECT_EQ(preferences.color_label_user_names(), QStringList(7, QString()));
+}
+
+TEST_F(LibraryViewPreferencesTest, ColorLabelNameIsStoredAndReadByANewInstance) {
+  LibraryViewPreferences first;
+  QSignalSpy changed(&first, &LibraryViewPreferences::colorLabelNamesChanged);
+  EXPECT_TRUE(first.SetColorLabelName(0, QStringLiteral("  Client picks  ")));
+  EXPECT_EQ(changed.count(), 1);
+  EXPECT_TRUE(first.SetColorLabelName(0, QStringLiteral("Client picks")));
+  EXPECT_EQ(changed.count(), 1);
+  EXPECT_EQ(first.color_label_names().at(0), QStringLiteral("Client picks"));
+  EXPECT_EQ(first.color_label_user_names().at(0), QStringLiteral("Client picks"));
+  EXPECT_EQ(QSettings{}.value("library/colorLabels/0/name").toString(),
+            QStringLiteral("Client picks"));
+
+  LibraryViewPreferences second;
+  QStringList            expected = ColorNames();
+  expected[0]                     = QStringLiteral("Client picks");
+  EXPECT_EQ(second.color_label_names(), expected);
+}
+
+TEST_F(LibraryViewPreferencesTest, EmptyColorLabelNameReturnsTheColorName) {
+  QSettings{}.setValue("library/colorLabels/3/name", QStringLiteral("Portfolio"));
+  LibraryViewPreferences preferences;
+  EXPECT_EQ(preferences.color_label_names().at(3), QStringLiteral("Portfolio"));
+
+  QSignalSpy changed(&preferences, &LibraryViewPreferences::colorLabelNamesChanged);
+  EXPECT_TRUE(preferences.SetColorLabelName(3, QStringLiteral("   ")));
+  EXPECT_EQ(changed.count(), 1);
+  EXPECT_EQ(preferences.color_label_names(), ColorNames());
+  EXPECT_TRUE(preferences.color_label_user_names().at(3).isEmpty());
+  EXPECT_FALSE(QSettings{}.contains("library/colorLabels/3/name"));
+
+  // A blank stored name also reads as the color name.
+  QSettings{}.setValue("library/colorLabels/5/name", QStringLiteral(" "));
+  LibraryViewPreferences reread;
+  EXPECT_EQ(reread.color_label_names(), ColorNames());
+}
+
+TEST_F(LibraryViewPreferencesTest, ColorLabelNameOutsideTheCodesIsRejectedAndLongNamesAreCut) {
+  LibraryViewPreferences preferences;
+  QSignalSpy changed(&preferences, &LibraryViewPreferences::colorLabelNamesChanged);
+  EXPECT_FALSE(preferences.SetColorLabelName(-1, QStringLiteral("x")));
+  EXPECT_FALSE(preferences.SetColorLabelName(7, QStringLiteral("x")));
+  EXPECT_EQ(changed.count(), 0);
+  EXPECT_EQ(preferences.color_label_names(), ColorNames());
+
+  EXPECT_TRUE(preferences.SetColorLabelName(6, QString(60, QLatin1Char('a'))));
+  EXPECT_EQ(preferences.color_label_names().at(6).size(),
+            LibraryViewPreferences::kColorLabelNameMaxLength);
+}
+
+TEST_F(LibraryViewPreferencesTest, DefaultColorLabelNamesFollowTheLanguage) {
+  LibraryViewPreferences preferences;
+  ASSERT_TRUE(preferences.SetColorLabelName(1, QStringLiteral("Client picks")));
+  QSignalSpy changed(&preferences, &LibraryViewPreferences::colorLabelNamesChanged);
+
+  ColorNameTranslator translator;
+  ASSERT_TRUE(QCoreApplication::installTranslator(&translator));
+  i18n::TranslationNotifier::Instance().NotifyLanguageChanged();
+  EXPECT_EQ(changed.count(), 1);
+  EXPECT_EQ(preferences.color_label_names().at(0), QStringLiteral("红色"));
+  EXPECT_EQ(preferences.color_label_default_names().at(0), QStringLiteral("红色"));
+  EXPECT_EQ(preferences.color_label_names().at(1), QStringLiteral("Client picks"));
+
+  ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
+  EXPECT_EQ(preferences.color_label_names().at(0), QStringLiteral("Red"));
 }
 
 }  // namespace

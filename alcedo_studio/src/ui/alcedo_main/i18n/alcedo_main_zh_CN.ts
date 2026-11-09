@@ -7316,6 +7316,10 @@ Create a new layer above it and draw the Mask there?</source>
 <context>
     <name>SettingDialog</name>
     <message>
+        <source>Color Labels</source>
+        <translation>颜色标签</translation>
+    </message>
+    <message>
         <location filename="../qml/SettingDialog.qml" line="+1"/>
         <source>LUTs</source>
         <translation>LUT</translation>
@@ -9119,6 +9123,44 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>All</source>
         <translation>全部</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::LibraryViewPreferences</name>
+    <message>
+        <source>Red</source>
+        <translation>红色</translation>
+    </message>
+    <message>
+        <source>Orange</source>
+        <translation>橙色</translation>
+    </message>
+    <message>
+        <source>Yellow</source>
+        <translation>黄色</translation>
+    </message>
+    <message>
+        <source>Green</source>
+        <translation>绿色</translation>
+    </message>
+    <message>
+        <source>Blue</source>
+        <translation>蓝色</translation>
+    </message>
+    <message>
+        <source>Purple</source>
+        <translation>紫色</translation>
+    </message>
+    <message>
+        <source>Gray</source>
+        <translation>灰色</translation>
+    </message>
+</context>
+<context>
+    <name>ColorLabelNamesEditor</name>
+    <message>
+        <source>Reset %1</source>
+        <translation>重置 %1</translation>
     </message>
 </context>
 </TS>

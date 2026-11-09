@@ -42,6 +42,8 @@ Dialog {
     property string pendingAcceleratorBackend: appModules.project.acceleratorBackend
     property string pendingLockedNodeMaskAction: appModules.editorBehavior.lockedNodeMaskAction
     property string pendingLibraryGridLayout: appModules.libraryView.gridLayout
+    // User names of the seven color label codes; an empty entry keeps the color name.
+    property var pendingColorLabelNames: Array.from(appModules.libraryView.colorLabelUserNames)
     property int requestedCategory: 0
     // Category indices used by callers outside this dialog.
     readonly property int updatesCategory: 6
@@ -101,7 +103,14 @@ Dialog {
         pendingAcceleratorBackend = appModules.project.acceleratorBackend
         pendingLockedNodeMaskAction = appModules.editorBehavior.lockedNodeMaskAction
         pendingLibraryGridLayout = appModules.libraryView.gridLayout
+        pendingColorLabelNames = Array.from(appModules.libraryView.colorLabelUserNames)
         cachePanel.reloadPending()
+    }
+
+    function setPendingColorLabelName(code, name) {
+        const names = pendingColorLabelNames.slice()
+        names[code] = name
+        pendingColorLabelNames = names
     }
 
     function acceleratorIndexForValue(value) {
@@ -209,6 +218,13 @@ Dialog {
         }
         if (appModules.libraryView.gridLayout !== pendingLibraryGridLayout) {
             appModules.libraryView.setGridLayout(pendingLibraryGridLayout)
+        }
+        const storedColorLabelNames = appModules.libraryView.colorLabelUserNames
+        for (let code = 0; code < pendingColorLabelNames.length; ++code) {
+            const pendingName = String(pendingColorLabelNames[code] || "").trim()
+            if (pendingName !== storedColorLabelNames[code]) {
+                appModules.libraryView.SetColorLabelName(code, pendingName)
+            }
         }
         cachePanel.applyPending()
         if (appModules.semanticGeneration.importPreference !== pendingSemanticImportPreference) {
@@ -692,6 +708,36 @@ Dialog {
                                             font.pixelSize: 12
                                             font.weight: 500
                                             lineHeight: 1.25
+                                        }
+
+                                        RowLayout {
+                                            objectName: "settingsColorLabelsRow"
+                                            Layout.fillWidth: true
+                                            Layout.topMargin: 8
+                                            spacing: 16
+
+                                            Label {
+                                                Layout.preferredWidth: 160
+                                                Layout.alignment: Qt.AlignTop
+                                                Layout.topMargin: 8
+                                                text: qsTr("Color Labels")
+                                                color: dialog.textColor
+                                                font.pixelSize: 15
+                                                font.weight: 600
+                                                wrapMode: Text.Wrap
+                                            }
+
+                                            ColorLabelNamesEditor {
+                                                objectName: "settingsColorLabelNames"
+                                                Layout.fillWidth: true
+                                                Layout.maximumWidth: 520
+                                                userNames: dialog.pendingColorLabelNames
+                                                defaultNames: appModules.libraryView.colorLabelDefaultNames
+                                                maximumNameLength: 40
+                                                onNameEdited: function(code, name) {
+                                                    dialog.setPendingColorLabelName(code, name)
+                                                }
+                                            }
                                         }
                                     }
                                 }

@@ -257,6 +257,8 @@ class AppTheme final : public QObject {
   // AI Mask tool input markers on the photograph (SM9): fixed in every theme, like the tint.
   Q_PROPERTY(QColor aiMaskInputAddColor READ aiMaskInputAddColor CONSTANT)
   Q_PROPERTY(QColor aiMaskInputSubtractColor READ aiMaskInputSubtractColor CONSTANT)
+  // Library color label codes 0 Red ... 6 Gray (#768): fixed in every theme, in code order.
+  Q_PROPERTY(QVariantList colorLabelColors READ colorLabelColors CONSTANT)
   Q_PROPERTY(QColor dateGraphLevel0Color READ dateGraphLevel0Color NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dateGraphLevel1Color READ dateGraphLevel1Color NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dateGraphLevel2Color READ dateGraphLevel2Color NOTIFY ThemeChanged)
@@ -495,6 +497,7 @@ class AppTheme final : public QObject {
   auto maskCoverageTintOpacity() const -> qreal;
   auto aiMaskInputAddColor() const -> QColor;
   auto aiMaskInputSubtractColor() const -> QColor;
+  auto colorLabelColors() const -> QVariantList;
   auto dateGraphLevel0Color() const -> QColor;
   auto dateGraphLevel1Color() const -> QColor;
   auto dateGraphLevel2Color() const -> QColor;
