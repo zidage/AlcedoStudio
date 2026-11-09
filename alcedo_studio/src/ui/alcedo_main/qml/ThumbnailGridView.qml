@@ -46,8 +46,9 @@ Item {
     // keeps the first shown photo at the top.
     property bool _layoutJustified: false
     readonly property bool justified: _layoutJustified
-    // The Flickable of the shown layout.
-    readonly property Flickable view: _layoutJustified ? justifiedView : grid
+    // The scrolled view of the shown layout: the GridView, or the justified-rows item with the
+    // same contentX, contentY, originY, and contentHeight properties.
+    readonly property Item view: _layoutJustified ? justifiedView : grid
     readonly property Item inputOverlay: overlay
 
     // ── Zoom control ──
@@ -127,6 +128,9 @@ Item {
     signal imageFocused(var item, int index)
     signal contextMenuRequested(var item, real sceneX, real sceneY)
     signal zoomChanged(int zoomLevel)
+    // Ctrl+wheel asks the owner for a zoom level, so an owner binding of zoomLevel stays. The
+    // view sets zoomLevel itself only when the owner did not.
+    signal zoomLevelRequested(int zoomLevel)
 
     function semanticTagTitle(rawTag) {
         const normalized = rawTag === undefined || rawTag === null
@@ -240,12 +244,19 @@ Item {
         root.clampContentY()
         root.updateCacheHint()
     }
-    // The fold ends: one cache size for the final size. A relayout queued by the last frame
-    // sets it when it runs (finishRelayoutAndClamp).
+    // The fold ends: one relayout and one cache size for the final size, at once. A relayout
+    // queued by the last frame is cancelled, so the cache size is set exactly once and before
+    // the next event.
     onGeometryAnimatingChanged: {
-        if (!geometryAnimating && !relayoutAndClampTimer.running) {
-            root.updateCacheHint()
+        if (geometryAnimating) {
+            return
         }
+        relayoutAndClampTimer.stop()
+        if (!_layoutJustified) {
+            grid.forceLayout()
+        }
+        root.clampContentY()
+        root.updateCacheHint()
     }
 
     function modelCount() {
@@ -673,7 +684,10 @@ Item {
         }
         _zoomFocusY = focusViewportY === undefined ? -1 : Math.max(0, focusViewportY)
         _zoomFocusX = focusViewportX === undefined ? -1 : Math.max(0, focusViewportX)
-        zoomLevel = clamped
+        root.zoomLevelRequested(clamped)
+        if (zoomLevel !== clamped) {
+            zoomLevel = clamped
+        }
     }
 
     // The drawn viewport rectangle and the thumbnail of each created card, by element id.
@@ -1217,26 +1231,37 @@ Item {
         viewportHeight: justifiedView.height
     }
 
-    Flickable {
+    // A plain item with the scroll properties of a Flickable, not a Flickable: the view takes no
+    // flick input, and a Flickable moves contentY back into its bounds by itself when the content
+    // height changes, after the zoom transition has set the anchored position.
+    Item {
         id: justifiedView
         objectName: "thumbnailGridView_justified"
         z: 0
         anchors.fill: parent
         visible: root._layoutJustified
         clip: true
-        interactive: false
-        boundsBehavior: Flickable.StopAtBounds
-        contentWidth: width
-        contentHeight: justifiedModel.contentHeight
+        property real contentX: 0
+        property real contentY: 0
+        readonly property real originY: 0
+        readonly property real contentHeight: justifiedModel.contentHeight
         onContentYChanged: root.maybeLoadMoreThumbnails()
 
-        Repeater {
-            id: justifiedRepeater
-            model: justifiedModel
-            delegate: JustifiedThumbnailTile {
-                view: root
+        Item {
+            id: justifiedContent
+            x: -justifiedView.contentX
+            y: -justifiedView.contentY
+            width: justifiedView.width
+            height: justifiedView.contentHeight
+
+            Repeater {
+                id: justifiedRepeater
+                model: justifiedModel
+                delegate: JustifiedThumbnailTile {
+                    view: root
+                }
+                onCountChanged: root.maybeLoadMoreThumbnails()
             }
-            onCountChanged: root.maybeLoadMoreThumbnails()
         }
     }
 

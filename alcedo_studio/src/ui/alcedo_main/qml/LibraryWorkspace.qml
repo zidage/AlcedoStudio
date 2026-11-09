@@ -680,6 +680,8 @@ RowLayout {
         ThumbnailGridView {
             objectName: "libraryThumbnailGridView"
             zoomLevel: root.gridZoomLevel
+            // Ctrl+wheel: the grid asks for the level, so the zoomLevel binding stays.
+            onZoomLevelRequested: function(level) { root.gridZoomLevel = level }
             zoomAdjusting: zoomSlider.pressed
             geometryAnimating: root.geometryAnimating
             onZoomLevelChanged: root.gridZoomLevel = zoomLevel

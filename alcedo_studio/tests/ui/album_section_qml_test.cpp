@@ -1525,4 +1525,95 @@ TEST_F(AlbumSectionQmlTests, JustifiedRowsFillTheWidthFollowTheAspectRatioAndRat
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
 }
 
+
+namespace {
+
+/// Shown photo delegates (classic cards and justified tiles) by element id.
+auto ShownPhotoItems(QQuickItem* root) -> std::map<uint, QQuickItem*> {
+  std::vector<QQuickItem*> items;
+  CollectItems(
+      root,
+      [](QQuickItem* item) {
+        const auto name = item->objectName();
+        return item->isVisible() && (name == QStringLiteral("thumbnailGridView_firstCard") ||
+                                     name.startsWith(QStringLiteral("thumbnailGridView_card_")) ||
+                                     name.startsWith(QStringLiteral("thumbnailGridView_tile_")));
+      },
+      items);
+  std::map<uint, QQuickItem*> out;
+  for (auto* item : items) {
+    out[item->property("elementId").toUInt()] = item;
+  }
+  return out;
+}
+
+/// Zoom steps from the slider (the view centre is the focus) deep in a long result: after each
+/// step and its settle timers, the photo nearest the view centre is drawn with the same point
+/// (the centre, or the nearest edge when the centre is in a gap) at the same viewport height.
+void ExpectSliderZoomKeepsTheCentrePhoto(ApplicationModuleHost& backend, const char* layout,
+                                         const std::filesystem::path& dir) {
+  UseTestSettings(dir);
+  ASSERT_TRUE(backend.library_view()->setGridLayout(QString::fromLatin1(layout)));
+  const auto packed = CreatePopulatedPackedProject(dir, {}, 0, MixedSizePhotoSpecs(600));
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* shown_view = qobject_cast<QQuickItem*>(view.Find(
+      std::string(layout) == "justified" ? "thumbnailGridView_justified" : "thumbnailGridView_grid"));
+  ASSERT_NE(shown_view, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() { return ShownPhotoItems(shown_view).size() > 6; }));
+  ProcessEvents(500);
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "restoreContentY", Q_ARG(QVariant, 6000.0)));
+  ProcessEvents(500);
+
+  const QPointF centre(shown_view->width() / 2.0, shown_view->height() / 2.0);
+  for (const int level : {3, 2, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4}) {
+    // The photo that the view anchors: the photo nearest the centre.
+    QVariant focus_index;
+    ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "nearestCardIndexAt",
+                                          Q_RETURN_ARG(QVariant, focus_index),
+                                          Q_ARG(QVariant, centre.x()), Q_ARG(QVariant, centre.y())));
+    uint   focus_id = 0;
+    double fraction = 0.0;
+    double anchor_y = 0.0;  // Viewport height of the anchored point of that photo.
+    for (const auto& [id, item] : ShownPhotoItems(shown_view)) {
+      if (item->property("cardIndex").toInt() != focus_index.toInt()) {
+        continue;
+      }
+      const auto rect = DrawnRect(item, shown_view);
+      focus_id        = id;
+      fraction        = std::clamp((centre.y() - rect.top()) / rect.height(), 0.0, 1.0);
+      anchor_y        = rect.top() + fraction * rect.height();
+    }
+    ASSERT_NE(focus_id, 0U) << layout << " level " << level << ": no photo at the centre";
+    view.loaded()->setProperty("zoomLevel", level);
+    ProcessEvents(900);
+    const auto items = ShownPhotoItems(shown_view);
+    const auto it    = items.find(focus_id);
+    ASSERT_NE(it, items.end()) << layout << " level " << level << ": the centre photo left";
+    const auto rect = DrawnRect(it->second, shown_view);
+    EXPECT_NEAR(rect.top() + fraction * rect.height(), anchor_y, 1.0)
+        << layout << " level " << level << " contentY "
+        << view.loaded()->property("contentY").toReal();
+  }
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+}  // namespace
+
+// Slider zoom steps deep in a long result keep the photo at the view centre at the centre
+// height after every step, in the classic grid and in the justified rows.
+TEST_F(AlbumSectionQmlTests, ClassicGridSliderZoomStepsKeepTheCentrePhotoAtTheCentre) {
+  ApplicationModuleHost backend;
+  ExpectSliderZoomKeepsTheCentrePhoto(backend, "classic", temp_dir_);
+}
+
+TEST_F(AlbumSectionQmlTests, JustifiedRowsSliderZoomStepsKeepTheCentrePhotoAtTheCentre) {
+  ApplicationModuleHost backend;
+  ExpectSliderZoomKeepsTheCentrePhoto(backend, "justified", temp_dir_);
+}
+
 }  // namespace alcedo::ui::test
