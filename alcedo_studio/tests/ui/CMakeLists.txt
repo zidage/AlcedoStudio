@@ -812,6 +812,8 @@ alcedo_link_quickqanava_qml(EditorCheckpointQmlIntegrationTest)
 
 # Issue 747: the Library/editor switch on Main.qml runs no database read on the UI thread,
 # and the hidden workspace keeps its size while the collections sidebar folds.
+# Issue 751: the switch applies the sidebar at once and fades in; a manual toggle follows the
+# sidebar edge per frame and defers the cache and render size to the end of the fold.
 add_executable(EditorWorkspaceSwitchQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_workspace_switch_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp

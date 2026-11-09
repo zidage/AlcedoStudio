@@ -9,11 +9,19 @@
 //   (LibraryModule::RequestEditorListPosition).
 // - The hidden workspace keeps its size while the collections sidebar folds, so it does not lay
 //   out on every frame of the fold (WorkspaceHost.qml).
+// Issue 751: the motion of the collections sidebar.
+// - A workspace switch applies the sidebar state of the new workspace at once; the shown
+//   workspace takes its final width once and fades in.
+// - A manual toggle slides the sidebar at its full width; the shown workspace follows the
+//   sidebar edge on every frame. The thumbnail cache size waits for the end of the fold; the
+//   editor viewport keeps its size, is scaled to the slot, and renders once at the end.
 
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEventLoop>
+#include <QMetaObject>
 #include <QPoint>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -36,6 +44,7 @@
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/main_qml_test_fixture.hpp"
 
 namespace alcedo::ui::test {
@@ -218,11 +227,43 @@ TEST_F(EditorWorkspaceSwitchQmlTest, HiddenWorkspaceKeepsItsSizeWhileSidebarFold
   EXPECT_EQ(AppQmlWarnings(*loaded), QString());
 }
 
-// The fold animates (no Reduce Motion). The shown workspace takes its width after the fold at
-// once and keeps it while the host width animates: it lays out once per switch instead of on
-// every frame (the Library grid took 30-40 ms a frame, and each editor viewport size started a
-// render). It stays aligned to the right edge of the host.
-TEST_F(EditorWorkspaceSwitchQmlTest, ShownWorkspaceLaysOutOnceWhileSidebarFolds) {
+/// Turns Reduce Motion off for one test; the fixture turns it on for every load.
+class MotionOn {
+ public:
+  MotionOn() { AppTheme::Instance().setReduceMotion(false); }
+  ~MotionOn() { AppTheme::Instance().setReduceMotion(true); }
+  MotionOn(const MotionOn&)            = delete;
+  MotionOn& operator=(const MotionOn&) = delete;
+};
+
+auto IntProperty(QObject* object, const char* name) -> int {
+  return object->property(name).toInt();
+}
+
+/// Runs a manual toggle of the collections sidebar with motion on, until the fold ends. While
+/// the fold runs, @p during is called after each event pass. Returns the frames that the
+/// window animated during the fold (QQuickWindow::afterAnimating).
+auto RunManualSidebarToggle(QQuickWindow* window, const std::function<void()>& during) -> int {
+  int        frames     = 0;
+  const auto connection = QObject::connect(window, &QQuickWindow::afterAnimating,
+                                           [&]() { ++frames; });
+  QMetaObject::invokeMethod(window, "toggleCollectionsSidebar");
+  EXPECT_TRUE(window->property("collectionsSidebarFolding").toBool());
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (window->property("collectionsSidebarFolding").toBool() &&
+         std::chrono::steady_clock::now() < deadline) {
+    during();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+  }
+  QObject::disconnect(connection);
+  EXPECT_FALSE(window->property("collectionsSidebarFolding").toBool());
+  return frames;
+}
+
+// Issue 751: a workspace switch is a cut. The sidebar state of the new workspace applies at
+// once, the shown workspace takes its final width once, in the same call as the route change,
+// and it fades in (opacity and a short slide; its layout does not change).
+TEST_F(EditorWorkspaceSwitchQmlTest, WorkspaceSwitchAppliesSidebarAtOnceAndFadesIn) {
   ASSERT_TRUE(QCoreApplication::instance());
   const auto populated = CreatePopulatedPackedProject(temp_dir_, {}, 2);
   ASSERT_TRUE(populated.has_value());
@@ -230,18 +271,17 @@ TEST_F(EditorWorkspaceSwitchQmlTest, ShownWorkspaceLaysOutOnceWhileSidebarFolds)
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ProcessEvents(200);
-  AppTheme::Instance().setReduceMotion(false);
-  const std::unique_ptr<void, void (*)(void*)> restore_motion(
-      &loaded, [](void*) { AppTheme::Instance().setReduceMotion(true); });
+  const MotionOn motion;
 
-  auto* host           = loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceHost"));
-  auto* library_loader =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryWorkspaceLoader"));
-  auto* editor_loader =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceLoader"));
+  auto* window         = loaded->window;
+  auto* host           = window->findChild<QQuickItem*>(QStringLiteral("workspaceHost"));
+  auto* library_loader = window->findChild<QQuickItem*>(QStringLiteral("libraryWorkspaceLoader"));
+  auto* editor_loader  = window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceLoader"));
   ASSERT_NE(host, nullptr);
   ASSERT_NE(library_loader, nullptr);
   ASSERT_NE(editor_loader, nullptr);
+  const qreal library_width = library_loader->width();
+  ASSERT_DOUBLE_EQ(window->property("collectionsSidebarReveal").toDouble(), 1.0);
 
   int        host_width_changes   = 0;
   int        editor_width_changes = 0;
@@ -252,27 +292,173 @@ TEST_F(EditorWorkspaceSwitchQmlTest, ShownWorkspaceLaysOutOnceWhileSidebarFolds)
   auto*      router               = loaded->host.workspace_router();
   router->OpenEditor(static_cast<uint>(populated->images_[0].file_id_),
                      static_cast<uint>(populated->images_[0].image_id_));
-  ProcessEvents(800);
+  ASSERT_EQ(router->workspace(), QStringLiteral("editor"));
+  // Before any event or frame: the sidebar is folded, the host and the editor have their final
+  // width, and the fade has started.
+  EXPECT_DOUBLE_EQ(window->property("collectionsSidebarReveal").toDouble(), 0.0);
+  EXPECT_FALSE(window->property("collectionsSidebarFolding").toBool());
+  EXPECT_EQ(host_width_changes, 1);
+  EXPECT_EQ(editor_width_changes, 1);
+  EXPECT_DOUBLE_EQ(editor_loader->width(), host->width());
+  EXPECT_GT(host->width(), library_width);
+  EXPECT_TRUE(host->property("revealRunning").toBool());
+  EXPECT_LT(editor_loader->opacity(), 1.0);
+
+  ProcessEvents(500);
+  EXPECT_FALSE(host->property("revealRunning").toBool());
+  EXPECT_DOUBLE_EQ(editor_loader->opacity(), 1.0);
+  EXPECT_DOUBLE_EQ(editor_loader->x(), 0.0);
+  EXPECT_EQ(host_width_changes, 1);
+  EXPECT_EQ(editor_width_changes, 1);
   QObject::disconnect(host_connection);
   QObject::disconnect(editor_connection);
-  ASSERT_EQ(router->workspace(), QStringLiteral("editor"));
-  // The fold changed the host width more than once; the editor took one width.
-  EXPECT_GE(host_width_changes, 2);
-  EXPECT_LE(editor_width_changes, 1);
-  EXPECT_DOUBLE_EQ(editor_loader->width(), host->width());
-  EXPECT_DOUBLE_EQ(editor_loader->x(), 0.0);
 
+  // Back to the Library: the sidebar opens at once, and the Library is at the width it kept.
   int        library_width_changes = 0;
   const auto library_connection    = QObject::connect(library_loader, &QQuickItem::widthChanged,
                                                       [&]() { ++library_width_changes; });
   router->OpenLibrary();
-  ProcessEvents(800);
-  QObject::disconnect(library_connection);
-  EXPECT_LE(library_width_changes, 1);
+  EXPECT_DOUBLE_EQ(window->property("collectionsSidebarReveal").toDouble(), 1.0);
   EXPECT_DOUBLE_EQ(library_loader->width(), host->width());
+  EXPECT_DOUBLE_EQ(library_loader->width(), library_width);
+  EXPECT_TRUE(host->property("revealRunning").toBool());
+  ProcessEvents(500);
+  QObject::disconnect(library_connection);
+  EXPECT_EQ(library_width_changes, 0);
+  EXPECT_DOUBLE_EQ(library_loader->opacity(), 1.0);
   EXPECT_DOUBLE_EQ(library_loader->x(), 0.0);
   EXPECT_EQ(AppQmlWarnings(*loaded), QString());
 }
+
+// Issue 751: a manual toggle in the Library. The sidebar slides at its full width (its content
+// does not reflow), and the Library follows the sidebar edge with one width change per frame.
+// The thumbnail cache size waits for the end of the fold.
+TEST_F(EditorWorkspaceSwitchQmlTest, LibraryFollowsManualSidebarToggleAndSizesCacheOnce) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, {}, 24);
+  ASSERT_TRUE(populated.has_value());
+  auto loaded = LoadMainWindowWithPackedProject(populated->packed_path_);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(300);
+  const MotionOn motion;
+
+  auto* window         = loaded->window;
+  auto* host           = window->findChild<QQuickItem*>(QStringLiteral("workspaceHost"));
+  auto* library_loader = window->findChild<QQuickItem*>(QStringLiteral("libraryWorkspaceLoader"));
+  auto* grid           = window->findChild<QQuickItem*>(QStringLiteral("libraryThumbnailGridView"));
+  auto* sidebar        = window->findChild<QQuickItem*>(QStringLiteral("collectionsSidebar"));
+  ASSERT_NE(host, nullptr);
+  ASSERT_NE(library_loader, nullptr);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(sidebar, nullptr);
+  const qreal open_width    = library_loader->width();
+  const qreal sidebar_width = sidebar->width();
+  ASSERT_GT(sidebar_width, 0.0);
+
+  for (const bool expanded_after : {false, true}) {
+    SCOPED_TRACE(expanded_after ? "open" : "fold");
+    int        width_changes = 0;
+    const auto connection    = QObject::connect(library_loader, &QQuickItem::widthChanged,
+                                                [&]() { ++width_changes; });
+    const int  hints_before  = IntProperty(grid, "cacheHintUpdateCount");
+    bool       hint_in_fold  = false;
+    bool       panel_resized = false;
+    const int  frames        = RunManualSidebarToggle(window, [&]() {
+      hint_in_fold  = hint_in_fold || IntProperty(grid, "cacheHintUpdateCount") != hints_before;
+      panel_resized = panel_resized || sidebar->width() != sidebar_width;
+      EXPECT_DOUBLE_EQ(library_loader->width(), host->width());
+    });
+    QObject::disconnect(connection);
+    EXPECT_EQ(window->property("collectionsSidebarExpanded").toBool(), expanded_after);
+    EXPECT_FALSE(hint_in_fold);
+    EXPECT_FALSE(panel_resized);
+    EXPECT_EQ(IntProperty(grid, "cacheHintUpdateCount"), hints_before + 1);
+    // The content follows the sidebar edge during the fold (a held width changes once), at
+    // most once per frame. A debug build animates few frames in the 160-200 ms fold.
+    EXPECT_GE(width_changes, 2) << "frames " << frames;
+    EXPECT_LE(width_changes, frames + 1);
+    EXPECT_DOUBLE_EQ(library_loader->width(), host->width());
+    EXPECT_DOUBLE_EQ(sidebar->width(), sidebar_width);
+  }
+  EXPECT_DOUBLE_EQ(library_loader->width(), open_width);
+  EXPECT_EQ(AppQmlWarnings(*loaded), QString());
+}
+
+// Issue 751: a manual toggle in the editor. The viewport slot follows the sidebar edge on every
+// frame. The viewport item keeps its size and is scaled to the slot, so its render size
+// (updatePresentationTargetSize) and its Resize render wait for the end of the fold and run
+// once, at the slot size.
+TEST_F(EditorWorkspaceSwitchQmlTest, EditorFollowsManualSidebarToggleAndRendersOnce) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, {}, 2);
+  ASSERT_TRUE(populated.has_value());
+  auto loaded = LoadMainWindowWithPackedProject(populated->packed_path_);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(200);
+  auto* router = loaded->host.workspace_router();
+  router->OpenEditor(static_cast<uint>(populated->images_[0].file_id_),
+                     static_cast<uint>(populated->images_[0].image_id_));
+  ProcessEvents(800);
+  ASSERT_EQ(router->workspace(), QStringLiteral("editor"));
+  const MotionOn motion;
+
+  auto* window        = loaded->window;
+  auto* editor_loader = window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceLoader"));
+  auto* viewport_slot = window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
+  auto* viewport      = window->findChild<QQuickItem*>(QStringLiteral("editorViewportItem"));
+  auto* interaction =
+      window->findChild<editor_rhi::EditorInteractionController*>(
+          QStringLiteral("editorInteractionController"));
+  ASSERT_NE(editor_loader, nullptr);
+  ASSERT_NE(viewport_slot, nullptr);
+  ASSERT_NE(viewport, nullptr);
+  ASSERT_NE(interaction, nullptr);
+
+  for (const bool expanded_after : {true, false}) {
+    SCOPED_TRACE(expanded_after ? "open" : "fold");
+    int        viewport_width_changes = 0;
+    int        resize_reports         = 0;
+    const auto width_connection       = QObject::connect(viewport_slot, &QQuickItem::widthChanged,
+                                                         [&]() { ++viewport_width_changes; });
+    const auto resize_connection      = QObject::connect(
+        interaction, &editor_rhi::EditorInteractionController::viewChangeReported,
+        [&](int kind) {
+          if (kind ==
+              static_cast<int>(editor_rhi::EditorInteractionController::ViewChangeKind::Resize)) {
+            ++resize_reports;
+          }
+        });
+    const int   sizes_before   = IntProperty(viewport_slot, "presentationSizeUpdateCount");
+    const qreal viewport_width = viewport->width();
+    bool        size_in_fold   = false;
+    bool        resize_in_fold = false;
+    bool        item_resized   = false;
+    const int   frames         = RunManualSidebarToggle(window, [&]() {
+      size_in_fold =
+          size_in_fold || IntProperty(viewport_slot, "presentationSizeUpdateCount") != sizes_before;
+      resize_in_fold = resize_in_fold || resize_reports > 0;
+      item_resized   = item_resized || viewport->width() != viewport_width;
+    });
+    QObject::disconnect(width_connection);
+    QObject::disconnect(resize_connection);
+    EXPECT_EQ(window->property("collectionsSidebarExpanded").toBool(), expanded_after);
+    EXPECT_FALSE(size_in_fold);
+    EXPECT_FALSE(resize_in_fold);
+    EXPECT_FALSE(item_resized);
+    EXPECT_EQ(IntProperty(viewport_slot, "presentationSizeUpdateCount"), sizes_before + 1);
+    EXPECT_EQ(resize_reports, 1);
+    EXPECT_GE(viewport_width_changes, 2) << "frames " << frames;
+    EXPECT_LE(viewport_width_changes, frames + 1);
+    // After the fold the viewport and the view transform have the slot size, unscaled.
+    EXPECT_DOUBLE_EQ(viewport->width(), viewport_slot->width());
+    EXPECT_DOUBLE_EQ(viewport->scale(), 1.0);
+    EXPECT_NEAR(interaction->viewportWidth(), viewport_slot->width(), 1.0);
+  }
+  EXPECT_EQ(AppQmlWarnings(*loaded), QString());
+}
+
 
 }  // namespace
 }  // namespace alcedo::ui::test

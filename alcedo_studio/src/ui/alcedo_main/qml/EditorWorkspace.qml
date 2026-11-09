@@ -15,6 +15,9 @@ Item {
     property var editorSession: appModules.editorSession
     property var interactionPolicy: appModules.interactionPolicy
     property Item blurSource: null
+    // True while the workspace width follows the collections sidebar fold (WorkspaceHost). The
+    // viewport keeps its size and scales the presented frame, and renders once at the final size.
+    property bool geometryAnimating: false
 
     readonly property color colPanel: theme ? theme.colGlassPanel : "#1C1C1D"
     readonly property color colStroke: theme ? theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
@@ -201,7 +204,10 @@ Item {
                     EditorViewportItem {
                         id: editorViewportItem
                         objectName: "editorViewportItem"
-                        anchors.fill: parent
+                        anchors.centerIn: parent
+                        width: viewportSlot.stageWidth
+                        height: viewportSlot.stageHeight
+                        scale: viewportSlot.stageScale
                         visible: root.hasImage
                         // imageIdentity is the durable DB id; sessionEpoch is stamped
                         // from EditorSessionController::SyncViewportIdentity on the GUI thread.
@@ -253,7 +259,10 @@ Item {
                     EditorOverlayItem {
                         id: editorOverlayItem
                         objectName: "editorOverlayItem"
-                        anchors.fill: parent
+                        anchors.centerIn: parent
+                        width: viewportSlot.stageWidth
+                        height: viewportSlot.stageHeight
+                        scale: viewportSlot.stageScale
                         visible: root.hasImage
                         interaction: editorInteraction
                         maskOverlayControlColor: appTheme.maskOverlayControlColor
@@ -353,7 +362,10 @@ Item {
                     AiMaskInputOverlayItem {
                         id: aiMaskInputOverlay
                         objectName: "editorAiMaskInputOverlay"
-                        anchors.fill: parent
+                        anchors.centerIn: parent
+                        width: viewportSlot.stageWidth
+                        height: viewportSlot.stageHeight
+                        scale: viewportSlot.stageScale
                         visible: root.hasImage && root.aiMaskToolActive
                         interaction: editorInteraction
                         promptSteps: root.aiMaskTool ? root.aiMaskTool.promptSteps : []
@@ -814,17 +826,66 @@ Item {
                         }
                     }
 
-                    function syncViewportMetrics() {
-                        // setViewportMetrics emits viewStateChanged → single push.
-                        editorInteraction.setViewportMetrics(
-                                    viewportSlot.width, viewportSlot.height,
-                                    currentDevicePixelRatio())
-                        if (root.editorSession) {
-                            var dpr = currentDevicePixelRatio()
-                            root.editorSession.updatePresentationTargetSize(
-                                        Math.max(1, Math.round(viewportSlot.width * dpr)),
-                                        Math.max(1, Math.round(viewportSlot.height * dpr)))
+                    // The size of the viewport, its overlays, and the interaction metrics. While
+                    // the collections sidebar folds, it keeps the size from the start of the fold
+                    // (issue 751): the viewport keeps its presented frame and render size, and
+                    // nothing re-samples or renders on each frame. stageScale fits the presented
+                    // photo to the moving slot. When the fold ends, the stage takes the slot size
+                    // once, and the viewport renders once at that size.
+                    property size heldStageSize: Qt.size(0, 0)
+                    readonly property bool stageHeld: root.geometryAnimating
+                                                      && heldStageSize.width > 0
+                    readonly property real stageWidth: stageHeld ? heldStageSize.width : width
+                    readonly property real stageHeight: stageHeld ? heldStageSize.height : height
+                    readonly property real stageScale: stageHeld
+                                                       ? fittedPhotoWidth(width, height)
+                                                         / fittedPhotoWidth(stageWidth, stageHeight)
+                                                       : 1
+
+                    // Width of the photo fitted in a box of @p boxWidth x @p boxHeight.
+                    function fittedPhotoWidth(boxWidth, boxHeight) {
+                        const referenceWidth = editorInteraction.renderReferenceWidth
+                        const referenceHeight = editorInteraction.renderReferenceHeight
+                        const aspect = referenceWidth > 0 && referenceHeight > 0
+                                ? referenceWidth / referenceHeight
+                                : boxWidth / Math.max(1, boxHeight)
+                        return Math.max(1, Math.min(boxWidth, boxHeight * aspect))
+                    }
+
+                    Connections {
+                        target: root
+                        function onGeometryAnimatingChanged() {
+                            viewportSlot.heldStageSize = root.geometryAnimating
+                                    ? Qt.size(viewportSlot.width, viewportSlot.height)
+                                    : Qt.size(0, 0)
                         }
+                    }
+
+                    // Calls of EditorSessionController::updatePresentationTargetSize; read by
+                    // tests.
+                    property int presentationSizeUpdateCount: 0
+                    // The stage size and pixel ratio of the last sync. A hold that starts or ends
+                    // notifies the stage size without a new value.
+                    property var syncedMetrics: null
+
+                    function syncViewportMetrics() {
+                        const dpr = currentDevicePixelRatio()
+                        if (syncedMetrics && syncedMetrics.width === stageWidth
+                                && syncedMetrics.height === stageHeight
+                                && syncedMetrics.dpr === dpr) {
+                            return
+                        }
+                        syncedMetrics = { width: stageWidth, height: stageHeight, dpr: dpr }
+                        // The render size first: setViewportMetrics reports a Resize that
+                        // starts a render, and that render reads the render size.
+                        if (root.editorSession) {
+                            presentationSizeUpdateCount += 1
+                            root.editorSession.updatePresentationTargetSize(
+                                        Math.max(1, Math.round(stageWidth * dpr)),
+                                        Math.max(1, Math.round(stageHeight * dpr)))
+                        }
+                        // setViewportMetrics emits viewStateChanged → single push.
+                        editorInteraction.setViewportMetrics(stageWidth, stageHeight, dpr)
                     }
 
                     function resetAndSyncForImageSession() {
@@ -917,8 +978,8 @@ Item {
                         syncViewportMetrics()
                         ensurePresentationBinding()
                     }
-                    onWidthChanged: syncViewportMetrics()
-                    onHeightChanged: syncViewportMetrics()
+                    onStageWidthChanged: syncViewportMetrics()
+                    onStageHeightChanged: syncViewportMetrics()
                 }
 
                 EditorFilmstrip {
