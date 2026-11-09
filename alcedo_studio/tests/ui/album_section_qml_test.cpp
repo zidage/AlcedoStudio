@@ -10,7 +10,9 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QGuiApplication>
+#include <QJSValue>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickItem>
@@ -200,10 +202,11 @@ auto AlbumWarnings(const std::vector<std::string>& warnings) -> std::vector<std:
   std::vector<std::string> out;
   for (const auto& warning : warnings) {
     for (const auto* file :
-         {"AlbumSectionView.qml", "InspectorFieldActions.qml", "AlbumInspectorPanel.qml",
-          "StatsCard.qml", "DateFilterSection.qml", "StarRatingFilter.qml", "ThumbnailGridView.qml",
-          "ThumbnailStarRating.qml", "ThumbnailEditMark.qml", "JustifiedThumbnailTile.qml",
-          "ThumbnailPinBinding.qml", "ThumbnailLayoutAnimation.qml"}) {
+         {"AlbumSectionView.qml", "InspectorFieldActions.qml", "InspectorSection.qml",
+          "AlbumInspectorPanel.qml", "StatsCard.qml", "DateFilterSection.qml",
+          "StarRatingFilter.qml", "ThumbnailGridView.qml", "ThumbnailStarRating.qml",
+          "ThumbnailEditMark.qml", "JustifiedThumbnailTile.qml", "ThumbnailPinBinding.qml",
+          "ThumbnailLayoutAnimation.qml"}) {
       if (warning.find(file) != std::string::npos) {
         out.push_back(warning);
         break;
@@ -337,7 +340,189 @@ void ApplyRatingRequest(ApplicationModuleHost& backend, const QList<QVariant>& r
       request.at(1).toInt());
 }
 
+/// A QML `var` property as a QVariantList (a JS array reads back as a QJSValue).
+auto VarList(QObject* object, const char* name) -> QVariantList {
+  QVariant value = object->property(name);
+  if (value.userType() == qMetaTypeId<QJSValue>()) {
+    value = value.value<QJSValue>().toVariant();
+  }
+  return value.toList();
+}
+
+/// Labels of the values a StatsCard shows, in order.
+auto ShownLabels(QObject* card) -> QStringList {
+  QStringList labels;
+  for (const auto& entry : VarList(card, "visibleItems")) {
+    labels << entry.toMap().value(QStringLiteral("label")).toString();
+  }
+  return labels;
+}
+
+/// Six photos with four cameras and five lenses (issue #766 value search).
+auto SearchablePhotoSpecs() -> std::vector<LibraryPhotoSpec> {
+  return {
+      {.model_ = "Canon R5", .lens_ = "RF 50mm F1.2 L"},
+      {.model_ = "Canon R6", .lens_ = "RF 24-70mm F2.8 L"},
+      {.model_ = "Nikon Z8", .lens_ = "NIKKOR Z 50mm f/1.8 S"},
+      {.model_ = "Nikon Z8", .lens_ = "NIKKOR Z 24-120mm f/4 S"},
+      {.model_ = "Sony A7", .lens_ = "FE 85mm F1.4 GM"},
+      {.model_ = "Sony A7", .lens_ = "FE 85mm F1.4 GM"},
+  };
+}
+
 }  // namespace
+
+// Issue #766: at the default inspector width (300 px) in English, the hero has no photo count
+// line, and the sort and Group actions of every section sit on the title row of its header
+// band, together at the right.
+TEST_F(AlbumSectionQmlTests, LibraryOverviewKeepsTheActionsOnTheTitleRowAt300Px) {
+  ApplicationModuleHost backend;
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, SixPhotoSpecs());
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+
+  LoadedComponent inspector(backend, "AlbumInspectorPanel.qml", 300);
+  ASSERT_TRUE(WaitUntil([&]() { return inspector.loaded() != nullptr; }))
+      << Joined(inspector.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(inspector.window());
+  ASSERT_NE(window, nullptr);
+  ProcessEvents(200);
+
+  // No "Showing ..." line anywhere in the panel.
+  std::vector<QQuickItem*> showing;
+  CollectItems(
+      window->contentItem(),
+      [](QQuickItem* item) {
+        return item->isVisible() &&
+               item->property("text").toString().startsWith(QStringLiteral("Showing"));
+      },
+      showing);
+  EXPECT_TRUE(showing.empty()) << showing.front()->property("text").toString().toStdString();
+
+  const std::vector<std::pair<const char*, const char*>> sections = {
+      {"captureDateFilterSection", "date"},   {"importDateFilterSection", "import"},
+      {"editTimeInspectorSection", "edited"}, {"cameraInspectorSection", "camera"},
+      {"labelInspectorSection", "label"},     {"ratingInspectorSection", "rating"},
+      {"lensInspectorSection", "lens"}};
+  const auto action_size  = AppTheme::Instance().inspectorHeaderActionSize();
+  const auto action_group = 3.0 * action_size + 2.0 * AppTheme::Instance().spaceXs();
+  for (const auto& [section_name, field] : sections) {
+    SCOPED_TRACE(section_name);
+    auto* section = qobject_cast<QQuickItem*>(inspector.Find(section_name));
+    ASSERT_NE(section, nullptr);
+    EXPECT_NEAR(section->width(), 300.0 - 2.0 * AppTheme::Instance().spaceMd(), 16.0);
+    EXPECT_FALSE(section->property("stackHeaderActions").toBool());
+    auto* title = qvariant_cast<QQuickItem*>(section->property("titleItem"));
+    ASSERT_NE(title, nullptr);
+    // Title case, as written: no upper-case transform.
+    EXPECT_NE(title->property("text").toString(), title->property("text").toString().toUpper());
+    auto* actions =
+        FirstItem(section, QStringLiteral("inspectorFieldActions_") + QString::fromLatin1(field));
+    ASSERT_NE(actions, nullptr);
+    ASSERT_TRUE(actions->isVisible());
+    const auto title_rect = title->mapRectToScene(QRectF(0, 0, title->width(), title->height()));
+    const auto actions_rect =
+        actions->mapRectToScene(QRectF(0, 0, actions->width(), actions->height()));
+    const auto section_rect =
+        section->mapRectToScene(QRectF(0, 0, section->width(), section->height()));
+    EXPECT_NEAR(actions_rect.center().y(), title_rect.center().y(), 1.0);
+    EXPECT_GE(actions_rect.left(), title_rect.right() - 0.5);
+    EXPECT_LE(actions_rect.right(), section_rect.right());
+    EXPECT_LE(actions_rect.width(), action_group + 0.5);
+  }
+  EXPECT_TRUE(AlbumWarnings(inspector.warnings()).empty())
+      << Joined(AlbumWarnings(inspector.warnings()));
+}
+
+// Issue #766: the search field of By Camera Model, By Labels, and By Lens shows only the values
+// that contain the text (case-insensitive), keeps the selected value, shows every value again
+// when cleared, and never changes the library query.
+TEST_F(AlbumSectionQmlTests, LibraryOverviewSearchFiltersCameraLabelAndLensValues) {
+  ApplicationModuleHost backend;
+  const auto packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, SearchablePhotoSpecs());
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+
+  LoadedComponent inspector(backend, "AlbumInspectorPanel.qml", 300);
+  ASSERT_TRUE(WaitUntil([&]() { return inspector.loaded() != nullptr; }))
+      << Joined(inspector.warnings());
+  auto* camera = inspector.Find("cameraStatsCard");
+  auto* labels = inspector.Find("labelStatsCard");
+  auto* lens   = inspector.Find("lensStatsCard");
+  ASSERT_NE(camera, nullptr);
+  ASSERT_NE(labels, nullptr);
+  ASSERT_NE(lens, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() {
+    return VarList(camera, "model").size() == 4 && VarList(lens, "model").size() == 5;
+  })) << "cameras "
+      << VarList(camera, "model").size() << " lenses " << VarList(lens, "model").size();
+  // The fixture has no semantic labels; the label card gets its values here.
+  QVariantList label_values;
+  for (const auto& [label, count] : std::vector<std::pair<QString, int>>{
+           {"portrait", 5}, {"night", 3}, {"Night sky", 2}, {"street", 1}, {"nightlife", 1}}) {
+    label_values << QVariantMap{{"label", label}, {"count", count}};
+  }
+  labels->setProperty("model", label_values);
+
+  auto* camera_item = qobject_cast<QQuickItem*>(camera);
+  auto* input       = FirstItem(camera_item, QStringLiteral("statsCardSearchInput"));
+  ASSERT_NE(input, nullptr);
+  EXPECT_TRUE(input->isVisible());
+  EXPECT_STREQ(input->metaObject()->className(), "QQuickTextInput");
+  auto* clear = FirstItem(camera_item, QStringLiteral("statsCardSearchClear"));
+  ASSERT_NE(clear, nullptr);
+  EXPECT_FALSE(clear->isVisible());
+
+  const auto query_before  = backend.library()->model().count();
+  const auto camera_filter = backend.stats()->StatsFilterCamera();
+
+  // Camera: "CANON" matches inside the value, any case; the preview limit does not apply.
+  camera->setProperty("filterText", QStringLiteral("CANON"));
+  EXPECT_TRUE(clear->isVisible());
+  {
+    auto shown = ShownLabels(camera);
+    shown.sort();
+    EXPECT_EQ(shown, (QStringList{"Canon R5", "Canon R6"}));
+  }
+  // A selected value that does not match stays, first.
+  camera->setProperty("selectedLabel", QStringLiteral("Sony A7"));
+  EXPECT_EQ(ShownLabels(camera).value(0), QStringLiteral("Sony A7"));
+  EXPECT_EQ(ShownLabels(camera).size(), 3);
+  // Cleared: all values again (the chip preview plus "+N more").
+  camera->setProperty("filterText", QString());
+  EXPECT_EQ(ShownLabels(camera).size() + camera->property("hiddenCount").toInt(), 4);
+  EXPECT_TRUE(ShownLabels(camera).contains(QStringLiteral("Sony A7")));
+
+  // Labels: "night" matches three values; the selected "portrait" stays.
+  labels->setProperty("selectedLabel", QStringLiteral("portrait"));
+  labels->setProperty("filterText", QStringLiteral("night"));
+  EXPECT_EQ(ShownLabels(labels), (QStringList{"portrait", "night", "Night sky", "nightlife"}));
+  labels->setProperty("filterText", QStringLiteral("zzz"));
+  EXPECT_EQ(ShownLabels(labels), (QStringList{"portrait"}));
+  labels->setProperty("filterText", QString());
+  EXPECT_EQ(ShownLabels(labels).size() + labels->property("hiddenCount").toInt(), 5);
+
+  // Lens: "50mm" matches inside two lens names.
+  lens->setProperty("filterText", QStringLiteral("50mm"));
+  {
+    auto shown = ShownLabels(lens);
+    shown.sort();
+    EXPECT_EQ(shown, (QStringList{"NIKKOR Z 50mm f/1.8 S", "RF 50mm F1.2 L"}));
+  }
+  lens->setProperty("filterText", QString());
+  EXPECT_EQ(ShownLabels(lens).size(), 5);
+
+  // Typing never ran a library query nor changed a filter.
+  ProcessEvents(200);
+  EXPECT_EQ(backend.library()->model().count(), query_before);
+  EXPECT_EQ(backend.stats()->StatsFilterCamera(), camera_filter);
+  EXPECT_TRUE(backend.stats()->StatsFilterLens().isEmpty());
+  EXPECT_TRUE(backend.stats()->StatsFilterLabel().isEmpty());
+  EXPECT_TRUE(AlbumWarnings(inspector.warnings()).empty())
+      << Joined(AlbumWarnings(inspector.warnings()));
+}
 
 TEST_F(AlbumSectionQmlTests, InspectorFieldActionsApplyOneSortAndOneGroupWithoutChangingFilters) {
   ApplicationModuleHost backend;
@@ -1614,6 +1799,91 @@ TEST_F(AlbumSectionQmlTests, ClassicGridSliderZoomStepsKeepTheCentrePhotoAtTheCe
 TEST_F(AlbumSectionQmlTests, JustifiedRowsSliderZoomStepsKeepTheCentrePhotoAtTheCentre) {
   ApplicationModuleHost backend;
   ExpectSliderZoomKeepsTheCentrePhoto(backend, "justified", temp_dir_);
+}
+
+// Issue #766: a Library Overview section folds with the shared fold motion. The header stays;
+// the content keeps its size and a clip reveals it with the fold progress, which also drives the
+// content opacity and the glyph turn. The date content stays loaded while it folds.
+// reduceMotion makes the fold a cut.
+TEST_F(AlbumSectionQmlTests, LibraryOverviewSectionsFoldWithTheSharedMotion) {
+  UseTestSettings(temp_dir_);
+  auto&      theme                = AppTheme::Instance();
+  const bool reduce_motion_before = theme.reduceMotion();
+  theme.setReduceMotion(false);
+  ApplicationModuleHost backend;
+  const auto packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, SearchablePhotoSpecs());
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+
+  LoadedComponent inspector(backend, "AlbumInspectorPanel.qml", 300);
+  ASSERT_TRUE(WaitUntil([&]() { return inspector.loaded() != nullptr; }))
+      << Joined(inspector.warnings());
+  auto* lens = qobject_cast<QQuickItem*>(inspector.Find("lensInspectorSection"));
+  ASSERT_NE(lens, nullptr);
+  auto* clip   = FirstItem(lens, QStringLiteral("inspectorSectionBodyClip"));
+  auto* body   = FirstItem(lens, QStringLiteral("inspectorSectionBody"));
+  auto* glyph  = FirstItem(lens, QStringLiteral("inspectorSectionGlyph"));
+  auto* header = FirstItem(lens, QStringLiteral("inspectorSectionHeader"));
+  ASSERT_NE(clip, nullptr);
+  ASSERT_NE(body, nullptr);
+  ASSERT_NE(glyph, nullptr);
+  ASSERT_NE(header, nullptr);
+  const auto full_height = [&]() { return lens->property("bodyFullHeight").toReal(); };
+  ASSERT_TRUE(WaitUntil([&]() {
+    return full_height() > 40.0 && std::abs(clip->height() - full_height()) < 0.5;
+  })) << "clip "
+      << clip->height() << " full " << full_height();
+  const auto full        = full_height();
+  const auto body_height = body->height();
+  const auto header_y    = header->mapToItem(lens, QPointF(0, 0)).y();
+  EXPECT_NEAR(glyph->rotation(), 90.0, 0.5);
+
+  // Pinned half way through a close: half the content shows at half opacity, at full size.
+  lens->setProperty("expanded", false);
+  ASSERT_TRUE(QMetaObject::invokeMethod(lens, "driveFoldProgress", Q_ARG(QVariant, 0.5)));
+  ProcessEvents(20);
+  EXPECT_NEAR(clip->height(), full * 0.5, 1.0);
+  EXPECT_NEAR(body->height(), body_height, 0.5);
+  EXPECT_NEAR(body->opacity(), 0.5, 0.01);
+  EXPECT_NEAR(glyph->rotation(), 45.0, 0.5);
+  EXPECT_NEAR(header->mapToItem(lens, QPointF(0, 0)).y(), header_y, 0.5);
+  EXPECT_NEAR(header->height(), 36.0, 0.5);
+  ASSERT_TRUE(QMetaObject::invokeMethod(lens, "endFoldDrive"));
+  ASSERT_TRUE(WaitUntil([&]() { return !clip->isVisible(); }, 2000)) << "clip " << clip->height();
+  EXPECT_NEAR(glyph->rotation(), 0.0, 0.5);
+
+  // The date content stays loaded while the section folds.
+  auto* capture = qobject_cast<QQuickItem*>(inspector.Find("captureDateFilterSection"));
+  ASSERT_NE(capture, nullptr);
+  auto* calendar = FirstItem(capture, QStringLiteral("dateFilterCalendarLoader"));
+  ASSERT_NE(calendar, nullptr);
+  capture->setProperty("expanded", false);
+  ASSERT_TRUE(QMetaObject::invokeMethod(capture, "driveFoldProgress", Q_ARG(QVariant, 0.5)));
+  ProcessEvents(20);
+  EXPECT_TRUE(calendar->property("active").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(capture, "endFoldDrive"));
+  ASSERT_TRUE(WaitUntil([&]() { return !calendar->property("active").toBool(); }, 2000));
+
+  // An open runs over time: the clip passes through heights between closed and open.
+  lens->setProperty("expanded", true);
+  bool          saw_between = false;
+  QElapsedTimer timer;
+  timer.start();
+  while (timer.elapsed() < 2000 && std::abs(clip->height() - full) >= 0.5) {
+    ProcessEvents(5);
+    saw_between = saw_between || (clip->height() > 1.0 && clip->height() < full - 1.0);
+  }
+  EXPECT_NEAR(clip->height(), full, 0.5);
+  EXPECT_TRUE(saw_between);
+
+  // reduceMotion: the close is a cut.
+  theme.setReduceMotion(true);
+  lens->setProperty("expanded", false);
+  EXPECT_TRUE(WaitUntil([&]() { return !clip->isVisible(); }, 100)) << "clip " << clip->height();
+  theme.setReduceMotion(reduce_motion_before);
+  EXPECT_TRUE(AlbumWarnings(inspector.warnings()).empty())
+      << Joined(AlbumWarnings(inspector.warnings()));
 }
 
 }  // namespace alcedo::ui::test

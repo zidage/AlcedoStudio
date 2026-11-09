@@ -191,7 +191,6 @@ TEST_F(ApplicationModuleHostLifecycleTests, ModulesCanBeConstructedWithoutTheCom
   EXPECT_EQ(stats.parent(), nullptr);
   EXPECT_EQ(search.parent(), nullptr);
   EXPECT_EQ(import_export.parent(), nullptr);
-  EXPECT_EQ(stats.FormatPhotoInfo(0, 0), QStringLiteral("No images loaded."));
 }
 
 }  // namespace

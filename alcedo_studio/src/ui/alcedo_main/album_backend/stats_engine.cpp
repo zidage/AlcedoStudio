@@ -146,16 +146,6 @@ void StatsEngine::ApplyFolderStats(const AlbumStatsView& stats, bool emit_change
   }
 }
 
-auto StatsEngine::FormatPhotoInfo(int shown, int total) const -> QString {
-  if (total <= 0) {
-    return PL_TEXT("No images loaded.").Render();
-  }
-  if (shown == total) {
-    return PL_TEXT("Showing %1 images", total).Render();
-  }
-  return PL_TEXT("Showing %1 of %2", shown, total).Render();
-}
-
 auto StatsEngine::MakeThumbMap(const AlbumItem& image, int index) const -> QVariantMap {
   const QString aperture = image.aperture > 0.0 ? QString::number(image.aperture, 'f', 1) : "--";
   const QString focal =

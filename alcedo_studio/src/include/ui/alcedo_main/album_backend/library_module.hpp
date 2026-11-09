@@ -106,7 +106,6 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   Q_PROPERTY(int shownCount READ ShownCount NOTIFY CountsChanged)
   Q_PROPERTY(int totalCount READ TotalCount NOTIFY CountsChanged)
   Q_PROPERTY(bool hasMoreThumbnails READ HasMoreThumbnails NOTIFY CountsChanged)
-  Q_PROPERTY(QString filterInfo READ FilterInfo NOTIFY CountsChanged)
   Q_PROPERTY(bool thumbnailDiskCacheEnabled READ ThumbnailDiskCacheEnabled NOTIFY
                  ThumbnailDiskCacheStateChanged)
   Q_PROPERTY(QString thumbnailDiskCacheRoot READ ThumbnailDiskCacheRoot NOTIFY
@@ -158,7 +157,6 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   int          ShownCount() const { return thumbnail_model_.count(); }
   int          TotalCount() const;
   bool         HasMoreThumbnails() const { return thumbnail_model_.hasMore(); }
-  QString      FilterInfo() const;
   bool         ThumbnailDiskCacheEnabled() const;
   QString      ThumbnailDiskCacheRoot() const;
   int          ThumbnailDiskCacheMaxEntries() const;

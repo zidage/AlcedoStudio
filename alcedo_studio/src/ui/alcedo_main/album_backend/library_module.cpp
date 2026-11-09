@@ -126,10 +126,6 @@ void LibraryModule::EmitThumbnailUpdated(uint elementId, const QString& thumbUrl
   emit thumbnailUpdated(elementId, thumbUrl, loading, missingSource, errorText);
 }
 
-auto LibraryModule::FilterInfo() const -> QString {
-  return stats_->FormatPhotoInfo(ShownCount(), TotalCount());
-}
-
 
 int LibraryModule::TotalCount() const {
   return static_cast<int>(

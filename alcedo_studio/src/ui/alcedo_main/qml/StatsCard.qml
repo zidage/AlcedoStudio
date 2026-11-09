@@ -1,27 +1,46 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 
+// Album Inspector value list (bars, chips, rank dots, or date tiles). The section header, the
+// fold state, and the header actions belong to the InspectorSection around it.
 Item {
     id: card
     implicitHeight: cardCol.implicitHeight
 
-    property string title: ""
     property var model: []
-    property bool expanded: true
     readonly property int previewLimit: 10
     readonly property int chipPreviewLimit: 3
     property string selectedLabel: ""
     property string displayMode: "bars"
-    property bool showHeader: true
-    /// Optional actions beside the title (Album Inspector sort and Group). Loaded apart from
-    /// the content, so a collapsed card keeps them; activating them never toggles expansion.
-    property Component headerActions: null
-    readonly property bool stackHeaderActions: headerActions !== null
-        && width < titleMetrics.advanceWidth + appTheme.inspectorHeaderActionSize * 6
-                   + appTheme.spaceLg * 2
+    /// True: a search field above the values filters them while the user types. It never
+    /// changes the library query; only a click on a value does.
+    property bool searchable: false
+    property alias filterText: searchInput.text
     property var yearExpansion: ({})
     signal barClicked(string label)
+
+    readonly property string filterKey: searchable ? filterText.trim().toLowerCase() : ""
+    readonly property bool filtering: filterKey !== ""
+    /// The model entries whose label contains the search text (case-insensitive). The
+    /// selected value stays in the list; when it does not match, it comes first.
+    readonly property var filteredItems: {
+        if (!model) return [];
+        if (!filtering) return model;
+        const entries = [];
+        let selectedEntry = null;
+        for (let i = 0; i < model.length; ++i) {
+            const label = String(model[i].label);
+            if (label.toLowerCase().indexOf(filterKey) >= 0) {
+                entries.push(model[i]);
+            } else if (selectedLabel !== "" && label === selectedLabel) {
+                selectedEntry = model[i];
+            }
+        }
+        if (selectedEntry !== null) entries.unshift(selectedEntry);
+        return entries;
+    }
 
     readonly property var groupedItems: {
         if (!model) return [];
@@ -95,6 +114,9 @@ Item {
     readonly property var visibleItems: {
         if (!model) return [];
         if (displayMode === "grouped") return model;
+        // While the user searches, every matching value shows; the preview limit returns
+        // when the field is cleared.
+        if (filtering) return filteredItems;
 
         const n = model.length;
         if (displayMode === "chips") {
@@ -135,8 +157,11 @@ Item {
         return entries;
     }
     readonly property int visibleCount: visibleItems.length
-    readonly property int hiddenCount: Math.max(0, totalItems - visibleCount)
+    readonly property int hiddenCount: filtering ? 0 : Math.max(0, totalItems - visibleCount)
     readonly property bool hasOverflow: hiddenCount > 0
+    /// "Show less" applies when every value shows and there are more than the preview.
+    readonly property bool canShowLess: showAll && !filtering
+        && totalItems > (displayMode === "chips" ? chipPreviewLimit : previewLimit)
 
     function isYearExpanded(group, index) {
         if (!group) return false;
@@ -170,54 +195,97 @@ Item {
         anchors.right: parent.right
         spacing: 8
 
-        TextMetrics {
-            id: titleMetrics
-            text: card.title.toUpperCase()
-            font.pixelSize: 10
-            font.weight: 700
-            font.letterSpacing: 1.6
-        }
-
-        RowLayout {
+        // --- search: a plain TextInput in a hairline box, no style-provided field chrome ---
+        Rectangle {
+            objectName: "statsCardSearchField"
+            visible: card.searchable && card.totalItems > 0
             Layout.fillWidth: true
-            visible: card.showHeader
+            Layout.preferredHeight: appTheme.collectionRowHeight
+            radius: appTheme.controlRadiusSmall
+            color: appTheme.bgCanvasColor
+            border.width: 1
+            border.color: searchInput.activeFocus ? appTheme.textMutedColor
+                                                  : appTheme.dividerColor
 
-            Label {
-                Layout.fillWidth: true
-                text: card.title.toUpperCase()
-                color: appTheme.textMutedColor
-                font.pixelSize: 10
-                font.weight: 700
-                font.letterSpacing: 1.6
-                wrapMode: Text.Wrap
-            }
-            Loader {
-                active: card.headerActions !== null && !card.stackHeaderActions
-                visible: active
-                sourceComponent: card.headerActions
-            }
-            Label {
-                text: card.expanded ? "▲" : "▼"
-                color: appTheme.textMutedColor
-                font.pixelSize: 9
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: card.expanded = !card.expanded
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: appTheme.spaceSm
+                anchors.rightMargin: appTheme.spaceXs
+                spacing: 6
+
+                ColorImage {
+                    Layout.preferredWidth: 12
+                    Layout.preferredHeight: 12
+                    Layout.alignment: Qt.AlignVCenter
+                    source: "qrc:/panel_icons/search.svg"
+                    sourceSize.width: 24
+                    sourceSize.height: 24
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    color: appTheme.textMutedColor
+                }
+
+                TextInput {
+                    id: searchInput
+                    objectName: "statsCardSearchInput"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    verticalAlignment: TextInput.AlignVCenter
+                    clip: true
+                    selectByMouse: true
+                    color: appTheme.textColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
+                    selectedTextColor: appTheme.textColor
+                    selectionColor: card.withAlpha(appTheme.textMutedColor, 0.6)
+                    Keys.onEscapePressed: function(event) {
+                        if (searchInput.text.length > 0) {
+                            searchInput.clear()
+                            event.accepted = true
+                        }
+                    }
+
+                    Text {
+                        anchors.fill: parent
+                        verticalAlignment: Text.AlignVCenter
+                        visible: searchInput.text.length === 0
+                                 && searchInput.preeditText.length === 0
+                        text: qsTr("Search")
+                        color: appTheme.textMutedColor
+                        font: searchInput.font
+                        elide: Text.ElideRight
+                    }
+                }
+
+                Item {
+                    objectName: "statsCardSearchClear"
+                    visible: searchInput.text.length > 0
+                    Layout.preferredWidth: 18
+                    Layout.preferredHeight: 18
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Label {
+                        anchors.centerIn: parent
+                        text: "×"
+                        color: clearHit.containsMouse ? appTheme.textColor
+                                                      : appTheme.textMutedColor
+                        font.pixelSize: 14
+                    }
+
+                    MouseArea {
+                        id: clearHit
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: searchInput.clear()
+                    }
                 }
             }
         }
 
-        Loader {
-            Layout.fillWidth: true
-            active: card.showHeader && card.headerActions !== null && card.stackHeaderActions
-            visible: active
-            sourceComponent: card.headerActions
-        }
-
         // --- bars ---
         ColumnLayout {
-            visible: card.displayMode === "bars" && card.expanded
+            visible: card.displayMode === "bars"
             Layout.fillWidth: true
             spacing: 3
 
@@ -313,7 +381,7 @@ Item {
 
         // --- chips ---
         Item {
-            visible: card.displayMode === "chips" && card.expanded
+            visible: card.displayMode === "chips"
             Layout.fillWidth: true
             implicitHeight: chipsFlow.implicitHeight
 
@@ -338,12 +406,12 @@ Item {
                         color: isSelected
                             ? appTheme.editorListSelectedFillColor
                             : chipHitArea.containsMouse
-                                ? card.withAlpha(appTheme.hoverColor, 0.78)
-                                : card.withAlpha(appTheme.bgBaseColor, 0.62)
+                                ? appTheme.controlHoveredFillColor
+                                : appTheme.controlFillColor
                         border.width: 1
                         border.color: isSelected
                             ? appTheme.editorListSelectedFillColor
-                            : card.withAlpha(appTheme.glassStrokeColor, 0.35)
+                            : appTheme.cardBorderColor
 
                         MouseArea {
                             id: chipHitArea
@@ -374,9 +442,9 @@ Item {
                     height: 38
                     radius: 19
                     implicitWidth: moreLabel.implicitWidth + 28
-                    color: card.withAlpha(appTheme.bgBaseColor, 0.35)
+                    color: "transparent"
                     border.width: 1
-                    border.color: card.withAlpha(appTheme.glassStrokeColor, 0.3)
+                    border.color: appTheme.controlBorderColor
 
                     MouseArea {
                         anchors.fill: parent
@@ -397,13 +465,13 @@ Item {
                 }
 
                 Rectangle {
-                    visible: card.showAll && card.totalItems > card.chipPreviewLimit
+                    visible: card.canShowLess
                     height: 38
                     radius: 19
                     implicitWidth: collapseLabel.implicitWidth + 28
-                    color: card.withAlpha(appTheme.bgBaseColor, 0.35)
+                    color: "transparent"
                     border.width: 1
-                    border.color: card.withAlpha(appTheme.glassStrokeColor, 0.3)
+                    border.color: appTheme.controlBorderColor
 
                     MouseArea {
                         anchors.fill: parent
@@ -435,7 +503,7 @@ Item {
 
         // --- dots ---
         ColumnLayout {
-            visible: card.displayMode === "dots" && card.expanded
+            visible: card.displayMode === "dots"
             Layout.fillWidth: true
             spacing: 6
 
@@ -458,7 +526,7 @@ Item {
                         color: isSelected
                             ? appTheme.editorListSelectedFillColor
                             : dotHitArea.containsMouse
-                                ? card.withAlpha(appTheme.hoverColor, 0.86)
+                                ? appTheme.controlFillColor
                                 : "transparent"
                     }
 
@@ -522,7 +590,7 @@ Item {
 
         // --- grouped (year + month + day tiles) ---
         ColumnLayout {
-            visible: card.displayMode === "grouped" && card.expanded
+            visible: card.displayMode === "grouped"
             Layout.fillWidth: true
             spacing: 14
 
@@ -623,12 +691,12 @@ Item {
                                                 color: isSelected
                                                     ? appTheme.editorListSelectedFillColor
                                                     : dateHitArea.containsMouse
-                                                        ? card.withAlpha(appTheme.hoverColor, 0.72)
-                                                        : card.withAlpha(appTheme.bgBaseColor, 0.44)
+                                                        ? appTheme.controlHoveredFillColor
+                                                        : appTheme.controlFillColor
                                                 border.width: 1
                                                 border.color: isSelected
                                                     ? appTheme.editorListSelectedFillColor
-                                                    : card.withAlpha(appTheme.glassStrokeColor, 0.18)
+                                                    : appTheme.cardBorderColor
 
                                                 MouseArea {
                                                     id: dateHitArea
@@ -686,8 +754,7 @@ Item {
         }
 
         Label {
-            visible: card.hasOverflow
-                     && card.expanded
+            visible: (card.hasOverflow || card.canShowLess)
                      && (card.displayMode === "bars" || card.displayMode === "dots")
             text: card.showAll
                 ? qsTr("Show less ▲")

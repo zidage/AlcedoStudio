@@ -2,9 +2,10 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Album inspector page: library overview hero, capture/import/camera/label/rating/lens
-// filters, and the active-search filter card. Each field header carries the photo-sort
-// arrows and the Group checkbox (InspectorFieldActions) of the library query.
+// Album inspector page: library overview hero, then one InspectorSection per field (capture,
+// import, edit time, camera, label, rating, lens) and the active-search filter card. Each
+// section header band carries the photo-sort arrows and the Group action
+// (InspectorFieldActions) of the library query.
 ScrollView {
     id: root
     contentWidth: availableWidth
@@ -44,11 +45,12 @@ ScrollView {
 
         // Library Overview hero
         Item {
+            objectName: "libraryOverviewHero"
             Layout.fillWidth: true
             Layout.topMargin: 24
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-            Layout.bottomMargin: 4
+            Layout.leftMargin: appTheme.spaceMd * 2
+            Layout.rightMargin: appTheme.spaceMd * 2
+            Layout.bottomMargin: appTheme.spaceXl
             implicitHeight: heroCol.implicitHeight
 
             ColumnLayout {
@@ -58,11 +60,11 @@ ScrollView {
                 spacing: 14
 
                 Label {
-                    text: qsTr("LIBRARY OVERVIEW")
+                    text: qsTr("Library Overview")
                     color: root.mutedTextColor
-                    font.pixelSize: 10
-                    font.weight: 700
-                    font.letterSpacing: 1.8
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeBody
+                    font.weight: appTheme.fontWeightStrong
                 }
 
                 RowLayout {
@@ -88,30 +90,19 @@ ScrollView {
                         Layout.alignment: Qt.AlignVCenter
                     }
                 }
-
-                Label {
-                    visible: appModules.library.filterInfo !== ""
-                    text: appModules.library.filterInfo
-                    color: root.mutedTextColor
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: 11
-                    font.weight: 400
-                    Layout.topMargin: -6
-                }
-
             }
         }
 
-        // Stats sections
+        // Sections: one rounded card each (InspectorSection).
         ColumnLayout {
             Layout.fillWidth: true
-            Layout.topMargin: 28
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-            Layout.bottomMargin: 20
-            spacing: 24
+            Layout.leftMargin: appTheme.spaceMd
+            Layout.rightMargin: appTheme.spaceMd
+            Layout.bottomMargin: appTheme.spaceLg
+            spacing: appTheme.spaceSm
 
             DateFilterSection {
+                objectName: "captureDateFilterSection"
                 Layout.fillWidth: true
                 title: qsTr("By Capture Date")
                 model: appModules.stats.dateStats
@@ -151,65 +142,71 @@ ScrollView {
 
             // Edit time has no filter buckets, only the sort and Group actions. Edited photos
             // group by the day of their last edit; unedited photos form one group.
-            RowLayout {
+            InspectorSection {
                 objectName: "editTimeInspectorSection"
                 Layout.fillWidth: true
-                spacing: appTheme.spaceXs
-
-                Label {
-                    Layout.fillWidth: true
-                    text: qsTr("By Edit Time").toUpperCase()
-                    color: appTheme.textMutedColor
-                    font.pixelSize: 10
-                    font.weight: 700
-                    font.letterSpacing: 1.6
-                    wrapMode: Text.Wrap
-                }
-                InspectorFieldActions {
-                    field: "edited"
-                    fieldTitle: qsTr("edit time")
-                    timeField: true
-                    ascendingTitle: qsTr("oldest first")
-                    descendingTitle: qsTr("newest first")
+                title: qsTr("By Edit Time")
+                foldable: false
+                hasBody: false
+                headerActions: Component {
+                    InspectorFieldActions {
+                        field: "edited"
+                        fieldTitle: qsTr("edit time")
+                        timeField: true
+                        ascendingTitle: qsTr("oldest first")
+                        descendingTitle: qsTr("newest first")
+                    }
                 }
             }
 
-            StatsCard {
+            InspectorSection {
+                objectName: "cameraInspectorSection"
                 Layout.fillWidth: true
                 title: qsTr("By Camera Model")
-                model: appModules.stats.cameraStats
-                selectedLabel: appModules.stats.statsFilterCamera
-                displayMode: "chips"
-                onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("camera", label) }
                 headerActions: Component {
                     InspectorFieldActions {
                         field: "camera"
                         fieldTitle: qsTr("camera model")
                     }
                 }
+
+                StatsCard {
+                    objectName: "cameraStatsCard"
+                    Layout.fillWidth: true
+                    model: appModules.stats.cameraStats
+                    selectedLabel: appModules.stats.statsFilterCamera
+                    displayMode: "chips"
+                    searchable: true
+                    onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("camera", label) }
+                }
             }
 
-            StatsCard {
+            InspectorSection {
+                objectName: "labelInspectorSection"
                 Layout.fillWidth: true
                 title: qsTr("By Labels")
-                model: appModules.stats.labelStats
-                selectedLabel: appModules.stats.statsFilterLabel
-                displayMode: "chips"
-                onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("label", label) }
                 headerActions: Component {
                     InspectorFieldActions {
                         field: "label"
                         fieldTitle: qsTr("labels")
                     }
                 }
+
+                StatsCard {
+                    objectName: "labelStatsCard"
+                    Layout.fillWidth: true
+                    model: appModules.stats.labelStats
+                    selectedLabel: appModules.stats.statsFilterLabel
+                    displayMode: "chips"
+                    searchable: true
+                    onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("label", label) }
+                }
             }
 
-            StarRatingFilter {
+            InspectorSection {
+                objectName: "ratingInspectorSection"
                 Layout.fillWidth: true
-                selectedRating: appModules.stats.statsFilterRating
-                onStarClicked: function(rating) {
-                    appModules.stats.ToggleStatsFilter("rating", rating);
-                }
+                title: qsTr("By Rating")
                 headerActions: Component {
                     InspectorFieldActions {
                         field: "rating"
@@ -218,119 +215,109 @@ ScrollView {
                         descendingTitle: qsTr("highest first")
                     }
                 }
+
+                StarRatingFilter {
+                    Layout.fillWidth: true
+                    selectedRating: appModules.stats.statsFilterRating
+                    onStarClicked: function(rating) {
+                        appModules.stats.ToggleStatsFilter("rating", rating);
+                    }
+                }
             }
 
-            StatsCard {
+            InspectorSection {
+                objectName: "lensInspectorSection"
                 Layout.fillWidth: true
                 title: qsTr("By Lens")
-                model: appModules.stats.lensStats
-                selectedLabel: appModules.stats.statsFilterLens
-                displayMode: "dots"
-                onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("lens", label) }
                 headerActions: Component {
                     InspectorFieldActions {
                         field: "lens"
                         fieldTitle: qsTr("lens")
                     }
                 }
+
+                StatsCard {
+                    objectName: "lensStatsCard"
+                    Layout.fillWidth: true
+                    model: appModules.stats.lensStats
+                    selectedLabel: appModules.stats.statsFilterLens
+                    displayMode: "dots"
+                    searchable: true
+                    onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("lens", label) }
+                }
             }
 
-            Item {
+            InspectorSection {
+                objectName: "searchFilterInspectorSection"
                 Layout.fillWidth: true
                 visible: appModules.search.activeSearchQuery.length > 0
-                implicitHeight: searchFilterCard.implicitHeight
+                title: qsTr("Search Filter")
+                foldable: false
 
-                ColumnLayout {
-                    id: searchFilterCard
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    spacing: 8
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
 
-                    Label {
-                        text: qsTr("SEARCH FILTER")
-                        color: root.mutedTextColor
-                        font.pixelSize: 10
-                        font.weight: 700
-                        font.letterSpacing: 1.6
+                    ColumnLayout {
+                        id: searchFilterColumn
+                        Layout.fillWidth: true
+                        spacing: 2
+                        Layout.alignment: Qt.AlignVCenter
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("Filtered by search")
+                            color: root.withAlpha(root.textColor, 0.86)
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: 12
+                            font.weight: 700
+                            wrapMode: Text.Wrap
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: appModules.search.activeSearchQuery
+                            color: root.mutedTextColor
+                            font.family: appTheme.dataFontFamily
+                            font.pixelSize: 11
+                            font.weight: 500
+                            wrapMode: Text.Wrap
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: appModules.search.activeSearchIsSemantic
+                            text: qsTr("Natural language")
+                            color: root.mutedTextColor
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: 11
+                            font.weight: 500
+                            wrapMode: Text.Wrap
+                        }
                     }
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Math.max(58, searchFilterColumn.implicitHeight
-                                                         + appTheme.spaceMd)
-                        radius: 6
-                        color: root.withAlpha(appTheme.bgBaseColor, 0.62)
-                        border.width: 1
-                        border.color: root.withAlpha(appTheme.glassStrokeColor, 0.36)
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 12
-                            anchors.rightMargin: 8
-                            spacing: 10
-
-                            ColumnLayout {
-                                id: searchFilterColumn
-                                Layout.fillWidth: true
-                                spacing: 2
-                                Layout.alignment: Qt.AlignVCenter
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: qsTr("Filtered by search")
-                                    color: root.withAlpha(root.textColor, 0.86)
-                                    font.family: appTheme.uiFontFamily
-                                    font.pixelSize: 12
-                                    font.weight: 700
-                                    wrapMode: Text.Wrap
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: appModules.search.activeSearchQuery
-                                    color: root.mutedTextColor
-                                    font.family: appTheme.dataFontFamily
-                                    font.pixelSize: 11
-                                    font.weight: 500
-                                    wrapMode: Text.Wrap
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    visible: appModules.search.activeSearchIsSemantic
-                                    text: qsTr("Natural language")
-                                    color: root.mutedTextColor
-                                    font.family: appTheme.uiFontFamily
-                                    font.pixelSize: 11
-                                    font.weight: 500
-                                    wrapMode: Text.Wrap
-                                }
-                            }
-
-                            ToolButton {
-                                id: clearSearchButton
-                                Layout.preferredWidth: 28
-                                Layout.preferredHeight: 28
-                                text: "×"
-                                font.pixelSize: 18
-                                font.weight: 400
-                                onClicked: appModules.search.ClearFuzzySearch()
-                                background: Rectangle {
-                                    radius: 6
-                                    color: clearSearchButton.down
-                                           ? root.withAlpha(appTheme.textColor, 0.10)
-                                           : (clearSearchButton.hovered
-                                              ? root.withAlpha(appTheme.hoverColor, 0.86)
-                                              : "transparent")
-                                }
-                                contentItem: Text {
-                                    text: clearSearchButton.text
-                                    color: root.withAlpha(root.textColor, 0.76)
-                                    font: clearSearchButton.font
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                            }
+                    ToolButton {
+                        id: clearSearchButton
+                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: 28
+                        text: "×"
+                        font.pixelSize: 18
+                        font.weight: 400
+                        onClicked: appModules.search.ClearFuzzySearch()
+                        background: Rectangle {
+                            radius: 6
+                            color: clearSearchButton.down
+                                   ? root.withAlpha(appTheme.textColor, 0.10)
+                                   : (clearSearchButton.hovered
+                                      ? root.withAlpha(appTheme.hoverColor, 0.86)
+                                      : "transparent")
+                        }
+                        contentItem: Text {
+                            text: clearSearchButton.text
+                            color: root.withAlpha(root.textColor, 0.76)
+                            font: clearSearchButton.font
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
                         }
                     }
                 }
