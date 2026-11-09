@@ -2,9 +2,10 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Executor ownership refactor P4: thumbnails and analysis renditions render committed pipeline
-// graph snapshots on the ThumbnailService's own batch executors. They never use the editor's
-// executor, never take its render lock, and never see uncommitted editor values.
+// Executor ownership refactor P4: thumbnails render committed pipeline graph snapshots on the
+// ThumbnailService's own batch executors, and semantic generation inputs come from the committed
+// state through SemanticInputImageService. Neither uses the editor's executor, takes its render
+// lock, or sees uncommitted editor values.
 // Since P6 the editor session owns its working document and its Interactive executor; these tests
 // stand in for it with an EditorStandIn that owns the same objects.
 
@@ -31,6 +32,7 @@
 #include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "app/semantic_input_image_service.hpp"
 #include "app/thumbnail_service.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -57,6 +59,7 @@ namespace {
 using namespace std::chrono_literals;
 using raw_import_test::HostPixels;
 using raw_import_test::ImportLinearDng;
+using raw_import_test::ImportRawFile;
 using raw_import_test::LinearDngPath;
 
 auto RequestThumbnail(ThumbnailService& service, sl_element_id_t element_id, image_id_t image_id,
@@ -202,6 +205,38 @@ auto HasBatchRenderer(PipelineExecutor& executor) -> bool {
   }
 #endif
   return false;
+}
+
+/// First Sony ARW of the CI fixture set; its JPEG preview is larger than every model input.
+auto FirstCiArwPath() -> std::filesystem::path {
+  const auto root = std::filesystem::path(TEST_IMG_PATH) / "ci_rawfiles";
+  if (!std::filesystem::exists(root)) {
+    return {};
+  }
+  std::vector<std::filesystem::path> paths;
+  for (const auto& entry : std::filesystem::directory_iterator(root)) {
+    const auto ext = entry.path().extension().string();
+    if (entry.is_regular_file() && (ext == ".ARW" || ext == ".arw") &&
+        std::filesystem::file_size(entry.path()) > 1024 * 1024) {
+      paths.push_back(entry.path());
+    }
+  }
+  std::sort(paths.begin(), paths.end());
+  return paths.empty() ? std::filesystem::path{} : paths.front();
+}
+
+auto RequestSemanticInput(SemanticInputImageService& service, sl_element_id_t element_id,
+                          image_id_t image_id) -> SemanticInputImageResult {
+  std::promise<SemanticInputImageResult> done;
+  auto                                   done_future = done.get_future();
+  service.Request(
+      element_id, image_id, [] { return false; },
+      [&done](SemanticInputImageResult result) { done.set_value(std::move(result)); });
+  if (done_future.wait_for(120s) != std::future_status::ready) {
+    ADD_FAILURE() << "semantic input request did not finish";
+    return {};
+  }
+  return done_future.get();
 }
 
 class ThumbnailCommittedRenderTest : public ::testing::Test {
@@ -361,6 +396,102 @@ TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersTheCommittedStateNotUncommi
 
   thumbnails.ReleaseThumbnail(ids.first);
   pipelines->ReleaseEditorLease(ids.first);
+}
+
+// ── Semantic generation inputs ─────────────────────────────────────────────────────────────────
+
+// An imported RAW image without a committed edit gets the camera preview stored in the file,
+// scaled so that its shorter edge is the model input size.
+TEST_F(ThumbnailCommittedRenderTest, SemanticInputOfAnUneditedRawIsTheCameraPreview) {
+  const auto arw = FirstCiArwPath();
+  if (arw.empty()) {
+    GTEST_SKIP() << "ARW fixtures missing under TEST_IMG_PATH/ci_rawfiles";
+  }
+  ProjectService project(db_path_, meta_path_);
+  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  const auto     ids       = ImportRawFile(project, pipelines, arw);
+  ASSERT_NE(ids.first, 0u);
+  ASSERT_FALSE(pipelines->AcquireCommittedSnapshot(ids.first)->Head().has_value());
+
+  SemanticInputImageService inputs(project.GetImagePoolService(), pipelines, 256);
+  const auto                result = RequestSemanticInput(inputs, ids.first, ids.second);
+  ASSERT_EQ(result.status, SemanticInputImageStatus::kReady) << result.message;
+  EXPECT_EQ(result.element_id, ids.first);
+  EXPECT_EQ(result.image.source, SemanticInputImageSource::kEmbeddedPreview);
+  EXPECT_EQ(std::min(result.image.width, result.image.height), 256u);
+  EXPECT_EQ(result.image.rgba8.size(),
+            static_cast<size_t>(result.image.width) * result.image.height * 4u);
+}
+
+// After a committed edit the input is a render of the committed state, on the service's own
+// executor: the editor's executor gets no batch renderer.
+TEST_F(ThumbnailCommittedRenderTest, SemanticInputOfAnEditedRawRendersTheCommittedState) {
+  const auto arw = FirstCiArwPath();
+  if (arw.empty()) {
+    GTEST_SKIP() << "ARW fixtures missing under TEST_IMG_PATH/ci_rawfiles";
+  }
+  ProjectService project(db_path_, meta_path_);
+  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  const auto     ids       = ImportRawFile(project, pipelines, arw);
+  ASSERT_NE(ids.first, 0u);
+  auto editor = OpenEditor(*pipelines, ids.first);
+  (void)CommitExposure(editor, 1.5f);
+  (void)PublishWorkingAsCommitted(*pipelines, editor);
+  ASSERT_TRUE(pipelines->AcquireCommittedSnapshot(ids.first)->Head().has_value());
+
+  SemanticInputImageService inputs(project.GetImagePoolService(), pipelines, 256);
+  const auto                result = RequestSemanticInput(inputs, ids.first, ids.second);
+  ASSERT_EQ(result.status, SemanticInputImageStatus::kReady) << result.message;
+  EXPECT_EQ(result.image.source, SemanticInputImageSource::kCommittedRender);
+  EXPECT_GT(result.image.width, 0u);
+  EXPECT_LE(std::min(result.image.width, result.image.height), 256u);
+  EXPECT_EQ(result.image.rgba8.size(),
+            static_cast<size_t>(result.image.width) * result.image.height * 4u);
+  EXPECT_FALSE(HasBatchRenderer(*editor.executor));
+
+  pipelines->ReleaseEditorLease(ids.first);
+}
+
+// A semantic input reads the committed state. It must not release the editor lease or change the
+// editor's working document, which holds uncommitted values across the request.
+TEST_F(ThumbnailCommittedRenderTest, SemanticInputLeavesTheEditorLeaseAndWorkingDocumentUntouched) {
+  if (!std::filesystem::exists(LinearDngPath())) {
+    GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
+  }
+  ProjectService project(db_path_, meta_path_);
+  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  const auto     ids       = ImportLinearDng(project, pipelines);
+  ASSERT_NE(ids.first, 0u);
+
+  auto lease = pipelines->AcquireEditorLease(ids.first);
+  ASSERT_NE(lease.document_, nullptr);
+  lease.document_->PrimaryGrade()
+      ->FindAdjustmentByType(type_ids::Exposure())
+      ->LoadJson({{"exposure_ev", 2.0f}});
+  PipelineDocument* const   working_document = lease.document_.get();
+  const auto                working_json     = lease.document_->ToJson();
+
+  SemanticInputImageService inputs(project.GetImagePoolService(), pipelines, 256);
+  const auto                result = RequestSemanticInput(inputs, ids.first, ids.second);
+  ASSERT_EQ(result.status, SemanticInputImageStatus::kReady) << result.message;
+
+  EXPECT_EQ(lease.document_.get(), working_document);
+  EXPECT_EQ(lease.document_->ToJson(), working_json);
+  EXPECT_THROW((void)pipelines->LoadHistorySnapshot(ids.first), std::runtime_error)
+      << "the semantic input must not end the editor lease";
+
+  pipelines->ReleaseEditorLease(ids.first);
+}
+
+// An element that is not in the project fails with the real error and no image.
+TEST_F(ThumbnailCommittedRenderTest, SemanticInputOfAnUnknownImageFailsWithTheRealError) {
+  ProjectService            project(db_path_, meta_path_);
+  auto                      pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  SemanticInputImageService inputs(project.GetImagePoolService(), pipelines, 256);
+  const auto                result = RequestSemanticInput(inputs, 999999u, 999999u);
+  EXPECT_EQ(result.status, SemanticInputImageStatus::kError);
+  EXPECT_FALSE(result.message.empty());
+  EXPECT_TRUE(result.image.rgba8.empty());
 }
 
 TEST_F(ThumbnailCommittedRenderTest, DiskCacheEntriesAreLabelledWithTheRenderedCommittedState) {

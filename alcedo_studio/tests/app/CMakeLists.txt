@@ -867,11 +867,12 @@ gtest_discover_tests(MaskThumbnailServiceTest TEST_PREFIX "MaskThumbnailServiceT
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(MaskThumbnailServiceTest app ci_core)
 
-# Executor ownership refactor P7: thumbnails, analysis, and export render on their own executors
+# Executor ownership refactor P7: thumbnails, semantic inputs, and export render on their own executors
 # and leave the editor executor, its working document, and storage unchanged.
 add_executable(BackgroundRenderIsolationTest ${ALCEDO_TEST_ROOT}/app/background_render_isolation_test.cpp)
 target_include_directories(BackgroundRenderIsolationTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(BackgroundRenderIsolationTest ThumbnailService ExportService ProjectService
+target_link_libraries(BackgroundRenderIsolationTest ThumbnailService SemanticInputImageService
+  ExportService ProjectService
   ImportService EditorWorkingDocument GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(BackgroundRenderIsolationTest TEST_PREFIX "BackgroundRenderIsolationTest.")
 alcedo_register_test_target(BackgroundRenderIsolationTest app)
@@ -889,8 +890,8 @@ alcedo_register_test_target(ExecutorIsolationTest app)
 # batch executors, never on the editor's executor or behind its render lock.
 add_executable(ThumbnailCommittedRenderTest ${ALCEDO_TEST_ROOT}/app/thumbnail_committed_render_test.cpp)
 target_include_directories(ThumbnailCommittedRenderTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(ThumbnailCommittedRenderTest ThumbnailService ProjectService ImportService
-  EditorWorkingDocument GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+target_link_libraries(ThumbnailCommittedRenderTest ThumbnailService SemanticInputImageService
+  ProjectService ImportService EditorWorkingDocument GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(ThumbnailCommittedRenderTest TEST_PREFIX "ThumbnailCommittedRenderTest.")
 alcedo_register_test_target(ThumbnailCommittedRenderTest app)
 

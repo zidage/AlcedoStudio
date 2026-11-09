@@ -15,6 +15,7 @@
 #include <QTimer>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <string>
@@ -24,16 +25,15 @@
 #include "app/album_browse_service.hpp"
 #include "app/model_asset_catalog.hpp"
 #include "app/project_service.hpp"
+#include "app/semantic_input_image_service.hpp"
 #include "storage/store/semantic/semantic_label_config.hpp"
-#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
-#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
-#include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
-#include "ui/alcedo_main/album_backend/background_task_controller.hpp"
-#include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 
 namespace alcedo::ui {
 
@@ -55,7 +55,7 @@ constexpr auto   kSiglip2ProfileId                      = "siglip2-b32-256-multi
 constexpr auto   kSiglip2CoreMlProfileId                = "siglip2-base-256-coreml-macos";
 constexpr size_t kMobileClipBatchSize                   = 64;
 constexpr size_t kJinaClipBatchSize                     = 4;
-constexpr size_t kSiglip2BatchSize                      = 8;
+constexpr size_t kSiglip2BatchSize                      = 32;
 constexpr size_t kCoreMlImageBatchSize                  = 1;
 constexpr size_t kCoreMlTextBatchSize                   = 8;
 
@@ -146,26 +146,6 @@ auto EmbeddingTimeoutForProfile(const SemanticResolvedModelManifest& manifest)
   const AiSidecarRuntimeModelInfo info{.profile_id = manifest.profile_id,
                                        .model_id   = manifest.model_id};
   return EmbeddingTimeoutForProfile(info);
-}
-
-auto ItemsNeedingSemanticGeneration(const std::vector<SemanticGenerationItem>& items,
-                                    const SemanticEmbeddingStore&              embeddings,
-                                    const std::string& model_key, bool force_regenerate)
-    -> std::vector<SemanticGenerationItem> {
-  if (force_regenerate || model_key.empty()) {
-    return items;
-  }
-
-  std::vector<SemanticGenerationItem> pending;
-  pending.reserve(items.size());
-  constexpr bool require_label = true;
-  for (const auto& item : items) {
-    if (!embeddings.HasReadyImageEmbedding(item.element_id, item.image_id, model_key,
-                                           require_label)) {
-      pending.push_back(item);
-    }
-  }
-  return pending;
 }
 
 }  // namespace
@@ -741,9 +721,9 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
     return;
   }
 
-  auto project           = project_->handler().project();
-  auto thumbnail_service = project_->handler().thumbnail_service();
-  if (!project || !thumbnail_service) {
+  auto project   = project_->handler().project();
+  auto pipelines = project_->handler().pipeline_service();
+  if (!project || !pipelines) {
     running_ = false;
     pending_items_.clear();
     status_text_ = PL_TEXT("Semantic generation is unavailable without an open project.");
@@ -886,36 +866,17 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
     return;
   }
 
-  pending_items_ =
-      ItemsNeedingSemanticGeneration(pending_items_, storage.GetSemanticEmbeddingStore(),
-                                     model_key, forceRegenerate);
+  // The job skips the images that already have labels, with one query on its worker thread.
   model_key_ = model_key;
   total_     = ClampToInt(pending_items_.size());
   embedded_  = 0;
   skipped_   = 0;
   failed_    = 0;
   canceled_  = 0;
-  if (pending_items_.empty()) {
-    running_ = false;
-    sidecar_lease_.reset();
-    status_text_ = PL_TEXT("All images already have semantic labels.");
-    if (!background_task_id_.isEmpty()) {
-      background_tasks_->FinishTask(background_task_id_, BackgroundTaskState::Succeeded,
-                                           status_text_.Render());
-      background_task_id_.clear();
-    }
-    status_->SetTaskState(status_text_, 100, false);
-    status_->ScheduleIdleTaskStateReset(1800);
-    RefreshAlbumSummary();
-    emit StateChanged();
-    return;
-  }
+  ResetRemainingTimeEstimate();
   status_text_ = PL_TEXT("Generating semantic labels for %1 image(s)...", total_);
-  emit                      StateChanged();
 
   SemanticGenerationOptions options;
-  options.thumbnail_resolution = ThumbnailResolution::k256;
-  options.thumbnail_batch_size = 8;
   options.embedding_batch_size = EmbeddingBatchSizeForProfile(*runtime_status.model_info);
   options.embedding_timeout    = EmbeddingTimeoutForProfile(*runtime_status.model_info);
   options.expected_model_info  = runtime_status.model_info;
@@ -929,9 +890,13 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
       LabelPrototypeBatchSizeForProfile(*runtime_status.model_info);
   options.persistence = persistence;
 
-  auto thumbnails = std::make_shared<ThumbnailServiceAnalysisRenditionProvider>(thumbnail_service);
-  auto embedder   = std::make_shared<AiSidecarRuntimeImageEmbeddingClient>(runtime);
-  auto service    = std::make_shared<SemanticGenerationService>(thumbnails, embedder);
+  // The model input images come from their own service: camera previews of unedited RAW files and
+  // renders of the committed state for the others. The job ends the service on its thread.
+  auto inputs         = std::make_shared<SemanticInputImageService>(
+      project->GetImagePoolService(), pipelines,
+      std::max<uint32_t>(1, runtime_status.model_info->image_size));
+  auto embedder = std::make_shared<AiSidecarRuntimeImageEmbeddingClient>(runtime);
+  auto service  = std::make_shared<SemanticGenerationService>(std::move(inputs), embedder);
   QPointer<SemanticGenerationController> self(this);
   auto                                   job = service->StartGeneration(
       pending_items_, options,
@@ -968,6 +933,8 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
   if (background_task_id_.isEmpty()) {
     background_task_id_ = RegisterBackgroundTask();
   }
+  // Observers see the running job together with its background task.
+  emit StateChanged();
 }
 
 auto SemanticGenerationController::RuntimeOptionsForProfile(const ModelProfileSpec& profile) const
@@ -995,7 +962,9 @@ void SemanticGenerationController::UpdateProgress(const SemanticGenerationProgre
   status_text_ =
       PL_TEXT("Generating semantic labels... %1/%2 complete", completed, std::max(total_, 1));
   status_->SetTaskState(status_text_, pct, true);
-  RefreshAlbumSummary();
+  // The album counts are read again when the job finishes; during the job the worker writes
+  // every batch, and a count here would wait for those writes on the GUI thread.
+  UpdateRemainingTimeEstimate(progress);
   if (!background_task_id_.isEmpty()) {
     background_tasks_->UpdateTask(background_task_id_, status_text_.Render(), QString(),
                                          pct);
@@ -1037,8 +1006,12 @@ void SemanticGenerationController::Finish(std::vector<SemanticGenerationItemResu
   canceled_    = canceled;
   total_       = static_cast<int>(results.size());
 
-  status_text_ = PL_TEXT("Semantic generation complete: %1 generated, %2 skipped, %3 failed.",
-                         embedded, skipped, failed + canceled);
+  ResetRemainingTimeEstimate();
+  const bool all_labeled = embedded == 0 && failed == 0 && canceled == 0 && skipped > 0;
+  status_text_           = all_labeled
+                               ? PL_TEXT("All images already have semantic labels.")
+                               : PL_TEXT("Semantic generation complete: %1 generated, %2 skipped, %3 failed.",
+                                         embedded, skipped, failed + canceled);
   status_->SetTaskState(status_text_, 100, false);
   status_->ScheduleIdleTaskStateReset(2200);
   RefreshAlbumSummary();
@@ -1049,14 +1022,53 @@ void SemanticGenerationController::Finish(std::vector<SemanticGenerationItemResu
   }
   if (!background_task_id_.isEmpty()) {
     const BackgroundTaskState final_state =
-        canceled > 0
-            ? BackgroundTaskState::Canceled
-            : (embedded > 0 ? BackgroundTaskState::Succeeded : BackgroundTaskState::Failed);
+        canceled > 0 ? BackgroundTaskState::Canceled
+                     : (embedded > 0 || all_labeled ? BackgroundTaskState::Succeeded
+                                                    : BackgroundTaskState::Failed);
     background_tasks_->FinishTask(background_task_id_, final_state, status_text_.Render());
     background_task_id_.clear();
   }
   sidecar_lease_.reset();
   emit StateChanged();
+}
+
+void SemanticGenerationController::ResetRemainingTimeEstimate() {
+  rate_samples_.clear();
+  remaining_seconds_ = -1;
+}
+
+void SemanticGenerationController::UpdateRemainingTimeEstimate(
+    const SemanticGenerationProgress& progress) {
+  // Work is an image that got an embedding or failed. Skipped images are no work, and the
+  // estimate starts at the first finished image, after the sidecar start and the label
+  // prototypes. The rate is the one of the last kRateWindow.
+  constexpr auto kRateWindow    = std::chrono::seconds(60);
+  constexpr auto kMinRateWindow = std::chrono::seconds(3);
+  const size_t   done           = progress.embedded + progress.failed;
+  const size_t   work_total     = progress.total > progress.skipped + progress.canceled
+                                      ? progress.total - progress.skipped - progress.canceled
+                                      : 0;
+  const auto     now            = std::chrono::steady_clock::now();
+  if (done == 0) {
+    remaining_seconds_ = -1;
+    return;
+  }
+  if (rate_samples_.empty() || rate_samples_.back().second != done) {
+    rate_samples_.emplace_back(now, done);
+  }
+  while (rate_samples_.size() > 2 && now - rate_samples_[1].first >= kRateWindow) {
+    rate_samples_.pop_front();
+  }
+  const auto& oldest = rate_samples_.front();
+  const auto  span   = std::chrono::duration<double>(now - oldest.first);
+  if (span < kMinRateWindow || done <= oldest.second) {
+    return;
+  }
+  const double rate      = static_cast<double>(done - oldest.second) / span.count();
+  const size_t remaining = work_total > done ? work_total - done : 0;
+  remaining_seconds_ =
+      static_cast<int>(std::min(std::ceil(static_cast<double>(remaining) / rate),
+                                static_cast<double>(std::numeric_limits<int>::max())));
 }
 
 void SemanticGenerationController::ClearPrompt() {

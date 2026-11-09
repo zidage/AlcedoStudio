@@ -27,6 +27,8 @@ use crate::service::ort_runtime::DeviceRequest;
 
 #[cfg(test)]
 const EMBEDDING_DIM: usize = 512;
+/// Threads that resize and normalize the images of one batch.
+const MAX_PREPROCESS_THREADS: usize = 8;
 
 #[derive(Debug, Clone)]
 struct SessionIo {
@@ -522,17 +524,45 @@ impl OrtClipEngine {
             bail!("image batch must not be empty");
         }
 
-        let mut batch_data = Vec::with_capacity(rgbs.len() * 3 * self.image_size * self.image_size);
+        let image_len = 3 * self.image_size * self.image_size;
+        let mut batch_data = vec![0.0f32; rgbs.len() * image_len];
         let (mean, std) = self.adapter.image_mean_std();
-        for rgb in rgbs {
-            batch_data.extend(Self::prepare_image_tensor_data_for_size(
-                rgb,
-                self.image_size,
-                self.adapter.image_resize_mode(),
-                mean,
-                std,
-            )?);
-        }
+        let resize_mode = self.adapter.image_resize_mode();
+        let image_size = self.image_size;
+        // Each image fills its own slice of the batch tensor; the threads share nothing else.
+        let threads = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+            .clamp(1, MAX_PREPROCESS_THREADS)
+            .min(rgbs.len());
+        let images_per_thread = rgbs.len().div_ceil(threads);
+        std::thread::scope(|scope| -> Result<()> {
+            let workers: Vec<_> = batch_data
+                .chunks_mut(images_per_thread * image_len)
+                .zip(rgbs.chunks(images_per_thread))
+                .map(|(out, images)| {
+                    scope.spawn(move || -> Result<()> {
+                        for (slot, rgb) in out.chunks_mut(image_len).zip(images) {
+                            let data = Self::prepare_image_tensor_data_for_size(
+                                rgb,
+                                image_size,
+                                resize_mode,
+                                mean,
+                                std,
+                            )?;
+                            slot.copy_from_slice(&data);
+                        }
+                        Ok(())
+                    })
+                })
+                .collect();
+            for worker in workers {
+                worker
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("image preprocessing thread panicked"))??;
+            }
+            Ok(())
+        })?;
 
         Ok((batch_data, rgbs.len()))
     }
@@ -743,28 +773,37 @@ impl OrtClipEngine {
         if self.adapter.uses_multimodal_session() {
             return self.forward_multimodal_image_embeddings(rgbs);
         }
-        self.vision_residency()?
-            .with_session(|loaded| self.forward_image_with_session(loaded, rgbs))
+        // The resize and normalization run before the encoder lock, on several threads, so the
+        // next batch is prepared while the encoder runs the current one.
+        let (pixel_values, batch_size) = self.prepare_image_batch_tensor_data(rgbs)?;
+        self.vision_residency()?.with_session(move |loaded| {
+            self.forward_image_with_session(loaded, pixel_values, batch_size)
+        })
     }
 
     fn forward_image_with_session(
         &self,
         loaded: &mut LoadedEncoder,
-        rgbs: &[RgbImage],
+        pixel_values: Vec<f32>,
+        batch_size: usize,
     ) -> Result<Vec<Vec<f32>>> {
         if let Some(max_batch_size) = loaded
             .io
             .fixed_batch_size
-            .filter(|max_batch_size| rgbs.len() > *max_batch_size)
+            .filter(|max_batch_size| batch_size > *max_batch_size)
         {
-            let mut embeddings = Vec::with_capacity(rgbs.len());
-            for chunk in rgbs.chunks(max_batch_size) {
-                embeddings.extend(self.forward_image_with_session(loaded, chunk)?);
+            let image_len = 3 * self.image_size * self.image_size;
+            let mut embeddings = Vec::with_capacity(batch_size);
+            for chunk in pixel_values.chunks(max_batch_size * image_len) {
+                embeddings.extend(self.forward_image_with_session(
+                    loaded,
+                    chunk.to_vec(),
+                    chunk.len() / image_len,
+                )?);
             }
             return Ok(embeddings);
         }
 
-        let (pixel_values, batch_size) = self.prepare_image_batch_tensor_data(rgbs)?;
         let input_tensor = Tensor::from_array((
             [batch_size, 3, self.image_size, self.image_size],
             pixel_values,

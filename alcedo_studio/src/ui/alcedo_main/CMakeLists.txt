@@ -312,6 +312,7 @@ target_link_libraries(AlbumBackendLib
         ThumbnailService
         MaskThumbnailService
         SemanticGenerationService
+        SemanticInputImageService
         AiProviderProfile
         AiCredentialStore
         ModelDownloadService
@@ -404,6 +405,8 @@ def_library(AutomationHostLib
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_library_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/export_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_export_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/label_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_label_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/search_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_search_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/lut_commands.cpp"

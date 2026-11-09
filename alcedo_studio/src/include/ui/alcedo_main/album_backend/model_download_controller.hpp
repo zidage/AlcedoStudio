@@ -71,6 +71,8 @@ class ModelDownloadController final : public QObject {
   // the profile is unknown, the download statement is not accepted (plan P8), or another
   // download runs (one download at a time, plan P9).
   bool               InstallModel(const QString& profileId);
+  /// Background task of the running download; empty when no download runs.
+  [[nodiscard]] auto DownloadTaskId() const -> QString { return background_task_id_; }
   // Cancels the running download of @p profileId. Returns false when it does not run.
   bool               CancelInstall(const QString& profileId);
   // Deletes the files of @p profileId. Returns false with the reason in the row error while its

@@ -60,22 +60,19 @@ using ThumbnailCallback       = std::function<void(std::shared_ptr<ThumbnailGuar
 using ThumbnailResultCallback = std::function<void(ThumbnailRequestResult)>;
 using CallbackDispatcher      = std::function<void(std::function<void()>)>;
 
-/// Identity of one analysis rendition request; unique within one ThumbnailService.
-using AnalysisRenditionId     = std::uint64_t;
-
 /**
- * @brief Renders thumbnails and analysis renditions of committed image states.
+ * @brief Renders thumbnails of committed image states.
  *
  * Every render reads the committed pipeline graph snapshot of the image
  * (@ref PipelineMgmtService::AcquireCommittedSnapshot): uncommitted editor values never reach a
- * thumbnail, an analysis input, or the disk cache, and the disk cache key is the snapshot's
+ * thumbnail or the disk cache, and the disk cache key is the snapshot's
  * history label (head and chain).
  *
  * Owns its own renderers: a fixed pool of batch executors (@ref kDefaultBatchExecutorCount) and a
  * scheduler with one worker per executor. It never takes the editor's render lock and never
  * renders on the editor's executor.
  *
- * Request flow: memory cache (thumbnails only) → lookup worker (snapshot, disk cache read) →
+ * Request flow: memory cache → lookup worker (snapshot, disk cache read) →
  * batch render → RGBA8 display buffer → disk cache write → callback.
  */
 class ThumbnailService {
@@ -120,22 +117,6 @@ class ThumbnailService {
                             ThumbnailResultCallback callback, bool pin_if_found = true,
                             CallbackDispatcher  dispatcher = nullptr,
                             ThumbnailResolution resolution = ThumbnailResolution::k1024);
-
-  /**
-   * @brief Render one analysis rendition of the committed state of @p element_id.
-   *
-   * Same render path as a thumbnail, but the result is delivered once to @p callback and is not
-   * stored in the memory cache; the disk cache uses the analysis namespace.
-   * @return Identity for @ref CancelAnalysisRendition and @ref ReleaseAnalysisRendition. It
-   *         cancels only this request, never another client's request for the same image.
-   */
-  auto RequestAnalysisRendition(sl_element_id_t element_id, image_id_t image_id,
-                                ThumbnailResolution resolution, ThumbnailResultCallback callback)
-      -> AnalysisRenditionId;
-  /// Cancel @p id. A request that has not delivered yet delivers kCanceled.
-  void                  CancelAnalysisRendition(AnalysisRenditionId id);
-  /// Forget @p id; later cancels of it do nothing. Does not cancel it.
-  void                  ReleaseAnalysisRendition(AnalysisRenditionId id);
 
   // Cancel a pending thumbnail request for one element/resolution key.
   // Also increments the key generation token so queued tasks skip execution.
@@ -189,40 +170,4 @@ class ThumbnailService {
   DiskCacheStats GetDiskCacheStats() const;
 };
 
-/**
- * @brief Source of analysis renditions for one client (image analysis or semantic generation).
- *
- * Requests are keyed by (element, resolution) within the client; cancelling or releasing a key
- * affects only this client's requests.
- */
-class IAnalysisRenditionProvider {
- public:
-  virtual ~IAnalysisRenditionProvider()                           = default;
-
-  virtual void RequestRendition(sl_element_id_t element_id, image_id_t image_id,
-                                ThumbnailResolution     resolution,
-                                ThumbnailResultCallback callback) = 0;
-  virtual void CancelRendition(const ThumbnailCacheKey& key)      = 0;
-  virtual void ReleaseRendition(const ThumbnailCacheKey& key)     = 0;
-};
-
-/**
- * @brief @ref IAnalysisRenditionProvider backed by @ref ThumbnailService analysis renditions.
- *
- * Maps this client's keys to the service's request identities. Thread: any thread.
- */
-class ThumbnailServiceAnalysisRenditionProvider final : public IAnalysisRenditionProvider {
- public:
-  explicit ThumbnailServiceAnalysisRenditionProvider(std::shared_ptr<ThumbnailService> service);
-
-  void RequestRendition(sl_element_id_t element_id, image_id_t image_id,
-                        ThumbnailResolution resolution, ThumbnailResultCallback callback) override;
-  void CancelRendition(const ThumbnailCacheKey& key) override;
-  void ReleaseRendition(const ThumbnailCacheKey& key) override;
-
- private:
-  std::shared_ptr<ThumbnailService>                               service_;
-  std::mutex                                                      mutex_;
-  std::unordered_multimap<ThumbnailCacheKey, AnalysisRenditionId> requests_;
-};
 };  // namespace alcedo

@@ -43,13 +43,9 @@ ColumnLayout {
     readonly property real progressValue: progressTotal > 0 ? progressCompleted / progressTotal : 0
     property real elapsedSecs: 0
     property var generationStart: null
-    // Rough ETA: batch size is fixed (64 or 4), so once the first batch lands the
-    // completion rate stabilizes and remaining time = remaining / rate.
-    readonly property real processingRate: (elapsedSecs > 0 && progressCompleted > 0)
-                                           ? progressCompleted / elapsedSecs : 0
-    readonly property real remainingSecs: processingRate > 0
-                                          ? (progressTotal - progressCompleted) / processingRate
-                                          : 0
+    // Seconds until the generation finishes, from the controller's rate of the last minute; -1
+    // while no estimate exists.
+    readonly property int remainingSeconds: hasController ? semanticController.remainingSeconds : -1
 
     onGenerationRunningChanged: {
         if (generationRunning) {
@@ -240,8 +236,8 @@ ColumnLayout {
                     visible: panel.generationRunning && panel.generationStart !== null
                     text: {
                         var elapsed = panel.formatDuration(panel.elapsedSecs)
-                        if (panel.progressCompleted > 0 && panel.processingRate > 0) {
-                            var rem = panel.formatDuration(panel.remainingSecs)
+                        if (panel.remainingSeconds >= 0) {
+                            var rem = panel.formatDuration(panel.remainingSeconds)
                             return qsTr("Elapsed %1 · ~%2 remaining").arg(elapsed).arg(rem)
                         }
                         return qsTr("Elapsed %1 · estimating…").arg(elapsed)
