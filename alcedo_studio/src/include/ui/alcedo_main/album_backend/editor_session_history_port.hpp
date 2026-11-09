@@ -118,6 +118,7 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
       const alcedo::EditorHistoryGuardHandle&                     guard,
       const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
       const alcedo::EditorComparisonSource& a, const alcedo::EditorComparisonSource& b,
+      alcedo::EditorComparisonDevelopSettings develop_settings,
       alcedo::EditorComparisonInputPair* pair, std::string* error) -> bool override;
   auto BuildAiMaskAnalysisDocument(
       const alcedo::EditorHistoryGuardHandle&                     guard,

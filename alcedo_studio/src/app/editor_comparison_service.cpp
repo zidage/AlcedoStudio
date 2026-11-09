@@ -122,9 +122,9 @@ void EditorComparisonService::RenderSelectedPair() {
   }
   EditorComparisonInputPair pair;
   std::string               error;
-  if (!dependencies_.history->BuildComparisonInputs(activity.target.guard,
-                                                    activity.captured_current, activity.a,
-                                                    activity.b, &pair, &error)) {
+  if (!dependencies_.history->BuildComparisonInputs(
+          activity.target.guard, activity.captured_current, activity.a, activity.b,
+          EditorComparisonDevelopSettings::CurrentSensor, &pair, &error)) {
     Publish(EditorComparisonStatus::Failed, 0,
             error.empty() ? "The comparison images could not be prepared" : std::move(error));
     return;

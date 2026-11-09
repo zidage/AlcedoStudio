@@ -628,7 +628,10 @@ class IEditorSessionBackend {
    *        root, to host pixels.
    *
    * Uses the image render port with @p geometry; presents nothing and writes nothing. The
-   * working values include input that is not settled yet.
+   * working values include input that is not settled yet. The root keeps every stored Develop
+   * setting (EditorComparisonDevelopSettings::Stored), including demosaic, highlight
+   * reconstruction, Lens Correction, and white balance, so the root image is the image as
+   * imported.
    * @return Rejected only when the command queue refuses the command. Every other outcome,
    *         including a refusal on the owner, reaches @p on_complete exactly once.
    */

@@ -2798,9 +2798,12 @@ auto EditorSessionService::RenderPreviewImages(RenderRequest geometry, EditorPre
   }
   EditorComparisonInputPair pair;
   std::string               error;
+  // The root image is the image as imported: the root keeps its stored Develop settings, so
+  // Lens Correction, RAW decode, and white balance of the working values never reach it.
   if (!dependencies_.history->BuildComparisonInputs(
           lifecycle_.history_guard(), current, EditorComparisonSource::Root(),
-          EditorComparisonSource::Current(), &pair, &error)) {
+          EditorComparisonSource::Current(), EditorComparisonDevelopSettings::Stored, &pair,
+          &error)) {
     return refuse(EditorPreviewImagesStatus::Failed,
                   error.empty() ? "The preview documents could not be prepared" : error);
   }

@@ -14,9 +14,21 @@
 /**
  * @file
  * @brief Sides of the editor comparison: two states of the open image, both rendered with the
- *        current sensor settings. EditorComparisonInputs builds them.
+ *        current sensor settings. EditorComparisonInputs builds them. The preview images of
+ *        `render.preview` use the same sides with the Develop settings of each replayed state.
  */
 namespace alcedo {
+
+/// Develop settings of a replayed comparison side: a side that is not the captured working values.
+enum class EditorComparisonDevelopSettings : std::uint8_t {
+  /// Demosaic, highlight reconstruction, Lens Correction, and camera profile of the captured
+  /// working values; the replayed white balance stays (PipelineDocument::UseSensorSettingsFrom).
+  /// Both sides share one sensor result. The editor comparison uses it.
+  CurrentSensor,
+  /// Every Develop setting of the replayed state, as stored. The preview images of
+  /// `render.preview` use it, so the root image is the image as imported (issue #715).
+  Stored,
+};
 
 /// Which state of the open image one side of a comparison shows.
 enum class EditorComparisonSourceKind : std::uint8_t {
@@ -56,10 +68,12 @@ struct EditorComparisonSource {
  * Purpose: the editor comparison renders two fixed states later, on the editor executor, while
  * the working document stays live; neither state may change in between. @ref snapshot is a
  * preview of the current editor lineage and image. For the current working values it is the
- * captured preview itself. For any other state it is a private replay frozen after
+ * captured preview itself. For any other state it is a private replay. With
+ * EditorComparisonDevelopSettings::CurrentSensor the replay is frozen after
  * PipelineDocument::UseSensorSettingsFrom, so it shares the current sensor settings and their
- * stamps but keeps its own white balance, geometry, Color Grades, Masks, and DRT. It is never a
- * committed snapshot, because its sensor settings can differ from the stored head.
+ * stamps but keeps its own white balance, geometry, Color Grades, Masks, and DRT. With
+ * EditorComparisonDevelopSettings::Stored it keeps every stored value. It is never a committed
+ * snapshot, because it is a private derivative of the current editor lineage.
  *
  * Owner: the comparison that requested it. Released with the pair on replacement or close.
  */

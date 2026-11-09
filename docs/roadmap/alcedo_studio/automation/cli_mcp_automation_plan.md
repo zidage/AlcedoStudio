@@ -2320,7 +2320,9 @@ Implemented behavior:
     editor.history answers the commits of the active Version with position applied / current /
     future. editor.actions lists every EditorAction with allowed and reason.
   - render.preview {out_dir, long_edge [16, 4096] = 2048, region?} renders Root and Current
-    through ScheduleImages and writes <file_stem>_current.png and <file_stem>_root.png; the PNG
+    through ScheduleImages and writes <file_stem>_current.png and <file_stem>_root.png. The Root
+    keeps every stored Develop setting, including Lens Correction and RAW decode (issue #715);
+    the editor comparison gives its Root the current sensor settings instead. The PNG
     encode runs on the global thread pool. Another accepted image job renders first (issue #598
     replaced the earlier Busy -> -32005 answer); a region outside the image -> -32602.
 Deviations from the phase text:

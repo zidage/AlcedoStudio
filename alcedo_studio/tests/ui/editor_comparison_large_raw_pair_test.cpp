@@ -184,7 +184,8 @@ class EditorComparisonLargeRawPairTest : public ::testing::Test {
     auto pair = BuildEditorComparisonInputs(*lease_->graph_, *lease_->root_,
                                             pipeline_->CurrentPreview(kElementId), kElementId,
                                             EditorComparisonSource::Root(),
-                                            EditorComparisonSource::Current(), &error);
+                                            EditorComparisonSource::Current(),
+                                            EditorComparisonDevelopSettings::CurrentSensor, &error);
     EXPECT_TRUE(pair.has_value()) << error;
     return pair.value_or(EditorComparisonInputPair{});
   }

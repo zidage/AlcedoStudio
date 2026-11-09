@@ -452,6 +452,55 @@ TEST_F(AutomationEditorE2ETest, PreviewWritesCurrentAndRootPngWithRequestedLongE
   Stop();
 }
 
+// Issue #715: the root file is a render of the root state. Develop fields of the working values
+// (RAW decode and Lens Correction) change the current file only.
+TEST_F(AutomationEditorE2ETest, PreviewRootFileKeepsTheRootDevelopSettings) {
+  ASSERT_FALSE(StartWithOnePhoto(QStringLiteral("preview_root_develop_project")).isEmpty());
+  OpenPhoto();
+  const auto read_field = [this](const QString& field) {
+    return Result(QStringLiteral("editor.get"), QJsonObject{{"fields", QJsonArray{field}}})
+        .value("values")
+        .toObject()
+        .value(field)
+        .toObject();
+  };
+  const auto set_field = [this](const QString& field, const QJsonObject& value) {
+    (void)Result(QStringLiteral("editor.set"), QJsonObject{{"field", field}, {"value", value}});
+  };
+  const QJsonObject root_raw  = read_field(QStringLiteral("raw_decode"));
+  const QJsonObject root_lens = read_field(QStringLiteral("lens_calib"));
+  ASSERT_TRUE(root_raw.value("highlights_reconstruct").toBool());
+  ASSERT_FALSE(root_lens.value("enabled").toBool());
+
+  QJsonObject changed_raw = root_raw;
+  changed_raw["highlights_reconstruct"] = false;
+  QJsonObject changed_lens              = root_lens;
+  changed_lens["enabled"]               = true;
+  set_field(QStringLiteral("raw_decode"), changed_raw);
+  set_field(QStringLiteral("lens_calib"), changed_lens);
+  const QString     out_dir = QDir(root_).filePath(QStringLiteral("preview_root_develop"));
+  const QJsonObject changed =
+      Result(QStringLiteral("render.preview"),
+             QJsonObject{{"out_dir", out_dir}, {"long_edge", 512}, {"file_stem", "changed"}});
+
+  set_field(QStringLiteral("raw_decode"), root_raw);
+  set_field(QStringLiteral("lens_calib"), root_lens);
+  const QJsonObject restored = Result(
+      QStringLiteral("render.preview"),
+      QJsonObject{
+          {"out_dir", out_dir}, {"long_edge", 512}, {"compare", "none"}, {"file_stem", "restored"}});
+
+  const QImage changed_current(changed.value("current").toObject().value("path").toString());
+  const QImage changed_root(changed.value("root").toObject().value("path").toString());
+  const QImage root_state(restored.value("current").toObject().value("path").toString());
+  ASSERT_FALSE(changed_current.isNull());
+  ASSERT_FALSE(changed_root.isNull());
+  ASSERT_FALSE(root_state.isNull());
+  ASSERT_NE(changed_current, root_state) << "the RAW decode and Lens Correction change the image";
+  EXPECT_EQ(changed_root, root_state) << "the root file is a render of the root state";
+  Stop();
+}
+
 TEST_F(AutomationEditorE2ETest, RegionPreviewHasRegionAspectRatio) {
   ASSERT_FALSE(StartWithOnePhoto(QStringLiteral("region_project")).isEmpty());
   OpenPhoto();
