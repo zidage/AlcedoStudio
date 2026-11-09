@@ -31,6 +31,15 @@ target_compile_definitions(AlcedoVersion INTERFACE
     ALCEDO_APP_VERSION="${PROJECT_VERSION}"
 )
 
+# The camera preview stored in a RAW file, read without unpacking the sensor data.
+def_library(EmbeddedPreviewReader
+    SOURCES
+        "${ALCEDO_INCLUDE_ROOT}/io/image/embedded_preview_reader.hpp"
+        "${ALCEDO_SRC_ROOT}/io/image/embedded_preview_reader.cpp"
+    PUBLIC_DEPS opencv_core
+    PRIVATE_DEPS libraw::raw_r libjpeg-turbo::turbojpeg opencv_imgproc
+)
+
 def_library(ExifIfdTags
     SOURCES
         "${ALCEDO_INCLUDE_ROOT}/io/image/exif_ifd_tags.hpp"

@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Background renders (thumbnails, analysis renditions, export) run on the executors of their own
+// Background renders (thumbnails, semantic inputs, export) run on the executors of their own
 // services and read committed snapshots
 // (docs/refactor/2026-09-27-executor-ownership-refactor-plan.md, phase P7). The editor is
 // modelled by what it owns since P6: the lease, an EditorWorkingDocument, and a test-owned
@@ -27,6 +27,7 @@
 #include "app/export_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "app/semantic_input_image_service.hpp"
 #include "app/thumbnail_service.hpp"
 #include "app/thumbnail_types.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -197,7 +198,7 @@ class BackgroundRenderIsolationTest : public ::testing::Test {
 
 // Before P4 and P5, thumbnails, analysis, and export rendered on the editor's per-image executor,
 // and their completion could release or save the editor's state. Now each renders on its own
-// service executor: after one thumbnail, one analysis rendition, and one P3 export of the image
+// service executor: after one thumbnail, one semantic input, and one P3 export of the image
 // the editor holds, the editor executor has no batch renderer, keeps its binding, prepared
 // source, and published results, and its next frame of the same preview reuses them. The editor's
 // uncommitted value stays in its working document and never reaches storage.
@@ -243,17 +244,18 @@ TEST_F(BackgroundRenderIsolationTest,
   ASSERT_NE(thumbnail.guard, nullptr);
   ASSERT_NE(thumbnail.guard->thumbnail_buffer_, nullptr);
 
-  std::promise<ThumbnailRequestResult> analysis_done;
-  auto                                 analysis_fut = analysis_done.get_future();
-  const auto                           rendition =
-      thumbnails.RequestAnalysisRendition(ids.first, ids.second, ThumbnailResolution::k256,
-                                          [&analysis_done](ThumbnailRequestResult result) {
-                                            analysis_done.set_value(std::move(result));
-                                          });
+  SemanticInputImageService semantic_inputs(project.GetImagePoolService(), pipelines, 256);
+  std::promise<SemanticInputImageResult> analysis_done;
+  auto                                   analysis_fut = analysis_done.get_future();
+  semantic_inputs.Request(
+      ids.first, ids.second, [] { return false; },
+      [&analysis_done](SemanticInputImageResult result) {
+        analysis_done.set_value(std::move(result));
+      });
   ASSERT_EQ(analysis_fut.wait_for(60s), std::future_status::ready);
   const auto analysis = analysis_fut.get();
-  EXPECT_EQ(analysis.status, ThumbnailRequestStatus::kReady) << analysis.message;
-  ASSERT_NE(analysis.guard, nullptr);
+  EXPECT_EQ(analysis.status, SemanticInputImageStatus::kReady) << analysis.message;
+  EXPECT_FALSE(analysis.image.rgba8.empty());
 
   std::filesystem::create_directories(export_dir_);
   ExportService export_service(project.GetSleeveService(), project.GetImagePoolService(),
@@ -307,7 +309,6 @@ TEST_F(BackgroundRenderIsolationTest,
             first_frame.depth() == CV_32F ? 1e-4 : 1.0);
 
   thumbnails.ReleaseThumbnail(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
-  thumbnails.ReleaseAnalysisRendition(rendition);
   pipelines->ReleaseEditorLease(ids.first);
 }
 

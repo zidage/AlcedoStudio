@@ -151,7 +151,7 @@ constexpr ThumbnailResolution kAllThumbnailResolutions[] = {
 };
 
 /**
- * @brief One thumbnail or analysis request between lookup and delivery.
+ * @brief One thumbnail request between lookup and delivery.
  *
  * Exactly one of @ref DeliverPixels and @ref Fail takes effect; later calls do nothing.
  */
@@ -159,7 +159,6 @@ struct RenditionRequest {
   sl_element_id_t           element_id = 0;
   image_id_t                image_id   = 0;
   ThumbnailResolution       resolution = ThumbnailResolution::k1024;
-  ThumbnailDiskCachePurpose purpose    = ThumbnailDiskCachePurpose::kThumbnail;
   std::function<bool()>     canceled;
   /// Takes the RGBA8 display buffer. Returns the guard that now owns it, or null when the
   /// requester no longer wants it; only an owned buffer is written to the disk cache.
@@ -247,10 +246,6 @@ struct ThumbnailService::State {
   std::unordered_map<ThumbnailCacheKey, std::shared_ptr<std::atomic<uint64_t>>>
       generation_tokens_{};
 
-  // Cancel flags of analysis renditions that have not delivered, by request identity.
-  std::unordered_map<AnalysisRenditionId, std::shared_ptr<std::atomic<bool>>> analysis_requests_{};
-  AnalysisRenditionId                                                         next_analysis_id_ = 1;
-
   State(std::shared_ptr<SleeveServiceImpl>   sleeve_service,
         std::shared_ptr<ImagePoolService>    image_pool_service,
         std::shared_ptr<PipelineMgmtService> pipeline_service,
@@ -298,8 +293,8 @@ struct ThumbnailService::State {
     token->fetch_add(1);
   }
 
-  auto BuildDiskCacheKey(const PipelineGraphSnapshot& snapshot, ThumbnailResolution resolution,
-                         ThumbnailDiskCachePurpose purpose) const
+  auto BuildDiskCacheKey(const PipelineGraphSnapshot& snapshot,
+                         ThumbnailResolution          resolution) const
       -> std::optional<ThumbnailDiskCacheKey> {
     if (!disk_cache_service_ || project_uuid_.empty()) {
       return std::nullopt;
@@ -308,7 +303,7 @@ struct ThumbnailService::State {
     key.project_uuid         = project_uuid_;
     key.element_id           = snapshot.ElementId();
     key.resolution           = resolution;
-    key.purpose              = purpose;
+    key.purpose              = ThumbnailDiskCachePurpose::kThumbnail;
     key.edit_version_hash    = CommittedHistoryLabel(snapshot);
     key.cache_schema_version = kDiskCacheSchemaVersion;
     return key;
@@ -403,7 +398,7 @@ void ThumbnailService::State::LookUpRendition(const std::shared_ptr<State>&     
     return;
   }
 
-  const auto disk_key = st->BuildDiskCacheKey(*snapshot, request->resolution, request->purpose);
+  const auto disk_key = st->BuildDiskCacheKey(*snapshot, request->resolution);
   if (disk_key.has_value()) {
     auto disk_buffer = st->disk_cache_service_->Read(*disk_key);
     if (request->IsCanceled()) {
@@ -641,7 +636,6 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
   request->element_id = id;
   request->image_id   = image_id;
   request->resolution = resolution;
-  request->purpose    = ThumbnailDiskCachePurpose::kThumbnail;
   request->canceled   = generation_changed;
 
   request->on_pixels  = [st, cache_key, generation_changed](
@@ -701,84 +695,6 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
   };
 
   State::StartRendition(st, std::move(request));
-}
-
-auto ThumbnailService::RequestAnalysisRendition(sl_element_id_t element_id, image_id_t image_id,
-                                                ThumbnailResolution     resolution,
-                                                ThumbnailResultCallback callback)
-    -> AnalysisRenditionId {
-  auto st = state_;
-  if (!st || !st->image_pool_service_ || !st->pipeline_service_) {
-    throw std::runtime_error("[ERROR] ThumbnailService: Services not initialized.");
-  }
-
-  const ThumbnailCacheKey cache_key{element_id, resolution};
-  auto                    cancel_flag = std::make_shared<std::atomic<bool>>(false);
-  AnalysisRenditionId     id          = 0;
-  {
-    std::unique_lock lock(st->cache_lock_);
-    id                         = st->next_analysis_id_++;
-    st->analysis_requests_[id] = cancel_flag;
-  }
-
-  // The request delivers once; afterwards a cancel of its identity has nothing to cancel.
-  auto forget = [weak_state = std::weak_ptr<State>(st), id] {
-    if (auto state = weak_state.lock()) {
-      std::unique_lock lock(state->cache_lock_);
-      state->analysis_requests_.erase(id);
-    }
-  };
-
-  auto request        = std::make_shared<RenditionRequest>();
-  request->element_id = element_id;
-  request->image_id   = image_id;
-  request->resolution = resolution;
-  request->purpose    = ThumbnailDiskCachePurpose::kAnalysis;
-  request->canceled   = [cancel_flag] { return cancel_flag->load(); };
-  request->on_pixels  = [callback, cache_key, forget](
-                           std::unique_ptr<ImageBuffer> pixels) -> std::shared_ptr<ThumbnailGuard> {
-    forget();
-    auto guard               = std::make_shared<ThumbnailGuard>();
-    guard->thumbnail_buffer_ = std::move(pixels);
-    guard->pin_count_        = 1;
-    DispatchThumbnailResultCallback(callback, nullptr,
-                                    ThumbnailRequestResult{.guard  = guard,
-                                                           .status = ThumbnailRequestStatus::kReady,
-                                                           .message = {},
-                                                           .key     = cache_key});
-    return guard;
-  };
-  request->on_failure = [callback, cache_key, forget](ThumbnailRequestStatus status,
-                                                      std::string            message) {
-    forget();
-    DispatchThumbnailResultCallback(
-        callback, nullptr,
-        ThumbnailRequestResult{
-            .guard = nullptr, .status = status, .message = std::move(message), .key = cache_key});
-  };
-
-  State::StartRendition(st, std::move(request));
-  return id;
-}
-
-void ThumbnailService::CancelAnalysisRendition(AnalysisRenditionId id) {
-  auto st = state_;
-  if (!st) {
-    return;
-  }
-  std::unique_lock lock(st->cache_lock_);
-  if (const auto it = st->analysis_requests_.find(id); it != st->analysis_requests_.end()) {
-    it->second->store(true);
-  }
-}
-
-void ThumbnailService::ReleaseAnalysisRendition(AnalysisRenditionId id) {
-  auto st = state_;
-  if (!st) {
-    return;
-  }
-  std::unique_lock lock(st->cache_lock_);
-  st->analysis_requests_.erase(id);
 }
 
 void ThumbnailService::CancelPending(const ThumbnailCacheKey& key) {
@@ -1052,50 +968,4 @@ auto ThumbnailService::GetDiskCacheStats() const -> DiskCacheStats {
   return s;
 }
 
-ThumbnailServiceAnalysisRenditionProvider::ThumbnailServiceAnalysisRenditionProvider(
-    std::shared_ptr<ThumbnailService> service)
-    : service_(std::move(service)) {}
-
-void ThumbnailServiceAnalysisRenditionProvider::RequestRendition(sl_element_id_t         element_id,
-                                                                 image_id_t              image_id,
-                                                                 ThumbnailResolution     resolution,
-                                                                 ThumbnailResultCallback callback) {
-  const ThumbnailCacheKey key{element_id, resolution};
-  if (!service_) {
-    callback(ThumbnailRequestResult{.guard   = nullptr,
-                                    .status  = ThumbnailRequestStatus::kError,
-                                    .message = "ThumbnailService is not available",
-                                    .key     = key});
-    return;
-  }
-  // Hold the lock across the request so a cancel of this key cannot run between the request and
-  // the recording of its identity.
-  std::scoped_lock lock(mutex_);
-  const auto       id =
-      service_->RequestAnalysisRendition(element_id, image_id, resolution, std::move(callback));
-  requests_.emplace(key, id);
-}
-
-void ThumbnailServiceAnalysisRenditionProvider::CancelRendition(const ThumbnailCacheKey& key) {
-  if (!service_) {
-    return;
-  }
-  std::scoped_lock lock(mutex_);
-  const auto [begin, end] = requests_.equal_range(key);
-  for (auto it = begin; it != end; ++it) {
-    service_->CancelAnalysisRendition(it->second);
-  }
-}
-
-void ThumbnailServiceAnalysisRenditionProvider::ReleaseRendition(const ThumbnailCacheKey& key) {
-  if (!service_) {
-    return;
-  }
-  std::scoped_lock lock(mutex_);
-  const auto [begin, end] = requests_.equal_range(key);
-  for (auto it = begin; it != end; ++it) {
-    service_->ReleaseAnalysisRendition(it->second);
-  }
-  requests_.erase(begin, end);
-}
 };  // namespace alcedo

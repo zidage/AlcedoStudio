@@ -28,6 +28,8 @@ enum class ThumbnailCacheFormat : uint8_t {
 
 enum class ThumbnailDiskCachePurpose : uint8_t {
   kThumbnail = 0,
+  /// Semantic generation inputs of earlier versions. Nothing writes these entries now; the cache
+  /// index still reads them from old metadata, and the LRU removes them.
   kAnalysis  = 1,
 };
 

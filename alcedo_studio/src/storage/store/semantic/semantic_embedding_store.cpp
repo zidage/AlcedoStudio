@@ -357,4 +357,40 @@ auto SemanticEmbeddingStore::HasReadyImageEmbedding(sl_element_id_t file_id, ima
   }
 }
 
+auto SemanticEmbeddingStore::ListReadyLabeledImages(const std::string& model_key,
+                                                    std::string*       error) const
+    -> std::vector<std::pair<sl_element_id_t, image_id_t>> {
+  auto                                                guard   = database_.GetConnectionGuard();
+  auto                                                db_lock = guard.Lock();
+  std::vector<std::pair<sl_element_id_t, image_id_t>> images;
+  try {
+    const auto model_dim = semantic_tables::ModelEmbeddingDim(guard.conn_, model_key);
+    if (!model_dim.has_value()) {
+      return images;
+    }
+    // The rule of HasReadyImageEmbedding with require_label, for every file at once.
+    auto query = expr::raw(
+        std::format("SELECT se.file_id, se.image_id FROM {} se JOIN SemanticImageLabel sl "
+                    "ON sl.file_id = se.file_id AND sl.model_key = se.model_key WHERE ",
+                    ImageEmbeddingTable(*model_dim)));
+    query.append(expr::and_({expr::column_eq("se.model_key", model_key),
+                             expr::column_eq("se.embedding_dim", static_cast<int64_t>(*model_dim)),
+                             expr::raw("se.status = 'ready' AND se.error IS NULL"),
+                             expr::raw("sl.label IS NOT NULL AND sl.label <> ''")}));
+    static const std::array<duckorm::DuckFieldDesc, 2> fields = {
+        semantic_tables::Column("file_id", duckorm::DuckDBType::INT64),
+        semantic_tables::Column("image_id", duckorm::DuckDBType::INT64)};
+    const auto rows = duckorm::select_by_query(guard.conn_, fields, fields.size(), query);
+    images.reserve(rows.size());
+    for (const auto& row : rows) {
+      images.emplace_back(static_cast<sl_element_id_t>(std::get<int64_t>(row[0])),
+                          static_cast<image_id_t>(std::get<int64_t>(row[1])));
+    }
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+    images.clear();
+  }
+  return images;
+}
+
 }  // namespace alcedo

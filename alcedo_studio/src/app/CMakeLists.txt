@@ -739,12 +739,22 @@ def_library(MaskThumbnailService
     PUBLIC_DEPS Qt6::Core Qt6::Gui EditGeometry EditMaskCore
 )
 
+# Model input images of semantic generation: camera previews of unedited RAW files and renders
+# of the committed state on its own CPU workers and batch executor.
+def_library(SemanticInputImageService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/semantic_input_image_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/semantic_input_image_service.hpp"
+    PUBLIC_DEPS EditPipeline EditInput ImageLoader ThreadPool ImagePoolService PipelineMgmtService
+    PRIVATE_DEPS EmbeddedPreviewReader opencv_core opencv_imgproc
+)
+
 def_library(SemanticGenerationService
     SOURCES
         "${ALCEDO_APP_ROOT}/semantic_generation_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/semantic_generation_service.hpp"
         "${ALCEDO_INCLUDE_ROOT}/storage/store/semantic/semantic_label_config.hpp"
-    PUBLIC_DEPS AiSidecarRuntimeService ThumbnailService Storage opencv_core opencv_imgproc
+    PUBLIC_DEPS AiSidecarRuntimeService SemanticInputImageService Storage
     PRIVATE_DEPS AppDiagnostics
 )
 

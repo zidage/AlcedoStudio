@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "storage/store/database.hpp"
@@ -64,6 +65,12 @@ class SemanticEmbeddingStore {
   [[nodiscard]] auto HasReadyImageEmbedding(sl_element_id_t file_id, image_id_t image_id,
                                             const std::string& model_key,
                                             bool               require_label = false) const -> bool;
+  /// Every (file id, image id) that has a ready embedding of the model and a non-empty label:
+  /// the images for which HasReadyImageEmbedding(file_id, image_id, model_key, true) is true, read
+  /// with one query. Empty, with @p error set, when the query fails.
+  [[nodiscard]] auto ListReadyLabeledImages(const std::string& model_key,
+                                            std::string*       error = nullptr) const
+      -> std::vector<std::pair<sl_element_id_t, image_id_t>>;
 
  private:
   Database& database_;

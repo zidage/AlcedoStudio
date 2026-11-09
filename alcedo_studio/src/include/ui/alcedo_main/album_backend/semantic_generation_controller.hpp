@@ -7,8 +7,12 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <chrono>
+#include <cstddef>
+#include <deque>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app/model_asset_catalog.hpp"
@@ -42,6 +46,7 @@ class SemanticGenerationController final : public QObject {
   Q_PROPERTY(int failed READ Failed NOTIFY StateChanged)
   Q_PROPERTY(int canceled READ Canceled NOTIFY StateChanged)
   Q_PROPERTY(QString statusText READ StatusText NOTIFY StateChanged)
+  Q_PROPERTY(int remainingSeconds READ RemainingSeconds NOTIFY StateChanged)
   Q_PROPERTY(int albumTotalCount READ AlbumTotalCount NOTIFY StateChanged)
   Q_PROPERTY(int albumLabeledCount READ AlbumLabeledCount NOTIFY StateChanged)
   Q_PROPERTY(int albumUnlabeledCount READ AlbumUnlabeledCount NOTIFY StateChanged)
@@ -82,6 +87,11 @@ class SemanticGenerationController final : public QObject {
   QString            ActiveModelProfileId() const;
   QString            ActiveModelDisplayName() const;
   QString            ActiveModelKeyQString() const;
+  /// Background task of the running generation; empty before it is registered and after the
+  /// generation finished.
+  QString            BackgroundTaskId() const { return background_task_id_; }
+  /// Estimated seconds until the running generation finishes, or -1 while no estimate exists.
+  int                RemainingSeconds() const { return remaining_seconds_; }
   bool               ModelActivationRunning() const { return model_activation_running_; }
   QString            ActivatingModelProfileId() const { return activating_profile_id_; }
   int                SidecarIdleStopSeconds() const;
@@ -130,6 +140,9 @@ class SemanticGenerationController final : public QObject {
   void StartGenerationForItems(std::vector<SemanticGenerationItem> items, bool forceRegenerate);
   void ContinueGenerationForItems(bool forceRegenerate);
   void UpdateProgress(const SemanticGenerationProgress& progress);
+  // The time estimate of the running job, from the rate of finished images in the last minute.
+  void UpdateRemainingTimeEstimate(const SemanticGenerationProgress& progress);
+  void ResetRemainingTimeEstimate();
   void Finish(std::vector<SemanticGenerationItemResult> results);
   void ClearPrompt();
   void ResetCounters();
@@ -188,6 +201,9 @@ class SemanticGenerationController final : public QObject {
   int                                    album_total_count_        = 0;
   int                                    album_labeled_count_      = 0;
   int                                    album_unlabeled_count_    = 0;
+  int                                       remaining_seconds_        = -1;
+  // (time, finished images) at progress updates of the last minute, oldest first.
+  std::deque<std::pair<std::chrono::steady_clock::time_point, size_t>> rate_samples_;
 };
 
 /// Semantic label display language of the current UI language setting.

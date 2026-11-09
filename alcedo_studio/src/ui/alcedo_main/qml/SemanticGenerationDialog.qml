@@ -31,6 +31,9 @@ Popup {
     property bool backgrounded: false
     property real elapsedSecs: 0
     property var generationStart: null
+    // Seconds until the generation finishes, from the controller's rate of the last minute; -1
+    // while no estimate exists.
+    property int remainingSeconds: -1
 
     signal startRequested(bool rememberChoice)
     signal skipRequested(bool rememberChoice)
@@ -40,12 +43,6 @@ Popup {
     readonly property real progressValue: total > 0 ? completed / total : 0
     readonly property bool showingGeneration: startTransitionPending
                                               || (generationRunning && !backgrounded)
-    // Rough ETA: batch size is fixed (64 or 4), so once the first batch lands the
-    // completion rate stabilizes and remaining time = remaining / rate.
-    readonly property real processingRate: (elapsedSecs > 0 && completed > 0)
-                                           ? completed / elapsedSecs : 0
-    readonly property real remainingSecs: processingRate > 0
-                                          ? (total - completed) / processingRate : 0
     readonly property color panelColor: appTheme.toneGraphite
     readonly property color sectionColor: appTheme.bgBaseColor
     readonly property color textColor: appTheme.textColor
@@ -210,8 +207,8 @@ Popup {
                 visible: root.generationRunning && root.generationStart !== null
                 text: {
                     var elapsed = root.formatDuration(root.elapsedSecs)
-                    if (root.completed > 0 && root.processingRate > 0) {
-                        var rem = root.formatDuration(root.remainingSecs)
+                    if (root.remainingSeconds >= 0) {
+                        var rem = root.formatDuration(root.remainingSeconds)
                         return qsTr("Elapsed %1 · ~%2 remaining").arg(elapsed).arg(rem)
                     }
                     return qsTr("Elapsed %1 · estimating…").arg(elapsed)
