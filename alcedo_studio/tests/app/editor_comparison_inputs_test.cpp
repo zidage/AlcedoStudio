@@ -189,8 +189,10 @@ class EditorComparisonInputsTest : public ::testing::Test {
 
   auto Build(const std::shared_ptr<const PipelineGraphSnapshot>& captured,
              const EditorComparisonSource& a, const EditorComparisonSource& b,
-             EditorComparisonInputPair* pair, std::string* error) -> bool {
-    return history_.BuildComparisonInputs(handle_, captured, a, b, pair, error);
+             EditorComparisonInputPair* pair, std::string* error,
+             EditorComparisonDevelopSettings develop_settings =
+                 EditorComparisonDevelopSettings::CurrentSensor) -> bool {
+    return history_.BuildComparisonInputs(handle_, captured, a, b, develop_settings, pair, error);
   }
 
   /// Commit the state of Version "Look A" on the default Version, then open Version "Look B"
@@ -284,6 +286,76 @@ TEST_F(EditorComparisonInputsTest, RootAndCurrentInputsKeepHistoryAndWorkingDocu
   EXPECT_FLOAT_EQ(ExposureEv(pair.a.snapshot->Document()), ExposureEv(lease_.root_->document));
   // Root adjustments with the current sensor setting.
   EXPECT_FALSE(DevelopPayloadOf(*pair.a.snapshot).highlights_reconstruct);
+}
+
+// Issue #715: with the stored Develop settings, the root keeps its RAW decode, Lens Correction,
+// and white balance; none of the current values reach it.
+TEST_F(EditorComparisonInputsTest, StoredDevelopSettingsKeepEveryRootDevelopValue) {
+  std::string error;
+  ASSERT_TRUE(CommitPanelField(history_, handle_, "raw_decode",
+                               R"({"raw":{"highlights_reconstruct":false}})", &error))
+      << error;
+  ASSERT_TRUE(CommitPanelField(history_, handle_, "lens_calib",
+                               R"({"lens_calib":{"enabled":true,"apply_tca":false}})", &error))
+      << error;
+  ASSERT_TRUE(CommitPanelField(history_, handle_, "color_temp",
+                               R"({"wb_mode":"custom","custom_cct":4100.0,"custom_tint":12.0})",
+                               &error))
+      << error;
+  const auto captured = Working();
+  const auto current  = DevelopPayloadOf(*captured);
+  const auto root     = lease_.root_->document.Develop()->Params().Params();
+  ASSERT_NE(current.highlights_reconstruct, root.highlights_reconstruct);
+  ASSERT_NE(current.lens_enabled, root.lens_enabled);
+  ASSERT_NE(current.apply_tca, root.apply_tca);
+  ASSERT_NE(current.wb_mode, root.wb_mode);
+  const auto                before = ReadHeldState();
+
+  EditorComparisonInputPair pair;
+  ASSERT_TRUE(Build(captured, EditorComparisonSource::Root(), EditorComparisonSource::Current(),
+                    &pair, &error, EditorComparisonDevelopSettings::Stored))
+      << error;
+  ExpectHeldStateUnchanged(before);
+
+  EXPECT_EQ(pair.b.snapshot, captured) << "Current uses the captured preview directly";
+  ASSERT_NE(pair.a.snapshot, nullptr);
+  EXPECT_EQ(pair.a.snapshot->Lineage(), captured->Lineage());
+  EXPECT_FALSE(pair.a.snapshot->IsCommitted());
+  const auto payload = DevelopPayloadOf(*pair.a.snapshot);
+  EXPECT_EQ(payload.demosaic_method, root.demosaic_method);
+  EXPECT_EQ(payload.highlights_reconstruct, root.highlights_reconstruct);
+  EXPECT_EQ(payload.lens_enabled, root.lens_enabled);
+  EXPECT_EQ(payload.apply_tca, root.apply_tca);
+  EXPECT_EQ(payload.wb_mode, root.wb_mode);
+  EXPECT_EQ(payload.use_camera_wb, root.use_camera_wb);
+  EXPECT_EQ(payload.custom_cct, root.custom_cct);
+  EXPECT_EQ(payload.camera_profile, current.camera_profile);
+}
+
+// Issue #715: a Version replayed with the stored Develop settings keeps its own sensor settings.
+TEST_F(EditorComparisonInputsTest, StoredDevelopSettingsKeepTheSensorSettingsOfAVersion) {
+  const auto look_a   = MakeTwoDifferentVersions();
+  const auto captured = Working();
+  const auto current  = DevelopPayloadOf(*captured);
+  ASSERT_EQ(current.demosaic_method, "neural_engine");
+  ASSERT_TRUE(current.highlights_reconstruct);
+  ASSERT_FALSE(current.lens_enabled);
+
+  std::string               error;
+  EditorComparisonInputPair pair;
+  ASSERT_TRUE(Build(captured, EditorComparisonSource::Version(look_a),
+                    EditorComparisonSource::Current(), &pair, &error,
+                    EditorComparisonDevelopSettings::Stored))
+      << error;
+
+  const auto payload = DevelopPayloadOf(*pair.a.snapshot);
+  EXPECT_NE(payload.demosaic_method, "neural_engine");
+  EXPECT_FALSE(payload.highlights_reconstruct);
+  EXPECT_TRUE(payload.lens_enabled);
+  EXPECT_FALSE(payload.apply_tca);
+  EXPECT_EQ(payload.wb_mode, "custom");
+  EXPECT_FLOAT_EQ(payload.custom_cct, 4100.0f);
+  EXPECT_FLOAT_EQ(ExposureEv(pair.a.snapshot->Document()), 0.5f);
 }
 
 TEST_F(EditorComparisonInputsTest, VersionInputsRetainOwnWhiteBalanceAndUseCurrentSensorSettings) {

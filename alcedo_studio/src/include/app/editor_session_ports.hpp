@@ -272,12 +272,15 @@ class IEditorHistoryPort {
    * @brief Build both comparison inputs of the held image without changing its history.
    *
    * Resolves @p a and @p b against the held CommitGraph and immutable root, and gives every
-   * replayed state the sensor settings of @p captured_current (BuildEditorComparisonInputs).
-   * Moves no head, writes no commit, WAL record, or checkpoint, and does not touch the working
-   * document, its dirty state, or the published previews. Session owner thread.
+   * replayed state the Develop settings that @p develop_settings selects
+   * (BuildEditorComparisonInputs). Moves no head, writes no commit, WAL record, or checkpoint,
+   * and does not touch the working document, its dirty state, or the published previews. Session
+   * owner thread.
    *
    * @param captured_current Preview of the working values captured when the comparison opened.
    *        It must belong to the held image and to the lineage of its working document.
+   * @param develop_settings CurrentSensor for the editor comparison; Stored for the preview
+   *        images, which show each state as stored.
    * @return true with @p pair set to both inputs; false with @p error set and @p pair unchanged.
    *         Default ports reject.
    */
@@ -285,7 +288,8 @@ class IEditorHistoryPort {
       const EditorHistoryGuardHandle& /*guard*/,
       const std::shared_ptr<const PipelineGraphSnapshot>& /*captured_current*/,
       const EditorComparisonSource& /*a*/, const EditorComparisonSource& /*b*/,
-      EditorComparisonInputPair* /*pair*/, std::string* error) -> bool {
+      EditorComparisonDevelopSettings /*develop_settings*/, EditorComparisonInputPair* /*pair*/,
+      std::string* error) -> bool {
     if (error != nullptr) {
       *error = "Comparison inputs are not supported by this history port";
     }

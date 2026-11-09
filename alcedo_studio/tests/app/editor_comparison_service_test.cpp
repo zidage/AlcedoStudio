@@ -652,6 +652,52 @@ TEST_F(EditorComparisonServiceTest, PreviewImagesRenderRootAndWorkingValuesWithR
   EXPECT_EQ(checkpoints_->materialize_count, 0);
 }
 
+// Issue #715: the root image of render.preview is the image as imported. Lens Correction, RAW
+// decode, and white balance of the working values do not reach the root document, while the
+// editor comparison still gives its root the current sensor settings.
+TEST_F(EditorComparisonServiceTest, PreviewImagesRootKeepsTheStoredDevelopSettingsOfTheRoot) {
+  OpenInteractive();
+  ASSERT_TRUE(CommitPanelField("raw_decode", R"({"raw":{"highlights_reconstruct":false}})"));
+  ASSERT_TRUE(CommitPanelField("lens_calib", R"({"lens_calib":{"enabled":true}})"));
+  ASSERT_TRUE(CommitPanelField("color_temp",
+                               R"({"wb_mode":"custom","custom_cct":4100.0,"custom_tint":12.0})"));
+  const auto root    = lease_.root_->document.Develop()->Params().Params();
+  const auto current = DevelopPayloadOf(*Working());
+  ASSERT_NE(current.highlights_reconstruct, root.highlights_reconstruct);
+  ASSERT_NE(current.lens_enabled, root.lens_enabled);
+  ASSERT_NE(current.wb_mode, root.wb_mode);
+
+  auto       outcome  = std::make_shared<std::optional<EditorPreviewImagesResult>>();
+  const auto accepted = service_->RenderPreviewImages(
+      EditorImageRenderRequest{}.geometry, EditorPreviewImageSet::CurrentAndRoot,
+      [outcome](EditorPreviewImagesResult result) { *outcome = std::move(result); });
+  ASSERT_NE(accepted.kind, EditorSessionResultKind::Rejected) << accepted.message;
+  Drain();
+  ASSERT_EQ(images_->jobs.size(), 1u) << LastMessage();
+  {
+    const auto& request = images_->jobs.front().request;
+    ASSERT_EQ(request.snapshots.size(), 2u);
+    const auto preview_root = DevelopPayloadOf(*request.snapshots[0]);
+    EXPECT_EQ(preview_root.highlights_reconstruct, root.highlights_reconstruct);
+    EXPECT_EQ(preview_root.lens_enabled, root.lens_enabled);
+    EXPECT_EQ(preview_root.wb_mode, root.wb_mode);
+    const auto preview_current = DevelopPayloadOf(*request.snapshots[1]);
+    EXPECT_EQ(preview_current.highlights_reconstruct, current.highlights_reconstruct);
+    EXPECT_EQ(preview_current.lens_enabled, current.lens_enabled);
+  }
+  images_->CompleteLast(EditorImageRenderStatus::Completed);
+  ASSERT_TRUE(outcome->has_value());
+  EXPECT_EQ((*outcome)->status, EditorPreviewImagesStatus::Completed) << (*outcome)->message;
+
+  OpenComparison();
+  ASSERT_EQ(images_->jobs.size(), 2u);
+  const auto compare_root = DevelopPayloadOf(*images_->jobs.back().request.snapshots[0]);
+  EXPECT_EQ(compare_root.highlights_reconstruct, current.highlights_reconstruct)
+      << "the editor comparison keeps the current sensor settings";
+  EXPECT_EQ(compare_root.lens_enabled, current.lens_enabled);
+  EXPECT_EQ(compare_root.wb_mode, root.wb_mode);
+}
+
 // Issue #355: render.preview with compare 'none' renders only the working values.
 TEST_F(EditorComparisonServiceTest, PreviewImagesCurrentOnlyRenderOnlyTheWorkingValues) {
   OpenInteractive();

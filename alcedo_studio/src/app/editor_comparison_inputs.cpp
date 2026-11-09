@@ -75,11 +75,11 @@ void RequireBoundCameraProfile(const PipelineDocument& document) {
 
 auto BuildInput(const CommitGraph& graph, const LoadedRootState& root,
                 const std::shared_ptr<const PipelineGraphSnapshot>& current,
-                sl_element_id_t element_id, const EditorComparisonSource& source)
-    -> EditorComparisonInput {
+                sl_element_id_t element_id, const EditorComparisonSource& source,
+                EditorComparisonDevelopSettings develop_settings) -> EditorComparisonInput {
   const auto resolved = ResolveSource(graph, element_id, source);
   if (resolved.uses_current) {
-    // The captured preview already has the current sensor settings; no derivative is needed.
+    // The captured preview already has the current Develop settings; no derivative is needed.
     return {source, std::nullopt, current};
   }
   std::string replay_error;
@@ -90,7 +90,9 @@ auto BuildInput(const CommitGraph& graph, const LoadedRootState& root,
   try {
     ValidateProductDocument(*document, element_id);
     RejectHdr(*document, resolved.label);
-    document->UseSensorSettingsFrom(current->Document());
+    if (develop_settings == EditorComparisonDevelopSettings::CurrentSensor) {
+      document->UseSensorSettingsFrom(current->Document());
+    }
     RequireBoundCameraProfile(*document);
   } catch (const std::exception& ex) {
     throw std::runtime_error(resolved.label + ": " + ex.what());
@@ -106,8 +108,9 @@ auto BuildInput(const CommitGraph& graph, const LoadedRootState& root,
 auto BuildEditorComparisonInputs(const CommitGraph& graph, const LoadedRootState& root,
                                  const std::shared_ptr<const PipelineGraphSnapshot>& current,
                                  sl_element_id_t element_id, const EditorComparisonSource& a,
-                                 const EditorComparisonSource& b, std::string* error)
-    -> std::optional<EditorComparisonInputPair> {
+                                 const EditorComparisonSource&   b,
+                                 EditorComparisonDevelopSettings develop_settings,
+                                 std::string* error) -> std::optional<EditorComparisonInputPair> {
   try {
     if (!current) {
       throw std::invalid_argument("The captured working state is missing");
@@ -117,8 +120,9 @@ auto BuildEditorComparisonInputs(const CommitGraph& graph, const LoadedRootState
     }
     RejectHdr(current->Document(), "The current working state");
     RequireBoundCameraProfile(current->Document());
-    EditorComparisonInputPair pair{BuildInput(graph, root, current, element_id, a),
-                                   BuildInput(graph, root, current, element_id, b)};
+    EditorComparisonInputPair pair{
+        BuildInput(graph, root, current, element_id, a, develop_settings),
+        BuildInput(graph, root, current, element_id, b, develop_settings)};
     return pair;
   } catch (const std::exception& ex) {
     if (error != nullptr) {

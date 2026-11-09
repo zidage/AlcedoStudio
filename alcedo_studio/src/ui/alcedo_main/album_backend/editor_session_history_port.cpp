@@ -276,6 +276,7 @@ auto EditorSessionHistoryPort::BuildComparisonInputs(
     const alcedo::EditorHistoryGuardHandle&                     guard,
     const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
     const alcedo::EditorComparisonSource& a, const alcedo::EditorComparisonSource& b,
+    alcedo::EditorComparisonDevelopSettings develop_settings,
     alcedo::EditorComparisonInputPair* pair, std::string* error) -> bool {
   if (pair == nullptr) {
     if (error) *error = "Comparison inputs require output storage";
@@ -297,7 +298,7 @@ auto EditorSessionHistoryPort::BuildComparisonInputs(
     return false;
   }
   auto built = alcedo::BuildEditorComparisonInputs(*state->graph, *state->root, captured_current,
-                                                   guard.element_id, a, b, error);
+                                                   guard.element_id, a, b, develop_settings, error);
   if (!built.has_value()) return false;
   *pair = std::move(*built);
   return true;

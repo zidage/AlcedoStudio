@@ -674,12 +674,14 @@ class EditorSessionRenderSchedulerPortGpuTest : public ::testing::Test {
   }
 
   /// Comparison inputs built by the production builder from the held history and current preview.
-  auto BuildInputs(const alcedo::EditorComparisonSource& a, const alcedo::EditorComparisonSource& b)
+  auto BuildInputs(const alcedo::EditorComparisonSource& a, const alcedo::EditorComparisonSource& b,
+                   alcedo::EditorComparisonDevelopSettings develop_settings =
+                       alcedo::EditorComparisonDevelopSettings::CurrentSensor)
       -> alcedo::EditorComparisonInputPair {
     const auto  current = held_.pipeline_port->CurrentPreview(22);
     std::string error;
     auto pair = alcedo::BuildEditorComparisonInputs(*held_.lease->graph_, *held_.lease->root_,
-                                                    current, 22, a, b, &error);
+                                                    current, 22, a, b, develop_settings, &error);
     EXPECT_TRUE(pair.has_value()) << error;
     return pair.value_or(alcedo::EditorComparisonInputPair{});
   }
@@ -1605,6 +1607,49 @@ TEST_F(EditorSessionRenderSchedulerPortGpuTest,
   EXPECT_GT(cv::norm(root, current, cv::NORM_L1) / (4.0 * static_cast<double>(root.total())), 0.01);
   EXPECT_LT(cv::norm(root, FreshImage(*inputs.a.snapshot), cv::NORM_INF), 2e-5);
   EXPECT_LT(cv::norm(current, FreshImage(*inputs.b.snapshot), cv::NORM_INF), 2e-5);
+#endif
+}
+
+// Issue #715: the preview images render the root with its stored sensor settings. The root image
+// matches a fresh render of the root document, and the current image and the next viewport frame
+// still show the current sensor settings.
+TEST_F(EditorSessionRenderSchedulerPortGpuTest,
+       StoredRootPairDevelopsTheRootSensorAndKeepsTheCurrentSensorResult) {
+#ifdef HAVE_CUDA
+  WriteHighlightsReconstruct(Working().Document(), false);
+  WriteCustomWhiteBalance(Working().Document(), 3200.0f, 12.0f);
+  (void)Working().PublishPreview();
+  const cv::Mat frame_before = RenderFrame(840);
+  ASSERT_FALSE(frame_before.empty());
+  auto* renderer = EditorRenderer();
+  ASSERT_NE(renderer, nullptr);
+
+  const auto inputs = BuildInputs(alcedo::EditorComparisonSource::Root(),
+                                  alcedo::EditorComparisonSource::Current(),
+                                  alcedo::EditorComparisonDevelopSettings::Stored);
+  ASSERT_NE(inputs.a.snapshot, nullptr);
+  ASSERT_TRUE(inputs.a.snapshot->Document().Develop()->Params().Params().highlights_reconstruct)
+      << "the root keeps its stored highlight reconstruction";
+  renderer->ResetStats();
+  const auto pair = ScheduleImagesAndWait(*scheduler_, PairRequest(inputs));
+  ASSERT_TRUE(pair.has_value());
+  ASSERT_EQ(pair->status, alcedo::EditorImageRenderStatus::Completed) << pair->message;
+  ASSERT_EQ(pair->images.size(), 2u);
+  EXPECT_GE(renderer->Stats().pass.sensor_develop_execute, 1u)
+      << "the root develops its own sensor settings";
+  EXPECT_EQ(renderer->Stats().libraw_open_unpack_count, 0u);
+
+  const cv::Mat root    = pair->images[0].pixels->GetCPUData();
+  const cv::Mat current = pair->images[1].pixels->GetCPUData();
+  ASSERT_EQ(root.type(), CV_32FC4);
+  ASSERT_EQ(root.size(), current.size());
+  EXPECT_LT(cv::norm(root, FreshImage(*inputs.a.snapshot), cv::NORM_INF), 2e-5);
+  EXPECT_LT(cv::norm(current, FreshImage(*inputs.b.snapshot), cv::NORM_INF), 2e-5);
+
+  // The viewport still shows the current sensor settings.
+  const cv::Mat frame_after = RenderFrame(841);
+  ASSERT_EQ(frame_after.size(), frame_before.size());
+  EXPECT_LT(cv::norm(frame_after, frame_before, cv::NORM_INF), 2e-5);
 #endif
 }
 
