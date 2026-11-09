@@ -2,6 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+// kind: "normal" (raised dark control), "light" (the main action of a neutral page or dialog:
+// light fill, dark text; DESIGN.md "Neutral actions"), "accent", "danger", "warning".
 Button {
     id: control
 
@@ -24,6 +26,9 @@ Button {
         if (kind === "warning") {
             return appTheme.dangerColor
         }
+        if (kind === "light") {
+            return appTheme.textColor
+        }
         return appTheme.controlFillColor
     }
 
@@ -45,7 +50,8 @@ Button {
     contentItem: Label {
         id: buttonLabel
         text: control.text
-        color: control.enabled ? "#FFFFFF" : appTheme.textMutedColor
+        color: !control.enabled ? appTheme.textMutedColor
+                                : (control.kind === "light" ? appTheme.bgCanvasColor : "#FFFFFF")
         font: control.font
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
@@ -70,7 +76,8 @@ Button {
                 return Qt.darker(base, 1.14)
             }
             if (control.hovered) {
-                return Qt.lighter(base, 1.08)
+                // A light fill is already near white: hover steps it down instead.
+                return control.kind === "light" ? Qt.darker(base, 1.06) : Qt.lighter(base, 1.08)
             }
             return base
         }

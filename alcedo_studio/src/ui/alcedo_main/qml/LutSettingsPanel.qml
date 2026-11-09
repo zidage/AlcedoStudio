@@ -14,7 +14,8 @@ import QtQuick.Layouts
 // Settings opens; this page never starts one by itself except "Check again".
 //
 // Data (counts, sizes, revisions, paths) is set in Manrope
-// (appTheme.headlineFontFamily); IBM Plex Sans is being retired.
+// (appTheme.headlineFontFamily); IBM Plex Sans is being retired. The Total tile, the
+// Categories legend, and its bar are the shared CountTile, LegendItem, and SplitBar.
 ColumnLayout {
     id: page
     objectName: "lutSettingsPanel"
@@ -406,48 +407,12 @@ ColumnLayout {
             }
         }
 
-        BentoTile {
+        CountTile {
             objectName: "lutSettingsTotalTile"
-            Layout.preferredWidth: 190
             Layout.fillHeight: true
-            contentHeight: totalColumn.implicitHeight
-
-            ColumnLayout {
-                id: totalColumn
-                anchors.fill: parent
-                spacing: 0
-
-                Label {
-                    Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    text: qsTr("Total")
-                    color: page.mutedTextColor
-                    font.family: page.dataFontFamily
-                    font.pixelSize: appTheme.fontSizeSection
-                    font.weight: Font.Medium
-                }
-                Item {
-                    Layout.fillHeight: true
-                }
-                // Centered, so the gaps left and right of the number are equal.
-                Label {
-                    objectName: "lutSettingsTotalCount"
-                    Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    text: String(page.totalCount)
-                    color: page.textColor
-                    font.family: page.dataFontFamily
-                    font.pixelSize: 72
-                    font.weight: Font.ExtraLight
-                    font.features: { "tnum": 1 }
-                    fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: 32
-                    elide: Text.ElideNone
-                }
-                Item {
-                    Layout.fillHeight: true
-                }
-            }
+            label: qsTr("Total")
+            count: page.totalCount
+            countLabel.objectName: "lutSettingsTotalCount"
         }
     }
 
@@ -490,34 +455,12 @@ ColumnLayout {
                 }
             }
 
-            Rectangle {
-                id: compositionTrack
+            SplitBar {
                 Layout.fillWidth: true
-                implicitHeight: 10
-                radius: height / 2
-                color: appTheme.bgBaseColor
-                clip: true
-
-                Row {
-                    anchors.fill: parent
-                    spacing: page.filmCount > 0 && page.customCount > 0 ? 3 : 0
-
-                    Rectangle {
-                        height: parent.height
-                        width: page.totalCount > 0
-                               ? (compositionTrack.width - parent.spacing) * page.filmCount / page.totalCount : 0
-                        radius: height / 2
-                        color: appTheme.accentColor
-                    }
-                    Rectangle {
-                        height: parent.height
-                        width: page.totalCount > 0
-                               ? (compositionTrack.width - parent.spacing) * page.customCount / page.totalCount : 0
-                        radius: height / 2
-                        color: appTheme.toneMist
-                        opacity: 0.7
-                    }
-                }
+                firstCount: page.filmCount
+                secondCount: page.customCount
+                firstColor: appTheme.accentColor
+                secondColor: Qt.rgba(appTheme.toneMist.r, appTheme.toneMist.g, appTheme.toneMist.b, 0.7)
             }
         }
     }
@@ -642,36 +585,5 @@ ColumnLayout {
 
     Item {
         Layout.fillHeight: true
-    }
-
-    component LegendItem: RowLayout {
-        id: legend
-
-        property color swatch: "transparent"
-        property string label: ""
-        property int count: 0
-
-        spacing: appTheme.spaceSm
-
-        Rectangle {
-            Layout.alignment: Qt.AlignVCenter
-            implicitWidth: 8
-            implicitHeight: 8
-            radius: 4
-            color: legend.swatch
-        }
-        Label {
-            text: legend.label
-            color: appTheme.textMutedColor
-            font.family: appTheme.uiFontFamily
-            font.pixelSize: appTheme.fontSizeBody
-        }
-        Label {
-            text: String(legend.count)
-            color: appTheme.textColor
-            font.family: appTheme.headlineFontFamily
-            font.pixelSize: appTheme.fontSizeSection
-            font.weight: Font.DemiBold
-        }
     }
 }

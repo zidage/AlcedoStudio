@@ -7061,6 +7061,22 @@ Create a new layer above it and draw the Mask there?</source>
         <source>Move task to background</source>
         <translation>将任务移至后台</translation>
     </message>
+    <message>
+        <source>Generating AI labels</source>
+        <translation>正在生成 AI 标签</translation>
+    </message>
+    <message>
+        <source>Generate AI labels for the new photos?</source>
+        <translation>为新照片生成 AI 标签？</translation>
+    </message>
+    <message>
+        <source>photos need labels</source>
+        <translation>张照片需要标签</translation>
+    </message>
+    <message>
+        <source>Remember my choice</source>
+        <translation>记住我的选择</translation>
+    </message>
 </context>
 <context>
     <name>SemanticGenerationSettingsPanel</name>
@@ -7300,6 +7316,46 @@ Create a new layer above it and draw the Mask there?</source>
         <source>Open AI Models</source>
         <translation>打开 AI 模型</translation>
     </message>
+    <message>
+        <source>AI labels</source>
+        <translation>AI 标签</translation>
+    </message>
+    <message>
+        <source>Labeling</source>
+        <translation>正在标注</translation>
+    </message>
+    <message>
+        <source>photos</source>
+        <translation>张照片</translation>
+    </message>
+    <message>
+        <source>Regenerate all</source>
+        <translation>全部重新生成</translation>
+    </message>
+    <message>
+        <source>Photos</source>
+        <translation>照片</translation>
+    </message>
+    <message>
+        <source>No open project</source>
+        <translation>未打开项目</translation>
+    </message>
+    <message>
+        <source>No model</source>
+        <translation>无模型</translation>
+    </message>
+    <message>
+        <source>Manage</source>
+        <translation>管理</translation>
+    </message>
+    <message>
+        <source>Keep the model loaded</source>
+        <translation>保持模型加载</translation>
+    </message>
+    <message>
+        <source>Labels for imported photos</source>
+        <translation>导入照片的标签</translation>
+    </message>
 </context>
 <context>
     <name>SettingDialog</name>
@@ -7486,6 +7542,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>Saved AI Keys</source>
         <translation>已保存的 AI 密钥</translation>
+    </message>
+    <message>
+        <source>The AI model runs on this computer, and no photo is uploaded. The labeling speed depends on the CPU, the GPU, and the disk.</source>
+        <translation>AI 模型在本机运行，照片不会上传。标注速度取决于 CPU、GPU 和磁盘。</translation>
     </message>
 </context>
 <context>
@@ -9111,6 +9171,29 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>All</source>
         <translation>全部</translation>
+    </message>
+</context>
+<context>
+    <name>DataFormat</name>
+    <message>
+        <source>Estimating the remaining time</source>
+        <translation>正在估算剩余时间</translation>
+    </message>
+    <message>
+        <source>Less than a minute remaining</source>
+        <translation>剩余不到 1 分钟</translation>
+    </message>
+    <message>
+        <source>About %1 min remaining</source>
+        <translation>剩余约 %1 分钟</translation>
+    </message>
+    <message>
+        <source>About %1 h remaining</source>
+        <translation>剩余约 %1 小时</translation>
+    </message>
+    <message>
+        <source>About %1 h %2 min remaining</source>
+        <translation>剩余约 %1 小时 %2 分钟</translation>
     </message>
 </context>
 </TS>
