@@ -41,6 +41,7 @@ Dialog {
     property string pendingSemanticImportPreference: appModules.semanticGeneration.importPreference
     property string pendingAcceleratorBackend: appModules.project.acceleratorBackend
     property string pendingLockedNodeMaskAction: appModules.editorBehavior.lockedNodeMaskAction
+    property string pendingLibraryGridLayout: appModules.libraryView.gridLayout
     property int requestedCategory: 0
     // Category indices used by callers outside this dialog.
     readonly property int updatesCategory: 6
@@ -99,6 +100,7 @@ Dialog {
         pendingSemanticImportPreference = appModules.semanticGeneration.importPreference
         pendingAcceleratorBackend = appModules.project.acceleratorBackend
         pendingLockedNodeMaskAction = appModules.editorBehavior.lockedNodeMaskAction
+        pendingLibraryGridLayout = appModules.libraryView.gridLayout
         cachePanel.reloadPending()
     }
 
@@ -135,6 +137,16 @@ Dialog {
         const entries = lockedNodeMaskComboModel.entries
         for (let i = 0; i < entries.length; ++i) {
             if (entries[i].value === action) {
+                return i
+            }
+        }
+        return 0
+    }
+
+    function libraryGridLayoutIndex(layout) {
+        const entries = libraryGridLayoutComboModel.entries
+        for (let i = 0; i < entries.length; ++i) {
+            if (entries[i].value === layout) {
                 return i
             }
         }
@@ -194,6 +206,9 @@ Dialog {
         }
         if (appModules.editorBehavior.lockedNodeMaskAction !== pendingLockedNodeMaskAction) {
             appModules.editorBehavior.setLockedNodeMaskAction(pendingLockedNodeMaskAction)
+        }
+        if (appModules.libraryView.gridLayout !== pendingLibraryGridLayout) {
+            appModules.libraryView.setGridLayout(pendingLibraryGridLayout)
         }
         cachePanel.applyPending()
         if (appModules.semanticGeneration.importPreference !== pendingSemanticImportPreference) {
@@ -261,6 +276,22 @@ Dialog {
             const item = entries[index]
             if (item)
                 dialog.pendingLockedNodeMaskAction = item.value
+        }
+    }
+
+    QtObject {
+        id: libraryGridLayoutComboModel
+        property string label: ""
+        property bool enabled: true
+        readonly property var entries: [
+            { value: "classic", label: qsTr("Classic grid") },
+            { value: "justified", label: qsTr("Justified rows") }
+        ]
+        property int currentIndex: dialog.libraryGridLayoutIndex(dialog.pendingLibraryGridLayout)
+        function selectIndex(index) {
+            const item = entries[index]
+            if (item)
+                dialog.pendingLibraryGridLayout = item.value
         }
     }
 
@@ -586,7 +617,6 @@ Dialog {
                                     Layout.topMargin: 8
                                     Layout.leftMargin: 34
                                     Layout.rightMargin: 34
-                                    Layout.bottomMargin: 26
                                     title: qsTr("Workspace appearance")
                                     textColor: dialog.textColor
                                     mutedTextColor: dialog.mutedTextColor
@@ -611,6 +641,57 @@ Dialog {
                                             controlHeight: 36
                                             showResetButton: false
                                             model: themeComboModel
+                                        }
+                                    }
+                                }
+
+                                SettingsSection {
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 8
+                                    Layout.leftMargin: 34
+                                    Layout.rightMargin: 34
+                                    Layout.bottomMargin: 26
+                                    title: qsTr("Library")
+                                    textColor: dialog.textColor
+                                    mutedTextColor: dialog.mutedTextColor
+                                    dividerColor: dialog.dividerColor
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 10
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 16
+
+                                            Label {
+                                                Layout.preferredWidth: 160
+                                                text: qsTr("Photo layout")
+                                                color: dialog.textColor
+                                                font.pixelSize: 15
+                                                font.weight: 600
+                                                wrapMode: Text.Wrap
+                                            }
+
+                                            AdjustmentCombo {
+                                                objectName: "settingsLibraryGridLayoutControl"
+                                                controlObjectName: "settingsLibraryGridLayoutCombo"
+                                                Layout.fillWidth: true
+                                                controlHeight: 36
+                                                showResetButton: false
+                                                model: libraryGridLayoutComboModel
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            Layout.leftMargin: 176
+                                            text: qsTr("Classic grid shows each photo in a card of the same size, with its details below it. Justified rows show the photos in rows of one height that fill the width; each photo keeps its shape, and its details and rating show when the pointer is on it. Grouped photos always use the classic grid.")
+                                            wrapMode: Text.WordWrap
+                                            color: dialog.mutedTextColor
+                                            font.pixelSize: 12
+                                            font.weight: 500
+                                            lineHeight: 1.25
                                         }
                                     }
                                 }

@@ -27,7 +27,17 @@ Item {
     // Same zoom ladder and thumbnail tiers as ThumbnailGridView.
     readonly property var zoomColumns: [2, 3, 4, 5, 6, 8, 11, 14]
     readonly property var zoomResolutionEdges: [2048, 1024, 1024, 512, 512, 256, 256, 256]
-    readonly property int zoomIndex: Math.max(0, Math.min(zoomColumns.length - 1, zoomLevel))
+    // Zoom level of the shown rows. applyZoomTransition sets it after the shown cells are
+    // recorded, so every size below changes together with the rows.
+    property int layoutZoomLevel: 4
+    property bool zoomReady: false
+    property bool zoomTransitioning: false
+    // Focus point of the next zoom step in list viewport coordinates; -1 is the view centre.
+    property real zoomFocusX: -1
+    property real zoomFocusY: -1
+    // Ctrl+wheel angle not yet used for a zoom step (a touchpad sends small steps).
+    property real zoomWheelAngle: 0
+    readonly property int zoomIndex: Math.max(0, Math.min(zoomColumns.length - 1, layoutZoomLevel))
     readonly property int visualColumns: zoomColumns[zoomIndex]
     readonly property int desiredMaxEdge: zoomResolutionEdges[zoomIndex]
     readonly property int cardInset: visualColumns >= 11 ? 4 : (visualColumns >= 8 ? 6 : 8)
@@ -78,12 +88,129 @@ Item {
     // A new column count rebuilds the rows (a model reset puts the list at the top), so the
     // row at the top of the view is kept through the change.
     onColumnCountChanged: {
+        if (zoomTransitioning) {
+            return
+        }
         const anchor = pendingScrollAnchor || currentScrollAnchor
         pendingScrollAnchor = anchor
         sections.SetColumnCount(columnCount)
         Qt.callLater(root.applyPendingScrollAnchor)
     }
-    Component.onCompleted: sections.SetColumnCount(columnCount)
+    Component.onCompleted: {
+        layoutZoomLevel = Math.max(0, Math.min(zoomColumns.length - 1, zoomLevel))
+        zoomReady = true
+        sections.SetColumnCount(columnCount)
+    }
+    onZoomLevelChanged: {
+        const target = Math.max(0, Math.min(zoomColumns.length - 1, zoomLevel))
+        if (!zoomReady) {
+            layoutZoomLevel = target
+            return
+        }
+        const focusX = zoomFocusX >= 0 ? zoomFocusX : list.width * 0.5
+        const focusY = zoomFocusY >= 0 ? zoomFocusY : list.height * 0.5
+        zoomFocusX = -1
+        zoomFocusY = -1
+        if (target !== layoutZoomLevel) {
+            root.applyZoomTransition(target, focusX, focusY)
+        }
+    }
+
+    // ── Zoom ──
+    // A new zoom level rebuilds the rows in one synchronous step. Before the change each
+    // created header and cell records its drawn rectangle; after the new rows and the new scroll
+    // position are set, each cell animates from that rectangle to its new one (position and
+    // size), and the cell nearest the focus point keeps that point at the same height on the
+    // screen. A step during an animation starts from the drawn rectangles of that moment.
+    function applyZoomTransition(target, focusX, focusY) {
+        if (!root.layoutReady() || list.count <= 0) {
+            layoutZoomLevel = target
+            return
+        }
+        const before = changeEntries()
+        const byKey = {}
+        let focus = null
+        let focusDistance = -1
+        for (let i = 0; i < before.length; ++i) {
+            const entry = before[i]
+            byKey[entry.key] = entry
+            entry.onScreen = entry.y + entry.h > 0 && entry.y < list.height
+            if (entry.header) {
+                continue
+            }
+            const dx = focusX < entry.x ? entry.x - focusX
+                                        : (focusX > entry.x + entry.w ? focusX - entry.x - entry.w : 0)
+            const dy = focusY < entry.y ? entry.y - focusY
+                                        : (focusY > entry.y + entry.h ? focusY - entry.y - entry.h : 0)
+            const distance = dy * 100000 + dx
+            if (focusDistance < 0 || distance < focusDistance) {
+                focus = entry
+                focusDistance = distance
+            }
+        }
+        const fraction = focus && focus.h > 0
+                         ? Math.max(0, Math.min(1, (focusY - focus.y) / focus.h)) : 0
+        const fallbackAnchor = scrollAnchor()
+
+        finishChangeAnimations()
+        zoomTransitioning = true
+        layoutZoomLevel = target
+        sections.SetColumnCount(columnCount)
+        list.forceLayout()
+        let anchored = false
+        if (focus && focus.occurrence >= 0) {
+            const row = sections.RowForOccurrence(focus.occurrence)
+            if (row >= 0) {
+                list.positionViewAtIndex(row, ListView.Beginning)
+                list.forceLayout()
+                const item = list.itemAtIndex(row)
+                if (item) {
+                    const maxY = list.originY + Math.max(0, list.contentHeight - list.height)
+                    list.contentY = Math.max(list.originY, Math.min(maxY,
+                        item.y + fraction * photoRowHeight - focusY))
+                    list.forceLayout()
+                    anchored = true
+                }
+            }
+        }
+        if (!anchored) {
+            applyScrollAnchor(fallbackAnchor)
+            list.forceLayout()
+        }
+        zoomTransitioning = false
+        trackScrollAnchor()
+        visibleRowsTimer.restart()
+
+        const after = changeEntries()
+        const shown = {}
+        for (let j = 0; j < after.length; ++j) {
+            const entry = after[j]
+            shown[entry.key] = true
+            const old = byKey[entry.key]
+            const onScreen = entry.y + entry.h > 0 && entry.y < list.height
+            if (old) {
+                if (onScreen || old.onScreen) {
+                    entry.target.startFlip(old.x - entry.x, old.y - entry.y, 1,
+                                           entry.header ? 1 : old.w / Math.max(1, entry.w),
+                                           entry.header ? 1 : old.h / Math.max(1, entry.h))
+                }
+            } else if (onScreen) {
+                entry.target.startFlip(0, 0, 0)
+            }
+        }
+        for (let k = 0; k < before.length; ++k) {
+            const entry = before[k]
+            if (entry.onScreen && !shown[entry.key]) {
+                changeGhostComponent.createObject(ghostLayer, {
+                    x: entry.header ? entry.x : entry.x + entry.gapX,
+                    y: entry.header ? entry.y : entry.y + entry.gapY,
+                    width: entry.header ? entry.w : entry.w - entry.gapX * 2,
+                    height: entry.header ? entry.h : entry.h - entry.gapY * 2,
+                    source: entry.thumb, title: entry.text
+                })
+            }
+        }
+    }
 
     function photoFor(fileId, revision) {
         if (fileId <= 0) {
@@ -275,11 +402,14 @@ Item {
                 if (!cell || cell.fileId <= 0) {
                     continue
                 }
+                // Drawn rectangle: mapToItem includes the running flip (scale and offset).
                 const p = cell.mapToItem(list, 0, 0)
                 entries.push({ key: "p|" + groupKey + "|" + cell.fileId, header: false,
                                target: cell, title: row.groupTitle, unknown: row.groupUnknown,
                                fileId: cell.fileId, occurrence: cell.occurrence, x: p.x, y: p.y,
-                               w: cell.width, h: cell.height, rowTop: rowTop,
+                               w: cell.width * cell.flipScaleX, h: cell.height * cell.flipScaleY,
+                               gapX: cellGap / 2 * cell.flipScaleX,
+                               gapY: cellGap / 2 * cell.flipScaleY, rowTop: rowTop,
                                thumb: cell.liveThumbUrl, text: "" })
             }
         }
@@ -421,10 +551,10 @@ Item {
         for (let g = 0; g < ghosts.length; ++g) {
             const entry = ghosts[g]
             changeGhostComponent.createObject(ghostLayer, {
-                x: entry.header ? entry.x : entry.x + cellGap / 2,
-                y: entry.header ? entry.y : entry.y + cellGap / 2,
-                width: entry.header ? entry.w : entry.w - cellGap,
-                height: entry.header ? entry.h : entry.h - cellGap,
+                x: entry.header ? entry.x : entry.x + entry.gapX,
+                y: entry.header ? entry.y : entry.y + entry.gapY,
+                width: entry.header ? entry.w : entry.w - entry.gapX * 2,
+                height: entry.header ? entry.h : entry.h - entry.gapY * 2,
                 source: entry.thumb, title: entry.text
             })
         }
@@ -664,18 +794,26 @@ Item {
         property int pinnedFileId: 0
         property int pinnedImageId: 0
         property int pinnedMaxEdge: 0
-        // In-place change: offset from the new cell to the old one.
+        // In-place change and zoom: offset from the new cell to the old one, and the old size as
+        // a scale of the new size from the top-left corner.
         property real flipX: 0
         property real flipY: 0
+        property real flipScaleX: 1
+        property real flipScaleY: 1
 
         width: root.cellWidth
         height: root.photoRowHeight
-        transform: Translate { x: cell.flipX; y: cell.flipY }
+        transform: [
+            Scale { xScale: cell.flipScaleX; yScale: cell.flipScaleY },
+            Translate { x: cell.flipX; y: cell.flipY }
+        ]
 
-        function startFlip(dx, dy, fromOpacity) {
+        function startFlip(dx, dy, fromOpacity, fromScaleX, fromScaleY) {
             flipAnimation.stop()
             flipX = dx
             flipY = dy
+            flipScaleX = fromScaleX === undefined ? 1 : fromScaleX
+            flipScaleY = fromScaleY === undefined ? 1 : fromScaleY
             opacity = fromOpacity
             flipAnimation.restart()
         }
@@ -683,6 +821,8 @@ Item {
             flipAnimation.stop()
             flipX = 0
             flipY = 0
+            flipScaleX = 1
+            flipScaleY = 1
             opacity = 1
         }
         ParallelAnimation {
@@ -693,6 +833,14 @@ Item {
             }
             NumberAnimation {
                 target: cell; property: "flipY"; to: 0
+                duration: root.changeAnimationDuration; easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                target: cell; property: "flipScaleX"; to: 1
+                duration: root.changeAnimationDuration; easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                target: cell; property: "flipScaleY"; to: 1
                 duration: root.changeAnimationDuration; easing.type: Easing.OutCubic
             }
             NumberAnimation {
@@ -799,6 +947,8 @@ Item {
                     anchors.margins: 2
                     source: cell.liveThumbUrl
                     asynchronous: true
+                    // A new tier keeps the shown thumbnail until the new image is ready.
+                    retainWhileLoading: true
                     fillMode: Image.PreserveAspectFit
                     visible: cell.liveThumbUrl.length > 0
                 }
@@ -954,10 +1104,26 @@ Item {
                 }
             }
             onWheel: function(wheel) {
+                // A zoom step needs one wheel notch (120); a touchpad sends smaller steps,
+                // which add up. The cell under the pointer keeps its place.
                 if (wheel.modifiers & Qt.ControlModifier) {
-                    const delta = wheel.angleDelta.y > 0 ? 1 : -1
-                    root.zoomChanged(Math.max(0, Math.min(root.zoomColumns.length - 1,
-                                                          root.zoomLevel + delta)))
+                    const angle = wheel.angleDelta.y
+                    if (angle !== 0 && (root.zoomWheelAngle > 0) !== (angle > 0)) {
+                        root.zoomWheelAngle = 0
+                    }
+                    root.zoomWheelAngle += angle
+                    let level = root.zoomLevel
+                    while (Math.abs(root.zoomWheelAngle) >= 120) {
+                        const step = root.zoomWheelAngle > 0 ? 1 : -1
+                        root.zoomWheelAngle -= step * 120
+                        level = Math.max(0, Math.min(root.zoomColumns.length - 1, level + step))
+                    }
+                    if (level !== root.zoomLevel) {
+                        const p = cellHit.mapToItem(list, wheel.x, wheel.y)
+                        root.zoomFocusX = p.x
+                        root.zoomFocusY = p.y
+                        root.zoomChanged(level)
+                    }
                     wheel.accepted = true
                     return
                 }

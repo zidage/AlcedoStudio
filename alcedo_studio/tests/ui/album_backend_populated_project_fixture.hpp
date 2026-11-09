@@ -22,6 +22,7 @@
 #include <QVariantMap>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <functional>
@@ -99,6 +100,8 @@ struct LibraryPhotoSpec {
   std::string                date_time_ = "2026-05-25 10:00:00";
   int                        rating_    = 0;
   std::optional<std::time_t> added_time_{};  ///< Element.added_time; creation time when empty.
+  uint32_t                   width_  = 0;     ///< Oriented photo width; 0 is unknown.
+  uint32_t                   height_ = 0;     ///< Oriented photo height; 0 is unknown.
 };
 
 /// Build a packed project with one synthetic DNG image (no real pixels, no GPU),
@@ -152,6 +155,8 @@ inline auto CreatePopulatedPackedProject(
     metadata.lens_          = spec.lens_;
     metadata.date_time_str_ = spec.date_time_;
     metadata.rating_        = spec.rating_;
+    metadata.width_         = spec.width_;
+    metadata.height_        = spec.height_;
     image->SetExifDisplayMetaData(std::move(metadata));
 
     auto file = project->GetSleeveService()->Write<std::shared_ptr<SleeveFile>>(

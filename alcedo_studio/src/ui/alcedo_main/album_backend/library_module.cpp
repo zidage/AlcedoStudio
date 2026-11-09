@@ -416,6 +416,12 @@ void ReadRowDisplayValues(const LibraryQueryInput& input, LibraryQueryOutput& ou
           display.aperture     = static_cast<double>(exif.aperture_);
           display.focal_length = static_cast<double>(exif.focal_);
           display.is_hdr       = exif.is_hdr_;
+          // The stored dimensions are those of the oriented image (see
+          // SetDisplayDimensionsFromLibRaw and PopulateRasterDimensionsFromHeader).
+          if (exif.width_ > 0 && exif.height_ > 0) {
+            display.aspect_ratio =
+                static_cast<double>(exif.width_) / static_cast<double>(exif.height_);
+          }
         });
       } catch (...) {
       }
@@ -761,6 +767,7 @@ auto LibraryModule::ItemFromRow(const AlbumQueryRow& query_row, const AlbumItem&
   item.aperture     = display.aperture;
   item.focal_length = display.focal_length;
   item.is_hdr       = display.is_hdr;
+  item.aspect_ratio = display.aspect_ratio;
   item.tags         = display.tags;
   // SQL supplies these display values.
   item.file_name    = QString::fromUtf8(row.file_name_.c_str());

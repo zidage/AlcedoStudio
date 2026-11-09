@@ -66,6 +66,8 @@ void RegisterApplicationModuleTypes() {
                                               "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorBehaviorPreferences>(
       "Alcedo.Main", 1, 0, "EditorBehaviorPreferences", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<LibraryViewPreferences>(
+      "Alcedo.Main", 1, 0, "LibraryViewPreferences", "Owned by ApplicationModuleHost");
 }
 
 }  // namespace alcedo::ui

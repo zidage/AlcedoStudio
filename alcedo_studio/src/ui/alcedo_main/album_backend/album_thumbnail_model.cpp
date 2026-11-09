@@ -103,12 +103,16 @@ QVariant AlbumThumbnailModel::roleValue(const AlbumItem& item, int role) const {
       return EditedAtValue(item);
     case EditVersionName:
       return item.edit_version_name;
+    case AspectRatio:
+      return item.aspect_ratio;
     default:
       return {};
   }
 }
 
-QHash<int, QByteArray> AlbumThumbnailModel::roleNames() const {
+QHash<int, QByteArray> AlbumThumbnailModel::roleNames() const { return RoleNameTable(); }
+
+auto AlbumThumbnailModel::RoleNameTable() -> QHash<int, QByteArray> {
   return {
       {ElementId, "elementId"},
       {FileId, "fileId"},
@@ -134,6 +138,7 @@ QHash<int, QByteArray> AlbumThumbnailModel::roleNames() const {
       {IsEdited, "isEdited"},
       {EditedAt, "editedAt"},
       {EditVersionName, "editVersionName"},
+      {AspectRatio, "aspectRatio"},
   };
 }
 
