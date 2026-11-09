@@ -93,6 +93,32 @@ Item {
         shown.height = root.height
     }
 
+    // Applies the pending layouts of the shown workspace now (issue 754). A RowLayout or
+    // ColumnLayout can apply a new width in its next polish, so after the last frame of a fold
+    // the content can still have the previous width. Each layout is polished before the layouts
+    // inside it, so every layout works with the final size of its parent. Hidden items and the
+    // content of views (Flickable) are skipped: their delegates do not use these layouts.
+    function settleShownWorkspaceLayouts() {
+        const shown = root._shownWorkspace === "editor" ? editorLoader : libraryLoader
+        root.polishLayoutsIn(shown.item)
+    }
+
+    function polishLayoutsIn(item) {
+        if (!item || !item.visible) {
+            return
+        }
+        if (item instanceof Layout) {
+            item.ensurePolished()
+        }
+        if (item instanceof Flickable) {
+            return
+        }
+        const children = item.children
+        for (let i = 0; i < children.length; i++) {
+            root.polishLayoutsIn(children[i])
+        }
+    }
+
     // The new workspace fades in at its final size with a short slide. Its layout does not
     // change: only opacity and x move.
     function revealShownWorkspace() {

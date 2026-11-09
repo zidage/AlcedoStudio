@@ -36,8 +36,9 @@ ApplicationWindow {
     readonly property real collectionsSidebarExtent: collectionsSidebarReveal
                                                      * collectionsSidebarOpenExtent
     // True while a manual toggle folds or opens the sidebar. The shown workspace follows the
-    // sidebar edge on every frame and defers the work that only its final size needs.
-    readonly property bool collectionsSidebarFolding: collectionsSidebarFoldAnimation.running
+    // sidebar edge on every frame and defers the work that only its final size needs. It turns
+    // false after the shown workspace has its final size (collectionsSidebarFoldAnimation).
+    property bool collectionsSidebarFolding: false
     property bool editorAdjustmentStackExpanded: true
     // Luminance/Hue Range section of the Mask panel (#605): collapsed at the start of the session;
     // the user's choice survives the editor Loader.
@@ -202,6 +203,18 @@ ApplicationWindow {
         target: root
         property: "collectionsSidebarReveal"
         easing.type: appTheme.motionEasing
+
+        // The last reveal value can reach the nested layouts of the shown workspace in their
+        // next polish, after the animation stops (issue 754). The host applies those layouts
+        // first, so the workspace has its final size when the flag drops.
+        onRunningChanged: {
+            if (running) {
+                root.collectionsSidebarFolding = true
+                return
+            }
+            workspaceHost.settleShownWorkspaceLayouts()
+            root.collectionsSidebarFolding = false
+        }
     }
 
     function nauticalButtonFill(enabled, hovered, pressed) {

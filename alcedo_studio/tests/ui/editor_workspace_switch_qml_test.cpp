@@ -15,6 +15,8 @@
 // - A manual toggle slides the sidebar at its full width; the shown workspace follows the
 //   sidebar edge on every frame. The thumbnail cache size waits for the end of the fold; the
 //   editor viewport keeps its size, is scaled to the slot, and renders once at the end.
+// Issue 754: when the fold flag drops, the shown workspace already has its final width, so
+//   the Library grid sets the cache size once, for that width.
 
 #include <gtest/gtest.h>
 
@@ -25,6 +27,7 @@
 #include <QPoint>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QSignalSpy>
 #include <QString>
 #include <QStringList>
 #include <QTest>
@@ -241,12 +244,12 @@ auto IntProperty(QObject* object, const char* name) -> int {
 }
 
 /// Runs a manual toggle of the collections sidebar with motion on, until the fold ends. While
-/// the fold runs, @p during is called after each event pass. Returns the frames that the
-/// window animated during the fold (QQuickWindow::afterAnimating).
+/// the fold runs, @p during is called after each event pass. Returns the steps of the sidebar
+/// edge (changes of collectionsSidebarReveal). The fold animation runs on its own clock: in a
+/// debug build a frame can show two steps or none, so the steps are counted, not the frames.
 auto RunManualSidebarToggle(QQuickWindow* window, const std::function<void()>& during) -> int {
-  int        frames     = 0;
-  const auto connection = QObject::connect(window, &QQuickWindow::afterAnimating,
-                                           [&]() { ++frames; });
+  QSignalSpy edge_steps(window, SIGNAL(collectionsSidebarRevealChanged()));
+  EXPECT_TRUE(edge_steps.isValid());
   QMetaObject::invokeMethod(window, "toggleCollectionsSidebar");
   EXPECT_TRUE(window->property("collectionsSidebarFolding").toBool());
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -255,9 +258,9 @@ auto RunManualSidebarToggle(QQuickWindow* window, const std::function<void()>& d
     during();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
   }
-  QObject::disconnect(connection);
   EXPECT_FALSE(window->property("collectionsSidebarFolding").toBool());
-  return frames;
+  EXPECT_GE(edge_steps.count(), 1);
+  return static_cast<int>(edge_steps.count());
 }
 
 // Issue 751: a workspace switch is a cut. The sidebar state of the new workspace applies at
@@ -364,7 +367,7 @@ TEST_F(EditorWorkspaceSwitchQmlTest, LibraryFollowsManualSidebarToggleAndSizesCa
     const int  hints_before  = IntProperty(grid, "cacheHintUpdateCount");
     bool       hint_in_fold  = false;
     bool       panel_resized = false;
-    const int  frames        = RunManualSidebarToggle(window, [&]() {
+    const int  edge_steps    = RunManualSidebarToggle(window, [&]() {
       hint_in_fold  = hint_in_fold || IntProperty(grid, "cacheHintUpdateCount") != hints_before;
       panel_resized = panel_resized || sidebar->width() != sidebar_width;
       EXPECT_DOUBLE_EQ(library_loader->width(), host->width());
@@ -374,10 +377,15 @@ TEST_F(EditorWorkspaceSwitchQmlTest, LibraryFollowsManualSidebarToggleAndSizesCa
     EXPECT_FALSE(hint_in_fold);
     EXPECT_FALSE(panel_resized);
     EXPECT_EQ(IntProperty(grid, "cacheHintUpdateCount"), hints_before + 1);
-    // The content follows the sidebar edge during the fold (a held width changes once), at
-    // most once per frame. A debug build animates few frames in the 160-200 ms fold.
-    EXPECT_GE(width_changes, 2) << "frames " << frames;
-    EXPECT_LE(width_changes, frames + 1);
+    // Issue 754: the grid has its final width when the flag drops. The next layout passes keep
+    // it and do not set the cache size again.
+    const qreal grid_width_at_end = grid->width();
+    ProcessEvents(100);
+    EXPECT_DOUBLE_EQ(grid->width(), grid_width_at_end);
+    EXPECT_EQ(IntProperty(grid, "cacheHintUpdateCount"), hints_before + 1);
+    // The content follows the sidebar edge during the fold: its width changes once for each
+    // step of the edge (the host sizes the loader directly) and at no other time.
+    EXPECT_EQ(width_changes, edge_steps);
     EXPECT_DOUBLE_EQ(library_loader->width(), host->width());
     EXPECT_DOUBLE_EQ(sidebar->width(), sidebar_width);
   }
@@ -435,7 +443,7 @@ TEST_F(EditorWorkspaceSwitchQmlTest, EditorFollowsManualSidebarToggleAndRendersO
     bool        size_in_fold   = false;
     bool        resize_in_fold = false;
     bool        item_resized   = false;
-    const int   frames         = RunManualSidebarToggle(window, [&]() {
+    const int   edge_steps     = RunManualSidebarToggle(window, [&]() {
       size_in_fold =
           size_in_fold || IntProperty(viewport_slot, "presentationSizeUpdateCount") != sizes_before;
       resize_in_fold = resize_in_fold || resize_reports > 0;
@@ -449,8 +457,10 @@ TEST_F(EditorWorkspaceSwitchQmlTest, EditorFollowsManualSidebarToggleAndRendersO
     EXPECT_FALSE(item_resized);
     EXPECT_EQ(IntProperty(viewport_slot, "presentationSizeUpdateCount"), sizes_before + 1);
     EXPECT_EQ(resize_reports, 1);
-    EXPECT_GE(viewport_width_changes, 2) << "frames " << frames;
-    EXPECT_LE(viewport_width_changes, frames + 1);
+    // The slot follows the edge at most once per step: its layouts can apply two steps in one
+    // polish.
+    EXPECT_GE(viewport_width_changes, 1);
+    EXPECT_LE(viewport_width_changes, edge_steps);
     // After the fold the viewport and the view transform have the slot size, unscaled.
     EXPECT_DOUBLE_EQ(viewport->width(), viewport_slot->width());
     EXPECT_DOUBLE_EQ(viewport->scale(), 1.0);
