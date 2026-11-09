@@ -537,6 +537,9 @@ alcedo_register_test_target(AlbumBackendSearchWorkerTest ui)
 # section projection geometry, and the one library query path of LibraryModule.
 def_ui_test(AlbumSectionModelTest album_section_model_test.cpp)
 alcedo_register_test_target(AlbumSectionModelTest ui)
+# Issue 745: justified-rows Library layout geometry, its window model, and the layout setting.
+def_ui_test(JustifiedLayoutTest justified_layout_test.cpp)
+alcedo_register_test_target(JustifiedLayoutTest ui)
 def_ui_test(AlbumBackendLibraryQueryTest album_backend_library_query_test.cpp)
 alcedo_register_test_target(AlbumBackendLibraryQueryTest ui)
 

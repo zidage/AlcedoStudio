@@ -990,6 +990,12 @@ auto AppTheme::thumbnailEditMarkFillColor() const -> QColor {
   return WithAlpha(bgDeepColor(), 200);
 }
 
+auto AppTheme::thumbnailDetailsScrimColor() const -> QColor {
+  // Deep base under the hover details of a justified-rows tile: the text and the stars read on
+  // bright photos, and the photo stays visible through it.
+  return WithAlpha(bgDeepColor(), 180);
+}
+
 auto AppTheme::scopeGridColor() const -> QColor {
   return Blend(bgDeepColor(), textMutedColor(), 0.32);
 }

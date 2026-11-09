@@ -199,6 +199,7 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor ratingStarEmptyColor READ ratingStarEmptyColor NOTIFY ThemeChanged)
   // Fill of the edit mark chip on the top-right corner of a thumbnail photo.
   Q_PROPERTY(QColor thumbnailEditMarkFillColor READ thumbnailEditMarkFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor thumbnailDetailsScrimColor READ thumbnailDetailsScrimColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeGridColor READ scopeGridColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopePlotBorderColor READ scopePlotBorderColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramRedColor READ scopeHistogramRedColor NOTIFY ThemeChanged)
@@ -445,6 +446,7 @@ class AppTheme final : public QObject {
   auto editorListFavoriteActiveOnSelectedColor() const -> QColor;
   auto ratingStarEmptyColor() const -> QColor;
   auto thumbnailEditMarkFillColor() const -> QColor;
+  auto thumbnailDetailsScrimColor() const -> QColor;
   auto scopeGridColor() const -> QColor;
   auto scopePlotBorderColor() const -> QColor;
   auto scopeHistogramRedColor() const -> QColor;

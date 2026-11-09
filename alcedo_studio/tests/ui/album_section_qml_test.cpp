@@ -9,12 +9,14 @@
 
 #include <gtest/gtest.h>
 
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSettings>
 #include <QSignalSpy>
 #include <QStyleHints>
 #include <QTest>
@@ -26,7 +28,9 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -41,6 +45,7 @@
 #include "json.hpp"
 #include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
@@ -197,7 +202,8 @@ auto AlbumWarnings(const std::vector<std::string>& warnings) -> std::vector<std:
     for (const auto* file :
          {"AlbumSectionView.qml", "InspectorFieldActions.qml", "AlbumInspectorPanel.qml",
           "StatsCard.qml", "DateFilterSection.qml", "StarRatingFilter.qml", "ThumbnailGridView.qml",
-          "ThumbnailStarRating.qml", "ThumbnailEditMark.qml"}) {
+          "ThumbnailStarRating.qml", "ThumbnailEditMark.qml", "JustifiedThumbnailTile.qml",
+          "ThumbnailPinBinding.qml", "ThumbnailLayoutAnimation.qml"}) {
       if (warning.find(file) != std::string::npos) {
         out.push_back(warning);
         break;
@@ -305,6 +311,12 @@ auto GridCard(QQuickWindow* window, sl_element_id_t element_id) -> QQuickItem* {
       },
       cards);
   return cards.empty() ? nullptr : cards.front();
+}
+
+/// Drawn rectangle of @p item in the coordinates of @p view, with its transforms (the zoom
+/// animation offset and scale).
+auto DrawnRect(QQuickItem* item, QQuickItem* view) -> QRectF {
+  return item->mapRectToItem(view, QRectF(0, 0, item->width(), item->height()));
 }
 
 auto SceneCenter(QQuickItem* item) -> QPoint {
@@ -449,9 +461,9 @@ TEST_F(AlbumSectionQmlTests, SectionViewShowsGroupRowsAndReleasesOccurrencePinsO
 }
 
 // The grouped view's scroll anchor (the occurrence at the top of the view and the offset into
-// its row) restores the same position in a new view instance, as after an editor round trip,
-// and keeps the top photo through a new column count.
-TEST_F(AlbumSectionQmlTests, ScrollAnchorRestoresTheTopPhotoAcrossTeardownAndColumnChanges) {
+// its row) restores the same position in a new view instance, as after an editor round trip.
+// A zoom step from the slider keeps the photo at the view centre in the centre row (issue 745).
+TEST_F(AlbumSectionQmlTests, ScrollAnchorRestoresTheTopPhotoAndZoomKeepsTheCentrePhoto) {
   ApplicationModuleHost         backend;
   std::vector<LibraryPhotoSpec> specs(400);
   for (size_t index = 0; index < specs.size(); ++index) {
@@ -503,22 +515,44 @@ TEST_F(AlbumSectionQmlTests, ScrollAnchorRestoresTheTopPhotoAcrossTeardownAndCol
   })) << "contentY "
       << list->property("contentY").toReal() << " expected " << saved_y;
 
-  // A new column count keeps the anchored photo in the top row of the view.
+  // A zoom step keeps the photo at the view centre under the view centre. ListView places the
+  // rows relative to the created rows, so the drawn cells are read, not the model offsets.
+  auto*      list_item = qobject_cast<QQuickItem*>(list);
+  const auto centre    = QPointF(list_item->width() / 2.0, list_item->height() / 2.0);
+  const auto cell_at_centre = [&]() -> std::pair<qint64, QRectF> {
+    std::vector<QQuickItem*> cells;
+    CollectNamedItems(list_item, QStringLiteral("albumSectionPhotoCell"), cells);
+    for (auto* cell : cells) {
+      if (!cell->isVisible()) continue;
+      const auto rect = DrawnRect(cell, list_item);
+      if (rect.contains(centre)) {
+        return {cell->property("occurrence").toLongLong(), rect};
+      }
+    }
+    return {-1, QRectF{}};
+  };
+  const auto [centre_occurrence, centre_rect] = cell_at_centre();
+  ASSERT_GE(centre_occurrence, 0);
+  const auto fraction = (centre.y() - centre_rect.top()) / centre_rect.height();
   const auto columns_before = view.loaded()->property("columnCount").toInt();
   view.loaded()->setProperty("zoomLevel", 1);
   ASSERT_TRUE(WaitUntil([&]() {
     return view.loaded()->property("columnCount").toInt() != columns_before &&
            sections.ColumnCount() == view.loaded()->property("columnCount").toInt();
   }));
-  ProcessEvents(100);
-  const auto top_row  = sections.RowAtOffset(list->property("contentY").toReal(),
-                                             view.loaded()->property("headerHeight").toReal(),
-                                             view.loaded()->property("photoRowHeight").toReal());
-  const auto top_info = sections.RowInfo(top_row);
-  const auto first    = top_info.value(QStringLiteral("firstOccurrence")).toLongLong();
-  const auto count    = top_info.value(QStringLiteral("occurrenceCount")).toLongLong();
-  EXPECT_LE(first, occurrence);
-  EXPECT_LT(occurrence, first + std::max<qint64>(count, 1));
+  ProcessEvents(500);
+  std::vector<QQuickItem*> cells;
+  CollectNamedItems(list_item, QStringLiteral("albumSectionPhotoCell"), cells);
+  bool found = false;
+  for (auto* cell : cells) {
+    if (!cell->isVisible() || cell->property("occurrence").toLongLong() != centre_occurrence) {
+      continue;
+    }
+    found           = true;
+    const auto rect = DrawnRect(cell, list_item);
+    EXPECT_NEAR(rect.top() + fraction * rect.height(), centre.y(), 1.0);
+  }
+  EXPECT_TRUE(found) << "occurrence " << centre_occurrence << " has no cell";
 }
 
 TEST_F(AlbumSectionQmlTests, LargeSectionTraversalKeepsCellsAndLoadedRowsBounded) {
@@ -1194,6 +1228,392 @@ TEST_F(AlbumSectionQmlTests, FlatGridRubberBandSelectsTheCoveredPhotosAfterTheOr
   EXPECT_EQ(drag(0, static_cast<size_t>(columns) + 1), expected(0, columns))
       << "originY " << origin_y << " contentY " << grid->property("contentY").toReal();
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+
+// ── Issue 745: zoom animation and justified rows ──
+
+namespace {
+
+/// Store QSettings of this test in @p dir, so the layout setting does not reach the user's
+/// settings.
+void UseTestSettings(const std::filesystem::path& dir) {
+  QCoreApplication::setOrganizationName(QStringLiteral("AlcedoTests"));
+  QCoreApplication::setApplicationName(QStringLiteral("AlbumSectionQmlTest"));
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                     QString::fromStdWString((dir / "settings").wstring()));
+  QSettings settings;
+  settings.clear();
+  settings.sync();
+}
+
+/// The justified tiles under @p root by photo index.
+auto JustifiedTiles(QQuickItem* root) -> std::map<int, QQuickItem*> {
+  std::vector<QQuickItem*> items;
+  CollectItems(
+      root,
+      [](QQuickItem* item) {
+        return item->objectName().startsWith(QStringLiteral("thumbnailGridView_tile_"));
+      },
+      items);
+  std::map<int, QQuickItem*> tiles;
+  for (auto* item : items) {
+    tiles[item->property("photoIndex").toInt()] = item;
+  }
+  return tiles;
+}
+
+auto MixedSizePhotoSpecs(int count) -> std::vector<LibraryPhotoSpec> {
+  const std::vector<std::pair<uint32_t, uint32_t>> sizes{
+      {6000, 4000}, {4000, 6000}, {5000, 5000}, {7200, 3000}, {3000, 4000}, {6000, 3375}};
+  std::vector<LibraryPhotoSpec> specs;
+  for (int i = 0; i < count; ++i) {
+    LibraryPhotoSpec spec;
+    spec.rating_ = i % 3;
+    spec.width_  = sizes[static_cast<size_t>(i) % sizes.size()].first;
+    spec.height_ = sizes[static_cast<size_t>(i) % sizes.size()].second;
+    specs.push_back(spec);
+  }
+  return specs;
+}
+
+auto AspectRatioOfRow(ApplicationModuleHost& backend, int row) -> double {
+  auto& model = backend.library()->model();
+  return model.data(model.index(row, 0), AlbumThumbnailModel::AspectRatio).toDouble();
+}
+
+}  // namespace
+
+// A 6 to 5 column zoom step: on the first frame every card is drawn at its old rectangle, at
+// the end every card is at its new cell, and the card under the pointer keeps the point under
+// the pointer at the same height for the whole animation.
+TEST_F(AlbumSectionQmlTests, FlatGridZoomStepMovesEachCardFromItsOldRectangleToItsNewCell) {
+  ApplicationModuleHost backend;
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 300);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto& keys = packed->images_;
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  auto* grid   = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_grid"));
+  ASSERT_NE(grid, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys[0].file_id_) != nullptr; }));
+  ProcessEvents(500);
+  ASSERT_EQ(view.loaded()->property("columns").toInt(), 6);
+  const auto cell_height = grid->property("cellHeight").toReal();
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "restoreContentY",
+                                        Q_ARG(QVariant, 4.0 * cell_height + 37.0)));
+  ProcessEvents(300);
+
+  std::map<uint, QRectF> old_rects;
+  for (const auto& key : keys) {
+    auto* card = GridCard(window, key.file_id_);
+    if (card == nullptr || !card->isVisible()) {
+      continue;
+    }
+    const auto rect = DrawnRect(card, grid);
+    if (rect.bottom() > 0 && rect.top() < grid->height()) {
+      old_rects[key.file_id_] = rect;
+    }
+  }
+  ASSERT_GT(old_rects.size(), 12U);
+  const QPointF focus(500.0, 400.0);
+  uint          focus_id = 0;
+  for (const auto& [id, rect] : old_rects) {
+    if (rect.contains(focus)) {
+      focus_id = id;
+    }
+  }
+  ASSERT_NE(focus_id, 0U) << "no card under the focus point";
+  const auto focus_old = old_rects[focus_id];
+  const auto fraction  = (focus.y() - focus_old.top()) / focus_old.height();
+  const auto focus_y   = [&]() {
+    auto* card = GridCard(window, focus_id);
+    if (card == nullptr) return -1.0e9;
+    const auto rect = DrawnRect(card, grid);
+    return rect.top() + fraction * rect.height();
+  };
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "setZoomLevelAt", Q_ARG(QVariant, 3),
+                                        Q_ARG(QVariant, focus.y()), Q_ARG(QVariant, focus.x())));
+  // First frame: the new layout is applied, the cards are drawn at their old rectangles.
+  EXPECT_EQ(view.loaded()->property("columns").toInt(), 5);
+  int kept = 0;
+  for (const auto& [id, rect] : old_rects) {
+    auto* card = GridCard(window, id);
+    if (card == nullptr) {
+      continue;
+    }
+    ++kept;
+    const auto drawn = DrawnRect(card, grid);
+    EXPECT_NEAR(drawn.x(), rect.x(), 0.5) << id;
+    EXPECT_NEAR(drawn.y(), rect.y(), 0.5) << id;
+    EXPECT_NEAR(drawn.width(), rect.width(), 0.5) << id;
+    EXPECT_NEAR(drawn.height(), rect.height(), 0.5) << id;
+  }
+  EXPECT_GT(kept, 8);
+  EXPECT_NEAR(focus_y(), focus.y(), 0.5);
+  for (int step = 0; step < 6; ++step) {
+    ProcessEvents(40);
+    EXPECT_NEAR(focus_y(), focus.y(), 1.0) << "step " << step;
+  }
+
+  // Last frame: every card is at its cell of the 5-column layout.
+  ProcessEvents(600);
+  const auto cell_width = grid->property("cellWidth").toReal();
+  const auto content_y  = grid->property("contentY").toReal();
+  const auto origin_y   = grid->property("originY").toReal();
+  for (size_t index = 0; index < keys.size(); ++index) {
+    auto* card = GridCard(window, keys[index].file_id_);
+    if (card == nullptr || !card->isVisible()) {
+      continue;
+    }
+    EXPECT_DOUBLE_EQ(card->property("zoomTranslateX").toReal(), 0.0) << index;
+    EXPECT_DOUBLE_EQ(card->property("zoomTranslateY").toReal(), 0.0) << index;
+    EXPECT_DOUBLE_EQ(card->property("zoomScaleX").toReal(), 1.0) << index;
+    EXPECT_DOUBLE_EQ(card->property("zoomScaleY").toReal(), 1.0) << index;
+    // GridView keeps its current item (index 0) alive far above the view; only the cells on
+    // the screen are checked.
+    const auto expected_y = origin_y +
+                            std::floor(static_cast<qreal>(index) / 5.0) *
+                                grid->property("cellHeight").toReal() -
+                            content_y;
+    if (expected_y + card->height() <= 0 || expected_y >= grid->height()) {
+      continue;
+    }
+    const auto drawn = DrawnRect(card, grid);
+    EXPECT_NEAR(drawn.x(), static_cast<qreal>(index % 5) * cell_width, 0.5) << index;
+    EXPECT_NEAR(drawn.y(), expected_y, 0.5) << index;
+  }
+  EXPECT_NEAR(focus_y(), focus.y(), 1.0);
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// Justified rows: the setting is read by a new view; the tiles of a row share one photo height,
+// a complete row fills the view width, each tile width follows the photo aspect ratio; the hover
+// details show the camera line and rate a photo with a star click; a zoom step keeps the tile
+// under the pointer; and the classic setting brings the cards back.
+TEST_F(AlbumSectionQmlTests, JustifiedRowsFillTheWidthFollowTheAspectRatioAndRateFromTheDetails) {
+  UseTestSettings(temp_dir_);
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(backend.library_view()->setGridLayout(QStringLiteral("justified")));
+  EXPECT_EQ(QSettings{}.value("library/gridLayout").toString(), QStringLiteral("justified"));
+  const auto packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, MixedSizePhotoSpecs(60));
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto& keys = packed->images_;
+  // The worker reads the oriented dimensions into the aspectRatio role.
+  std::set<long> aspect_ratios;
+  for (int row = 0; row < backend.library()->model().count(); ++row) {
+    aspect_ratios.insert(std::lround(AspectRatioOfRow(backend, row) * 1000.0));
+  }
+  EXPECT_EQ(aspect_ratios, (std::set<long>{667, 750, 1000, 1500, 1778, 2400}));
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  auto* flick  = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_justified"));
+  ASSERT_NE(flick, nullptr);
+  EXPECT_EQ(view.loaded()->property("layoutMode").toString(), QStringLiteral("justified"));
+  ASSERT_TRUE(WaitUntil([&]() { return JustifiedTiles(flick).size() > 6; }))
+      << Joined(view.warnings());
+  ProcessEvents(400);
+  EXPECT_EQ(GridCard(window, keys[0].file_id_), nullptr);
+
+  const auto caption = view.loaded()->property("justifiedCaptionHeight").toReal();
+  const auto spacing = view.loaded()->property("justifiedSpacing").toReal();
+  std::map<qreal, std::vector<QQuickItem*>> rows;
+  for (const auto& [index, tile] : JustifiedTiles(flick)) {
+    rows[tile->y()].push_back(tile);
+  }
+  ASSERT_GE(rows.size(), 3U);
+  int complete_rows = 0;
+  for (auto it = rows.begin(); std::next(it) != rows.end(); ++it) {
+    auto& tiles = it->second;
+    std::sort(tiles.begin(), tiles.end(),
+              [](QQuickItem* a, QQuickItem* b) { return a->x() < b->x(); });
+    qreal width = 0.0;
+    for (auto* tile : tiles) {
+      EXPECT_DOUBLE_EQ(tile->height(), tiles.front()->height());
+      const auto photo_height = tile->height() - caption;
+      EXPECT_NEAR(tile->width() / photo_height,
+                  AspectRatioOfRow(backend, tile->property("photoIndex").toInt()), 1e-3);
+      width += tile->width();
+    }
+    width += spacing * static_cast<qreal>(tiles.size() - 1);
+    EXPECT_NEAR(width, flick->width(), 0.5) << "row at " << it->first;
+    EXPECT_NEAR(tiles.front()->x(), 0.0, 0.5);
+    ++complete_rows;
+  }
+  EXPECT_GE(complete_rows, 2);
+
+  // Hover details and a star click on the second tile.
+  QSignalSpy requests(view.loaded(), SIGNAL(ratingRequested(QVariant, int)));
+  ASSERT_TRUE(requests.isValid());
+  auto* tile = JustifiedTiles(flick).at(1);
+  ASSERT_NE(tile, nullptr);
+  const auto target  = tile->property("elementId").toUInt();
+  auto*      details = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_details"));
+  auto*      camera  = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_camera"));
+  auto*      stars   = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_stars"));
+  ASSERT_NE(details, nullptr);
+  ASSERT_NE(camera, nullptr);
+  ASSERT_NE(stars, nullptr);
+  EXPECT_DOUBLE_EQ(details->property("opacity").toReal(), 0.0);
+  QTest::mouseMove(window, SceneCenter(tile));
+  ASSERT_TRUE(WaitUntil([&]() { return details->property("opacity").toReal() >= 1.0; }, 3000));
+  EXPECT_TRUE(
+      camera->property("text").toString().contains(QStringLiteral("Synthetic Album Camera")));
+  auto* star4 = FirstItem(stars, QStringLiteral("thumbnailStar_4"));
+  ASSERT_NE(star4, nullptr);
+  QTest::mouseMove(window, SceneCenter(star4));
+  ASSERT_TRUE(WaitUntil([&]() { return stars->property("previewRating").toInt() == 4; }, 3000));
+  QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, SceneCenter(star4));
+  ASSERT_TRUE(WaitUntil([&]() { return requests.count() == 1; }, 3000));
+  EXPECT_EQ(requests.at(0).at(0).toMap().value("elementId").toUInt(), target);
+  EXPECT_EQ(requests.at(0).at(1).toInt(), 4);
+  ApplyRatingRequest(backend, requests.at(0));
+  EXPECT_EQ(RatingOf(backend, target), 4);
+  ASSERT_TRUE(WaitUntil([&]() { return StarCount(stars, QStringLiteral("★")) == 4; }, 3000));
+  QTest::mouseMove(window, QPoint(5, 5));
+  ProcessEvents(300);
+
+  // A zoom step keeps the point of the tile under the pointer at its height.
+  const QPointF focus(300.0, 300.0);
+  int           focus_index = -1;
+  QRectF        focus_old;
+  for (const auto& [index, item] : JustifiedTiles(flick)) {
+    const auto rect = DrawnRect(item, flick);
+    if (rect.contains(focus)) {
+      focus_index = index;
+      focus_old   = rect;
+    }
+  }
+  ASSERT_GE(focus_index, 0);
+  const auto fraction = (focus.y() - focus_old.top()) / focus_old.height();
+  const auto focus_y  = [&]() {
+    const auto tiles = JustifiedTiles(flick);
+    const auto it    = tiles.find(focus_index);
+    if (it == tiles.end()) return -1.0e9;
+    const auto rect = DrawnRect(it->second, flick);
+    return rect.top() + fraction * rect.height();
+  };
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "setZoomLevelAt", Q_ARG(QVariant, 2),
+                                        Q_ARG(QVariant, focus.y()), Q_ARG(QVariant, focus.x())));
+  EXPECT_NEAR(focus_y(), focus.y(), 0.5);
+  ProcessEvents(700);
+  EXPECT_NEAR(focus_y(), focus.y(), 1.0);
+  EXPECT_DOUBLE_EQ(view.loaded()->property("justifiedRowHeight").toReal(), 280.0);
+
+  // The classic setting shows the cards again.
+  ASSERT_TRUE(backend.library_view()->setGridLayout(QStringLiteral("classic")));
+  ASSERT_TRUE(WaitUntil([&]() {
+    if (!JustifiedTiles(flick).empty()) return false;
+    for (const auto& key : keys) {
+      if (GridCard(window, key.file_id_) != nullptr) return true;
+    }
+    return false;
+  }));
+  ProcessEvents(300);
+  EXPECT_TRUE(JustifiedTiles(flick).empty());
+  EXPECT_EQ(QSettings{}.value("library/gridLayout").toString(), QStringLiteral("classic"));
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+
+namespace {
+
+/// Shown photo delegates (classic cards and justified tiles) by element id.
+auto ShownPhotoItems(QQuickItem* root) -> std::map<uint, QQuickItem*> {
+  std::vector<QQuickItem*> items;
+  CollectItems(
+      root,
+      [](QQuickItem* item) {
+        const auto name = item->objectName();
+        return item->isVisible() && (name == QStringLiteral("thumbnailGridView_firstCard") ||
+                                     name.startsWith(QStringLiteral("thumbnailGridView_card_")) ||
+                                     name.startsWith(QStringLiteral("thumbnailGridView_tile_")));
+      },
+      items);
+  std::map<uint, QQuickItem*> out;
+  for (auto* item : items) {
+    out[item->property("elementId").toUInt()] = item;
+  }
+  return out;
+}
+
+/// Zoom steps from the slider (the view centre is the focus) deep in a long result: after each
+/// step and its settle timers, the photo nearest the view centre is drawn with the same point
+/// (the centre, or the nearest edge when the centre is in a gap) at the same viewport height.
+void ExpectSliderZoomKeepsTheCentrePhoto(ApplicationModuleHost& backend, const char* layout,
+                                         const std::filesystem::path& dir) {
+  UseTestSettings(dir);
+  ASSERT_TRUE(backend.library_view()->setGridLayout(QString::fromLatin1(layout)));
+  const auto packed = CreatePopulatedPackedProject(dir, {}, 0, MixedSizePhotoSpecs(600));
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* shown_view = qobject_cast<QQuickItem*>(view.Find(
+      std::string(layout) == "justified" ? "thumbnailGridView_justified" : "thumbnailGridView_grid"));
+  ASSERT_NE(shown_view, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() { return ShownPhotoItems(shown_view).size() > 6; }));
+  ProcessEvents(500);
+  ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "restoreContentY", Q_ARG(QVariant, 6000.0)));
+  ProcessEvents(500);
+
+  const QPointF centre(shown_view->width() / 2.0, shown_view->height() / 2.0);
+  for (const int level : {3, 2, 1, 2, 3, 4, 5, 6, 7, 6, 5, 4}) {
+    // The photo that the view anchors: the photo nearest the centre.
+    QVariant focus_index;
+    ASSERT_TRUE(QMetaObject::invokeMethod(view.loaded(), "nearestCardIndexAt",
+                                          Q_RETURN_ARG(QVariant, focus_index),
+                                          Q_ARG(QVariant, centre.x()), Q_ARG(QVariant, centre.y())));
+    uint   focus_id = 0;
+    double fraction = 0.0;
+    double anchor_y = 0.0;  // Viewport height of the anchored point of that photo.
+    for (const auto& [id, item] : ShownPhotoItems(shown_view)) {
+      if (item->property("cardIndex").toInt() != focus_index.toInt()) {
+        continue;
+      }
+      const auto rect = DrawnRect(item, shown_view);
+      focus_id        = id;
+      fraction        = std::clamp((centre.y() - rect.top()) / rect.height(), 0.0, 1.0);
+      anchor_y        = rect.top() + fraction * rect.height();
+    }
+    ASSERT_NE(focus_id, 0U) << layout << " level " << level << ": no photo at the centre";
+    view.loaded()->setProperty("zoomLevel", level);
+    ProcessEvents(900);
+    const auto items = ShownPhotoItems(shown_view);
+    const auto it    = items.find(focus_id);
+    ASSERT_NE(it, items.end()) << layout << " level " << level << ": the centre photo left";
+    const auto rect = DrawnRect(it->second, shown_view);
+    EXPECT_NEAR(rect.top() + fraction * rect.height(), anchor_y, 1.0)
+        << layout << " level " << level << " contentY "
+        << view.loaded()->property("contentY").toReal();
+  }
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+}  // namespace
+
+// Slider zoom steps deep in a long result keep the photo at the view centre at the centre
+// height after every step, in the classic grid and in the justified rows.
+TEST_F(AlbumSectionQmlTests, ClassicGridSliderZoomStepsKeepTheCentrePhotoAtTheCentre) {
+  ApplicationModuleHost backend;
+  ExpectSliderZoomKeepsTheCentrePhoto(backend, "classic", temp_dir_);
+}
+
+TEST_F(AlbumSectionQmlTests, JustifiedRowsSliderZoomStepsKeepTheCentrePhotoAtTheCentre) {
+  ApplicationModuleHost backend;
+  ExpectSliderZoomKeepsTheCentrePhoto(backend, "justified", temp_dir_);
 }
 
 }  // namespace alcedo::ui::test

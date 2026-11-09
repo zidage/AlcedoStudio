@@ -41,6 +41,7 @@
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/justified_layout_model.hpp"
 #include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
@@ -107,6 +108,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   project_pack::RemoveAbandonedProjectTempFiles(project_pack::ProjectTempRoot());
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
   alcedo::ui::RegisterEditorAdjustmentQmlTypes();
+  alcedo::ui::RegisterJustifiedLayoutQmlType();
   alcedo::ui::RegisterEditorHistoryQmlTypes();
   alcedo::ui::RegisterEditorNodeQmlTypes();
   background_tasks_ = std::make_unique<BackgroundTaskController>();
@@ -478,6 +480,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
   editor_behavior_ = std::make_unique<EditorBehaviorPreferences>(this);
   RecordConstruction("EditorBehaviorPreferences", editor_behavior_.get());
+  library_view_ = std::make_unique<LibraryViewPreferences>(this);
+  RecordConstruction("LibraryViewPreferences", library_view_.get());
   project_launch_ = std::make_unique<ProjectLaunchCoordinator>(project_.get(), this);
   RecordConstruction("ProjectLaunchCoordinator", project_launch_.get());
   project_launch_->SetInteractionPolicy(interaction_policy_.get());
@@ -730,6 +734,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(library_mutations_, "LibraryMutationOperations");
   destroy(application_close_, "ApplicationCloseCoordinator");
   destroy(project_launch_, "ProjectLaunchCoordinator");
+  destroy(library_view_, "LibraryViewPreferences");
   destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");
   destroy(lut_preview_, "LutPreviewController");

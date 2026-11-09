@@ -53,6 +53,7 @@ class AlbumThumbnailModel : public QAbstractListModel {
     IsEdited,
     EditedAt,
     EditVersionName,
+    AspectRatio,  ///< Width / height of the oriented photo; 0 when unknown.
   };
 
   explicit AlbumThumbnailModel(QObject* parent = nullptr);
@@ -60,6 +61,8 @@ class AlbumThumbnailModel : public QAbstractListModel {
   int rowCount(const QModelIndex& parent = QModelIndex()) const override;
   QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
   QHash<int, QByteArray> roleNames() const override;
+  /// The role names of this model (roleNames), also for models that forward its roles.
+  static auto RoleNameTable() -> QHash<int, QByteArray>;
 
   int count() const { return static_cast<int>(rows_.size()); }
   int totalCountInt() const { return static_cast<int>(total_count_); }

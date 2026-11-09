@@ -265,6 +265,7 @@ parallel palette to satisfy the policy.
 | **List favorite active on selected** | **`editorListFavoriteActiveOnSelectedColor`** | **Starred glyph inverted on the light well** (full ink) |
 | Rating star empty | `ratingStarEmptyColor` | Empty star of Library card ratings, the Inspector rating filter, and the photo Inspector rating; filled stars use `textColor`, the hover preview `textMutedColor` |
 | Thumbnail edit mark fill | `thumbnailEditMarkFillColor` | `bgDeepColor` (alpha 200) fill of the edit mark chip on the top-right corner of a Library card or filmstrip photo |
+| Thumbnail details scrim | `thumbnailDetailsScrimColor` | `bgDeepColor` (alpha 180) fill of the hover details panel on the bottom of a justified-rows Library tile |
 
 **Monochrome inverted list selection:** dense catalogs (the LUT browser first) keep a
 black-and-white row language — sunken `bgBaseColor` track, light
@@ -498,6 +499,39 @@ edit state and the rating. The shared parts are `ThumbnailEditMark.qml` and
   `textMutedColor` border, `textColor` icon), not gold.
 - The accessible name of a card includes the rating ("3 stars", "Unrated") and
   "Edited" for an edited photo.
+- **Zoom:** a zoom step moves each card from its drawn rectangle to its new
+  rectangle (position and size) in 280 ms (`OutCubic`; `reduceMotion` makes it
+  a cut). The card under the pointer (Ctrl+wheel) or at the view centre keeps
+  that point at the same height on the screen. Cards that leave the view move
+  to their new place and fade out; cards that enter fade in. A step during the
+  animation starts from the drawn rectangles of that moment. The thumbnail of a
+  new tier replaces the shown one when it is ready. The grouped view uses the
+  same rules (260 ms).
+
+### Library justified rows
+
+Settings "Language / Theme" > Library > Photo layout selects the layout of the
+ungrouped Library: "Classic grid" (the cards above) or "Justified rows"
+(`LibraryViewPreferences`, QSettings `library/gridLayout`). Grouped photos
+always use the classic cells.
+
+- **Rows:** the tiles of one row have one photo height; the tile width follows
+  the aspect ratio of the oriented photo, and a complete row fills the view
+  width. The photo fills the tile (`PreserveAspectCrop`); there is no 3:2 box
+  and no side bands. The last row keeps the target height and starts at the
+  left edge. The zoom slider sets the target row height: 480, 360, 280, 220,
+  180, 140, 104, 80 px.
+- **Gaps:** `cardInset` between tiles and rows (8, 6, 4 px as on the cards).
+- **Caption:** the file name only, in `dataFontFamily` at the card title size;
+  22 px high, 16 px from 8 columns, none at the smallest level.
+- **Hover details:** while the pointer is on a tile, a panel on the bottom of
+  the photo shows the camera, ISO, and aperture line, the date and labels line,
+  and the stars, on a `thumbnailDetailsScrimColor` fill; the panel fades in
+  `motionFadeMs`. At the levels where the cards have the star control, the stars
+  are the same control here; at smaller levels they are display only.
+- **Marks and selection:** the edit mark chip and the missing-source mark sit
+  on the photo as on the cards. Selection is the 2 px `textColor` outline
+  around the photo.
 
 ### Library sort, group, and sections
 
