@@ -1376,4 +1376,46 @@ TEST_F(CommitGraphStoreTest, GarbageCollectionRemovesOrphanAttribution) {
   EXPECT_NE(graph->FindCommitAttribution(kept_hash), nullptr);
 }
 
+TEST_F(CommitGraphStoreTest, MaterializeFailureRollsBackVersionRefDelete) {
+  auto             guard = db_->GetConnectionGuard();
+  auto             lock  = guard.Lock();
+  CommitGraphStore service(guard.conn_);
+
+  auto             graph          = service.CreateEmptyPersisted(8003);
+  const auto       alternate      = graph.CreateVersionRefAtRoot("Alternate", /*created_at=*/77);
+  auto             with_alternate = graph.CaptureMaterialization();
+  ASSERT_NO_THROW(service.Materialize(with_alternate));
+  graph.ApplyMaterializedState(with_alternate.image_state);
+  ASSERT_EQ(service.ListVersionRefsForElement(8003).size(), 2u);
+  const auto prior_state = service.GetImageEditState(8003);
+  ASSERT_TRUE(prior_state.has_value());
+
+  // Without the Alternate Version, Materialize deletes its VersionRef row first.
+  ASSERT_TRUE(graph.RemoveVersionRef(alternate));
+  const auto without_alternate = graph.CaptureMaterialization();
+  ASSERT_EQ(without_alternate.version_refs.size(), 1u);
+
+  // Failure injection: the ImageEditState upsert is the last write of Materialize, so without
+  // the table it fails after the VersionRef delete and the VersionRef upserts ran.
+  ExecuteSql(guard.conn_, "ALTER TABLE ImageEditState RENAME TO ImageEditStateAside;");
+  EXPECT_ANY_THROW(service.Materialize(without_alternate));
+  ExecuteSql(guard.conn_, "ALTER TABLE ImageEditStateAside RENAME TO ImageEditState;");
+
+  EXPECT_EQ(service.ListVersionRefsForElement(8003).size(), 2u);
+  const auto stored_alternate = service.GetVersionRef(alternate);
+  ASSERT_TRUE(stored_alternate.has_value());
+  EXPECT_EQ(stored_alternate->display_name, "Alternate");
+  EXPECT_EQ(stored_alternate->created_at, 77);
+  const auto state_after = service.GetImageEditState(8003);
+  ASSERT_TRUE(state_after.has_value());
+  EXPECT_EQ(state_after->active_version_id, prior_state->active_version_id);
+  EXPECT_EQ(state_after->materialized_transaction_chain_hash,
+            prior_state->materialized_transaction_chain_hash);
+
+  // The same capture commits once the table is back, and then the row is gone.
+  ASSERT_NO_THROW(service.Materialize(without_alternate));
+  EXPECT_EQ(service.ListVersionRefsForElement(8003).size(), 1u);
+  EXPECT_FALSE(service.GetVersionRef(alternate).has_value());
+}
+
 }  // namespace alcedo

@@ -62,7 +62,7 @@ class ImageMapper
  private:
   static constexpr uint32_t                                         field_count_      = 22;
   static constexpr const char*                                      table_name_       = "Image";
-  static constexpr const char*                                      prime_key_clause_ = "id={}";
+  static constexpr const char*                                      primary_key_column_ = "id";
   // Order matches the `Image` table DDL, because duckorm select reads `SELECT *`.
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_      = {
       FIELD(ImageMapperParams, id, UINT32),

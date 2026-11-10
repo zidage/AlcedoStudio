@@ -158,6 +158,19 @@ auto eq(SqlFragment left, SqlFragment right) -> SqlFragment {
   return bin_op(std::move(left), "=", std::move(right));
 }
 
+auto in_list(SqlFragment operand, std::span<const std::string> values) -> SqlFragment {
+  if (values.empty()) {
+    return raw("FALSE");
+  }
+  operand.sql_.append(" IN (");
+  for (size_t i = 0; i < values.size(); ++i) {
+    operand.sql_.append(i == 0 ? "?" : ", ?");
+    operand.binds_.emplace_back(values[i]);
+  }
+  operand.sql_.append(")");
+  return operand;
+}
+
 auto ne(SqlFragment left, SqlFragment right) -> SqlFragment {
   return bin_op(std::move(left), "!=", std::move(right));
 }

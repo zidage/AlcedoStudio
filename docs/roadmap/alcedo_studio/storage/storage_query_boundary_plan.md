@@ -2,7 +2,7 @@
 
 Date: 2026-11-09
 
-Status: in progress. S1 complete (2026-11-09); S2 to S6 planned.
+Status: in progress. S1 and S2 complete (2026-11-09); S3 to S6 planned.
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and the callers of storage in
 `app/` and `sleeve/`.
@@ -188,7 +188,7 @@ storage/  -> duckorm, Mapper, Store, StatsDimension, LibrarySearchPredicates, SQ
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | S1 | Typed statements and rows in duckorm; `MaskAssetStore` on duckorm | duckorm, mask asset store | none | 1000-1400 | complete (#786) |
-| S2 | Typed-key Mapper and one transaction style; `CommitGraphStore`, `FolderMapper`, `ImageStore` on duckorm | Mapper, edit history store, sleeve mappers | S1 | 1300-1800 | planned (#787) |
+| S2 | Typed-key Mapper and one transaction style; `CommitGraphStore`, `FolderMapper`, `ImageStore` on duckorm | Mapper, edit history store, sleeve mappers | S1 | 1300-1800 | complete (#787) |
 | S3 | `ElementStore` read paths on typed rows | element store, album query | S1 | 1000-1500 | planned (#788) |
 | S4 | One stats dimension definition; filter compiler in storage | storage query, sleeve filter, element store | S3 | 1200-1800 | planned (#789) |
 | S5 | Search predicates in storage; domain values in service signatures | storage query, app filter and browse services, library module | S4 | 1200-1800 | planned (#790) |
@@ -542,14 +542,132 @@ ctest --test-dir build/debug --output-on-failure -R "MapperCrtpRoundtripTest|Com
 
 **Exit criteria**
 
-- [ ] `mapper.hpp` and `duckdb_orm.hpp` accept WHERE input only as `SqlFragment`.
-- [ ] Storage has one transaction style.
-- [ ] `commit_graph_store.cpp` has zero `duckdb_` symbols.
-- [ ] `RemoveImageByPath` is deleted.
+- [x] `mapper.hpp` and `duckdb_orm.hpp` accept WHERE input only as `SqlFragment`.
+- [x] Storage has one transaction style.
+- [x] `commit_graph_store.cpp` has zero `duckdb_` symbols.
+- [x] `RemoveImageByPath` is deleted.
 
 **Expected diff:** 1300-1800 lines.
 
 **Completion record:** see section 8.
+
+##### Phase S2 completion record (2026-11-09)
+
+**Status:** complete. Branch `refactor/storage-typed-key-mapper-787`, stacked on the S1 branch
+`refactor/duckorm-typed-statements-786` (PR #794).
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| Mapper L2 | `include/storage/mapper/mapper.hpp` | `MapperKey` concept; `KeyEquals(id)` builds `(PrimaryKeyColumn() = ?)`; `GetById`, `GetWhere`, `GetRowsByQuery`, `RemoveById`, `RemoveByIds` (integer keys, `in_list`), `RemoveWhere`, `UpdateParams`, `UpdateParamsRows`; `FieldReflectable::PrimaryKeyColumn` |
+| Mapper keys | 13 Derived mapper headers | `prime_key_clause_` format strings become `primary_key_column_` column names |
+| duckorm L1 | `duckdb_orm.hpp`, `duckdb_orm.cpp` | the `const char* where_clause` overloads of `select`, `update`, `remove` and the public `begin_transaction` / `commit_transaction` / `rollback_transaction` are deleted; `Transaction` runs BEGIN and COMMIT itself |
+| duckorm L3 | `duckdb_expr.hpp`, `duckdb_expr.cpp` | `expr::in_list(operand, std::span<const std::string>)` binds each text value |
+| duckorm types | `duckdb_types.hpp` | `duckorm::Connection` names the connection handle for stores |
+| Edit history | `commit_graph_store.hpp`, `commit_graph_store.cpp` | every statement on `Statement`, `execute`, `scalar<T>`, `query<Row>`, `query_one<Row>`, or Mapper key methods; row structs `MaterializedHistoryLabelRow`, `RootPipelineStateRow`, `AttributionRow`, `ImageEditStateIdRow`, `StoredHistoryJsonRow`; `ExecuteOrThrow`, `QueryUint64`, `SqlQuote` deleted |
+| Sleeve mappers | `folder_mapper.cpp`, `file_mapper.cpp`, `element_mapper.*`, `element_id_mapper.*` | bound keys and `in_list`; `InsertFolderContents` binds `(?, ?)` rows |
+| Image | `image_mapper.cpp`, `image_store.*` | bound name, path, and type; `AddImages` and `UpdateImages` open a `Transaction`; `RemoveImageByPath` deleted |
+| Pipeline | `pipeline_mapper.cpp` | `GetById` |
+| Element store | `element_store.cpp` | `AddElements` and `UpdateElements` on `Transaction`; `GetFolderChildren` binds the folder id |
+
+**Detail decisions made during the work** (the plan left them open):
+
+- **Method names.** Row methods: `GetById`, `GetWhere`, `GetRowsByQuery`, `RemoveById`,
+  `RemoveByIds`, `RemoveWhere`, `UpdateParams`, `UpdateParamsRows`. Domain methods keep
+  `GetByPredicate(SqlFragment)` and `GetByQuery(SqlFragment)`. `RemoveByClause(SqlFragment)`
+  became `RemoveWhere`, and `UpdateParamsBatch` became `UpdateParamsRows`, which states that it
+  joins the caller transaction. `InsertParamsBatch` is deleted: `InsertParamsRows` is the same
+  operation inside the caller transaction. The aliases `Get(const char*)`,
+  `GetByQuery(const char*)`, `Remove(Id)`, and `Update(Id, RowParams)` are deleted.
+- **Key types.** `MapperKey` accepts integers that fit `int64_t` (bound as BIGINT) and
+  `std::string` (bound as VARCHAR). `GetById` throws when a key matches several rows, which
+  only a table without a key constraint (`FileImage`, `FolderContent` by `folder_id`) can hold.
+- **Transactions.** The public BEGIN, COMMIT, and ROLLBACK functions are deleted, so
+  `duckorm::Transaction` is the only way to open a transaction. `ImageStore::AddImages` and
+  `UpdateImages` open the transaction that the Mapper batch opened before.
+- **Integer id lists.** `RemoveByIds`, `RemoveContentByIds`, `RemoveFolderContents`, and the
+  root existence check use `expr::in_list` with integer literals, as section 2.2 decided for id
+  lists. Text values (version ids, commit hashes, root ids, names, paths) are binds.
+- **Connection type in stores.** `commit_graph_store.cpp` names the connection
+  `duckorm::Connection`, an alias of the C API handle in `duckdb_types.hpp`, so the source
+  check reports 0 lines. S6 uses the same alias for the store session.
+- **`ListImageElementIds`.** It reads `SELECT element_id` into `ImageEditStateIdRow`; the old
+  read loaded every ImageEditState row with its checkpoint JSON to return the ids.
+- **`DeleteUnreachableCommits`.** One DELETE for the attribution rows and one for the commit
+  rows, each with a bound `in_list` of the hashes, replace one pair of statements per hash.
+- **Raw-SQL mapper reads.** `ElementMapper::GetElementsInFolderByFilter(std::wstring)` became
+  `GetElementsByQuery(SqlFragment)`, and `ElementIdMapper::GetElementIdsByQuery` takes a
+  `SqlFragment`. `GetElementByName`, `GetImageByName`, and `GetImageByPath` bind their text;
+  before, each pasted the text unquoted into the WHERE clause, so each call failed in DuckDB.
+- **`FileMapper::Update` on `FileImage`.** The statement keeps its text with the key now bound.
+  DuckDB rejects it because `FileImage` has no key constraint; #795 records the defect.
+
+**Primary success call chain:**
+
+```text
+EditorMiniGitMaterializer -> CommitGraphStore::Materialize(m)
+  -> m.Validate() -> duckorm::Transaction tx(conn)
+  -> InsertCommitIfAbsent: commit_mapper_.GetById(hash) -> Mapper::GetWhere((commit_hash = ?))
+     -> commit_mapper_.Insert (prepared INSERT, field binds)
+  -> InsertAttributionIfAbsent: duckorm::execute(INSERT OR IGNORE ... VALUES (?, ?, ?))
+  -> version_ref_mapper_.RemoveWhere(((element_id = ?) AND (NOT (version_id IN (?, ...)))))
+  -> version_ref_mapper_.UpdateParams(id, row) -> duckorm::update(... WHERE (version_id = ?))
+  -> image_edit_state_mapper_.UpdateParams -> tx.commit()
+```
+
+**Primary failure and restore call chain:**
+
+```text
+Materialize -> VersionRef delete and upserts ran -> ImageEditState upsert fails
+  -> std::runtime_error("<DuckDB message> [SQL: INSERT INTO ImageEditState ...]")
+  -> ~Statement -> ~Transaction runs ROLLBACK
+  -> EditCommit, EditCommitAttribution, VersionRef, ImageEditState keep the prior rows
+  -> EditorMiniGitMaterializer receives the error
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `GetByIdReturnsNulloptForMissingKey` | `MapperCrtpRoundtripTest` | PASS |
+| `RemoveByIdBindsTextKeyWithQuote` (key `a'b` removes one of three VersionRef rows) | `MapperCrtpRoundtripTest` | PASS |
+| `BatchInsertJoinsCallerTransaction` (rows visible inside, 0 rows after rollback, 2 after commit) | `MapperCrtpRoundtripTest` | PASS |
+| `GetImageByPathBindsPathWithQuote` (path `D:/O'Brien/frame.dng`, name read) | `MapperCrtpRoundtripTest` | PASS |
+| `MaterializeFailureRollsBackVersionRefDelete` (failing ImageEditState upsert after the VersionRef delete; the deleted Version row and the prior state remain; the same capture then commits) | `CommitGraphTest` | PASS |
+| Every current `CommitGraphTest` and `MapperCrtpRoundtripTest` case | both | PASS |
+| `ProjectCompatibilityTest`, `PipelineMapperTest` | `tests/app` | PASS |
+| Zero `duckdb_` symbols outside `#include` and zero `std::format` in `commit_graph_store.cpp`, `folder_mapper.cpp`, `image_store.cpp` | source search | 0 lines each |
+| One transaction style: zero `begin_transaction` / `"BEGIN` / `"COMMIT` / `"ROLLBACK` outside duckorm in storage | source search | 0 lines |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM Storage SleeveMapper MapperCrtpRoundtripTest CommitGraphTest DuckormStatementTest DuckormExprTest MaskAssetStoreTest   (exit 0)
+ctest --test-dir build/debug --output-on-failure -R "^(MapperCrtpRoundtripTest|CommitGraphTest|DuckormStatementTest|DuckormExprTest|MaskAssetStoreTest)\."   (exit 0)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineMapperTest ProjectCompatibilityTest LibraryHistoryAndExportTest AlbumQueryTest FilterServiceTest SemanticStorageControllerTest AiStorageControllerTest ProjectPackageBackendTest LibrarySearchColumnsTest LibrarySearchRecallTest SleeveFilterCompileTest SleeveFilterFactoryTest   (exit 0)
+ctest --test-dir build/debug --output-on-failure -R "^(PipelineMapperTest|ProjectCompatibilityTest|LibraryHistoryAndExportTest|AlbumQueryTest|FilterServiceTest|SemanticStorageControllerTest|AiStorageControllerTest|ProjectPackageBackendTest|LibrarySearchColumnsTest|LibrarySearchRecallTest|SleeveFilterCompileTest|SleeveFilterFactoryTest)\."   (exit 8, one failure from main, below)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main
+```
+
+Suite totals: `MapperCrtpRoundtripTest` 8/8, `CommitGraphTest` 49/49, `DuckormStatementTest` 24/24,
+`DuckormExprTest` 10/10, `MaskAssetStoreTest` 5/5 (96/96). Caller suites: 224 passed, 1 skipped
+(`AlbumQueryTest.LargeLibraryPagesStayBoundedAndRecordTimings`), 1 disabled, 1 failed:
+`SemanticStoreTest.ExistingSemanticModelWithoutActiveColumnPromotesLatestModel`, the failure on
+`main` recorded in #793. The full suite is for the user to start; this record lists the targeted
+suites.
+
+**Checklist / exit condition:** all four boxes checked.
+
+**LOC note:** `mapper.hpp` 288 (was 371), `commit_graph_store.cpp` 563 (was 670),
+`folder_mapper.cpp` 143, `mapper_crtp_roundtrip_test.cpp` 222. Two touched files were above
+1000 lines before this phase: `element_store.cpp` 1273 (S3 moves its read paths onto row
+structs) and `commit_graph_test.cpp` 1421 (one test added). The code diff is 637 added and 705
+removed lines in 30 files, below the 1300-1800 estimate: the Mapper key change made most caller
+edits one line.
+
+**Remaining gaps:** `ElementStore` reads (formatted SQL and C API cells) are S3 (#788). #795
+(`FileMapper::Update` on `FileImage`) needs a table key and a migration.
 
 ### Phase S3: ElementStore read paths on typed rows
 

@@ -38,7 +38,7 @@ class EditCommitMapper
  private:
   static constexpr uint32_t    field_count_      = 7;
   static constexpr const char* table_name_       = "EditCommit";
-  static constexpr const char* prime_key_clause_ = "commit_hash='{}'";
+  static constexpr const char* primary_key_column_                               = "commit_hash";
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_ = {
       FIELD(EditCommitMapperParams, commit_hash, VARCHAR),
       FIELD(EditCommitMapperParams, root_id, VARCHAR),

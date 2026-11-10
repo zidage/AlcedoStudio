@@ -14,6 +14,10 @@
 #include <variant>
 
 namespace duckorm {
+/// An open DuckDB connection handle. Stores name the connection by this alias, so only duckorm
+/// and `database.cpp` spell the C API type.
+using Connection = duckdb_connection;
+
 enum class DuckDBType : uint8_t {
   INT32,
   INT64,

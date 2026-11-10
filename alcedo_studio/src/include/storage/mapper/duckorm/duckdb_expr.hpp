@@ -197,6 +197,16 @@ template <std::integral T>
 }
 
 /**
+ * @brief `operand IN (?, ?, ...)` with each text value bound.
+ *
+ * @param operand Column or expression on the left.
+ * @param values Text values, for example hash strings. Each value is a bind, so quotes need no
+ *        escaping.
+ * @return The IN predicate, or `FALSE` for an empty list (no row matches).
+ */
+[[nodiscard]] auto in_list(SqlFragment operand, std::span<const std::string> values) -> SqlFragment;
+
+/**
  * @brief A `FLOAT[n]` array literal, for example `[0.5,-1]::FLOAT[2]`.
  *
  * @details Written with the classic locale and 9 significant digits, so every float value

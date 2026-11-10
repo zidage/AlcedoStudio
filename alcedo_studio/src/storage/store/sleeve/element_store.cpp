@@ -587,8 +587,8 @@ void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> e
 
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
-  duckorm::begin_transaction(guard.conn_);
-  try {
+  {
+    duckorm::Transaction transaction(guard.conn_);
     ElementMapper(guard.conn_).InsertParamsRows(element_rows);
     FileMapper(guard.conn_).InsertParamsRows(file_rows);
     FolderMapper folder_mapper(guard.conn_);
@@ -598,10 +598,7 @@ void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> e
         folder_mapper.InsertFolderContents(folder->element_id_, folder->ListElements());
       }
     }
-    duckorm::commit_transaction(guard.conn_);
-  } catch (...) {
-    duckorm::rollback_transaction(guard.conn_);
-    throw;
+    transaction.commit();
   }
   MarkFolderContentsSynced(elements);
   for (const auto& element : elements) {
@@ -653,19 +650,19 @@ auto ElementStore::GetFolderChildren(const sl_element_id_t folder_id)
     -> std::vector<std::shared_ptr<SleeveElement>> {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
-  auto children =
-      ElementMapper(guard.conn_)
-          .GetByQuery(std::format(
-              "SELECT e.id, e.type, e.element_name, e.added_time, e.modified_time, e.ref_count "
-              "FROM Element e JOIN FolderContent fc ON fc.element_id = e.id WHERE fc.folder_id = "
-              "{}",
-              folder_id));
+  const auto folder_param = duckorm::expr::param(static_cast<int64_t>(folder_id));
+  auto       children     = ElementMapper(guard.conn_)
+                      .GetElementsByQuery(duckorm::SqlFragment{
+                          "SELECT e.id, e.type, e.element_name, e.added_time, e.modified_time, "
+                          "e.ref_count FROM Element e JOIN FolderContent fc "
+                          "ON fc.element_id = e.id WHERE fc.folder_id = ?",
+                          folder_param.binds_});
   const auto bindings =
       FileMapper(guard.conn_)
-          .GetByQuery(std::format(
-              "SELECT fi.file_id, fi.image_id FROM FileImage fi "
-              "JOIN FolderContent fc ON fc.element_id = fi.file_id WHERE fc.folder_id = {}",
-              folder_id));
+          .GetByQuery(duckorm::SqlFragment{"SELECT fi.file_id, fi.image_id FROM FileImage fi "
+                                           "JOIN FolderContent fc ON fc.element_id = fi.file_id "
+                                           "WHERE fc.folder_id = ?",
+                                           folder_param.binds_});
 
   // GetElementById binds an image only when the file has exactly one FileImage row.
   std::unordered_map<sl_element_id_t, std::pair<image_id_t, size_t>> image_by_file;
@@ -818,15 +815,12 @@ void ElementStore::UpdateElements(std::span<const std::shared_ptr<SleeveElement>
   }
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
-  duckorm::begin_transaction(guard.conn_);
-  try {
+  {
+    duckorm::Transaction transaction(guard.conn_);
     for (const auto& element : elements) {
       UpdateElementRows(guard.conn_, element);
     }
-    duckorm::commit_transaction(guard.conn_);
-  } catch (...) {
-    duckorm::rollback_transaction(guard.conn_);
-    throw;
+    transaction.commit();
   }
   MarkFolderContentsSynced(elements);
   for (const auto& element : elements) {
