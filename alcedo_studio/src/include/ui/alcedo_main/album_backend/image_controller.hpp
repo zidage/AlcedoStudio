@@ -75,7 +75,9 @@ class ImageController final : public QObject {
    * failedCount, deletedElementIds, failedElementIds, message}`.
    *
    * Returns `{started, taskId, message}`. When the delete does not start, `message` gives the
-   * reason and no DeleteImagesFinished follows.
+   * reason and no DeleteImagesFinished follows. `locked: true` marks a delete that the
+   * interaction policy refuses because a background task holds the DeleteImages lock of the
+   * project or of a target; it can start once that task is complete.
    */
   Q_INVOKABLE QVariantMap StartDeleteImages(const QVariantList& targetEntries);
   /// True while a delete started by StartDeleteImages runs.

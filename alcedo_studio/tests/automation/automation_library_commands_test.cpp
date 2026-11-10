@@ -434,5 +434,53 @@ TEST_F(AutomationLibraryCommandsTest, MarkBatchWhileAnotherSavesIsRejected) {
             0);
 }
 
+TEST_F(AutomationLibraryCommandsTest, DeleteOfPhotoInSavingMarkBatchIsRejected) {
+  const QString raw_root = QStringLiteral(TEST_IMG_PATH) + QStringLiteral("/ci_rawfiles");
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "marks_delete"}})
+                   .isEmpty());
+  const QString import_id = session
+                                .CallResult(QStringLiteral("library.import"),
+                                            QJsonObject{{"folder", raw_root}, {"recursive", false}})
+                                .value("task_id")
+                                .toString();
+  session.CallResult(QStringLiteral("tasks.wait"),
+                     QJsonObject{{"task_id", import_id}, {"timeout_ms", 600000}});
+  const QJsonArray items =
+      session.CallResult(QStringLiteral("library.list")).value("items").toArray();
+  ASSERT_GE(items.size(), 2);
+  const QJsonValue  first   = items.at(0).toObject().value("element_id");
+  const QJsonValue  second  = items.at(1).toObject().value("element_id");
+
+  // The mark batch answers before its save finishes, so the delete finds the photo locked.
+  const QJsonObject started = session.CallResult(
+      QStringLiteral("library.color_label"),
+      QJsonObject{{"element_ids", QJsonArray{first, second}}, {"code", "red"}, {"on", true}});
+  ASSERT_FALSE(started.value("task_id").toString().isEmpty());
+  const auto locked =
+      session.Call(QStringLiteral("library.delete"),
+                   QJsonObject{{"element_ids", QJsonArray{first}}, {"scope", "project"}});
+  ASSERT_EQ(ErrorCode(locked), AutomationErrorCode::Rejected);
+  EXPECT_FALSE(locked->error->message.isEmpty());
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(),
+            items.size());
+
+  // The same delete starts once the batch is complete.
+  EXPECT_EQ(session
+                .CallResult(QStringLiteral("tasks.wait"),
+                            QJsonObject{{"task_id", started.value("task_id")}})
+                .value("state")
+                .toString(),
+            QStringLiteral("succeeded"));
+  const QJsonObject deleted =
+      session.CallResult(QStringLiteral("library.delete"),
+                         QJsonObject{{"element_ids", QJsonArray{first}}, {"scope", "project"}});
+  EXPECT_EQ(deleted.value("deleted_ids").toArray(), QJsonArray{first});
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(),
+            items.size() - 1);
+}
+
 }  // namespace
 }  // namespace alcedo::automation

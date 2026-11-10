@@ -1237,7 +1237,10 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   remove.method      = QStringLiteral("library.delete");
   remove.description = QStringLiteral(
       "Deletes 'element_ids'. With scope 'project' the photos leave the project; this needs the "
-      "root folder as the current folder. With scope 'album' they leave the current album.");
+      "root folder as the current folder. With scope 'album' they leave the current album. "
+      "Answers -32002 (rejected) while a task holds the photos: a mark, rating, or paste "
+      "adjustments batch that is saving, or another delete. Send it again after tasks.wait. "
+      "Other start failures answer -32007 (failed).");
   remove.changes_state = true;
   remove.params_schema = AutomationClosedParamsSchema(
       QJsonObject{
@@ -1278,7 +1281,12 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     const QVariantMap started = mutations->StartDeleteTargets(TargetEntries(*rows));
     if (!started.value(QStringLiteral("started")).toBool()) {
       QObject::disconnect(*finished);
-      wait->SendOwnerError(AutomationErrorCode::Failed,
+      // A task that holds the photos (a mark, rating, or paste adjustments batch, another
+      // delete) is the same temporary refusal that the mark and rating commands answer with
+      // Rejected.
+      wait->SendOwnerError(started.value(QStringLiteral("locked")).toBool()
+                               ? AutomationErrorCode::Rejected
+                               : AutomationErrorCode::Failed,
                            started.value(QStringLiteral("message")).toString());
     }
   };
