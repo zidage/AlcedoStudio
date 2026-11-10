@@ -15,7 +15,6 @@
 #include <QSettings>
 #include <QSignalSpy>
 #include <QString>
-
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -35,6 +34,7 @@
 #include "sleeve/storage.hpp"
 #include "type/type.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo::ui::test {
 
@@ -108,7 +108,7 @@ inline void AddUnboundImage(ProjectService& project, const file_name_t& file_nam
 /// root (an empty head hash), as import writes it.
 inline void AddEditHistoryRows(ProjectService& project, sl_element_id_t elementId,
                                int commitCount) {
-  auto       guard      = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto       guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   const auto id         = std::to_string(elementId);
   const auto root_id    = "root_" + id;
   const auto version_id = "version_" + id;

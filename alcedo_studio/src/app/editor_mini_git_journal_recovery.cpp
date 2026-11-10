@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "edit/history/mini_git_working_history.hpp"
-#include "storage/store/edit_history/commit_graph_store.hpp"
+#include "storage/store/storage_session.hpp"
 
 namespace alcedo {
 namespace {
@@ -58,9 +58,8 @@ auto EditorMiniGitJournalRecovery::Recover(sl_element_id_t              element_
   }
 
   try {
-    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto               db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
+    auto               session       = storage_->OpenSession();
+    auto&              graph_service = session.CommitGraph();
     auto               stored_graph = graph_service.LoadGraph(element_id);
     if (!stored_graph.has_value()) {
       SetError(error, "mini-Git recovery requires a durable commit graph");

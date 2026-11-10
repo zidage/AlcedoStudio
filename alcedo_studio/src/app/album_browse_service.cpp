@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "storage/query/filter_compiler.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -107,9 +108,10 @@ auto AlbumBrowseService::ListFilesInFolderById(sl_element_id_t folder_id) const
   return ListFilesInFolderById(folder_id, 0, 0);
 }
 
-auto AlbumBrowseService::ListFilesInFolderById(
-    sl_element_id_t folder_id, size_t offset, size_t limit,
-    const std::optional<duckorm::SqlFragment>& extra_filter) const -> std::vector<AlbumFileView> {
+auto AlbumBrowseService::ListFilesInFolderById(sl_element_id_t folder_id, size_t offset,
+                                               size_t                           limit,
+                                               const std::optional<FilterNode>& filter) const
+    -> std::vector<AlbumFileView> {
   std::vector<AlbumFileView> files;
   if (!sleeve_service_) {
     return files;
@@ -118,7 +120,8 @@ auto AlbumBrowseService::ListFilesInFolderById(
   try {
     const auto  storage = sleeve_service_->GetStorage();
     const auto& ctrl    = storage->GetElementStore();
-    const auto  entries = ctrl.ListFilesInFolderPage(folder_id, offset, limit, extra_filter);
+    const auto  entries =
+        ctrl.ListFilesInFolderPage(folder_id, offset, limit, CompileFilterPredicate(filter));
     files.reserve(entries.size());
     for (const auto& entry : entries) {
       if (entry.file_id_ == 0 || entry.image_id_ == 0) {
@@ -141,8 +144,8 @@ auto AlbumBrowseService::ListFilesInFolderById(
   return files;
 }
 
-auto AlbumBrowseService::CountFilesInFolderById(
-    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter) const
+auto AlbumBrowseService::CountFilesInFolderById(sl_element_id_t                  folder_id,
+                                                const std::optional<FilterNode>& filter) const
     -> size_t {
   if (!sleeve_service_) {
     return 0;
@@ -151,7 +154,7 @@ auto AlbumBrowseService::CountFilesInFolderById(
   try {
     const auto  storage = sleeve_service_->GetStorage();
     const auto& ctrl    = storage->GetElementStore();
-    return ctrl.CountFilesInFolder(folder_id, extra_filter);
+    return ctrl.CountFilesInFolder(folder_id, CompileFilterPredicate(filter));
   } catch (...) {
     return 0;
   }
@@ -191,33 +194,33 @@ auto AlbumBrowseService::ElementStoreForRead(std::string_view operation) const -
 auto AlbumBrowseService::ReadAlbumQuery(
     sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
-    const AlbumQueryRead& read, const std::optional<duckorm::SqlFragment>& relevance_select) const
-    -> AlbumQueryResult {
+    const AlbumQueryRead&                        read,
+    const std::optional<SemanticQueryEmbedding>& semantic_relevance) const -> AlbumQueryResult {
   auto& store = ElementStoreForRead("ReadAlbumQuery");
   return store.ReadAlbumQuery(folder_id, CompileFilterPredicate(filter), options,
-                              active_semantic_model_key, read, relevance_select);
+                              active_semantic_model_key, read, semantic_relevance);
 }
 
 auto AlbumBrowseService::ReadAlbumFilePosition(
     sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
-    const std::optional<duckorm::SqlFragment>& relevance_select) const
+    const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
     -> std::optional<AlbumFilePosition> {
   auto& store = ElementStoreForRead("ReadAlbumFilePosition");
   return store.ReadAlbumFilePosition(folder_id, CompileFilterPredicate(filter), options,
                                      active_semantic_model_key, file_id, preferred_group,
-                                     relevance_select);
+                                     semantic_relevance);
 }
 
 auto AlbumBrowseService::ReadAlbumFileIds(
     sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key, int64_t begin,
-    int64_t end, const std::optional<duckorm::SqlFragment>& relevance_select) const
+    int64_t end, const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
     -> std::vector<sl_element_id_t> {
   auto& store = ElementStoreForRead("ReadAlbumFileIds");
   return store.ReadAlbumFileIds(folder_id, CompileFilterPredicate(filter), options,
-                                active_semantic_model_key, begin, end, relevance_select);
+                                active_semantic_model_key, begin, end, semantic_relevance);
 }
 
 auto AlbumBrowseService::ReadAlbumFileRows(std::span<const sl_element_id_t> file_ids) const

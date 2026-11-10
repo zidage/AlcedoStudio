@@ -4,7 +4,6 @@
 
 #include "storage/mapper/sleeve/element/file_mapper.hpp"
 
-#include <format>
 #include <stdexcept>
 #include <variant>
 
@@ -32,7 +31,7 @@ auto FileMapper::FromParams(FileMapperParams&& param) -> std::pair<sl_element_id
 }
 
 auto FileMapper::GetFileById(const sl_element_id_t id) -> std::pair<sl_element_id_t, image_id_t> {
-  auto result = GetByPredicate(std::format("file_id={}", id));
+  auto result = GetByPredicate(KeyEquals(id));
   if (result.size() != 1) {
     throw std::runtime_error("FileMapper: Unable to recover a file image mapping: broken record");
   }

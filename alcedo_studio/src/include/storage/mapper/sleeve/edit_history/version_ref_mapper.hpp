@@ -37,7 +37,7 @@ class VersionRefMapper
  private:
   static constexpr uint32_t    field_count_      = 6;
   static constexpr const char* table_name_       = "VersionRef";
-  static constexpr const char* prime_key_clause_ = "version_id='{}'";
+  static constexpr const char* primary_key_column_                               = "version_id";
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_ = {
       FIELD(VersionRefMapperParams, version_id, VARCHAR),
       FIELD(VersionRefMapperParams, element_id, UINT32),

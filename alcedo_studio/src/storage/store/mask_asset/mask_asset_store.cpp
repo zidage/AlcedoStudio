@@ -9,70 +9,58 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "storage/mapper/duckorm/duckdb_statement.hpp"
 
 namespace alcedo {
 namespace {
 
-/// Owns one prepared statement and the result of its last execution.
-class PreparedStatement {
- public:
-  PreparedStatement(duckdb_connection conn, const char* sql) {
-    if (duckdb_prepare(conn, sql, &statement_) != DuckDBSuccess) {
-      const char*       error   = duckdb_prepare_error(statement_);
-      const std::string message = error != nullptr ? error : "MaskAssetStore prepare failed";
-      duckdb_destroy_prepare(&statement_);
-      throw std::runtime_error("MaskAssetStore: " + message);
-    }
-  }
-  ~PreparedStatement() {
-    if (has_result_) {
-      duckdb_destroy_result(&result_);
-    }
-    duckdb_destroy_prepare(&statement_);
-  }
-  PreparedStatement(const PreparedStatement&)                                  = delete;
-  auto               operator=(const PreparedStatement&) -> PreparedStatement& = delete;
+constexpr const char* kPutSql =
+    "INSERT INTO MaskAsset (asset_key, format_version, width, height, bounds_x, bounds_y, "
+    "bounds_w, bounds_h, pixel_byte_count, codec, data) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (asset_key) DO NOTHING;";
 
-  [[nodiscard]] auto Get() const -> duckdb_prepared_statement { return statement_; }
+constexpr const char* kReadSql =
+    "SELECT format_version, width, height, bounds_x, bounds_y, bounds_w, bounds_h, "
+    "pixel_byte_count, codec, data FROM MaskAsset WHERE asset_key = ?;";
 
-  void               BindText(idx_t index, std::string_view value) {
-    Check(duckdb_bind_varchar_length(statement_, index, value.data(),
-                                                   static_cast<idx_t>(value.size())));
-  }
+constexpr const char* kListKeysSql = "SELECT asset_key FROM MaskAsset ORDER BY asset_key;";
 
-  /// Run the statement; the result stays valid until the next Execute or the destructor.
-  auto Execute() -> duckdb_result& {
-    if (has_result_) {
-      duckdb_destroy_result(&result_);
-      has_result_ = false;
-    }
-    const auto state = duckdb_execute_prepared(statement_, &result_);
-    has_result_      = true;
-    if (state != DuckDBSuccess) {
-      const char* error = duckdb_result_error(&result_);
-      throw std::runtime_error(std::string{"MaskAssetStore: "} +
-                               (error != nullptr ? error : "statement failed"));
-    }
-    return result_;
-  }
+constexpr const char* kDeleteSql   = "DELETE FROM MaskAsset WHERE asset_key = ?;";
 
-  static void Check(duckdb_state state) {
-    if (state != DuckDBSuccess) {
-      throw std::runtime_error("MaskAssetStore: parameter bind failed");
-    }
-  }
+/// One `MaskAsset` row without its key, in kReadSql column order.
+struct MaskAssetRow {
+  std::int32_t              format_version   = 0;
+  std::int32_t              width            = 0;
+  std::int32_t              height           = 0;
+  float                     bounds_x         = 0.0F;
+  float                     bounds_y         = 0.0F;
+  float                     bounds_w         = 0.0F;
+  float                     bounds_h         = 0.0F;
+  std::int64_t              pixel_byte_count = 0;
+  std::string               codec;
+  std::vector<std::uint8_t> data;
 
- private:
-  duckdb_prepared_statement statement_  = nullptr;
-  duckdb_result             result_     = {};
-  bool                      has_result_ = false;
+  using Columns = duckorm::RowColumns<&MaskAssetRow::format_version, &MaskAssetRow::width,
+                                      &MaskAssetRow::height, &MaskAssetRow::bounds_x,
+                                      &MaskAssetRow::bounds_y, &MaskAssetRow::bounds_w,
+                                      &MaskAssetRow::bounds_h, &MaskAssetRow::pixel_byte_count,
+                                      &MaskAssetRow::codec, &MaskAssetRow::data>;
+};
+
+struct MaskAssetKeyRow {
+  std::string asset_key;
+
+  using Columns = duckorm::RowColumns<&MaskAssetKeyRow::asset_key>;
 };
 
 [[noreturn]] void FailCorrupt(const MaskAssetKey& key, std::string_view reason) {
@@ -97,15 +85,6 @@ auto Compress(std::span<const std::uint8_t> pixels) -> std::vector<std::uint8_t>
   return packed;
 }
 
-auto ReadText(duckdb_result& result, idx_t column) -> std::string {
-  char*       raw  = duckdb_value_varchar(&result, column, 0);
-  std::string text = raw != nullptr ? raw : "";
-  if (raw != nullptr) {
-    duckdb_free(raw);
-  }
-  return text;
-}
-
 }  // namespace
 
 auto MaskAssetStore::Put(const MaskAsset& asset) -> bool {
@@ -118,58 +97,35 @@ auto MaskAssetStore::Put(const MaskAsset& asset) -> bool {
     throw std::runtime_error("MaskAssetStore: Mask asset key " + std::string{asset.key.Value()} +
                              " does not match its pixels");
   }
-  const auto        packed = Compress(asset.pixels);
-  PreparedStatement statement(
-      conn_,
-      "INSERT INTO MaskAsset (asset_key, format_version, width, height, bounds_x, bounds_y, "
-      "bounds_w, bounds_h, pixel_byte_count, codec, data) "
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (asset_key) DO NOTHING;");
   const auto& bounds = asset.descriptor.reference_bounds;
-  statement.BindText(1, asset.key.Value());
-  PreparedStatement::Check(
-      duckdb_bind_int32(statement.Get(), 2, static_cast<std::int32_t>(kMaskAssetFormatVersion)));
-  PreparedStatement::Check(duckdb_bind_int32(
-      statement.Get(), 3, static_cast<std::int32_t>(asset.descriptor.extent.width)));
-  PreparedStatement::Check(duckdb_bind_int32(
-      statement.Get(), 4, static_cast<std::int32_t>(asset.descriptor.extent.height)));
-  PreparedStatement::Check(duckdb_bind_float(statement.Get(), 5, bounds.x));
-  PreparedStatement::Check(duckdb_bind_float(statement.Get(), 6, bounds.y));
-  PreparedStatement::Check(duckdb_bind_float(statement.Get(), 7, bounds.w));
-  PreparedStatement::Check(duckdb_bind_float(statement.Get(), 8, bounds.h));
-  PreparedStatement::Check(
-      duckdb_bind_int64(statement.Get(), 9, static_cast<std::int64_t>(asset.pixels.size())));
-  statement.BindText(10, kMaskAssetZlibCodec);
-  PreparedStatement::Check(
-      duckdb_bind_blob(statement.Get(), 11, packed.data(), static_cast<idx_t>(packed.size())));
-  auto& result = statement.Execute();
-  return duckdb_rows_changed(&result) > 0;
+  // The float bounds bind as DOUBLE; DuckDB casts them back to the same FLOAT values.
+  duckorm::SqlFragment put{
+      kPutSql,
+      {std::string{asset.key.Value()}, static_cast<std::int64_t>(kMaskAssetFormatVersion),
+       static_cast<std::int64_t>(asset.descriptor.extent.width),
+       static_cast<std::int64_t>(asset.descriptor.extent.height), static_cast<double>(bounds.x),
+       static_cast<double>(bounds.y), static_cast<double>(bounds.w), static_cast<double>(bounds.h),
+       static_cast<std::int64_t>(asset.pixels.size()), std::string{kMaskAssetZlibCodec},
+       Compress(asset.pixels)}};
+  return duckorm::execute_count(conn_, put) > 0;
 }
 
 auto MaskAssetStore::Read(const MaskAssetKey& key) -> MaskAsset {
-  PreparedStatement statement(
-      conn_,
-      "SELECT format_version, width, height, bounds_x, bounds_y, bounds_w, bounds_h, "
-      "pixel_byte_count, codec, data FROM MaskAsset WHERE asset_key = ?;");
-  statement.BindText(1, key.Value());
-  auto& result = statement.Execute();
-  if (duckdb_row_count(&result) == 0) {
+  const auto row = duckorm::query_one<MaskAssetRow>(
+      conn_, duckorm::SqlFragment{kReadSql, {std::string{key.Value()}}});
+  if (!row.has_value()) {
     throw std::runtime_error("Mask asset " + std::string{key.Value()} +
                              " is missing from the project");
   }
-  for (idx_t column = 0; column < 10; ++column) {
-    if (duckdb_value_is_null(&result, column, 0)) {
-      FailCorrupt(key, "a column is null");
-    }
-  }
-  if (duckdb_value_int32(&result, 0, 0) != static_cast<std::int32_t>(kMaskAssetFormatVersion)) {
+  if (row->format_version != static_cast<std::int32_t>(kMaskAssetFormatVersion)) {
     FailCorrupt(key, "unsupported format version");
   }
-  if (ReadText(result, 8) != kMaskAssetZlibCodec) {
+  if (row->codec != kMaskAssetZlibCodec) {
     FailCorrupt(key, "unsupported codec");
   }
-  const auto width      = duckdb_value_int32(&result, 1, 0);
-  const auto height     = duckdb_value_int32(&result, 2, 0);
-  const auto byte_count = duckdb_value_int64(&result, 7, 0);
+  const auto width      = row->width;
+  const auto height     = row->height;
+  const auto byte_count = row->pixel_byte_count;
   if (width < 1 || height < 1 || width > static_cast<std::int32_t>(kMaximumRasterMaskAxis) ||
       height > static_cast<std::int32_t>(kMaximumRasterMaskAxis) ||
       byte_count != static_cast<std::int64_t>(width) * height) {
@@ -180,15 +136,11 @@ auto MaskAssetStore::Read(const MaskAssetKey& key) -> MaskAsset {
   asset.descriptor.extent =
       Extent2D{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
   asset.descriptor.reference_bounds =
-      NormalizedRect{duckdb_value_float(&result, 3, 0), duckdb_value_float(&result, 4, 0),
-                     duckdb_value_float(&result, 5, 0), duckdb_value_float(&result, 6, 0)};
+      NormalizedRect{row->bounds_x, row->bounds_y, row->bounds_w, row->bounds_h};
   asset.pixels.resize(static_cast<std::size_t>(byte_count));
-  duckdb_blob packed     = duckdb_value_blob(&result, 9, 0);
-  uLongf      pixel_size = static_cast<uLongf>(asset.pixels.size());
-  const int   status =
-      uncompress(asset.pixels.data(), &pixel_size, static_cast<const Bytef*>(packed.data),
-                 static_cast<uLong>(packed.size));
-  duckdb_free(packed.data);
+  uLongf    pixel_size = static_cast<uLongf>(asset.pixels.size());
+  const int status     = uncompress(asset.pixels.data(), &pixel_size, row->data.data(),
+                                    static_cast<uLong>(row->data.size()));
   if (status != Z_OK) {
     FailCorrupt(key, "zlib data cannot be inflated (status " + std::to_string(status) + ")");
   }
@@ -202,17 +154,11 @@ auto MaskAssetStore::Read(const MaskAssetKey& key) -> MaskAsset {
 }
 
 auto MaskAssetStore::ListKeys() -> std::vector<MaskAssetKey> {
-  PreparedStatement         statement(conn_, "SELECT asset_key FROM MaskAsset ORDER BY asset_key;");
-  auto&                     result = statement.Execute();
-  const auto                rows   = duckdb_row_count(&result);
+  auto rows = duckorm::query<MaskAssetKeyRow>(conn_, duckorm::SqlFragment{kListKeysSql, {}});
   std::vector<MaskAssetKey> keys;
-  keys.reserve(static_cast<std::size_t>(rows));
-  for (idx_t row = 0; row < rows; ++row) {
-    char* raw = duckdb_value_varchar(&result, 0, row);
-    keys.emplace_back(std::string{raw != nullptr ? raw : ""});
-    if (raw != nullptr) {
-      duckdb_free(raw);
-    }
+  keys.reserve(rows.size());
+  for (auto& row : rows) {
+    keys.emplace_back(std::move(row.asset_key));
   }
   return keys;
 }
@@ -227,22 +173,13 @@ auto MaskAssetStore::DeleteKeysNotIn(const std::set<MaskAssetKey>& keep) -> std:
   if (remove.empty()) {
     return 0;
   }
-  if (duckorm::begin_transaction(conn_) != DuckDBSuccess) {
-    throw std::runtime_error("MaskAssetStore: cannot begin the delete transaction");
+  duckorm::Transaction transaction(conn_);
+  duckorm::Statement   statement(conn_, kDeleteSql);
+  for (const auto& key : remove) {
+    statement.Bind(1, key.Value());
+    (void)statement.Execute();
   }
-  try {
-    PreparedStatement statement(conn_, "DELETE FROM MaskAsset WHERE asset_key = ?;");
-    for (const auto& key : remove) {
-      statement.BindText(1, key.Value());
-      (void)statement.Execute();
-    }
-    if (duckorm::commit_transaction(conn_) != DuckDBSuccess) {
-      throw std::runtime_error("MaskAssetStore: cannot commit the delete transaction");
-    }
-  } catch (...) {
-    duckorm::rollback_transaction(conn_);
-    throw;
-  }
+  transaction.commit();
   return remove.size();
 }
 

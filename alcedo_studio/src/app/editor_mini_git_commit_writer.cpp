@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "storage/store/edit_history/commit_graph_store.hpp"
+#include "storage/store/storage_session.hpp"
 
 namespace alcedo {
 
@@ -44,9 +44,8 @@ auto EditorMiniGitCommitWriter::Write(const CommitGraphMaterialization& material
   }
 
   try {
-    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto               db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
+    auto  session       = storage_->OpenSession();
+    auto& graph_service = session.CommitGraph();
     graph_service.Materialize(materialization);
   } catch (const std::exception& e) {
     WriteResult result;

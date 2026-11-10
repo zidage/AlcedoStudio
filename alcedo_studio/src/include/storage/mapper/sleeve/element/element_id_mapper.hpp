@@ -7,6 +7,7 @@
 #include <array>
 #include <vector>
 
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
@@ -26,7 +27,7 @@ class ElementIdMapper
  private:
   static constexpr uint32_t                                         field_count_      = 1;
   static constexpr const char*                                      table_name_       = "Element";
-  static constexpr const char*                                      prime_key_clause_ = "id={}";
+  static constexpr const char*                                      primary_key_column_ = "id";
 
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_ = {
       FIELD(ElementIdMapperParams, id, UINT32)};
@@ -36,8 +37,8 @@ class ElementIdMapper
   static auto ToParams(const sl_element_id_t& source) -> ElementIdMapperParams;
   static auto FromParams(ElementIdMapperParams&& param) -> sl_element_id_t;
 
-  /// Specialized queries only: expects a single UINT32 column named "id".
-  auto GetElementIdsByQuery(const std::wstring& query_sql) -> std::vector<sl_element_id_t>;
+  /// Ids of a full SELECT whose projection is one BIGINT column of element ids.
+  auto GetElementIdsByQuery(const duckorm::SqlFragment& query) -> std::vector<sl_element_id_t>;
 
   friend struct FieldReflectable<ElementIdMapper>;
   using Mapper::Mapper;

@@ -24,6 +24,7 @@
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -569,7 +570,8 @@ TEST_F(DeleteTests, DeleteRunsOnWorkerWhileUiThreadProcessesEventsAndReportsComp
   // A helper thread holds the project database lock, so the delete job waits in its first
   // database write. The lock is released after 30 s at the latest, so a delete that runs on the
   // UI thread fails the test instead of hanging it.
-  auto&      database = backend.project()->handler().project()->GetStorage()->GetDatabase();
+  auto&      database =
+      StorageTestAccess::GetDatabase(*backend.project()->handler().project()->GetStorage());
   std::mutex hold_mutex;
   std::condition_variable hold_changed;
   bool                    held    = false;

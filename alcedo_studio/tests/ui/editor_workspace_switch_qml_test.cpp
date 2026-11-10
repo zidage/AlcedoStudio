@@ -49,6 +49,7 @@
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/main_qml_test_fixture.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -157,7 +158,8 @@ TEST_F(EditorWorkspaceSwitchQmlTest, ReturnToEditorDoesNotWaitForDatabaseLock) {
   ASSERT_EQ(router->workspace(), QStringLiteral("library"));
   ASSERT_EQ(session->last_element_id(), file_id);
 
-  DatabaseLockHold hold(loaded->host.project()->handler().project()->GetStorage()->GetDatabase());
+  DatabaseLockHold hold(
+      StorageTestAccess::GetDatabase(*loaded->host.project()->handler().project()->GetStorage()));
   ASSERT_TRUE(hold.WaitHeld());
 
   auto* editor_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));

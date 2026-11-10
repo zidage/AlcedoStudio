@@ -2,14 +2,18 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "storage/query/filter_compiler.hpp"
 
 #include <ctime>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/query/library_search_predicates.hpp"
+#include "storage/query/stats_dimension.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -61,17 +65,11 @@ auto FilterSQLCompiler::FieldToColumn(FilterField field) -> SqlFragment {
       return expr::col("i.rating");
     case FilterField::ImagePath:
       return expr::col("i.image_path");
-    case FilterField::CameraModelLabel:
-      return expr::col("COALESCE(NULLIF(i.camera_model, ''), '(unknown)')");
-    case FilterField::LensLabel:
-      return expr::col("COALESCE(NULLIF(i.lens, ''), '(unknown)')");
-    case FilterField::CaptureDateLabel:
-      return expr::col("CAST(i.capture_date AS VARCHAR)");
-    case FilterField::RatingLabel:
-      return expr::col("i.rating");
     case FilterField::SemanticTags:
-      // Domain semantic-label filters use EXISTS factories (Phase 2). Placeholder only.
+      // Semantic label filters are StatsBucket nodes (kSemanticLabel). Placeholder only.
       return expr::col("i.embedding");
+    case FilterField::FileId:
+      return expr::col("e.id");
   }
   return expr::raw("1=0");
 }
@@ -182,12 +180,14 @@ auto FilterSQLCompiler::CompileNode(const FilterNode& node) -> SqlFragment {
     return expr::and_(children);
   }
 
-  if (node.type_ == FilterNode::Type::RawSQL && node.raw_sql_.has_value()) {
-    // Bridge: trusted SQL text plus any prepared binds the factory kept.
-    SqlFragment frag;
-    frag.sql_   = conv::ToBytes(*node.raw_sql_);
-    frag.binds_ = node.raw_binds_;
-    return frag;
+  if (node.type_ == FilterNode::Type::StatsBucket && node.stats_bucket_.has_value()) {
+    return stats_dimension::BucketPredicate(*node.stats_bucket_,
+                                            stats_dimension::ColumnSource::kLiveTables);
+  }
+
+  if (node.type_ == FilterNode::Type::LibrarySearch && node.library_search_.has_value()) {
+    return BuildLibrarySearchPredicate(node.library_search_->request,
+                                       node.library_search_->capabilities);
   }
 
   return {};
@@ -195,18 +195,6 @@ auto FilterSQLCompiler::CompileNode(const FilterNode& node) -> SqlFragment {
 
 auto FilterSQLCompiler::Compile(const FilterNode& node) -> SqlFragment {
   return CompileNode(node);
-}
-
-auto MergeFilterNodes(const std::optional<FilterNode>& left,
-                      const std::optional<FilterNode>& right) -> std::optional<FilterNode> {
-  if (!left.has_value()) {
-    return right;
-  }
-  if (!right.has_value()) {
-    return left;
-  }
-  return FilterNode{FilterNode::Type::Logical, FilterOp::AND, {*left, *right}, std::nullopt,
-                    std::nullopt};
 }
 
 auto CompileFilterPredicate(const std::optional<FilterNode>& node)

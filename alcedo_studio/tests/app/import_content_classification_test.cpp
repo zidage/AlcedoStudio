@@ -38,6 +38,7 @@
 #include "utils/import/import_error_code.hpp"
 #include "utils/import/import_log.hpp"
 #include "utils/string/convert.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -51,7 +52,7 @@ auto RawFixturePath() -> std::filesystem::path {
 }
 
 auto QueryCount(ProjectService& project, const std::string& sql) -> int64_t {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
@@ -71,7 +72,7 @@ struct ImageRow {
 };
 
 auto QueryImageRow(ProjectService& project, const std::string& file_name) -> ImageRow {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   ImageRow      row;
@@ -108,7 +109,7 @@ auto CountFileImageRowsWithoutImage(ProjectService& project) -> int64_t {
 }
 
 auto LibraryFileNames(ProjectService& project) -> std::set<std::string> {
-  auto                  guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto                  lock  = guard.Lock();
   duckdb_result         result;
   std::set<std::string> names;

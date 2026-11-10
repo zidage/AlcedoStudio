@@ -24,7 +24,7 @@ class FilterMapper : Mapper<FilterMapper, FilterMapperParams, FilterMapperParams
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> FilterMapperParams;
   static constexpr uint32_t    field_count_                                      = 3;
   static constexpr const char* table_name_                                       = "Filter";
-  static constexpr const char* prime_key_clause_                                 = "combo_id={}";
+  static constexpr const char* primary_key_column_                               = "combo_id";
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_ = {
       FIELD(FilterMapperParams, combo_id, UINT32), FIELD(FilterMapperParams, type, UINT32),
       FIELD(FilterMapperParams, data, VARCHAR)};
@@ -44,7 +44,7 @@ class ComboMapper : Mapper<ComboMapper, ComboMapperParams, ComboMapperParams, sl
  private:
   static constexpr uint32_t    field_count_                                      = 2;
   static constexpr const char* table_name_                                       = "ComboFolder";
-  static constexpr const char* prime_key_clause_                                 = "combo_id={}";
+  static constexpr const char* primary_key_column_                               = "combo_id";
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_ = {
       FIELD(ComboMapperParams, combo_id_, UINT32), FIELD(ComboMapperParams, folder_id_, UINT32)};
 

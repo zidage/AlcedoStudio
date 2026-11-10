@@ -47,6 +47,7 @@
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -857,7 +858,8 @@ TEST_F(LibraryQueryTests, EditorListPositionDoesNotWaitForDatabaseLockOnUiThread
 
   // A helper thread holds the database lock. It releases the lock after 30 s at the latest, so
   // a read on the UI thread fails the test instead of hanging it.
-  auto&      database = backend.project()->handler().project()->GetStorage()->GetDatabase();
+  auto&      database =
+      StorageTestAccess::GetDatabase(*backend.project()->handler().project()->GetStorage());
   std::mutex hold_mutex;
   std::condition_variable hold_changed;
   bool                    held    = false;
@@ -948,7 +950,8 @@ TEST_F(LibraryQueryTests, QueryFailureKeepsAcceptedContentAndRetryRepeatsTheRequ
   // Remove the Image table under the query so the real read fails on the worker.
   {
     auto guard =
-        backend.project()->handler().project()->GetStorage()->GetDatabase().GetConnectionGuard();
+        StorageTestAccess::GetDatabase(*backend.project()->handler().project()->GetStorage())
+            .GetConnectionGuard();
     auto          lock = guard.Lock();
     duckdb_result result;
     ASSERT_EQ(duckdb_query(guard.conn_, "ALTER TABLE Image RENAME TO ImageHidden", &result),
@@ -963,7 +966,8 @@ TEST_F(LibraryQueryTests, QueryFailureKeepsAcceptedContentAndRetryRepeatsTheRequ
 
   {
     auto guard =
-        backend.project()->handler().project()->GetStorage()->GetDatabase().GetConnectionGuard();
+        StorageTestAccess::GetDatabase(*backend.project()->handler().project()->GetStorage())
+            .GetConnectionGuard();
     auto          lock = guard.Lock();
     duckdb_result result;
     ASSERT_EQ(duckdb_query(guard.conn_, "ALTER TABLE ImageHidden RENAME TO Image", &result),

@@ -47,6 +47,7 @@
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/editor_parameter_target_test.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 
@@ -152,7 +153,7 @@ auto CommittedSnapshotOfLease(const EditorHistoryLease& lease, sl_element_id_t e
 /// Stored image edit state of @p element_id; fails the test when there is none.
 auto StoredEditState(ProjectService& project, sl_element_id_t element_id)
     -> std::optional<ImageEditState> {
-  auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   return graph_service.GetImageEditState(element_id);
@@ -561,7 +562,7 @@ TEST_F(PipelineMapperTests, ReopenWithMatchingCheckpointSkipsReplay) {
   first.ReleaseEditorLease(731);
 
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       stored = graph_service.LoadGraph(731);
@@ -601,7 +602,7 @@ TEST_F(PipelineMapperTests, PersistEditorHistoryWritesNewActiveVersionBeforeEdit
   EXPECT_EQ(lease.graph_.GetImageEditState().active_version_id, new_version);
 
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       persisted = graph_service.LoadGraph(715);
@@ -631,7 +632,7 @@ TEST_F(PipelineMapperTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOn
   const std::vector<sl_element_id_t> deleted_ids = {711};
   pipelines.DeletePipelines(deleted_ids);
 
-  auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   EXPECT_FALSE(graph_service.GetImageEditState(711).has_value());
@@ -649,7 +650,7 @@ TEST_F(PipelineMapperTests, ReopenWithStaleCheckpointReplaysFromRoot) {
   commit_hash_t            expected_head{};
   transaction_chain_hash_t expected_chain{};
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             graph = graph_service.LoadGraph(702);
@@ -794,7 +795,7 @@ TEST_F(PipelineMapperTests, EditorLeaseOfAnUnreplayableActiveHeadFailsWithTheRep
   PipelineMgmtService pipelines(project.GetStorage());
   InitializeDefaultRoot(pipelines, 743);
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             graph = graph_service.LoadGraph(743);
@@ -833,7 +834,7 @@ TEST_F(PipelineMapperTests, CheckpointForAnotherImageNeverLoads) {
 
   nlohmann::json donor_checkpoint;
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             donor_graph = graph_service.LoadGraph(802);
@@ -866,7 +867,7 @@ TEST_F(PipelineMapperTests,
 
   commit_hash_t expected_head{};
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             graph = graph_service.LoadGraph(732);
@@ -917,7 +918,7 @@ TEST_F(PipelineMapperTests, EditorHistoryPersistenceRejectsAConcurrentMaterializ
 
   commit_hash_t remote_head{};
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             remote_graph = graph_service.LoadGraph(703);
@@ -940,7 +941,7 @@ TEST_F(PipelineMapperTests, EditorHistoryPersistenceRejectsAConcurrentMaterializ
       << "a rejected write leaves the graph's materialized state unchanged";
 
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       persisted = graph_service.LoadGraph(703);
@@ -968,7 +969,7 @@ TEST_F(PipelineMapperTests,
   // ApplyMaterializedState, so the in-memory materialized_* stays at root while DuckDB advances
   // to the working head.
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     graph_service.Materialize(graph.CaptureMaterializationWithSerializedPipelineState(
@@ -978,7 +979,7 @@ TEST_F(PipelineMapperTests,
   // DuckDB now holds the working head; the in-memory graph still reports root.
   commit_hash_t durable_head{};
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             persisted = graph_service.LoadGraph(720);
@@ -1030,7 +1031,7 @@ TEST_F(PipelineMapperTests, ImageRootStoresCompleteDefaultDocumentAndDevelopData
   const auto persisted_dump = PipelineDocument::FromJson(*element_json).ToJson().dump();
   root_id_t  root_id{};
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       state = graph_service.GetImageEditState(704);
@@ -1044,7 +1045,7 @@ TEST_F(PipelineMapperTests, ImageRootStoresCompleteDefaultDocumentAndDevelopData
       ->SetValue(9.0f);
 
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       encoded = graph_service.GetRootSerializedPipelineState(704, root_id);
@@ -1127,14 +1128,14 @@ TEST_F(PipelineMapperTests,
        NonRawRootWithoutCameraMatricesIsRenderableInCommittedSnapshotAndEditor) {
   ProjectService project(db_path_, meta_path_);
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     graph_service.CreateRootPipelinePersisted(722, CreateDefaultPipelineDocument(), std::nullopt);
   }
 
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       state = graph_service.GetImageEditState(722);
@@ -1166,7 +1167,7 @@ TEST_F(PipelineMapperTests,
   ASSERT_TRUE(ResolveDevelopColorTransform(editor_payload).ok);
 
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       encoded =
@@ -1206,7 +1207,7 @@ TEST_F(PipelineMapperTests, EditorOpenOfExistingRawRootKeepsTheRawCameraProfile)
   EXPECT_DOUBLE_EQ(profile.color_matrix_2[0], 0.5);
   EXPECT_EQ(lease.graph_.GetRootId(), root_id);
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       encoded = graph_service.GetRootSerializedPipelineState(724, root_id);
@@ -1257,7 +1258,7 @@ TEST_F(PipelineMapperTests, RootStateRejectsDifferentImageOwner) {
   InitializeDefaultRoot(pipelines, 706);
   const auto       first_root = pipelines.LoadHistorySnapshot(705).graph_->GetRootId();
 
-  auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   EXPECT_THROW(graph_service.GetRootSerializedPipelineState(706, first_root), std::runtime_error);
@@ -1270,7 +1271,7 @@ TEST_F(PipelineMapperTests, EditorLoadReportsMissingReachableCommit) {
 
   commit_hash_t missing_hash{};
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             graph = graph_service.LoadGraph(703);
@@ -1353,7 +1354,7 @@ TEST_F(PipelineMapperTests, PersistEditorHistoryWritesHistoryAndCheckpointInOneT
   EXPECT_EQ(checkpoint.document.ToJson(), lease.document_->ToJson());
   EXPECT_FLOAT_EQ(DocumentExposure(checkpoint.document), 2.25f);
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       persisted = graph_service.LoadGraph(762);

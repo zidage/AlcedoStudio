@@ -36,6 +36,7 @@
 #include "sleeve/storage.hpp"
 #include "ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -699,7 +700,7 @@ TEST_F(ProjectTests, DataSummary_WarnsOnDbChanged) {
   // no longer matches.
   {
     Storage storage(dbPath);
-    auto           guard = storage.GetDatabase().GetConnectionGuard();
+    auto           guard = StorageTestAccess::GetDatabase(storage).GetConnectionGuard();
     duckdb_result  result;
     ASSERT_EQ(duckdb_query(guard.conn_,
                            "INSERT INTO Element (id, type, element_name, "
@@ -1066,7 +1067,8 @@ TEST_F(WelcomePreviewTests, ProjectOverviewExcludesImagesWithoutFileBinding) {
     AddSyntheticPhoto(project, {L"bound_a.dng", "2025-01-02 03:04:05"});
     AddSyntheticPhoto(project, {L"bound_b.dng", "2025-01-03 03:04:05"});
     AddUnboundImage(project, L"unbound.dng");
-    const auto image_rows = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    const auto image_rows =
+        StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     duckdb_result result;
     ASSERT_EQ(duckdb_query(image_rows.conn_, "SELECT COUNT(*) FROM Image;", &result),
               DuckDBSuccess);

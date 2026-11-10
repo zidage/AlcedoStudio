@@ -334,83 +334,24 @@ auto MakeAiSidecarRuntimeService() -> std::shared_ptr<AiSidecarRuntimeService> {
       });
 }
 
-// Collects lightweight diagnostic summary of the project database:
-// per-table row counts and min/max primary key ranges. This is NOT
-// a strong integrity check — mismatches produce a warning, not a
-// load failure. Use data_fingerprint (L3) for semantic verification.
+// Diagnostic summary of the project database: per-table row counts and min/max key ranges
+// (StorageMaintenance::ReadDataSummary). This is NOT a strong integrity check: a mismatch
+// produces a warning, not a load failure. Use data_fingerprint (L3) for semantic verification.
 auto ComputeProjectDataSummary(Storage& storage_service) -> nlohmann::json {
-  auto guard       = storage_service.GetDatabase().GetConnectionGuard();
-  auto db_lock     = guard.Lock();
-
-  auto query_int64 = [&](const std::string& sql) -> std::optional<int64_t> {
-    duckdb_result result;
-    if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
-      duckdb_destroy_result(&result);
-      return std::nullopt;
-    }
-    std::optional<int64_t> value;
-    if (duckdb_row_count(&result) > 0 && duckdb_column_count(&result) > 0) {
-      if (!duckdb_value_is_null(&result, 0, 0)) {
-        value = duckdb_value_int64(&result, 0, 0);
-      }
-    }
-    duckdb_destroy_result(&result);
-    return value;
-  };
-
-  struct TableInfo {
-    const char* name;
-    const char* pk_column;  // nullptr if no meaningful single numeric PK
-  };
-  static constexpr TableInfo kTables[] = {
-      {"Sleeve", "id"},
-      {"Image", "id"},
-      {"SleeveRoot", "id"},
-      {"Element", "id"},
-      {"FolderContent", nullptr},
-      {"FileImage", "file_id"},
-      {"ComboFolder", "combo_id"},
-      {"Filter", "combo_id"},
-      {"VersionRef", "version_id"},
-      {"EditCommit", "commit_hash"},
-      {"ImageEditState", "element_id"},
-      {"PipelineParam", "file_id"},
-      {"SemanticModel", nullptr},
-      {"SemanticImageEmbedding", "file_id"},
-      {"SemanticImageEmbedding768", "file_id"},
-      {"SemanticImageLabel", "file_id"},
-      {"SemanticLabelQuery", nullptr},
-      {"SemanticLabelPrototype", nullptr},
-      {"SemanticLabelPrototype768", nullptr},
-  };
-
-  nlohmann::json summary;
-  summary["version"]    = 1;
   nlohmann::json tables = nlohmann::json::object();
-
-  for (const auto& table : kTables) {
+  for (const auto& table : storage_service.Maintenance().ReadDataSummary()) {
     nlohmann::json entry;
-
-    auto           count = query_int64(std::string("SELECT COUNT(*) FROM \"") + table.name + "\"");
-    if (!count.has_value()) continue;
-    entry["rows"] = *count;
-
-    if (table.pk_column != nullptr) {
-      const std::string pk_str(table.pk_column);
-      auto              min_val =
-          query_int64(std::string("SELECT MIN(\"") + pk_str + "\") FROM \"" + table.name + "\"");
-      auto max_val =
-          query_int64(std::string("SELECT MAX(\"") + pk_str + "\") FROM \"" + table.name + "\"");
-      if (min_val.has_value() && max_val.has_value()) {
-        entry["min_id"] = *min_val;
-        entry["max_id"] = *max_val;
-      }
+    entry["rows"] = table.rows;
+    if (table.min_key.has_value() && table.max_key.has_value()) {
+      entry["min_id"] = *table.min_key;
+      entry["max_id"] = *table.max_key;
     }
-
-    tables[table.name] = entry;
+    tables[table.table] = entry;
   }
 
-  summary["tables"] = tables;
+  nlohmann::json summary;
+  summary["version"] = 1;
+  summary["tables"]  = tables;
   return summary;
 }
 
@@ -590,14 +531,11 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
   // Older projects have HNSW indexes on the semantic embedding tables. Search no
   // longer uses them, and while one exists every embedding write needs the vss
   // extension. Drop them; when that fails, the project does not open.
-  {
-    auto    guard   = storage_->GetDatabase().GetConnectionGuard();
-    auto    db_lock = guard.Lock();
-    QString drop_error;
-    if (!project_pack::DropHnswIndexesOfOlderProject(guard.conn_, &drop_error)) {
-      throw std::runtime_error("Unable to drop the HNSW index of an older project: " +
-                               drop_error.toStdString());
-    }
+  try {
+    storage_->Maintenance().DropHnswIndexesOfOlderProject();
+  } catch (const std::exception& e) {
+    throw std::runtime_error(std::string("Unable to drop the HNSW index of an older project: ") +
+                             e.what());
   }
 
   if (expected_summary.has_value()) {

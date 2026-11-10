@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "app/project_service.hpp"
+#include "../support/storage_test_access.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -415,7 +416,7 @@ TEST_F(ProjectPackageBackendTest, CreatedWorkspaceHoldsItsOwnerLock) {
 // ── DB snapshot failure ─────────────────────────────────────────────────────
 
 auto RunSql(const std::shared_ptr<ProjectService>& project, const std::string& sql) -> bool {
-  auto&         db_ctrl = project->GetStorage()->GetDatabase();
+  auto&         db_ctrl = StorageTestAccess::GetDatabase(*project->GetStorage());
   auto          guard   = db_ctrl.GetConnectionGuard();
   auto          lock    = guard.Lock();
   duckdb_result result;
@@ -425,7 +426,7 @@ auto RunSql(const std::shared_ptr<ProjectService>& project, const std::string& s
 }
 
 auto CountAttachedSnapshots(const std::shared_ptr<ProjectService>& project) -> int64_t {
-  auto&         db_ctrl = project->GetStorage()->GetDatabase();
+  auto&         db_ctrl = StorageTestAccess::GetDatabase(*project->GetStorage());
   auto          guard   = db_ctrl.GetConnectionGuard();
   auto          lock    = guard.Lock();
   duckdb_result result;

@@ -26,6 +26,7 @@
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "sleeve/sleeve_filter/filter_factory.hpp"
+#include "storage/query/filter_compiler.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "support/semantic_stores_test_support.hpp"
 #include "type/supported_file_type.hpp"
@@ -379,13 +380,6 @@ TEST_F(FilterServiceTests, BindsStringFilterValueWithEmbeddedQuote) {
   EXPECT_EQ(sql.sql_, "(i.camera_model = ?)");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "O'Brien");
-}
-
-TEST_F(FilterServiceTests, RawSQLBridgeNodeCompilesAsTrustedText) {
-  FilterNode root{FilterNode::Type::RawSQL, {}, {}, std::nullopt, std::wstring(L"e.id > 0")};
-  const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "e.id > 0");
-  EXPECT_TRUE(sql.binds_.empty());
 }
 
 TEST_F(FilterServiceTests, FolderIndexTest_Model) {
@@ -1568,8 +1562,8 @@ TEST_F(FilterServiceTests, StatsSemanticLabelExistsFilterRestrictsFolderStats) {
   StoreSemanticLabel(project, "mobileclip-stats-filter", landscape_id, "landscape", 4);
 
   SleeveFilterService filter_service(project.GetStorage());
-  const auto          stats_node = sleeve_filter::BuildSemanticLabelExistsFilter(
-      "mobileclip-stats-filter", SemanticLabelAliases("landscape"));
+  const auto          stats_node =
+      sleeve_filter::BuildSemanticLabelBucketFilter("mobileclip-stats-filter", "landscape");
 
   const auto stats = filter_service.BuildFolderStats(0, stats_node);
   EXPECT_EQ(stats.total_photo_count_, 1);
@@ -1720,7 +1714,7 @@ TEST_F(FilterServiceTests, FuzzySearchInjectPayloadDoesNotWidenFolderResults) {
   ASSERT_FALSE(predicate->binds_.empty());
 }
 
-TEST_F(FilterServiceTests, FuzzySearchZeroFieldMaskCompilesToFalseRawSql) {
+TEST_F(FilterServiceTests, FuzzySearchZeroFieldMaskCompilesToFalse) {
   ProjectService project(db_path_, meta_path_);
   const auto     file_id = CreateSyntheticFile(
       project, SyntheticFileSpec{.file_name_    = L"mask_zero.dng",
@@ -1731,10 +1725,12 @@ TEST_F(FilterServiceTests, FuzzySearchZeroFieldMaskCompilesToFalseRawSql) {
   SleeveFilterService filter_service(project.GetStorage());
   const auto          node = filter_service.BuildFuzzySearchWhere(L"Nikon", SearchFieldMask{0});
   ASSERT_TRUE(node.has_value());
-  EXPECT_EQ(node->type_, FilterNode::Type::RawSQL);
-  ASSERT_TRUE(node->raw_sql_.has_value());
-  EXPECT_EQ(*node->raw_sql_, L"FALSE");
-  EXPECT_TRUE(node->raw_binds_.empty());
+  EXPECT_EQ(node->type_, FilterNode::Type::LibrarySearch);
+  ASSERT_TRUE(node->library_search_.has_value());
+  EXPECT_EQ(node->library_search_->request.fields, SearchFieldMask{0});
+  const auto frag = FilterSQLCompiler::Compile(*node);
+  EXPECT_EQ(frag.sql_, "FALSE");
+  EXPECT_TRUE(frag.binds_.empty());
 
   EXPECT_TRUE(filter_service.SearchFolder(0, L"Nikon", 0, 10, SearchFieldMask{0}).empty());
   EXPECT_EQ(filter_service.CountSearchResults(0, L"Nikon", SearchFieldMask{0}), 0u);
@@ -1750,7 +1746,9 @@ TEST_F(FilterServiceTests, ExactFileWhereBindsFileIdAsParam) {
 
   SleeveFilterService filter_service(project.GetStorage());
   const auto          node = filter_service.BuildExactFileWhere(file_id);
-  EXPECT_EQ(node.type_, FilterNode::Type::RawSQL);
+  EXPECT_EQ(node.type_, FilterNode::Type::Condition);
+  ASSERT_TRUE(node.condition_.has_value());
+  EXPECT_EQ(node.condition_->field_, FilterField::FileId);
 
   const auto frag = FilterSQLCompiler::Compile(node);
   EXPECT_EQ(frag.sql_, "(e.id = ?)");

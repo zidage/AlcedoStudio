@@ -22,6 +22,7 @@
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/hash_type.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "../../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -64,7 +65,7 @@ class EditorMiniGitJournalRecoveryTest : public ::testing::Test {
     storage_  = project_->GetStorage();
     recovery_ = std::make_unique<EditorMiniGitJournalRecovery>(storage_);
     {
-      auto               guard = storage_->GetDatabase().GetConnectionGuard();
+      auto               guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
       auto               lock  = guard.Lock();
       CommitGraphStore graph_service(guard.conn_);
       graph_ =
@@ -145,7 +146,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, FullyCoveredWalClearsWithoutRewritingDb
   ASSERT_TRUE(result.accepted) << result.error;
   EXPECT_FALSE(result.materialized);
 
-  auto               guard = storage_->GetDatabase().GetConnectionGuard();
+  auto               guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto               lock  = guard.Lock();
   CommitGraphStore graph_service(guard.conn_);
   EXPECT_EQ(graph_service.CountCommitsForRoot(graph_->GetRootId()), 1u);
@@ -174,7 +175,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, ContiguousMissingSuffixLeavesWalForLive
   EXPECT_EQ(reopened.records().size(), 1u);
 
   // DuckDB must be unchanged (no fold).
-  auto               guard = storage_->GetDatabase().GetConnectionGuard();
+  auto               guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto               lock  = guard.Lock();
   CommitGraphStore graph_service(guard.conn_);
   EXPECT_EQ(graph_service.CountCommitsForRoot(graph_->GetRootId()), 0u);
@@ -236,7 +237,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, BrokenParentIsolatesWalAndWritesNothing
   // Original path should be gone (isolated) or empty of usable records.
   EXPECT_FALSE(std::filesystem::exists(journal_path_));
 
-  auto               guard = storage_->GetDatabase().GetConnectionGuard();
+  auto               guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto               lock  = guard.Lock();
   CommitGraphStore graph_service(guard.conn_);
   EXPECT_EQ(graph_service.CountCommitsForRoot(graph_->GetRootId()), 0u);
@@ -268,7 +269,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, CurrentFormatWalRejectsOrdinaryAndMerge
 
   for (const auto& payload : {ordinary_payload, merge_payload}) {
     {
-      auto               guard = storage_->GetDatabase().GetConnectionGuard();
+      auto               guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
       auto               lock  = guard.Lock();
       CommitGraphStore graph_service(guard.conn_);
       auto               stored = graph_service.LoadGraph(element_id_);
@@ -291,7 +292,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, CurrentFormatWalRejectsOrdinaryAndMerge
     EXPECT_FALSE(result.accepted);
     EXPECT_FALSE(result.error.empty());
 
-    auto               guard = storage_->GetDatabase().GetConnectionGuard();
+    auto               guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
     auto               lock  = guard.Lock();
     CommitGraphStore graph_service(guard.conn_);
     EXPECT_EQ(graph_service.CountCommitsForRoot(graph_->GetRootId()), 0u);
@@ -317,7 +318,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, NormalSaveCaptureDoesNotRequireJournalF
 
   ASSERT_TRUE(EditorMiniGitJournalRecovery::TruncateJournalFile(journal_path_));
 
-  auto               guard = storage_->GetDatabase().GetConnectionGuard();
+  auto               guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto               lock  = guard.Lock();
   CommitGraphStore graph_service(guard.conn_);
   EXPECT_EQ(graph_service.CountCommitsForRoot(graph_->GetRootId()), 1u);

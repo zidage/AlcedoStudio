@@ -4,14 +4,17 @@
 
 #pragma once
 
-#include <ctime>
+#include <chrono>
 #include <cstdint>
+#include <ctime>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
-#include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "image/color_label.hpp"
+#include "sleeve/sleeve_filter/library_search_request.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -33,14 +36,8 @@ enum class FilterField {
   ImageSize,
   Rating,
   ImagePath,
-  // Phase 2: stats-bar bucket columns. Each column must equal the bucket
-  // expression used by ElementStore::BuildFolderStats GROUP BY so a
-  // clicked bucket label selects exactly the rows that produced that bucket.
-  CameraModelLabel,
-  LensLabel,
-  CaptureDateLabel,
-  RatingLabel,
-  SemanticTags
+  SemanticTags,
+  FileId,  ///< The file element id; EQUALS with an int64_t value selects one file.
 };
 
 enum class CompareOp {
@@ -67,8 +64,47 @@ struct FieldCondition {
   std::optional<FilterValue> second_value_ = std::nullopt;  // Used for BETWEEN condition
 };
 
+/**
+ * @brief Dimensions of the library statistics. Storage defines the bucket expression and the
+ *        bucket predicate of each one (storage/query/stats_dimension.hpp).
+ */
+enum class StatsDimensionId : std::uint8_t {
+  kCaptureDate,
+  kCameraModel,
+  kLens,
+  kRating,
+  kImportDay,
+  kColorLabel,
+  kDeleteMark,
+  kSemanticLabel,
+};
+
+/**
+ * @brief Key of one bucket of a stats dimension.
+ *
+ * - std::monostate: the bucket of the photos without a value (no capture date, no import time,
+ *   no rating, no camera model or lens text). For kDeleteMark it is the one bucket, the photos
+ *   with the Delete mark.
+ * - std::string: the bucket label as the stats read returns it: a `YYYY-MM-DD` day (capture
+ *   date, import day), a camera model or lens label (the unknown label included), or a semantic
+ *   label key.
+ * - int64_t: a rating.
+ * - ColorLabel: a color label code.
+ */
+using StatsBucketKey = std::variant<std::monostate, std::string, int64_t, ColorLabel>;
+
+/// The photos of one stats bucket: a stats bar click.
+struct StatsBucketCondition {
+  StatsDimensionId dimension;
+  StatsBucketKey   key;
+  /// kImportDay: IANA zone of the local day, the zone of the import-day buckets.
+  std::string      time_zone{};
+  /// kSemanticLabel: the active semantic model; an empty key selects no photo.
+  std::string      semantic_model_key{};
+};
+
 struct FilterNode {
-  enum class Type { Logical, Condition, RawSQL } type_;
+  enum class Type { Logical, Condition, StatsBucket, LibrarySearch } type_;
 
   // For Logical nodes
   FilterOp                op_;
@@ -77,44 +113,21 @@ struct FilterNode {
   // For Condition nodes
   std::optional<FieldCondition> condition_;
 
-  // For RawSQL nodes: trusted SQL text plus optional prepared-statement binds.
-  // Prefer typed Condition nodes. RawSQL is a bridge for factories and search.
-  std::optional<std::wstring>     raw_sql_;
-  std::vector<duckorm::BindValue> raw_binds_{};
+  // For StatsBucket nodes
+  std::optional<StatsBucketCondition>   stats_bucket_{};
+
+  // For LibrarySearch nodes
+  std::optional<LibrarySearchCondition> library_search_{};
 };
 
 /**
- * @brief Compiles a FilterNode tree into a duckorm WHERE fragment.
+ * @brief Read a stats bucket day label.
  *
- * @details Maps domain FilterField values onto scoped album-query columns.
- * Alias rule (must match BuildScopedFileQuery):
- * - Image columns use `i.` (`i.file_name`, `i.image_path`, and the typed search columns
- *   such as `i.camera_model`, `i.capture_date`, `i.rating`; never the metadata JSON)
- * - Element columns use `e.` (`e.element_name`, `e.added_time`)
- *
- * This compiler builds only a WHERE predicate. Stores own FROM/JOIN scope.
+ * @param text Day in `YYYY-MM-DD` form.
+ * @return The calendar day.
+ * @throws std::invalid_argument when @p text is not a valid `YYYY-MM-DD` day.
  */
-class FilterSQLCompiler {
- public:
-  /**
-   * @brief Compile a filter tree into a SqlFragment WHERE predicate.
-   *
-   * @param node Root of the filter tree.
-   * @return Fragment with `?` binds for user values (and RawSQL bridge binds).
-   * Empty when the tree is empty.
-   *
-   * @note Typed string/number values use prepared binds. RawSQL may carry binds
-   * from sleeve factories. Callers must run the fragment through a prepared
-   * statement path (ElementStore album scope queries).
-   */
-  static auto Compile(const FilterNode& node) -> duckorm::SqlFragment;
-
- private:
-  static auto CompileNode(const FilterNode& node) -> duckorm::SqlFragment;
-  static auto GenerateCondition(const FieldCondition& cond) -> duckorm::SqlFragment;
-  static auto FieldToColumn(FilterField field) -> duckorm::SqlFragment;
-  static auto ValueToFragment(const FilterValue& value) -> duckorm::SqlFragment;
-};
+[[nodiscard]] auto ParseStatsBucketDay(std::string_view text) -> std::chrono::year_month_day;
 
 /**
  * @brief Merge two optional filter trees under one AND root.
@@ -127,16 +140,6 @@ class FilterSQLCompiler {
 [[nodiscard]] auto MergeFilterNodes(const std::optional<FilterNode>& left,
                                     const std::optional<FilterNode>& right)
     -> std::optional<FilterNode>;
-
-/**
- * @brief Compile an optional filter tree into a SqlFragment WHERE predicate.
- *
- * @param node Filter tree (already merged by the caller).
- * @return Fragment with SQL text and binds, or std::nullopt when the tree is
- * absent or compiles to an empty fragment.
- */
-[[nodiscard]] auto CompileFilterPredicate(const std::optional<FilterNode>& node)
-    -> std::optional<duckorm::SqlFragment>;
 
 class FilterCombo {
  public:

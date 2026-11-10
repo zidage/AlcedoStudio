@@ -31,6 +31,7 @@
 #include "support/semantic_stores_test_support.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -1343,7 +1344,7 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
   EXPECT_EQ(embedder->ImageItemCount(), static_cast<int>(items.size()));
 
   const auto item_count = static_cast<int64_t>(items.size());
-  auto       sql_guard  = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto       sql_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   EXPECT_EQ(RawScalarInt64(sql_guard.conn_,
                            "SELECT COUNT(*) FROM SemanticImageEmbedding "
                            "WHERE model_key = 'mobileclip-test' AND status = 'ready';"),

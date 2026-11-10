@@ -19,15 +19,6 @@ namespace alcedo::album_query_sql {
 /// Temporary table that holds the matching files of one read (see ElementStore). Alias `s`.
 inline constexpr const char* kMatchSetTable = "SearchMatchSet";
 
-/**
- * @brief Match set column that holds the local import day.
- *
- * @param time_zone IANA zone. Empty yields a NULL DATE, so no import-day value exists.
- * @return `CAST(timezone(?, timezone('UTC', e.added_time)) AS DATE)` with the zone bound:
- *         `e.added_time` is UTC by application convention.
- */
-[[nodiscard]] auto           ImportDayColumn(const std::string& time_zone) -> duckorm::SqlFragment;
-
 /// True when the options read the canonical label relation (label group or label sort).
 [[nodiscard]] auto           UsesLabelRelation(const AlbumQueryOptions& options) -> bool;
 

@@ -48,6 +48,7 @@
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "../support/storage_test_access.hpp"
 #ifdef HAVE_METAL
 #include "image/metal_image.hpp"
 #endif
@@ -1239,7 +1240,7 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
   // commit) and its transaction chain.
   std::string root_label;
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             graph = graph_service.LoadGraph(element_id);
@@ -1286,7 +1287,7 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
   commit_hash_t active_head{};
   std::string   active_label;
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             graph = graph_service.LoadGraph(element_id);

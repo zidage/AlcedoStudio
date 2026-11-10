@@ -49,6 +49,7 @@
 #include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -132,7 +133,7 @@ auto RunQueuedExports(ExportService& service) -> std::vector<ExportResult> {
 /// Materialized (head, chain) label of @p element_id in storage.
 auto StoredLabel(ProjectService& project, sl_element_id_t element_id)
     -> std::optional<MaterializedHistoryLabel> {
-  auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   return graph_service.GetMaterializedHistoryLabel(element_id);
@@ -304,7 +305,7 @@ TEST_F(LibraryHistoryAndExportTest, PersistHistoryWritesTheNewStateAndPublishesI
   EXPECT_EQ(label->head_commit_hash, committed->Head());
   EXPECT_EQ(label->transaction_chain_hash, committed->Chain());
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       state = graph_service.GetImageEditState(ids.first);

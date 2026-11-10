@@ -7,6 +7,7 @@
 #include <string>
 
 #include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "storage/query/filter_compiler.hpp"
 
 using namespace alcedo;
 
@@ -64,12 +65,17 @@ TEST(SleeveFilterCompileTest, BindsQuoteInsideStringFilterValueWithoutEmbedding)
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "%O'Brien%");
 }
 
-TEST(SleeveFilterCompileTest, RawSQLBridgeNodeKeepsTrustedText) {
-  FilterNode root{FilterNode::Type::RawSQL, {}, {}, std::nullopt,
-                  std::wstring(L"(e.id > 0 AND i.image_path IS NOT NULL)")};
+TEST(SleeveFilterCompileTest, FileIdConditionComparesElementIdWithBind) {
+  FilterNode root{
+      FilterNode::Type::Condition,
+      {},
+      {},
+      FieldCondition{
+          .field_ = FilterField::FileId, .op_ = CompareOp::EQUALS, .value_ = int64_t{42}}};
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(e.id > 0 AND i.image_path IS NOT NULL)");
-  EXPECT_TRUE(sql.binds_.empty());
+  EXPECT_EQ(sql.sql_, "(e.id = ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<int64_t>(sql.binds_[0]), 42);
 }
 
 TEST(SleeveFilterCompileTest, BetweenIsoUsesImageMetadataAliasAndBinds) {
@@ -129,16 +135,23 @@ TEST(SleeveFilterCompileTest, TypedEqualsKeepsInjectPayloadOnlyInBind) {
   EXPECT_EQ(sql.sql_.find("--"), std::string::npos);
 }
 
-TEST(SleeveFilterCompileTest, RawSQLBridgeKeepsPreparedBindsWithoutSplicingValues) {
-  FilterNode root{
-      FilterNode::Type::RawSQL, {}, {}, std::nullopt, std::wstring(L"(i.camera_model = ?)")};
-  root.raw_binds_.push_back(std::string("x' OR 1=1 --"));
+TEST(SleeveFilterCompileTest, LibrarySearchNodeKeepsLiteralTermTextOnlyInBinds) {
+  FilterNode root{FilterNode::Type::LibrarySearch, {}, {}, std::nullopt};
+  root.library_search_ = LibrarySearchCondition{
+      .request = {.query_text = L"x'--",
+                  .terms      = {SearchTerm{.text_ = L"x'--", .literal_ = true}},
+                  .fields     = static_cast<SearchFieldMask>(SearchField::Filename)}};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(i.camera_model = ?)");
-  ASSERT_EQ(sql.binds_.size(), 1u);
-  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "x' OR 1=1 --");
-  EXPECT_EQ(sql.sql_.find("OR 1=1"), std::string::npos);
+  // The literal term matches the element name and the file name as typed, each case-sensitive
+  // and lower-cased: four `contains` calls with one bind each.
+  EXPECT_EQ(sql.sql_.find("x'--"), std::string::npos);
+  EXPECT_NE(sql.sql_.find("e.element_name"), std::string::npos);
+  EXPECT_NE(sql.sql_.find("i.file_name"), std::string::npos);
+  ASSERT_EQ(sql.binds_.size(), 4u);
+  for (const auto& bind : sql.binds_) {
+    EXPECT_EQ(std::get<std::string>(bind), "x'--");
+  }
 }
 
 TEST(SleeveFilterCompileTest, RegexConditionBindsPatternAsParam) {
