@@ -36,8 +36,30 @@ auto AutomationClosedParamsSchema(QJsonObject properties = {}, QJsonArray requir
 auto AutomationEnteredProject(ui::ApplicationModuleHost* host, AutomationReply& reply)
     -> std::shared_ptr<ProjectService>;
 
+/// The largest element id and folder id: project ids are 32-bit (sl_element_id_t).
+inline constexpr double kMaxAutomationElementId = 4294967295.0;
+
+/// Schema of one element id: an integer from @p minimum (1 for photos, 0 for folders) to
+/// kMaxAutomationElementId. With @p description it has a description.
+auto AutomationElementIdSchema(int minimum = 1, const QString& description = {}) -> QJsonObject;
+
+/// Schema of a list of element ids: at least one AutomationElementIdSchema item. With
+/// @p description it has a description.
+auto AutomationElementIdListSchema(const QString& description = {}) -> QJsonObject;
+
+/// The element id of @p value, or nothing when @p value is not an integer from 0 to
+/// kMaxAutomationElementId. A schema check comes first, so a command answers nothing for an id it
+/// cannot read and never reaches a photo through a wrapped id.
+auto AutomationElementIdOf(const QJsonValue& value) -> std::optional<sl_element_id_t>;
+
+/// The element id of @p params[@p key] (AutomationElementIdOf). Sends -32602 with the pointer
+/// `/key` and returns nothing when it is not an element id.
+auto AutomationElementIdParam(const QJsonObject& params, const QString& key, AutomationReply& reply)
+    -> std::optional<sl_element_id_t>;
+
 /// The library rows of @p params["element_ids"], in that order, without repeated ids. Sends
-/// -32602 with `data.unknown_ids` and returns nothing when an id is not a photo of the project.
+/// -32602 with `data.unknown_ids` and returns nothing when an id is not a photo of the project,
+/// and -32602 with the pointer of the id when an id is not an element id.
 auto ResolveAutomationElementRows(ProjectService& project, const QJsonObject& params,
                                   AutomationReply& reply)
     -> std::optional<std::vector<SearchResultRow>>;

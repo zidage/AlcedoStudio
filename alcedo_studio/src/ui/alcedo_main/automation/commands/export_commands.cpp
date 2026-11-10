@@ -229,10 +229,7 @@ auto RegisterAutomationExportCommands(AutomationCommandRegistry& registry,
   run.changes_state     = true;
   QJsonObject run_props = ExportOptionProperties();
   run_props.insert("element_ids",
-                   QJsonObject{{"type", "array"},
-                               {"items", QJsonObject{{"type", "integer"}, {"minimum", 1}}},
-                               {"minItems", 1},
-                               {"description", "The photos to export."}});
+                   AutomationElementIdListSchema(QStringLiteral("The photos to export.")));
   run_props.insert("out_dir", QJsonObject{{"type", "string"},
                                           {"description",
                                            "The output folder. It is created "

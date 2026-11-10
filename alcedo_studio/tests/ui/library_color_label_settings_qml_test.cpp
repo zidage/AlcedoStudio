@@ -12,6 +12,7 @@
 
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QInputMethodEvent>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
@@ -297,6 +298,62 @@ TEST(LibraryColorLabelSettingsQmlTest, ClosingWithoutApplyKeepsTheStoredNames) {
   harness.Open();
   EXPECT_TRUE(Text(harness.input(2)).isEmpty());
   EXPECT_FALSE(harness.reset(2)->isVisible());
+}
+
+/// Commits @p text into @p field at its cursor, the path of an input method and of a paste.
+void CommitText(QQuickItem* field, const QString& text) {
+  QInputMethodEvent event;
+  event.setCommitString(text);
+  QCoreApplication::sendEvent(field, &event);
+  ProcessEvents();
+}
+
+// Issue 780: the field applies the rule of LibraryViewPreferences while the user types: 40
+// characters with surrogate pairs whole, no control characters, line breaks as spaces.
+TEST(LibraryColorLabelSettingsQmlTest, FieldKeepsWholeCharactersAndDropsControlCharacters) {
+  SettingsDirectory settings;
+  ASSERT_TRUE(settings.valid());
+  const QString         emoji = QString::fromUtf8("\xF0\x9F\x98\x80");
+  const QString         x39(39, QLatin1Char('x'));
+
+  SettingsDialogHarness harness;
+  ASSERT_NE(harness.dialog(), nullptr) << harness.warnings_.join('\n').toStdString();
+  harness.Open();
+
+  auto* blue = harness.input(4);
+  ASSERT_NE(blue, nullptr);
+  blue->forceActiveFocus();
+  ProcessEvents();
+  ASSERT_TRUE(blue->hasActiveFocus());
+  TypeText(harness.window_, x39);
+  CommitText(blue, emoji + QStringLiteral("tail"));
+  EXPECT_EQ(Text(blue), x39 + emoji);
+  EXPECT_EQ(blue->property("cursorPosition").toInt(), 41);
+
+  auto* red = harness.input(0);
+  red->forceActiveFocus();
+  ProcessEvents();
+  CommitText(red, QStringLiteral("Client\npicks"));
+  EXPECT_EQ(Text(red), QStringLiteral("Client picks"));
+  // A control character in the middle goes; the cursor stays after the typed text.
+  red->setProperty("cursorPosition", 6);
+  CommitText(red, QString(QChar(0x202E)) + QStringLiteral("s"));
+  EXPECT_EQ(Text(red), QStringLiteral("Clients picks"));
+  EXPECT_EQ(red->property("cursorPosition").toInt(), 7);
+  // The field still follows the pending name: typing goes on, and the reset glyph empties it.
+  TypeText(harness.window_, QStringLiteral("!"));
+  EXPECT_EQ(Text(red), QStringLiteral("Clients! picks"));
+
+  harness.Apply();
+  EXPECT_EQ(harness.preferences()->color_label_names().at(4), x39 + emoji);
+  EXPECT_EQ(harness.preferences()->color_label_names().at(0), QStringLiteral("Clients! picks"));
+  EXPECT_EQ(QSettings{}.value(LibraryViewPreferences::ColorLabelNameSettingKey(4)).toString(),
+            x39 + emoji);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(harness.reset(0), "clicked"));
+  ProcessEvents();
+  EXPECT_TRUE(Text(red).isEmpty());
+  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
 }  // namespace

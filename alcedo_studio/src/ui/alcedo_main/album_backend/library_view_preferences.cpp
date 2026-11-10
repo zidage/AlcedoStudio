@@ -26,11 +26,69 @@ constexpr std::array<const char*, kColorLabelCount> kColorLabelSourceNames = {
     QT_TRANSLATE_NOOP("alcedo::ui::LibraryViewPreferences", "Gray"),
 };
 
-auto NormalizedColorLabelName(const QString& name) -> QString {
-  return name.trimmed().left(LibraryViewPreferences::kColorLabelNameMaxLength).trimmed();
+/// True for a character that a name keeps as a space: a line break or a tab.
+auto IsLineOrTabControl(char32_t code_point) -> bool {
+  return code_point == U'\t' || code_point == U'\n' || code_point == U'\v' || code_point == U'\f' ||
+         code_point == U'\r' || code_point == 0x85 || code_point == 0x2028 || code_point == 0x2029;
+}
+
+/// True for a character that a name drops: the other control characters (category Cc) and the
+/// bidirectional embeddings, overrides, and isolates, which reorder the text after them.
+auto IsDroppedControl(char32_t code_point) -> bool {
+  return code_point < 0x20 || (code_point >= 0x7F && code_point <= 0x9F) ||
+         (code_point >= 0x202A && code_point <= 0x202E) ||
+         (code_point >= 0x2066 && code_point <= 0x2069);
+}
+
+/// @p name without control characters and lone surrogates; line breaks and tabs become spaces.
+auto WithoutControlCharacters(const QString& name) -> QString {
+  QString result;
+  result.reserve(name.size());
+  for (qsizetype index = 0; index < name.size(); ++index) {
+    const QChar unit = name.at(index);
+    if (unit.isHighSurrogate() && index + 1 < name.size() && name.at(index + 1).isLowSurrogate()) {
+      result.append(unit);
+      result.append(name.at(index + 1));
+      ++index;
+      continue;
+    }
+    if (unit.isSurrogate()) {
+      continue;  // A lone half of a pair is not text.
+    }
+    const char32_t code_point = unit.unicode();
+    if (IsLineOrTabControl(code_point)) {
+      result.append(QLatin1Char(' '));
+    } else if (!IsDroppedControl(code_point)) {
+      result.append(unit);
+    }
+  }
+  return result;
+}
+
+/// The first @p count characters of @p name; a surrogate pair counts as one character and stays
+/// whole. @p name holds no lone surrogates.
+auto FirstCharacters(const QString& name, int count) -> QString {
+  qsizetype end = 0;
+  for (int taken = 0; taken < count && end < name.size(); ++taken) {
+    end += name.at(end).isHighSurrogate() ? 2 : 1;
+  }
+  return name.left(end);
 }
 
 }  // namespace
+
+auto LibraryViewPreferences::EditableColorLabelNameText(const QString& text) -> QString {
+  return FirstCharacters(WithoutControlCharacters(text), kColorLabelNameMaxLength);
+}
+
+auto LibraryViewPreferences::NormalizedColorLabelName(const QString& name) -> QString {
+  return FirstCharacters(WithoutControlCharacters(name).trimmed(), kColorLabelNameMaxLength)
+      .trimmed();
+}
+
+auto LibraryViewPreferences::EditableColorLabelName(const QString& text) const -> QString {
+  return EditableColorLabelNameText(text);
+}
 
 LibraryViewPreferences::LibraryViewPreferences(QObject* parent) : QObject(parent) {
   QSettings     settings;

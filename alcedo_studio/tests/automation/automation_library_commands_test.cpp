@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStringList>
+#include <vector>
 
 #include "automation/automation_protocol.hpp"
 #include "automation_in_process_session.hpp"
@@ -189,6 +190,98 @@ TEST_F(AutomationLibraryCommandsTest, DeleteOfUnknownIdOrOtherScopeDeletesNothin
       AutomationErrorCode::Rejected);
   EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(),
             items.size());
+}
+
+// Issue 779: an id of 2^32 or more was cast to the 32-bit element id and wrapped to a real
+// photo, so the commands changed that photo.
+TEST_F(AutomationLibraryCommandsTest, ElementIdOf2To32OrMoreIsParamErrorAndChangesNothing) {
+  const QString raw_root = QStringLiteral(TEST_IMG_PATH) + QStringLiteral("/ci_rawfiles");
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "alias_project"}})
+                   .isEmpty());
+  const QString task_id = session
+                              .CallResult(QStringLiteral("library.import"),
+                                          QJsonObject{{"folder", raw_root}, {"recursive", false}})
+                              .value("task_id")
+                              .toString();
+  session.CallResult(QStringLiteral("tasks.wait"),
+                     QJsonObject{{"task_id", task_id}, {"timeout_ms", 600000}});
+  const QJsonArray items =
+      session.CallResult(QStringLiteral("library.list")).value("items").toArray();
+  ASSERT_FALSE(items.isEmpty());
+  const double      first       = items.at(0).toObject().value("element_id").toDouble();
+  // 2^32 + the id of a real photo: the old cast read it as that photo.
+  const double      alias       = 4294967296.0 + first;
+  const QString     alias_text  = QString::number(static_cast<qulonglong>(alias));
+  const QJsonObject info_before = session.CallResult(
+      QStringLiteral("library.info"), QJsonObject{{"element_ids", QJsonArray{first}}});
+  ASSERT_FALSE(info_before.isEmpty());
+
+  const QString out = QDir(Folder()).filePath(QStringLiteral("alias_thumbnail.png"));
+  struct Request {
+    QString     method;
+    QJsonObject params;
+    QString     pointer;
+  };
+  const std::vector<Request> requests{
+      {QStringLiteral("library.delete"),
+       QJsonObject{{"element_ids", QJsonArray{alias}}, {"scope", "project"}},
+       QStringLiteral("/element_ids/0")},
+      {QStringLiteral("library.rate"),
+       QJsonObject{{"element_ids", QJsonArray{alias}}, {"rating", 5}},
+       QStringLiteral("/element_ids/0")},
+      {QStringLiteral("library.color_label"),
+       QJsonObject{{"element_ids", QJsonArray{alias}}, {"code", "purple"}, {"on", true}},
+       QStringLiteral("/element_ids/0")},
+      {QStringLiteral("library.delete_mark"),
+       QJsonObject{{"element_ids", QJsonArray{alias}}, {"on", true}},
+       QStringLiteral("/element_ids/0")},
+      {QStringLiteral("library.info"), QJsonObject{{"element_ids", QJsonArray{alias}}},
+       QStringLiteral("/element_ids/0")},
+      {QStringLiteral("library.thumbnail"), QJsonObject{{"element_id", alias}, {"out", out}},
+       QStringLiteral("/element_id")},
+      {QStringLiteral("library.list"), QJsonObject{{"folder_id", alias}},
+       QStringLiteral("/folder_id")},
+  };
+  for (const auto& request : requests) {
+    const auto response = session.Call(request.method, request.params);
+    ASSERT_EQ(ErrorCode(response), AutomationErrorCode::InvalidParams)
+        << request.method.toStdString();
+    EXPECT_EQ(response->error->data.toObject().value("pointer").toString(), request.pointer)
+        << request.method.toStdString();
+    // The message names the id as the client sent it and the largest id.
+    EXPECT_TRUE(response->error->message.contains(alias_text))
+        << request.method.toStdString() << ": " << response->error->message.toStdString();
+    EXPECT_TRUE(response->error->message.contains(QStringLiteral("4294967295")))
+        << request.method.toStdString() << ": " << response->error->message.toStdString();
+  }
+
+  // Ids past 2^53 and past 2^64 are errors at the id too, never "unknown element ids: 0".
+  for (const double huge : {9007199254740992.0, 18446744073709551616.0, 1e300}) {
+    const auto response =
+        session.Call(QStringLiteral("library.delete"),
+                     QJsonObject{{"element_ids", QJsonArray{first, huge}}, {"scope", "project"}});
+    ASSERT_EQ(ErrorCode(response), AutomationErrorCode::InvalidParams) << huge;
+    EXPECT_EQ(response->error->data.toObject().value("pointer").toString(),
+              QStringLiteral("/element_ids/1"))
+        << huge;
+    EXPECT_FALSE(response->error->message.contains(QStringLiteral("unknown element ids")))
+        << response->error->message.toStdString();
+  }
+
+  // The photo keeps its place, rating, marks, and no thumbnail file was written.
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(),
+            items.size());
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.info"),
+                               QJsonObject{{"element_ids", QJsonArray{first}}}),
+            info_before);
+  EXPECT_FALSE(QFile::exists(out));
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list"), QJsonObject{{"deleted", true}})
+                .value("total")
+                .toInt(),
+            0);
 }
 
 auto DescribedCommand(InProcessAutomationSession& session, const QString& method) -> QJsonObject {
