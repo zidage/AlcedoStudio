@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QStringList>
 
 #include "automation/automation_protocol.hpp"
 #include "automation_in_process_session.hpp"
@@ -188,6 +189,156 @@ TEST_F(AutomationLibraryCommandsTest, DeleteOfUnknownIdOrOtherScopeDeletesNothin
       AutomationErrorCode::Rejected);
   EXPECT_EQ(session.CallResult(QStringLiteral("library.list")).value("total").toInt(),
             items.size());
+}
+
+auto DescribedCommand(InProcessAutomationSession& session, const QString& method) -> QJsonObject {
+  for (const QJsonValue& command : session.registry().Describe()) {
+    if (command.toObject().value("method").toString() == method) {
+      return command.toObject();
+    }
+  }
+  return {};
+}
+
+auto SortedStrings(const QJsonArray& values) -> QStringList {
+  QStringList strings;
+  for (const QJsonValue& value : values) {
+    strings.push_back(value.toString());
+  }
+  strings.sort();
+  return strings;
+}
+
+TEST_F(AutomationLibraryCommandsTest, MarkCommandsAreRegisteredWithSchemas) {
+  InProcessAutomationSession session;
+  const QJsonArray  code_keys{"red", "orange", "yellow", "green", "blue", "purple", "gray"};
+
+  const QJsonObject color_label = DescribedCommand(session, QStringLiteral("library.color_label"));
+  ASSERT_FALSE(color_label.isEmpty());
+  EXPECT_TRUE(color_label.value("changes_state").toBool());
+  QJsonObject params = color_label.value("params_schema").toObject();
+  EXPECT_EQ(SortedStrings(params.value("required").toArray()),
+            (QStringList{"code", "element_ids", "on"}));
+  EXPECT_EQ(params.value("properties").toObject().value("code").toObject().value("enum"),
+            QJsonValue(code_keys));
+  EXPECT_EQ(
+      SortedStrings(color_label.value("result_schema").toObject().value("required").toArray()),
+      (QStringList{"code", "marked_count", "on", "task_id"}));
+
+  const QJsonObject delete_mark = DescribedCommand(session, QStringLiteral("library.delete_mark"));
+  ASSERT_FALSE(delete_mark.isEmpty());
+  EXPECT_TRUE(delete_mark.value("changes_state").toBool());
+  params = delete_mark.value("params_schema").toObject();
+  EXPECT_EQ(SortedStrings(params.value("required").toArray()), (QStringList{"element_ids", "on"}));
+  EXPECT_EQ(
+      SortedStrings(delete_mark.value("result_schema").toObject().value("required").toArray()),
+      (QStringList{"marked_count", "on", "task_id"}));
+
+  const QJsonObject color_labels =
+      DescribedCommand(session, QStringLiteral("library.color_labels"));
+  ASSERT_FALSE(color_labels.isEmpty());
+  EXPECT_FALSE(color_labels.value("changes_state").toBool());
+  const QJsonObject code_item = color_labels.value("result_schema")
+                                    .toObject()
+                                    .value("properties")
+                                    .toObject()
+                                    .value("codes")
+                                    .toObject()
+                                    .value("items")
+                                    .toObject();
+  EXPECT_EQ(SortedStrings(code_item.value("required").toArray()),
+            (QStringList{"code", "color", "default_name", "index", "name", "renamed"}));
+
+  const QJsonObject rename =
+      DescribedCommand(session, QStringLiteral("library.color_label_name.set"));
+  ASSERT_FALSE(rename.isEmpty());
+  EXPECT_TRUE(rename.value("changes_state").toBool());
+  EXPECT_EQ(SortedStrings(rename.value("params_schema").toObject().value("required").toArray()),
+            (QStringList{"code", "name"}));
+
+  const QJsonObject list = DescribedCommand(session, QStringLiteral("library.list"));
+  const QJsonObject list_props =
+      list.value("params_schema").toObject().value("properties").toObject();
+  EXPECT_EQ(list_props.value("color_label").toObject().value("enum"), QJsonValue(code_keys));
+  EXPECT_EQ(list_props.value("deleted").toObject().value("type"), QJsonValue("boolean"));
+  const QJsonObject list_item = list.value("result_schema")
+                                    .toObject()
+                                    .value("properties")
+                                    .toObject()
+                                    .value("items")
+                                    .toObject()
+                                    .value("items")
+                                    .toObject();
+  EXPECT_TRUE(SortedStrings(list_item.value("required").toArray()).contains("color_labels"));
+  EXPECT_TRUE(SortedStrings(list_item.value("required").toArray()).contains("delete_mark"));
+}
+
+TEST_F(AutomationLibraryCommandsTest, UnknownColorLabelCodeIsParamError) {
+  InProcessAutomationSession session;
+  const auto                 pointer_of = [](const std::optional<AutomationResponse>& response) {
+    return response->error->data.toObject().value("pointer").toString();
+  };
+  const auto color_label =
+      session.Call(QStringLiteral("library.color_label"),
+                   QJsonObject{{"element_ids", QJsonArray{1}}, {"code", "pink"}, {"on", true}});
+  ASSERT_EQ(ErrorCode(color_label), AutomationErrorCode::InvalidParams);
+  EXPECT_EQ(pointer_of(color_label), QStringLiteral("/code"));
+  // Keys are lower case.
+  const auto list =
+      session.Call(QStringLiteral("library.list"), QJsonObject{{"color_label", "Red"}});
+  ASSERT_EQ(ErrorCode(list), AutomationErrorCode::InvalidParams);
+  EXPECT_EQ(pointer_of(list), QStringLiteral("/color_label"));
+  const auto rename = session.Call(QStringLiteral("library.color_label_name.set"),
+                                   QJsonObject{{"code", "pink"}, {"name", "Picks"}});
+  ASSERT_EQ(ErrorCode(rename), AutomationErrorCode::InvalidParams);
+  EXPECT_EQ(pointer_of(rename), QStringLiteral("/code"));
+}
+
+TEST_F(AutomationLibraryCommandsTest, MarkBatchWhileAnotherSavesIsRejected) {
+  const QString raw_root = QStringLiteral(TEST_IMG_PATH) + QStringLiteral("/ci_rawfiles");
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "marks_project"}})
+                   .isEmpty());
+  const QString import_id = session
+                                .CallResult(QStringLiteral("library.import"),
+                                            QJsonObject{{"folder", raw_root}, {"recursive", false}})
+                                .value("task_id")
+                                .toString();
+  session.CallResult(QStringLiteral("tasks.wait"),
+                     QJsonObject{{"task_id", import_id}, {"timeout_ms", 600000}});
+  const QJsonArray items =
+      session.CallResult(QStringLiteral("library.list")).value("items").toArray();
+  ASSERT_GE(items.size(), 2);
+  const QJsonValue  first   = items.at(0).toObject().value("element_id");
+  const QJsonValue  second  = items.at(1).toObject().value("element_id");
+
+  // The answer of the first batch comes before its save finishes on the GUI thread, so the
+  // second batch finds the first one still saving.
+  const QJsonObject started = session.CallResult(
+      QStringLiteral("library.color_label"),
+      QJsonObject{{"element_ids", QJsonArray{first, second}}, {"code", "red"}, {"on", true}});
+  EXPECT_EQ(started.value("marked_count").toInt(), 2);
+  EXPECT_EQ(started.value("code").toString(), QStringLiteral("red"));
+  const auto busy = session.Call(QStringLiteral("library.delete_mark"),
+                                 QJsonObject{{"element_ids", QJsonArray{first}}, {"on", true}});
+  ASSERT_EQ(ErrorCode(busy), AutomationErrorCode::Rejected);
+  EXPECT_FALSE(busy->error->message.isEmpty());
+
+  EXPECT_EQ(session
+                .CallResult(QStringLiteral("tasks.wait"),
+                            QJsonObject{{"task_id", started.value("task_id")}})
+                .value("state")
+                .toString(),
+            QStringLiteral("succeeded"));
+  const QJsonObject red =
+      session.CallResult(QStringLiteral("library.list"), QJsonObject{{"color_label", "red"}});
+  EXPECT_EQ(red.value("total").toInt(), 2);
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list"), QJsonObject{{"deleted", true}})
+                .value("total")
+                .toInt(),
+            0);
 }
 
 }  // namespace

@@ -17,7 +17,9 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMap>
+#include <QPair>
 #include <QSet>
+#include <QStringList>
 #include <algorithm>
 #include <filesystem>
 #include <vector>
@@ -38,7 +40,20 @@ auto FileNames(const std::vector<std::filesystem::path>& paths) -> QSet<QString>
   return names;
 }
 
-class AutomationLibraryE2ETest : public test::AutomationE2ETestBase {};
+class AutomationLibraryE2ETest : public test::AutomationE2ETestBase {
+ protected:
+  /// Runs a mark batch command and waits for its save task. Returns the final task state.
+  auto MarkAndWait(const QString& method, const QJsonObject& params) -> QString {
+    const QJsonObject started = Result(method, params);
+    EXPECT_EQ(started.value("marked_count").toInt(), params.value("element_ids").toArray().size());
+    EXPECT_EQ(started.value("on"), params.value("on"));
+    const QString task_id = started.value("task_id").toString();
+    EXPECT_FALSE(task_id.isEmpty()) << method.toStdString();
+    return Result(QStringLiteral("tasks.wait"), QJsonObject{{"task_id", task_id}})
+        .value("state")
+        .toString();
+  }
+};
 
 TEST_F(AutomationLibraryE2ETest, ImportCiRawFilesListsEveryImportedFile) {
   const auto raw_files = CollectCiRawFiles();
@@ -378,6 +393,154 @@ TEST_F(AutomationLibraryE2ETest, RatingOutsideRangeIsRejected) {
         << error.value("message").toString().toStdString();
   }
   EXPECT_EQ(ListItems().at(0).toObject().value("rating").toInt(), 0);
+  Stop();
+}
+
+/// The `color_labels` and `delete_mark` of the library.info items, by element id.
+auto MarksById(const QJsonArray& items) -> QMap<double, QPair<QJsonArray, bool>> {
+  QMap<double, QPair<QJsonArray, bool>> marks;
+  for (const QJsonValue& value : items) {
+    const QJsonObject item = value.toObject();
+    marks.insert(item.value("element_id").toDouble(),
+                 {item.value("color_labels").toArray(), item.value("delete_mark").toBool()});
+  }
+  return marks;
+}
+
+auto ElementIds(const QJsonArray& items) -> QSet<double> {
+  QSet<double> ids;
+  for (const QJsonValue& value : items) {
+    ids.insert(value.toObject().value("element_id").toDouble());
+  }
+  return ids;
+}
+
+TEST_F(AutomationLibraryE2ETest, ColorLabelsAndDeleteMarkChangeAndFilterTheList) {
+  const auto raw_files = CollectCiRawFiles();
+  ASSERT_GE(raw_files.size(), 3u) << "the CI RAW files are missing under " << TEST_IMG_PATH;
+  ASSERT_FALSE(StartWithNewProject(QStringLiteral("marks_project")).isEmpty());
+  ASSERT_EQ(ImportAndWait(raw_files).value("state").toString(), QStringLiteral("succeeded"));
+  const QJsonArray items = ListItems();
+  ASSERT_EQ(items.size(), static_cast<qsizetype>(raw_files.size()));
+  for (const QJsonValue& value : items) {
+    EXPECT_EQ(value.toObject().value("color_labels").toArray(), QJsonArray{});
+    EXPECT_EQ(value.toObject().value("delete_mark"), QJsonValue(false));
+  }
+  const QJsonValue first  = items.at(0).toObject().value("element_id");
+  const QJsonValue second = items.at(1).toObject().value("element_id");
+  const QJsonValue third  = items.at(2).toObject().value("element_id");
+  const QJsonArray three{first, second, third};
+  const auto       info = [&]() {
+    return MarksById(Result(QStringLiteral("library.info"), QJsonObject{{"element_ids", three}})
+                               .value("items")
+                               .toArray());
+  };
+  const QString succeeded = QStringLiteral("succeeded");
+
+  // Blue on the first photo, then red on the first two: the first keeps blue.
+  EXPECT_EQ(
+      MarkAndWait(QStringLiteral("library.color_label"),
+                  QJsonObject{{"element_ids", QJsonArray{first}}, {"code", "blue"}, {"on", true}}),
+      succeeded);
+  EXPECT_EQ(
+      MarkAndWait(
+          QStringLiteral("library.color_label"),
+          QJsonObject{{"element_ids", QJsonArray{first, second}}, {"code", "red"}, {"on", true}}),
+      succeeded);
+  auto marks = info();
+  EXPECT_EQ(marks.value(first.toDouble()).first, (QJsonArray{"red", "blue"}));
+  EXPECT_EQ(marks.value(second.toDouble()).first, QJsonArray{"red"});
+  EXPECT_EQ(marks.value(third.toDouble()).first, QJsonArray{});
+
+  // Red off on both: blue stays on the first photo.
+  EXPECT_EQ(
+      MarkAndWait(
+          QStringLiteral("library.color_label"),
+          QJsonObject{{"element_ids", QJsonArray{first, second}}, {"code", "red"}, {"on", false}}),
+      succeeded);
+  marks = info();
+  EXPECT_EQ(marks.value(first.toDouble()).first, QJsonArray{"blue"});
+  EXPECT_EQ(marks.value(second.toDouble()).first, QJsonArray{});
+
+  EXPECT_EQ(MarkAndWait(QStringLiteral("library.delete_mark"),
+                        QJsonObject{{"element_ids", QJsonArray{first, second}}, {"on", true}}),
+            succeeded);
+  marks = info();
+  EXPECT_TRUE(marks.value(first.toDouble()).second);
+  EXPECT_TRUE(marks.value(second.toDouble()).second);
+  EXPECT_FALSE(marks.value(third.toDouble()).second);
+
+  const auto list = [&](QJsonObject params) {
+    params.insert("limit", 1000);
+    return Result(QStringLiteral("library.list"), params);
+  };
+  const QJsonObject deleted = list(QJsonObject{{"deleted", true}});
+  EXPECT_EQ(deleted.value("total").toInt(), 2);
+  EXPECT_EQ(ElementIds(deleted.value("items").toArray()),
+            (QSet<double>{first.toDouble(), second.toDouble()}));
+  const QJsonObject kept = list(QJsonObject{{"deleted", false}});
+  EXPECT_EQ(kept.value("total").toInt(), items.size() - 2);
+  EXPECT_FALSE(ElementIds(kept.value("items").toArray()).contains(first.toDouble()));
+  const QJsonObject blue = list(QJsonObject{{"color_label", "blue"}});
+  EXPECT_EQ(blue.value("total").toInt(), 1);
+  EXPECT_EQ(ElementIds(blue.value("items").toArray()), QSet<double>{first.toDouble()});
+  EXPECT_EQ(blue.value("items").toArray().at(0).toObject().value("color_labels").toArray(),
+            QJsonArray{"blue"});
+  EXPECT_EQ(list(QJsonObject{{"color_label", "blue"}, {"deleted", true}}).value("total").toInt(),
+            1);
+  EXPECT_EQ(list(QJsonObject{{"color_label", "blue"}, {"deleted", false}}).value("total").toInt(),
+            0);
+  EXPECT_EQ(list(QJsonObject{{"color_label", "red"}}).value("total").toInt(), 0);
+
+  // Clearing the mark of one photo leaves the other marked.
+  EXPECT_EQ(MarkAndWait(QStringLiteral("library.delete_mark"),
+                        QJsonObject{{"element_ids", QJsonArray{first}}, {"on", false}}),
+            succeeded);
+  const QJsonObject still_deleted = list(QJsonObject{{"deleted", true}});
+  EXPECT_EQ(still_deleted.value("total").toInt(), 1);
+  EXPECT_EQ(ElementIds(still_deleted.value("items").toArray()), QSet<double>{second.toDouble()});
+  // The mark changes nothing on disk: every photo is still in the project.
+  EXPECT_EQ(list(QJsonObject{}).value("total").toInt(), items.size());
+  Stop();
+}
+
+TEST_F(AutomationLibraryE2ETest, ColorLabelNamesRenameAndRestore) {
+  ASSERT_FALSE(StartWithNewProject(QStringLiteral("names_project")).isEmpty());
+  const QJsonArray  codes = Result(QStringLiteral("library.color_labels")).value("codes").toArray();
+  const QStringList keys{"red", "orange", "yellow", "green", "blue", "purple", "gray"};
+  ASSERT_EQ(codes.size(), keys.size());
+  for (qsizetype index = 0; index < codes.size(); ++index) {
+    const QJsonObject code = codes.at(index).toObject();
+    EXPECT_EQ(code.value("code").toString(), keys.at(index));
+    EXPECT_EQ(code.value("index").toInt(), index);
+    EXPECT_FALSE(code.value("renamed").toBool());
+    EXPECT_FALSE(code.value("default_name").toString().isEmpty());
+    EXPECT_EQ(code.value("name"), code.value("default_name"));
+    EXPECT_EQ(code.value("color").toString().size(), 7);
+  }
+  EXPECT_EQ(codes.at(0).toObject().value("color").toString(), QStringLiteral("#E5534B"));
+  const QJsonValue  green_default = codes.at(3).toObject().value("default_name");
+
+  const QJsonObject renamed       = Result(QStringLiteral("library.color_label_name.set"),
+                                           QJsonObject{{"code", "green"}, {"name", "  Client picks  "}});
+  EXPECT_EQ(renamed.value("code").toString(), QStringLiteral("green"));
+  EXPECT_EQ(renamed.value("name").toString(), QStringLiteral("Client picks"));
+  EXPECT_TRUE(renamed.value("renamed").toBool());
+  EXPECT_EQ(renamed.value("default_name"), green_default);
+  EXPECT_EQ(Result(QStringLiteral("library.color_labels")).value("codes").toArray().at(3),
+            QJsonValue(renamed));
+
+  const QJsonObject restored = Result(QStringLiteral("library.color_label_name.set"),
+                                      QJsonObject{{"code", "green"}, {"name", ""}});
+  EXPECT_EQ(restored.value("name"), green_default);
+  EXPECT_FALSE(restored.value("renamed").toBool());
+  EXPECT_EQ(Result(QStringLiteral("library.color_labels")).value("codes").toArray(), codes);
+
+  const CliRun unknown =
+      Call(QStringLiteral("library.color_label"),
+           QJsonObject{{"element_ids", QJsonArray{1}}, {"code", "pink"}, {"on", true}});
+  EXPECT_EQ(unknown.exit_code, 1);
+  EXPECT_EQ(unknown.json.value("error").toObject().value("code").toInt(), -32602);
   Stop();
 }
 

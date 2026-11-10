@@ -14,11 +14,13 @@ namespace alcedo::automation {
 
 /// Registers `library.import`, `library.folders`, `library.list`, `library.info`,
 /// `library.thumbnail`, `library.thumbnails`, `library.selection.get`, `library.selection.set`,
-/// `library.rate`, and `library.delete`. They call the owners that the GUI uses:
+/// `library.rate`, `library.color_label`, `library.delete_mark`, `library.color_labels`,
+/// `library.color_label_name.set`, and `library.delete`. They call the owners that the GUI uses:
 /// ImportExportHandler and its folder scan for the import, AlbumBrowseService (the library
 /// query) for the reads, ImagePoolService for the source file and the capture metadata of
-/// `library.info`, ThumbnailService for the thumbnails, LibrarySelection for the selection, and
-/// LibraryMutationOperations for the rating and the delete. The selection exists only in the GUI
+/// `library.info`, ThumbnailService for the thumbnails, LibrarySelection for the selection,
+/// LibraryMutationOperations for the rating, the color labels, the Delete mark, and the delete,
+/// and LibraryViewPreferences for the color label names. The selection exists only in the GUI
 /// host: with @p host_mode `headless` the selection commands answer -32001. @p host and @p tracker
 /// must outlive every dispatch. Returns false and writes @p error when a registration fails.
 [[nodiscard]] auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
