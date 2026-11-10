@@ -5,11 +5,14 @@
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 
 #include <charconv>
+#include <cstdint>
 #include <iomanip>
 #include <locale>
+#include <span>
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace duckorm {
 namespace expr {
@@ -145,6 +148,10 @@ auto param(const char* value) -> SqlFragment {
 
 auto param(const std::string& value) -> SqlFragment {
   return param(std::string_view(value));
+}
+
+auto param(std::span<const std::uint8_t> blob) -> SqlFragment {
+  return SqlFragment{"?", {BindValue{std::vector<std::uint8_t>(blob.begin(), blob.end())}}};
 }
 
 auto eq(SqlFragment left, SqlFragment right) -> SqlFragment {

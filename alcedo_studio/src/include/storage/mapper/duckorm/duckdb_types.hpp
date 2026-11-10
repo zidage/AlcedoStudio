@@ -32,28 +32,6 @@ enum class DuckDBType : uint8_t {
 };
 
 /**
- * @brief A RAII class for managing prepared statements in DuckDB.
- *
- */
-class PreparedStatement {
- private:
-  void RecycleResources();
-
- public:
-  duckdb_result             result_;
-  duckdb_prepared_statement stmt_;
-  duckdb_connection&        con_;
-
-  bool                      prepared_ = false;
-  PreparedStatement(duckdb_connection& con);
-  PreparedStatement(duckdb_connection& con, const std::string& prepare_query);
-  PreparedStatement();
-  ~PreparedStatement();
-  auto GetStmtGuard(const std::string& prepare_query) -> duckdb_prepared_statement&;
-  void SetConnection(duckdb_connection& con);
-};
-
-/**
  * @brief Field descriptor for DuckDB ORM.
  *
  */

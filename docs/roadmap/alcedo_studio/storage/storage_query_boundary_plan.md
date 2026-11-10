@@ -2,7 +2,7 @@
 
 Date: 2026-11-09
 
-Status: planned
+Status: in progress. S1 complete (2026-11-09); S2 to S6 planned.
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and the callers of storage in
 `app/` and `sleeve/`.
@@ -187,7 +187,7 @@ storage/  -> duckorm, Mapper, Store, StatsDimension, LibrarySearchPredicates, SQ
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
-| S1 | Typed statements and rows in duckorm; `MaskAssetStore` on duckorm | duckorm, mask asset store | none | 1000-1400 | planned (#786) |
+| S1 | Typed statements and rows in duckorm; `MaskAssetStore` on duckorm | duckorm, mask asset store | none | 1000-1400 | complete (#786) |
 | S2 | Typed-key Mapper and one transaction style; `CommitGraphStore`, `FolderMapper`, `ImageStore` on duckorm | Mapper, edit history store, sleeve mappers | S1 | 1300-1800 | planned (#787) |
 | S3 | `ElementStore` read paths on typed rows | element store, album query | S1 | 1000-1500 | planned (#788) |
 | S4 | One stats dimension definition; filter compiler in storage | storage query, sleeve filter, element store | S3 | 1200-1800 | planned (#789) |
@@ -310,13 +310,136 @@ ctest --test-dir build/debug --output-on-failure -R "DuckormStatementTest|Duckor
 
 **Exit criteria**
 
-- [ ] `duckorm::Statement` is the only prepared-statement owner in the repository.
-- [ ] `mask_asset_store.cpp` has zero `duckdb_` symbols.
-- [ ] The new `DuckormStatementTest` cases and all `MaskAssetStoreTest` cases pass.
+- [x] `duckorm::Statement` is the only prepared-statement owner in the repository.
+- [x] `mask_asset_store.cpp` has zero `duckdb_` symbols.
+- [x] The new `DuckormStatementTest` cases and all `MaskAssetStoreTest` cases pass.
 
 **Expected diff:** 1000-1400 lines.
 
 **Completion record:** see section 8.
+
+##### Phase S1 completion record (2026-11-09)
+
+**Status:** complete. Branch `refactor/duckorm-typed-statements-786` from `main` at `2843077e3`.
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| duckorm L0 | `include/storage/mapper/duckorm/duckdb_statement.hpp`, `storage/mapper/duckorm/duckdb_statement.cpp` (new) | `Statement`, `Result`, `CellScalar` / `CellValue`, `MemberKind`, `ColumnTypeFitsMember`, `RowColumns`, `TypedRow`, `RequireRowColumns` / `DecodeRow` / `DecodeRows` |
+| duckorm L1 | `duckdb_orm.hpp`, `duckdb_orm.cpp` | `query<Row>`, `query_one<Row>`, `scalar<T>`, `execute_count`; every statement of `insert`, `update`, `upsert_rows`, `remove`, `select`, `select_by_query`, `execute`, `execute_query` runs on `Statement` |
+| duckorm values | `duckdb_expr.hpp`, `duckdb_expr.cpp` | `BindValue` holds `std::vector<std::uint8_t>` (BLOB); `expr::param(std::span<const std::uint8_t>)` |
+| duckorm internal | `storage/mapper/duckorm/duckdb_value.hpp` (new) | `DuckValueGuard`, `MakeFloatArrayValue`, shared by `Statement::BindFloatArray` and `Appender` |
+| Deleted | `duckdb_types.hpp` (class only), `duckdb_types.cpp` (file) | `duckorm::PreparedStatement` |
+| Users | `folder_mapper.cpp`, `mask_asset_store.cpp` | `Statement`; `MaskAssetStore` on `execute_count`, `query_one<MaskAssetRow>`, `query<MaskAssetKeyRow>`, `Transaction` |
+
+**Detail decisions made during the work** (the plan left them open):
+
+- **Column type rule.** A member type takes a column only without loss: an integer member takes
+  an integer column of the same signedness and a range that fits, and a signed member also takes
+  a narrower unsigned column (UINTEGER into `int64_t`). `double` takes FLOAT and DOUBLE. Every
+  other member takes only its own type. So `COUNT(*)` (BIGINT) and `SELECT 1` (INTEGER) read as
+  `int64_t`, and `SUM` (HUGEINT) needs a cast. The rule is `ColumnTypeFitsMember`.
+- **DATE.** Section 2.2 lists DATE. `std::chrono::sys_days` is a member type and a bind type, so
+  S3 can read the import-day buckets as dates.
+- **`select_int64` and `select_string` are `scalar<int64_t>` and `scalar<std::string>`.** They
+  now reject a column that does not fit. Two existing test reads changed with them:
+  `AppenderWritesEveryValueTypeInsideTheTransaction` reads `vec[3]` (FLOAT) as `scalar<float>`,
+  and `DuckDbExtensionTest.MissingExtensionReportsEachFailedAttemptWithoutDownloading` reads
+  `current_setting('autoinstall_known_extensions')` (BOOLEAN) as `scalar<bool>`. Every production
+  caller reads INTEGER, BIGINT, VARCHAR, or JSON (the C API reports JSON as VARCHAR;
+  `SemanticStorageControllerTest` reads `supported_text_languages_json`).
+- **Untyped NULL.** The C API reports `SELECT NULL` as INTEGER, so a NULL literal needs a cast
+  (`NULL::VARCHAR`).
+- **Error text.** Every `Statement` failure throws `"<DuckDB message or duckorm message>
+  [SQL: <first 120 bytes>]"`; the cut ends at a whole UTF-8 sequence. Type errors name the column
+  index, the column name, the DuckDB type, and the member type.
+- **`bind_fragment_values` is deleted.** It had no caller outside duckorm;
+  `Statement::BindFragment` replaces it. `execute_query` keeps its signature through
+  `Statement::ExecuteDetached`, which gives the `duckdb_result` to the caller (S3 removes it).
+- **DuckFieldDesc reads.** `select` and `select_by_query` keep the positional `VarTypes` decoding
+  through `Result::ReadFieldCell`, which keeps DuckDB's value casts, so the Mapper rows read as
+  before until S2 and S3.
+- **MaskAssetStore.** The float bounds bind as DOUBLE in the `SqlFragment` (`BindValue` holds
+  floating values as `double`); DuckDB casts them back to the same FLOAT values, and the key check after a read proves
+  it. The store's own messages keep their text. SQL failures now carry the duckorm text instead of
+  the prefix `MaskAssetStore: `, and a NULL cell (the columns are NOT NULL) fails with the duckorm
+  NULL message instead of `is corrupt: a column is null`.
+- **Source check wording.** `grep -c "duckdb_"` also counts the include lines
+  `storage/mapper/duckorm/duckdb_*.hpp`. The check is
+  `grep -n "duckdb_" mask_asset_store.cpp | grep -v "#include"`, which prints 0 lines.
+- **Prepared-statement owner.** `Statement` is the only prepared-statement class.
+  `commit_graph_store.cpp` still calls `duckdb_prepare` on raw handles; S2 moves it to duckorm
+  (section 2.1).
+
+**Primary success call chain:**
+
+```text
+MaskAssetStore::Read(key)
+  -> duckorm::query_one<MaskAssetRow>(conn, SqlFragment{kReadSql, {key}})
+  -> Statement(conn, sql) -> BindFragment(1) -> Execute -> Result&
+  -> RequireRowColumns<MaskAssetRow>: column count 10, each column type once
+  -> RequireAtMostOneRow -> DecodeRow (ReadChecked per member, BLOB as std::vector<uint8_t>)
+  -> format version, codec, dimension checks -> zlib uncompress -> MakeMaskAssetKey check
+  -> MaskAsset
+```
+
+**Primary failure and restore call chain:**
+
+```text
+MaskAssetStore::DeleteKeysNotIn(keep)
+  -> ListKeys (query<MaskAssetKeyRow>)
+  -> Transaction tx(conn) -> Statement DELETE ... Bind(1, key) -> Execute fails
+  -> std::runtime_error("<DuckDB message> [SQL: DELETE FROM MaskAsset ...]")
+  -> ~Statement releases the result and the prepared statement -> ~Transaction runs ROLLBACK
+  -> the caller receives the message; the table keeps every row
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `QueryDecodesRowsIntoMemberPointerColumns` | `DuckormStatementTest` | PASS |
+| `QueryRejectsColumnCountMismatch` (names 3 and 2; empty result fails the same way) | `DuckormStatementTest` | PASS |
+| `QueryRejectsColumnTypeMismatch` (column 0 BIGINT into `std::string`, column 1 VARCHAR into `int64_t`) | `DuckormStatementTest` | PASS |
+| `NullCellReadsAsNulloptForOptionalMember` | `DuckormStatementTest` | PASS |
+| `NullCellThrowsForPlainMember` (column, row) | `DuckormStatementTest` | PASS |
+| `BlobBindAndReadKeepsBytes` (0x00 to 0xFF, empty BLOB, `expr::param` BLOB) | `DuckormStatementTest` | PASS |
+| `FloatAndUtinyintColumnsDecode` (+ lossless widening accepted, narrowing rejected) | `DuckormStatementTest` | PASS |
+| `ExecuteCountReportsChangedRows` (`ON CONFLICT DO NOTHING` of a stored key reports 0) | `DuckormStatementTest` | PASS |
+| `QueryOneReturnsNulloptForNoRowAndThrowsForTwoRows` | `DuckormStatementTest` | PASS |
+| `ScalarRejectsColumnTypeAndColumnCountMismatch` (DOUBLE into text, two columns, HUGEINT) | `DuckormStatementTest` | PASS |
+| `DateColumnDecodesAndBindsAsSysDays` | `DuckormStatementTest` | PASS |
+| `StatementRebindsAndReportsPrepareAndBindErrors` (reuse, C string as VARCHAR, 120-byte SQL head) | `DuckormStatementTest` | PASS |
+| Every current `MaskAssetStoreTest` case, unchanged | `MaskAssetStoreTest` | 5/5 PASS |
+| `mask_asset_store.cpp` without `duckdb_` symbols | source search | 0 lines outside `#include` |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM Storage DuckormStatementTest DuckormExprTest MaskAssetStoreTest MapperCrtpRoundtripTest DuckDbExtensionTest   (exit 0)
+ctest --test-dir build/debug --output-on-failure -R "DuckormStatementTest|DuckormExprTest|MaskAssetStoreTest|MapperCrtpRoundtripTest|DuckDbExtensionTest"   (exit 0)
+ctest --test-dir build/debug --output-on-failure -R "^(SemanticStorageControllerTest|AiStorageControllerTest|SleeveFilterCompileTest|SleeveFilterFactoryTest|FilterServiceTest|AlbumQueryTest|LibrarySearchRecallTest|LibrarySearchColumnsTest|PipelineMapperTest|ProjectPackageBackendTest|ProjectCompatibilityTest|CommitGraphTest)\."   (exit 8, one failure from main, below)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main
+```
+
+Suite totals: `DuckormStatementTest` 24/24, `DuckormExprTest` 10/10, `MaskAssetStoreTest` 5/5,
+`MapperCrtpRoundtripTest` 4/4, `DuckDbExtensionTest` 2/2. Caller suites: 260 passed, 1 skipped
+(`AlbumQueryTest.LargeLibraryPagesStayBoundedAndRecordTimings`), 1 disabled, 1 failed:
+`SemanticStoreTest.ExistingSemanticModelWithoutActiveColumnPromotesLatestModel` fails on `main`
+in the library marks migration before any duckorm read (#793). The full suite is for the user to start;
+this record lists the targeted suites.
+
+**Checklist / exit condition:** all three boxes checked.
+
+**LOC note:** `duckdb_statement.hpp` 434, `duckdb_statement.cpp` 576, `duckdb_orm.cpp` 471
+(was 768), `mask_asset_store.cpp` 186 (was 249), `duckorm_statement_test.cpp` 582. The diff is
+1697 added and 634 removed lines in 15 files (the plan document included). Every changed file
+is under 1000 lines.
+
+**Remaining gaps:** `CommitGraphStore`, `FolderMapper` text WHERE clauses, and the Mapper
+transactions are S2 (#787). `ElementStore` reads and the callers of `execute_query`,
+`select_by_query`, `select_int64`, and `select_string` are S3 (#788).
 
 ### Phase S2: Typed-key Mapper and one transaction style
 

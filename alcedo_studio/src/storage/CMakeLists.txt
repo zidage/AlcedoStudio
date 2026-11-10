@@ -4,7 +4,7 @@
 def_library(DuckORM
     SOURCES
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_orm.cpp"
-        "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_types.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_statement.cpp"
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_expr.cpp"
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_select.cpp"
     PUBLIC_DEPS DuckDB

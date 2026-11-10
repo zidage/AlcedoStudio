@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "duckdb_expr.hpp"
+#include "duckdb_statement.hpp"
 #include "duckdb_types.hpp"
 
 namespace duckorm {
@@ -89,16 +90,6 @@ std::vector<std::vector<VarTypes>> select_by_query(duckdb_connection&           
                                                    size_t field_count, const std::string& sql);
 
 /**
- * @brief Bind SqlFragment values onto a prepared statement starting at @p start_index.
- *
- * @param stmt Prepared statement that already includes matching `?` placeholders.
- * @param start_index 1-based DuckDB parameter index of the first fragment bind.
- * @param fragment Fragment whose binds_ list is applied in declaration order.
- */
-void bind_fragment_values(duckdb_prepared_statement stmt, idx_t start_index,
-                          const SqlFragment& fragment);
-
-/**
  * @brief Prepare and run a SQL statement, binding values from @p fragment.
  *
  * @param conn Open DuckDB connection.
@@ -125,19 +116,81 @@ duckdb_state execute_query(duckdb_connection& conn, const std::string& sql,
 void execute(duckdb_connection& conn, const SqlFragment& statement);
 
 /**
- * @brief First column of the first row as an integer.
+ * @brief Run one statement and return the number of rows it inserted, updated, or deleted.
  *
- * @return std::nullopt when the query returns no row or a NULL value.
- * @throws std::runtime_error with DuckDB's error message when the query fails.
+ * An `INSERT ... ON CONFLICT DO NOTHING` of a stored key returns 0.
+ * @throws std::runtime_error with DuckDB's error message when the statement fails.
+ */
+[[nodiscard]] auto execute_count(duckdb_connection& conn, const SqlFragment& statement) -> idx_t;
+
+/**
+ * @brief Run a SELECT and decode every row into @p Row (see RowColumns).
+ *
+ * The column count and the column types are checked once, before row 0 is read.
+ * @throws std::runtime_error when the query fails, the column count differs from the row's
+ *         column list, a column type does not fit its member, or a NULL cell meets a member
+ *         that is not `std::optional`.
+ */
+template <TypedRow Row>
+[[nodiscard]] auto query(duckdb_connection& conn, const SqlFragment& query) -> std::vector<Row> {
+  Statement statement(conn, query.sql_);
+  statement.BindFragment(1, query);
+  return DecodeRows<Row>(statement.Execute());
+}
+
+/**
+ * @brief Run a SELECT that returns at most one row and decode it into @p Row.
+ *
+ * @return std::nullopt when the query returns no row.
+ * @throws std::runtime_error as query<Row> does, and when the query returns more than one row.
+ */
+template <TypedRow Row>
+[[nodiscard]] auto query_one(duckdb_connection& conn, const SqlFragment& query)
+    -> std::optional<Row> {
+  Statement statement(conn, query.sql_);
+  statement.BindFragment(1, query);
+  const Result& result = statement.Execute();
+  RequireRowColumns<Row>(result);
+  result.RequireAtMostOneRow();
+  if (result.RowCount() == 0) {
+    return std::nullopt;
+  }
+  return DecodeRow<Row>(result, 0);
+}
+
+/**
+ * @brief The first cell of a one-column SELECT as @p T.
+ *
+ * @return std::nullopt when the query returns no row or the first cell is NULL. Rows after the
+ *         first are not read.
+ * @throws std::runtime_error when the query fails, returns a column count other than 1, or its
+ *         column type does not fit @p T (see ColumnTypeFitsMember).
+ */
+template <CellScalar T>
+[[nodiscard]] auto scalar(duckdb_connection& conn, const SqlFragment& query) -> std::optional<T> {
+  Statement statement(conn, query.sql_);
+  statement.BindFragment(1, query);
+  const Result& result = statement.Execute();
+  result.RequireColumnCount(1);
+  result.RequireColumnType<std::optional<T>>(0);
+  if (result.RowCount() == 0) {
+    return std::nullopt;
+  }
+  return result.ReadChecked<std::optional<T>>(0, 0);
+}
+
+/**
+ * @brief scalar<int64_t>: the first cell of a one-column integer SELECT.
+ *
+ * Kept for its callers until they read typed rows (storage plan S3).
  */
 [[nodiscard]] auto select_int64(duckdb_connection& conn, const SqlFragment& query)
     -> std::optional<int64_t>;
 
 /**
- * @brief First column of the first row as text.
+ * @brief scalar<std::string>: the first cell of a one-column VARCHAR SELECT.
  *
- * @return std::nullopt when the query returns no row or a NULL value.
- * @throws std::runtime_error with DuckDB's error message when the query fails.
+ * Kept for its callers until they read typed rows (storage plan S3).
  */
 [[nodiscard]] auto select_string(duckdb_connection& conn, const SqlFragment& query)
     -> std::optional<std::string>;

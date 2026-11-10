@@ -22,8 +22,10 @@ namespace duckorm {
  *
  * @details Prefer expr::lit for product WHERE text that is still pasted as a
  * string. Use expr::param when the caller prepares the fragment and binds.
+ * `std::monostate` binds NULL; `std::vector<std::uint8_t>` binds a BLOB.
  */
-using BindValue = std::variant<std::monostate, int64_t, double, bool, std::string>;
+using BindValue =
+    std::variant<std::monostate, int64_t, double, bool, std::string, std::vector<std::uint8_t>>;
 
 /**
  * @brief Generic SQL expression fragment with optional bind values.
@@ -114,6 +116,8 @@ namespace expr {
 [[nodiscard]] auto param(std::string_view value) -> SqlFragment;
 [[nodiscard]] auto param(const char* value) -> SqlFragment;
 [[nodiscard]] auto param(const std::string& value) -> SqlFragment;
+/// A `?` placeholder that binds a copy of @p blob as a BLOB.
+[[nodiscard]] auto param(std::span<const std::uint8_t> blob) -> SqlFragment;
 
 [[nodiscard]] auto eq(SqlFragment left, SqlFragment right) -> SqlFragment;
 /// `(column = ?)` with @p value bound.

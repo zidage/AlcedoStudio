@@ -14,6 +14,8 @@
 #include <variant>
 #include <vector>
 
+#include "storage/mapper/duckorm/duckdb_statement.hpp"
+
 namespace alcedo {
 auto FolderMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> FolderMapperParams {
   if (data.size() != FolderMapper::FieldCount()) {
@@ -97,11 +99,8 @@ void FolderMapper::InsertFolderContents(sl_element_id_t                  folder_
     sql += std::format("{}({},{})", i == 0 ? "" : ",", folder_id, content_ids[i]);
   }
   sql += " ON CONFLICT DO NOTHING;";
-  duckorm::PreparedStatement insert(conn_, sql);
-  if (duckdb_execute_prepared(insert.stmt_, &insert.result_) != DuckDBSuccess) {
-    const char* error = duckdb_result_error(&insert.result_);
-    throw std::runtime_error(error ? error : "Folder Mapper: FolderContent insert failed");
-  }
+  duckorm::Statement insert(conn_, sql);
+  (void)insert.Execute();
 }
 
 void FolderMapper::RemoveFolderContents(sl_element_id_t                  folder_id,
