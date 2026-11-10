@@ -1089,6 +1089,18 @@ auto AppTheme::aiMaskInputAddColor() const -> QColor { return QColor(0x30, 0xA4,
 
 auto AppTheme::aiMaskInputSubtractColor() const -> QColor { return QColor(0xE5, 0x48, 0x4D); }
 
+auto AppTheme::colorLabelColors() const -> QVariantList {
+  return QVariantList{
+      QColor(0xE5, 0x53, 0x4B),  // Red
+      QColor(0xE8, 0x86, 0x3A),  // Orange
+      QColor(0xD8, 0xB4, 0x3A),  // Yellow
+      QColor(0x4F, 0xAE, 0x6B),  // Green
+      QColor(0x4C, 0x8D, 0xDB),  // Blue
+      QColor(0x9B, 0x6B, 0xD3),  // Purple
+      QColor(0x8C, 0x8C, 0x8C),  // Gray
+  };
+}
+
 auto AppTheme::scopePlotBorderColor() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.42);
 }

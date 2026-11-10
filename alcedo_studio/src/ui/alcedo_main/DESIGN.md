@@ -551,6 +551,32 @@ upstream 2 px stroke and drawn at `iconOpticalSizeCompact`.
 Selected actions use the monochrome list well (`editorListSelectedFillColor` /
 `editorListSelectedInkColor`). Per-file details: `docs/VI/README.md`.
 
+### Library color labels
+
+A photo carries any of seven color label codes (#768). The colors are fixed in
+every theme; `appTheme.colorLabelColors` lists them in code order. The name of a
+code is the user name from Settings, or the translated color name
+(`appModules.libraryView.colorLabelNames`).
+
+| Code | Color name | `colorLabelColors` value |
+| --- | --- | --- |
+| 0 | Red | `#E5534B` |
+| 1 | Orange | `#E8863A` |
+| 2 | Yellow | `#D8B43A` |
+| 3 | Green | `#4FAE6B` |
+| 4 | Blue | `#4C8DDB` |
+| 5 | Purple | `#9B6BD3` |
+| 6 | Gray | `#8C8C8C` |
+
+Settings > Language / Theme > Library > Color Labels (`ColorLabelNamesEditor.qml`,
+#770): one 36 px row per code, in code order. A 12 px color dot in a 22 px cell;
+the name field, a plain `TextInput` in a 28 px `bgBaseColor` box with
+`controlRadiusSmall` corners and a 1 px `dividerColor` border (`textMutedColor`
+on focus); the translated color name as the placeholder in `textMutedColor`; a
+`reset.svg` glyph in `textMutedColor` in a 28 px cell, shown only on a row with a
+user name. The rows are at most 520 px wide. Names follow the Apply button of the
+dialog, like the other settings of the page.
+
 ---
 
 ## Radii

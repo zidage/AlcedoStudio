@@ -1086,6 +1086,38 @@ alcedo_ui_gtest_discover_tests(LutSettingsQmlTest
 )
 alcedo_register_test_target(LutSettingsQmlTest ui)
 
+# Library color labels L2 (#770): Settings > Library > Color Labels on the production
+# SettingDialog and module host with isolated QSettings (typed names, reset glyph, restart).
+add_executable(LibraryColorLabelSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/library_color_label_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LibraryColorLabelSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(LibraryColorLabelSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(LibraryColorLabelSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(LibraryColorLabelSettingsQmlTest
+    TEST_PREFIX "LibraryColorLabelSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;library_settings"
+)
+alcedo_register_test_target(LibraryColorLabelSettingsQmlTest ui)
+
 # AI Models plan AM4: Settings > AI Models on the production SettingDialog and module host with
 # the signed AI model test feed and a held downloader (feed check per page opening, download
 # statement), and the page alone with CLIP stand-ins (active border, Activate, Remove).
