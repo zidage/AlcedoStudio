@@ -39,6 +39,7 @@
 #include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/project_compat_render.hpp"
+#include "support/storage_invariants.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
 #include "../support/storage_test_access.hpp"
@@ -187,6 +188,7 @@ TEST(ProjectCompatibilityTest, OldProjectCommitsReadAsUserAndSaveAnAgentCommit) 
     ASSERT_NE(attribution, nullptr);
     EXPECT_EQ(attribution->author_, kEditCommitAuthorAgent);
     EXPECT_EQ(attribution->note_, "compat edit");
+    test::ExpectStorageInvariants(*project.GetStorage());
   }
   std::filesystem::remove_all(workspace, ec);
 }
@@ -424,6 +426,7 @@ TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds
               ColorLabelBit(ColorLabel::kGreen) | ColorLabelBit(ColorLabel::kGray));
     EXPECT_TRUE(project.GetImagePoolService()->Read<bool>(
         image_id, [](const std::shared_ptr<Image>& image) { return image->delete_mark_; }));
+    test::ExpectStorageInvariants(*project.GetStorage());
   }
   std::filesystem::remove_all(workspace, ec);
 }
