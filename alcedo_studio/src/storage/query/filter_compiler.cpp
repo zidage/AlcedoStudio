@@ -7,6 +7,7 @@
 #include <ctime>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -29,6 +30,16 @@ auto FormatTimestampLiteral(const std::tm& tm_value) -> SqlFragment {
     return expr::lit_null();
   }
   return expr::raw(std::string("TIMESTAMP ") + expr::lit(std::string_view(buffer)).sql_);
+}
+
+/// `column LIKE ? ESCAPE '~'` with the bound pattern @p prefix + @p text + @p suffix. The text
+/// is escaped, so `%`, `_`, and `~` in it match only themselves (#812).
+auto LiteralTextLike(SqlFragment column, std::string_view prefix, const std::wstring& text,
+                     std::string_view suffix) -> SqlFragment {
+  std::string pattern(prefix);
+  pattern += expr::escape_like_pattern(conv::ToBytes(text));
+  pattern += suffix;
+  return expr::like_escape(std::move(column), expr::param(std::move(pattern)));
 }
 
 }  // namespace
@@ -107,22 +118,15 @@ auto FilterSQLCompiler::GenerateCondition(const FieldCondition& cond) -> SqlFrag
       }
       return expr::between(std::move(column), ValueToFragment(cond.value_),
                            ValueToFragment(*cond.second_value_));
-    case CompareOp::CONTAINS: {
-      const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::like(std::move(column), expr::param("%" + conv::ToBytes(text) + "%"));
-    }
-    case CompareOp::NOT_CONTAINS: {
-      const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::not_like(std::move(column), expr::param("%" + conv::ToBytes(text) + "%"));
-    }
-    case CompareOp::STARTS_WITH: {
-      const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::like(std::move(column), expr::param(conv::ToBytes(text) + "%"));
-    }
-    case CompareOp::ENDS_WITH: {
-      const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::like(std::move(column), expr::param("%" + conv::ToBytes(text)));
-    }
+    case CompareOp::CONTAINS:
+      return LiteralTextLike(std::move(column), "%", std::get<std::wstring>(cond.value_), "%");
+    case CompareOp::NOT_CONTAINS:
+      return expr::not_(
+          LiteralTextLike(std::move(column), "%", std::get<std::wstring>(cond.value_), "%"));
+    case CompareOp::STARTS_WITH:
+      return LiteralTextLike(std::move(column), "", std::get<std::wstring>(cond.value_), "%");
+    case CompareOp::ENDS_WITH:
+      return LiteralTextLike(std::move(column), "%", std::get<std::wstring>(cond.value_), "");
     case CompareOp::EQUALS:
       return expr::eq(std::move(column), ValueToFragment(cond.value_));
     case CompareOp::NOT_EQUALS:

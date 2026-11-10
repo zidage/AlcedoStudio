@@ -346,7 +346,7 @@ TEST_F(FilterServiceTests, ComplexFilterSQLTest) {
   const auto sql = FilterSQLCompiler::Compile(root);
   EXPECT_EQ(sql.sql_,
             "((i.camera_model = ?) AND "
-            "(UPPER(i.file_name) LIKE ?))");
+            "(UPPER(i.file_name) LIKE ? ESCAPE '~'))");
   ASSERT_EQ(sql.binds_.size(), 2u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Nikon D850");
   EXPECT_EQ(std::get<std::string>(sql.binds_[1]), "%.NEF");
