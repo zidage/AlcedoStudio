@@ -280,7 +280,6 @@ Item {
         skipped: host.semanticGeneration.skipped
         failed: host.semanticGeneration.failed
         canceled: host.semanticGeneration.canceled
-        statusText: host.semanticGeneration.statusText
         remainingSeconds: host.semanticGeneration.remainingSeconds
         onStartRequested: function(rememberChoice) {
             if (rememberChoice) {
