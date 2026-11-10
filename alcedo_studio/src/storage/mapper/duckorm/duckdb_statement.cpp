@@ -565,12 +565,4 @@ auto Statement::Execute() -> Result& {
   return result_;
 }
 
-auto Statement::ExecuteDetached(duckdb_result* out_result) -> duckdb_state {
-  if (out_result == nullptr) {
-    throw std::invalid_argument("duckorm::Statement::ExecuteDetached requires a result");
-  }
-  result_.Reset();
-  return duckdb_execute_prepared(statement_, out_result);
-}
-
 }  // namespace duckorm

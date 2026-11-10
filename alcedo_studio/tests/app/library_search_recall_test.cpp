@@ -10,10 +10,10 @@
 // the expected set. When a later phase fixes the defect, the test fails and asks for the flag
 // to be cleared, so the table always states the real behavior.
 
-#include <duckdb.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
@@ -24,6 +24,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -481,28 +482,28 @@ TEST_F(LibrarySearchRecallTest, Bm25SemiJoinMatchesTheSameFilesAsThePerRowClause
 
 // ── Stats from one match set (Phase S8) ──────────────────────────────────────────────────
 
+/// One bucket of a separate stats statement: its label (NULL for an unknown date) and its
+/// photo count.
+struct SeparateBucketRow {
+  std::optional<std::string> label;
+  int64_t                    count = 0;
+  using Columns = duckorm::RowColumns<&SeparateBucketRow::label, &SeparateBucketRow::count>;
+};
+
 /// Buckets of one query from the stats statements that ElementStore::BuildFolderStats ran
 /// before Phase S8, one statement for each bucket kind, each evaluating the filter again.
-auto SeparateStatementBuckets(duckdb_connection conn, const std::string& sql,
+auto SeparateStatementBuckets(duckorm::Connection conn, const std::string& sql,
                               const duckorm::SqlFragment& binds) -> std::vector<StatsBucket> {
   std::vector<StatsBucket> buckets;
-  duckdb_result            result;
-  if (duckorm::execute_query(conn, sql, binds, &result) != DuckDBSuccess) {
-    ADD_FAILURE() << sql << ": " << duckdb_result_error(&result);
-    duckdb_destroy_result(&result);
-    return buckets;
-  }
-  for (idx_t row = 0; row < duckdb_row_count(&result); ++row) {
-    StatsBucket bucket;
-    if (!duckdb_value_is_null(&result, 0, row)) {
-      char* label   = duckdb_value_varchar(&result, 0, row);
-      bucket.label_ = label;
-      duckdb_free(label);
+  try {
+    for (auto& row :
+         duckorm::query<SeparateBucketRow>(conn, duckorm::SqlFragment{sql, binds.binds_})) {
+      buckets.push_back({.label_ = std::move(row.label).value_or(std::string{}),
+                         .count_ = static_cast<int>(row.count)});
     }
-    bucket.count_ = static_cast<int>(duckdb_value_int64(&result, 1, row));
-    buckets.push_back(std::move(bucket));
+  } catch (const std::runtime_error& error) {
+    ADD_FAILURE() << sql << ": " << error.what();
   }
-  duckdb_destroy_result(&result);
   return buckets;
 }
 

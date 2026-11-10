@@ -4,8 +4,6 @@
 
 #include "storage/store/ai/ai_store.hpp"
 
-#include <duckdb.h>
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -44,7 +42,7 @@ inline constexpr std::array<duckorm::DuckFieldDesc, 11> kInsertUnderstandingFiel
 };
 
 // `kSelectUnderstandingFields` lists ALL columns in DDL order (duckorm select runs
-// `SELECT *`, so the count must match `duckdb_column_count` and the order matches the
+// `SELECT *`, so the count must match the result column count and the order matches the
 // table definition). Offsets are unused for select, so they are zero; only the type drives
 // the value extraction. file_id is read as INT64 (BIGINT column, the proven read type)
 // and cast to uint32; BOOLEAN/TIMESTAMP come back as varchar ("true"/"false" / date
@@ -87,7 +85,7 @@ auto JoinFolded(const std::vector<std::string>& parts) -> std::string {
 // tags_json in SQL. A plain UPDATE is used because an INSERT ... ON CONFLICT DO UPDATE of a
 // row already written in the same transaction resets the columns it does not list (seen
 // with DuckDB in LibrarySearchColumnsTest). Throws on a DuckDB error.
-void WriteUnderstandingSearchText(duckdb_connection conn, const AiDescription& description) {
+void WriteUnderstandingSearchText(duckorm::Connection conn, const AiDescription& description) {
   namespace expr = duckorm::expr;
   auto statement = expr::raw("UPDATE AiImageUnderstanding SET caption_search_text = ");
   statement.append(expr::param(JoinFolded({description.caption_, description.scene_})));
@@ -188,7 +186,7 @@ auto ActiveRowOfFile(sl_element_id_t file_id) -> duckorm::SqlFragment {
 /// Runs a statement of the optional BM25 index path (document table, index build). The index
 /// is an accelerator: without the fts extension, or with a damaged document table, search
 /// matches the folded text only. Returns false when DuckDB rejects the statement.
-auto ExecuteFtsStatement(duckdb_connection conn, const duckorm::SqlFragment& statement) -> bool {
+auto ExecuteFtsStatement(duckorm::Connection conn, const duckorm::SqlFragment& statement) -> bool {
   try {
     duckorm::execute(conn, statement);
     return true;
@@ -197,7 +195,7 @@ auto ExecuteFtsStatement(duckdb_connection conn, const duckorm::SqlFragment& sta
   }
 }
 
-auto EnsureFtsDocumentTable(duckdb_connection conn) -> bool {
+auto EnsureFtsDocumentTable(duckorm::Connection conn) -> bool {
   return ExecuteFtsStatement(conn, duckorm::expr::raw("CREATE TABLE IF NOT EXISTS AiImageFtsDocument ("
                                                       "file_id BIGINT PRIMARY KEY,"
                                                       "body VARCHAR NOT NULL DEFAULT '',"
@@ -215,7 +213,7 @@ auto EnsureFtsDocumentTable(duckdb_connection conn) -> bool {
  * transaction rolls back; the FTS document statements are best-effort because the BM25 index
  * is optional.
  */
-void RewriteSearchDocuments(duckdb_connection                                conn,
+void RewriteSearchDocuments(duckorm::Connection                             conn,
                             std::optional<std::span<const sl_element_id_t>> file_ids) {
   namespace expr         = duckorm::expr;
   const auto files_where = [&file_ids](const char* keyword) {
@@ -262,13 +260,13 @@ void RewriteSearchDocuments(duckdb_connection                                con
  * index that the last writer built still matches them. A missing table or a failed query
  * counts as changed.
  */
-auto FtsDocumentsDifferFromUnderstandings(duckdb_connection conn) -> bool {
+auto FtsDocumentsDifferFromUnderstandings(duckorm::Connection conn) -> bool {
   const auto derived =
       std::format("SELECT file_id, {} AS body FROM {} WHERE active = TRUE GROUP BY file_id",
                   kFtsDocumentBodyExpr, kUnderstandingTable);
   const auto stored = std::format("SELECT file_id, body FROM {}", kFtsDocumentTable);
   try {
-    const auto difference = duckorm::select_int64(
+    const auto difference = duckorm::scalar<int64_t>(
         conn, duckorm::expr::raw(
                   std::format("SELECT COUNT(*) FROM (({} EXCEPT {}) UNION ALL ({} EXCEPT {}));",
                               stored, derived, derived, stored)));
@@ -279,10 +277,10 @@ auto FtsDocumentsDifferFromUnderstandings(duckdb_connection conn) -> bool {
 }
 
 /// True when `AiImageFtsDocument` holds at least one document. A failed query counts as empty.
-auto HasFtsDocuments(duckdb_connection conn) -> bool {
+auto HasFtsDocuments(duckorm::Connection conn) -> bool {
   try {
-    return duckorm::select_int64(conn, duckorm::expr::raw(std::format("SELECT 1 FROM {} LIMIT 1;",
-                                                                      kFtsDocumentTable)))
+    return duckorm::scalar<int64_t>(conn, duckorm::expr::raw(std::format(
+                                              "SELECT 1 FROM {} LIMIT 1;", kFtsDocumentTable)))
         .has_value();
   } catch (const std::runtime_error&) {
     return false;
@@ -290,12 +288,13 @@ auto HasFtsDocuments(duckdb_connection conn) -> bool {
 }
 
 /// True when `create_fts_index` has built the index schema of `AiImageFtsDocument`.
-auto FtsIndexExists(duckdb_connection conn) -> bool {
+auto FtsIndexExists(duckorm::Connection conn) -> bool {
   try {
-    return duckorm::select_int64(
-               conn, duckorm::expr::raw(std::format(
-                         "SELECT 1 FROM duckdb_schemas() WHERE schema_name = 'fts_main_{}';",
-                         kFtsDocumentTable)))
+    return duckorm::scalar<int64_t>(
+               conn,
+               duckorm::expr::raw(std::format(
+                   "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'fts_main_{}';",
+                   kFtsDocumentTable)))
         .has_value();
   } catch (const std::runtime_error&) {
     return false;
@@ -311,7 +310,7 @@ auto FtsIndexExists(duckdb_connection conn) -> bool {
  * it, the index exists from the first build on (an empty table is indexed too), so a later
  * rebuild does not change the result.
  */
-auto RebuildFtsIndex(duckdb_connection conn) -> bool {
+auto RebuildFtsIndex(duckorm::Connection conn) -> bool {
   if (!EnsureFtsDocumentTable(conn)) {
     return false;
   }
@@ -332,7 +331,7 @@ auto RebuildFtsIndex(duckdb_connection conn) -> bool {
  * When the documents are unchanged and the index exists, only the extension is loaded
  * (`match_bm25` calls its functions). Otherwise the index is rebuilt.
  */
-auto OpenFtsIndex(duckdb_connection conn, bool fts_documents_changed) -> bool {
+auto OpenFtsIndex(duckorm::Connection conn, bool fts_documents_changed) -> bool {
   if (!HasFtsDocuments(conn)) {
     return false;
   }
@@ -350,11 +349,11 @@ auto OpenFtsIndex(duckdb_connection conn, bool fts_documents_changed) -> bool {
 // codebase's established pattern is manual cascade on the ElementStore's connection. Instead,
 // every upsert rejects a file_id with no matching Element row, so no orphan AI annotation can
 // ever be written. A query failure throws, so it never allows an orphan write either.
-auto FileExists(duckdb_connection conn, sl_element_id_t file_id) -> bool {
+auto FileExists(duckorm::Connection conn, sl_element_id_t file_id) -> bool {
   auto query = duckorm::expr::raw("SELECT 1 FROM Element WHERE id = ");
   query.append(duckorm::expr::param(static_cast<int64_t>(file_id)));
   query.append(duckorm::expr::raw(" LIMIT 1"));
-  return duckorm::select_int64(conn, query).has_value();
+  return duckorm::scalar<int64_t>(conn, query).has_value();
 }
 
 }  // namespace
@@ -514,7 +513,7 @@ void AiStore::DeleteForFiles(std::span<const sl_element_id_t> file_ids) const {
   DeleteAiAnnotationRowsForFiles(guard.conn_, file_ids);
 }
 
-void DeleteAiAnnotationRowsForFiles(duckdb_connection                conn,
+void DeleteAiAnnotationRowsForFiles(duckorm::Connection              conn,
                                     std::span<const sl_element_id_t> file_ids) {
   if (file_ids.empty()) {
     return;

@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <duckdb.h>
-
 #include <atomic>
 #include <cstddef>
 #include <optional>
@@ -15,6 +13,7 @@
 
 #include "ai/ai_description.hpp"
 #include "ai/ai_rating.hpp"
+#include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/store/database.hpp"
 #include "type/type.hpp"
 
@@ -130,7 +129,7 @@ class AiStore {
 // passes its own connection so the AI row cleanup shares the caller's transaction. The
 // rebuild does not change whether the index exists (see the definition), so the state held
 // by `AiStore` stays valid. A no-op for an empty file list.
-void DeleteAiAnnotationRowsForFiles(duckdb_connection                conn,
+void DeleteAiAnnotationRowsForFiles(duckorm::Connection              conn,
                                     std::span<const sl_element_id_t> file_ids);
 
 }  // namespace alcedo

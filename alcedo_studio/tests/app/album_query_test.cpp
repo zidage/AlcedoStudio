@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -128,22 +129,24 @@ struct FixturePhoto {
   std::string        capture_at_;  ///< `YYYY-MM-DD HH:MM:SS`; empty when unknown.
 };
 
+/// One fixture photo: camera, lens, and capture time empty when unknown.
+auto MakeFixturePhoto(const wchar_t* name, const std::string& camera, const std::string& lens,
+                      const std::string& capture, int rating, std::time_t added) -> FixturePhoto {
+  return FixturePhoto{.spec_       = SyntheticImageSpec{.file_name_  = name,
+                                                        .image_path_ = std::wstring(L"D:/photos/") + name,
+                                                        .make_       = "Maker",
+                                                        .model_      = camera,
+                                                        .lens_       = lens,
+                                                        .date_time_  = capture,
+                                                        .rating_     = rating,
+                                                        .is_raw_file_ = false,
+                                                        .added_time_  = added},
+                      .capture_at_ = capture};
+}
+
 /// Eight photos with repeated timestamps, unknown fields, uneven groups, and equal ratings.
 auto FixturePhotos() -> std::vector<FixturePhoto> {
-  const auto photo = [](const wchar_t* name, std::string camera, std::string lens,
-                        std::string capture, int rating, std::time_t added) {
-    return FixturePhoto{
-        .spec_       = SyntheticImageSpec{.file_name_   = name,
-                                          .image_path_  = std::wstring(L"D:/photos/") + name,
-                                          .make_        = "Maker",
-                                          .model_       = camera,
-                                          .lens_        = lens,
-                                          .date_time_   = capture,
-                                          .rating_      = rating,
-                                          .is_raw_file_ = false,
-                                          .added_time_  = added},
-        .capture_at_ = capture};
-  };
+  const auto& photo = MakeFixturePhoto;
   return {
       photo(L"a.ARW", "Canon R5", "RF 50", "2026-06-07 09:00:00", 3, Utc(2026, 9, 1, 10)),
       photo(L"b.ARW", "Canon R5", "", "2026-06-07 18:00:00", 5, Utc(2026, 9, 1, 10)),
@@ -178,9 +181,11 @@ class AlbumQueryTest : public ::testing::Test {
     std::filesystem::remove_all(scratch_dir_, ec);
   }
 
-  /// Build the eight fixture photos and remember their file ids in fixture order.
-  void BuildFixture(ProjectService& project) {
+  /// Build the eight fixture photos and @p extra_photos after them, and remember their file
+  /// ids in that order.
+  void BuildFixture(ProjectService& project, const std::vector<FixturePhoto>& extra_photos = {}) {
     photos_ = FixturePhotos();
+    photos_.insert(photos_.end(), extra_photos.begin(), extra_photos.end());
     std::vector<SyntheticImageSpec> specs;
     for (const auto& photo : photos_) {
       specs.push_back(photo.spec_);
@@ -360,6 +365,180 @@ TEST_F(AlbumQueryTest, ScalarGroupsCountEveryFilteredFileOnce) {
       EXPECT_EQ(KeyText(result.rows_[row].group_key_), KeyText(result.groups_[group_index].key_));
     }
   }
+}
+
+/// Four photos after the eight fixture photos (12 files): a new camera, an unknown camera and
+/// capture time, and ratings 4, 0, 2, and 5.
+auto TwelvePhotoExtras() -> std::vector<FixturePhoto> {
+  return {
+      MakeFixturePhoto(L"i.ARW", "Sony A7", "FE 35", "2026-06-08 07:00:00", 4, Utc(2026, 9, 3)),
+      MakeFixturePhoto(L"j.ARW", "Leica Q3", "", "", 0, Utc(2026, 9, 3)),
+      MakeFixturePhoto(L"k.ARW", "Canon R5", "RF 50", "2026-06-05 06:00:00", 2, Utc(2026, 9, 4)),
+      MakeFixturePhoto(L"l.ARW", "", "", "2026-06-07 10:00:00", 5, Utc(2026, 9, 4)),
+  };
+}
+
+/// SQL that sets the library marks of the Image row bound to @p file_id.
+auto SetMarksSql(sl_element_id_t file_id, int color_labels, bool delete_mark) -> std::string {
+  return std::format(
+      "UPDATE Image SET color_labels = {}, delete_mark = {} "
+      "WHERE id = (SELECT image_id FROM FileImage WHERE file_id = {})",
+      color_labels, delete_mark ? "TRUE" : "FALSE", file_id);
+}
+
+auto BucketPairs(const std::vector<StorageStatsBucket>& buckets)
+    -> std::vector<std::pair<std::string, int>> {
+  std::vector<std::pair<std::string, int>> pairs;
+  for (const auto& bucket : buckets) {
+    pairs.emplace_back(bucket.label_, bucket.count_);
+  }
+  return pairs;
+}
+
+auto BucketSum(const std::vector<StorageStatsBucket>& buckets) -> int {
+  int sum = 0;
+  for (const auto& bucket : buckets) {
+    sum += bucket.count_;
+  }
+  return sum;
+}
+
+TEST_F(AlbumQueryTest, StatsBucketsMatchPageTotalAfterTypedRead) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project, TwelvePhotoExtras());
+  ASSERT_EQ(ids_.size(), 12u);
+  // a: red + yellow; c: yellow; i: gray; k: orange with the reserved bit 7; b and l: Delete.
+  RunStatement(project, SetMarksSql(ids_[0], 0b101, false));
+  RunStatement(project, SetMarksSql(ids_[1], 0, true));
+  RunStatement(project, SetMarksSql(ids_[2], 0b100, false));
+  RunStatement(project, SetMarksSql(ids_[8], 0b1000000, false));
+  RunStatement(project, SetMarksSql(ids_[10], 0b10000010, false));
+  RunStatement(project, SetMarksSql(ids_[11], 0, true));
+
+  const auto result = Store(project).ReadAlbumQuery(
+      0, std::nullopt, AlbumQueryOptions{.local_day_time_zone_ = "UTC"}, kActiveModel,
+      AlbumQueryRead{.offset_ = 0, .limit_ = 5, .read_statistics_ = true});
+  ASSERT_TRUE(result.statistics_.has_value());
+  const auto& stats = *result.statistics_;
+  EXPECT_EQ(result.rows_.size(), 5u);
+  EXPECT_EQ(result.unique_file_count_, 12);
+  EXPECT_EQ(stats.total_photo_count_, 12);
+
+  // Every bucket kind partitions the 12 files, in the documented order.
+  EXPECT_EQ(BucketSum(stats.camera_stats_), 12);
+  EXPECT_EQ(
+      BucketPairs(stats.camera_stats_),
+      (std::vector<std::pair<std::string, int>>{
+          {"Canon R5", 4}, {"(unknown)", 3}, {"Nikon Z8", 2}, {"Sony A7", 2}, {"Leica Q3", 1}}));
+  EXPECT_EQ(
+      BucketPairs(stats.date_stats_),
+      (std::vector<std::pair<std::string, int>>{
+          {"2026-06-08", 1}, {"2026-06-07", 4}, {"2026-06-06", 2}, {"2026-06-05", 2}, {"", 3}}));
+  EXPECT_EQ(BucketPairs(stats.rating_stats_),
+            (std::vector<std::pair<std::string, int>>{
+                {"5", 3}, {"4", 1}, {"3", 4}, {"2", 1}, {"1", 1}, {"0", 2}}));
+  EXPECT_EQ(BucketSum(stats.lens_stats_), 12);
+  EXPECT_EQ(BucketSum(stats.import_date_stats_), 12);
+  EXPECT_EQ(BucketPairs(stats.import_date_stats_),
+            (std::vector<std::pair<std::string, int>>{{"2026-09-04", 2},
+                                                      {"2026-09-03", 2},
+                                                      {"2026-09-02", 3},
+                                                      {"2026-09-01", 3},
+                                                      {"2026-08-30", 2}}));
+
+  // Photos for each color label code; bit 7 is no code.
+  EXPECT_EQ(stats.color_label_counts_, (std::array<int, kColorLabelCount>{1, 1, 2, 0, 0, 0, 1}));
+  EXPECT_EQ(stats.delete_mark_count_, 2);
+
+  // The page read with stats and the stats-only read give the same total from their match set.
+  const auto page =
+      Store(project).ListSearchResultPageWithStats(0, 0, 5, std::nullopt, kActiveModel);
+  EXPECT_EQ(page.page_.total_, 12u);
+  EXPECT_EQ(page.page_.rows_.size(), 5u);
+  EXPECT_EQ(page.stats_.total_photo_count_, 12);
+  EXPECT_EQ(BucketSum(page.stats_.camera_stats_), 12);
+  EXPECT_EQ(Store(project).BuildFolderStats(0).color_label_counts_, stats.color_label_counts_);
+}
+
+TEST_F(AlbumQueryTest, TypedListingReadsDecodeEveryColumn) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project, TwelvePhotoExtras());
+  RunStatement(project, SetMarksSql(ids_[0], 0b101, false));
+  RunStatement(project, SetMarksSql(ids_[1], 0, true));
+  RunStatement(project, SetMarksSql(ids_[10], 0b10000010, false));
+  // Image.file_name has no NOT NULL constraint; a NULL name reads as the empty text.
+  RunStatement(project, std::format("UPDATE Image SET file_name = NULL WHERE id = (SELECT "
+                                    "image_id FROM FileImage WHERE file_id = {})",
+                                    ids_[3]));
+
+  const auto rows = Store(project).ListSearchResultRows(std::vector{ids_[10], ids_[0], ids_[3]});
+  ASSERT_EQ(rows.size(), 3u);
+  EXPECT_EQ(rows[0].file_id_, ids_[10]);
+  EXPECT_EQ(rows[0].color_labels_, 0b10);  // the reserved bit 7 is masked off
+  EXPECT_EQ(rows[0].capture_date_, "2026-06-05");
+  EXPECT_EQ(rows[0].rating_, 2);
+  EXPECT_EQ(rows[1].file_name_, "a.ARW");
+  EXPECT_EQ(rows[1].camera_model_, "Canon R5");
+  EXPECT_EQ(rows[1].lens_, "RF 50");
+  EXPECT_EQ(rows[1].capture_date_, "2026-06-07");
+  EXPECT_EQ(rows[1].rating_, 3);
+  EXPECT_EQ(rows[1].added_time_, static_cast<int64_t>(Utc(2026, 9, 1, 10)));
+  EXPECT_EQ(rows[1].color_labels_, 0b101);
+  EXPECT_FALSE(rows[1].delete_mark_);
+  EXPECT_NE(rows[1].image_id_, 0u);
+  EXPECT_EQ(rows[2].file_name_, "");
+  EXPECT_EQ(rows[2].camera_model_, "");
+  EXPECT_EQ(rows[2].capture_date_, "");
+
+  // Window total on a page, and the COUNT(*) read for a page past the end.
+  auto sorted_ids = ids_;
+  std::sort(sorted_ids.begin(), sorted_ids.end());
+  const auto second_page = Store(project).ListSearchResultPage(0, 5, 5);
+  EXPECT_EQ(second_page.total_, 12u);
+  ASSERT_EQ(second_page.rows_.size(), 5u);
+  EXPECT_EQ(second_page.rows_[0].file_id_, sorted_ids[5]);
+  const auto past_end = Store(project).ListSearchResultPage(0, 100, 5);
+  EXPECT_TRUE(past_end.rows_.empty());
+  EXPECT_EQ(past_end.total_, 12u);
+
+  // The album page row carries the rating group key as a number and the Delete mark.
+  const auto album = Store(project).ReadAlbumQuery(
+      0, std::nullopt, AlbumQueryOptions{.group_field_ = AlbumGroupField::kRating}, kActiveModel,
+      AlbumQueryRead{.offset_ = 0, .limit_ = 12, .read_groups_ = true});
+  ASSERT_EQ(album.rows_.size(), 12u);
+  ASSERT_FALSE(album.groups_.empty());
+  EXPECT_TRUE(std::holds_alternative<int64_t>(album.groups_.front().key_));
+  EXPECT_EQ(KeyText(album.groups_.front().key_), "5");
+  for (const auto& row : album.rows_) {
+    EXPECT_TRUE(std::holds_alternative<int64_t>(row.group_key_));
+    EXPECT_EQ(KeyText(row.group_key_), std::to_string(row.photo_.rating_));
+    EXPECT_EQ(row.photo_.delete_mark_, row.photo_.file_id_ == ids_[1]);
+    EXPECT_FALSE(row.edited_at_ns_.has_value());
+  }
+  const auto position = Store(project).ReadAlbumFilePosition(
+      0, std::nullopt, AlbumQueryOptions{.group_field_ = AlbumGroupField::kRating}, kActiveModel,
+      ids_[0], std::nullopt);
+  ASSERT_TRUE(position.has_value());
+  EXPECT_TRUE(std::holds_alternative<int64_t>(position->group_key_));
+  EXPECT_EQ(KeyText(position->group_key_), "3");
+  // Ratings 5 (b, e, l) and 4 (i) come before the four rating 3 photos (a, c, g, h).
+  EXPECT_GE(position->occurrence_index_, 4);
+  EXPECT_LT(position->occurrence_index_, 8);
+
+  const auto files = Store(project).ListFilesInFolderPage(0, 0, 3);
+  ASSERT_EQ(files.size(), 3u);
+  for (size_t index = 0; index < files.size(); ++index) {
+    EXPECT_EQ(files[index].file_id_, sorted_ids[index]);
+    EXPECT_TRUE(files[index].file_name_.ends_with(".ARW")) << files[index].file_name_;
+  }
+  EXPECT_EQ(Store(project).CountFilesInFolder(0), 12u);
+
+  const auto overview = Store(project).ReadProjectOverview();
+  EXPECT_EQ(overview.photo_count_, 12u);
+  EXPECT_EQ(overview.edited_photo_count_, 0u);
+  EXPECT_EQ(overview.earliest_capture_date_, "2026-06-05");
+  EXPECT_EQ(overview.latest_capture_date_, "2026-06-08");
+  EXPECT_FALSE(Store(project).ReadLastEditedFile().has_value());
 }
 
 TEST_F(AlbumQueryTest, LabelGroupsUseAllCanonicalAssignmentsFromActiveModel) {
@@ -822,6 +1001,19 @@ TEST_F(AlbumQueryTest, AlbumQueryFailureReportsDuckDbError) {
                std::runtime_error);
   EXPECT_THROW(store.ListFilteredFileIds(0, broken), std::runtime_error);
   EXPECT_THROW(store.CountFilesInFolder(0, broken), std::runtime_error);
+  // A read that fails after the match set exists: the label group reads SemanticImageLabel,
+  // which the match set statement does not. The unwind runs ~MatchSetTable (its DROP fails in
+  // the aborted transaction, without a throw) and the ROLLBACK removes the match set.
+  RunStatement(project, "DROP INDEX idx_semantic_label_model_label; DROP TABLE SemanticImageLabel");
+  try {
+    (void)store.ReadAlbumQuery(0, std::nullopt,
+                               AlbumQueryOptions{.group_field_ = AlbumGroupField::kLabels},
+                               kActiveModel, AlbumQueryRead{.offset_ = 0, .limit_ = 10});
+    ADD_FAILURE() << "the label group read succeeded without SemanticImageLabel";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("SemanticImageLabel"), std::string::npos)
+        << error.what();
+  }
 
   // The failed reads released the database lock and the match set: another thread reads.
   auto other_thread = std::async(std::launch::async, [&store] {

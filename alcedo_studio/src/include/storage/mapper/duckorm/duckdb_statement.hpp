@@ -319,14 +319,6 @@ class Statement {
    */
   auto Execute() -> Result&;
 
-  /**
-   * @brief Run the statement and give its result to the caller, who destroys it.
-   *
-   * On failure @p out_result holds the error for inspection and must still be destroyed. Used
-   * by `execute_query` until its callers read typed rows.
-   */
-  auto ExecuteDetached(duckdb_result* out_result) -> duckdb_state;
-
  private:
   void                      BindInt8(idx_t index, std::int8_t value);
   void                      BindInt16(idx_t index, std::int16_t value);
@@ -357,6 +349,9 @@ struct MemberPointerTraits<Member Class::*> {
 /**
  * @brief The result columns of a row struct, in SELECT order, as pointers to its members.
  *
+ * A member may belong to a public base class of the row struct, so several row structs can
+ * share leading columns (see AppendRowColumns).
+ *
  * @code
  * struct LabelBucketRow {
  *   std::string label_key;
@@ -373,7 +368,31 @@ struct RowColumns {
                 "every row member type is a CellValue");
 };
 
-/// A default-constructible struct whose `Columns` is a RowColumns of its own members.
+namespace detail {
+template <typename Columns, auto... More>
+struct AppendRowColumns;
+
+template <auto... Members, auto... More>
+struct AppendRowColumns<RowColumns<Members...>, More...> {
+  using Type = RowColumns<Members..., More...>;
+};
+}  // namespace detail
+
+/**
+ * @brief The columns of @p Columns followed by @p More.
+ *
+ * @code
+ * struct PageRow : SearchRow {
+ *   int64_t total = 0;
+ *   using Columns = duckorm::AppendRowColumns<SearchRow::Columns, &PageRow::total>;
+ * };
+ * @endcode
+ */
+template <typename Columns, auto... More>
+using AppendRowColumns = typename detail::AppendRowColumns<Columns, More...>::Type;
+
+/// A default-constructible struct whose `Columns` is a RowColumns of its own members or of the
+/// members of its base classes.
 template <typename Row>
 concept TypedRow = std::default_initializable<Row> && requires { Row::Columns::kCount; };
 
@@ -381,8 +400,8 @@ namespace detail {
 template <typename Row, auto... Members>
 void RequireRowColumns(const Result& result, RowColumns<Members...> /*columns*/) {
   static_assert(
-      (std::same_as<typename MemberPointerTraits<decltype(Members)>::ClassType, Row> && ...),
-      "RowColumns lists members of the row struct itself");
+      (std::is_base_of_v<typename MemberPointerTraits<decltype(Members)>::ClassType, Row> && ...),
+      "RowColumns lists members of the row struct or of its base classes");
   result.RequireColumnCount(sizeof...(Members));
   idx_t column = 0;
   (result.RequireColumnType<typename MemberPointerTraits<decltype(Members)>::MemberType>(column++),

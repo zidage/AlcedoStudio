@@ -151,16 +151,6 @@ auto run_select(duckdb_connection& conn, const SqlFragment& query,
 
 }  // namespace
 
-duckdb_state execute_query(duckdb_connection& conn, const std::string& sql,
-                           const SqlFragment& fragment, duckdb_result* out_result) {
-  if (!out_result) {
-    throw std::runtime_error("duckorm::execute_query requires a non-null out_result");
-  }
-  Statement statement(conn, sql);
-  statement.BindFragment(1, fragment);
-  return statement.ExecuteDetached(out_result);
-}
-
 /**
  * @brief Insert an object into a DuckDB table.
  *

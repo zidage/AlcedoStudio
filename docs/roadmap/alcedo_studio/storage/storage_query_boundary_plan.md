@@ -2,7 +2,8 @@
 
 Date: 2026-11-09
 
-Status: in progress. S1 and S2 complete (2026-11-09); S3 to S6 planned.
+Status: in progress. S1 and S2 complete (2026-11-09); S3 complete (2026-11-10); S4 to S6
+planned.
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and the callers of storage in
 `app/` and `sleeve/`.
@@ -189,7 +190,7 @@ storage/  -> duckorm, Mapper, Store, StatsDimension, LibrarySearchPredicates, SQ
 | --- | --- | --- | --- | ---: | --- |
 | S1 | Typed statements and rows in duckorm; `MaskAssetStore` on duckorm | duckorm, mask asset store | none | 1000-1400 | complete (#786) |
 | S2 | Typed-key Mapper and one transaction style; `CommitGraphStore`, `FolderMapper`, `ImageStore` on duckorm | Mapper, edit history store, sleeve mappers | S1 | 1300-1800 | complete (#787) |
-| S3 | `ElementStore` read paths on typed rows | element store, album query | S1 | 1000-1500 | planned (#788) |
+| S3 | `ElementStore` read paths on typed rows | element store, album query | S1 | 1000-1500 | complete (#788) |
 | S4 | One stats dimension definition; filter compiler in storage | storage query, sleeve filter, element store | S3 | 1200-1800 | planned (#789) |
 | S5 | Search predicates in storage; domain values in service signatures | storage query, app filter and browse services, library module | S4 | 1200-1800 | planned (#790) |
 | S6 | Storage owns connections; maintenance API; boundary check in CI | Storage facade, app services, package backend, CI | S2, S5 | 1300-1900 | planned (#791) |
@@ -746,12 +747,140 @@ ctest --test-dir build/debug --output-on-failure -R "AlbumQueryTest|FilterServic
 
 **Exit criteria**
 
-- [ ] Inside storage, only `database.cpp`, `store_types.cpp`, and duckorm call the C API.
-- [ ] All listed tests pass.
+- [x] Inside storage, only `database.cpp`, `store_types.cpp`, and duckorm call the C API.
+- [x] All listed tests pass.
 
 **Expected diff:** 1000-1500 lines.
 
 **Completion record:** see section 8.
+
+##### Phase S3 completion record (2026-11-10)
+
+**Status:** complete. Branch `refactor/storage-element-store-typed-reads-788`, stacked on the S2
+branch `refactor/storage-typed-key-mapper-787` (PR #796).
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| duckorm L0 | `duckdb_statement.hpp` | `RowColumns` accepts members of a public base class of the row struct; `AppendRowColumns<Base::Columns, &Row::x...>` appends columns; `Statement::ExecuteDetached` deleted |
+| duckorm L1 | `duckdb_orm.hpp`, `duckdb_orm.cpp`, `duckdb_statement.cpp` | `execute_query` deleted: every result in the repository is a `Statement` result |
+| Element store | `element_store.cpp`, `element_store.hpp` | row structs `SearchResultDbRow`, `SearchResultPageDbRow`, `FileIdRow`, `FileListDbRow`, `ProjectOverviewRow`, `FolderPhotoCountRow`, `LastEditedFileRow`, `StatsBucketRow`, `MarkCountRow`, `LabelBucketRow`, `AlbumGroupRow<Key>`, `AlbumPageRow<Key>`, `AlbumPositionRow<Key>`; every read on `query<Row>`, `query_one<Row>`, or `scalar<int64_t>`; `ExecuteQueryOrThrow`, `ReadVarchar`, `RunScalarInt64`, `ReadSearchResultRow`, `ReadGroupKey` deleted; `~MatchSetTable` runs `duckorm::execute`; connections named `duckorm::Connection` |
+| AI store | `ai_store.cpp`, `ai_store.hpp` | `scalar<int64_t>`; `duckorm::Connection`; the FTS schema check reads `information_schema.schemata` |
+| Tests | `album_query_test.cpp`, `duckorm_statement_test.cpp`, `library_search_recall_test.cpp` | two new `AlbumQueryTest` cases, one new `DuckormStatementTest` case, a failure after the match set exists; the `execute_query` callers read row structs |
+
+**Detail decisions made during the work** (the plan left them open):
+
+- **Shared columns.** The search result columns occur in three reads: the plain row, the page
+  row with `COUNT(*) OVER ()`, and the album page row with the group key and the edit state.
+  `RowColumns` now takes base-class members and `AppendRowColumns` appends to a base column
+  list, so `SearchResultPageDbRow` and `AlbumPageRow<Key>` derive from `SearchResultDbRow` and
+  the ten columns are listed once. The plan named `AlbumGroupRow` and `AlbumPageRow`; both exist
+  as templates (next item). `SearchResultDbRow` is the plan's `SearchResultDbRow`.
+- **Group key type.** The group key column is BIGINT for ratings and VARCHAR for every other
+  field. `WithGroupKeyType(field, read)` calls the read with `int64_t` or `std::string`, and the
+  row templates take that key type, so the column type check holds for each field. The flat mode
+  projects `CAST(NULL AS VARCHAR)` instead of an untyped `NULL` (the C API reports that as
+  INTEGER).
+- **Group read columns.** The group read selected `group_key, group_order, photo_count`, where
+  the type of `group_order` changes with the field (DATE, VARCHAR, INTEGER). It now selects
+  `group_key, photo_count` and repeats the key expression in GROUP BY and ORDER BY. The key
+  expression has no binds, so the statement text and its order equal the old one.
+- **Mark counts.** `COALESCE(SUM(...), 0)` and `COUNT_IF` are HUGEINT in DuckDB, which the
+  lossless column rule rejects for `int64_t`. The mark counts use
+  `COUNT(*) FILTER (WHERE ...)`, which is BIGINT and counts the same rows. `MarkCountRow` has one
+  member for each `ColorLabel` code; a `static_assert` ties its column count to
+  `kColorLabelCount`.
+- **Nullable columns.** `Image.file_name` and `Element.element_name` have no NOT NULL
+  constraint, and older databases can hold NULL in the text, rating, and mark columns (the #768
+  migration adds no NOT NULL constraint). These members are `std::optional`, and a NULL reads as
+  the empty text, rating 0, no color label, and no Delete mark, as `ReadVarchar` and the C API
+  defaults did before.
+- **Failed drop.** A failed statement inside `ReadAlbumQuery` aborts the DuckDB transaction, so
+  the DROP in `~MatchSetTable` fails too and the ROLLBACK removes the table. The destructor logs
+  a failed drop only when no exception is unwinding (`std::uncaught_exceptions() == 0`), so a
+  failed read does not log a second, misleading message.
+- **`album_query.cpp`.** It builds SQL fragments only and reads no result, so it needed no
+  change. The `AiStore` direct C API call that the issue names was the `duckdb_column_count`
+  mention in a comment and the `duckdb_schemas()` table function; `ai_store.cpp` now has no
+  `duckdb_` text.
+- **`execute_query` and `ExecuteDetached`.** S1 kept them for these callers; with no caller left
+  (two test helpers moved to row structs), both are deleted.
+- **Scope kept.** `select_int64`, `select_string`, and `select_by_query` keep their semantic
+  store callers. The semantic stores name `duckdb_connection` as a type but call no C API
+  function; S5 and S6 own those files.
+- **MSVC.** MSVC rejects member pointers of a function-local struct as template arguments
+  (C2326), so every row struct is at namespace scope.
+
+**Primary success call chain:**
+
+```text
+AlbumBrowseService -> ElementStore::ReadAlbumQuery(folder_id, filter, options, model, read)
+  -> ValidateAlbumQueryRead -> GetConnectionGuard + Lock -> duckorm::Transaction
+  -> MatchSetTable (CREATE OR REPLACE TEMP TABLE SearchMatchSet AS SELECT ...)
+  -> ReadAlbumQueryFromMatchSet
+     -> CountRows (scalar<int64_t>) -> WithGroupKeyType(field)
+     -> query<AlbumGroupRow<Key>> -> query<AlbumPageRow<Key>> -> ToSearchResultRow, ToGroupKey
+     -> ReadMatchSetBuckets: query<StatsBucketRow> (GROUPING SETS)
+     -> ReadMatchSetMarkCounts: query_one<MarkCountRow> -> ReadMatchSetLabelBuckets
+  -> ~MatchSetTable: duckorm::execute(DROP TABLE IF EXISTS temp.SearchMatchSet)
+  -> tx.commit() -> AlbumQueryResult
+```
+
+**Primary failure and restore call chain:**
+
+```text
+ReadAlbumQuery(label group) -> MatchSetTable created
+  -> scalar<int64_t>(label occurrence count) fails (SemanticImageLabel missing) or a
+     query<Row> column check fails -> std::runtime_error("<message> [SQL: ...]")
+  -> ~MatchSetTable: DROP fails in the aborted transaction, caught, not logged during the unwind
+  -> ~Transaction ROLLBACK removes the match set -> ConnectionGuard releases the lock
+  -> the caller receives the first error; the next read on another thread succeeds
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `StatsBucketsMatchPageTotalAfterTypedRead` (12 files: camera, date, rating, import-day buckets in order and summing to 12; lens sum 12; color label counts with the reserved bit 7; Delete count; `ListSearchResultPageWithStats` and `BuildFolderStats` give the same totals) | `AlbumQueryTest` | PASS |
+| `TypedListingReadsDecodeEveryColumn` (all ten search columns, NULL `file_name`, masked bit 7, window total, past-end COUNT, rating group key as a number, file position, file list, overview, last edited file) | `AlbumQueryTest` | PASS |
+| `AlbumQueryFailureReportsDuckDbError` with a failure after the match set exists | `AlbumQueryTest` | PASS |
+| `DerivedRowReadsBaseColumnsThenOwnColumns` | `DuckormStatementTest` | PASS |
+| Every current `AlbumQueryTest`, `FilterServiceTest`, `LibrarySearchRecallTest`, `LibrarySearchColumnsTest`, `AiStorageControllerTest`, `DuckormStatementTest` case | 6 suites | 145/145 PASS (1 disabled, 1 skipped) |
+| Inside storage, C API calls only in `database.cpp`, `store_types.cpp`, and duckorm | `grep -rnE "duckdb_[a-z_]+\(" alcedo_studio/src/storage` outside duckorm | 4 lines, all in `database.cpp` and `store_types.cpp` |
+| Zero `duckdb_` text in `element_store.cpp`, `album_query.cpp`, `ai_store.cpp` | `grep -n "duckdb_" ... \| grep -v "#include"` | 0 lines |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM Storage DuckormStatementTest AlbumQueryTest FilterServiceTest LibrarySearchRecallTest LibrarySearchColumnsTest AiStorageControllerTest   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(DuckormStatementTest|AlbumQueryTest|FilterServiceTest|LibrarySearchRecallTest|LibrarySearchColumnsTest|AiStorageControllerTest)\."   (exit 0)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target MapperCrtpRoundtripTest CommitGraphTest DuckormExprTest MaskAssetStoreTest DuckDbExtensionTest PipelineMapperTest ProjectCompatibilityTest LibraryHistoryAndExportTest SemanticStorageControllerTest ProjectPackageBackendTest SleeveFilterCompileTest SleeveFilterFactoryTest   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(MapperCrtpRoundtripTest|CommitGraphTest|DuckormExprTest|MaskAssetStoreTest|DuckDbExtensionTest|PipelineMapperTest|ProjectCompatibilityTest|LibraryHistoryAndExportTest|SemanticStorageControllerTest|ProjectPackageBackendTest|SleeveFilterCompileTest|SleeveFilterFactoryTest)\."   (exit 8, one failure from main, below)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main   (exit 0)
+```
+
+Suite totals: `DuckormStatementTest` 25, `AlbumQueryTest` 34 (1 skipped:
+`LargeLibraryPagesStayBoundedAndRecordTimings`), `FilterServiceTest` 45,
+`LibrarySearchRecallTest` 7 (1 disabled), `LibrarySearchColumnsTest` 15,
+`AiStorageControllerTest` 20. Caller suites: 180 of 181 passed; the failure is
+`SemanticStoreTest.ExistingSemanticModelWithoutActiveColumnPromotesLatestModel`, the failure on
+`main` recorded in #793. The full suite is for the user to start; this record lists the targeted
+suites.
+
+**Checklist / exit condition:** both boxes checked.
+
+**LOC note:** `element_store.cpp` 1335 (was 1273; above 1000 before this phase), of which about
+200 lines are the row structs and their decode helpers; S4 moves the stats dimensions and the
+bucket reads into `storage/query`, which takes the bucket reads out of this file.
+`duckdb_statement.hpp` 453, `album_query_test.cpp` 1840 (two cases added),
+`duckorm_statement_test.cpp` 623. The diff is 680 added and 400 removed lines in 11 files (the
+plan document not counted), below the 1000-1500 estimate: S1 had already moved the statement
+owner, so each read changed in place.
+
+**Remaining gaps:** the semantic stores still read through `select_by_query` and
+`select_int64`; the app layer (`project_package_backend.cpp`, `project_service.cpp`) still calls
+the C API (S6, #791).
 
 ### Phase S4: One stats dimension definition and the filter compiler in storage
 

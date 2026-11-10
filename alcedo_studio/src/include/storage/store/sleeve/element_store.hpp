@@ -19,6 +19,7 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/mapper/pipeline/pipeline_mapper.hpp"
 #include "storage/mapper/sleeve/element/element_id_mapper.hpp"
 #include "storage/mapper/sleeve/element/element_mapper.hpp"
@@ -214,13 +215,13 @@ class ElementStore {
   // Insert the element row plus its child rows (file binding / folder content) on @p conn.
   // Does not touch sync_flag_ and does not manage a transaction, so it can run
   // either autocommit (AddElement) or inside a shared transaction (AddElements).
-  static void InsertElementRows(duckdb_connection&                    conn,
+  static void InsertElementRows(duckorm::Connection&                  conn,
                                 const std::shared_ptr<SleeveElement>& element);
   // Update the element row plus its child rows. For a folder, only the FolderContent rows of
   // the children added or removed since the last sync are written. Same
   // transaction-neutrality behavior as InsertElementRows; the caller clears the folder's
   // pending content changes after the commit.
-  static void UpdateElementRows(duckdb_connection&                    conn,
+  static void UpdateElementRows(duckorm::Connection&                  conn,
                                 const std::shared_ptr<SleeveElement>& element);
 
  public:
