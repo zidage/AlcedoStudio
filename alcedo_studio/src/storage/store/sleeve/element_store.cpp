@@ -28,6 +28,8 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/mapper/duckorm/duckdb_select.hpp"
+#include "storage/query/filter_compiler.hpp"
+#include "storage/query/stats_dimension.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "storage/store/sleeve/album_edit_state_sql.hpp"
@@ -225,7 +227,7 @@ class MatchSetTable {
         expr::raw("e.id AS file_id, fi.image_id, i.file_name, i.camera_model, i.lens, "
                   "i.capture_date, i.capture_at, i.rating, e.added_time, i.color_labels, "
                   "i.delete_mark"),
-        duckorm::clause::as(album_sql::ImportDayColumn(import_day_time_zone), "import_day"),
+        duckorm::clause::as(stats_dimension::ImportDayValue(import_day_time_zone), "import_day"),
         duckorm::clause::as(expr::raw(scope.joins_relevance_ ? "CAST(rel.relevance AS DOUBLE)"
                                                              : "CAST(NULL AS DOUBLE)"),
                             "relevance")};
@@ -308,28 +310,33 @@ struct LabelBucketRow {
 /// ratings descending (unknown date last), cameras and lenses by count descending, then by name.
 void ReadMatchSetBuckets(duckorm::Connection conn, FolderStatsView& out, bool read_import_days) {
   namespace expr = duckorm::expr;
+  using stats_dimension::GroupExpression;
   // GROUPING() needs every argument in some set, so the import-day set is always read; it is
   // dropped below when the read has no import-day time zone (every value is then NULL).
   const std::vector<std::vector<duckorm::SqlFragment>> sets{{expr::col("d")},  {expr::col("m")},
                                                             {expr::col("l")},  {expr::col("r")},
                                                             {expr::col("im")}, {}};
-  auto                                                 sql = std::format(
-      "SELECT g, label, c FROM ("
-                                                      "SELECT GROUPING(d, m, l, r, im) AS g, d, r, im, COALESCE(d, m, l, r, im) AS label, "
-                                                      "COUNT(*) AS c "
-                                                      "FROM (SELECT CAST(capture_date AS VARCHAR) AS d, "
-                                                      "COALESCE(NULLIF(camera_model, ''), '(unknown)') AS m, "
-                                                      "COALESCE(NULLIF(lens, ''), '(unknown)') AS l, CAST(rating AS VARCHAR) AS r, "
-                                                      "CAST(import_day AS VARCHAR) AS im FROM {})",
-      kMatchSetTable);
-  sql += duckorm::clause::grouping_sets(sets).sql_;
-  sql += std::format(
-      ") ORDER BY g, CASE WHEN g = {} THEN d END DESC NULLS LAST, "
-      "CASE WHEN g = {} THEN r END DESC NULLS LAST, "
-      "CASE WHEN g = {} THEN im END DESC NULLS LAST, c DESC, label",
-      kDateGroup, kRatingGroup, kImportDateGroup);
+  // One bucket label column for each dimension, from its stats dimension definition.
+  const std::vector<duckorm::SqlFragment>              labels{
+      duckorm::clause::as(GroupExpression(StatsDimensionId::kCaptureDate), "d"),
+      duckorm::clause::as(GroupExpression(StatsDimensionId::kCameraModel), "m"),
+      duckorm::clause::as(GroupExpression(StatsDimensionId::kLens), "l"),
+      duckorm::clause::as(GroupExpression(StatsDimensionId::kRating), "r"),
+      duckorm::clause::as(GroupExpression(StatsDimensionId::kImportDay), "im")};
+  auto query = expr::raw(
+      "SELECT g, label, c FROM (SELECT GROUPING(d, m, l, r, im) AS g, d, r, im, "
+      "COALESCE(d, m, l, r, im) AS label, COUNT(*) AS c FROM (");
+  query.append(
+      duckorm::clause::select_query(labels, expr::raw(std::format("FROM {} s", kMatchSetTable))));
+  query.sql_.append(")");
+  query.append(duckorm::clause::grouping_sets(sets));
+  query.sql_.append(
+      std::format(") ORDER BY g, CASE WHEN g = {} THEN d END DESC NULLS LAST, "
+                  "CASE WHEN g = {} THEN r END DESC NULLS LAST, "
+                  "CASE WHEN g = {} THEN im END DESC NULLS LAST, c DESC, label",
+                  kDateGroup, kRatingGroup, kImportDateGroup));
 
-  for (auto& row : duckorm::query<StatsBucketRow>(conn, duckorm::expr::raw(sql))) {
+  for (auto& row : duckorm::query<StatsBucketRow>(conn, query)) {
     const auto count = static_cast<int>(row.count);
     if (row.grouping_id == kTotalGroup) {
       out.total_photo_count_ = count;
@@ -364,14 +371,27 @@ void ReadMatchSetBuckets(duckorm::Connection conn, FolderStatsView& out, bool re
 /// Photos of each color label code and photos with the Delete mark in the match set, in one scan.
 /// A photo counts once for each code it holds.
 void ReadMatchSetMarkCounts(duckorm::Connection conn, FolderStatsView& out) {
-  std::string sql = "SELECT ";
+  using stats_dimension::BucketPredicate;
+  using stats_dimension::ColumnSource;
+  // Each count reads the bucket predicate of its stats dimension, the filter of a click.
+  const auto count_of = [](const StatsBucketCondition& bucket) {
+    auto count = duckorm::expr::raw("COUNT(*) FILTER (WHERE ");
+    count.append(BucketPredicate(bucket, ColumnSource::kMatchSet));
+    count.sql_.append(")");
+    return count;
+  };
+  std::vector<duckorm::SqlFragment> count_columns;
+  count_columns.reserve(kColorLabelCount + 1);
   for (int code = 0; code < kColorLabelCount; ++code) {
-    sql += std::format("COUNT(*) FILTER (WHERE ((color_labels >> {}) & 1) = 1), ", code);
+    count_columns.push_back(count_of(StatsBucketCondition{
+        .dimension = StatsDimensionId::kColorLabel, .key = static_cast<ColorLabel>(code)}));
   }
-  sql += std::format("COUNT(*) FILTER (WHERE delete_mark) FROM {}", kMatchSetTable);
+  count_columns.push_back(
+      count_of(StatsBucketCondition{.dimension = StatsDimensionId::kDeleteMark, .key = {}}));
+  const auto query = duckorm::clause::select_query(
+      count_columns, duckorm::expr::raw(std::format("FROM {} s", kMatchSetTable)));
   // An aggregate without GROUP BY returns one row, also for an empty match set.
-  const auto row =
-      duckorm::query_one<MarkCountRow>(conn, duckorm::expr::raw(sql)).value_or(MarkCountRow{});
+  const auto row = duckorm::query_one<MarkCountRow>(conn, query).value_or(MarkCountRow{});
   const std::array<int64_t, kColorLabelCount> counts{row.red,  row.orange, row.yellow, row.green,
                                                      row.blue, row.purple, row.gray};
   for (size_t code = 0; code < counts.size(); ++code) {

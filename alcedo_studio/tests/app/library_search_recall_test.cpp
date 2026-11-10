@@ -38,6 +38,7 @@
 #include "sleeve/sleeve_filter/filter_factory.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "storage/query/filter_compiler.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "storage/store/semantic/semantic_model_registry.hpp"

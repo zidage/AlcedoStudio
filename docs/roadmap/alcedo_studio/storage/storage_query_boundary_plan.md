@@ -2,7 +2,7 @@
 
 Date: 2026-11-09
 
-Status: in progress. S1 and S2 complete (2026-11-09); S3 complete (2026-11-10); S4 to S6
+Status: in progress. S1 and S2 complete (2026-11-09); S3 and S4 complete (2026-11-10); S5 and S6
 planned.
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and the callers of storage in
@@ -191,7 +191,7 @@ storage/  -> duckorm, Mapper, Store, StatsDimension, LibrarySearchPredicates, SQ
 | S1 | Typed statements and rows in duckorm; `MaskAssetStore` on duckorm | duckorm, mask asset store | none | 1000-1400 | complete (#786) |
 | S2 | Typed-key Mapper and one transaction style; `CommitGraphStore`, `FolderMapper`, `ImageStore` on duckorm | Mapper, edit history store, sleeve mappers | S1 | 1300-1800 | complete (#787) |
 | S3 | `ElementStore` read paths on typed rows | element store, album query | S1 | 1000-1500 | complete (#788) |
-| S4 | One stats dimension definition; filter compiler in storage | storage query, sleeve filter, element store | S3 | 1200-1800 | planned (#789) |
+| S4 | One stats dimension definition; filter compiler in storage | storage query, sleeve filter, element store | S3 | 1200-1800 | complete (#789) |
 | S5 | Search predicates in storage; domain values in service signatures | storage query, app filter and browse services, library module | S4 | 1200-1800 | planned (#790) |
 | S6 | Storage owns connections; maintenance API; boundary check in CI | Storage facade, app services, package backend, CI | S2, S5 | 1300-1900 | planned (#791) |
 
@@ -972,13 +972,126 @@ ctest --test-dir build/debug --output-on-failure -R "StatsDimensionTest|SleeveFi
 
 **Exit criteria**
 
-- [ ] Each bucket expression exists once, in `stats_dimension.cpp`.
-- [ ] `StatsDimensionTest` passes for every dimension.
-- [ ] `alcedo_studio/src/sleeve` has zero SQL text.
+- [x] Each bucket expression exists once, in `stats_dimension.cpp`.
+- [x] `StatsDimensionTest` passes for every dimension.
+- [x] `alcedo_studio/src/sleeve` has zero SQL text.
 
 **Expected diff:** 1200-1800 lines.
 
 **Completion record:** see section 8.
+
+##### Phase S4 completion record (2026-11-10)
+
+**Status:** complete. Branch `refactor/storage-stats-dimension-789`, stacked on the S3 branch
+`refactor/storage-element-store-typed-reads-788` (PR #797).
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| Storage query (new `StorageQuery` library) | `storage/query/stats_dimension.hpp/.cpp` | `UnknownLabel`, `GroupExpression`, `BucketPredicate(condition, ColumnSource)`, `ImportDayValue`, `SemanticLabelRowCondition`: the one SQL definition of each of the eight dimensions |
+| Storage query | `storage/query/filter_compiler.hpp/.cpp` (moved from `sleeve/sleeve_filter/filter_sql.cpp`) | `FilterSQLCompiler` and `CompileFilterPredicate`; a `StatsBucket` node compiles through `BucketPredicate(..., kLiveTables)`; the four `*Label` field cases deleted |
+| Sleeve filter (domain) | `filter_combo.hpp`, new `filter_combo.cpp`, `filter_factory.hpp/.cpp` | `StatsDimensionId`, `StatsBucketKey`, `StatsBucketCondition`, `FilterNode::Type::StatsBucket`; `ParseStatsBucketDay`; `MergeFilterNodes` stays here; every bucket builder returns a `StatsBucket` node; `BuildSemanticLabelExistsFilter(model, aliases)` became `BuildSemanticLabelBucketFilter(model, label_key)`; the `*Label` fields and the comment-only link deleted |
+| Element store | `element_store.cpp`, `album_query.cpp`, `album_query_sql.hpp` | `ReadMatchSetBuckets` projects `GroupExpression` of each dimension; `ReadMatchSetMarkCounts` counts `COUNT(*) FILTER (WHERE BucketPredicate(..., kMatchSet))`; the match set import day is `ImportDayValue`; `LabelRelations` reads the semantic label key and row condition of the dimension; `album_query_sql::ImportDayColumn` moved to `ImportDayValue` |
+| UI | `stats_engine.cpp`, `library_module.cpp` | the label click maps the shown text to the stored key (`StoredSemanticLabel`); `FilterReadsRating` and `FilterReadsMarks` read the bucket dimension instead of searching the raw SQL text |
+| App | `album_browse_service.cpp`, `sleeve_filter_service.cpp` | include the storage compiler |
+| Tests | new `tests/storage/stats_dimension_test.cpp`; `sleeve_filter_factory_test.cpp`, `sleeve_filter_compile_test.cpp`, `filter_service_test.cpp`, include updates | `StatsDimensionTest` (5 cases); factory cases for the new nodes, color label, Delete mark, import day range, and the two compile errors |
+
+**Detail decisions made during the work** (the plan left them open):
+
+- **Bucket key.** `StatsBucketKey` is `std::variant<std::monostate, std::string, int64_t,
+  ColorLabel>`: `std::monostate` is the bucket without a value (and the one Delete mark bucket),
+  text labels are strings, ratings are integers, color labels are codes. `StatsBucketCondition`
+  also holds `time_zone` (import day) and `semantic_model_key` (semantic label), because the
+  predicate of those two dimensions needs them and the compiler has no other input. The plan's
+  `BucketPredicate(StatsDimensionId, const StatsBucketKey&, ColumnSource)` is therefore
+  `BucketPredicate(const StatsBucketCondition&, ColumnSource)`.
+- **Group expression source.** Every GROUP BY of the stats read runs on the match set, so
+  `GroupExpression(StatsDimensionId)` reads the match set (alias `s`; the read now names the
+  table `s`) and takes no `ColumnSource`. The semantic label key reads the `SemanticImageLabel`
+  row `sl`. Color labels and the Delete mark have no group expression (a photo is in zero or
+  several of their buckets): the stats read counts them with `BucketPredicate(..., kMatchSet)`,
+  the predicate that a click compiles over the live tables.
+- **Predicates from the label expression.** Capture date, camera model, and lens compare the
+  group label expression over the live tables with the bound key, so one expression defines the
+  bucket and the click. The rating compares the integer column (`CAST(rating AS VARCHAR) = '4'`
+  and `rating = 4` select the same rows); the import day keeps the half-open range on
+  `e.added_time` over the live tables, so the import time column stays unwrapped.
+- **Semantic label filter.** The old filter matched `LOWER(sl.label)` against the English and
+  Chinese aliases of the shown text, while the bucket counted `LOWER(TRIM(sl.label))`; a stored
+  label with spaces was counted but not selected. The predicate now compares
+  `LOWER(TRIM(sl.label))` with `LOWER(TRIM(?))` of the key under the same row condition as the
+  bucket (`(sl.model_key = ?) AND TRIM(sl.label) <> ''`). The stats bar maps the shown text to
+  the key with `StoredSemanticLabel`; stored labels are canonical keys since
+  `CanonicalizeImageLabels` runs on project open.
+- **Color label predicate.** The filter used `(i.color_labels & bit) <> 0` and the count used
+  `((color_labels >> code) & 1) = 1`. Both now use the second form.
+- **Library target.** The definitions and the compiler are a new static library `StorageQuery`
+  (`DuckORM`, `SleeveFilter`, `StrConv`) that `Storage` links publicly, so the filter unit tests
+  link it without the stores.
+- **Member names.** The new `StatsBucketCondition` uses public member names without a trailing
+  `_` (repository rule); `FilterNode::stats_bucket_` keeps the trailing `_` of its sibling
+  members.
+- **Fixture NULLs.** A new database has NOT NULL on camera model, lens, rating, and the marks;
+  older databases can hold NULL there, so the test drops those constraints before it writes
+  NULL. `SemanticImageLabel` holds one label per file and model (primary key), so the fixture
+  has no file with two labels of one model.
+
+**Primary success call chain:**
+
+```text
+StatsEngine::BuildStatsFilterNode -> sleeve_filter::BuildCameraModelBucketFilter(label)
+  -> FilterNode{StatsBucket, StatsBucketCondition{kCameraModel, label}}
+  -> LibraryModule MergeFilterNodes -> AlbumBrowseService -> CompileFilterPredicate
+  -> FilterSQLCompiler::CompileNode -> stats_dimension::BucketPredicate(kLiveTables)
+  -> ElementStore::ReadAlbumQuery -> MatchSetTable -> ReadMatchSetBuckets (GroupExpression)
+     and ReadMatchSetMarkCounts (BucketPredicate(kMatchSet)) -> page and buckets
+```
+
+**Primary failure and restore call chain:**
+
+```text
+FilterSQLCompiler receives an unknown StatsDimensionId or a key of another dimension
+  -> std::invalid_argument("Stats dimension: unknown id" / "...the bucket key type does not fit
+     the dimension") before any statement runs -> AlbumBrowseService throws
+  -> LibraryModule keeps the prior filter and page
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `EachBucketPredicateSelectsItsBucketCount` (24 files with empty, NULL, repeated, and literal `(unknown)` values; capture date, camera, lens, rating, New York import days around both 2026 daylight-saving changes, semantic labels with case and spaces and a blank label, seven color label codes with the reserved bit 7, Delete mark; page total of every bucket filter equals its count) | `StatsDimensionTest` | PASS |
+| `BucketFilterStatsTotalEqualsTheClickedBucketCount`, `SemanticLabelKeyInAnotherCaseSelectsTheSameBucket`, two definition cases | `StatsDimensionTest` | PASS |
+| `SleeveFilterCompileTest`, `SleeveFilterFactoryTest` (expected SQL of the moved cases, new node cases) | 2 suites | PASS |
+| `AlbumQueryTest`, `FilterServiceTest`, `LibrarySearchRecallTest`, `LibrarySearchColumnsTest` | 4 suites | PASS |
+| Total of the seven suites above | ctest | 138/138 PASS (1 disabled, 1 skipped) |
+| `AlbumBackendStatsFilterTest` (offscreen) | UI suite | 3/3 PASS |
+| Zero SQL text in `alcedo_studio/src/sleeve` and `alcedo_studio/src/include/sleeve` | search for `SELECT`, `COALESCE`, `IS NULL`, `WHERE`, `expr::` | 0 lines |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"   (exit 0)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target StatsDimensionTest SleeveFilterCompileTest SleeveFilterFactoryTest AlbumQueryTest FilterServiceTest LibrarySearchRecallTest LibrarySearchColumnsTest AlbumBackendStatsFilterTest ThumbnailAlbumQtDemo alcedo_main   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(StatsDimensionTest|SleeveFilterCompileTest|SleeveFilterFactoryTest|AlbumQueryTest|FilterServiceTest|LibrarySearchRecallTest|LibrarySearchColumnsTest)\."   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^AlbumBackendStatsFilterTest\."   (QT_QPA_PLATFORM=offscreen, exit 0)
+```
+
+The full suite is for the user to start; this record lists the targeted suites.
+`FilterReadsRating` and `FilterReadsMarks` of `LibraryModule` have no test suite; they are
+checked by the build of `alcedo_main` only. `tests/sleeve/sleeve_filter_test.cpp` is not
+registered in any CMake target and is unchanged.
+
+**Checklist / exit condition:** all three boxes checked.
+
+**LOC note:** `element_store.cpp` 1355 (was 1335): the bucket reads stayed in the file and now
+read the definitions, so the file did not shrink as the S3 note expected; the bucket SQL itself
+moved. `stats_dimension.cpp` 261, `filter_compiler.cpp` 212, `stats_dimension_test.cpp` 348.
+
+**Remaining gaps:** the search of the app layer still builds `RawSQL` nodes
+(`sleeve_filter_service.cpp`), so `filter_combo.hpp` still includes `duckdb_expr.hpp` for the
+bridge binds (S5, #790).
 
 ### Phase S5: Search predicates in storage and domain values in service signatures
 

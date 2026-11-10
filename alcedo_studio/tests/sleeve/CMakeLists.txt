@@ -32,7 +32,7 @@ alcedo_register_test_target(MapperCrtpRoundtripTest storage ci_core)
 # Compile-path unit checks for FilterNode -> SqlFragment (no folder fixtures).
 add_executable(SleeveFilterCompileTest ${ALCEDO_TEST_ROOT}/sleeve/sleeve_filter_compile_test.cpp)
 target_include_directories(SleeveFilterCompileTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(SleeveFilterCompileTest PRIVATE GTest::gtest_main SleeveFilter StrConv)
+target_link_libraries(SleeveFilterCompileTest PRIVATE GTest::gtest_main StorageQuery StrConv)
 gtest_discover_tests(SleeveFilterCompileTest TEST_PREFIX "SleeveFilterCompileTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(SleeveFilterCompileTest storage ci_core)
@@ -41,10 +41,19 @@ alcedo_register_test_target(SleeveFilterCompileTest storage ci_core)
 # predicates, semantic-label EXISTS, merge/compile entry helpers).
 add_executable(SleeveFilterFactoryTest ${ALCEDO_TEST_ROOT}/sleeve/sleeve_filter_factory_test.cpp)
 target_include_directories(SleeveFilterFactoryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(SleeveFilterFactoryTest PRIVATE GTest::gtest_main SleeveFilter StrConv)
+target_link_libraries(SleeveFilterFactoryTest PRIVATE GTest::gtest_main StorageQuery StrConv)
 gtest_discover_tests(SleeveFilterFactoryTest TEST_PREFIX "SleeveFilterFactoryTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(SleeveFilterFactoryTest storage ci_core)
+
+# Storage S4 (#789): the bucket predicate of each stats dimension selects its bucket count.
+add_executable(StatsDimensionTest ${ALCEDO_TEST_ROOT}/storage/stats_dimension_test.cpp)
+target_include_directories(StatsDimensionTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/app)
+target_link_libraries(StatsDimensionTest PRIVATE GTest::gtest_main ProjectService SleeveFilterService)
+gtest_discover_tests(StatsDimensionTest TEST_PREFIX "StatsDimensionTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_extensions(StatsDimensionTest)
+alcedo_register_test_target(StatsDimensionTest storage ci_core)
 
 add_executable(DuckDbExtensionTest ${ALCEDO_TEST_ROOT}/storage/duckdb_extension_test.cpp)
 target_include_directories(DuckDbExtensionTest PUBLIC ${ALCEDO_INCLUDE_DIR})

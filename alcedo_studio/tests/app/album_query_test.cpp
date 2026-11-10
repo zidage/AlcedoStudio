@@ -45,6 +45,7 @@
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "sleeve/sleeve_filter/filter_factory.hpp"
 #include "storage/mapper/sleeve/element/element_mapper.hpp"
+#include "storage/query/filter_compiler.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "storage/store/semantic/semantic_model_registry.hpp"
 #include "storage/store/semantic/semantic_records.hpp"

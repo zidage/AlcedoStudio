@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "storage/query/filter_compiler.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {

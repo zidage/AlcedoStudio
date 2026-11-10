@@ -26,6 +26,7 @@
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "sleeve/sleeve_filter/filter_factory.hpp"
+#include "storage/query/filter_compiler.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "support/semantic_stores_test_support.hpp"
 #include "type/supported_file_type.hpp"
@@ -1568,8 +1569,8 @@ TEST_F(FilterServiceTests, StatsSemanticLabelExistsFilterRestrictsFolderStats) {
   StoreSemanticLabel(project, "mobileclip-stats-filter", landscape_id, "landscape", 4);
 
   SleeveFilterService filter_service(project.GetStorage());
-  const auto          stats_node = sleeve_filter::BuildSemanticLabelExistsFilter(
-      "mobileclip-stats-filter", SemanticLabelAliases("landscape"));
+  const auto          stats_node =
+      sleeve_filter::BuildSemanticLabelBucketFilter("mobileclip-stats-filter", "landscape");
 
   const auto stats = filter_service.BuildFolderStats(0, stats_node);
   EXPECT_EQ(stats.total_photo_count_, 1);

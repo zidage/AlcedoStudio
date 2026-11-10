@@ -7,6 +7,7 @@
 #include <string>
 
 #include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "storage/query/filter_compiler.hpp"
 
 using namespace alcedo;
 

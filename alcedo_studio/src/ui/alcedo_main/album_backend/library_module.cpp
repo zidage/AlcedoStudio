@@ -489,24 +489,27 @@ auto GroupKeyFromTitle(AlbumGroupField field, const QString& title, bool unknown
   return AlbumGroupKey{title.toStdString()};
 }
 
-/// True when @p node has a condition on the rating (typed, or raw SQL on `i.rating`).
+/// True when @p node is a stats bucket of @p dimension.
+auto IsStatsBucketOf(const FilterNode& node, StatsDimensionId dimension) -> bool {
+  return node.stats_bucket_.has_value() && node.stats_bucket_->dimension == dimension;
+}
+
+/// True when @p node has a condition on the rating (a typed condition or a rating bucket).
 auto FilterReadsRating(const FilterNode& node) -> bool {
-  if (node.condition_.has_value() && (node.condition_->field_ == FilterField::Rating ||
-                                      node.condition_->field_ == FilterField::RatingLabel)) {
+  if (node.condition_.has_value() && node.condition_->field_ == FilterField::Rating) {
     return true;
   }
-  if (node.raw_sql_.has_value() && node.raw_sql_->find(L"rating") != std::wstring::npos) {
+  if (IsStatsBucketOf(node, StatsDimensionId::kRating)) {
     return true;
   }
   return std::any_of(node.children_.begin(), node.children_.end(),
                      [](const FilterNode& child) { return FilterReadsRating(child); });
 }
 
-/// True when @p node reads a library mark (the raw SQL of BuildColorLabelFilter or
-/// BuildDeleteMarkFilter).
+/// True when @p node reads a library mark (a color label or Delete mark bucket).
 auto FilterReadsMarks(const FilterNode& node) -> bool {
-  if (node.raw_sql_.has_value() && (node.raw_sql_->find(L"color_labels") != std::wstring::npos ||
-                                    node.raw_sql_->find(L"delete_mark") != std::wstring::npos)) {
+  if (IsStatsBucketOf(node, StatsDimensionId::kColorLabel) ||
+      IsStatsBucketOf(node, StatsDimensionId::kDeleteMark)) {
     return true;
   }
   return std::any_of(node.children_.begin(), node.children_.end(),

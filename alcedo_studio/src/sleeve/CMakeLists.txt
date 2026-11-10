@@ -1,7 +1,7 @@
 # Sleeve target ownership (filters, elements, AI domain objects, filesystem, manager).
 
 set(FILTER_SRCS
-    "${ALCEDO_SRC_ROOT}/sleeve/sleeve_filter/filter_sql.cpp"
+    "${ALCEDO_SRC_ROOT}/sleeve/sleeve_filter/filter_combo.cpp"
     "${ALCEDO_SRC_ROOT}/sleeve/sleeve_filter/filter_factory.cpp"
 )
 

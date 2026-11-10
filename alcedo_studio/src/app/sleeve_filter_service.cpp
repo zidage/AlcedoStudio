@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "app/search_query_parser.hpp"
+#include "storage/query/filter_compiler.hpp"
 #include "storage/store/semantic/semantic_label_config.hpp"
 #include "utils/string/convert.hpp"
 #include "utils/string/search_text.hpp"

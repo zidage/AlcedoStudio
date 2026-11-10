@@ -10,6 +10,14 @@ def_library(DuckORM
     PUBLIC_DEPS DuckDB
 )
 
+# Query definitions: the SQL of the stats dimensions and the compiler of the domain filters.
+def_library(StorageQuery
+    SOURCES
+        "${ALCEDO_SRC_ROOT}/storage/query/stats_dimension.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/query/filter_compiler.cpp"
+    PUBLIC_DEPS DuckORM SleeveFilter StrConv
+)
+
 # Mappers
 set(MAPPER_SRCS
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/element/file_mapper.cpp"
@@ -56,7 +64,7 @@ set(STORAGE_SRCS
 
 def_library(Storage
     SOURCES ${STORAGE_SRCS}
-    PUBLIC_DEPS Ai DuckDB DuckORM SleeveMapper StrConv PipelineScheduler
+    PUBLIC_DEPS Ai DuckDB DuckORM SleeveMapper StorageQuery StrConv PipelineScheduler
     PRIVATE_DEPS AppDiagnostics
 )
 # MaskAssetStore compresses R8 pixels with zlib. The bundled gRPC static zlib is used when it

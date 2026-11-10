@@ -4,56 +4,43 @@
 
 #include "sleeve/sleeve_filter/filter_factory.hpp"
 
-#include <chrono>
 #include <cstdint>
-#include <format>
-#include <sstream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include <vector>
 
-#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo::sleeve_filter {
 namespace {
 
-using duckorm::SqlFragment;
-namespace expr = duckorm::expr;
-
-auto MakeConditionNode(FilterField field, CompareOp op, FilterValue value) -> FilterNode {
-  FieldCondition cond{.field_ = field, .op_ = op, .value_ = std::move(value)};
-  return FilterNode{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+auto MakeStatsBucketNode(StatsBucketCondition condition) -> FilterNode {
+  FilterNode node{FilterNode::Type::StatsBucket, FilterOp::AND, {}, std::nullopt, std::nullopt};
+  node.stats_bucket_ = std::move(condition);
+  return node;
 }
 
-// Bridge node that owns compiler output (SQL + binds). Sleeve factories may
-// build these; UI code must not author RawSQL text.
-auto MakeRawSQLNode(SqlFragment fragment) -> FilterNode {
-  FilterNode node{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt,
-                  conv::FromBytes(fragment.sql_)};
-  node.raw_binds_ = std::move(fragment.binds_);
-  return node;
+auto MakeStatsBucketNode(StatsDimensionId dimension, StatsBucketKey key) -> FilterNode {
+  return MakeStatsBucketNode(StatsBucketCondition{.dimension = dimension, .key = std::move(key)});
 }
 
 }  // namespace
 
 auto BuildCameraModelBucketFilter(const std::wstring& label) -> FilterNode {
-  return MakeConditionNode(FilterField::CameraModelLabel, CompareOp::EQUALS, label);
+  return MakeStatsBucketNode(StatsDimensionId::kCameraModel, conv::ToBytes(label));
 }
 
 auto BuildLensBucketFilter(const std::wstring& label) -> FilterNode {
-  return MakeConditionNode(FilterField::LensLabel, CompareOp::EQUALS, label);
+  return MakeStatsBucketNode(StatsDimensionId::kLens, conv::ToBytes(label));
 }
 
 auto BuildCaptureDateBucketFilter(const std::wstring& date_yyyy_mm_dd) -> FilterNode {
-  return MakeConditionNode(FilterField::CaptureDateLabel, CompareOp::EQUALS, date_yyyy_mm_dd);
+  return MakeStatsBucketNode(StatsDimensionId::kCaptureDate, conv::ToBytes(date_yyyy_mm_dd));
 }
 
 auto BuildCaptureDateUnknownFilter() -> FilterNode {
-  // ImageMapper writes NULL when the capture date is missing or does not parse; this is the
-  // row set of the NULL date bucket in ElementStore::BuildFolderStats.
-  return MakeRawSQLNode(expr::is_null(expr::col("i.capture_date")));
+  return MakeStatsBucketNode(StatsDimensionId::kCaptureDate, std::monostate{});
 }
 
 auto BuildImportDateBucketFilter(const std::wstring& date_yyyy_mm_dd, const std::string& time_zone)
@@ -61,42 +48,14 @@ auto BuildImportDateBucketFilter(const std::wstring& date_yyyy_mm_dd, const std:
   if (time_zone.empty()) {
     throw std::invalid_argument("Import-day filter: the time zone is empty");
   }
-  const std::string  text = conv::ToBytes(date_yyyy_mm_dd);
-  int                year = 0, month = 0, day = 0;
-  char               separator_1 = 0, separator_2 = 0;
-  std::istringstream stream(text);
-  stream >> year >> separator_1 >> month >> separator_2 >> day;
-  const std::chrono::year_month_day date{std::chrono::year{year},
-                                         std::chrono::month{static_cast<unsigned>(month)},
-                                         std::chrono::day{static_cast<unsigned>(day)}};
-  if (text.size() != 10 || stream.fail() || !stream.eof() || separator_1 != '-' ||
-      separator_2 != '-' || !date.ok()) {
-    throw std::invalid_argument("Import-day filter: the date is not a valid YYYY-MM-DD day");
-  }
-  // The next calendar day, not start + 24 hours: each local midnight is converted on its own.
-  const std::chrono::year_month_day next{std::chrono::sys_days{date} + std::chrono::days{1}};
-  const auto                        local_midnight = [](const std::chrono::year_month_day& value) {
-    return std::format("{:04}-{:02}-{:02} 00:00:00", static_cast<int>(value.year()),
-                                              static_cast<unsigned>(value.month()), static_cast<unsigned>(value.day()));
-  };
-  // timezone(zone, TIMESTAMP) reads a local wall time in the zone as an instant;
-  // timezone('UTC', TIMESTAMPTZ) gives that instant as UTC text, the form of e.added_time.
-  // The bounds are constants, so the column itself is not wrapped in a function.
-  const auto utc_bound = [&time_zone](const std::string& local_time) {
-    auto bound = expr::raw("timezone('UTC', timezone(CAST(");
-    bound.append(expr::param(time_zone));
-    bound.sql_.append(" AS VARCHAR), CAST(");
-    bound.append(expr::param(local_time));
-    bound.sql_.append(" AS TIMESTAMP)))");
-    return bound;
-  };
-  return MakeRawSQLNode(
-      expr::and_({expr::ge(expr::col("e.added_time"), utc_bound(local_midnight(date))),
-                  expr::lt(expr::col("e.added_time"), utc_bound(local_midnight(next)))}));
+  std::string day = conv::ToBytes(date_yyyy_mm_dd);
+  (void)ParseStatsBucketDay(day);
+  return MakeStatsBucketNode(StatsBucketCondition{
+      .dimension = StatsDimensionId::kImportDay, .key = std::move(day), .time_zone = time_zone});
 }
 
 auto BuildImportDateUnknownFilter() -> FilterNode {
-  return MakeRawSQLNode(expr::is_null(expr::col("e.added_time")));
+  return MakeStatsBucketNode(StatsDimensionId::kImportDay, std::monostate{});
 }
 
 auto BuildRatingBucketFilter(const std::wstring& label) -> FilterNode {
@@ -109,44 +68,25 @@ auto BuildRatingBucketFilter(const std::wstring& label) -> FilterNode {
     pos = 0;
   }
   if (pos == narrow.size() && pos > 0) {
-    return MakeConditionNode(FilterField::RatingLabel, CompareOp::EQUALS, int64_t{value});
+    return MakeStatsBucketNode(StatsDimensionId::kRating, int64_t{value});
   }
-  // Non-numeric bucket (for example "(unknown)"): the rating must be NULL.
-  return MakeRawSQLNode(expr::is_null(expr::col("i.rating")));
+  // Non-numeric bucket (for example "(unknown)"): the photos without a rating.
+  return MakeStatsBucketNode(StatsDimensionId::kRating, std::monostate{});
 }
 
 auto BuildColorLabelFilter(ColorLabel code) -> FilterNode {
-  // The bit is a trusted integer of the enum, so it stays in the SQL text.
-  return MakeRawSQLNode(
-      expr::raw(std::format("(i.color_labels & {}) <> 0", static_cast<int>(ColorLabelBit(code)))));
+  return MakeStatsBucketNode(StatsDimensionId::kColorLabel, code);
 }
 
 auto BuildDeleteMarkFilter() -> FilterNode {
-  return MakeRawSQLNode(expr::raw("i.delete_mark"));
+  return MakeStatsBucketNode(StatsDimensionId::kDeleteMark, std::monostate{});
 }
 
-auto BuildSemanticLabelExistsFilter(const std::string&           model_key,
-                                    std::span<const std::string> aliases) -> FilterNode {
-  if (model_key.empty()) {
-    return MakeRawSQLNode(expr::raw("1 = 0"));
-  }
-
-  std::vector<SqlFragment> label_terms;
-  label_terms.reserve(aliases.size());
-  for (const auto& alias : aliases) {
-    auto lower_alias = expr::raw("LOWER(");
-    lower_alias.append(expr::param(alias));
-    lower_alias.append(expr::raw(")"));
-    label_terms.push_back(expr::eq(expr::raw("LOWER(sl.label)"), std::move(lower_alias)));
-  }
-
-  SqlFragment alias_match =
-      label_terms.size() == 1 ? std::move(label_terms.front()) : expr::or_(label_terms);
-  auto subquery = expr::raw("SELECT 1 FROM SemanticImageLabel sl WHERE ");
-  subquery.append(expr::and_({expr::eq(expr::col("sl.file_id"), expr::col("e.id")),
-                              expr::eq(expr::col("sl.model_key"), expr::param(model_key)),
-                              std::move(alias_match)}));
-  return MakeRawSQLNode(expr::exists(std::move(subquery)));
+auto BuildSemanticLabelBucketFilter(const std::string& model_key, const std::string& label_key)
+    -> FilterNode {
+  return MakeStatsBucketNode(StatsBucketCondition{.dimension = StatsDimensionId::kSemanticLabel,
+                                                  .key       = label_key,
+                                                  .semantic_model_key = model_key});
 }
 
 }  // namespace alcedo::sleeve_filter

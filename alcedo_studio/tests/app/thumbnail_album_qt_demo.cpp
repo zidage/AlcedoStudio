@@ -56,6 +56,7 @@
 #include "app/thumbnail_service.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "storage/query/filter_compiler.hpp"
 #include "type/supported_file_type.hpp"
 
 namespace alcedo {
