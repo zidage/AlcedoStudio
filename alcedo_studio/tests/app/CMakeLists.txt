@@ -2,6 +2,26 @@
 set(ALCEDO_TEST_APP_ROOT "${ALCEDO_TEST_ROOT}/app")
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 
+add_executable(ImportDuplicateSkippingTest ${ALCEDO_TEST_ROOT}/app/import_duplicate_skipping_test.cpp)
+target_include_directories(ImportDuplicateSkippingTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ImportDuplicateSkippingTest PRIVATE ImportService ProjectService GTest::gtest_main)
+target_compile_definitions(ImportDuplicateSkippingTest PRIVATE
+    ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
+gtest_discover_tests(ImportDuplicateSkippingTest TEST_PREFIX "ImportDuplicateSkippingTest.")
+alcedo_copy_duckdb_fts_extension(ImportDuplicateSkippingTest)
+alcedo_register_test_target(ImportDuplicateSkippingTest app ci_core)
+
+# Application import defaults run without constructing the GUI host.
+add_executable(ImportBehaviorPreferencesTest
+    ${ALCEDO_TEST_ROOT}/ui/import_behavior_preferences_test.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/album_backend/import_behavior_preferences.cpp
+    ${ALCEDO_INCLUDE_DIR}/ui/alcedo_main/album_backend/import_behavior_preferences.hpp)
+set_target_properties(ImportBehaviorPreferencesTest PROPERTIES AUTOMOC ON)
+target_include_directories(ImportBehaviorPreferencesTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ImportBehaviorPreferencesTest PRIVATE GTest::gtest_main Qt6::Core Qt6::Test)
+gtest_discover_tests(ImportBehaviorPreferencesTest TEST_PREFIX "ImportBehaviorPreferencesTest.")
+alcedo_register_test_target(ImportBehaviorPreferencesTest app)
+
 add_executable(UpdateManifestTest ${ALCEDO_TEST_ROOT}/app/update_manifest_test.cpp)
 target_include_directories(UpdateManifestTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(UpdateManifestTest PRIVATE UpdateService unofficial::ed25519::ed25519
@@ -273,6 +293,7 @@ endif()
 add_executable(ImportServiceTest ${ALCEDO_TEST_ROOT}/app/import_service_test.cpp)
 target_include_directories(ImportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ImportServiceTest ImportService ProjectService GTest::gtest_main)
+gtest_discover_tests(ImportServiceTest TEST_PREFIX "ImportServiceTest.")
 
 alcedo_register_test_target(ImportServiceTest app)
 

@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Controls.Material
 import QtQuick.Layouts
 import QtQuick.Dialogs
 
@@ -90,7 +89,7 @@ Item {
     SettingDialog {
         id: settingsDialogObj
         objectName: "settingsDialog"
-        z: 30
+        z: welcomeDialogObj.visible ? welcomeDialogObj.z + 1 : 30
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
         languageOptions: host.languageOptions
@@ -254,6 +253,7 @@ Item {
         converterPathFromDefault: appModules.nikonHeRecovery.nikonHeConverterPathFromDefault
         showImportProgress: appModules.importExport.importRunning && appModules.nikonHeRecovery.nikonHeRecoveryActive
         importCompleted: appModules.importExport.importCompleted
+        importDuplicates: appModules.importExport.importDuplicates
         importTotal: appModules.importExport.importTotal
         importFailed: appModules.importExport.importFailed
         onBrowseRequested: appModules.nikonHeRecovery.BrowseNikonHeConverter()
@@ -344,6 +344,7 @@ Item {
             appModules.projectLaunch.BeginCreateAsUser(storageLocation, projectName)
         }
         onExitRequested: Qt.quit()
+        onSettingsRequested: root.openSettingsDialog()
         onLanguageRequested: function(languageCode) {
             languageManager.setLanguage(languageCode)
         }

@@ -32,12 +32,14 @@ Item {
     readonly property int total: handler.importTotal
     readonly property int completed: handler.importCompleted
     readonly property int failed: handler.importFailed
-    readonly property int expected: Math.max(0, total - failed)
+    readonly property int duplicates: handler.importDuplicates
+    readonly property int expected: Math.max(0, total - failed - duplicates)
 
     readonly property int rawTotal: Math.min(handler.importRawTotal, total)
     readonly property int rawCompleted: Math.min(handler.importRawCompleted, completed)
     readonly property int rawExpected: Math.max(0, rawTotal - Math.min(handler.importRawFailed,
-                                                                       failed))
+                                                                       failed)
+                                                 - handler.importRawDuplicates)
     readonly property int otherTotal: total - rawTotal
     readonly property int otherCompleted: completed - rawCompleted
     readonly property int otherExpected: Math.max(0, expected - rawExpected)
@@ -45,7 +47,7 @@ Item {
     readonly property bool finalizing: phase === "finalizing"
     readonly property bool progressUnknown: finalizing
                                             || (phase === "preparing"
-                                                && completed + failed === 0)
+                                                && completed + duplicates + failed === 0)
     readonly property bool canCancel: !canceling && !finalizing
 
     readonly property real ringsSize: 176
@@ -190,6 +192,16 @@ Item {
                     font.pixelSize: appTheme.fontSizeHeadline
                     font.weight: appTheme.fontWeightStrong
                     color: root.textColor
+                }
+                Label {
+                    objectName: "importDuplicateCount"
+                    Layout.fillWidth: true
+                    text: qsTr("%1 duplicates skipped").arg(root.formatCount(root.duplicates))
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
+                    color: root.mutedColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeBody
                 }
             }
         }

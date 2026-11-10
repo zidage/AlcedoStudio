@@ -6,6 +6,13 @@ def_library(TimeProvider
     SOURCES ${ALCEDO_SRC_ROOT}/utils/clock/time_provider.cpp
 )
 
+def_library(SourceImageFile
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/file/source_image_path.cpp
+        ${ALCEDO_SRC_ROOT}/utils/file/source_file_reader.cpp
+    PUBLIC_DEPS Qt6::Core
+)
+
 if(WIN32)
     def_library(PreviewPerformance TYPE SHARED
         SOURCES

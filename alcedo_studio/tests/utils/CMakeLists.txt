@@ -1,6 +1,19 @@
 # Utility test target ownership.
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 
+foreach(source_file_test IN ITEMS SourceImagePathTest SourceFileReaderTest)
+    if(source_file_test STREQUAL "SourceImagePathTest")
+        set(source_file_test_source source_image_path_test.cpp)
+    else()
+        set(source_file_test_source source_file_reader_test.cpp)
+    endif()
+    add_executable(${source_file_test} ${ALCEDO_TEST_ROOT}/utils/${source_file_test_source})
+    target_include_directories(${source_file_test} PRIVATE ${ALCEDO_INCLUDE_DIR})
+    target_link_libraries(${source_file_test} PRIVATE SourceImageFile GTest::gtest_main)
+    gtest_discover_tests(${source_file_test} TEST_PREFIX "${source_file_test}.")
+    alcedo_register_test_target(${source_file_test} core)
+endforeach()
+
 add_executable(CudaDriverRequirementsTest
     ${ALCEDO_TEST_ROOT}/utils/cuda_driver_requirements_test.cpp
     ${ALCEDO_SRC_DIR}/utils/cuda/cuda_driver_requirements.cpp

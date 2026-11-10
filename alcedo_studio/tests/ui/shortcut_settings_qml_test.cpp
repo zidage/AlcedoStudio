@@ -868,6 +868,28 @@ TEST(ShortcutSettingsQmlTest, CaptureFieldExposesAccessibleNameDescriptionAndFoc
                   .contains(FieldText("Tab cancels")));
 }
 
+TEST(ShortcutSettingsQmlTest, ImportPreferenceApplyPersistsAndCancelDiscardsPendingChanges) {
+  SettingsDialogHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  harness.OpenAt(1);
+  auto* settings = harness.dialog();
+  ASSERT_NE(settings, nullptr);
+  EXPECT_TRUE(settings->property("pendingSkipDuplicateImports").toBool());
+  settings->setProperty("pendingSkipDuplicateImports", false);
+  ASSERT_TRUE(QMetaObject::invokeMethod(settings, "close"));
+  harness.OpenAt(1);
+  EXPECT_TRUE(settings->property("pendingSkipDuplicateImports").toBool());
+  EXPECT_TRUE(harness.host_->import_behavior()->SkipDuplicateImports());
+  settings->setProperty("pendingSkipDuplicateImports", false);
+  ASSERT_TRUE(QMetaObject::invokeMethod(settings, "applySettings"));
+  EXPECT_FALSE(harness.host_->import_behavior()->SkipDuplicateImports());
+  harness.OpenAt(1);
+  EXPECT_FALSE(settings->property("pendingSkipDuplicateImports").toBool());
+  const auto* checkbox = FindItem(harness.window_, "settingsSkipDuplicateImports");
+  ASSERT_NE(checkbox, nullptr);
+  EXPECT_FALSE(checkbox->property("checked").toBool());
+}
+
 TEST(ShortcutSettingsQmlTest, KeyboardPageUsesThemeValuesWithoutRawVisualColors) {
   ShortcutPanelHarness harness;
   ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();

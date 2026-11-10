@@ -143,20 +143,10 @@ void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
     return;
   }
   std::vector<image_path_t>        paths;
-  std::unordered_set<std::wstring> seen;
 
   for (const QString& raw : fileUrlsOrPaths) {
     const auto pathOpt = InputToPath(raw);
     if (!pathOpt.has_value()) {
-      continue;
-    }
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(pathOpt.value(), ec) || ec) {
-      continue;
-    }
-
-    const std::wstring key = pathOpt->wstring();
-    if (!seen.insert(key).second) {
       continue;
     }
     paths.push_back(pathOpt.value());
@@ -189,30 +179,28 @@ void ImportExportHandler::StartFolderImport() {
 
 void ImportExportHandler::StartImportPaths(const std::vector<image_path_t>& paths,
                                            const bool                       preserveTarget,
-                                           const ImportCategoryMask         allowedCategories) {
-  std::vector<image_path_t>        deduped_paths;
-  std::unordered_set<std::wstring> seen;
-  deduped_paths.reserve(paths.size());
+                                           const ImportCategoryMask         allowedCategories,
+                                           std::optional<bool>              skipDuplicates) {
+  std::vector<image_path_t> selected_paths;
+  selected_paths.reserve(paths.size());
   for (const auto& path : paths) {
     if (path.empty()) {
       continue;
     }
-    const std::wstring key = path.wstring();
-    if (!seen.insert(key).second) {
-      continue;
-    }
-    deduped_paths.push_back(path);
+    selected_paths.push_back(path);
   }
-  if (deduped_paths.empty()) {
+  if (selected_paths.empty()) {
     status_->SetTaskState(PL_TEXT("No supported files selected."), 0, false);
     return;
   }
-  StartImportResolvedPaths(std::move(deduped_paths), preserveTarget, allowedCategories);
+  StartImportResolvedPaths(std::move(selected_paths), preserveTarget, allowedCategories,
+                           skipDuplicates);
 }
 
 void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> paths,
                                                    const bool                preserveTarget,
-                                                   const ImportCategoryMask  allowedCategories) {
+                                                   const ImportCategoryMask  allowedCategories,
+                                                   std::optional<bool>       skipDuplicates) {
   if (project_->handler().project_loading()) {
     status_->SetTaskState(PL_TEXT("Project is loading. Please wait."), 0, false);
     return;
@@ -242,6 +230,7 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   import_prepared_    = 0;
   import_completed_   = 0;
   import_failed_      = 0;
+  import_duplicates_ = import_raw_duplicates_ = import_updated_ = 0;
   import_unsupported_ = 0;
   import_excluded_    = 0;
   import_canceled_    = 0;
@@ -286,6 +275,8 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
 
   try {
     ImportOptions options;
+    options.skip_duplicates_ = skipDuplicates.value_or(
+        import_preferences_ ? import_preferences_->SkipDuplicateImports() : true);
     options.allowed_categories_ = allowedCategories;
     current_import_job_ = isvc->ImportToFolder(paths, import_target_folder_path_, options, job);
     // ImportToFolder sets the RAW file count before it returns; the dialog sizes its rings now.
@@ -318,14 +309,17 @@ void ImportExportHandler::ApplyImportProgress() {
   const uint32_t        excluded    = progress.excluded_type_.load();
   const uint32_t        canceled    = progress.canceled_.load();
   const uint32_t        raw_failed  = progress.raw_failed_.load();
-  const uint32_t        raw_done    = progress.raw_imported_.load();
+  const uint32_t        raw_done = (progress.raw_imported_.load() + progress.raw_updated_.load());
   const uint32_t        failed      = progress.failed_.load();
-  const uint32_t        imported    = progress.metadata_done_.load();
+  const uint32_t        imported    = (progress.metadata_done_.load() + progress.updated_.load());
   const uint32_t        prepared    = progress.placeholders_created_.load();
   const uint32_t        total       = std::max<uint32_t>(progress.total_, 1);
 
   import_prepared_    = static_cast<int>(prepared);
   import_completed_   = static_cast<int>(imported);
+  import_updated_                   = static_cast<int>(progress.updated_.load());
+  import_duplicates_                = static_cast<int>(progress.duplicates_.load());
+  import_raw_duplicates_            = static_cast<int>(progress.raw_duplicates_.load());
   import_failed_      = static_cast<int>(failed);
   import_unsupported_ = static_cast<int>(unsupported);
   import_excluded_                  = static_cast<int>(excluded);
@@ -336,15 +330,17 @@ void ImportExportHandler::ApplyImportProgress() {
   import_phase_       = job->submission_closed_.load() ? ImportPhaseState::Reading
                                                        : ImportPhaseState::Preparing;
   if (!job->IsCancelled()) {
-    import_status_text_ = PL_TEXT("Importing... %1/%2 (failed %3)", imported, total, failed);
+    import_status_text_ = PL_TEXT("Importing: %1 imported, %2 duplicates skipped, %3 failed",
+                                  imported, import_duplicates_, failed);
   }
   emit ImportStateChanged();
   emit importStateChanged();
 
-  const int processed_percent = static_cast<int>(((imported + failed) * 100U) / total);
+  const int processed_percent =
+      static_cast<int>(((imported + progress.duplicates_.load() + failed) * 100U) / total);
   status_->SetTaskState(import_status_text_, processed_percent, true);
   if (nikon_ && nikon_->is_reimporting()) {
-    nikon_->UpdateReimportProgress(imported, total, failed);
+    nikon_->UpdateReimportProgress(imported + progress.duplicates_.load(), total, failed);
   }
 }
 
@@ -665,42 +661,31 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   auto snapshot =
       std::make_shared<const ImportLogSnapshot>(importJob->import_log_->Snapshot());
   import_phase_       = ImportPhaseState::Finalizing;
-  import_completed_   = static_cast<int>(result.imported_);
+  import_completed_      = static_cast<int>(result.imported_ + result.updated_);
+  import_updated_        = static_cast<int>(result.updated_);
+  import_duplicates_     = static_cast<int>(result.duplicates_);
+  import_raw_duplicates_ = static_cast<int>(result.raw_duplicates_);
   import_failed_      = static_cast<int>(result.failed_);
   import_unsupported_ = static_cast<int>(result.unsupported_);
   import_excluded_    = static_cast<int>(result.excluded_type_);
   import_canceled_    = static_cast<int>(result.canceled_);
   import_raw_total_     = static_cast<int>(result.raw_requested_);
-  import_raw_completed_ = static_cast<int>(result.raw_imported_);
+  import_raw_completed_  = static_cast<int>(result.raw_imported_ + result.raw_updated_);
   import_raw_failed_    = static_cast<int>(result.raw_failed_);
   import_status_text_ = PL_TEXT("Saving %1 imported photo(s) to the library...", result.imported_);
   emit ImportStateChanged();
   emit importStateChanged();
   status_->SetTaskState(import_status_text_, 0, false);
 
-  // Removing the rejected placeholders and writing the imported Images, elements, project file
-  // and package take seconds for a large folder; they run off the UI thread. import_running_
-  // stays true until CompleteImport, which keeps the import overlay, the project switch block
-  // and the shutdown wait in place for the whole write.
+  // The import owner already persisted or restored every entry. Packaging stays off the UI
+  // thread, with import_running_ true until CompleteImport and the package result is visible.
   JoinFinalizeThread();
   QPointer<ImportExportHandler> self(this);
-  finalize_thread_ = std::thread([self, result, snapshot,
-                                  import_service = project_->handler().import_service(),
-                                  project        = project_->handler().project(),
-                                  save_and_package = project_->handler().MakeSaveAndPackageJob(),
-                                  dest             = import_target_folder_path_]() {
+  finalize_thread_ = std::thread([self, result, snapshot, project = project_->handler().project(),
+                                  save_and_package =
+                                      project_->handler().MakeSaveAndPackageJob()]() {
     ImportFinalizeOutcome outcome;
-    try {
-      if (import_service) {
-        import_service->SyncImports(*snapshot, dest);
-      }
-      if (project) {
-        project->GetSleeveService()->Sync();
-        project->GetImagePoolService()->SyncWithStorage();
-      }
-    } catch (...) {
-      outcome.state_saved_ = false;
-    }
+    outcome.state_saved_ = result.restoration_error_.empty();
     if (outcome.state_saved_ && project) {
       outcome.package_saved_ = save_and_package(&outcome.package_error_);
       // The job reports a failed SaveProject without a message.
@@ -744,13 +729,41 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
 
   const uint32_t skipped     = result.unsupported_ + result.excluded_type_ + result.canceled_;
   const uint32_t errors      = result.failed_ - std::min(result.failed_, skipped);
-  auto           task_text =
-      PL_TEXT("Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed",
-              result.imported_, result.excluded_type_, result.unsupported_, errors);
+  auto           task_text   = PL_TEXT(
+      "Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 "
+      "failed",
+      result.imported_, result.duplicates_, result.excluded_type_, result.unsupported_, errors);
   if (result.canceled_ > 0) {
     task_text = PL_TEXT(
-        "Import canceled: %1 imported, %2 not read, %3 not selected, %4 unsupported, %5 failed",
-        result.imported_, result.canceled_, result.excluded_type_, result.unsupported_, errors);
+        "Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 "
+        "unsupported, %6 failed",
+        result.imported_, result.duplicates_, result.canceled_, result.excluded_type_,
+        result.unsupported_, errors);
+  }
+  if (result.updated_ > 0) {
+    const auto notice = PL_TEXT(
+        "%1 source file(s) changed size. Existing edits and ratings now apply to the current "
+        "files.",
+        result.updated_);
+    task_text = PL_TEXT("%1 %2", task_text.Render(), notice.Render());
+    status_->SetServiceMessage(notice);
+    for (const auto& change : result.source_changes_)
+      for (const auto& [element, image] : change.entries) {
+        (void)image;
+        emit SourceFileChanged(element);
+      }
+    if (const auto thumbnails = project_->handler().thumbnail_service()) {
+      for (const auto& change : result.source_changes_) {
+        for (const auto& [element, image] : change.entries) {
+          thumbnails->InvalidateThumbnail(element);
+          (void)library_->thumbs().RefreshCurrentThumbnail(element, image);
+        }
+      }
+    }
+  }
+  if (!result.errors_.empty()) {
+    status_->SetServiceMessage(
+        PL_TEXT("Import failed: %1", QString::fromStdString(result.errors_.front().message_)));
   }
   if (!outcome.state_saved_) {
     status_->SetServiceMessage(PL_TEXT("Import finished, but saving project state failed."));
@@ -762,13 +775,16 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
   import_running_     = false;
   import_canceling_   = false;
   import_phase_       = ImportPhaseState::Idle;
-  import_completed_   = static_cast<int>(result.imported_);
+  import_completed_      = static_cast<int>(result.imported_ + result.updated_);
+  import_updated_        = static_cast<int>(result.updated_);
+  import_duplicates_     = static_cast<int>(result.duplicates_);
+  import_raw_duplicates_ = static_cast<int>(result.raw_duplicates_);
   import_failed_      = static_cast<int>(result.failed_);
   import_unsupported_ = static_cast<int>(result.unsupported_);
   import_excluded_    = static_cast<int>(result.excluded_type_);
   import_canceled_    = static_cast<int>(result.canceled_);
   import_raw_total_     = static_cast<int>(result.raw_requested_);
-  import_raw_completed_ = static_cast<int>(result.raw_imported_);
+  import_raw_completed_  = static_cast<int>(result.raw_imported_ + result.raw_updated_);
   import_raw_failed_    = static_cast<int>(result.raw_failed_);
   import_status_text_ = task_text;
   emit ImportStateChanged();
@@ -778,7 +794,7 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
   status_->ScheduleIdleTaskStateReset(1800);
 
   // Only files whose metadata import succeeded are in the library. Failed entries were
-  // deleted by SyncImports, and unsupported Nikon HE files wait for recovery.
+  // removed by the import owner, and unsupported Nikon HE files wait for recovery.
   std::vector<SemanticGenerationItem> semantic_items;
   semantic_items.reserve(snapshot->metadata_ok_.size());
   for (const auto& created : snapshot->created_) {
