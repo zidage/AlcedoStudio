@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QColor>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QGuiApplication>
@@ -44,10 +45,12 @@
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "image/color_label.hpp"
 #include "json.hpp"
 #include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
+#include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
@@ -206,7 +209,8 @@ auto AlbumWarnings(const std::vector<std::string>& warnings) -> std::vector<std:
           "AlbumInspectorPanel.qml", "StatsCard.qml", "DateFilterSection.qml",
           "StarRatingFilter.qml", "ThumbnailGridView.qml", "ThumbnailStarRating.qml",
           "ThumbnailEditMark.qml", "JustifiedThumbnailTile.qml", "ThumbnailPinBinding.qml",
-          "ThumbnailLayoutAnimation.qml"}) {
+          "ThumbnailLayoutAnimation.qml", "ThumbnailColorLabelDots.qml",
+          "ThumbnailDeleteMark.qml"}) {
       if (warning.find(file) != std::string::npos) {
         out.push_back(warning);
         break;
@@ -1884,6 +1888,363 @@ TEST_F(AlbumSectionQmlTests, LibraryOverviewSectionsFoldWithTheSharedMotion) {
   theme.setReduceMotion(reduce_motion_before);
   EXPECT_TRUE(AlbumWarnings(inspector.warnings()).empty())
       << Joined(AlbumWarnings(inspector.warnings()));
+}
+
+namespace {
+
+constexpr ColorLabelMask kRedGreenBlue = ColorLabelBit(ColorLabel::kRed) |
+                                         ColorLabelBit(ColorLabel::kGreen) |
+                                         ColorLabelBit(ColorLabel::kBlue);
+constexpr ColorLabelMask kPurpleGray =
+    ColorLabelBit(ColorLabel::kPurple) | ColorLabelBit(ColorLabel::kGray);
+
+/// Six photos with color labels and Delete marks (#771): the third has a long file name and all
+/// seven codes; the second and the sixth have the Delete mark.
+auto MarkedPhotoSpecs() -> std::vector<LibraryPhotoSpec> {
+  std::vector<LibraryPhotoSpec>                    specs(6);
+  const std::vector<std::pair<uint32_t, uint32_t>> sizes{{6000, 4000}, {4000, 6000}, {6000, 4000},
+                                                         {5000, 5000}, {6000, 4000}, {4000, 6000}};
+  for (size_t i = 0; i < specs.size(); ++i) {
+    specs[i].width_  = sizes[i].first;
+    specs[i].height_ = sizes[i].second;
+  }
+  specs[0].color_labels_ = kRedGreenBlue;
+  specs[0].rating_       = 4;
+  specs[1].delete_mark_  = true;
+  specs[2].file_name_    = L"_A7R0981_landscape_final_client_selects_export_version_two.dng";
+  specs[2].color_labels_ = kColorLabelMaskAll;
+  specs[2].rating_       = 3;
+  specs[3].color_labels_ = ColorLabelBit(ColorLabel::kOrange);
+  specs[5].color_labels_ = kPurpleGray;
+  specs[5].delete_mark_  = true;
+  return specs;
+}
+
+/// Codes of the visible dots of a ThumbnailColorLabelDots.
+auto ShownDotCodes(QQuickItem* dots) -> ColorLabelMask {
+  ColorLabelMask mask = 0;
+  if (dots == nullptr || !dots->isVisible()) {
+    return mask;
+  }
+  for (int code = 0; code < kColorLabelCount; ++code) {
+    auto* dot = FirstItem(dots, QStringLiteral("thumbnailColorLabelDot_%1").arg(code));
+    if (dot != nullptr && dot->isVisible()) {
+      mask = WithColorLabel(mask, static_cast<ColorLabel>(code), true);
+    }
+  }
+  return mask;
+}
+
+auto SceneRect(QQuickItem* item) -> QRectF {
+  return item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+}
+
+/// Dot diameter of a ThumbnailColorLabelDots (the colored part, without the ring).
+auto DotDiameter(QQuickItem* dots) -> qreal { return dots->property("dotSize").toReal(); }
+
+/// The caption shows the name, then the whole dots, inside @p box: the dots start after the
+/// name, end inside the box, and keep their full width (the name elides instead).
+void ExpectNameThenDotsInside(QQuickItem* name, QQuickItem* dots, QQuickItem* box,
+                              const std::string& where) {
+  ASSERT_NE(name, nullptr) << where;
+  ASSERT_NE(dots, nullptr) << where;
+  ASSERT_NE(box, nullptr) << where;
+  const auto name_rect = SceneRect(name);
+  const auto dots_rect = SceneRect(dots);
+  const auto box_rect  = SceneRect(box);
+  EXPECT_GE(dots_rect.left() + 0.5, name_rect.right()) << where;
+  EXPECT_LE(dots_rect.right(), box_rect.right() + 0.5) << where;
+  EXPECT_GE(dots_rect.left(), box_rect.left()) << where;
+  EXPECT_NEAR(dots->width(), dots->implicitWidth(), 0.5) << where;
+}
+
+auto TileByElement(QQuickItem* root, sl_element_id_t element_id) -> QQuickItem* {
+  for (const auto& [index, tile] : JustifiedTiles(root)) {
+    if (tile->property("elementId").toUInt() == element_id) {
+      return tile;
+    }
+  }
+  return nullptr;
+}
+
+auto MarkTargets(const PopulatedProject::ImageKey& key) -> QVariantList {
+  return QVariantList{QVariantMap{{"elementId", static_cast<uint>(key.file_id_)},
+                                  {"imageId", static_cast<uint>(key.image_id_)}}};
+}
+
+/// Adds Yellow and the Delete mark to @p key through the ImageController batch writes.
+void MarkYellowAndDeleted(ApplicationModuleHost& backend, const PopulatedProject::ImageKey& key) {
+  auto label = backend.images()->SetImageColorLabel(MarkTargets(key),
+                                                    static_cast<int>(ColorLabel::kYellow), true);
+  ASSERT_TRUE(label.value("success").toBool()) << label.value("message").toString().toStdString();
+  auto mark = backend.images()->SetImageDeleteMark(MarkTargets(key), true);
+  ASSERT_TRUE(mark.value("success").toBool()) << mark.value("message").toString().toStdString();
+}
+
+auto ColorOf(QQuickItem* item) -> QColor { return item->property("color").value<QColor>(); }
+
+}  // namespace
+
+// Issue #771, classic cards at 4 and 8 columns: the dots after the file name match the color
+// labels of each photo, in code order, and stay whole inside the card with a long file name;
+// the Delete mark scrim and its badge show only on the marked photos. A mark change updates
+// the same card in place.
+TEST_F(AlbumSectionQmlTests, ClassicCardsShowTheLabelDotsAfterTheNameAndTheDeleteScrim) {
+  ApplicationModuleHost backend;
+  const auto            specs  = MarkedPhotoSpecs();
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, specs);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto&     keys = packed->images_;
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  ASSERT_NE(window, nullptr);
+  const auto wait_for_columns = [&](int level, int columns) {
+    view.loaded()->setProperty("zoomLevel", level);
+    return WaitUntil([&]() {
+      for (const auto& key : keys) {
+        if (GridCard(window, key.file_id_) == nullptr) return false;
+      }
+      return view.loaded()->property("columns").toInt() == columns;
+    });
+  };
+  ASSERT_TRUE(wait_for_columns(2, 4)) << Joined(view.warnings());
+  ProcessEvents(1000);
+
+  const auto& theme = AppTheme::Instance();
+  for (size_t index = 0; index < keys.size(); ++index) {
+    const auto where = "4 columns, photo " + std::to_string(index);
+    auto*      card  = GridCard(window, keys[index].file_id_);
+    ASSERT_NE(card, nullptr) << where;
+    auto* dots = FirstItem(card, QStringLiteral("thumbnailGridLabelDots"));
+    auto* name = FirstItem(card, QStringLiteral("thumbnailGridName"));
+    ASSERT_NE(dots, nullptr) << where;
+    ASSERT_NE(name, nullptr) << where;
+    EXPECT_EQ(ShownDotCodes(dots), specs[index].color_labels_) << where;
+    EXPECT_EQ(VisibleCount(card, QStringLiteral("thumbnailGridCompactLabelDots")), 0) << where;
+    if (specs[index].color_labels_ != 0) {
+      EXPECT_DOUBLE_EQ(DotDiameter(dots), 9.0) << where;
+      ExpectNameThenDotsInside(name, dots, card, where);
+    }
+    const bool deleted = specs[index].delete_mark_;
+    EXPECT_EQ(VisibleCount(card, QStringLiteral("thumbnailGridDeleteMark")), deleted ? 1 : 0)
+        << where;
+    EXPECT_EQ(ColorOf(name), deleted ? theme.textMutedColor() : theme.textColor()) << where;
+    if (deleted) {
+      auto* badge = FirstItem(card, QStringLiteral("thumbnailDeleteMarkBadge"));
+      ASSERT_NE(badge, nullptr) << where;
+      EXPECT_DOUBLE_EQ(badge->width(), 34.0) << where;
+      auto*      scrim       = FirstItem(card, QStringLiteral("thumbnailGridDeleteMark"));
+      const auto scrim_color = ColorOf(scrim);
+      EXPECT_EQ(scrim_color.red(), 6) << where;
+      EXPECT_EQ(scrim_color.green(), 6) << where;
+      EXPECT_EQ(scrim_color.blue(), 6) << where;
+      EXPECT_NEAR(scrim_color.alphaF(), 0.72, 0.005) << where;
+      // The scrim covers the photo box.
+      EXPECT_EQ(SceneRect(scrim), SceneRect(scrim->parentItem())) << where;
+    }
+  }
+  // The long name elides; all seven dots stay.
+  auto* long_name = FirstItem(GridCard(window, keys[2].file_id_), "thumbnailGridName");
+  ASSERT_NE(long_name, nullptr);
+  EXPECT_TRUE(long_name->property("truncated").toBool());
+  // A short name keeps its full width, and the dots follow it.
+  EXPECT_FALSE(FirstItem(GridCard(window, keys[0].file_id_), "thumbnailGridName")
+                   ->property("truncated")
+                   .toBool());
+
+  // 8 columns: name, 7 px dots, filled stars on one line; a 24 px badge.
+  ASSERT_TRUE(wait_for_columns(5, 8)) << Joined(view.warnings());
+  ProcessEvents(1000);
+  for (size_t index = 0; index < keys.size(); ++index) {
+    const auto where = "8 columns, photo " + std::to_string(index);
+    auto*      card  = GridCard(window, keys[index].file_id_);
+    ASSERT_NE(card, nullptr) << where;
+    auto* dots = FirstItem(card, QStringLiteral("thumbnailGridCompactLabelDots"));
+    auto* name = FirstItem(card, QStringLiteral("thumbnailGridCompactName"));
+    ASSERT_NE(dots, nullptr) << where;
+    EXPECT_EQ(ShownDotCodes(dots), specs[index].color_labels_) << where;
+    EXPECT_EQ(VisibleCount(card, QStringLiteral("thumbnailGridLabelDots")), 0) << where;
+    if (specs[index].color_labels_ != 0) {
+      EXPECT_DOUBLE_EQ(DotDiameter(dots), 7.0) << where;
+      ExpectNameThenDotsInside(name, dots, card, where);
+      auto* stars = FirstItem(card, QStringLiteral("thumbnailGridCompactStars"));
+      if (stars != nullptr && stars->isVisible()) {
+        EXPECT_LE(SceneRect(dots).right(), SceneRect(stars).left() + 0.5) << where;
+      }
+    }
+    if (specs[index].delete_mark_) {
+      auto* badge = FirstItem(card, QStringLiteral("thumbnailDeleteMarkBadge"));
+      ASSERT_NE(badge, nullptr) << where;
+      EXPECT_TRUE(badge->isVisible()) << where;
+      EXPECT_DOUBLE_EQ(badge->width(), 24.0) << where;
+    }
+  }
+
+  // A mark change updates the drawn card: no model reset, the same delegate, no scroll move.
+  auto* grid = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_grid"));
+  ASSERT_NE(grid, nullptr);
+  QSignalSpy resets(&backend.library()->model(), &QAbstractItemModel::modelReset);
+  auto*      target_card = GridCard(window, keys[4].file_id_);
+  ASSERT_NE(target_card, nullptr);
+  const auto content_y = grid->property("contentY").toReal();
+  MarkYellowAndDeleted(backend, keys[4]);
+  ASSERT_TRUE(WaitUntil([&]() {
+    auto* card = GridCard(window, keys[4].file_id_);
+    return card != nullptr &&
+           ShownDotCodes(FirstItem(card, QStringLiteral("thumbnailGridCompactLabelDots"))) ==
+               ColorLabelBit(ColorLabel::kYellow) &&
+           VisibleCount(card, QStringLiteral("thumbnailGridDeleteMark")) == 1;
+  }));
+  ProcessEvents(300);
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(GridCard(window, keys[4].file_id_), target_card);
+  EXPECT_DOUBLE_EQ(grid->property("contentY").toReal(), content_y);
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// Issue #771, justified rows: the caption is the file name and the dots, inside the tile with a
+// long file name; the Delete mark scrim and badge show only on the marked photos, and a mark
+// change updates the same tile in place.
+TEST_F(AlbumSectionQmlTests, JustifiedTilesShowTheLabelDotsAfterTheNameAndTheDeleteScrim) {
+  UseTestSettings(temp_dir_);
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(backend.library_view()->setGridLayout(QStringLiteral("justified")));
+  const auto specs  = MarkedPhotoSpecs();
+  const auto packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, specs);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto&     keys = packed->images_;
+
+  // 640 px: the long name does not fit in its tile.
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 640);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* flick = qobject_cast<QQuickItem*>(view.Find("thumbnailGridView_justified"));
+  ASSERT_NE(flick, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() {
+    for (const auto& key : keys) {
+      if (TileByElement(flick, key.file_id_) == nullptr) return false;
+    }
+    return true;
+  })) << Joined(view.warnings());
+  ProcessEvents(400);
+
+  const auto& theme = AppTheme::Instance();
+  for (size_t index = 0; index < keys.size(); ++index) {
+    const auto where = "photo " + std::to_string(index);
+    auto*      tile  = TileByElement(flick, keys[index].file_id_);
+    ASSERT_NE(tile, nullptr) << where;
+    auto* dots = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_labelDots"));
+    auto* name = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_name"));
+    ASSERT_NE(dots, nullptr) << where;
+    ASSERT_NE(name, nullptr) << where;
+    EXPECT_EQ(ShownDotCodes(dots), specs[index].color_labels_) << where;
+    if (specs[index].color_labels_ != 0) {
+      ExpectNameThenDotsInside(name, dots, tile, where);
+      EXPECT_EQ(dots->property("ringColor").value<QColor>(), theme.glassPanelColor()) << where;
+    }
+    const bool deleted = specs[index].delete_mark_;
+    EXPECT_EQ(VisibleCount(tile, QStringLiteral("justifiedThumbnailTile_deleteMark")),
+              deleted ? 1 : 0)
+        << where;
+    EXPECT_EQ(VisibleCount(tile, QStringLiteral("thumbnailDeleteMarkBadge")), deleted ? 1 : 0)
+        << where;
+    EXPECT_EQ(ColorOf(name), deleted ? theme.textMutedColor() : theme.textColor()) << where;
+    if (deleted) {
+      auto* scrim = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_deleteMark"));
+      auto* photo = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_photo"));
+      ASSERT_NE(photo, nullptr) << where;
+      EXPECT_EQ(SceneRect(scrim), SceneRect(photo)) << where;
+    }
+  }
+  auto* long_name = FirstItem(TileByElement(flick, keys[2].file_id_),
+                              QStringLiteral("justifiedThumbnailTile_name"));
+  ASSERT_NE(long_name, nullptr);
+  EXPECT_TRUE(long_name->property("truncated").toBool());
+
+  QSignalSpy resets(&backend.library()->model(), &QAbstractItemModel::modelReset);
+  auto*      target_tile = TileByElement(flick, keys[4].file_id_);
+  ASSERT_NE(target_tile, nullptr);
+  const auto content_y = flick->property("contentY").toReal();
+  MarkYellowAndDeleted(backend, keys[4]);
+  ASSERT_TRUE(WaitUntil([&]() {
+    auto* tile = TileByElement(flick, keys[4].file_id_);
+    return tile != nullptr &&
+           ShownDotCodes(FirstItem(tile, QStringLiteral("justifiedThumbnailTile_labelDots"))) ==
+               ColorLabelBit(ColorLabel::kYellow) &&
+           VisibleCount(tile, QStringLiteral("justifiedThumbnailTile_deleteMark")) == 1;
+  }));
+  ProcessEvents(300);
+  EXPECT_EQ(resets.count(), 0);
+  EXPECT_EQ(TileByElement(flick, keys[4].file_id_), target_tile);
+  EXPECT_DOUBLE_EQ(flick->property("contentY").toReal(), content_y);
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// Issue #771, grouped view at 4 columns: the photo cells show the same dots and Delete mark.
+TEST_F(AlbumSectionQmlTests, SectionCellsShowTheLabelDotsAndTheDeleteScrim) {
+  ApplicationModuleHost backend;
+  const auto            specs  = MarkedPhotoSpecs();
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, specs);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  backend.library()->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto&     keys = packed->images_;
+
+  LoadedComponent view(backend, "AlbumSectionView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  view.loaded()->setProperty("zoomLevel", 2);
+  auto*      window   = qobject_cast<QQuickWindow*>(view.window());
+  const auto cell_for = [&](sl_element_id_t id) -> QQuickItem* {
+    std::vector<QQuickItem*> cells;
+    CollectItems(
+        window ? window->contentItem() : nullptr,
+        [&](QQuickItem* item) {
+          return item->objectName() == QStringLiteral("albumSectionPhotoCell") &&
+                 item->property("fileId").toUInt() == id;
+        },
+        cells);
+    return cells.empty() ? nullptr : cells.front();
+  };
+  ASSERT_TRUE(WaitUntil([&]() {
+    for (const auto& key : keys) {
+      auto* cell = cell_for(key.file_id_);
+      if (cell == nullptr || cell->property("photo").isNull()) return false;
+    }
+    return view.loaded()->property("visualColumns").toInt() == 4;
+  })) << Joined(view.warnings());
+  ProcessEvents(1000);
+
+  for (size_t index = 0; index < keys.size(); ++index) {
+    const auto where = "photo " + std::to_string(index);
+    auto*      cell  = cell_for(keys[index].file_id_);
+    ASSERT_NE(cell, nullptr) << where;
+    auto* dots = FirstItem(cell, QStringLiteral("albumSectionLabelDots"));
+    ASSERT_NE(dots, nullptr) << where;
+    EXPECT_EQ(ShownDotCodes(dots), specs[index].color_labels_) << where;
+    if (specs[index].color_labels_ != 0) {
+      ExpectNameThenDotsInside(FirstItem(cell, QStringLiteral("albumSectionName")), dots, cell,
+                               where);
+    }
+    EXPECT_EQ(VisibleCount(cell, QStringLiteral("albumSectionDeleteMark")),
+              specs[index].delete_mark_ ? 1 : 0)
+        << where;
+  }
+
+  MarkYellowAndDeleted(backend, keys[4]);
+  ASSERT_TRUE(WaitUntil([&]() {
+    auto* cell = cell_for(keys[4].file_id_);
+    return cell != nullptr &&
+           ShownDotCodes(FirstItem(cell, QStringLiteral("albumSectionLabelDots"))) ==
+               ColorLabelBit(ColorLabel::kYellow) &&
+           VisibleCount(cell, QStringLiteral("albumSectionDeleteMark")) == 1;
+  }));
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
 }
 
 }  // namespace alcedo::ui::test

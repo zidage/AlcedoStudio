@@ -4,11 +4,11 @@ import QtQuick.Effects
 
 // One tile of the justified-rows layout of ThumbnailGridView (a delegate of its
 // JustifiedLayoutModel). The photo fills the photo area of the tile (the tile width follows the
-// aspect ratio of the photo); the caption below it shows the file name only. While the pointer is
-// over the tile, a details panel on the bottom of the photo shows the camera, ISO, aperture,
-// capture date, labels, and the star rating; at the zoom levels where the stars are a control,
-// a click on a star rates the photo. The edit mark and the missing-source mark sit on the photo
-// as on the classic cards.
+// aspect ratio of the photo); the caption below it shows the file name and the color label dots
+// (ThumbnailColorLabelDots). While the pointer is over the tile, a details panel on the bottom
+// of the photo shows the camera, ISO, aperture, capture date, labels, and the star rating; at
+// the zoom levels where the stars are a control, a click on a star rates the photo. The edit mark, the missing-source mark, and the Delete mark
+// (ThumbnailDeleteMark) sit on the photo as on the classic cards.
 //
 // Pointer input reaches the tile through the input overlay of ThumbnailGridView: the overlay
 // hit-tests with starAtOverlay and editMarkAtOverlay, and the view starts the zoom animation
@@ -32,6 +32,8 @@ Item {
     required property string aperture
     required property string captureDate
     required property int rating
+    required property int colorLabels
+    required property bool deleteMark
     required property bool isHdr
     required property bool isEdited
     required property var editedAt
@@ -145,6 +147,12 @@ Item {
         if (isEdited) {
             parts.push(qsTr("Edited"))
         }
+        if (colorLabels !== 0) {
+            parts.push(labelDots.Accessible.name)
+        }
+        if (deleteMark) {
+            parts.push(deleteMarkItem.Accessible.name)
+        }
         return parts.join(", ")
     }
     Accessible.selected: isSelected
@@ -190,7 +198,16 @@ Item {
             source: thumbImage
             maskEnabled: true
             maskSource: thumbMask
+            saturation: deleteMarkItem.photoSaturation
             visible: tile.thumbnailReady
+        }
+        ThumbnailDeleteMark {
+            id: deleteMarkItem
+            objectName: "justifiedThumbnailTile_deleteMark"
+            anchors.fill: parent
+            radius: tile.tileRadius
+            marked: tile.deleteMark
+            compact: tile.view.columns >= 8
         }
 
         // Edit mark: a chip on the top-right corner of the photo.
@@ -248,6 +265,7 @@ Item {
         Rectangle {
             id: detailsPanel
             objectName: "justifiedThumbnailTile_details"
+            z: 4
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
@@ -310,22 +328,40 @@ Item {
         }
     }
 
-    // Caption: the file name only.
-    Label {
-        objectName: "justifiedThumbnailTile_name"
+    // Caption: the file name and the color label dots. The file name elides first.
+    Item {
+        objectName: "justifiedThumbnailTile_caption"
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: tile.captionHeight
         visible: tile.captionHeight > 0
-        verticalAlignment: Text.AlignVCenter
-        text: tile.fileName
-        color: appTheme.textColor
-        font.family: appTheme.dataFontFamily
-        font.pixelSize: tile.view.titleFontSize
-        font.weight: tile.view.dataFontWeight
-        font.letterSpacing: tile.view.dataLetterSpacing
-        elide: Text.ElideRight
+
+        Label {
+            id: captionName
+            objectName: "justifiedThumbnailTile_name"
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            width: Math.min(implicitWidth, Math.max(0, parent.width
+                            - (labelDots.visible ? labelDots.width + labelDots.leadingGap : 0)))
+            text: tile.fileName
+            color: tile.deleteMark ? appTheme.textMutedColor : appTheme.textColor
+            font.family: appTheme.dataFontFamily
+            font.pixelSize: tile.view.titleFontSize
+            font.weight: tile.view.dataFontWeight
+            font.letterSpacing: tile.view.dataLetterSpacing
+            elide: Text.ElideRight
+        }
+        ThumbnailColorLabelDots {
+            id: labelDots
+            objectName: "justifiedThumbnailTile_labelDots"
+            anchors.left: captionName.right
+            anchors.leftMargin: leadingGap
+            anchors.verticalCenter: parent.verticalCenter
+            labels: tile.colorLabels
+            compact: tile.view.compactText
+            ringColor: tile.view.justifiedCanvasColor
+        }
     }
 
     // Monochrome selection: a 2 px text-color outline around the photo, as on the classic cards.

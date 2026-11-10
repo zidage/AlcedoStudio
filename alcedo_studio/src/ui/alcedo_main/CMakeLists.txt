@@ -797,6 +797,8 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailGridView.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailStarRating.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailEditMark.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailColorLabelDots.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailDeleteMark.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailPinBinding.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailLayoutAnimation.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/JustifiedThumbnailTile.qml"

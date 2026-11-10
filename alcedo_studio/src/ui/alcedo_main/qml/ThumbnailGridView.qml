@@ -29,6 +29,9 @@ Item {
     readonly property color cardBgHover: appTheme.hoverColor
     readonly property color cardMuted: appTheme.textMutedColor
     readonly property color cardText: appTheme.textColor
+    // Surface behind the justified tiles (the Library browser panel); the ring of the color
+    // label dots in their caption.
+    readonly property color justifiedCanvasColor: appTheme.glassPanelColor
     readonly property color cardDanger: appTheme.dangerColor
     readonly property color cardDangerTint: appTheme.dangerTintColor
     readonly property int dataFontWeight: 500
@@ -1309,6 +1312,8 @@ Item {
             required property string aperture
             required property string captureDate
             required property int rating
+            required property int colorLabels
+            required property bool deleteMark
             required property bool isHdr
             required property bool isEdited
             required property var editedAt
@@ -1380,6 +1385,12 @@ Item {
                                rating > 0 ? qsTr("%n star(s)", "", rating) : qsTr("Unrated")]
                 if (isEdited) {
                     parts.push(qsTr("Edited"))
+                }
+                if (colorLabels !== 0) {
+                    parts.push(cardLabelDots.Accessible.name)
+                }
+                if (deleteMark) {
+                    parts.push(cardDeleteMark.Accessible.name)
                 }
                 return parts.join(", ")
             }
@@ -1475,7 +1486,17 @@ Item {
                     source: thumbImage
                     maskEnabled: true
                     maskSource: thumbMask
+                    saturation: cardDeleteMark.photoSaturation
                     visible: cardDelegate.thumbnailReady
+                }
+                // Delete mark: the scrim over the photo box, below the edit mark.
+                ThumbnailDeleteMark {
+                    id: cardDeleteMark
+                    objectName: "thumbnailGridDeleteMark"
+                    anchors.fill: parent
+                    radius: root.columns >= 11 ? 5 : 10
+                    marked: cardDelegate.deleteMark
+                    compact: root.columns >= 8
                 }
                 // Edit mark: a chip on the top-right corner of the photo.
                 ThumbnailEditMark {
@@ -1545,25 +1566,42 @@ Item {
                 visible: root.textAreaHeight > 0
                 spacing: root.compactText ? 0 : 2
 
-                // 8 and 11 columns: one line with the file name and the filled stars. The file
-                // name elides first.
+                // 8 and 11 columns: one line with the file name, the color label dots, and the
+                // filled stars. The file name elides first.
                 Item {
                     visible: root.compactText && !root.hideAllText
                     width: parent.width
                     height: root.textAreaHeight
 
                     Label {
+                        id: compactName
+                        objectName: "thumbnailGridCompactName"
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Math.max(0, parent.width - compactTrailing.width
-                                           - (compactTrailing.width > 0 ? 4 : 0))
+                        width: Math.min(implicitWidth, Math.max(0, parent.width
+                                        - compactTrailing.width
+                                        - (compactTrailing.width > 0 ? 4 : 0)
+                                        - (compactLabelDots.visible
+                                           ? compactLabelDots.width + compactLabelDots.leadingGap
+                                           : 0)))
                         text: fileName
-                        color: root.cardText
+                        color: cardDelegate.deleteMark ? root.cardMuted : root.cardText
                         font.family: appTheme.dataFontFamily
                         font.pixelSize: root.titleFontSize
                         font.weight: root.dataFontWeight
                         font.letterSpacing: root.dataLetterSpacing
                         elide: Text.ElideRight
+                    }
+
+                    ThumbnailColorLabelDots {
+                        id: compactLabelDots
+                        objectName: "thumbnailGridCompactLabelDots"
+                        anchors.left: compactName.right
+                        anchors.leftMargin: leadingGap
+                        anchors.verticalCenter: parent.verticalCenter
+                        labels: cardDelegate.colorLabels
+                        compact: true
+                        ringColor: cardDelegate.color
                     }
 
                     Row {
@@ -1584,7 +1622,8 @@ Item {
                     }
                 }
 
-                // 2 to 6 columns: file name; camera line; date line with the stars.
+                // 2 to 6 columns: file name with the color label dots; camera line; date line
+                // with the stars.
                 Item {
                     visible: !root.compactText
                     width: parent.width
@@ -1592,16 +1631,29 @@ Item {
 
                     Label {
                         id: titleLabel
+                        objectName: "thumbnailGridName"
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width
+                        width: Math.min(implicitWidth, Math.max(0, parent.width
+                                        - (cardLabelDots.visible
+                                           ? cardLabelDots.width + cardLabelDots.leadingGap
+                                           : 0)))
                         text: fileName
-                        color: root.cardText
+                        color: cardDelegate.deleteMark ? root.cardMuted : root.cardText
                         font.family: appTheme.dataFontFamily
                         font.pixelSize: root.titleFontSize
                         font.weight: root.dataFontWeight
                         font.letterSpacing: root.dataLetterSpacing
                         elide: Text.ElideRight
+                    }
+                    ThumbnailColorLabelDots {
+                        id: cardLabelDots
+                        objectName: "thumbnailGridLabelDots"
+                        anchors.left: titleLabel.right
+                        anchors.leftMargin: leadingGap
+                        anchors.verticalCenter: parent.verticalCenter
+                        labels: cardDelegate.colorLabels
+                        ringColor: cardDelegate.color
                     }
                 }
                 Label {

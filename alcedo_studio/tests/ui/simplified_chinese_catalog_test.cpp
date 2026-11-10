@@ -445,6 +445,8 @@ TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheColorLabelNames) 
             QStringLiteral("颜色标签"));
   EXPECT_EQ(QCoreApplication::translate("ColorLabelNamesEditor", "Reset %1"),
             QStringLiteral("重置 %1"));
+  EXPECT_EQ(QCoreApplication::translate("ThumbnailDeleteMark", "Marked for deletion"),
+            QStringLiteral("已标记删除"));
 
   ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
 }
