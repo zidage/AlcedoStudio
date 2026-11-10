@@ -1088,6 +1088,14 @@
         <source>lens</source>
         <translation>镜头</translation>
     </message>
+    <message>
+        <source>By Custom Label</source>
+        <translation>按自定义标签</translation>
+    </message>
+    <message>
+        <source>Color label names</source>
+        <translation>颜色标签名称</translation>
+    </message>
 </context>
 <context>
     <name>Alcedo</name>
@@ -9168,6 +9176,46 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>Reset %1</source>
         <translation>重置 %1</translation>
+    </message>
+</context>
+<context>
+    <name>ColorLabelFilterChips</name>
+    <message>
+        <source>Deleted</source>
+        <translation>待删除</translation>
+    </message>
+</context>
+<context>
+    <name>LibraryMarksControl</name>
+    <message>
+        <source>Rating</source>
+        <translation>评分</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Mixed</source>
+        <translation>混合</translation>
+    </message>
+    <message>
+        <source>Label</source>
+        <translation>标签</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>Marked</source>
+        <translation>已标记</translation>
+    </message>
+    <message>
+        <source>Mark</source>
+        <translation>标记</translation>
     </message>
 </context>
 </TS>

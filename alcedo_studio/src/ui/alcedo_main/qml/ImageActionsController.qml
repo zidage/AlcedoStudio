@@ -584,6 +584,13 @@ Item {
     Connections {
         target: appModules.images
         ignoreUnknownSignals: true
+        // A color label or Delete mark batch (marks control, #772). The rows and the control
+        // already show the change; only a failed write is reported.
+        function onImageMarksFinished(result) {
+            if (result && result.success !== true && result.message) {
+                host.showSnackbar(result.message)
+            }
+        }
         function onImageRatingsFinished(result) {
             const focusedElementId = Number(root.focusedImageTarget.elementId || 0)
             const ratedIds = result && result.ratedElementIds ? result.ratedElementIds : []

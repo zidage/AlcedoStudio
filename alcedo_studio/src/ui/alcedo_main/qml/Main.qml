@@ -523,6 +523,14 @@ ApplicationWindow {
         appDialogs.openAiModelSettings()
     }
 
+    function openColorLabelSettings() {
+        appDialogs.openColorLabelSettings()
+    }
+
+    function refreshFocusedImageInspection() {
+        imageActionsController.refreshFocusedImageInspection()
+    }
+
 
     function revealLibraryAfterProjectLoad() {
         const library = workspaceHost.libraryItem

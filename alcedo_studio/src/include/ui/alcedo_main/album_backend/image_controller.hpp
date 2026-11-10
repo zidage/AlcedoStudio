@@ -152,6 +152,10 @@ class ImageController final : public QObject {
     image_id_t      image_id_   = 0;
   };
 
+  // The element ids of @p targets (0 for a target without one).
+  [[nodiscard]] static auto TargetElementIds(const std::vector<RatingTarget>& targets)
+      -> std::vector<sl_element_id_t>;
+
   // A validated rating batch. `previous_view_ratings_` holds, per target, the rating the
   // library view showed before the batch (-1 when the view has no row for the target).
   struct RatingBatch {

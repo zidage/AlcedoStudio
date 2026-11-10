@@ -77,6 +77,40 @@ auto LibraryMutationOperations::RateTargetsAsUser(const QVariantList& targets, i
   return RateTargets(targets, rating);
 }
 
+auto LibraryMutationOperations::SetColorLabelOfTargets(const QVariantList& targets, int code,
+                                                       bool on) -> QVariantMap {
+  if (images_ == nullptr || targets.isEmpty()) {
+    return QVariantMap{{QStringLiteral("started"), false},
+                       {QStringLiteral("message"), tr("No valid image was selected.")}};
+  }
+  return images_->StartSetImageColorLabel(targets, code, on);
+}
+
+auto LibraryMutationOperations::SetDeleteMarkOfTargets(const QVariantList& targets, bool on)
+    -> QVariantMap {
+  if (images_ == nullptr || targets.isEmpty()) {
+    return QVariantMap{{QStringLiteral("started"), false},
+                       {QStringLiteral("message"), tr("No valid image was selected.")}};
+  }
+  return images_->StartSetImageDeleteMark(targets, on);
+}
+
+auto LibraryMutationOperations::SetColorLabelOfTargetsAsUser(const QVariantList& targets, int code,
+                                                             bool on) -> QVariantMap {
+  if (const QString refusal = UserStateChangeRefusal(interaction_policy_); !refusal.isEmpty()) {
+    return QVariantMap{{QStringLiteral("started"), false}, {QStringLiteral("message"), refusal}};
+  }
+  return SetColorLabelOfTargets(targets, code, on);
+}
+
+auto LibraryMutationOperations::SetDeleteMarkOfTargetsAsUser(const QVariantList& targets, bool on)
+    -> QVariantMap {
+  if (const QString refusal = UserStateChangeRefusal(interaction_policy_); !refusal.isEmpty()) {
+    return QVariantMap{{QStringLiteral("started"), false}, {QStringLiteral("message"), refusal}};
+  }
+  return SetDeleteMarkOfTargets(targets, on);
+}
+
 auto LibraryMutationOperations::DeleteScope() const -> QString {
   return folders_ == nullptr || folders_->CurrentFolderId() == 0 ? QStringLiteral("project")
                                                                  : QStringLiteral("album");
