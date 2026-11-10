@@ -33,6 +33,7 @@ Item {
     signal descriptionSaveRequested(string caption)
     signal ratingReasonSaveRequested(string reasons)
     signal contextMenuRequested(var item, real sceneX, real sceneY)
+    signal colorLabelSettingsRequested()
 
     readonly property color textColor: appTheme.textColor
     readonly property color mutedTextColor: appTheme.textMutedColor
@@ -152,6 +153,7 @@ Item {
             AlbumInspectorPanel {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                onColorLabelSettingsRequested: root.colorLabelSettingsRequested()
             }
 
             ImageInspectorPanel {

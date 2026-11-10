@@ -45,7 +45,11 @@ Dialog {
     // User names of the seven color label codes; an empty entry keeps the color name.
     property var pendingColorLabelNames: Array.from(appModules.libraryView.colorLabelUserNames)
     property int requestedCategory: 0
+    // The next opening scrolls the Language / Theme page to Library > Color Labels (the pencil of
+    // By Custom Label in the Library Overview).
+    property bool revealColorLabelsOnOpen: false
     // Category indices used by callers outside this dialog.
+    readonly property int colorLabelsCategory: 0
     readonly property int updatesCategory: 6
     readonly property int lutCategory: 8
     readonly property int aiModelsCategory: 9
@@ -66,6 +70,10 @@ Dialog {
             resetPendingValues()
             aiModelFeedCheckedThisOpening = false
             currentCategory = requestedCategory
+            if (revealColorLabelsOnOpen) {
+                revealColorLabelsOnOpen = false
+                Qt.callLater(revealColorLabels)
+            }
             // Each Settings opening checks the signed LUT package list once; the
             // application never checks it at startup (plan L6B).
             if (appModules.lutPackages)
@@ -73,6 +81,16 @@ Dialog {
             // Settings can open on the AI Models page; no category change follows then.
             showAiModelsPage()
         }
+    }
+
+    // Scroll the Language / Theme page so that the Color Labels row is at its top.
+    function revealColorLabels() {
+        const flick = languageScroll.contentItem
+        if (!flick || !colorLabelsRow)
+            return
+        const rowY = colorLabelsRow.mapToItem(flick.contentItem, 0, 0).y
+        const maxY = Math.max(0, flick.contentHeight - flick.height)
+        flick.contentY = Math.max(0, Math.min(maxY, rowY - 26))
     }
 
     function showAiModelsPage() {
@@ -711,6 +729,7 @@ Dialog {
                                         }
 
                                         RowLayout {
+                                            id: colorLabelsRow
                                             objectName: "settingsColorLabelsRow"
                                             Layout.fillWidth: true
                                             Layout.topMargin: 8

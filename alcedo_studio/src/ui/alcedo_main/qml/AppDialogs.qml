@@ -395,6 +395,12 @@ Item {
         openSettingsDialog(settingsDialogObj.aiModelsCategory)
     }
 
+    // Settings > Language / Theme, scrolled to Library > Color Labels.
+    function openColorLabelSettings() {
+        settingsDialogObj.revealColorLabelsOnOpen = true
+        openSettingsDialog(settingsDialogObj.colorLabelsCategory)
+    }
+
     function openBackgroundTasksDialog() {
         backgroundTasksDialogObj.open()
     }

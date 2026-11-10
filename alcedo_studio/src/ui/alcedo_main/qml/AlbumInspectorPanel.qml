@@ -1,14 +1,19 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 
 // Album inspector page: library overview hero, then one InspectorSection per field (capture,
-// import, edit time, camera, label, rating, lens) and the active-search filter card. Each
-// section header band carries the photo-sort arrows and the Group action
-// (InspectorFieldActions) of the library query.
+// import, edit time, camera, label, custom label, rating, lens) and the active-search filter
+// card. Each field section header band carries the photo-sort arrows and the Group action
+// (InspectorFieldActions) of the library query; By Custom Label has the pencil that opens
+// Settings > Library > Color Labels instead (a photo can have several codes).
 ScrollView {
     id: root
     contentWidth: availableWidth
+
+    // The pencil of By Custom Label: open the color label names in Settings.
+    signal colorLabelSettingsRequested()
     readonly property color textColor: appTheme.textColor
     readonly property color mutedTextColor: appTheme.textMutedColor
 
@@ -200,6 +205,79 @@ ScrollView {
                     displayMode: "chips"
                     searchable: true
                     onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("label", label) }
+                }
+            }
+
+            InspectorSection {
+                objectName: "customLabelInspectorSection"
+                Layout.fillWidth: true
+                title: qsTr("By Custom Label")
+                headerActions: Component {
+                    Item {
+                        id: renameAction
+                        objectName: "customLabelSettingsAction"
+                        implicitWidth: appTheme.inspectorHeaderActionSize
+                        implicitHeight: appTheme.inspectorHeaderActionSize
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("Color label names")
+                        Accessible.onPressAction: root.colorLabelSettingsRequested()
+
+                        function trigger() {
+                            root.colorLabelSettingsRequested()
+                        }
+
+                        Keys.onPressed: function(event) {
+                            if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
+                                    || event.key === Qt.Key_Enter) {
+                                renameAction.trigger()
+                                event.accepted = true
+                            }
+                        }
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: appTheme.badgeRadius
+                            color: renameHit.containsMouse ? appTheme.buttonHoveredFillColor
+                                                           : "transparent"
+                            border.width: renameAction.activeFocus ? 1 : 0
+                            border.color: appTheme.textMutedColor
+                        }
+
+                        ColorImage {
+                            anchors.centerIn: parent
+                            width: appTheme.iconOpticalSizeCompact
+                            height: appTheme.iconOpticalSizeCompact
+                            source: "qrc:/panel_icons/edit.svg"
+                            sourceSize.width: appTheme.iconSourceSizeCompact
+                            sourceSize.height: appTheme.iconSourceSizeCompact
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true
+                            color: renameHit.containsMouse ? appTheme.textColor
+                                                           : appTheme.textMutedColor
+                        }
+
+                        MouseArea {
+                            id: renameHit
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: renameAction.trigger()
+                        }
+
+                        ToolTip.visible: renameHit.containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: qsTr("Color label names")
+                    }
+                }
+
+                ColorLabelFilterChips {
+                    objectName: "customLabelFilterChips"
+                    Layout.fillWidth: true
+                    onCodeClicked: function(code) {
+                        appModules.stats.ToggleStatsFilter("colorLabel", String(code))
+                    }
+                    onDeletedClicked: appModules.stats.ToggleStatsFilter("deleted", "")
                 }
             }
 

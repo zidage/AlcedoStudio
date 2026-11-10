@@ -447,6 +447,14 @@ TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheColorLabelNames) 
             QStringLiteral("重置 %1"));
   EXPECT_EQ(QCoreApplication::translate("ThumbnailDeleteMark", "Marked for deletion"),
             QStringLiteral("已标记删除"));
+  // The marks control and By Custom Label (#772).
+  EXPECT_EQ(QCoreApplication::translate("AlbumInspectorPanel", "By Custom Label"),
+            QStringLiteral("按自定义标签"));
+  EXPECT_EQ(QCoreApplication::translate("ColorLabelFilterChips", "Deleted"),
+            QStringLiteral("待删除"));
+  EXPECT_EQ(QCoreApplication::translate("LibraryMarksControl", "Mixed"), QStringLiteral("混合"));
+  EXPECT_EQ(QCoreApplication::translate("LibraryMarksControl", "Mark"), QStringLiteral("标记"));
+  EXPECT_EQ(QCoreApplication::translate("LibraryMarksControl", "Marked"), QStringLiteral("已标记"));
 
   ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
 }

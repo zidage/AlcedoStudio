@@ -53,6 +53,7 @@
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
+#include "ui/alcedo_main/album_backend/library_view_preferences.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/shortcut_registry.hpp"
@@ -209,8 +210,8 @@ auto AlbumWarnings(const std::vector<std::string>& warnings) -> std::vector<std:
           "AlbumInspectorPanel.qml", "StatsCard.qml", "DateFilterSection.qml",
           "StarRatingFilter.qml", "ThumbnailGridView.qml", "ThumbnailStarRating.qml",
           "ThumbnailEditMark.qml", "JustifiedThumbnailTile.qml", "ThumbnailPinBinding.qml",
-          "ThumbnailLayoutAnimation.qml", "ThumbnailColorLabelDots.qml",
-          "ThumbnailDeleteMark.qml"}) {
+          "ThumbnailLayoutAnimation.qml", "ThumbnailColorLabelDots.qml", "ThumbnailDeleteMark.qml",
+          "ColorLabelFilterChips.qml"}) {
       if (warning.find(file) != std::string::npos) {
         out.push_back(warning);
         break;
@@ -2245,6 +2246,129 @@ TEST_F(AlbumSectionQmlTests, SectionCellsShowTheLabelDotsAndTheDeleteScrim) {
            VisibleCount(cell, QStringLiteral("albumSectionDeleteMark")) == 1;
   }));
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// Issue #772: By Custom Label sits between By Labels and By Rating. It has one chip per code in
+// code order with the user name and the match-set count, then "Deleted". A chip click toggles
+// the filter of that chip; Deleted shows only the photos with the Delete mark.
+TEST_F(AlbumSectionQmlTests, LibraryOverviewCustomLabelChipsFollowTheNamesAndFilterTheLibrary) {
+  UseTestSettings(temp_dir_);
+  ApplicationModuleHost backend;
+  const auto            specs  = MarkedPhotoSpecs();
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, specs);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto&     keys = packed->images_;
+
+  LoadedComponent inspector(backend, "AlbumInspectorPanel.qml", 300);
+  ASSERT_TRUE(WaitUntil([&]() { return inspector.loaded() != nullptr; }))
+      << Joined(inspector.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(inspector.window());
+  ASSERT_NE(window, nullptr);
+  ProcessEvents(200);
+
+  // Section order: By Labels, By Custom Label, By Rating.
+  auto* labels  = qobject_cast<QQuickItem*>(inspector.Find("labelInspectorSection"));
+  auto* custom  = qobject_cast<QQuickItem*>(inspector.Find("customLabelInspectorSection"));
+  auto* ratings = qobject_cast<QQuickItem*>(inspector.Find("ratingInspectorSection"));
+  ASSERT_NE(labels, nullptr);
+  ASSERT_NE(custom, nullptr);
+  ASSERT_NE(ratings, nullptr);
+  EXPECT_LT(labels->y(), custom->y());
+  EXPECT_LT(custom->y(), ratings->y());
+  EXPECT_NE(FirstItem(custom, QStringLiteral("customLabelSettingsAction")), nullptr);
+  EXPECT_EQ(FirstItem(custom, QStringLiteral("inspectorFieldActions_colorLabel")), nullptr);
+
+  // Expected counts of the match set (all six photos).
+  std::vector<int> code_counts(kColorLabelCount, 0);
+  int              deleted_count = 0;
+  for (const auto& spec : specs) {
+    for (int code = 0; code < kColorLabelCount; ++code) {
+      code_counts[static_cast<size_t>(code)] +=
+          HasColorLabel(spec.color_labels_, static_cast<ColorLabel>(code)) ? 1 : 0;
+    }
+    deleted_count += spec.delete_mark_ ? 1 : 0;
+  }
+
+  const auto chip = [&](int code) {
+    return FirstItem(custom, QStringLiteral("colorLabelChip_%1").arg(code));
+  };
+  auto* deleted_chip = FirstItem(custom, QStringLiteral("colorLabelChipDeleted"));
+  ASSERT_NE(deleted_chip, nullptr);
+  const QStringList names = backend.library_view()->color_label_names();
+  ASSERT_EQ(names.size(), kColorLabelCount);
+  for (int code = 0; code < kColorLabelCount; ++code) {
+    SCOPED_TRACE(code);
+    auto* item = chip(code);
+    ASSERT_NE(item, nullptr);
+    EXPECT_TRUE(item->isVisible());
+    EXPECT_EQ(item->property("name").toString(), names[code]);
+    EXPECT_EQ(item->property("count").toInt(), code_counts[static_cast<size_t>(code)]);
+    EXPECT_EQ(item->property("countText").toString(),
+              QString::number(code_counts[static_cast<size_t>(code)]));
+    // Code order, Deleted last.
+    if (code > 0) {
+      const auto previous = chip(code - 1)->mapToScene(QPointF(0, 0));
+      const auto current  = item->mapToScene(QPointF(0, 0));
+      EXPECT_TRUE(current.y() > previous.y() + 0.5 ||
+                  (std::abs(current.y() - previous.y()) < 0.5 && current.x() > previous.x()));
+    }
+  }
+  EXPECT_EQ(deleted_chip->property("count").toInt(), deleted_count);
+  const auto last_code = chip(kColorLabelCount - 1)->mapToScene(QPointF(0, 0));
+  const auto deleted   = deleted_chip->mapToScene(QPointF(0, 0));
+  EXPECT_TRUE(deleted.y() > last_code.y() + 0.5 ||
+              (std::abs(deleted.y() - last_code.y()) < 0.5 && deleted.x() > last_code.x()));
+
+  // A rename in Settings renames the chip.
+  ASSERT_TRUE(backend.library_view()->SetColorLabelName(0, QStringLiteral("Client picks")));
+  ASSERT_TRUE(WaitUntil(
+      [&]() { return chip(0)->property("name").toString() == QStringLiteral("Client picks"); }));
+
+  // A chip click sets the color label filter: only photos with Orange stay.
+  ASSERT_TRUE(QMetaObject::invokeMethod(chip(1), "clicked"));
+  ASSERT_TRUE(WaitUntil([&]() { return backend.stats()->StatsFilterColorLabel() == 1; }));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  ASSERT_TRUE(WaitUntil([&]() { return chip(1)->property("selected").toBool(); }));
+  std::set<sl_element_id_t> orange;
+  for (size_t i = 0; i < specs.size(); ++i) {
+    if (HasColorLabel(specs[i].color_labels_, ColorLabel::kOrange)) {
+      orange.insert(keys[i].file_id_);
+    }
+  }
+  std::set<sl_element_id_t> shown;
+  for (const auto& item : backend.library()->model().items()) {
+    shown.insert(item.element_id);
+  }
+  EXPECT_EQ(shown, orange);
+
+  // A second click clears it.
+  ASSERT_TRUE(QMetaObject::invokeMethod(chip(1), "clicked"));
+  ASSERT_TRUE(WaitUntil([&]() { return backend.stats()->StatsFilterColorLabel() == -1; }));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  ASSERT_TRUE(
+      WaitUntil([&]() { return backend.library()->model().items().size() == specs.size(); }));
+
+  // Deleted shows only the photos with the Delete mark.
+  ASSERT_TRUE(QMetaObject::invokeMethod(deleted_chip, "clicked"));
+  ASSERT_TRUE(WaitUntil([&]() { return backend.stats()->StatsFilterDeleteMark(); }));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  ASSERT_TRUE(WaitUntil([&]() { return deleted_chip->property("selected").toBool(); }));
+  std::set<sl_element_id_t> marked;
+  for (size_t i = 0; i < specs.size(); ++i) {
+    if (specs[i].delete_mark_) {
+      marked.insert(keys[i].file_id_);
+    }
+  }
+  shown.clear();
+  for (const auto& item : backend.library()->model().items()) {
+    shown.insert(item.element_id);
+  }
+  EXPECT_EQ(shown, marked);
+  EXPECT_FALSE(chip(1)->property("selected").toBool());
+  EXPECT_TRUE(AlbumWarnings(inspector.warnings()).empty())
+      << Joined(AlbumWarnings(inspector.warnings()));
 }
 
 }  // namespace alcedo::ui::test

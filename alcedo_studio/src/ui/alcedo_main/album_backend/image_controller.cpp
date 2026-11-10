@@ -1529,6 +1529,8 @@ auto ImageController::FinishRatingBatch(const RatingBatch&        batch,
                      {"failedElementIds", ToVariantIdList(failed_ids)}};
 
   if (rated_ids.empty()) {
+    // The marks control showed the change; read the stored ratings again.
+    library_->ScheduleSelectionMarksRead();
     const auto msg = PL_TEXT("Failed to save image rating.");
     status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
@@ -1568,6 +1570,7 @@ auto ImageController::SetImageRatings(const QVariantList& targetEntries, int rat
   }
   batch->previous_view_ratings_ =
       SetViewRatings(batch->targets_, std::vector<int>(batch->targets_.size(), rating));
+  library_->selection_marks()->ApplyRating(TargetElementIds(batch->targets_), rating);
   const auto& ph      = project_->handler();
   const auto  outcome = PersistRatingBatch(ph.project(), *batch, ph.MakeSaveAndPackageJob());
   return FinishRatingBatch(*batch, outcome);
@@ -1589,6 +1592,7 @@ auto ImageController::StartSetImageRatings(const QVariantList& targetEntries, in
   // rating of any image whose write fails.
   batch->previous_view_ratings_ =
       SetViewRatings(batch->targets_, std::vector<int>(batch->targets_.size(), rating));
+  library_->selection_marks()->ApplyRating(TargetElementIds(batch->targets_), rating);
 
   rating_batch_running_ = true;
   if (background_tasks_ != nullptr) {
@@ -1741,6 +1745,13 @@ auto ImageController::ApplyViewMarkChange(const std::vector<RatingTarget>& targe
     library_->model().updateMarks(targets[i].element_id_, targets[i].image_id_,
                                   next.color_labels_, next.delete_mark_);
   }
+  // The marks control of the selection shows the change with the rows.
+  const auto element_ids = TargetElementIds(targets);
+  if (change.kind_ == MarkChange::Kind::kColorLabel) {
+    library_->selection_marks()->ApplyColorLabel(element_ids, change.code_, change.on_);
+  } else {
+    library_->selection_marks()->ApplyDeleteMark(element_ids, change.on_);
+  }
   return previous;
 }
 
@@ -1770,6 +1781,16 @@ void ImageController::SetViewMarks(const std::vector<RatingTarget>& targets,
     library_->model().updateMarks(targets[i].element_id_, targets[i].image_id_,
                                   marks[i].color_labels_, marks[i].delete_mark_);
   }
+}
+
+auto ImageController::TargetElementIds(const std::vector<RatingTarget>& targets)
+    -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> ids;
+  ids.reserve(targets.size());
+  for (const auto& target : targets) {
+    ids.push_back(target.element_id_);
+  }
+  return ids;
 }
 
 auto ImageController::PersistMarkBatch(const std::shared_ptr<ProjectService>& project,
@@ -1859,6 +1880,8 @@ auto ImageController::FinishMarkBatch(const MarkBatch& batch, const MarkBatchOut
                      {"failedElementIds", ToVariantIdList(failed_ids)}};
 
   if (marked_ids.empty()) {
+    // The marks control showed the change; read the stored marks again.
+    library_->ScheduleSelectionMarksRead();
     const auto msg = PL_TEXT("Failed to save the image marks.");
     status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();

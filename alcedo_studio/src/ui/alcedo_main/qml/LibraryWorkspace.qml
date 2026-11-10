@@ -579,7 +579,20 @@ RowLayout {
                     onContextMenuRequested: function(item, sceneX, sceneY) {
                         host.openImageContextMenu(item, sceneX, sceneY)
                     }
+                    onColorLabelSettingsRequested: host.openColorLabelSettings()
                 }
+            }
+
+            // Rating, color labels, and Delete mark of the selection (#772).
+            LibraryMarksControl {
+                Layout.fillWidth: true
+                visible: !inspectorPanel.exportPageActive
+                selectionState: host.selectionState
+                selectedCount: host.selectedCount
+                backendInteractive: host.backendInteractive
+                theme: root
+                onMessageRequested: function(message) { host.showSnackbar(message) }
+                onRatingApplied: host.refreshFocusedImageInspection()
             }
 
             LibraryInspectorActions {

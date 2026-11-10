@@ -69,6 +69,19 @@ class LibraryMutationOperations final : public QObject {
   /// RateTargets directly.
   Q_INVOKABLE QVariantMap  StartDeleteTargetsAsUser(const QVariantList& targets);
   Q_INVOKABLE QVariantMap  RateTargetsAsUser(const QVariantList& targets, int rating);
+  /// Sets (@p on) or clears the color label @p code (0 to 6) on every image of @p targets
+  /// through ImageController::StartSetImageColorLabel and returns its result (started, taskId,
+  /// message). ImageController::ImageMarksFinished reports the write.
+  Q_INVOKABLE QVariantMap  SetColorLabelOfTargets(const QVariantList& targets, int code, bool on);
+  /// Sets or clears the Delete mark on every image of @p targets through
+  /// ImageController::StartSetImageDeleteMark (see SetColorLabelOfTargets).
+  Q_INVOKABLE QVariantMap  SetDeleteMarkOfTargets(const QVariantList& targets, bool on);
+  /// The marks control of the Library inspector: SetColorLabelOfTargets and
+  /// SetDeleteMarkOfTargets, refused (`started: false`) with the reason in `message` while an
+  /// automation agent holds control.
+  Q_INVOKABLE QVariantMap  SetColorLabelOfTargetsAsUser(const QVariantList& targets, int code,
+                                                        bool on);
+  Q_INVOKABLE QVariantMap  SetDeleteMarkOfTargetsAsUser(const QVariantList& targets, bool on);
 
  signals:
   /// The element ids that a delete deleted.

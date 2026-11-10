@@ -97,6 +97,8 @@ LibraryModule::LibraryModule(ProjectModule* project, QObject* parent)
       thumbs_(*this),
       query_worker_(std::make_unique<SearchRequestWorker>()) {
   LoadThumbnailDiskCacheSettings();
+  connect(&selection_, &LibrarySelection::SelectionChanged, this,
+          [this]() { ScheduleSelectionMarksRead(); });
 }
 
 LibraryModule::~LibraryModule() { query_worker_.reset(); }
@@ -597,9 +599,62 @@ void LibraryModule::ScheduleRefresh(RefreshKind kind) {
   QMetaObject::invokeMethod(this, [this]() { SubmitPendingRefresh(); }, Qt::QueuedConnection);
 }
 
-void LibraryModule::NoteRatingsChanged() { RefreshAfterColumnWrite(PresentationReadsRating()); }
+void LibraryModule::NoteRatingsChanged() {
+  RefreshAfterColumnWrite(PresentationReadsRating());
+  ScheduleSelectionMarksRead();
+}
 
-void LibraryModule::NoteMarksChanged() { RefreshAfterColumnWrite(PresentationReadsMarks()); }
+void LibraryModule::NoteMarksChanged() {
+  RefreshAfterColumnWrite(PresentationReadsMarks());
+  ScheduleSelectionMarksRead();
+}
+
+void LibraryModule::ScheduleSelectionMarksRead() {
+  if (selection_marks_read_scheduled_) {
+    return;
+  }
+  selection_marks_read_scheduled_ = true;
+  // A rubber band drag changes the selection many times in one turn; one read follows.
+  QMetaObject::invokeMethod(
+      this,
+      [this]() {
+        selection_marks_read_scheduled_ = false;
+        SubmitSelectionMarksRead();
+      },
+      Qt::QueuedConnection);
+}
+
+void LibraryModule::SubmitSelectionMarksRead() {
+  auto       proj   = project_ ? project_->handler().project() : nullptr;
+  auto       browse = proj ? proj->GetAlbumBrowseService() : nullptr;
+  const auto ids    = selection_.SelectedElementIds();
+  if (ids.empty() || !browse) {
+    query_worker_->Invalidate(SearchRequestKind::kSelectionMarks);
+    selection_marks_.Clear();
+    return;
+  }
+  const auto revision = selection_marks_.LocalChangeRevision();
+  query_worker_->Submit(SearchRequestKind::kSelectionMarks, [this, browse, ids,
+                                                             revision](std::uint64_t generation) {
+    std::vector<SearchResultRow> rows;
+    bool                         ok = true;
+    try {
+      rows = browse->ReadAlbumFileRows(ids);
+    } catch (const std::exception&) {
+      ok = false;
+    }
+    QMetaObject::invokeMethod(
+        this,
+        [this, generation, revision, ok, rows = std::move(rows)]() {
+          if (!ok || !query_worker_->IsCurrent(SearchRequestKind::kSelectionMarks, generation) ||
+              selection_marks_.LocalChangeRevision() != revision) {
+            return;
+          }
+          selection_marks_.Replace(rows);
+        },
+        Qt::QueuedConnection);
+  });
+}
 
 auto LibraryModule::PresentationReadsMarks() const -> bool {
   if (!accepted_input_) {
