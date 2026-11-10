@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/semantic/semantic_records.hpp"
 #include "type/type.hpp"
@@ -44,18 +45,6 @@ class SemanticVectorSearch {
   explicit SemanticVectorSearch(Database& db_ctrl);
 
   /**
-   * @brief SELECT of the kept files of the folder (0 for the whole library).
-   *
-   * The statement returns the columns `file_id`, `image_id`, and `relevance`, with no order.
-   * The fragment carries its binds and is valid for one statement on this database.
-   * @throws std::runtime_error when the model is not registered, when a vector does not have
-   *         the model dimension, or when a vector has a non-finite value or a zero norm.
-   */
-  [[nodiscard]] auto BuildRelevanceSelect(sl_element_id_t               folder_id,
-                                          const SemanticQueryEmbedding& embedding) const
-      -> duckorm::SqlFragment;
-
-  /**
    * @brief The page [offset, offset + limit) of the kept files and the number of kept files.
    *
    * Every page of one query reads the same ordered result, so pages neither repeat nor skip
@@ -81,5 +70,19 @@ class SemanticVectorSearch {
  private:
   Database& database_;
 };
+
+/**
+ * @brief SELECT of the files of @p folder_id (0 for the whole library) that the relevance rule
+ *        of SemanticVectorSearch keeps for @p embedding.
+ *
+ * The statement returns the columns `file_id`, `image_id`, and `relevance`, with no order.
+ * The fragment carries its binds and is valid for one statement on the database of @p conn.
+ * The caller holds the connection lock of @p conn (ElementStore runs it inside its read).
+ * @throws std::runtime_error when the model is not registered, when a vector does not have
+ *         the model dimension, or when a vector has a non-finite value or a zero norm.
+ */
+[[nodiscard]] auto BuildSemanticRelevanceSelect(duckorm::Connection conn, sl_element_id_t folder_id,
+                                                const SemanticQueryEmbedding& embedding)
+    -> duckorm::SqlFragment;
 
 }  // namespace alcedo

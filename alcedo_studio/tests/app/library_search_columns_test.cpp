@@ -33,8 +33,10 @@
 #include "library_search_test_support.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "sleeve/sleeve_filter/filter_factory.hpp"
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/image/image_mapper.hpp"
 #include "storage/mapper/image/image_search_columns.hpp"
+#include "storage/query/filter_compiler.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "support/semantic_stores_test_support.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -395,7 +397,7 @@ TEST_F(LibrarySearchColumnsTest, SearchStatsAndFiltersGiveSameResultsWithMetadat
   const auto where =
       filter_service.BuildFuzzySearchWhere(L"2026-06-07 d810 P263_5860", kAllSearchFields);
   ASSERT_TRUE(where.has_value());
-  const auto sql = conv::ToBytes(*where->raw_sql_);
+  const auto sql = CompileFilterPredicate(where).value().sql_;
   EXPECT_EQ(sql.find("json_extract"), std::string::npos);
   EXPECT_EQ(sql.find("metadata"), std::string::npos);
   EXPECT_EQ(sql.find("REPLACE("), std::string::npos);
@@ -560,9 +562,14 @@ auto BuildWhereWhileDatabaseIsLocked(ProjectService& project, const SleeveFilter
   return build.get();
 }
 
+/// The SQL text of the compiled search @p node.
+auto SearchSql(const FilterNode& node) -> std::string {
+  return FilterSQLCompiler::Compile(node).sql_;
+}
+
 auto StringBinds(const FilterNode& node) -> std::vector<std::string> {
   std::vector<std::string> values;
-  for (const auto& bind : node.raw_binds_) {
+  for (const auto& bind : FilterSQLCompiler::Compile(node).binds_) {
     if (const auto* value = std::get_if<std::string>(&bind)) {
       values.push_back(*value);
     }
@@ -606,9 +613,9 @@ TEST_F(LibrarySearchColumnsTest, FuzzySearchWhereRunsNoCatalogQuery) {
   // WHERE has no BM25 term. No semantic model is active.
   EXPECT_FALSE(project.GetStorage()->GetAiStore().HasUnderstandingFtsIndex());
   const auto first = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"lighthouses");
-  ASSERT_TRUE(first.has_value() && first->raw_sql_.has_value());
-  EXPECT_EQ(first->raw_sql_->find(L"fts_main_AiImageFtsDocument.match_bm25"), std::wstring::npos);
-  EXPECT_EQ(first->raw_sql_->find(L"SemanticImageLabel"), std::wstring::npos);
+  ASSERT_TRUE(first.has_value());
+  EXPECT_EQ(SearchSql(*first).find("fts_main_AiImageFtsDocument.match_bm25"), std::string::npos);
+  EXPECT_EQ(SearchSql(*first).find("SemanticImageLabel"), std::string::npos);
   EXPECT_EQ(observed_operations, (std::vector<std::string>{"BuildFuzzySearchWhere"}));
   EXPECT_EQ(filter_service.ListSearchResultPage(folder_id, first, 0, 10).total_, 0u);
 
@@ -637,8 +644,8 @@ TEST_F(LibrarySearchColumnsTest, FuzzySearchWhereRunsNoCatalogQuery) {
   std::string error;
   ASSERT_TRUE(semantic.models_.SetActiveModelKey("model-a", &error)) << error;
   const auto with_model_a = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"portrait");
-  ASSERT_TRUE(with_model_a.has_value() && with_model_a->raw_sql_.has_value());
-  EXPECT_NE(with_model_a->raw_sql_->find(L"SemanticImageLabel"), std::wstring::npos);
+  ASSERT_TRUE(with_model_a.has_value());
+  EXPECT_NE(SearchSql(*with_model_a).find("SemanticImageLabel"), std::string::npos);
   EXPECT_TRUE(Contains(StringBinds(*with_model_a), "model-a"));
 
   ASSERT_TRUE(semantic.models_.SetActiveModelKey("model-b", &error)) << error;
@@ -650,8 +657,8 @@ TEST_F(LibrarySearchColumnsTest, FuzzySearchWhereRunsNoCatalogQuery) {
   ASSERT_TRUE(semantic.models_.PurgeModel("model-b", &error)) << error;
   EXPECT_TRUE(semantic.models_.ActiveModelKey().empty());
   const auto after_purge = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"portrait");
-  ASSERT_TRUE(after_purge.has_value() && after_purge->raw_sql_.has_value());
-  EXPECT_EQ(after_purge->raw_sql_->find(L"SemanticImageLabel"), std::wstring::npos);
+  ASSERT_TRUE(after_purge.has_value());
+  EXPECT_EQ(SearchSql(*after_purge).find("SemanticImageLabel"), std::string::npos);
 
   // Registering an active model makes it the active one in the same way.
   std::string upsert_error;
@@ -884,24 +891,35 @@ TEST_F(LibrarySearchColumnsTest, ApplySearchEvaluatesThePredicateOnce) {
     observed_operations.emplace_back(operation);
   });
 
-  // The search predicate of `nikkor` AND-ed with the row counter.
-  auto search = filter_service.BuildFuzzySearchWhere(L"nikkor", kAllSearchFields);
-  ASSERT_TRUE(search.has_value() && search->raw_sql_.has_value());
-  FilterNode counted        = *search;
-  counted.raw_sql_          = L"count_predicate_rows(e.id) AND (" + *search->raw_sql_ + L")";
+  // The search predicate of `nikkor` AND-ed with the row counter. The counted predicate goes
+  // to the store reads that the service methods call with the compiled filter.
+  const auto search = filter_service.BuildFuzzySearchWhere(L"nikkor", kAllSearchFields);
+  ASSERT_TRUE(search.has_value());
+  const auto search_predicate = CompileFilterPredicate(search);
+  ASSERT_TRUE(search_predicate.has_value());
+  auto counted = duckorm::expr::raw("count_predicate_rows(e.id) AND (");
+  counted.append(*search_predicate);
+  counted.append(duckorm::expr::raw(")"));
+  const auto& store         = project.GetStorage()->GetElementStore();
 
   // One page statement evaluates the predicate once: that is the row count of one evaluation.
   predicate_rows_evaluated  = 0;
-  const auto page           = filter_service.ListSearchResultPage(folder_id, counted, 0, 120);
+  const auto page           = store.ListSearchResultPage(folder_id, 0, 120, counted);
   const auto one_evaluation = predicate_rows_evaluated.load();
   ASSERT_EQ(page.total_, 1u);
   ASSERT_GT(one_evaluation, 0);
 
   // The apply read evaluates it once for the page, the total, and all stats buckets.
-  observed_operations.clear();
   predicate_rows_evaluated = 0;
-  const auto applied = filter_service.ListSearchResultPageWithStats(folder_id, counted, 0, 120);
+  const auto applied_read =
+      store.ListSearchResultPageWithStats(folder_id, 0, 120, counted, "model-a");
+  const SearchResultPageAndStats applied{.page_  = applied_read.page_,
+                                         .stats_ = ToAlbumStatsView(applied_read.stats_)};
   EXPECT_EQ(predicate_rows_evaluated.load(), one_evaluation);
+  // The service runs the apply as one query after the WHERE build.
+  observed_operations.clear();
+  EXPECT_EQ(filter_service.ListSearchResultPageWithStats(folder_id, search, 0, 120).page_.total_,
+            1u);
   EXPECT_EQ(observed_operations, (std::vector<std::string>{"ListSearchResultPageWithStats"}));
   EXPECT_EQ(applied.page_.total_, 1u);
   ASSERT_EQ(applied.page_.rows_.size(), 1u);
@@ -913,14 +931,14 @@ TEST_F(LibrarySearchColumnsTest, ApplySearchEvaluatesThePredicateOnce) {
 
   // The stats refresh with an active search also evaluates it once.
   predicate_rows_evaluated = 0;
-  EXPECT_EQ(filter_service.BuildFolderStats(folder_id, counted).total_photo_count_, 1);
+  EXPECT_EQ(store.BuildFolderStats(folder_id, counted, "model-a").total_photo_count_, 1);
   EXPECT_EQ(predicate_rows_evaluated.load(), one_evaluation);
 
   // The counter tells evaluations apart: the page and the stats read separately evaluate the
   // predicate twice.
   predicate_rows_evaluated = 0;
-  (void)filter_service.ListSearchResultPage(folder_id, counted, 0, 120);
-  (void)filter_service.BuildFolderStats(folder_id, counted);
+  (void)store.ListSearchResultPage(folder_id, 0, 120, counted);
+  (void)store.BuildFolderStats(folder_id, counted, "model-a");
   EXPECT_EQ(predicate_rows_evaluated.load(), 2 * one_evaluation);
 }
 

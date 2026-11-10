@@ -12,6 +12,7 @@
 
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/query/library_search_predicates.hpp"
 #include "storage/query/stats_dimension.hpp"
 #include "utils/string/convert.hpp"
 
@@ -67,6 +68,8 @@ auto FilterSQLCompiler::FieldToColumn(FilterField field) -> SqlFragment {
     case FilterField::SemanticTags:
       // Semantic label filters are StatsBucket nodes (kSemanticLabel). Placeholder only.
       return expr::col("i.embedding");
+    case FilterField::FileId:
+      return expr::col("e.id");
   }
   return expr::raw("1=0");
 }
@@ -182,12 +185,9 @@ auto FilterSQLCompiler::CompileNode(const FilterNode& node) -> SqlFragment {
                                             stats_dimension::ColumnSource::kLiveTables);
   }
 
-  if (node.type_ == FilterNode::Type::RawSQL && node.raw_sql_.has_value()) {
-    // Bridge: trusted SQL text plus any prepared binds of the app layer search.
-    SqlFragment frag;
-    frag.sql_   = conv::ToBytes(*node.raw_sql_);
-    frag.binds_ = node.raw_binds_;
-    return frag;
+  if (node.type_ == FilterNode::Type::LibrarySearch && node.library_search_.has_value()) {
+    return BuildLibrarySearchPredicate(node.library_search_->request,
+                                       node.library_search_->capabilities);
   }
 
   return {};

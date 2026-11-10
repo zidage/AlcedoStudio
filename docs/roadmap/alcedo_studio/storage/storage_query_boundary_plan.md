@@ -2,7 +2,7 @@
 
 Date: 2026-11-09
 
-Status: in progress. S1 and S2 complete (2026-11-09); S3 and S4 complete (2026-11-10); S5 and S6
+Status: in progress. S1 and S2 complete (2026-11-09); S3, S4, and S5 complete (2026-11-10); S6
 planned.
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and the callers of storage in
@@ -192,7 +192,7 @@ storage/  -> duckorm, Mapper, Store, StatsDimension, LibrarySearchPredicates, SQ
 | S2 | Typed-key Mapper and one transaction style; `CommitGraphStore`, `FolderMapper`, `ImageStore` on duckorm | Mapper, edit history store, sleeve mappers | S1 | 1300-1800 | complete (#787) |
 | S3 | `ElementStore` read paths on typed rows | element store, album query | S1 | 1000-1500 | complete (#788) |
 | S4 | One stats dimension definition; filter compiler in storage | storage query, sleeve filter, element store | S3 | 1200-1800 | complete (#789) |
-| S5 | Search predicates in storage; domain values in service signatures | storage query, app filter and browse services, library module | S4 | 1200-1800 | planned (#790) |
+| S5 | Search predicates in storage; domain values in service signatures | storage query, app filter and browse services, library module | S4 | 1200-1800 | complete (#790) |
 | S6 | Storage owns connections; maintenance API; boundary check in CI | Storage facade, app services, package backend, CI | S2, S5 | 1300-1900 | planned (#791) |
 
 Each phase keeps its upper estimate under 2000 lines. S3 and S4 are separate phases because
@@ -1185,13 +1185,120 @@ ctest --test-dir build/debug --output-on-failure -R "LibrarySearchPredicatesTest
 
 **Exit criteria**
 
-- [ ] `alcedo_studio/src/app` and `alcedo_studio/src/ui` have zero `duckorm::` references.
-- [ ] `FilterNode::Type::RawSQL` and `raw_binds_` are deleted.
-- [ ] All listed tests pass.
+- [x] `alcedo_studio/src/app` and `alcedo_studio/src/ui` have zero `duckorm::` references.
+- [x] `FilterNode::Type::RawSQL` and `raw_binds_` are deleted.
+- [x] All listed tests pass.
 
 **Expected diff:** 1200-1800 lines.
 
 **Completion record:** see section 8.
+
+##### Phase S5 completion record (2026-11-10)
+
+**Status:** complete. Branch `refactor/storage-search-predicates-790`, stacked on the S4 branch
+`refactor/storage-stats-dimension-789` (PR #799).
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| Sleeve filter (domain) | new `sleeve/sleeve_filter/library_search_request.hpp`, `filter_combo.hpp` | `SearchTerm`, `SearchDate`, `SearchTermKind`, `CaptureParameterField`, `SearchField`/`SearchFieldMask` moved here from `app/`; new `LibrarySearchRequest{query_text, terms, fields}`, `SearchCapabilities{semantic_model_key, has_ai_fts_index}`, `LibrarySearchCondition{request, capabilities}`; `FilterNode::Type::LibrarySearch` with `library_search_`; `FilterField::FileId`; `Type::RawSQL`, `raw_sql_`, `raw_binds_` deleted; `filter_combo.hpp` no longer includes `duckdb_expr.hpp`, and `SleeveFilter` no longer links `DuckORM` |
+| Storage query | new `storage/query/library_search_predicates.hpp/.cpp`, `filter_compiler.hpp/.cpp` | `BuildLibrarySearchPredicate(request, capabilities)`: the fuzzy text, EXIF word, date part, file kind, capture parameter, AI text, BM25, and semantic label predicates moved unchanged from `sleeve_filter_service.cpp`; the compiler compiles a `LibrarySearch` node through it and `FileId` to `e.id` |
+| Semantic relevance | `semantic_vector_search.hpp/.cpp`, `element_store.hpp/.cpp` | `SemanticVectorSearch::BuildRelevanceSelect` became `BuildSemanticRelevanceSelect(conn, folder_id, embedding)` on the connection of the caller; `ElementStore::ReadAlbumQuery`, `ReadAlbumFilePosition`, `ReadAlbumFileIds`, and `BuildFolderStats` take `std::optional<SemanticQueryEmbedding>` and build the select under their own lock |
+| App | `sleeve_filter_service.hpp/.cpp`, `search_query_parser.hpp`, `album_browse_service.hpp/.cpp` | `BuildFuzzySearchWhere` parses and returns a `LibrarySearch` node (capabilities read once, no SQL); `BuildExactFileWhere` returns a `FileId` condition; `BuildSemanticRelevanceSelect` deleted; the `AlbumBrowseService` reads take `std::optional<SemanticQueryEmbedding>`, and `ListFilesInFolderById` and `CountFilesInFolderById` take `std::optional<FilterNode>` |
+| UI | `library_module.cpp` | `RelevanceSelectOf` and the `duckdb_expr.hpp` include deleted; the reads pass the query embedding |
+| Tests | new `tests/storage/library_search_predicates_test.cpp` (`LibrarySearchPredicatesTest`); `album_query_test.cpp`, `filter_service_test.cpp`, `library_search_columns_test.cpp`, `library_search_recall_test.cpp`, `sleeve_filter_compile_test.cpp`, `sleeve_filter_factory_test.cpp` | the RawSQL cases became `FileId` and `LibrarySearch` cases; the tests that need a hand-written predicate (BM25 per-row comparison, row-counter UDF) give a `SqlFragment` to the `ElementStore` reads |
+
+**Detail decisions made during the work** (the plan left them open or did not fit the code):
+
+- **Location of the request types.** The plan proposed `storage/query/library_search_types.hpp`.
+  `FilterNode` (sleeve) holds the condition, and `StorageQuery` depends on `SleeveFilter`, so the
+  types are in `sleeve/sleeve_filter/library_search_request.hpp`, next to `StatsBucketCondition`.
+  `SearchQueryParser` stays in `app/` and includes that header. The moved `SearchTerm` and
+  `SearchDate` keep their member names (`text_`, `kind_`, and so on), so the parser and its tests
+  stay unchanged; the new structs use names without `_`.
+- **Capabilities in the condition.** The predicate needs the active semantic model and the FTS
+  index state. `BuildFuzzySearchWhere` reads them once, as before, and keeps them in the
+  condition (`SearchCapabilities`). The compiler stays a pure function of the node, as with the
+  semantic model key of the S4 `StatsBucketCondition`.
+- **`SemanticRelevanceRequest`.** The plan's `SemanticRelevanceRequest{model_key,
+  query_text_embedding}` is the existing `SemanticQueryEmbedding{model_key_, dimension_, query_,
+  neutral_}`, which `LibraryModule` already holds. The signatures take it, so one type holds
+  these values. The store read builds the relevance select on the connection that it holds: the
+  old member function took the connection lock itself and could not run inside the read. The
+  model check now runs in the read transaction and fails the read with the same
+  `std::runtime_error`.
+- **Exact file filter.** `BuildExactFileWhere` returned a RawSQL `e.id = ?` node. It is now a
+  typed `FilterField::FileId` condition with the same compiled text.
+- **Zero field mask.** A request with `fields == 0` compiles to `FALSE`, as the RawSQL node did.
+  A request with fields and an empty term list throws `std::invalid_argument`: an empty AND
+  compiles to an empty fragment, which the reads treat as "every file".
+- **Store `SqlFragment` parameters.** The `ElementStore` methods still take the compiled
+  `SqlFragment`. `app/` calls `CompileFilterPredicate` (from `storage/query/filter_compiler.hpp`)
+  and passes the result on without a duckorm type name. S6 moves the compile call behind the
+  storage session.
+
+**Primary success call chain:**
+
+```text
+SearchController -> SleeveFilterService::BuildFuzzySearchWhere(text, mask)
+  -> SearchQueryParser::Parse -> LibrarySearchRequest + SearchCapabilities (no SQL)
+  -> FilterNode{LibrarySearch} -> LibraryModule MergeFilterNodes
+  -> AlbumBrowseService::ReadAlbumQuery(filter, ..., semantic_query_)
+  -> CompileFilterPredicate -> FilterSQLCompiler -> BuildLibrarySearchPredicate
+  -> ElementStore::ReadAlbumQuery -> BuildSemanticRelevanceSelect (when set, same connection)
+  -> MatchSetTable -> page, groups, and stats -> LibraryModule
+```
+
+**Primary failure and restore call chain:**
+
+```text
+ElementStore::ReadAlbumQuery -> DuckDB error in the compiled search predicate, or an
+  unregistered model or invalid vector in the query embedding
+  -> std::runtime_error (the read transaction rolls back) -> AlbumBrowseService throws
+  -> LibraryModule sets output.error_ -> SearchController shows the search error; the prior
+     result rows stay
+LibrarySearch node with fields and an empty term list
+  -> std::invalid_argument before any statement runs
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `QuoteInSearchTextIsBound` (`O'Brien` returns only `O'Brien_portrait.JPG`; the text is only in binds; `x'OR'1'='1` matches no file) | `LibrarySearchPredicatesTest` | PASS |
+| FTS rule: `Bm25AlternativeNeedsTheIndexAndBothAiFieldGroups`; label rule: `SemanticLabelAlternativeNeedsTheActiveModelAndTheTagsField`; `RequestWithoutFieldsMatchesNoFile`; `RequestWithFieldsAndNoTermIsRejected` | `LibrarySearchPredicatesTest` | PASS (5/5) |
+| Recall, precision, and BM25 semi-join cases with unchanged expected file sets | `LibrarySearchRecallTest`, `LibrarySearchColumnsTest` | PASS |
+| `FuzzySearchZeroFieldMaskCompilesToFalse`, `ExactFileWhereBindsFileIdAsParam`, and all other cases | `FilterServiceTest` | PASS |
+| Relevance order, groups, stats, and select-all from the query embedding; new `SemanticReadOfAnUnregisteredModelFails` | `AlbumQueryTest` | PASS |
+| `FileIdConditionComparesElementIdWithBind`, `LibrarySearchNodeKeepsLiteralTermTextOnlyInBinds` | `SleeveFilterCompileTest` | PASS |
+| `SleeveFilterFactoryTest`, `StatsDimensionTest` | 2 suites | PASS |
+| Total of the nine suites above | ctest | 143/143 PASS (1 disabled, 1 skipped) |
+| `AlbumBackendLibraryQueryTest`, `AlbumBackendStatsFilterTest` (offscreen) | UI suites | 34/34 PASS |
+| Zero `duckorm` references in `alcedo_studio/src/app`, `src/ui`, `src/include/app`, `src/include/ui` | search for `duckorm` | 0 lines |
+| `RawSQL`, `raw_sql_`, `raw_binds_` deleted | search in `alcedo_studio/src` and `alcedo_studio/tests` | 0 lines |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target LibrarySearchPredicatesTest StatsDimensionTest SleeveFilterCompileTest SleeveFilterFactoryTest AlbumQueryTest FilterServiceTest LibrarySearchRecallTest LibrarySearchColumnsTest AlbumBackendLibraryQueryTest AlbumBackendStatsFilterTest alcedo_main   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(LibrarySearchPredicatesTest|StatsDimensionTest|SleeveFilterCompileTest|SleeveFilterFactoryTest|AlbumQueryTest|AlbumQueryRelevanceTest|FilterServiceTest|LibrarySearchRecallTest|LibrarySearchColumnsTest)\."   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(AlbumBackendLibraryQueryTest|AlbumBackendStatsFilterTest)\."   (QT_QPA_PLATFORM=offscreen, exit 0)
+```
+
+The full suite is for the user to start; this record lists the targeted suites. After this
+build, `git clang-format` changed only white space on the changed lines.
+
+**Checklist / exit condition:** all three boxes checked.
+
+**LOC note:** `sleeve_filter_service.cpp` 345 (was 737); `library_search_predicates.cpp` 410;
+`library_search_request.hpp` 149; `element_store.cpp` 1369 (was 1355: the relevance select
+helper); `library_search_predicates_test.cpp` 164. Diff before this record: 26 files, +1073 and
+-750 lines.
+
+**Remaining gaps:** `app/` still includes `storage/query/filter_compiler.hpp` (which includes
+`duckdb_expr.hpp`) and calls `CompileFilterPredicate` before the store reads, and the six app
+files of section 2.4 still read the connection guard (S6, #791).
 
 ### Phase S6: Storage owns connections, maintenance API, and boundary check
 

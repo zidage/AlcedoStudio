@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "image/color_label.hpp"
-#include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "sleeve/sleeve_filter/library_search_request.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -36,7 +36,8 @@ enum class FilterField {
   ImageSize,
   Rating,
   ImagePath,
-  SemanticTags
+  SemanticTags,
+  FileId,  ///< The file element id; EQUALS with an int64_t value selects one file.
 };
 
 enum class CompareOp {
@@ -103,7 +104,7 @@ struct StatsBucketCondition {
 };
 
 struct FilterNode {
-  enum class Type { Logical, Condition, RawSQL, StatsBucket } type_;
+  enum class Type { Logical, Condition, StatsBucket, LibrarySearch } type_;
 
   // For Logical nodes
   FilterOp                op_;
@@ -112,13 +113,11 @@ struct FilterNode {
   // For Condition nodes
   std::optional<FieldCondition> condition_;
 
-  // For RawSQL nodes: trusted SQL text plus optional prepared-statement binds.
-  // Prefer typed Condition nodes. RawSQL is a bridge for the search of the app layer.
-  std::optional<std::wstring>     raw_sql_;
-  std::vector<duckorm::BindValue> raw_binds_{};
-
   // For StatsBucket nodes
-  std::optional<StatsBucketCondition> stats_bucket_{};
+  std::optional<StatsBucketCondition>   stats_bucket_{};
+
+  // For LibrarySearch nodes
+  std::optional<LibrarySearchCondition> library_search_{};
 };
 
 /**

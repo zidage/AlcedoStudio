@@ -18,10 +18,12 @@ namespace alcedo {
  * Alias rule (must match BuildScopedFileQuery):
  * - Image columns use `i.` (`i.file_name`, `i.image_path`, and the typed search columns
  *   such as `i.camera_model`, `i.capture_date`, `i.rating`; never the metadata JSON)
- * - Element columns use `e.` (`e.element_name`, `e.added_time`)
+ * - Element columns use `e.` (`e.id`, `e.element_name`, `e.added_time`)
  *
  * A StatsBucket node compiles to the bucket predicate of its stats dimension over the live
  * tables (stats_dimension::BucketPredicate), the definition that the stats read counts with.
+ * A LibrarySearch node compiles to BuildLibrarySearchPredicate of its request and
+ * capabilities.
  *
  * This compiler builds only a WHERE predicate. Stores own FROM/JOIN scope.
  */
@@ -31,14 +33,12 @@ class FilterSQLCompiler {
    * @brief Compile a filter tree into a SqlFragment WHERE predicate.
    *
    * @param node Root of the filter tree.
-   * @return Fragment with `?` binds for user values (and RawSQL bridge binds).
-   * Empty when the tree is empty.
+   * @return Fragment with `?` binds for user values. Empty when the tree is empty.
    * @throws std::invalid_argument when a StatsBucket node has an unknown dimension or a key that
-   *         its dimension does not use.
+   *         its dimension does not use, or when a LibrarySearch node has fields and no term.
    *
-   * @note Typed string/number values use prepared binds. RawSQL may carry binds
-   * from the app layer search. Callers must run the fragment through a prepared
-   * statement path (ElementStore album scope queries).
+   * @note Typed string/number values use prepared binds. Callers must run the fragment
+   * through a prepared statement path (ElementStore album scope queries).
    */
   static auto Compile(const FilterNode& node) -> duckorm::SqlFragment;
 

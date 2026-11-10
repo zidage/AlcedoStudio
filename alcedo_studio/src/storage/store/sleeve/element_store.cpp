@@ -32,6 +32,7 @@
 #include "storage/query/stats_dimension.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
+#include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/album_edit_state_sql.hpp"
 #include "storage/store/sleeve/album_query_sql.hpp"
 #include "type/type.hpp"
@@ -85,6 +86,18 @@ namespace {
 
 namespace album_sql = album_query_sql;
 using album_sql::kMatchSetTable;
+
+/// The relevance select of @p semantic_relevance over @p folder_id on @p conn, or empty without
+/// a natural-language search. The caller holds the connection lock. Throws like
+/// BuildSemanticRelevanceSelect.
+auto RelevanceSelectOf(duckorm::Connection conn, sl_element_id_t folder_id,
+                       const std::optional<SemanticQueryEmbedding>& semantic_relevance)
+    -> std::optional<duckorm::SqlFragment> {
+  if (!semantic_relevance.has_value()) {
+    return std::nullopt;
+  }
+  return BuildSemanticRelevanceSelect(conn, folder_id, *semantic_relevance);
+}
 
 /// COUNT(*) of @p from_where with the binds of @p binds. Throws std::runtime_error on failure.
 auto CountRows(duckorm::Connection conn, const std::string& from_where,
@@ -991,12 +1004,12 @@ auto ElementStore::GetElementIdsInFolderByFilter(const std::shared_ptr<FilterCom
 
 auto ElementStore::BuildFolderStats(
     sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
-    const std::string&                         active_semantic_model_key,
-    const std::optional<duckorm::SqlFragment>& relevance_select) const -> FolderStatsView {
+    const std::string&                           active_semantic_model_key,
+    const std::optional<SemanticQueryEmbedding>& semantic_relevance) const -> FolderStatsView {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   return ReadMatchSet(guard.conn_, folder_id, extra_filter, active_semantic_model_key, nullptr, 0,
-                      0, relevance_select);
+                      0, RelevanceSelectOf(guard.conn_, folder_id, semantic_relevance));
 }
 
 auto ElementStore::ListSearchResultPageWithStats(
@@ -1011,13 +1024,11 @@ auto ElementStore::ListSearchResultPageWithStats(
   return out;
 }
 
-auto ElementStore::ReadAlbumQuery(sl_element_id_t                            folder_id,
-                                  const std::optional<duckorm::SqlFragment>& extra_filter,
-                                  const AlbumQueryOptions&                   options,
-                                  const std::string&    active_semantic_model_key,
-                                  const AlbumQueryRead& read,
-                                  const std::optional<duckorm::SqlFragment>& relevance_select) const
-    -> AlbumQueryResult {
+auto ElementStore::ReadAlbumQuery(
+    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
+    const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
+    const AlbumQueryRead&                        read,
+    const std::optional<SemanticQueryEmbedding>& semantic_relevance) const -> AlbumQueryResult {
   ValidateAlbumQueryRead(options, read);
   auto                 guard   = database_.GetConnectionGuard();
   auto                 db_lock = guard.Lock();
@@ -1026,7 +1037,8 @@ auto ElementStore::ReadAlbumQuery(sl_element_id_t                            fol
   {
     // The only statement that evaluates the filter and the relevance select; every read below
     // uses its rows.
-    const auto          scope = BuildScopedFileQuery(folder_id, extra_filter, relevance_select);
+    const auto scope = BuildScopedFileQuery(
+        folder_id, extra_filter, RelevanceSelectOf(guard.conn_, folder_id, semantic_relevance));
     const MatchSetTable match_set(guard.conn_, scope, options.local_day_time_zone_);
     out = ReadAlbumQueryFromMatchSet(guard.conn_, options, active_semantic_model_key, read,
                                      scope.joins_relevance_);
@@ -1039,7 +1051,7 @@ auto ElementStore::ReadAlbumFilePosition(
     sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
-    const std::optional<duckorm::SqlFragment>& relevance_select) const
+    const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
     -> std::optional<AlbumFilePosition> {
   namespace expr = duckorm::expr;
   ValidateAlbumQueryOptions(options);
@@ -1048,7 +1060,8 @@ auto ElementStore::ReadAlbumFilePosition(
   duckorm::Transaction             transaction(guard.conn_);
   std::optional<AlbumFilePosition> out;
   {
-    const auto          scope = BuildScopedFileQuery(folder_id, extra_filter, relevance_select);
+    const auto scope = BuildScopedFileQuery(
+        folder_id, extra_filter, RelevanceSelectOf(guard.conn_, folder_id, semantic_relevance));
     const MatchSetTable match_set(guard.conn_, scope, options.local_day_time_zone_);
     auto                query = album_sql::RelationsPrefix(
         options, active_semantic_model_key, album_sql::EditStateProjection::kNotRead);
@@ -1100,7 +1113,7 @@ auto ElementStore::ReadAlbumFileIds(
     sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     int64_t occurrence_begin, int64_t occurrence_end,
-    const std::optional<duckorm::SqlFragment>& relevance_select) const
+    const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
     -> std::vector<sl_element_id_t> {
   namespace expr = duckorm::expr;
   ValidateAlbumQueryOptions(options);
@@ -1115,7 +1128,8 @@ auto ElementStore::ReadAlbumFileIds(
   auto                 db_lock = guard.Lock();
   duckorm::Transaction transaction(guard.conn_);
   {
-    const auto          scope = BuildScopedFileQuery(folder_id, extra_filter, relevance_select);
+    const auto scope = BuildScopedFileQuery(
+        folder_id, extra_filter, RelevanceSelectOf(guard.conn_, folder_id, semantic_relevance));
     const MatchSetTable match_set(guard.conn_, scope, options.local_day_time_zone_);
     auto                query = album_sql::RelationsPrefix(
         options, active_semantic_model_key, album_sql::EditStateProjection::kNotRead);

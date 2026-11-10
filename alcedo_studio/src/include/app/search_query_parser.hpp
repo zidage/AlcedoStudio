@@ -8,67 +8,9 @@
 #include <string_view>
 #include <vector>
 
+#include "sleeve/sleeve_filter/library_search_request.hpp"
+
 namespace alcedo {
-
-/// What a library search term means (Decision D4 of library_search_and_project_size_plan.md).
-enum class SearchTermKind {
-  Date,              ///< A capture date, month, year, or month-day.
-  FileKind,          ///< A file kind: `jpg`, `dng`, `raw`, or one explicit extension.
-  CaptureParameter,  ///< `iso800`, `f2.8`, or `35mm`.
-  Text,              ///< Any other token.
-};
-
-/// Which part of the capture date a SearchDate fixes.
-enum class SearchDateMatch {
-  Day,        ///< year_, month_, day_: one calendar day.
-  YearMonth,  ///< year_, month_: one month of one year.
-  Year,       ///< year_: one year.
-  MonthDay,   ///< month_, day_: that day in any year.
-  Month,      ///< month_: that month in any year.
-};
-
-/// One reading of a date term. The fields that SearchDateMatch does not name are 0.
-struct SearchDate {
-  SearchDateMatch match_                                      = SearchDateMatch::Day;
-  int             year_                                       = 0;
-  int             month_                                      = 0;
-  int             day_                                        = 0;
-
-  auto            operator==(const SearchDate&) const -> bool = default;
-};
-
-enum class CaptureParameterField {
-  Iso,          ///< Compared with `Image.iso`.
-  Aperture,     ///< Compared with `Image.aperture` (f-number).
-  FocalLength,  ///< Compared with `Image.focal_mm`.
-};
-
-/**
- * @brief One typed term of a library search query.
- *
- * A Date, FileKind, or CaptureParameter term matches its typed column **or** its text
- * alternative (`folded_text_` inside the folded search text columns), so `20260607` still
- * finds a file name that contains those digits. A Text term matches only the text columns.
- */
-struct SearchTerm {
-  SearchTermKind           kind_ = SearchTermKind::Text;
-  /// Query text of the term. A term built from several tokens (`June 7`, `iso 800`) joins
-  /// them with one space.
-  std::wstring             text_{};
-  /// FoldSearchText(text_). Empty when the text folds to nothing.
-  std::wstring             folded_text_{};
-  /// Text term only: match `text_` as typed against the file name, camera, and lens columns
-  /// instead of `folded_text_`. Set when the token has `%`, `*`, `?`, `'`, or `"` (the user
-  /// typed these on purpose), or when folding removes more than half of it.
-  bool                     literal_ = false;
-  /// Date term: the date the term names.
-  SearchDate               date_{};
-  /// FileKind term: lowercase extensions without a dot.
-  std::vector<std::string> extensions_{};
-  /// CaptureParameter term.
-  CaptureParameterField    parameter_       = CaptureParameterField::Iso;
-  double                   parameter_value_ = 0.0;
-};
 
 /**
  * @brief Turns a library search query into typed terms.

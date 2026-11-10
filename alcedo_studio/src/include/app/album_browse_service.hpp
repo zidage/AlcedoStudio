@@ -20,7 +20,7 @@
 #include "app/sleeve_service.hpp"
 #include "sleeve/album_query.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
-#include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/store/semantic/semantic_records.hpp"
 #include "storage/store/sleeve/element_store.hpp"
 #include "type/type.hpp"
 
@@ -79,13 +79,15 @@ class AlbumBrowseService {
       -> std::vector<AlbumFileView>;
   [[nodiscard]] auto ListFilesInFolderById(sl_element_id_t folder_id) const
       -> std::vector<AlbumFileView>;
+  /// One page of the files of @p folder_id that match @p filter (all files when empty), in
+  /// element id order; @p limit 0 lists every file. Empty when a read fails.
   [[nodiscard]] auto ListFilesInFolderById(
-      sl_element_id_t                            folder_id, size_t offset, size_t limit,
-      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const
-      -> std::vector<AlbumFileView>;
+      sl_element_id_t folder_id, size_t offset, size_t limit,
+      const std::optional<FilterNode>& filter = std::nullopt) const -> std::vector<AlbumFileView>;
+  /// Number of the files of @p folder_id that match @p filter; 0 when a read fails.
   [[nodiscard]] auto CountFilesInFolderById(
-      sl_element_id_t                            folder_id,
-      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const -> size_t;
+      sl_element_id_t folder_id, const std::optional<FilterNode>& filter = std::nullopt) const
+      -> size_t;
   /// Photo count, edited photo count, and capture date range of the whole project. Reads only.
   /// Unlike the listing reads, it does not hide a failure: it throws std::runtime_error when the
   /// sleeve service is absent or the statement fails.
@@ -102,10 +104,10 @@ class AlbumBrowseService {
    * @param filter Merged search and Inspector filter tree; compiled once here.
    * @param active_semantic_model_key Key the caller read once from its owner; the label
    *        filter, groups, sort, and statistics all use it.
-   * @param relevance_select The kept files of a natural-language search, built for
-   *        @p folder_id (SleeveFilterService::BuildSemanticRelevanceSelect). When set, only
-   *        those files match, and without a selected sort they order by relevance (see
-   *        ElementStore::ReadAlbumQuery).
+   * @param semantic_relevance The embeddings of a natural-language search
+   *        (SleeveFilterService::EmbedSemanticQuery). When set, only the files of @p folder_id
+   *        that the relevance rule keeps match, and without a selected sort they order by
+   *        relevance (see ElementStore::ReadAlbumQuery).
    * @throws std::invalid_argument for invalid options or page bounds.
    * @throws std::runtime_error when the project storage is missing or a statement fails. A
    *         failure never yields an empty successful result.
@@ -115,21 +117,22 @@ class AlbumBrowseService {
   [[nodiscard]] auto ReadAlbumQuery(
       sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
-      const AlbumQueryRead&                      read,
-      const std::optional<duckorm::SqlFragment>& relevance_select = std::nullopt) const
+      const AlbumQueryRead&                        read,
+      const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> AlbumQueryResult;
   /// Position of @p file_id in the ordered occurrences of the same query (see ReadAlbumQuery).
   [[nodiscard]] auto ReadAlbumFilePosition(
       sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
       sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
-      const std::optional<duckorm::SqlFragment>& relevance_select = std::nullopt) const
+      const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> std::optional<AlbumFilePosition>;
   /// Ordered unique file ids of the occurrences in [@p begin, @p end) of the same query.
   [[nodiscard]] auto ReadAlbumFileIds(
       sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key, int64_t begin,
-      int64_t end, const std::optional<duckorm::SqlFragment>& relevance_select = std::nullopt) const
+      int64_t                                      end,
+      const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> std::vector<sl_element_id_t>;
 
   /// Display rows (file and image ids, name, typed metadata) of @p file_ids in that order.

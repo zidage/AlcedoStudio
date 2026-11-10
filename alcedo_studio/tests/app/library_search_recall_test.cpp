@@ -392,11 +392,12 @@ TEST_F(LibrarySearchRecallTest, YearMonthAndMonthTermsCoverDecember) {
             (std::set<std::string>{"A0002.NEF"}));
 }
 
-/// File names of the rows that @p filter selects in the folder (one page with every row).
-auto FilteredFileNames(const SleeveFilterService& filter_service, sl_element_id_t folder_id,
-                       const FilterNode& filter) -> std::set<std::string> {
+/// File names of the rows that the predicate @p filter selects in the folder (one page with
+/// every row).
+auto FilteredFileNames(const ElementStore& store, sl_element_id_t folder_id,
+                       const duckorm::SqlFragment& filter) -> std::set<std::string> {
   std::set<std::string> names;
-  const auto page = filter_service.ListSearchResultPage(folder_id, filter, 0, 1000);
+  const auto            page = store.ListSearchResultPage(folder_id, 0, 1000, filter);
   for (const auto& row : page.rows_) {
     names.insert(row.file_name_);
   }
@@ -404,11 +405,9 @@ auto FilteredFileNames(const SleeveFilterService& filter_service, sl_element_id_
   return names;
 }
 
-/// A RawSQL filter with one string bind for each `?` in @p sql.
-auto RawFilter(const std::wstring& sql, const std::string& query) -> FilterNode {
-  FilterNode node{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt, sql};
-  node.raw_binds_ = {query};
-  return node;
+/// The predicate @p sql with one string bind for its `?`.
+auto RawFilter(const std::string& sql, const std::string& query) -> duckorm::SqlFragment {
+  return duckorm::SqlFragment{sql, {query}};
 }
 
 // Phase S7 step 3: the BM25 alternative is a semi-join on the scored AI documents. It selects
@@ -443,22 +442,20 @@ TEST_F(LibrarySearchRecallTest, Bm25SemiJoinMatchesTheSameFilesAsThePerRowClause
 
   SleeveFilterService filter_service(project.GetStorage());
   const auto          folder_id = LibraryRootFolderId(project);
-  const std::wstring  per_row_sql =
-      L"(fts_main_AiImageFtsDocument.match_bm25(e.id, ?) IS NOT NULL)";
-  const std::wstring semi_join_sql =
-      L"e.id IN (SELECT file_id FROM (SELECT file_id, "
-      L"fts_main_AiImageFtsDocument.match_bm25(file_id, ?) AS score FROM AiImageFtsDocument) "
-      L"WHERE score IS NOT NULL)";
+  const auto&         store       = project.GetStorage()->GetElementStore();
+  const std::string   per_row_sql = "(fts_main_AiImageFtsDocument.match_bm25(e.id, ?) IS NOT NULL)";
+  const std::string   semi_join_sql =
+      "e.id IN (SELECT file_id FROM (SELECT file_id, "
+      "fts_main_AiImageFtsDocument.match_bm25(file_id, ?) AS score FROM AiImageFtsDocument) "
+      "WHERE score IS NOT NULL)";
 
   const std::vector<std::string> queries = {
       "lighthouse", "lighthouses", "coast",        "coast dusk", "fog", "mountain village",
       "icebergs",   "outdoor",     "maple garden", "red cliff",  "desert"};
   size_t queries_with_matches = 0;
   for (const auto& query : queries) {
-    const auto per_row   = FilteredFileNames(filter_service, folder_id,
-                                             RawFilter(per_row_sql, query));
-    const auto semi_join = FilteredFileNames(filter_service, folder_id,
-                                             RawFilter(semi_join_sql, query));
+    const auto per_row   = FilteredFileNames(store, folder_id, RawFilter(per_row_sql, query));
+    const auto semi_join = FilteredFileNames(store, folder_id, RawFilter(semi_join_sql, query));
     EXPECT_EQ(semi_join, per_row) << "query `" << query << "`";
     if (!per_row.empty()) {
       ++queries_with_matches;
@@ -467,16 +464,15 @@ TEST_F(LibrarySearchRecallTest, Bm25SemiJoinMatchesTheSameFilesAsThePerRowClause
   // Every query but `desert` scores at least one document; `outdoor` (the scene of every
   // understanding) scores all five files that have one.
   EXPECT_EQ(queries_with_matches, queries.size() - 1);
-  EXPECT_EQ(FilteredFileNames(filter_service, folder_id, RawFilter(semi_join_sql, "outdoor")).size(),
-            5u);
+  EXPECT_EQ(FilteredFileNames(store, folder_id, RawFilter(semi_join_sql, "outdoor")).size(), 5u);
 
   // The production WHERE uses the semi-join. `lighthouses` matches file 1 by its folded
   // caption and file 0 only through BM25 stemming (its text has `lighthouse`, not the plural).
   const auto where = filter_service.BuildFuzzySearchWhere(L"lighthouses", kAllSearchFields);
-  ASSERT_TRUE(where.has_value() && where->raw_sql_.has_value());
-  EXPECT_NE(where->raw_sql_->find(semi_join_sql.substr(0, semi_join_sql.find(L'?'))),
-            std::wstring::npos);
-  EXPECT_EQ(where->raw_sql_->find(L"match_bm25(e.id"), std::wstring::npos);
+  ASSERT_TRUE(where.has_value());
+  const auto where_sql = FilterSQLCompiler::Compile(*where).sql_;
+  EXPECT_NE(where_sql.find(semi_join_sql.substr(0, semi_join_sql.find('?'))), std::string::npos);
+  EXPECT_EQ(where_sql.find("match_bm25(e.id"), std::string::npos);
   EXPECT_EQ(SearchFileNames(filter_service, folder_id, L"lighthouses"),
             (std::set<std::string>{"P2635860.RW2", "P2635861.RW2"}));
 }

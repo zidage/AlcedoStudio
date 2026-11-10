@@ -7,7 +7,7 @@ set(FILTER_SRCS
 
 def_library(SleeveFilter
     SOURCES ${FILTER_SRCS}
-    PUBLIC_DEPS DuckORM StrConv
+    PUBLIC_DEPS StrConv
     PRIVATE_DEPS Image JSON
 )
 

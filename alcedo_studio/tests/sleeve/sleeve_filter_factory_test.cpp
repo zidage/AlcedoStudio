@@ -103,7 +103,7 @@ TEST(SleeveFilterFactoryTest, BucketBuildersReturnStatsBucketDomainValues) {
   ASSERT_TRUE(camera.stats_bucket_.has_value());
   EXPECT_EQ(camera.stats_bucket_->dimension, StatsDimensionId::kCameraModel);
   EXPECT_EQ(std::get<std::string>(camera.stats_bucket_->key), "Nikon D850");
-  EXPECT_FALSE(camera.raw_sql_.has_value());
+  EXPECT_FALSE(camera.library_search_.has_value());
 
   const auto rating = sleeve_filter::BuildRatingBucketFilter(L"3");
   EXPECT_EQ(std::get<int64_t>(rating.stats_bucket_->key), 3);

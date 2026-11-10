@@ -10,10 +10,12 @@ def_library(DuckORM
     PUBLIC_DEPS DuckDB
 )
 
-# Query definitions: the SQL of the stats dimensions and the compiler of the domain filters.
+# Query definitions: the SQL of the stats dimensions and of the library search, and the
+# compiler of the domain filters.
 def_library(StorageQuery
     SOURCES
         "${ALCEDO_SRC_ROOT}/storage/query/stats_dimension.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/query/library_search_predicates.cpp"
         "${ALCEDO_SRC_ROOT}/storage/query/filter_compiler.cpp"
     PUBLIC_DEPS DuckORM SleeveFilter StrConv
 )

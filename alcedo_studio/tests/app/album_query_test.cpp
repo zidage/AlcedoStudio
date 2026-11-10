@@ -1609,7 +1609,8 @@ TEST_F(AlbumQueryTest, LargeLibraryPagesStayBoundedAndRecordTimings) {
 }
 
 // Natural-language search in the library reads (global_search_redesign_plan.md, Phase GS2):
-// the relevance select of SemanticVectorSearch joins the match set of each read.
+// the store builds the relevance select of the query embeddings and joins it to the match set
+// of each read.
 
 constexpr const char*          kRelevanceModel = "relevance-test-model";
 
@@ -1636,9 +1637,9 @@ auto AxisVector(size_t axis) -> std::vector<float> {
 
 class AlbumQueryRelevanceTest : public AlbumQueryTest {
  protected:
-  /// Register the model, store one embedding per fixture photo, and return the relevance
-  /// select of the root scope for the query on axis 0.
-  auto BuildFixtureRelevanceSelect(ProjectService& project) -> duckorm::SqlFragment {
+  /// Register the model, store one embedding per fixture photo, and return the query
+  /// embeddings of the query on axis 0 (neutral text on the last axis).
+  auto StoreFixtureEmbeddings(ProjectService& project) -> SemanticQueryEmbedding {
     auto&       storage = *project.GetStorage();
     std::string error;
     EXPECT_TRUE(storage.GetSemanticModelRegistry().UpsertModel(
@@ -1659,11 +1660,10 @@ class AlbumQueryRelevanceTest : public AlbumQueryTest {
           &error))
           << error;
     }
-    return storage.GetSemanticVectorSearch().BuildRelevanceSelect(
-        0, SemanticQueryEmbedding{.model_key_ = kRelevanceModel,
+    return SemanticQueryEmbedding{.model_key_ = kRelevanceModel,
                                   .dimension_ = kSemanticEmbeddingDim,
                                   .query_     = AxisVector(0),
-                                  .neutral_   = AxisVector(kSemanticEmbeddingDim - 1)});
+                                  .neutral_   = AxisVector(kSemanticEmbeddingDim - 1)};
   }
 
   /// Fixture ids of photos named by their fixture index (a = 0 ... h = 7).
@@ -1676,7 +1676,7 @@ class AlbumQueryRelevanceTest : public AlbumQueryTest {
   }
 
   auto ReadAllWithRelevance(ProjectService& project, const AlbumQueryOptions& options,
-                            const duckorm::SqlFragment&                relevance,
+                            const SemanticQueryEmbedding&              relevance,
                             const std::optional<duckorm::SqlFragment>& filter = std::nullopt)
       -> AlbumQueryResult {
     return Store(project).ReadAlbumQuery(
@@ -1707,7 +1707,7 @@ auto BucketCounts(const std::vector<StorageStatsBucket>& buckets)
 TEST_F(AlbumQueryRelevanceTest, SemanticResultShowsKeptFilesInRelevanceOrderOnEveryPage) {
   ProjectService project(db_path_, meta_path_);
   BuildFixture(project);
-  const auto relevance = BuildFixtureRelevanceSelect(project);
+  const auto relevance = StoreFixtureEmbeddings(project);
 
   // f 0.60, b 0.50, h 0.45, e 0.40, a 0.30, c 0.25; d and g are below the similarity limit.
   const auto expected  = IdsOf({5, 1, 7, 4, 0, 2});
@@ -1738,7 +1738,7 @@ TEST_F(AlbumQueryRelevanceTest, SemanticResultShowsKeptFilesInRelevanceOrderOnEv
 TEST_F(AlbumQueryRelevanceTest, SelectedSortReplacesRelevanceOrder) {
   ProjectService project(db_path_, meta_path_);
   BuildFixture(project);
-  const auto relevance = BuildFixtureRelevanceSelect(project);
+  const auto relevance = StoreFixtureEmbeddings(project);
   const auto photo     = [this](sl_element_id_t id) -> const FixturePhoto& { return Photo(id); };
   const auto kept      = IdsOf({5, 1, 7, 4, 0, 2});
 
@@ -1761,7 +1761,7 @@ TEST_F(AlbumQueryRelevanceTest, SelectedSortReplacesRelevanceOrder) {
 TEST_F(AlbumQueryRelevanceTest, GroupedSemanticResultKeepsGroupOrderAndRanksInsideGroups) {
   ProjectService project(db_path_, meta_path_);
   BuildFixture(project);
-  const auto relevance = BuildFixtureRelevanceSelect(project);
+  const auto relevance = StoreFixtureEmbeddings(project);
 
   // Camera groups keep their key order (unknown last); inside each group, relevance order.
   const auto cameras   = ReadAllWithRelevance(
@@ -1784,7 +1784,7 @@ TEST_F(AlbumQueryRelevanceTest, GroupedSemanticResultKeepsGroupOrderAndRanksInsi
 TEST_F(AlbumQueryRelevanceTest, SemanticStatsCountOnlyKeptFiles) {
   ProjectService project(db_path_, meta_path_);
   BuildFixture(project);
-  const auto relevance = BuildFixtureRelevanceSelect(project);
+  const auto relevance = StoreFixtureEmbeddings(project);
 
   const auto result    = ReadAllWithRelevance(project, AlbumQueryOptions{}, relevance);
   ASSERT_TRUE(result.statistics_.has_value());
@@ -1820,7 +1820,7 @@ TEST_F(AlbumQueryRelevanceTest, SemanticStatsCountOnlyKeptFiles) {
 TEST_F(AlbumQueryRelevanceTest, SemanticSelectAllReturnsTheKeptSet) {
   ProjectService project(db_path_, meta_path_);
   BuildFixture(project);
-  const auto relevance = BuildFixtureRelevanceSelect(project);
+  const auto relevance = StoreFixtureEmbeddings(project);
   auto&      store     = Store(project);
 
   EXPECT_EQ(store.ReadAlbumFileIds(0, std::nullopt, AlbumQueryOptions{}, kActiveModel, 0, 1000,
@@ -1835,6 +1835,26 @@ TEST_F(AlbumQueryRelevanceTest, SemanticSelectAllReturnsTheKeptSet) {
                    .ReadAlbumFilePosition(0, std::nullopt, AlbumQueryOptions{}, kActiveModel,
                                           ids_.at(3), std::nullopt, relevance)
                    .has_value());
+}
+
+TEST_F(AlbumQueryRelevanceTest, SemanticReadOfAnUnregisteredModelFails) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  auto unregistered       = StoreFixtureEmbeddings(project);
+  unregistered.model_key_ = "model-not-registered";
+  auto& store             = Store(project);
+
+  EXPECT_THROW((void)ReadAllWithRelevance(project, AlbumQueryOptions{}, unregistered),
+               std::runtime_error);
+  EXPECT_THROW((void)store.ReadAlbumFileIds(0, std::nullopt, AlbumQueryOptions{}, kActiveModel, 0,
+                                            1000, unregistered),
+               std::runtime_error);
+  // The failed reads leave the connection usable: the same read without the search lists all.
+  EXPECT_EQ(store
+                .ReadAlbumFileIds(0, std::nullopt, AlbumQueryOptions{}, kActiveModel, 0, 1000,
+                                  std::nullopt)
+                .size(),
+            ids_.size());
 }
 
 }  // namespace

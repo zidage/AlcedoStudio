@@ -55,6 +55,19 @@ gtest_discover_tests(StatsDimensionTest TEST_PREFIX "StatsDimensionTest."
 alcedo_copy_duckdb_extensions(StatsDimensionTest)
 alcedo_register_test_target(StatsDimensionTest storage ci_core)
 
+# Storage S5 (#790): the library search predicate is built in storage from the parsed request;
+# user text is a bound value.
+add_executable(LibrarySearchPredicatesTest
+  ${ALCEDO_TEST_ROOT}/storage/library_search_predicates_test.cpp)
+target_include_directories(LibrarySearchPredicatesTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+  ${ALCEDO_TEST_ROOT}/app)
+target_link_libraries(LibrarySearchPredicatesTest PRIVATE GTest::gtest_main ProjectService
+  SleeveFilterService)
+gtest_discover_tests(LibrarySearchPredicatesTest TEST_PREFIX "LibrarySearchPredicatesTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_extensions(LibrarySearchPredicatesTest)
+alcedo_register_test_target(LibrarySearchPredicatesTest storage ci_core)
+
 add_executable(DuckDbExtensionTest ${ALCEDO_TEST_ROOT}/storage/duckdb_extension_test.cpp)
 target_include_directories(DuckDbExtensionTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(DuckDbExtensionTest PRIVATE GTest::gtest_main Storage)
