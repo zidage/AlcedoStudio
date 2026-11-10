@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Effects
 import Alcedo.Main 1.0
 
 // Grouped Library photo area. One vertical ListView over LibraryModule.sectionModel: each
@@ -789,6 +790,8 @@ Item {
         readonly property bool focused: root.activeFocus && root.focusOccurrence === occurrence
         readonly property int rating: photo ? Number(photo.rating) : 0
         readonly property bool edited: photo ? photo.isEdited === true : false
+        readonly property int colorLabels: photo ? Number(photo.colorLabels) : 0
+        readonly property bool deleteMark: photo ? photo.deleteMark === true : false
         readonly property bool hovered: cellHover.hovered || cellStars.pointerInside
         property string liveThumbUrl: photo ? photo.thumbUrl : ""
         property int pinnedFileId: 0
@@ -857,6 +860,12 @@ Item {
                            rating > 0 ? qsTr("%n star(s)", "", rating) : qsTr("Unrated")]
             if (edited) {
                 parts.push(qsTr("Edited"))
+            }
+            if (colorLabels !== 0) {
+                parts.push(cellLabelDots.Accessible.name)
+            }
+            if (deleteMark) {
+                parts.push(cellDeleteMark.Accessible.name)
             }
             return parts.join(", ")
         }
@@ -951,6 +960,20 @@ Item {
                     retainWhileLoading: true
                     fillMode: Image.PreserveAspectFit
                     visible: cell.liveThumbUrl.length > 0
+                    layer.enabled: cell.deleteMark
+                    layer.effect: MultiEffect {
+                        saturation: cellDeleteMark.photoSaturation
+                    }
+                }
+
+                // Delete mark: the scrim over the photo well, below the edit mark.
+                ThumbnailDeleteMark {
+                    id: cellDeleteMark
+                    objectName: "albumSectionDeleteMark"
+                    anchors.fill: parent
+                    radius: thumbWell.radius
+                    marked: cell.deleteMark
+                    compact: root.compactText
                 }
 
                 // Edit mark: a chip on the top-right corner of the photo.
@@ -983,12 +1006,15 @@ Item {
 
                     Label {
                         id: cellName
+                        objectName: "albumSectionName"
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
                         width: Math.min(implicitWidth, Math.max(0, parent.width
-                                        - (nameTrailing.width > 0 ? nameTrailing.width + 4 : 0)))
+                                        - (nameTrailing.width > 0
+                                           ? nameTrailing.width + nameTrailing.anchors.leftMargin
+                                           : 0)))
                         text: cell.photo ? cell.photo.fileName : ""
-                        color: appTheme.textColor
+                        color: cell.deleteMark ? appTheme.textMutedColor : appTheme.textColor
                         font.family: appTheme.dataFontFamily
                         font.pixelSize: appTheme.fontSizeCaption
                         elide: Text.ElideRight
@@ -997,9 +1023,19 @@ Item {
                     Row {
                         id: nameTrailing
                         anchors.left: cellName.right
-                        anchors.leftMargin: 4
+                        anchors.leftMargin: cellLabelDots.visible ? cellLabelDots.leadingGap : 4
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 3
+
+                        ThumbnailColorLabelDots {
+                            id: cellLabelDots
+                            objectName: "albumSectionLabelDots"
+                            anchors.verticalCenter: parent.verticalCenter
+                            labels: cell.colorLabels
+                            compact: root.compactText
+                            ringColor: cell.hovered ? appTheme.hoverColor
+                                                    : appTheme.cardSurfaceColor
+                        }
 
                         ThumbnailStarRating {
                             objectName: "albumSectionCompactStars"

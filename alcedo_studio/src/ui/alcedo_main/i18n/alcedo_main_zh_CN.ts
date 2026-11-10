@@ -8997,6 +8997,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>ThumbnailDeleteMark</name>
+    <message>
+        <source>Marked for deletion</source>
+        <translation>已标记删除</translation>
+    </message>
+</context>
+<context>
     <name>ThumbnailEditMark</name>
     <message>
         <source>Edited</source>

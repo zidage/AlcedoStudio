@@ -485,8 +485,8 @@ edit state and the rating. The shared parts are `ThumbnailEditMark.qml` and
   another, 30 ms apart, with a short scale settle in `motionFadeMs`;
   `reduceMotion` makes it a cut. A multi-selection keeps the context menu and
   keyboard paths.
-- **8 and 11 columns:** one caption line with the file name and only the
-  filled stars; the file name elides first. The stars are display
+- **8 and 11 columns:** one caption line with the file name, the color label
+  dots, and only the filled stars; the file name elides first. The stars are display
   only: no hover preview, no stars for an unrated photo, and a click on them is
   a normal card click (selection).
 - **14 columns:** no caption, so no stars. The edit mark chip still shows.
@@ -524,16 +524,17 @@ always use the classic cells.
   left edge. The zoom slider sets the target row height: 480, 360, 280, 220,
   180, 140, 104, 80 px.
 - **Gaps:** `cardInset` between tiles and rows (8, 6, 4 px as on the cards).
-- **Caption:** the file name only, in `dataFontFamily` at the card title size;
-  22 px high, 16 px from 8 columns, none at the smallest level.
+- **Caption:** the file name and the color label dots (see "Library color
+  labels"), in `dataFontFamily` at the card title size; 22 px high, 16 px from
+  8 columns, none at the smallest level.
 - **Hover details:** while the pointer is on a tile, a panel on the bottom of
   the photo shows the camera, ISO, and aperture line, the date and labels line,
   and the stars, on a `thumbnailDetailsScrimColor` fill; the panel fades in
   `motionFadeMs`. At the levels where the cards have the star control, the stars
   are the same control here; at smaller levels they are display only.
-- **Marks and selection:** the edit mark chip and the missing-source mark sit
-  on the photo as on the cards. Selection is the 2 px `textColor` outline
-  around the photo.
+- **Marks and selection:** the edit mark chip, the missing-source mark, and the
+  Delete mark sit on the photo as on the cards. Selection is the 2 px
+  `textColor` outline around the photo.
 
 ### Library sort, group, and sections
 
@@ -576,6 +577,28 @@ on focus); the translated color name as the placeholder in `textMutedColor`; a
 `reset.svg` glyph in `textMutedColor` in a 28 px cell, shown only on a row with a
 user name. The rows are at most 520 px wide. Names follow the Apply button of the
 dialog, like the other settings of the page.
+
+**Caption dots** (`ThumbnailColorLabelDots.qml`, #771): the classic cards, the
+justified tiles, and the grouped cells show one dot per code after the file
+name, in code order. A dot is 9 px (7 px at 8 and 11 columns), overlaps the
+previous dot by 3 px, and has a 1.5 px ring of the surface behind it: the card
+fill on a card (`cardSurfaceColor`, `hoverColor` while hovered) and
+`glassPanelColor` under a justified tile. The space from the name to the first
+dot color is 6 px (4 px at 8 and 11 columns). The file name elides first; the
+dots stay whole. At 8 and 11 columns the line is the name, the dots, and the
+filled stars. A photo without codes shows no dots. The accessible name of the
+card lists the names of its codes.
+
+**Delete mark** (`ThumbnailDeleteMark.qml`, #771): the photo box (the photo
+area of a justified tile) is covered by a `rgba(6,6,6,0.72)` scrim with a round
+trash badge in the centre: 34 px (24 px at 8 and 11 columns), `bgDeepColor`
+fill, 1 px `controlBorderColor` hairline, `panel_icons/trash.svg` in
+`textColor` at 16 px (12 px). The photo under it is desaturated (MultiEffect
+saturation -0.65). The edit mark chip and the justified hover details stay above
+the scrim. The file name turns `textMutedColor`. The mark takes no pointer
+input: the photo stays selectable and editable. A change of the marks updates
+the shown cards in place (`AlbumThumbnailModel::updateMarks`), without a
+delegate rebuild or a scroll move.
 
 ---
 

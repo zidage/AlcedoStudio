@@ -105,6 +105,7 @@ struct LibraryPhotoSpec {
   uint32_t                   height_ = 0;     ///< Oriented photo height; 0 is unknown.
   ColorLabelMask             color_labels_ = 0;  ///< Library color label code bits.
   bool                       delete_mark_  = false;
+  std::wstring               file_name_;  ///< Library file name; "album-delete-<n>.dng" when empty.
 };
 
 /// Build a packed project with one synthetic DNG image (no real pixels, no GPU),
@@ -153,6 +154,10 @@ inline auto CreatePopulatedPackedProject(
     image->image_type_ = ImageType::DNG;
 
     const LibraryPhotoSpec spec = index < specs.size() ? specs[index] : LibraryPhotoSpec{};
+    if (sourceImagePaths.empty() && !spec.file_name_.empty()) {
+      image->image_path_ = tempDir / spec.file_name_;
+      image->image_name_ = spec.file_name_;
+    }
     ExifDisplayMetaData   metadata;
     metadata.model_         = spec.model_;
     metadata.lens_          = spec.lens_;
