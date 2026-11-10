@@ -649,6 +649,7 @@ auto ImageController::StartDeleteImages(const QVariantList& targetEntries) -> QV
       snapshot.locks_.push_back({InteractionCapability::EditImageRating, element_id, reason});
       snapshot.locks_.push_back({InteractionCapability::EditImageDescription, element_id, reason});
       snapshot.locks_.push_back({InteractionCapability::EditImageRatingReason, element_id, reason});
+      snapshot.locks_.push_back({InteractionCapability::EditImageMarks, element_id, reason});
     }
     delete_task_id_ = background_tasks_->RegisterTask(snapshot);
   }
@@ -1370,10 +1371,21 @@ auto ImageController::PrepareRatingBatch(const QVariantList& targetEntries, int 
     return fail(PL_TEXT("Image service is unavailable.").Render(), true);
   }
 
-  RatingBatch                    batch;
+  RatingBatch batch;
+  batch.rating_  = rating;
+  batch.targets_ = ResolveBatchTargets(targetEntries, &batch.unresolved_element_ids_);
+  if (batch.targets_.empty()) {
+    return fail(PL_TEXT("No valid image was selected.").Render(), true);
+  }
+  return batch;
+}
+
+auto ImageController::ResolveBatchTargets(const QVariantList&           targetEntries,
+                                          std::vector<sl_element_id_t>* unresolved_element_ids)
+    const -> std::vector<RatingTarget> {
+  std::vector<RatingTarget>      targets;
   std::unordered_set<image_id_t> seen_image_ids;
-  batch.rating_ = rating;
-  batch.targets_.reserve(static_cast<size_t>(targetEntries.size()));
+  targets.reserve(static_cast<size_t>(targetEntries.size()));
   seen_image_ids.reserve(static_cast<size_t>(targetEntries.size()) * 2 + 1);
   for (const QVariant& row_var : targetEntries) {
     const QVariantMap  row    = row_var.toMap();
@@ -1381,18 +1393,15 @@ auto ImageController::PrepareRatingBatch(const QVariantList& targetEntries, int 
                                                     row.value("imageId").toUInt());
     if (target.image_id_ == 0) {
       if (target.element_id_ != 0) {
-        batch.unresolved_element_ids_.push_back(target.element_id_);
+        unresolved_element_ids->push_back(target.element_id_);
       }
       continue;
     }
     if (seen_image_ids.insert(target.image_id_).second) {
-      batch.targets_.push_back(target);
+      targets.push_back(target);
     }
   }
-  if (batch.targets_.empty()) {
-    return fail(PL_TEXT("No valid image was selected.").Render(), true);
-  }
-  return batch;
+  return targets;
 }
 
 auto ImageController::SetViewRatings(const std::vector<RatingTarget>& targets,
@@ -1638,6 +1647,379 @@ auto ImageController::StartSetImageRatings(const QVariantList& targetEntries, in
   result["started"] = true;
   result["taskId"]  = rating_task_id_;
   return result;
+}
+
+auto ImageController::ApplyMarkChange(ViewMarks marks, const MarkChange& change) -> ViewMarks {
+  if (change.kind_ == MarkChange::Kind::kColorLabel) {
+    marks.color_labels_ = WithColorLabel(marks.color_labels_, change.code_, change.on_);
+  } else {
+    marks.delete_mark_ = change.on_;
+  }
+  return marks;
+}
+
+auto ImageController::PrepareMarkBatch(const QVariantList& targetEntries, MarkChange change,
+                                       QVariantMap* error_result) -> std::optional<MarkBatch> {
+  auto fail = [&](const QString& message, bool show_status) -> std::optional<MarkBatch> {
+    if (show_status) {
+      status_->SetTaskState(PL_TEXT("%1", message), 0, false);
+    }
+    error_result->insert("message", message);
+    return std::nullopt;
+  };
+
+  // A delete of a target, or a mark batch that is still saving, holds EditImageMarks locks. A
+  // batch that touches any locked image is refused as a whole.
+  if (policy_) {
+    const QVariantMap policy = policy_->EvaluateEditImageMarks(targetEntries);
+    if (!policy.value(QStringLiteral("allowed")).toBool()) {
+      QString reason = policy.value(QStringLiteral("reason")).toString();
+      if (reason.isEmpty()) {
+        reason = PL_TEXT("These images cannot be marked right now.").Render();
+      }
+      return fail(reason, true);
+    }
+  }
+
+  auto& ph = project_->handler();
+  if (ph.project_loading()) {
+    return fail(PL_TEXT("Project is loading. Please wait.").Render(), true);
+  }
+  if (!ph.project()) {
+    return fail(PL_TEXT("No project is loaded.").Render(), true);
+  }
+  if (!ph.project()->GetImagePoolService()) {
+    return fail(PL_TEXT("Image service is unavailable.").Render(), true);
+  }
+
+  MarkBatch batch;
+  batch.change_  = change;
+  batch.targets_ = ResolveBatchTargets(targetEntries, &batch.unresolved_element_ids_);
+  if (batch.targets_.empty()) {
+    return fail(PL_TEXT("No valid image was selected.").Render(), true);
+  }
+  return batch;
+}
+
+auto ImageController::ApplyViewMarkChange(const std::vector<RatingTarget>& targets,
+                                          const MarkChange&                change)
+    -> std::vector<std::optional<ViewMarks>> {
+  std::vector<std::optional<ViewMarks>>       previous(targets.size());
+  std::unordered_map<sl_element_id_t, size_t> index_by_element;
+  std::unordered_map<image_id_t, size_t>      index_by_image;
+  for (size_t i = 0; i < targets.size(); ++i) {
+    if (targets[i].element_id_ != 0) {
+      index_by_element.emplace(targets[i].element_id_, i);
+    } else {
+      index_by_image.emplace(targets[i].image_id_, i);
+    }
+  }
+
+  // One pass over the view state for the whole batch.
+  for (auto& item : library_->view_state().all_images_) {
+    auto index_it = index_by_element.find(item.element_id);
+    if (index_it == index_by_element.end()) {
+      index_it = index_by_image.find(item.image_id);
+      if (index_it == index_by_image.end()) {
+        continue;
+      }
+    }
+    const size_t index = index_it->second;
+    const ViewMarks current{.color_labels_ = item.color_labels, .delete_mark_ = item.delete_mark};
+    if (!previous[index].has_value()) {
+      previous[index] = current;
+    }
+    const ViewMarks next = ApplyMarkChange(current, change);
+    item.color_labels    = next.color_labels_;
+    item.delete_mark     = next.delete_mark_;
+  }
+  for (size_t i = 0; i < targets.size(); ++i) {
+    if (!previous[i].has_value()) {
+      continue;
+    }
+    const ViewMarks next = ApplyMarkChange(*previous[i], change);
+    library_->model().updateMarks(targets[i].element_id_, targets[i].image_id_,
+                                  next.color_labels_, next.delete_mark_);
+  }
+  return previous;
+}
+
+void ImageController::SetViewMarks(const std::vector<RatingTarget>& targets,
+                                   const std::vector<ViewMarks>&    marks) {
+  std::unordered_map<sl_element_id_t, size_t> index_by_element;
+  std::unordered_map<image_id_t, size_t>      index_by_image;
+  for (size_t i = 0; i < targets.size(); ++i) {
+    if (targets[i].element_id_ != 0) {
+      index_by_element.emplace(targets[i].element_id_, i);
+    } else {
+      index_by_image.emplace(targets[i].image_id_, i);
+    }
+  }
+  for (auto& item : library_->view_state().all_images_) {
+    auto index_it = index_by_element.find(item.element_id);
+    if (index_it == index_by_element.end()) {
+      index_it = index_by_image.find(item.image_id);
+      if (index_it == index_by_image.end()) {
+        continue;
+      }
+    }
+    item.color_labels = marks[index_it->second].color_labels_;
+    item.delete_mark  = marks[index_it->second].delete_mark_;
+  }
+  for (size_t i = 0; i < targets.size(); ++i) {
+    library_->model().updateMarks(targets[i].element_id_, targets[i].image_id_,
+                                  marks[i].color_labels_, marks[i].delete_mark_);
+  }
+}
+
+auto ImageController::PersistMarkBatch(const std::shared_ptr<ProjectService>& project,
+                                       const MarkBatch&                       batch,
+                                       const std::function<bool(QString*)>&   save_job)
+    -> MarkBatchOutcome {
+  MarkBatchOutcome outcome;
+  outcome.marked_.assign(batch.targets_.size(), false);
+  auto image_pool = project ? project->GetImagePoolService() : nullptr;
+  if (!image_pool) {
+    return outcome;
+  }
+
+  const MarkChange change = batch.change_;
+  try {
+    // Change every image in memory first (an image whose mark already has the value stays
+    // SYNCED). The single SyncWithStorage below writes the changed ones in one transaction.
+    for (size_t i = 0; i < batch.targets_.size(); ++i) {
+      try {
+        image_pool->Write_NoSync<void>(
+            batch.targets_[i].image_id_, [change](const std::shared_ptr<Image>& image) {
+              if (!image) {
+                return;
+              }
+              if (change.kind_ == MarkChange::Kind::kColorLabel) {
+                image->SetColorLabel(change.code_, change.on_);
+              } else {
+                image->SetDeleteMark(change.on_);
+              }
+            });
+        outcome.marked_[i] = true;
+      } catch (...) {
+      }
+    }
+
+    const auto sync_status = image_pool->SyncWithStorage();
+    if (!sync_status.failed_images_.empty()) {
+      std::unordered_set<image_id_t> sync_failed_image_ids;
+      for (const auto& error : sync_status.failed_images_) {
+        sync_failed_image_ids.insert(error.image_id_);
+      }
+      for (size_t i = 0; i < batch.targets_.size(); ++i) {
+        if (sync_failed_image_ids.count(batch.targets_[i].image_id_) > 0) {
+          outcome.marked_[i] = false;
+        }
+      }
+    }
+  } catch (...) {
+    outcome.marked_.assign(batch.targets_.size(), false);
+    return outcome;
+  }
+
+  if (std::find(outcome.marked_.begin(), outcome.marked_.end(), true) != outcome.marked_.end()) {
+    QString ignored_error;
+    outcome.save_ok_ = save_job ? save_job(&ignored_error) : true;
+  }
+  return outcome;
+}
+
+auto ImageController::FinishMarkBatch(const MarkBatch& batch, const MarkBatchOutcome& outcome)
+    -> QVariantMap {
+  std::vector<sl_element_id_t> marked_ids;
+  std::vector<sl_element_id_t> failed_ids = batch.unresolved_element_ids_;
+  std::vector<RatingTarget>    revert_targets;
+  std::vector<ViewMarks>       revert_marks;
+  for (size_t i = 0; i < batch.targets_.size(); ++i) {
+    const auto& target = batch.targets_[i];
+    if (outcome.marked_[i]) {
+      marked_ids.push_back(target.element_id_);
+      continue;
+    }
+    failed_ids.push_back(target.element_id_);
+    if (i < batch.previous_view_marks_.size() && batch.previous_view_marks_[i].has_value()) {
+      revert_targets.push_back(target);
+      revert_marks.push_back(*batch.previous_view_marks_[i]);
+    }
+  }
+  // The view already shows the new marks. Put the old ones back where the write failed.
+  if (!revert_targets.empty()) {
+    SetViewMarks(revert_targets, revert_marks);
+  }
+
+  QVariantMap result{{"success", false},
+                     {"markedCount", static_cast<int>(marked_ids.size())},
+                     {"failedCount", static_cast<int>(failed_ids.size())},
+                     {"markedElementIds", ToVariantIdList(marked_ids)},
+                     {"failedElementIds", ToVariantIdList(failed_ids)}};
+
+  if (marked_ids.empty()) {
+    const auto msg = PL_TEXT("Failed to save the image marks.");
+    status_->SetTaskState(msg, 0, false);
+    result["message"] = msg.Render();
+    return result;
+  }
+
+  library_->NoteMarksChanged();
+
+  const int  count     = static_cast<int>(marked_ids.size());
+  const bool color     = batch.change_.kind_ == MarkChange::Kind::kColorLabel;
+  auto       msg       = color ? (batch.change_.on_
+                                      ? PL_TEXT("Color label added to %1 images.", count)
+                                      : PL_TEXT("Color label removed from %1 images.", count))
+                               : (batch.change_.on_
+                                      ? PL_TEXT("Delete mark set on %1 images.", count)
+                                      : PL_TEXT("Delete mark cleared on %1 images.", count));
+  if (!failed_ids.empty()) {
+    msg = PL_TEXT("%1 %2 images failed.", msg.Render(), static_cast<int>(failed_ids.size()));
+  }
+  if (!outcome.save_ok_) {
+    msg = PL_TEXT("%1 Project state save failed.", msg.Render());
+  }
+  status_->SetServiceMessage(msg);
+  status_->SetTaskState(msg, outcome.save_ok_ ? 100 : 0, false);
+  if (outcome.save_ok_) {
+    status_->ScheduleIdleTaskStateReset(1200);
+  }
+
+  result["success"] = true;
+  result["message"] = msg.Render();
+  return result;
+}
+
+auto ImageController::SetImageMarks(const QVariantList& targetEntries, MarkChange change)
+    -> QVariantMap {
+  QVariantMap error_result{{"success", false},
+                           {"message", QString{}},
+                           {"markedCount", 0},
+                           {"failedCount", 0}};
+  auto        batch = PrepareMarkBatch(targetEntries, change, &error_result);
+  if (!batch.has_value()) {
+    return error_result;
+  }
+  batch->previous_view_marks_ = ApplyViewMarkChange(batch->targets_, batch->change_);
+  const auto& ph              = project_->handler();
+  const auto  outcome = PersistMarkBatch(ph.project(), *batch, ph.MakeSaveAndPackageJob());
+  return FinishMarkBatch(*batch, outcome);
+}
+
+auto ImageController::StartSetImageMarks(const QVariantList& targetEntries, MarkChange change)
+    -> QVariantMap {
+  QVariantMap result{{"started", false}, {"message", QString{}}};
+  if (mark_batch_running_) {
+    result["message"] = PL_TEXT("Image marks are still being saved.").Render();
+    return result;
+  }
+  auto batch = PrepareMarkBatch(targetEntries, change, &result);
+  if (!batch.has_value()) {
+    return result;
+  }
+
+  // The library shows the new marks right away; FinishMarkBatch puts back the old marks of any
+  // image whose write fails.
+  batch->previous_view_marks_ = ApplyViewMarkChange(batch->targets_, batch->change_);
+
+  mark_batch_running_ = true;
+  if (background_tasks_ != nullptr) {
+    const QString          reason = PL_TEXT("Image marks are being saved.").Render();
+    const bool             color  = change.kind_ == MarkChange::Kind::kColorLabel;
+    BackgroundTaskSnapshot snapshot;
+    snapshot.kind_  = BackgroundTaskKind::LibraryMarkUpdate;
+    snapshot.state_ = BackgroundTaskState::Running;
+    snapshot.title_ = color ? (change.on_ ? PL_TEXT("Adding a color label").Render()
+                                          : PL_TEXT("Removing a color label").Render())
+                            : (change.on_ ? PL_TEXT("Setting the Delete mark").Render()
+                                          : PL_TEXT("Clearing the Delete mark").Render());
+    snapshot.detail_ = PL_TEXT("%1 images", static_cast<int>(batch->targets_.size())).Render();
+    snapshot.progress_percent_ = -1;
+    snapshot.cancelable_       = false;
+    snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
+    snapshot.locks_            = {
+        {InteractionCapability::EditImageMarks, 0, reason},
+        {InteractionCapability::CloseProject, 0, reason},
+    };
+    for (const auto& target : batch->targets_) {
+      snapshot.affected_targets_.push_back(static_cast<quint64>(target.element_id_));
+      snapshot.locks_.push_back(
+          {InteractionCapability::DeleteImages, static_cast<quint64>(target.element_id_), reason});
+    }
+    mark_task_id_ = background_tasks_->RegisterTask(snapshot);
+  }
+
+  const auto&               ph = project_->handler();
+  QPointer<ImageController> self(this);
+  std::thread([self, project = ph.project(), save_job = ph.MakeSaveAndPackageJob(),
+               batch = std::move(*batch)]() mutable {
+    auto outcome =
+        std::make_shared<MarkBatchOutcome>(PersistMarkBatch(project, batch, save_job));
+    auto finished_batch = std::make_shared<MarkBatch>(std::move(batch));
+    QMetaObject::invokeMethod(
+        self.data(),
+        [self, outcome, finished_batch]() {
+          if (!self) {
+            return;
+          }
+          const QVariantMap result = self->FinishMarkBatch(*finished_batch, *outcome);
+          if (self->background_tasks_ != nullptr && !self->mark_task_id_.isEmpty()) {
+            self->background_tasks_->FinishTask(self->mark_task_id_,
+                                                result.value("success").toBool()
+                                                    ? BackgroundTaskState::Succeeded
+                                                    : BackgroundTaskState::Failed,
+                                                result.value("message").toString());
+            self->mark_task_id_.clear();
+          }
+          self->mark_batch_running_ = false;
+          emit self->ImageMarksFinished(result);
+          emit self->imageMarksFinished(result);
+        },
+        Qt::QueuedConnection);
+  }).detach();
+
+  result["started"] = true;
+  result["taskId"]  = mark_task_id_;
+  return result;
+}
+
+auto ImageController::SetImageColorLabel(const QVariantList& targetEntries, int code, bool on)
+    -> QVariantMap {
+  const auto color_label = ColorLabelFromIndex(code);
+  if (!color_label.has_value()) {
+    return QVariantMap{{"success", false},
+                       {"message", PL_TEXT("Unknown color label.").Render()},
+                       {"markedCount", 0},
+                       {"failedCount", 0}};
+  }
+  return SetImageMarks(targetEntries, MarkChange{.kind_ = MarkChange::Kind::kColorLabel,
+                                                 .code_ = *color_label,
+                                                 .on_   = on});
+}
+
+auto ImageController::StartSetImageColorLabel(const QVariantList& targetEntries, int code,
+                                              bool on) -> QVariantMap {
+  const auto color_label = ColorLabelFromIndex(code);
+  if (!color_label.has_value()) {
+    return QVariantMap{{"started", false}, {"message", PL_TEXT("Unknown color label.").Render()}};
+  }
+  return StartSetImageMarks(targetEntries, MarkChange{.kind_ = MarkChange::Kind::kColorLabel,
+                                                      .code_ = *color_label,
+                                                      .on_   = on});
+}
+
+auto ImageController::SetImageDeleteMark(const QVariantList& targetEntries, bool on)
+    -> QVariantMap {
+  return SetImageMarks(targetEntries,
+                       MarkChange{.kind_ = MarkChange::Kind::kDeleteMark, .on_ = on});
+}
+
+auto ImageController::StartSetImageDeleteMark(const QVariantList& targetEntries, bool on)
+    -> QVariantMap {
+  return StartSetImageMarks(targetEntries,
+                            MarkChange{.kind_ = MarkChange::Kind::kDeleteMark, .on_ = on});
 }
 
 auto ImageController::SetImageDescription(uint elementId, const QString& caption) -> QVariantMap {

@@ -516,6 +516,10 @@ alcedo_register_test_target(AlbumBackendImageDetailsTest ui)
 def_ui_test(AlbumBackendRatingTest album_backend_rating_test.cpp "ci_raw_flow")
 alcedo_register_test_target(AlbumBackendRatingTest ui)
 
+# Library color labels and the Delete mark (#769).
+def_ui_test(AlbumBackendLibraryMarksTest album_backend_library_marks_test.cpp)
+alcedo_register_test_target(AlbumBackendLibraryMarksTest ui)
+
 def_ui_test(AlbumBackendThumbnailTest album_backend_thumbnail_test.cpp)
 alcedo_register_test_target(AlbumBackendThumbnailTest ui)
 

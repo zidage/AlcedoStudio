@@ -28,6 +28,8 @@ enum class BackgroundTaskKind {
   AdjustmentPaste,
   /// Star ratings written to several library images and saved to the project.
   RatingUpdate,
+  /// Color labels or the Delete mark written to several library images and saved (#768).
+  LibraryMarkUpdate,
   /// Library images deleted (or removed from an album) and the project saved.
   ImageDelete,
   /// An automation agent (CLI or MCP) holds control of the GUI session. Canceling the task
@@ -60,6 +62,8 @@ enum class InteractionCapability {
   EditImageDescription,
   EditImageRating,
   EditImageRatingReason,
+  /// Color labels and the Delete mark of an image (#768).
+  EditImageMarks,
   ChangeSemanticModel,
   RunSemanticGeneration,
   ChangeModelDownloadSettings,

@@ -115,6 +115,16 @@ auto BuildRatingBucketFilter(const std::wstring& label) -> FilterNode {
   return MakeRawSQLNode(expr::is_null(expr::col("i.rating")));
 }
 
+auto BuildColorLabelFilter(ColorLabel code) -> FilterNode {
+  // The bit is a trusted integer of the enum, so it stays in the SQL text.
+  return MakeRawSQLNode(
+      expr::raw(std::format("(i.color_labels & {}) <> 0", static_cast<int>(ColorLabelBit(code)))));
+}
+
+auto BuildDeleteMarkFilter() -> FilterNode {
+  return MakeRawSQLNode(expr::raw("i.delete_mark"));
+}
+
 auto BuildSemanticLabelExistsFilter(const std::string&           model_key,
                                     std::span<const std::string> aliases) -> FilterNode {
   if (model_key.empty()) {

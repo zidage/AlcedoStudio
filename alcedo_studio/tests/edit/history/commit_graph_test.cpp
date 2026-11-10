@@ -952,7 +952,9 @@ class ProjectSchemaBoundaryTests : public ::testing::Test {
 
 TEST_F(ProjectSchemaBoundaryTests, CurrentProjectFileVersionIsSupported) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
-  EXPECT_EQ(project_pack::kProjectFileVersion, "0.10.0");
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.11.0");
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.10.0"));
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.12.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.9.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.8.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.7.0"));

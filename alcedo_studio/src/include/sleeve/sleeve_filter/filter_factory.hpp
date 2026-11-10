@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "image/color_label.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 
 namespace alcedo::sleeve_filter {
@@ -71,6 +72,18 @@ namespace alcedo::sleeve_filter {
  * @return Typed condition or a NULL-check predicate.
  */
 [[nodiscard]] auto BuildRatingBucketFilter(const std::wstring& label) -> FilterNode;
+
+/**
+ * @brief Build a filter node that matches files whose photo has the color label @p code
+ *        (`Image.color_labels` holds its bit).
+ */
+[[nodiscard]] auto BuildColorLabelFilter(ColorLabel code) -> FilterNode;
+
+/**
+ * @brief Build a filter node that matches files whose photo has the Delete mark
+ *        (`Image.delete_mark`).
+ */
+[[nodiscard]] auto BuildDeleteMarkFilter() -> FilterNode;
 
 /**
  * @brief Build a filter node that matches files with a semantic label.

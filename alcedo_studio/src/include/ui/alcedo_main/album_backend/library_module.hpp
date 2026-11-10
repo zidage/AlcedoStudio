@@ -273,6 +273,14 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
    */
   void                   NoteRatingsChanged();
 
+  /**
+   * @brief The color labels or the Delete mark of loaded photos changed in storage, and their
+   *        rows already show it (AlbumThumbnailModel::updateMarks). When the Inspector filter or
+   *        the search reads a mark, refresh the library; otherwise read only the statistics of
+   *        the accepted query, as NoteRatingsChanged does. UI thread only.
+   */
+  void                   NoteMarksChanged();
+
   /// Request one refresh of the accepted library query. Requests of one event loop turn are
   /// combined: the refresh reads the filters, the search, and the presentation options when it
   /// is submitted to the worker. The new result replaces the shown one (a model reset). UI
@@ -394,6 +402,11 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   /// True when the accepted or the requested presentation reads the rating (see
   /// NoteRatingsChanged).
   auto               PresentationReadsRating() const -> bool;
+  /// True when the accepted Inspector filter or search reads a library mark (see
+  /// NoteMarksChanged).
+  auto               PresentationReadsMarks() const -> bool;
+  /// Refresh the library when @p reads_changed_column, else read only the statistics.
+  void               RefreshAfterColumnWrite(bool reads_changed_column);
   /// Read the statistics of the accepted query on the worker and publish them (no photo rows).
   void               SubmitStatisticsRead();
   /// Load the next missing page of the requested section rows or flat range, if any.

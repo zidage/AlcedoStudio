@@ -1915,6 +1915,10 @@ Alcedo 将改用 %1。</translation>
         <source>Delete Images</source>
         <translation>删除图像</translation>
     </message>
+    <message>
+        <source>Labels and Marks</source>
+        <translation>标签与标记</translation>
+    </message>
 </context>
 <context>
     <name>BackgroundTasksDialog</name>
@@ -2034,6 +2038,10 @@ Alcedo 将改用 %1。</translation>
     <message>
         <source>Delete Images</source>
         <translation>删除图像</translation>
+    </message>
+    <message>
+        <source>Labels and Marks</source>
+        <translation>标签与标记</translation>
     </message>
     <message>
         <source>Agent Sessions</source>

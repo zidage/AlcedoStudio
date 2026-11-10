@@ -34,6 +34,8 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_asset.hpp"
+#include "image/color_label.hpp"
+#include "image/image.hpp"
 #include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/project_compat_render.hpp"
@@ -314,6 +316,115 @@ TEST(ProjectCompatibilityTest, PackedProjectKeepsMaskAssetRows) {
   std::filesystem::remove_all(source_workspace, ec);
   std::filesystem::remove_all(unpacked_workspace, ec);
   std::filesystem::remove(packed_path, ec);
+}
+
+/// Text of a one-cell query on the database file at @p db_path, opened without the project.
+auto QueryDatabaseFileText(const std::filesystem::path& db_path, const std::string& sql)
+    -> std::string {
+  duckdb_database   database;
+  duckdb_connection connection;
+  EXPECT_EQ(duckdb_open(db_path.string().c_str(), &database), DuckDBSuccess);
+  EXPECT_EQ(duckdb_connect(database, &connection), DuckDBSuccess);
+  duckdb_result result;
+  EXPECT_EQ(duckdb_query(connection, sql.c_str(), &result), DuckDBSuccess) << sql;
+  std::string value;
+  if (char* cell = duckdb_value_varchar(&result, 0, 0); cell != nullptr) {
+    value = cell;
+    duckdb_free(cell);
+  }
+  duckdb_destroy_result(&result);
+  duckdb_disconnect(&connection);
+  duckdb_close(&database);
+  return value;
+}
+
+auto ReadProjectFileVersion(const std::filesystem::path& meta_path) -> std::string {
+  std::ifstream in(meta_path, std::ios::binary);
+  EXPECT_TRUE(in.is_open());
+  return nlohmann::json::parse(in).at("project_file_version").get<std::string>();
+}
+
+constexpr const char* kImageMarkColumnCountSql =
+    "SELECT COUNT(*) FROM duckdb_columns() WHERE table_name = 'Image' "
+    "AND column_name IN ('color_labels', 'delete_mark');";
+constexpr const char* kRootIdsSql =
+    "SELECT string_agg(element_id || ':' || root_id, ',' ORDER BY element_id) FROM PipelineRoot;";
+constexpr const char* kEditStateRootIdsSql =
+    "SELECT string_agg(element_id || ':' || root_id, ',' ORDER BY element_id) "
+    "FROM ImageEditState;";
+
+// #769: a 0.10.0 project opens, gains the library mark columns with empty marks, keeps its root
+// ids, stores marks, and saves as 0.11.0.
+TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds) {
+  TimeProvider::Refresh();
+  nlohmann::json expected;
+  {
+    std::ifstream in(CompatDir() / "raw_project_abdb000c8.json", std::ios::binary);
+    ASSERT_TRUE(in.is_open());
+    expected = nlohmann::json::parse(in);
+  }
+  const auto      workspace = std::filesystem::temp_directory_path() / "alcedo_project_compat_marks";
+  std::error_code ec;
+  std::filesystem::remove_all(workspace, ec);
+  std::filesystem::path db_path;
+  std::filesystem::path meta_path;
+  QString               error;
+  ASSERT_TRUE(project_pack::UnpackProjectToWorkspace(CompatDir() / "raw_project_abdb000c8.alcd",
+                                                     workspace, QStringLiteral("Compat"), &db_path,
+                                                     &meta_path, &error))
+      << error.toStdString();
+  ASSERT_EQ(ReadProjectFileVersion(meta_path), "0.10.0");
+  ASSERT_EQ(QueryDatabaseFileInt64(db_path, kImageMarkColumnCountSql), 0)
+      << "the fixture must predate the library mark columns";
+  const auto root_ids       = QueryDatabaseFileText(db_path, kRootIdsSql);
+  const auto edit_state_ids = QueryDatabaseFileText(db_path, kEditStateRootIdsSql);
+  ASSERT_FALSE(root_ids.empty());
+
+  const auto image_id = expected.at("image_id").get<image_id_t>();
+  {
+    ProjectService project(db_path, meta_path);
+    auto           image_pool = project.GetImagePoolService();
+    EXPECT_EQ(image_pool->Read<int>(image_id,
+                                    [](const std::shared_ptr<Image>& image) {
+                                      return static_cast<int>(image->color_labels_);
+                                    }),
+              0);
+    EXPECT_FALSE(image_pool->Read<bool>(
+        image_id, [](const std::shared_ptr<Image>& image) { return image->delete_mark_; }));
+
+    image_pool->Write_NoSync<void>(image_id, [](const std::shared_ptr<Image>& image) {
+      image->SetColorLabel(ColorLabel::kGreen, true);
+      image->SetColorLabel(ColorLabel::kGray, true);
+      image->SetDeleteMark(true);
+    });
+    EXPECT_TRUE(image_pool->SyncWithStorage().failed_images_.empty());
+    project.SaveProject(meta_path);
+  }
+
+  EXPECT_EQ(ReadProjectFileVersion(meta_path), "0.11.0");
+  EXPECT_EQ(QueryDatabaseFileInt64(db_path, kImageMarkColumnCountSql), 2);
+  EXPECT_EQ(QueryDatabaseFileInt64(
+                db_path, "SELECT color_labels FROM Image WHERE id = " + std::to_string(image_id)),
+            ColorLabelBit(ColorLabel::kGreen) | ColorLabelBit(ColorLabel::kGray));
+  EXPECT_EQ(QueryDatabaseFileInt64(db_path, "SELECT CAST(delete_mark AS BIGINT) FROM Image WHERE "
+                                            "id = " + std::to_string(image_id)),
+            1);
+  EXPECT_EQ(QueryDatabaseFileText(db_path, kRootIdsSql), root_ids);
+  EXPECT_EQ(QueryDatabaseFileText(db_path, kEditStateRootIdsSql), edit_state_ids);
+
+  // The saved project opens again with the marks.
+  {
+    ProjectService project(db_path, meta_path);
+    EXPECT_EQ(project.GetImagePoolService()->Read<int>(
+                  image_id,
+                  [](const std::shared_ptr<Image>& image) {
+                    return static_cast<int>(image->color_labels_);
+                  }),
+              ColorLabelBit(ColorLabel::kGreen) | ColorLabelBit(ColorLabel::kGray));
+    EXPECT_TRUE(project.GetImagePoolService()->Read<bool>(
+        image_id, [](const std::shared_ptr<Image>& image) { return image->delete_mark_; }));
+  }
+  std::filesystem::remove_all(workspace, ec);
 }
 }  // namespace
 }  // namespace alcedo

@@ -22,9 +22,14 @@ namespace alcedo {
  * projects hashed the complete tables, so 0.9.0 projects are rejected without
  * conversion. The format identities below are unchanged from 0.9.0.
  *
+ * Project metadata 0.11.0 adds the library mark columns `Image.color_labels` and
+ * `Image.delete_mark` (#768). A 0.10.0 project opens: Database adds the two columns with their
+ * defaults, and the next save writes 0.11.0. Builds that accept only 0.10.0 reject a 0.11.0
+ * project, so they never write Image rows without the marks. The other identities are unchanged.
+ *
  * | Identity | Constant | Value |
  * | --- | --- | --- |
- * | Project metadata | @ref kProjectFileVersion | 0.10.0 |
+ * | Project metadata | @ref kProjectFileVersion | 0.11.0 |
  * | Packed project header | @ref kPackedProjectFormatVersion | 7 |
  * | Pipeline document JSON | @ref kPipelineDocumentFormatVersion | 7 |
  * | Image edit schema | @ref kImageEditSchemaVersion | 5 |
@@ -38,11 +43,11 @@ namespace alcedo {
  */
 
 /// Project metadata version written by SaveProject and required on open.
-inline constexpr std::string_view kProjectFileVersion = "0.10.0";
-/// Inclusive lower bound of accepted project metadata. Equals @ref kProjectFileVersion.
+inline constexpr std::string_view kProjectFileVersion = "0.11.0";
+/// Inclusive lower bound of accepted project metadata: 0.10.0 opens and gains the mark columns.
 inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.10.0";
 /// Inclusive upper bound of accepted project metadata. Equals @ref kProjectFileVersion.
-inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.10.0";
+inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.11.0";
 /// Packed `.alcd` header version. Independent of the metadata string.
 inline constexpr std::uint32_t kPackedProjectFormatVersion = 7;
 

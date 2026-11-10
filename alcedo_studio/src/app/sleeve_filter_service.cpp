@@ -424,7 +424,9 @@ auto ToAlbumStatsView(const FolderStatsView& stats) -> AlbumStatsView {
           .lens_stats_        = ToStatsBuckets(stats.lens_stats_),
           .label_stats_       = ToStatsBuckets(stats.label_stats_),
           .rating_stats_      = ToStatsBuckets(stats.rating_stats_),
-          .import_date_stats_ = ToStatsBuckets(stats.import_date_stats_)};
+          .import_date_stats_ = ToStatsBuckets(stats.import_date_stats_),
+          .color_label_counts_ = stats.color_label_counts_,
+          .delete_mark_count_  = stats.delete_mark_count_};
 }
 
 auto SleeveFilterService::CreateFilterCombo(const FilterNode& root) -> filter_id_t {

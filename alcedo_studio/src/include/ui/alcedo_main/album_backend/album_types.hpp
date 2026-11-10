@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "image/color_label.hpp"
 #include "type/type.hpp"
 
 namespace alcedo::ui {
@@ -36,6 +37,9 @@ struct AlbumItem {
   QDate                 capture_date{};
   QDate                 import_date{};
   int                   rating = 0;
+  /// Library marks (#768): color label code bits and the Delete mark.
+  ColorLabelMask        color_labels = 0;
+  bool                  delete_mark  = false;
   bool                  is_hdr = false;
   /// Width / height of the oriented photo (ExifDisplayMetaData::width_ / height_ are the
   /// dimensions of the oriented image); 0 when the dimensions are unknown.

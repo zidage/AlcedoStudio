@@ -126,6 +126,7 @@ class InteractionPolicyController final : public QObject {
   Q_INVOKABLE QVariantMap EvaluateEditImageRating(uint elementId) const;
   Q_INVOKABLE QVariantMap EvaluateEditImageRatings(const QVariantList& targets) const;
   Q_INVOKABLE QVariantMap EvaluateEditImageRatingReason(uint elementId) const;
+  Q_INVOKABLE QVariantMap EvaluateEditImageMarks(const QVariantList& targets) const;
   Q_INVOKABLE QVariantMap EvaluateDeleteImages(const QVariantList& targets) const;
   Q_INVOKABLE QVariantMap EvaluateChangeSemanticModel() const;
   Q_INVOKABLE QVariantMap EvaluateRunSemanticGeneration() const;

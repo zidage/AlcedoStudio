@@ -14,6 +14,7 @@
 #include <optional>
 #include <vector>
 
+#include "image/color_label.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -93,6 +94,26 @@ class ImageController final : public QObject {
   // Returns {started, taskId, message}; taskId is the RatingUpdate background task.
   // ImageRatingsFinished carries the SetImageRatings result.
   Q_INVOKABLE QVariantMap StartSetImageRatings(const QVariantList& targetEntries, int rating);
+
+  /**
+   * @brief Sets (@p on) or clears the color label @p code (0 to 6, see ColorLabel) on every
+   *        image of @p targetEntries. The other codes of each image stay.
+   *
+   * @details One batched image-row update, one statistics read (or a library refresh when the
+   * Inspector filter reads a mark), and one project save, on the caller's thread. The library
+   * rows show the new marks before the write; a failed write puts the old marks back. Returns
+   * `{success, message, markedCount, failedCount, markedElementIds, failedElementIds}`.
+   */
+  Q_INVOKABLE QVariantMap SetImageColorLabel(const QVariantList& targetEntries, int code, bool on);
+  /// Same batch as SetImageColorLabel; the write and the save run on a worker thread as a
+  /// LibraryMarkUpdate background task. Returns `{started, taskId, message}`;
+  /// ImageMarksFinished carries the SetImageColorLabel result.
+  Q_INVOKABLE QVariantMap StartSetImageColorLabel(const QVariantList& targetEntries, int code,
+                                                  bool on);
+  /// Sets or clears the Delete mark on every image of @p targetEntries (see SetImageColorLabel).
+  Q_INVOKABLE QVariantMap SetImageDeleteMark(const QVariantList& targetEntries, bool on);
+  /// Same batch as SetImageDeleteMark on a worker thread (see StartSetImageColorLabel).
+  Q_INVOKABLE QVariantMap StartSetImageDeleteMark(const QVariantList& targetEntries, bool on);
   /// User edits of the inspector: refused with the reason in `message` while an automation agent
   /// holds control.
   Q_INVOKABLE QVariantMap SetImageDescription(uint elementId, const QString& caption);
@@ -116,6 +137,9 @@ class ImageController final : public QObject {
   // QML Connections maps a handler onFoo to the signal foo, so a signal that starts with an
   // uppercase letter needs a lowercase twin for QML.
   void imageRatingsFinished(const QVariantMap& result);
+  /// A batch started by StartSetImageColorLabel or StartSetImageDeleteMark is complete.
+  void ImageMarksFinished(const QVariantMap& result);
+  void imageMarksFinished(const QVariantMap& result);
   /// StartDeleteImages accepted the delete of @p elementIds. Emitted on the UI thread before the
   /// worker starts, so a receiver can close what must not be open while the images are deleted.
   void DeleteImagesStarting(const QVariantList& elementIds);
@@ -154,6 +178,61 @@ class ImageController final : public QObject {
   // Returns the ratings the view showed before (-1 where the view has no row).
   auto SetViewRatings(const std::vector<RatingTarget>& targets, const std::vector<int>& ratings)
       -> std::vector<int>;
+
+  // One change of a library mark batch: one color label code set or cleared, or the Delete mark
+  // set or cleared.
+  struct MarkChange {
+    enum class Kind { kColorLabel, kDeleteMark };
+    Kind       kind_ = Kind::kColorLabel;
+    ColorLabel code_ = ColorLabel::kRed;  // kColorLabel only.
+    bool       on_   = false;
+  };
+
+  // The marks of one library row.
+  struct ViewMarks {
+    ColorLabelMask color_labels_ = 0;
+    bool           delete_mark_  = false;
+  };
+
+  // A validated mark batch. `previous_view_marks_` holds, per target, the marks the library view
+  // showed before the batch (empty when the view has no row for the target).
+  struct MarkBatch {
+    MarkChange                            change_{};
+    std::vector<RatingTarget>             targets_{};
+    std::vector<std::optional<ViewMarks>> previous_view_marks_{};
+    std::vector<sl_element_id_t>          unresolved_element_ids_{};
+  };
+
+  struct MarkBatchOutcome {
+    std::vector<bool> marked_{};  // per target
+    bool              save_ok_ = false;
+  };
+
+  // One target per image of @p targetEntries, in entry order (the first entry of an image wins).
+  // Entries without an image id add their element id to @p unresolved_element_ids.
+  [[nodiscard]] auto ResolveBatchTargets(const QVariantList&           targetEntries,
+                                         std::vector<sl_element_id_t>* unresolved_element_ids) const
+      -> std::vector<RatingTarget>;
+  [[nodiscard]] static auto ApplyMarkChange(ViewMarks marks, const MarkChange& change)
+      -> ViewMarks;
+  [[nodiscard]] auto PrepareMarkBatch(const QVariantList& targetEntries, MarkChange change,
+                                      QVariantMap* error_result) -> std::optional<MarkBatch>;
+  [[nodiscard]] static auto PersistMarkBatch(const std::shared_ptr<ProjectService>& project,
+                                             const MarkBatch&                       batch,
+                                             const std::function<bool(QString*)>&   save_job)
+      -> MarkBatchOutcome;
+  [[nodiscard]] auto FinishMarkBatch(const MarkBatch& batch, const MarkBatchOutcome& outcome)
+      -> QVariantMap;
+  // Applies @p change to the library view state and the thumbnail model rows of @p targets.
+  // Returns the marks each row showed before (empty where the view has no row).
+  auto ApplyViewMarkChange(const std::vector<RatingTarget>& targets, const MarkChange& change)
+      -> std::vector<std::optional<ViewMarks>>;
+  // Shows @p marks[i] for @p targets[i] (a revert of ApplyViewMarkChange).
+  void SetViewMarks(const std::vector<RatingTarget>& targets, const std::vector<ViewMarks>& marks);
+  [[nodiscard]] auto SetImageMarks(const QVariantList& targetEntries, MarkChange change)
+      -> QVariantMap;
+  [[nodiscard]] auto StartSetImageMarks(const QVariantList& targetEntries, MarkChange change)
+      -> QVariantMap;
 
   // A validated delete: the targets with the ids that the library rows supply, and the scope.
   struct DeleteBatch {
@@ -194,6 +273,8 @@ class ImageController final : public QObject {
   BackgroundTaskController*     background_tasks_ = nullptr;
   QString                       rating_task_id_{};
   bool                          rating_batch_running_ = false;
+  QString                       mark_task_id_{};
+  bool                          mark_batch_running_ = false;
   QString                       delete_task_id_{};
   bool                          delete_running_ = false;
 };

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -13,6 +14,7 @@
 #include <string_view>
 #include <vector>
 
+#include "image/color_label.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/store/semantic/semantic_records.hpp"
@@ -82,6 +84,9 @@ struct AlbumStatsView {
   std::vector<StatsBucket> rating_stats_{};
   /// Local import-day buckets; read only when the library query names a time zone.
   std::vector<StatsBucket> import_date_stats_{};
+  /// Photos of each color label code (index = ColorLabel), and photos with the Delete mark.
+  std::array<int, kColorLabelCount> color_label_counts_{};
+  int                               delete_mark_count_ = 0;
 };
 
 /// The statistics of one storage read in the application form.

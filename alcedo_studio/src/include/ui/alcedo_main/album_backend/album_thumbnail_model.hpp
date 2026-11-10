@@ -54,6 +54,8 @@ class AlbumThumbnailModel : public QAbstractListModel {
     EditedAt,
     EditVersionName,
     AspectRatio,  ///< Width / height of the oriented photo; 0 when unknown.
+    ColorLabels,  ///< Color label code bits (bit k = ColorLabel k), an int.
+    DeleteMark,
   };
 
   explicit AlbumThumbnailModel(QObject* parent = nullptr);
@@ -104,6 +106,12 @@ class AlbumThumbnailModel : public QAbstractListModel {
 
   /// Patch rating for the currently loaded row — emits dataChanged for Rating only.
   bool updateRating(sl_element_id_t elementId, image_id_t imageId, int rating);
+
+  /// Patch the color labels and the Delete mark of the loaded row of @p elementId. Emits
+  /// dataChanged for ColorLabels and DeleteMark. Returns false when the row is not loaded or did
+  /// not change.
+  bool updateMarks(sl_element_id_t elementId, image_id_t imageId, ColorLabelMask colorLabels,
+                   bool deleteMark);
 
   /// Patch the edit state of the loaded row of @p elementId: the head commit time of the active
   /// Version (empty when unedited) and its display name. Emits dataChanged for IsEdited,
