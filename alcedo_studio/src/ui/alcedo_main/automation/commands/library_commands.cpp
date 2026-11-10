@@ -32,9 +32,11 @@
 #include "app/editor_adjustment_context.hpp"
 #include "app/image_pool_service.hpp"
 #include "app/thumbnail_service.hpp"
+#include "image/color_label.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "sleeve/album_query.hpp"
+#include "sleeve/sleeve_filter/filter_factory.hpp"
 #include "storage/mapper/image/image_search_columns.hpp"
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
@@ -270,6 +272,60 @@ void RequestNextThumbnails(const std::shared_ptr<ThumbnailBatch>& batch) {
   }
 }
 
+auto ColorLabelKeyText(ColorLabel code) -> QString {
+  const std::string_view key = ColorLabelKey(code);
+  return QString::fromLatin1(key.data(), static_cast<qsizetype>(key.size()));
+}
+
+/// The code keys of @p mask in code order.
+auto ColorLabelKeys(ColorLabelMask mask) -> QJsonArray {
+  QJsonArray keys;
+  for (int index = 0; index < kColorLabelCount; ++index) {
+    const auto code = static_cast<ColorLabel>(index);
+    if (HasColorLabel(mask, code)) {
+      keys.push_back(ColorLabelKeyText(code));
+    }
+  }
+  return keys;
+}
+
+/// The code of the `code` or `color_label` parameter @p key. The schema allows only the keys.
+auto ColorLabelOfParam(const QJsonValue& key) -> std::optional<ColorLabel> {
+  return ColorLabelFromKey(key.toString().toStdString());
+}
+
+/// The marks of @p row as the item fields `color_labels` and `delete_mark`.
+void InsertMarks(QJsonObject* item, const SearchResultRow& row) {
+  item->insert("color_labels", ColorLabelKeys(row.color_labels_));
+  item->insert("delete_mark", row.delete_mark_);
+}
+
+/// The library.color_labels item of @p code with the names of @p names.
+auto ColorLabelItem(const ui::LibraryViewPreferences& names, ColorLabel code) -> QJsonObject {
+  const int index = static_cast<int>(code);
+  return QJsonObject{{"code", ColorLabelKeyText(code)},
+                     {"index", index},
+                     {"name", names.color_label_names().value(index)},
+                     {"default_name", names.color_label_default_names().value(index)},
+                     {"renamed", !names.color_label_user_names().value(index).isEmpty()},
+                     {"color", QStringLiteral("#%1")
+                                   .arg(kColorLabelDisplayRgb[static_cast<std::size_t>(index)], 6,
+                                        16, QLatin1Char('0'))
+                                   .toUpper()}};
+}
+
+/// Answers library.color_label and library.delete_mark with the result of the mark batch start
+/// @p started: @p result and the task id, or the owner message when the batch did not start.
+void AnswerMarkBatch(AutomationReply& reply, const QVariantMap& started, QJsonObject result) {
+  if (!started.value(QStringLiteral("started")).toBool()) {
+    SendAutomationOwnerError(reply, AutomationErrorCode::Rejected,
+                             started.value(QStringLiteral("message")).toString());
+    return;
+  }
+  result.insert("task_id", started.value(QStringLiteral("taskId")).toString());
+  reply.SendResult(result);
+}
+
 /// The metadata keeps focal length and aperture as float, so 6.3f reads as 6.3000001907 when
 /// widened. Two decimals are finer than any lens or aperture marking; the Image search columns
 /// round the same way.
@@ -285,6 +341,7 @@ auto PhotoInfoItem(ImagePoolService* image_pool, const SearchResultRow& row) -> 
                    {"image_id", static_cast<double>(row.image_id_)},
                    {"file_name", QString::fromStdString(row.file_name_)},
                    {"rating", row.rating_}};
+  InsertMarks(&item, row);
   if (image_pool == nullptr) {
     return item;
   }
@@ -402,12 +459,60 @@ void ImportFolder(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracke
   scan->Start(folder);
 }
 
+auto ColorLabelKeyNames() -> QJsonArray {
+  QJsonArray keys;
+  for (const std::string_view key : kColorLabelKeys) {
+    keys.push_back(QString::fromLatin1(key.data(), static_cast<qsizetype>(key.size())));
+  }
+  return keys;
+}
+
+/// A color label code key parameter.
+auto ColorLabelCodeParam(const QString& description) -> QJsonObject {
+  return QJsonObject{
+      {"type", "string"}, {"enum", ColorLabelKeyNames()}, {"description", description}};
+}
+
+auto ColorLabelsFieldSchema() -> QJsonObject {
+  return QJsonObject{{"type", "array"},
+                     {"items", QJsonObject{{"type", "string"}, {"enum", ColorLabelKeyNames()}}},
+                     {"description", "The color label codes of the photo in code order."}};
+}
+
+auto DeleteMarkFieldSchema() -> QJsonObject {
+  return QJsonObject{{"type", "boolean"},
+                     {"description", "The Delete mark. The mark changes nothing on disk."}};
+}
+
+auto ColorLabelItemSchema() -> QJsonObject {
+  return AutomationObjectSchema(
+      QJsonObject{
+          {"code", QJsonObject{{"type", "string"}, {"enum", ColorLabelKeyNames()}}},
+          {"index", QJsonObject{{"type", "integer"},
+                                {"description", "The position of the code, 0 (red) to 6 (gray)."}}},
+          {"name", QJsonObject{{"type", "string"},
+                               {"description",
+                                "The name that the Library shows: the user name, "
+                                "or the color name."}}},
+          {"default_name",
+           QJsonObject{{"type", "string"},
+                       {"description", "The color name in the application language."}}},
+          {"renamed", QJsonObject{{"type", "boolean"},
+                                  {"description", "True when the code has a user name."}}},
+          {"color",
+           QJsonObject{{"type", "string"}, {"description", "The display color as #RRGGBB."}}}},
+      QJsonArray{"code", "index", "name", "default_name", "renamed", "color"});
+}
+
 auto ItemSchema() -> QJsonObject {
-  return AutomationObjectSchema(QJsonObject{{"element_id", QJsonObject{{"type", "integer"}}},
-                                            {"image_id", QJsonObject{{"type", "integer"}}},
-                                            {"file_name", QJsonObject{{"type", "string"}}},
-                                            {"rating", QJsonObject{{"type", "integer"}}}},
-                                QJsonArray{"element_id", "image_id", "file_name", "rating"});
+  return AutomationObjectSchema(
+      QJsonObject{{"element_id", QJsonObject{{"type", "integer"}}},
+                  {"image_id", QJsonObject{{"type", "integer"}}},
+                  {"file_name", QJsonObject{{"type", "string"}}},
+                  {"rating", QJsonObject{{"type", "integer"}}},
+                  {"color_labels", ColorLabelsFieldSchema()},
+                  {"delete_mark", DeleteMarkFieldSchema()}},
+      QJsonArray{"element_id", "image_id", "file_name", "rating", "color_labels", "delete_mark"});
 }
 
 /// ImageController target entries (elementId, imageId, fileName) of @p rows.
@@ -456,6 +561,8 @@ auto InfoItemSchema() -> QJsonObject {
           {"image_id", integer},
           {"file_name", text},
           {"rating", integer},
+          {"color_labels", ColorLabelsFieldSchema()},
+          {"delete_mark", DeleteMarkFieldSchema()},
           {"file_path",
            QJsonObject{{"type", "string"}, {"description", "The source file of the photo."}}},
           {"capture_time",
@@ -479,7 +586,37 @@ auto InfoItemSchema() -> QJsonObject {
                        {"description",
                         "Why the metadata cannot be read; the item then has only the library "
                         "columns."}}}},
-      QJsonArray{"element_id", "image_id", "file_name", "rating"});
+      QJsonArray{"element_id", "image_id", "file_name", "rating", "color_labels", "delete_mark"});
+}
+
+/// The library.list filter of the `color_label` and `deleted` parameters, or empty without them.
+auto MarkFilterOfParams(const QJsonObject& params) -> std::optional<FilterNode> {
+  std::vector<FilterNode> children;
+  if (params.contains("color_label")) {
+    if (const auto code = ColorLabelOfParam(params.value("color_label"))) {
+      children.push_back(sleeve_filter::BuildColorLabelFilter(*code));
+    }
+  }
+  if (params.contains("deleted")) {
+    FilterNode marked = sleeve_filter::BuildDeleteMarkFilter();
+    if (params.value("deleted").toBool()) {
+      children.push_back(std::move(marked));
+    } else {
+      children.push_back(FilterNode{FilterNode::Type::Logical,
+                                    FilterOp::NOT,
+                                    {std::move(marked)},
+                                    std::nullopt,
+                                    std::nullopt});
+    }
+  }
+  if (children.empty()) {
+    return std::nullopt;
+  }
+  if (children.size() == 1) {
+    return std::move(children.front());
+  }
+  return FilterNode{FilterNode::Type::Logical, FilterOp::AND, std::move(children), std::nullopt,
+                    std::nullopt};
 }
 
 void RegisterOrFail(AutomationCommandRegistry& registry, AutomationCommandSpec spec, bool* ok,
@@ -599,7 +736,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   list.method      = QStringLiteral("library.list");
   list.description = QStringLiteral(
       "Returns one page of the photos of a folder (the root folder by default) in the order "
-      "of 'sort', then by element id. 'total' is the photo count of the folder.");
+      "of 'sort', then by element id. 'color_label' keeps the photos with that code and "
+      "'deleted' the photos with (true) or without (false) the Delete mark; both together keep "
+      "the photos that match both. 'total' is the photo count of the folder that matches.");
   QJsonArray sort_names;
   for (const auto& sort : kSortFields) {
     sort_names.push_back(QString::fromLatin1(sort.name));
@@ -614,7 +753,11 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                             {"maximum", static_cast<double>(kMaxAlbumQueryPageRows)},
                             {"default", 100}}},
       {"sort", QJsonObject{{"type", "string"}, {"enum", sort_names}, {"default", "none"}}},
-      {"descending", QJsonObject{{"type", "boolean"}, {"default", false}}}});
+      {"descending", QJsonObject{{"type", "boolean"}, {"default", false}}},
+      {"color_label", ColorLabelCodeParam(QStringLiteral("Only photos with this code."))},
+      {"deleted", QJsonObject{{"type", "boolean"},
+                              {"description",
+                               "Only photos with (true) or without (false) the Delete mark."}}}});
   list.result_schema = AutomationObjectSchema(
       QJsonObject{{"total", QJsonObject{{"type", "integer"}}},
                   {"offset", QJsonObject{{"type", "integer"}}},
@@ -652,14 +795,17 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     read.offset_ = offset;
     read.limit_  = limit;
     try {
-      const AlbumQueryResult result = browse->ReadAlbumQuery(
-          *folder_id, std::nullopt, options, host->stats()->ActiveSemanticModelKey(), read);
+      const AlbumQueryResult result =
+          browse->ReadAlbumQuery(*folder_id, MarkFilterOfParams(params), options,
+                                 host->stats()->ActiveSemanticModelKey(), read);
       QJsonArray items;
       for (const auto& row : result.rows_) {
-        items.push_back(QJsonObject{{"element_id", static_cast<double>(row.photo_.file_id_)},
-                                    {"image_id", static_cast<double>(row.photo_.image_id_)},
-                                    {"file_name", QString::fromStdString(row.photo_.file_name_)},
-                                    {"rating", row.photo_.rating_}});
+        QJsonObject item{{"element_id", static_cast<double>(row.photo_.file_id_)},
+                         {"image_id", static_cast<double>(row.photo_.image_id_)},
+                         {"file_name", QString::fromStdString(row.photo_.file_name_)},
+                         {"rating", row.photo_.rating_}};
+        InsertMarks(&item, row.photo_);
+        items.push_back(item);
       }
       reply.SendResult(QJsonObject{{"total", static_cast<double>(result.unique_file_count_)},
                                    {"offset", static_cast<double>(offset)},
@@ -820,7 +966,8 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   AutomationCommandSpec info;
   info.method      = QStringLiteral("library.info");
   info.description = QStringLiteral(
-      "Returns the source file and the capture values of 'element_ids', in that order. The "
+      "Returns the source file, the marks (rating, color_labels, delete_mark), and the capture "
+      "values of 'element_ids', in that order. The "
       "capture values come from the metadata that the import read: capture_time, camera_make, "
       "camera_model, lens, focal_mm, aperture, shutter, shutter_seconds, iso, width, and "
       "height. A value that the metadata does not have is left out of the item.");
@@ -958,6 +1105,129 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                                        {"rating", result.value(QStringLiteral("rating")).toInt()}});
   };
   RegisterOrFail(registry, std::move(rate), &ok, error);
+
+  AutomationCommandSpec color_label;
+  color_label.method      = QStringLiteral("library.color_label");
+  color_label.description = QStringLiteral(
+      "Sets ('on': true) or clears ('on': false) one color label code on every photo of "
+      "'element_ids'. The other codes of each photo stay. The batch save runs as a task: the "
+      "result holds its 'task_id' for tasks.wait. A batch while another mark batch saves, or a "
+      "photo that a running delete holds, is rejected.");
+  color_label.changes_state = true;
+  color_label.params_schema = AutomationClosedParamsSchema(
+      QJsonObject{{"element_ids", ElementIdsParam()},
+                  {"code", ColorLabelCodeParam(QStringLiteral("The color label code."))},
+                  {"on", QJsonObject{{"type", "boolean"}}}},
+      QJsonArray{"element_ids", "code", "on"});
+  color_label.result_schema =
+      AutomationObjectSchema(QJsonObject{{"task_id", QJsonObject{{"type", "string"}}},
+                                         {"marked_count", QJsonObject{{"type", "integer"}}},
+                                         {"code", QJsonObject{{"type", "string"}}},
+                                         {"on", QJsonObject{{"type", "boolean"}}}},
+                             QJsonArray{"task_id", "marked_count", "code", "on"});
+  color_label.handler = [host](const QJsonObject& params, AutomationReply reply) {
+    const auto project = AutomationEnteredProject(host, reply);
+    if (!project) {
+      return;
+    }
+    const auto rows = ResolveAutomationElementRows(*project, params, reply);
+    if (!rows.has_value()) {
+      return;
+    }
+    const auto code = ColorLabelOfParam(params.value("code"));
+    if (!code.has_value()) {
+      SendAutomationParamError(reply, QStringLiteral("/code"),
+                               QStringLiteral("unknown color label code"));
+      return;
+    }
+    const bool        on      = params.value("on").toBool();
+    const QVariantMap started = host->library_mutations()->SetColorLabelOfTargets(
+        TargetEntries(*rows), static_cast<int>(*code), on);
+    AnswerMarkBatch(reply, started,
+                    QJsonObject{{"marked_count", static_cast<int>(rows->size())},
+                                {"code", ColorLabelKeyText(*code)},
+                                {"on", on}});
+  };
+  RegisterOrFail(registry, std::move(color_label), &ok, error);
+
+  AutomationCommandSpec delete_mark;
+  delete_mark.method      = QStringLiteral("library.delete_mark");
+  delete_mark.description = QStringLiteral(
+      "Sets ('on': true) or clears ('on': false) the Delete mark of every photo of "
+      "'element_ids'. The mark changes nothing on disk; library.delete is the separate step "
+      "that deletes photos. The batch save runs as a task: the result holds its 'task_id' for "
+      "tasks.wait. A batch while another mark batch saves, or a photo that a running delete "
+      "holds, is rejected.");
+  delete_mark.changes_state = true;
+  delete_mark.params_schema = AutomationClosedParamsSchema(
+      QJsonObject{{"element_ids", ElementIdsParam()}, {"on", QJsonObject{{"type", "boolean"}}}},
+      QJsonArray{"element_ids", "on"});
+  delete_mark.result_schema =
+      AutomationObjectSchema(QJsonObject{{"task_id", QJsonObject{{"type", "string"}}},
+                                         {"marked_count", QJsonObject{{"type", "integer"}}},
+                                         {"on", QJsonObject{{"type", "boolean"}}}},
+                             QJsonArray{"task_id", "marked_count", "on"});
+  delete_mark.handler = [host](const QJsonObject& params, AutomationReply reply) {
+    const auto project = AutomationEnteredProject(host, reply);
+    if (!project) {
+      return;
+    }
+    const auto rows = ResolveAutomationElementRows(*project, params, reply);
+    if (!rows.has_value()) {
+      return;
+    }
+    const bool        on = params.value("on").toBool();
+    const QVariantMap started =
+        host->library_mutations()->SetDeleteMarkOfTargets(TargetEntries(*rows), on);
+    AnswerMarkBatch(reply, started,
+                    QJsonObject{{"marked_count", static_cast<int>(rows->size())}, {"on", on}});
+  };
+  RegisterOrFail(registry, std::move(delete_mark), &ok, error);
+
+  AutomationCommandSpec color_labels;
+  color_labels.method      = QStringLiteral("library.color_labels");
+  color_labels.description = QStringLiteral(
+      "Returns the seven color label codes in code order (red, orange, yellow, green, blue, "
+      "purple, gray) with their names. The name of a code is a setting of the computer that "
+      "every project shares; the code key never changes.");
+  color_labels.params_schema = AutomationClosedParamsSchema();
+  color_labels.result_schema = AutomationObjectSchema(
+      QJsonObject{{"codes", QJsonObject{{"type", "array"}, {"items", ColorLabelItemSchema()}}}},
+      QJsonArray{"codes"});
+  color_labels.handler = [host](const QJsonObject&, AutomationReply reply) {
+    QJsonArray codes;
+    for (int index = 0; index < kColorLabelCount; ++index) {
+      codes.push_back(ColorLabelItem(*host->library_view(), static_cast<ColorLabel>(index)));
+    }
+    reply.SendResult(QJsonObject{{"codes", codes}});
+  };
+  RegisterOrFail(registry, std::move(color_labels), &ok, error);
+
+  AutomationCommandSpec color_label_name;
+  color_label_name.method = QStringLiteral("library.color_label_name.set");
+  color_label_name.description =
+      QStringLiteral(
+          "Sets the user name of a color label code for every project on the computer. The name is "
+          "trimmed and cut to %1 characters; an empty name gives the code its color name back. "
+          "Returns the library.color_labels item of the code.")
+          .arg(ui::LibraryViewPreferences::kColorLabelNameMaxLength);
+  color_label_name.changes_state = true;
+  color_label_name.params_schema = AutomationClosedParamsSchema(
+      QJsonObject{{"code", ColorLabelCodeParam(QStringLiteral("The color label code."))},
+                  {"name", QJsonObject{{"type", "string"}}}},
+      QJsonArray{"code", "name"});
+  color_label_name.result_schema = ColorLabelItemSchema();
+  color_label_name.handler       = [host](const QJsonObject& params, AutomationReply reply) {
+    const auto code = ColorLabelOfParam(params.value("code"));
+    if (!code.has_value() || !host->library_view()->SetColorLabelName(
+                                 static_cast<int>(*code), params.value("name").toString())) {
+      SendAutomationParamError(reply, QStringLiteral("/code"),
+                                     QStringLiteral("unknown color label code"));
+      return;
+    }
+    reply.SendResult(ColorLabelItem(*host->library_view(), *code));
+  };
+  RegisterOrFail(registry, std::move(color_label_name), &ok, error);
 
   AutomationCommandSpec remove;
   remove.method      = QStringLiteral("library.delete");

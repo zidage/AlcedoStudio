@@ -4,8 +4,11 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 
 namespace alcedo {
 
@@ -57,6 +60,29 @@ inline constexpr ColorLabelMask kColorLabelMaskAll = 0x7F;
     return std::nullopt;
   }
   return static_cast<ColorLabel>(index);
+}
+
+/// Stable text key of each code in code order, as alcedo-cli names the codes. Keys never change.
+inline constexpr std::array<std::string_view, kColorLabelCount> kColorLabelKeys = {
+    "red", "orange", "yellow", "green", "blue", "purple", "gray"};
+
+/// Display color of each code in code order as 0xRRGGBB. It is the same in every theme.
+inline constexpr std::array<std::uint32_t, kColorLabelCount> kColorLabelDisplayRgb = {
+    0xE5534B, 0xE8863A, 0xD8B43A, 0x4FAE6B, 0x4C8DDB, 0x9B6BD3, 0x8C8C8C};
+
+/// The text key of @p code ("red" ... "gray").
+[[nodiscard]] constexpr auto ColorLabelKey(ColorLabel code) -> std::string_view {
+  return kColorLabelKeys[static_cast<std::size_t>(code)];
+}
+
+/// The code of the text key @p key, or empty for an unknown key. Keys are lower case.
+[[nodiscard]] constexpr auto ColorLabelFromKey(std::string_view key) -> std::optional<ColorLabel> {
+  for (int index = 0; index < kColorLabelCount; ++index) {
+    if (kColorLabelKeys[static_cast<std::size_t>(index)] == key) {
+      return static_cast<ColorLabel>(index);
+    }
+  }
+  return std::nullopt;
 }
 
 }  // namespace alcedo
