@@ -46,7 +46,8 @@ class LibraryMutationOperations final : public QObject {
   Q_INVOKABLE QString      DeleteScope() const;
   /**
    * @brief Starts the delete of @p targets through ImageController::StartDeleteImages and
-   *        returns its result (started, taskId, message).
+   *        returns its result (started, taskId, message, and `locked` when a task holds the
+   *        delete lock).
    *
    * @details When the delete starts (ImageController::DeleteImagesStarting), the editor image
    * closes when it is a target: the last edited image is forgotten, the Editor workspace shows

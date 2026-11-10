@@ -613,6 +613,7 @@ auto ImageController::StartDeleteImages(const QVariantList& targetEntries) -> QV
         status_->SetTaskState(PL_TEXT("%1", reason), 0, false);
       }
       result[QStringLiteral("message")] = reason;
+      result[QStringLiteral("locked")]  = true;
       return result;
     }
   }
