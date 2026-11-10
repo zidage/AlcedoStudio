@@ -49,7 +49,7 @@ Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checkl
 | UI caption | `uiFontFamily` | `fontSizeCaption` (11) | `fontWeightRegular` | `lineHeightCaption` (14) | Secondary chrome |
 | Headline | `headlineFontFamily` | `fontSizeHeadline` (22) | `fontWeightHeading` | `lineHeightHeadline` (28) | Empty-state titles |
 | Settings card title | `headlineFontFamily` | `fontSizeSection` (14) | DemiBold | 1.1 | Title of a `PackageCard` (Settings > LUTs, Settings > AI Models) and of the folder tiles of those pages. Below it, after a `spaceSm` gap, one sentence in `uiFontFamily` + `fontSizeBody` muted text says what the package or model does; no list and no version text there (a Pill shows the version). A GitHub button beside the title opens the project of the package when it has one. Do not use a display size: a model name must stay on one line in the two-column page. |
-| Data / numeric | `dataFontFamily` | body/caption | regular/strong | matching | Tabular metrics, zoom, crop degrees (IBM Plex Sans) |
+| Data / numeric | `headlineFontFamily` (Manrope) with `font.features: { "tnum": 1 }` | body to display | DemiBold for inline counts, ExtraLight for display counts | matching | Counts, sizes, revisions, progress values, and remaining times. `dataFontFamily` (IBM Plex Sans) is retired page by page: a new or changed surface uses Manrope. Counts use the digit grouping of the locale (`DataFormat.grouped`); see "Settings bento pages" for large counts. |
 | Mono | `monoFontFamily` | body/caption | regular | matching | Minigit history/Versions data (commit hashes, before/after delta lines) and the adjustment-header EXIF tokens. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, crop degrees, or the selected node display name. |
 
 Families resolve at runtime from registered Alcedo fonts (`AppTheme::RegisterFonts`).
@@ -1406,17 +1406,53 @@ are not a valid target.
 
 ---
 
+## Settings bento pages
+
+Settings > LUTs, Settings > AI Models, and Settings > Local Content Recognition use `BentoTile`
+surfaces with the page margins 26 px (top) and 34 px (sides) and `spaceMd` between tiles.
+
+- **Count tile** (`CountTile.qml`, 190 px wide): the name in muted Manrope `fontSizeSection`
+  Medium, the count in Manrope 72 px ExtraLight with tabular figures, centered. A page that can
+  hold 10,000 or more items sets `compactLargeCounts`: the count then shows at most three
+  significant digits, truncated (12.8K, 102K, 1.25M; in Chinese 1.28万, 10.2万, 1.23亿), and the
+  exact grouped count stands below it in muted Manrope `fontSizeBody`.
+- **Split bar and legend** (`SplitBar.qml`, `LegendItem.qml`): a 10 px track in
+  `bgBaseColor`, the first part from the left, a 3 px gap, the second part at the right. The
+  legend swatch (8 px) carries the color of its bar part; it names a color, it is not a status
+  dot. The LUT categories keep `accentColor` and `toneMist` at 0.7. The label coverage of
+  Local Content Recognition is neutral: `textColor` for photos with labels and
+  `textMutedColor` at 0.45 for photos that need labels.
+- **Task progress in a tile**: `ThemedProgressBar` with `showDetails`; `fillColor` is
+  `textColor` on neutral pages. The detail text is percent, `completed / total` (grouped), and
+  the remaining time from `DataFormat.remaining` ("About 3 min remaining", "About 2 h 10 min
+  remaining", "Less than a minute remaining", "Estimating the remaining time"). The running
+  body takes the place of the idle body at the same height, so the tile does not resize.
+- **Neutral actions**: Local Content Recognition and the AI label dialog use no theme blue. The
+  main action is `DialogActionButton` `kind: "light"` (`textColor` fill, `bgCanvasColor`
+  text); the other actions are `kind: "normal"`. "Move task to background" is an
+  `IconButton` with `to_bg.svg` in the normal control colors (`controlFillColor`,
+  `controlBorderColor`). Buttons are 34 px high in tiles and in this dialog.
+- **Settings rows** in a tile: the name in `uiFontFamily` `fontSizeTitle` `fontWeightStrong` at
+  the left; the value and the control at the right (combos 220 px wide); 1 px `dividerColor`
+  lines between the rows. No explanatory sentence under a row or in a tile: the name, the value,
+  and the state words carry the meaning. Background information goes into the page info badge.
+- Local Content Recognition fits the dialog at its full size (980 x 620) without scrolling.
+
 ## Shared components
 
 | Component | Responsibility |
 | --- | --- |
 | `IconActionButton.qml` | Structural SVG action (Item root, true square chrome): hit/optical/source, tooltip, a11y, hover, focus, selected fill; SVG tint via `ColorImage` (same as `Button.icon.color`) |
 | `CollapsibleSection.qml` | Folding group shell with shared motion driver |
-| `DialogActionButton.qml` | Text dialog actions (46 px floor; wrapped labels grow the button) |
+| `DialogActionButton.qml` | Text dialog actions (46 px floor; wrapped labels grow the button); kinds `normal`, `light` (main action of a neutral surface), `accent`, `danger`, `warning` |
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
 | `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive |
 | `AdjustmentSlider.qml` | Shared numeric slider + field bound to `EditorAdjustmentValueModel` |
-| `ThemedProgressBar.qml` | Shared determinate / indeterminate progress track (Background Tasks + Export) |
+| `ThemedProgressBar.qml` | Shared determinate / indeterminate progress track (Background Tasks, Export, Settings tiles); detail text in Manrope with tabular figures |
+| `BentoTile.qml` | Settings bento surface (radius 14, `cardSurfaceColor`, `cardBorderColor`, 22 px padding) |
+| `CountTile.qml` | Bento tile with one large count; optional short form for large counts with the exact count below |
+| `SplitBar.qml` / `LegendItem.qml` | Two-part count bar and its legend entries (swatch, name, grouped count) |
+| `DataFormat.js` | Grouped counts, short large counts (K/M, 万/亿), and remaining-time text |
 | `ThemeCheckBox.qml` | Monochrome check row (Adjustment Transfer / Export): selected well + check, muted label when off; disabled: hairline box, muted mark and label |
 | `ThemeSwitch.qml` | Monochrome switch row (search settings): label + track; on = selected well + ink knob, off = sunken track + muted knob |
 | `AppContextMenu.qml` | Shared dark popup menu shell (`Menu` + `AppMenuItem` delegate, fade transition, `openAt`) |

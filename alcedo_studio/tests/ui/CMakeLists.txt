@@ -1152,6 +1152,40 @@ alcedo_ui_gtest_discover_tests(AiModelsSettingsQmlTest
 )
 alcedo_register_test_target(AiModelsSettingsQmlTest ui)
 
+# Issue #762: Settings > Local Content Recognition and the AI label dialog alone, with a QML
+# stand-in for the label controller (counts, split bar, short photo counts, generate buttons,
+# progress and remaining time, model row, dialog prompt and progress, page height).
+add_executable(SemanticSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/semantic_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(SemanticSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(SemanticSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+set_target_properties(SemanticSettingsQmlTest PROPERTIES AUTOMOC ON)
+target_compile_definitions(SemanticSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(SemanticSettingsQmlTest
+    TEST_PREFIX "SemanticSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;semantic_settings"
+)
+alcedo_register_test_target(SemanticSettingsQmlTest ui)
+
 # Phase 6A: typed adjustment models (no GPU/QML rendering; QSignalSpy drives the
 # debounce timer deterministically via the event loop).
 add_executable(EditorAdjustmentModelTest

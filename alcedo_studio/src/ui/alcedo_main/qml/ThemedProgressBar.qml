@@ -3,7 +3,8 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // Shared themed progress indicator. Download callers can opt into the metric
-// row; existing background/export callers retain the compact track-only form.
+// row; existing background/export callers retain the compact track-only form. The detail text is
+// data: Manrope with tabular figures, so the digits do not shift while the values change.
 Item {
     id: root
     objectName: "themedProgressBar"
@@ -79,7 +80,8 @@ Item {
         Label {
             text: root.percentText
             color: appTheme.textColor
-            font.family: appTheme.dataFontFamily
+            font.family: appTheme.headlineFontFamily
+            font.features: { "tnum": 1 }
             font.pixelSize: appTheme.fontSizeCaption
             font.weight: appTheme.fontWeightStrong
         }
@@ -88,7 +90,8 @@ Item {
             Layout.fillWidth: true
             text: root.leadingText
             color: appTheme.textMutedColor
-            font.family: appTheme.dataFontFamily
+            font.family: appTheme.headlineFontFamily
+            font.features: { "tnum": 1 }
             font.pixelSize: appTheme.fontSizeCaption
             wrapMode: Text.Wrap
         }
@@ -97,7 +100,8 @@ Item {
             visible: text.length > 0
             text: root.speedText
             color: appTheme.textMutedColor
-            font.family: appTheme.dataFontFamily
+            font.family: appTheme.headlineFontFamily
+            font.features: { "tnum": 1 }
             font.pixelSize: appTheme.fontSizeCaption
             font.weight: appTheme.fontWeightStrong
         }
@@ -106,7 +110,8 @@ Item {
             visible: text.length > 0
             text: root.etaText
             color: appTheme.textMutedColor
-            font.family: appTheme.dataFontFamily
+            font.family: appTheme.headlineFontFamily
+            font.features: { "tnum": 1 }
             font.pixelSize: appTheme.fontSizeCaption
         }
     }
