@@ -4,25 +4,18 @@ import QtQuick.Layouts
 
 // Album-inspector date filter: calendar tiles or a GitHub-style activity graph.
 // Style is local; both views consume the same dateStats list and emit one
-// day-clicked label for StatsEngine.ToggleStatsFilter("date", …).
-ColumnLayout {
+// day-clicked label for StatsEngine.ToggleStatsFilter("date", …). The header band, the fold
+// state, and the header actions come from InspectorSection.
+InspectorSection {
     id: section
     objectName: "dateFilterSection"
-    spacing: appTheme.spaceSm
 
-    property string title: ""
     property var model: []
     property string selectedLabel: ""
     property var folderKey: 0
-    property bool expanded: true
     property string styleKey: "calendar"
     /// False shows only the calendar tiles, without the activity graph and the style switch.
     property bool activityAvailable: true
-    /// Optional actions beside the title (see StatsCard.headerActions).
-    property Component headerActions: null
-    readonly property bool stackHeaderActions: headerActions !== null
-        && width < titleMetrics.advanceWidth + appTheme.inspectorHeaderActionSize * 6
-                   + appTheme.spaceLg * 2
     signal dayClicked(string label)
 
     readonly property var styleItems: [
@@ -40,64 +33,15 @@ ColumnLayout {
         }
     ]
 
-    TextMetrics {
-        id: titleMetrics
-        text: section.title.toUpperCase()
-        font.pixelSize: 10
-        font.weight: 700
-        font.letterSpacing: 1.6
-    }
-
-    RowLayout {
-        Layout.fillWidth: true
-        spacing: appTheme.spaceXs
-
-        Label {
-            text: section.title.toUpperCase()
-            color: appTheme.textMutedColor
-            font.pixelSize: 10
-            font.weight: 700
-            font.letterSpacing: 1.6
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-            Layout.alignment: Qt.AlignVCenter
-        }
-
-        Loader {
-            active: section.headerActions !== null && !section.stackHeaderActions
-            visible: active
-            sourceComponent: section.headerActions
-            Layout.alignment: Qt.AlignVCenter
-        }
-
-        Label {
-            text: section.expanded ? "▲" : "▼"
-            color: appTheme.textMutedColor
-            font.pixelSize: 9
-            Layout.alignment: Qt.AlignVCenter
-            MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: section.expanded = !section.expanded
-            }
-        }
-    }
-
-    Loader {
-        Layout.fillWidth: true
-        active: section.headerActions !== null && section.stackHeaderActions
-        visible: active
-        sourceComponent: section.headerActions
-    }
-
     SlidingIconNav {
         id: styleNav
         objectName: "dateFilterStyleNav"
-        visible: section.expanded && section.activityAvailable
+        visible: section.contentLive && section.activityAvailable
         Layout.alignment: Qt.AlignLeft
         currentKey: section.styleKey
         items: section.styleItems
         thumbObjectName: "dateFilterStyleNavThumb"
+        trackColor: appTheme.bgCanvasColor
         onActivated: function(key) {
             section.styleKey = key
         }
@@ -107,7 +51,7 @@ ColumnLayout {
         id: calendarLoader
         objectName: "dateFilterCalendarLoader"
         Layout.fillWidth: true
-        active: section.expanded
+        active: section.contentLive
                 && (section.styleKey === "calendar" || !section.activityAvailable)
         visible: status === Loader.Ready
         Layout.preferredHeight: (status === Loader.Ready && item) ? item.implicitHeight : 0
@@ -118,7 +62,7 @@ ColumnLayout {
         id: graphLoader
         objectName: "dateFilterGraphLoader"
         Layout.fillWidth: true
-        active: section.expanded && section.activityAvailable
+        active: section.contentLive && section.activityAvailable
                 && section.styleKey === "activity"
         asynchronous: true
         visible: status === Loader.Ready
@@ -129,8 +73,6 @@ ColumnLayout {
     Component {
         id: calendarComponent
         StatsCard {
-            title: section.title
-            showHeader: false
             model: section.model
             selectedLabel: section.selectedLabel
             displayMode: "grouped"

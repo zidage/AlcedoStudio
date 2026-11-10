@@ -990,7 +990,7 @@
     <name>AlbumInspectorPanel</name>
     <message>
         <location filename="../qml/AlbumInspectorPanel.qml" line="+43"/>
-        <source>LIBRARY OVERVIEW</source>
+        <source>Library Overview</source>
         <translation>图库概览</translation>
     </message>
     <message>
@@ -1020,8 +1020,12 @@
     </message>
     <message>
         <location line="+20"/>
-        <source>SEARCH FILTER</source>
+        <source>Search Filter</source>
         <translation>搜索筛选</translation>
+    </message>
+    <message>
+        <source>By Rating</source>
+        <translation>按评分</translation>
     </message>
     <message>
         <location line="+38"/>
@@ -7605,15 +7609,11 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
-    <name>StarRatingFilter</name>
-    <message>
-        <location filename="../qml/StarRatingFilter.qml" line="+59"/>
-        <source>BY RATING</source>
-        <translation>按评分</translation>
-    </message>
-</context>
-<context>
     <name>StatsCard</name>
+    <message>
+        <source>Search</source>
+        <translation>搜索</translation>
+    </message>
     <message>
         <location filename="../qml/StatsCard.qml" line="+358"/>
         <source> more</source>

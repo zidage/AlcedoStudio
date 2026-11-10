@@ -62,7 +62,6 @@ class StatsEngine final : public QObject {
   /// Active semantic model key read once for one library request.
   [[nodiscard]] auto ActiveSemanticModelKey() const -> std::string;
 
-  [[nodiscard]] auto FormatPhotoInfo(int shown, int total) const -> QString;
   [[nodiscard]] auto MakeThumbMap(const AlbumItem& image, int index) const -> QVariantMap;
   [[nodiscard]] auto BuildSearchRecommendations(int limit) const -> QVariantList;
 

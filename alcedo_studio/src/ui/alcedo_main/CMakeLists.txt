@@ -778,6 +778,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/InspectorPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AlbumInspectorPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/InspectorFieldActions.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/InspectorSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AlbumSectionView.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ImageInspectorPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollectionsPanel.qml"
