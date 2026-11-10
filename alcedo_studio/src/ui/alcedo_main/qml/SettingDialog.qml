@@ -752,7 +752,6 @@ Dialog {
                                                 Layout.maximumWidth: 520
                                                 userNames: dialog.pendingColorLabelNames
                                                 defaultNames: appModules.libraryView.colorLabelDefaultNames
-                                                maximumNameLength: 40
                                                 onNameEdited: function(code, name) {
                                                     dialog.setPendingColorLabelName(code, name)
                                                 }

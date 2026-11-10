@@ -450,6 +450,73 @@ TEST_F(LibraryViewPreferencesTest, ColorLabelNameOutsideTheCodesIsRejectedAndLon
             LibraryViewPreferences::kColorLabelNameMaxLength);
 }
 
+// Issue 780: the cut counted UTF-16 units and kept the first half of an emoji at character 40.
+TEST_F(LibraryViewPreferencesTest, EmojiAtCharacter40StaysWholeInTheAnswerTheStoreAndARestart) {
+  const QString emoji = QString::fromUtf8("\xF0\x9F\x98\x80");  // U+1F600, a surrogate pair
+  ASSERT_EQ(emoji.size(), 2);
+  const QString x39(39, QLatin1Char('x'));
+  {
+    LibraryViewPreferences preferences;
+    ASSERT_TRUE(preferences.SetColorLabelName(4, x39 + emoji + QStringLiteral("tail")));
+    // 39 x and the whole emoji: 40 characters, 41 UTF-16 units.
+    EXPECT_EQ(preferences.color_label_names().at(4), x39 + emoji);
+    EXPECT_FALSE(preferences.color_label_names().at(4).back().isHighSurrogate());
+    EXPECT_EQ(QSettings{}.value("library/colorLabels/4/name").toString(), x39 + emoji);
+  }
+  LibraryViewPreferences restarted;
+  EXPECT_EQ(restarted.color_label_names().at(4), x39 + emoji);
+
+  // 40 emoji are 40 characters; the 41st goes.
+  QString forty_one;
+  for (int i = 0; i < 41; ++i) forty_one += emoji;
+  ASSERT_TRUE(restarted.SetColorLabelName(5, forty_one));
+  EXPECT_EQ(restarted.color_label_names().at(5), forty_one.left(80));
+
+  // A lone half of a pair is not text and goes.
+  ASSERT_TRUE(restarted.SetColorLabelName(
+      6, QStringLiteral("ab") + QChar(0xD83D) + QStringLiteral("c") + QChar(0xDE00)));
+  EXPECT_EQ(restarted.color_label_names().at(6), QStringLiteral("abc"));
+}
+
+TEST_F(LibraryViewPreferencesTest, ControlCharactersLeaveTheNameAndLineBreaksBecomeSpaces) {
+  LibraryViewPreferences preferences;
+  QString                with_controls = QStringLiteral("a");
+  with_controls += QChar(0x0000);
+  with_controls += QStringLiteral("b");
+  with_controls += QChar(0x202E);  // right-to-left override
+  with_controls += QStringLiteral("c");
+  with_controls += QChar(0x2066);  // left-to-right isolate
+  with_controls += QChar(0x007F);
+  with_controls += QChar(0x0090);
+  with_controls += QStringLiteral("d");
+  ASSERT_TRUE(preferences.SetColorLabelName(0, with_controls));
+  EXPECT_EQ(preferences.color_label_names().at(0), QStringLiteral("abcd"));
+  EXPECT_EQ(QSettings{}.value("library/colorLabels/0/name").toString(), QStringLiteral("abcd"));
+
+  ASSERT_TRUE(preferences.SetColorLabelName(1, QStringLiteral("\nClient\npicks\r\n\t")));
+  EXPECT_EQ(preferences.color_label_names().at(1), QStringLiteral("Client picks"));
+  ASSERT_TRUE(preferences.SetColorLabelName(
+      2, QStringLiteral("Print") + QChar(0x2028) + QStringLiteral("30x40")));
+  EXPECT_EQ(preferences.color_label_names().at(2), QStringLiteral("Print 30x40"));
+
+  // A name of control characters only is empty, so the code shows its color name.
+  ASSERT_TRUE(preferences.SetColorLabelName(3, QString(QChar(0x202E)) + QChar(0x0001)));
+  EXPECT_EQ(preferences.color_label_names().at(3), ColorNames().at(3));
+  EXPECT_FALSE(QSettings{}.contains("library/colorLabels/3/name"));
+
+  // A stored name from an older build reads with the same rule.
+  QSettings{}.setValue("library/colorLabels/5/name",
+                       QStringLiteral("old") + QChar(0x0000) + QStringLiteral("\nname"));
+  LibraryViewPreferences reread;
+  EXPECT_EQ(reread.color_label_names().at(5), QStringLiteral("old name"));
+
+  // The text of the Settings field keeps the spaces at its ends while the user types.
+  EXPECT_EQ(LibraryViewPreferences::EditableColorLabelNameText(QStringLiteral(" a\nb ")),
+            QStringLiteral(" a b "));
+  EXPECT_EQ(reread.EditableColorLabelName(QString(45, QLatin1Char('y'))),
+            QString(40, QLatin1Char('y')));
+}
+
 TEST_F(LibraryViewPreferencesTest, DefaultColorLabelNamesFollowTheLanguage) {
   LibraryViewPreferences preferences;
   ASSERT_TRUE(preferences.SetColorLabelName(1, QStringLiteral("Client picks")));

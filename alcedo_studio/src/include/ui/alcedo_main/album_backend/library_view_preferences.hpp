@@ -43,7 +43,7 @@ class LibraryViewPreferences final : public QObject {
   static constexpr auto kGridLayoutSettingKey    = "library/gridLayout";
   static constexpr auto kClassicLayout           = "classic";
   static constexpr auto kJustifiedLayout         = "justified";
-  /// Longest user name; longer names are cut.
+  /// Longest user name in characters (a surrogate pair is one character); longer names are cut.
   static constexpr int  kColorLabelNameMaxLength = 40;
 
   explicit LibraryViewPreferences(QObject* parent = nullptr);
@@ -66,12 +66,31 @@ class LibraryViewPreferences final : public QObject {
   /**
    * @brief Persist @p name as the user name of color code @p code (0 Red ... 6 Gray).
    *
-   * Leading and trailing white space is removed and the name is cut to
-   * kColorLabelNameMaxLength characters. An empty name removes the user name, so the code shows
-   * its translated color name again.
+   * The name is NormalizedColorLabelName(@p name). An empty name removes the user name, so the
+   * code shows its translated color name again.
    * @return false for a code outside 0 to 6; nothing changes.
    */
   Q_INVOKABLE bool          SetColorLabelName(int code, const QString& name);
+
+  /**
+   * @brief The text a name field keeps while the user types @p text.
+   *
+   * Line breaks and tabs become spaces; the other control characters (category Cc), the
+   * bidirectional embeddings, overrides, and isolates (U+202A to U+202E, U+2066 to U+2069), and
+   * lone surrogates are removed. The text is cut to kColorLabelNameMaxLength characters, and a
+   * surrogate pair counts as one character and stays whole. White space stays, so the user can
+   * type a space between words.
+   */
+  [[nodiscard]] static auto EditableColorLabelNameText(const QString& text) -> QString;
+  /// EditableColorLabelNameText for QML (the Settings name field).
+  Q_INVOKABLE QString       EditableColorLabelName(const QString& text) const;
+  /**
+   * @brief The user name that @p name stores: EditableColorLabelNameText without leading and
+   * trailing white space, cut after the leading white space is removed.
+   *
+   * The command answer, the stored name, and the name after a restart are this same text.
+   */
+  [[nodiscard]] static auto NormalizedColorLabelName(const QString& name) -> QString;
 
   /// QSettings key of the user name of @p code.
   [[nodiscard]] static auto ColorLabelNameSettingKey(int code) -> QString;

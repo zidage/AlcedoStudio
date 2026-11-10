@@ -5,6 +5,7 @@
 #include "ui/alcedo_main/automation/automation_json_schema.hpp"
 
 #include <QJsonArray>
+#include <QLocale>
 #include <QStringList>
 #include <cmath>
 
@@ -27,6 +28,12 @@ auto IsKnownTypeName(const QString& name) -> bool {
                                       QStringLiteral("integer"), QStringLiteral("boolean"),
                                       QStringLiteral("null")};
   return kTypeNames.contains(name);
+}
+
+/// @p number with the fewest digits that read back as the same double, so an id such as
+/// 4294967298 keeps every digit (QString::arg(double) keeps six).
+auto NumberText(double number) -> QString {
+  return QString::number(number, 'g', QLocale::FloatingPointShortest);
 }
 
 auto IsIntegral(const QJsonValue& value) -> bool {
@@ -205,16 +212,14 @@ auto ValidateAt(const QJsonValue& value, const QJsonObject& schema, const QStrin
   if (value.isDouble()) {
     const double number = value.toDouble();
     if (schema.contains("minimum") && number < schema.value("minimum").toDouble()) {
-      return AutomationSchemaViolation{pointer,
-                                       QStringLiteral("value %1 is less than the minimum %2")
-                                           .arg(number)
-                                           .arg(schema.value("minimum").toDouble())};
+      return AutomationSchemaViolation{
+          pointer, QStringLiteral("value %1 is less than the minimum %2")
+                       .arg(NumberText(number), NumberText(schema.value("minimum").toDouble()))};
     }
     if (schema.contains("maximum") && number > schema.value("maximum").toDouble()) {
-      return AutomationSchemaViolation{pointer,
-                                       QStringLiteral("value %1 is greater than the maximum %2")
-                                           .arg(number)
-                                           .arg(schema.value("maximum").toDouble())};
+      return AutomationSchemaViolation{
+          pointer, QStringLiteral("value %1 is greater than the maximum %2")
+                       .arg(NumberText(number), NumberText(schema.value("maximum").toDouble()))};
     }
   }
 

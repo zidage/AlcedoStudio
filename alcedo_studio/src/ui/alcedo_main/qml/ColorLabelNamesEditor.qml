@@ -16,7 +16,6 @@ ColumnLayout {
     property var defaultNames: []
     // Color of each code in code order (appTheme.colorLabelColors).
     property var colors: appTheme.colorLabelColors
-    property int maximumNameLength: 40
 
     // The user typed in the field of @p code or pressed its reset glyph (@p name is empty).
     signal nameEdited(int code, string name)
@@ -26,6 +25,26 @@ ColumnLayout {
     function userName(code) {
         const names = root.userNames || []
         return code < names.length && names[code] ? String(names[code]) : ""
+    }
+
+    // Applies the name rule of LibraryViewPreferences to the typed text of @p input: control
+    // characters go, line breaks and tabs become spaces, and the text keeps 40 characters with
+    // surrogate pairs whole (the rule of library.color_label_name.set). A changed text is
+    // replaced and the field binds to the pending name again; the cursor stays after the same
+    // typed character.
+    function editName(row, input) {
+        const typed = input.text
+        const allowed = appModules.libraryView.EditableColorLabelName(typed)
+        if (allowed === typed) {
+            root.nameEdited(row.index, typed)
+            return
+        }
+        const cursor = Math.min(
+            allowed.length,
+            appModules.libraryView.EditableColorLabelName(typed.substring(0, input.cursorPosition)).length)
+        root.nameEdited(row.index, allowed)
+        input.text = Qt.binding(function() { return row.name })
+        input.cursorPosition = cursor
     }
 
     function withAlpha(color, alpha) {
@@ -84,7 +103,6 @@ ColumnLayout {
                     verticalAlignment: TextInput.AlignVCenter
                     clip: true
                     selectByMouse: true
-                    maximumLength: root.maximumNameLength
                     text: row.name
                     color: appTheme.textColor
                     font.family: appTheme.uiFontFamily
@@ -92,7 +110,7 @@ ColumnLayout {
                     selectedTextColor: appTheme.textColor
                     selectionColor: root.withAlpha(appTheme.textMutedColor, 0.6)
                     Accessible.name: placeholder.text
-                    onTextEdited: root.nameEdited(row.index, text)
+                    onTextEdited: root.editName(row, nameInput)
 
                     Text {
                         id: placeholder

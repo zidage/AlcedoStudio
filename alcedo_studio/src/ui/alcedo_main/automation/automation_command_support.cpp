@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QStringList>
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <utility>
 
@@ -53,14 +54,62 @@ auto AutomationEnteredProject(ui::ApplicationModuleHost* host, AutomationReply& 
   return nullptr;
 }
 
+auto AutomationElementIdSchema(int minimum, const QString& description) -> QJsonObject {
+  QJsonObject schema{
+      {"type", "integer"}, {"minimum", minimum}, {"maximum", kMaxAutomationElementId}};
+  if (!description.isEmpty()) {
+    schema.insert("description", description);
+  }
+  return schema;
+}
+
+auto AutomationElementIdListSchema(const QString& description) -> QJsonObject {
+  QJsonObject schema{{"type", "array"}, {"items", AutomationElementIdSchema()}, {"minItems", 1}};
+  if (!description.isEmpty()) {
+    schema.insert("description", description);
+  }
+  return schema;
+}
+
+auto AutomationElementIdOf(const QJsonValue& value) -> std::optional<sl_element_id_t> {
+  if (!value.isDouble()) {
+    return std::nullopt;
+  }
+  const double number = value.toDouble();
+  // The range test comes before the cast: a double outside the target range is undefined
+  // behavior in a conversion to an unsigned integer. NaN fails both comparisons.
+  if (!(number >= 0.0 && number <= kMaxAutomationElementId) || std::floor(number) != number) {
+    return std::nullopt;
+  }
+  return static_cast<sl_element_id_t>(number);
+}
+
+auto AutomationElementIdParam(const QJsonObject& params, const QString& key, AutomationReply& reply)
+    -> std::optional<sl_element_id_t> {
+  auto id = AutomationElementIdOf(params.value(key));
+  if (!id.has_value()) {
+    SendAutomationParamError(reply, QLatin1Char('/') + key,
+                             QStringLiteral("value is not an element id from 0 to %1")
+                                 .arg(static_cast<qulonglong>(kMaxAutomationElementId)));
+  }
+  return id;
+}
+
 auto ResolveAutomationElementRows(ProjectService& project, const QJsonObject& params,
                                   AutomationReply& reply)
     -> std::optional<std::vector<SearchResultRow>> {
   std::vector<sl_element_id_t> ids;
-  for (const QJsonValue& value : params.value("element_ids").toArray()) {
-    const auto id = static_cast<sl_element_id_t>(value.toDouble());
-    if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
-      ids.push_back(id);
+  const QJsonArray             values = params.value("element_ids").toArray();
+  for (qsizetype index = 0; index < values.size(); ++index) {
+    const auto id = AutomationElementIdOf(values.at(index));
+    if (!id.has_value()) {
+      SendAutomationParamError(reply, QStringLiteral("/element_ids/%1").arg(index),
+                               QStringLiteral("value is not an element id from 1 to %1")
+                                   .arg(static_cast<qulonglong>(kMaxAutomationElementId)));
+      return std::nullopt;
+    }
+    if (std::find(ids.begin(), ids.end(), *id) == ids.end()) {
+      ids.push_back(*id);
     }
   }
   const auto browse = project.GetAlbumBrowseService();

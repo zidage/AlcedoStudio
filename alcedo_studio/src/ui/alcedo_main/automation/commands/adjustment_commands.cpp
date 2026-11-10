@@ -186,7 +186,12 @@ auto ReadSourceCatalog(ui::ApplicationModuleHost* host, const QJsonObject& param
   if (!project) {
     return std::nullopt;
   }
-  const auto element_id = static_cast<sl_element_id_t>(params.value("element_id").toDouble());
+  const auto element_id_param =
+      AutomationElementIdParam(params, QStringLiteral("element_id"), reply);
+  if (!element_id_param.has_value()) {
+    return std::nullopt;
+  }
+  const auto element_id = *element_id_param;
   if (!CheckKnownPhoto(*project, element_id, reply)) {
     return std::nullopt;
   }
@@ -423,8 +428,8 @@ auto RegisterAutomationAdjustmentCommands(AutomationCommandRegistry& registry,
   auto* const       registry_ptr        = &registry;
 
   const QJsonObject text_schema{{"type", "string"}};
-  const QJsonObject id_schema{
-      {"type", "integer"}, {"minimum", 1}, {"description", "The photo (library.list)."}};
+  const QJsonObject id_schema =
+      AutomationElementIdSchema(1, QStringLiteral("The photo (library.list)."));
   const QJsonObject version_id_schema{
       {"type", "string"},
       {"description", "Hex id of a Version (adjustments.items); the active Version without it."}};
@@ -622,11 +627,8 @@ auto RegisterAutomationAdjustmentCommands(AutomationCommandRegistry& registry,
       QJsonObject{
           {"package_id",
            QJsonObject{{"type", "string"}, {"description", "A package id from adjustments.copy."}}},
-          {"element_ids",
-           QJsonObject{{"type", "array"},
-                       {"items", QJsonObject{{"type", "integer"}, {"minimum", 1}}},
-                       {"minItems", 1},
-                       {"description", "The photos; the library selection without it."}}},
+          {"element_ids", AutomationElementIdListSchema(
+                              QStringLiteral("The photos; the library selection without it."))},
           {"version_name",
            QJsonObject{{"type", "string"},
                        {"description",

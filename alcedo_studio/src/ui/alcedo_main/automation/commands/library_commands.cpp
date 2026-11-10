@@ -539,11 +539,7 @@ auto SelectionItems(const ui::LibrarySelection& selection) -> QJsonArray {
   return items;
 }
 
-auto ElementIdsParam() -> QJsonObject {
-  return QJsonObject{{"type", "array"},
-                     {"items", QJsonObject{{"type", "integer"}, {"minimum", 1}}},
-                     {"minItems", 1}};
-}
+auto ElementIdsParam() -> QJsonObject { return AutomationElementIdListSchema(); }
 
 /// `element_ids` of library.info and library.thumbnails: at most kMaxBatchElementIds ids.
 auto BatchElementIdsParam() -> QJsonObject {
@@ -744,9 +740,8 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     sort_names.push_back(QString::fromLatin1(sort.name));
   }
   list.params_schema = AutomationClosedParamsSchema(QJsonObject{
-      {"folder_id", QJsonObject{{"type", "integer"},
-                                {"minimum", 0},
-                                {"description", "A folder id from library.folders."}}},
+      {"folder_id",
+       AutomationElementIdSchema(0, QStringLiteral("A folder id from library.folders."))},
       {"offset", QJsonObject{{"type", "integer"}, {"minimum", 0}, {"default", 0}}},
       {"limit", QJsonObject{{"type", "integer"},
                             {"minimum", 1},
@@ -771,7 +766,10 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     const auto                     browse = project->GetAlbumBrowseService();
     std::optional<sl_element_id_t> folder_id;
     if (params.contains("folder_id")) {
-      folder_id = static_cast<sl_element_id_t>(params.value("folder_id").toDouble());
+      folder_id = AutomationElementIdParam(params, QStringLiteral("folder_id"), reply);
+      if (!folder_id.has_value()) {
+        return;
+      }
     } else {
       folder_id = RootFolderId(*project);
     }
@@ -825,7 +823,7 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
       "'long_edge'. 'out' must end in .png and must not exist: the command creates a new file "
       "and does not replace an existing one.");
   thumbnail.params_schema = AutomationClosedParamsSchema(
-      QJsonObject{{"element_id", QJsonObject{{"type", "integer"}, {"minimum", 1}}},
+      QJsonObject{{"element_id", AutomationElementIdSchema()},
                   {"out", QJsonObject{{"type", "string"},
                                       {"description", "The new PNG file; it must not exist."}}},
                   {"long_edge", QJsonObject{{"type", "integer"},
@@ -843,7 +841,12 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     if (!project) {
       return;
     }
-    const auto    element_id = static_cast<sl_element_id_t>(params.value("element_id").toDouble());
+    const auto element_id_param =
+        AutomationElementIdParam(params, QStringLiteral("element_id"), reply);
+    if (!element_id_param.has_value()) {
+      return;
+    }
+    const auto    element_id = *element_id_param;
     const int     long_edge  = params.value("long_edge").toInt(512);
     const QString out        = QFileInfo(params.value("out").toString()).absoluteFilePath();
     if (!out.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
@@ -1033,9 +1036,8 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
       "selection.");
   selection_set.changes_state = true;
   selection_set.params_schema = AutomationClosedParamsSchema(
-      QJsonObject{{"element_ids",
-                   QJsonObject{{"type", "array"},
-                               {"items", QJsonObject{{"type", "integer"}, {"minimum", 1}}}}}},
+      QJsonObject{
+          {"element_ids", QJsonObject{{"type", "array"}, {"items", AutomationElementIdSchema()}}}},
       QJsonArray{"element_ids"});
   selection_set.result_schema = selection_items_schema;
   selection_set.handler       = [host, selection_available](const QJsonObject& params,
@@ -1207,9 +1209,11 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   color_label_name.method = QStringLiteral("library.color_label_name.set");
   color_label_name.description =
       QStringLiteral(
-          "Sets the user name of a color label code for every project on the computer. The name is "
-          "trimmed and cut to %1 characters; an empty name gives the code its color name back. "
-          "Returns the library.color_labels item of the code.")
+          "Sets the user name of a color label code for every project on the computer. Line "
+          "breaks and tabs become spaces, other control characters and bidirectional controls "
+          "are removed, and the name is trimmed and cut to %1 Unicode code points; an "
+          "empty name gives the code its color name back. Returns the "
+          "library.color_labels item of the code, whose name is the stored name.")
           .arg(ui::LibraryViewPreferences::kColorLabelNameMaxLength);
   color_label_name.changes_state = true;
   color_label_name.params_schema = AutomationClosedParamsSchema(

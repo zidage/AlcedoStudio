@@ -651,7 +651,7 @@ auto RegisterAutomationEditorCommands(AutomationCommandRegistry& registry,
                                       ui::ApplicationModuleHost* host, QString* error) -> bool {
   bool              ok = RegisterAutomationEditorCatalogCommand(registry, error);
 
-  const QJsonObject id_schema{{"type", "integer"}, {"minimum", 1}};
+  const QJsonObject id_schema = AutomationElementIdSchema();
   const QJsonObject text_schema{{"type", "string"}};
   const QJsonObject head_schema{{"type", QJsonArray{"string", "null"}},
                                 {"description", "Hex hash of the head commit; null at the root."}};
@@ -676,7 +676,12 @@ auto RegisterAutomationEditorCommands(AutomationCommandRegistry& registry,
     if (!service) {
       return;
     }
-    const auto element_id = static_cast<sl_element_id_t>(params.value("element_id").toDouble());
+    const auto element_id_param =
+        AutomationElementIdParam(params, QStringLiteral("element_id"), reply);
+    if (!element_id_param.has_value()) {
+      return;
+    }
+    const auto                   element_id = *element_id_param;
     const auto browse     = service->GetAlbumBrowseService();
     std::vector<SearchResultRow> rows;
     try {
