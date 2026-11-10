@@ -26,6 +26,7 @@
 #include "sleeve/storage.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -85,7 +86,7 @@ auto QueryDuckDbInt64(const std::filesystem::path& db_path, const std::string& s
 /// A row that a sync deletes and inserts again gets a new rowid.
 auto FolderContentRowIds(ProjectService& project, sl_element_id_t folder_id)
     -> std::map<sl_element_id_t, int64_t> {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   const auto    sql = "SELECT element_id, rowid FROM FolderContent WHERE folder_id = " +

@@ -83,6 +83,23 @@ gtest_discover_tests(MaskAssetStoreTest TEST_PREFIX "MaskAssetStoreTest."
   PROPERTIES LABELS "storage;ai_mask")
 alcedo_register_test_target(MaskAssetStoreTest storage)
 
+# Storage::OpenSession: the database lock for the session lifetime and the image root write.
+add_executable(StorageSessionTest ${ALCEDO_TEST_ROOT}/storage/storage_session_test.cpp)
+target_include_directories(StorageSessionTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(StorageSessionTest PRIVATE GTest::gtest_main Storage)
+gtest_discover_tests(StorageSessionTest TEST_PREFIX "StorageSessionTest."
+  PROPERTIES LABELS "storage")
+alcedo_register_test_target(StorageSessionTest storage)
+
+# Storage::Maintenance: the diagnostics summary, the package snapshot, and the HNSW index drop.
+add_executable(StorageMaintenanceTest ${ALCEDO_TEST_ROOT}/storage/storage_maintenance_test.cpp)
+target_include_directories(StorageMaintenanceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(StorageMaintenanceTest PRIVATE GTest::gtest_main Storage)
+gtest_discover_tests(StorageMaintenanceTest TEST_PREFIX "StorageMaintenanceTest."
+  PROPERTIES LABELS "storage")
+alcedo_copy_duckdb_extensions(StorageMaintenanceTest)
+alcedo_register_test_target(StorageMaintenanceTest storage)
+
 # AI annotation and semantic model/embedding stores against a real project database.
 add_executable(AiStorageControllerTest ${ALCEDO_TEST_ROOT}/storage/ai_storage_controller_test.cpp)
 target_include_directories(AiStorageControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})

@@ -39,6 +39,7 @@
 #include "support/editor_parameter_target_test.hpp"
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
+#include "../../support/storage_test_access.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -91,7 +92,7 @@ auto DocumentHash(const alcedo::PipelineDocument& document) -> std::string {
 /// Stored checkpoint of @p element_id, or nullopt when storage holds none.
 auto StoredCheckpoint(alcedo::ProjectService& project, sl_element_id_t element_id)
     -> std::optional<alcedo::PipelineDocumentCheckpoint> {
-  auto                     db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto                     db_lock  = db_guard.Lock();
   alcedo::CommitGraphStore graph_service(db_guard.conn_);
   const auto               graph = graph_service.LoadGraph(element_id);
@@ -536,7 +537,7 @@ TEST(EditorSessionHistoryPortProjectTest, ProjectReopenPreservesDagVersionsHisto
     auto capture = history.CaptureSaveCheckpoint(handle, &error);
     ASSERT_TRUE(static_cast<bool>(capture)) << error;
     {
-      auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+      auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
       auto db_lock  = db_guard.Lock();
       alcedo::CommitGraphStore graph_service(db_guard.conn_);
       graph_service.Materialize(capture->materialization);
@@ -599,7 +600,7 @@ TEST(EditorSessionHistoryPortProjectTest, MissingReachableTypedCommitFailsClosed
 
   alcedo::commit_hash_t missing_hash{};
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     alcedo::CommitGraphStore graph_service(db_guard.conn_);
     auto             graph = graph_service.LoadGraph(element_id);

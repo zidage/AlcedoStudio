@@ -54,6 +54,7 @@
 #include "support/non_raw_import_files.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/import/import_log.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -75,7 +76,7 @@ auto Utc(int year, unsigned month, unsigned day, int hour = 0, int minute = 0, i
 }
 
 void RunStatement(ProjectService& project, const std::string& sql) {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   ASSERT_EQ(duckdb_query(guard.conn_, sql.c_str(), &result), DuckDBSuccess)
@@ -84,7 +85,7 @@ void RunStatement(ProjectService& project, const std::string& sql) {
 }
 
 auto QueryText(ProjectService& project, const std::string& sql) -> std::string {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
@@ -1075,7 +1076,7 @@ TEST_F(AlbumQueryTest, ElementTimesRoundTripAsUtcAcrossLocalTimeZones) {
     auto element = store.GetElementById(ids[0]);
     EXPECT_EQ(element->added_time_, added) << zone;
     {
-      auto guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+      auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
       auto lock  = guard.Lock();
       ElementMapper(guard.conn_).Update(element, element->element_id_);
     }
@@ -1399,7 +1400,7 @@ TEST_F(AlbumQueryTest, PageRowsCarryTheActiveHeadEditStateInEveryPresentation) {
 /// joined by newlines (EXPLAIN output).
 auto QueryColumnText(ProjectService& project, const std::string& setup, const std::string& sql,
                      idx_t column) -> std::string {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   if (duckdb_query(guard.conn_, setup.c_str(), &result) != DuckDBSuccess) {

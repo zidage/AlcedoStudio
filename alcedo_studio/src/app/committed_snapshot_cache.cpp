@@ -14,7 +14,7 @@
 #include "app/pipeline_root_state.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
-#include "storage/store/edit_history/commit_graph_store.hpp"
+#include "storage/store/storage_session.hpp"
 
 namespace alcedo {
 namespace {
@@ -27,9 +27,8 @@ auto MatchesLabel(const PipelineGraphSnapshot& snapshot, const MaterializedHisto
 
 auto ReadMaterializedLabel(Storage& storage, sl_element_id_t element_id)
     -> std::optional<MaterializedHistoryLabel> {
-  auto             db_guard = storage.GetDatabase().GetConnectionGuard();
-  auto             db_lock  = db_guard.Lock();
-  CommitGraphStore graph_service(db_guard.conn_);
+  auto  session       = storage.OpenSession();
+  auto& graph_service = session.CommitGraph();
   return graph_service.GetMaterializedHistoryLabel(element_id);
 }
 
@@ -42,9 +41,8 @@ auto LoadCommittedSnapshotFromStorage(Storage& storage, sl_element_id_t element_
   std::optional<PipelineDocumentCheckpoint> checkpoint;
   std::optional<CommitGraph>                graph;
   {
-    auto             db_guard = storage.GetDatabase().GetConnectionGuard();
-    auto             db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
+    auto  session       = storage.OpenSession();
+    auto& graph_service = session.CommitGraph();
     state = graph_service.GetImageEditState(element_id);
     if (!state.has_value()) {
       throw std::runtime_error("PipelineMgmtService: image " + std::to_string(element_id) +

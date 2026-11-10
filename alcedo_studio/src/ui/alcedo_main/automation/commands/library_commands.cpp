@@ -37,7 +37,7 @@
 #include "image/image_buffer.hpp"
 #include "sleeve/album_query.hpp"
 #include "sleeve/sleeve_filter/filter_factory.hpp"
-#include "storage/mapper/image/image_search_columns.hpp"
+#include "storage/query/capture_date_time.hpp"
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/automation/automation_command_support.hpp"
@@ -363,7 +363,7 @@ auto PhotoInfoItem(ImagePoolService* image_pool, const SearchResultRow& row) -> 
       }
       const ExifDisplayMetaData& metadata = image->exif_display_;
       if (const auto capture = ParseCaptureDateTime(metadata.date_time_str_)) {
-        item.insert("capture_time", QString::fromStdString(capture->date_time_));
+        item.insert("capture_time", QString::fromStdString(capture->date_time));
       }
       insert_text("camera_make", metadata.make_);
       insert_text("camera_model", metadata.model_);

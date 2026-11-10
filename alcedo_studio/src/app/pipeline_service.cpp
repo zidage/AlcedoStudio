@@ -27,9 +27,9 @@
 #include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/mask/ai_mask_asset_references.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "storage/mapper/pipeline/pipeline_mapper.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "storage/store/mask_asset/mask_asset_store.hpp"
+#include "storage/store/storage_session.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -59,9 +59,8 @@ auto ReadStoredHistory(Storage& storage, sl_element_id_t id) -> StoredHistory {
   std::optional<CommitGraph>     graph;
   std::optional<LoadedRootState> root_state;
   {
-    auto             db_guard = storage.GetDatabase().GetConnectionGuard();
-    auto             db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
+    auto  session       = storage.OpenSession();
+    auto& graph_service = session.CommitGraph();
     graph = graph_service.LoadGraph(id);
     if (!graph.has_value()) {
       throw std::runtime_error("PipelineMgmtService: image " + std::to_string(id) +
@@ -160,9 +159,8 @@ auto PipelineMgmtService::PersistHistory(const ImageHistorySnapshot& base, const
           graph.GetRootId(), head, graph.ChainHashForHead(head), *document));
 
   {
-    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto             db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
+    auto             session       = storage_->OpenSession();
+    auto&            graph_service = session.CommitGraph();
     const auto       stored_state = graph_service.GetImageEditState(id);
     if (!stored_state.has_value() ||
         !SameMaterializedState(*stored_state, base.graph_->GetImageEditState())) {
@@ -211,25 +209,15 @@ void PipelineMgmtService::WriteImageRoots(std::vector<EncodedImageRoot> roots) {
     return;
   }
   std::vector<EncodedRootPipeline> root_rows;
+  std::vector<std::string>         element_pipeline_json;
   root_rows.reserve(roots.size());
+  element_pipeline_json.reserve(roots.size());
   for (auto& root : roots) {
     root_rows.push_back(std::move(root.root));
+    element_pipeline_json.push_back(std::move(root.element_pipeline_json));
   }
-  auto                              db_guard = storage_->GetDatabase().GetConnectionGuard();
-  auto                              db_lock  = db_guard.Lock();
-  CommitGraphStore                  graph_store(db_guard.conn_);
-  PipelineMapper                    pipeline_mapper(db_guard.conn_);
-  // The element pipeline JSON commits in the same transaction as the root rows.
-  std::vector<PipelineMapperParams> pipeline_rows;
-  pipeline_rows.reserve(roots.size());
-  for (std::size_t index = 0; index < roots.size(); ++index) {
-    pipeline_rows.push_back(PipelineMapperParams{
-        root_rows[index].element_id,
-        std::make_unique<std::string>(std::move(roots[index].element_pipeline_json))});
-  }
-  graph_store.InsertRootPipelines(root_rows, [&pipeline_rows, &pipeline_mapper]() {
-    pipeline_mapper.UpsertParamsRows(pipeline_rows);
-  });
+  auto session = storage_->OpenSession();
+  session.InsertImageRoots(root_rows, std::move(element_pipeline_json));
 }
 
 auto PipelineMgmtService::AcquireEditorLease(sl_element_id_t id) -> EditorHistoryLease {
@@ -313,9 +301,8 @@ auto PipelineMgmtService::PersistEditorHistory(CommitGraph&            graph,
         graph.CaptureMaterializationWithSerializedPipelineState(EncodePipelineDocumentCheckpoint(
             graph.GetRootId(), head, graph.ChainHashForHead(head), document));
     {
-      auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
-      auto             db_lock  = db_guard.Lock();
-      CommitGraphStore graph_service(db_guard.conn_);
+      auto             session       = storage_->OpenSession();
+      auto&            graph_service = session.CommitGraph();
       const auto       stored_state = graph_service.GetImageEditState(id);
       if (!stored_state.has_value() ||
           !SameMaterializedState(*stored_state, expected_materialized_state)) {
@@ -335,17 +322,13 @@ auto PipelineMgmtService::PersistEditorHistory(CommitGraph&            graph,
 }
 
 auto PipelineMgmtService::CollectUnreachableEditCommits() -> std::size_t {
-  auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
-  auto             db_lock  = db_guard.Lock();
-  CommitGraphStore graph_service(db_guard.conn_);
-  return graph_service.DeleteUnreachableCommitsForProject();
+  auto session = storage_->OpenSession();
+  return session.CommitGraph().DeleteUnreachableCommitsForProject();
 }
 
 void PipelineMgmtService::PutMaskAsset(const MaskAsset& asset) {
-  auto           db_guard = storage_->GetDatabase().GetConnectionGuard();
-  auto           db_lock  = db_guard.Lock();
-  MaskAssetStore store(db_guard.conn_);
-  (void)store.Put(asset);
+  auto session = storage_->OpenSession();
+  (void)session.MaskAssets().Put(asset);
 }
 
 auto PipelineMgmtService::ReadMaskAsset(const MaskAssetKey& key) -> MaskAsset {
@@ -354,9 +337,8 @@ auto PipelineMgmtService::ReadMaskAsset(const MaskAssetKey& key) -> MaskAsset {
 
 auto PipelineMgmtService::CollectUnreferencedMaskAssets(
     const std::filesystem::path& journal_directory) -> std::size_t {
-  auto           db_guard = storage_->GetDatabase().GetConnectionGuard();
-  auto           db_lock  = db_guard.Lock();
-  MaskAssetStore store(db_guard.conn_);
+  auto  session = storage_->OpenSession();
+  auto& store   = session.MaskAssets();
   if (store.ListKeys().empty()) {
     return 0;
   }
@@ -364,9 +346,8 @@ auto PipelineMgmtService::CollectUnreferencedMaskAssets(
   const auto             mark = [&referenced](const nlohmann::json& value) {
     CollectAiMaskAssetKeys(value, referenced);
   };
-  CommitGraphStore graph_store(db_guard.conn_);
-  graph_store.VisitStoredHistoryJsonContaining(MaskSourceKindText(MaskSourceKind::AiSegmentation),
-                                               mark);
+  session.CommitGraph().VisitStoredHistoryJsonContaining(
+      MaskSourceKindText(MaskSourceKind::AiSegmentation), mark);
   std::error_code directory_error;
   if (std::filesystem::is_directory(journal_directory, directory_error)) {
     for (const auto& entry : std::filesystem::directory_iterator(journal_directory)) {
@@ -405,9 +386,8 @@ void PipelineMgmtService::DeletePipelines(std::span<const sl_element_id_t> ids) 
     }
   }
   try {
-    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto             db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
+    auto  session       = storage_->OpenSession();
+    auto& graph_service = session.CommitGraph();
     for (const auto id : ids) {
       if (id != 0) {
         graph_service.DeleteGraphForElement(id);

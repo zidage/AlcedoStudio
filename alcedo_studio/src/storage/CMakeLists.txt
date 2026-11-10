@@ -17,6 +17,7 @@ def_library(StorageQuery
         "${ALCEDO_SRC_ROOT}/storage/query/stats_dimension.cpp"
         "${ALCEDO_SRC_ROOT}/storage/query/library_search_predicates.cpp"
         "${ALCEDO_SRC_ROOT}/storage/query/filter_compiler.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/query/capture_date_time.cpp"
     PUBLIC_DEPS DuckORM SleeveFilter StrConv
 )
 
@@ -39,7 +40,8 @@ set(MAPPER_SRCS
 
 def_library(SleeveMapper
     SOURCES ${MAPPER_SRCS}
-    PUBLIC_DEPS DuckDB DuckORM Image SleeveElement ImagePool PipelineHistory EditPipeline PipelineScheduler StrConv
+    PUBLIC_DEPS DuckDB DuckORM Image SleeveElement ImagePool PipelineHistory EditPipeline
+        PipelineScheduler StorageQuery StrConv
 )
 
 # Stores + Storage facade (no storage/service rank)
@@ -62,6 +64,8 @@ set(STORAGE_SRCS
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/album_edit_state_sql.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/edit_history/commit_graph_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/mask_asset/mask_asset_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/storage_session.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/storage_maintenance.cpp"
 )
 
 def_library(Storage

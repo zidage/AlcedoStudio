@@ -34,6 +34,7 @@
 #include "support/editor_history_port_test_reads.hpp"
 #include "support/editor_lease_test_support.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
+#include "../../support/storage_test_access.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -131,7 +132,7 @@ class PersistentEditor final {
       return false;
     }
     {
-      auto             db_guard = project_.GetStorage()->GetDatabase().GetConnectionGuard();
+      auto db_guard = StorageTestAccess::GetDatabase(*project_.GetStorage()).GetConnectionGuard();
       auto             db_lock  = db_guard.Lock();
       CommitGraphStore graph_service(db_guard.conn_);
       graph_service.Materialize(capture->materialization);

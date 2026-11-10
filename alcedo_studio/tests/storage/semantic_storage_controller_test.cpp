@@ -23,6 +23,7 @@
 #include "storage/image_pool/image_pool_manager.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/duckdb_extension.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -548,7 +549,7 @@ TEST_F(SemanticStoreTest, FilesWithoutReadyEmbeddingAreNotResults) {
   StoreEmbedding(semantic, files[0].file_id_, files[0].image_id_, OneHot(0));
   StoreEmbedding(semantic, files[1].file_id_, files[1].image_id_, OneHot(0));
   {
-    auto guard   = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto guard   = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto db_lock = guard.Lock();
     RunSql(guard.conn_, std::format("UPDATE SemanticImageEmbedding SET status = 'pending' "
                                     "WHERE file_id = {};",
@@ -575,7 +576,7 @@ TEST_F(SemanticStoreTest, OlderProjectHnswIndexIsDroppedOnOpen) {
 
     // The index that older versions created on the first natural-language search.
     {
-      auto        guard   = project.GetStorage()->GetDatabase().GetConnectionGuard();
+      auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
       auto        db_lock = guard.Lock();
       std::string load_error;
       ASSERT_TRUE(LoadPackagedDuckDbExtension(guard.conn_, "vss", &load_error)) << load_error;
@@ -591,7 +592,7 @@ TEST_F(SemanticStoreTest, OlderProjectHnswIndexIsDroppedOnOpen) {
   {
     ProjectService reopened(db_path_, meta_path_, ProjectOpenMode::kLoadExisting);
     {
-      auto guard   = reopened.GetStorage()->GetDatabase().GetConnectionGuard();
+      auto guard   = StorageTestAccess::GetDatabase(*reopened.GetStorage()).GetConnectionGuard();
       auto db_lock = guard.Lock();
       EXPECT_EQ(CountHnswIndexes(guard.conn_), 0);
     }
@@ -605,7 +606,7 @@ TEST_F(SemanticStoreTest, OlderProjectHnswIndexIsDroppedOnOpen) {
 
   // The drop is stored in the file: a second open finds no index.
   ProjectService second_open(db_path_, meta_path_, ProjectOpenMode::kLoadExisting);
-  auto           guard   = second_open.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto guard = StorageTestAccess::GetDatabase(*second_open.GetStorage()).GetConnectionGuard();
   auto           db_lock = guard.Lock();
   EXPECT_EQ(CountHnswIndexes(guard.conn_), 0);
 }

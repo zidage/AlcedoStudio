@@ -32,6 +32,7 @@
 #include "image/metadata_extractor.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/import/import_log.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -48,7 +49,7 @@ auto OtherCameraDngPath() -> std::filesystem::path {
 
 /// Text of every value in the first column of @p sql.
 auto QueryTexts(ProjectService& project, const std::string& sql) -> std::vector<std::string> {
-  auto                     guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto                     lock  = guard.Lock();
   duckdb_result            result;
   std::vector<std::string> texts;

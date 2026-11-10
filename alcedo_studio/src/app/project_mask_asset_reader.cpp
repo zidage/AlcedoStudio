@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-#include "storage/store/mask_asset/mask_asset_store.hpp"
+#include "storage/store/storage_session.hpp"
 
 namespace alcedo {
 
@@ -20,9 +20,8 @@ auto ProjectMaskAssetReader::Read(const MaskAssetKey& key) const -> MaskAsset {
     throw std::runtime_error("Mask asset " + std::string{key.Value()} +
                              " cannot be read: the project has no storage");
   }
-  auto           db_guard = storage_->GetDatabase().GetConnectionGuard();
-  auto           db_lock  = db_guard.Lock();
-  MaskAssetStore store(db_guard.conn_);
+  auto  session = storage_->OpenSession();
+  auto& store   = session.MaskAssets();
   return store.Read(key);
 }
 

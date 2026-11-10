@@ -11,24 +11,9 @@
 
 #include "image/metadata.hpp"
 #include "storage/mapper/image/image_mapper.hpp"
+#include "storage/query/capture_date_time.hpp"
 
 namespace alcedo {
-
-/// A capture time parsed from the EXIF display date text.
-struct CaptureDateTime {
-  std::string date_;       ///< `YYYY-MM-DD`
-  std::string date_time_;  ///< `YYYY-MM-DD HH:MM:SS` (`00:00:00` when the text has no time)
-};
-
-/**
- * @brief Parse the EXIF display date text (`YYYY-MM-DD HH:MM:SS`, or `YYYY:MM:DD ...`).
- *
- * The date part must be four digits, a separator, two digits, a separator, and two digits,
- * and must name a real calendar day. A time part, when present, must be `HH:MM:SS` in range.
- * Returns std::nullopt for empty, partial, or out-of-range text (for example
- * `0000:00:00 00:00:00`), so the capture columns are NULL instead of a wrong date.
- */
-auto ParseCaptureDateTime(std::string_view text) -> std::optional<CaptureDateTime>;
 
 /**
  * @brief Write the search columns of @p row from the Image file name, path, and metadata.

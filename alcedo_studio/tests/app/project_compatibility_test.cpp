@@ -41,6 +41,7 @@
 #include "support/project_compat_render.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -152,7 +153,7 @@ TEST(ProjectCompatibilityTest, OldProjectCommitsReadAsUserAndSaveAnAgentCommit) 
   std::size_t   commit_count = 0;
   {
     ProjectService   project(db_path, meta_path);
-    auto             guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             lock  = guard.Lock();
     CommitGraphStore store(guard.conn_);
     auto             loaded = store.LoadGraph(element_id);
@@ -175,7 +176,7 @@ TEST(ProjectCompatibilityTest, OldProjectCommitsReadAsUserAndSaveAnAgentCommit) 
   }
   {
     ProjectService   project(db_path, meta_path);
-    auto             guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             lock  = guard.Lock();
     CommitGraphStore store(guard.conn_);
     const auto       reloaded = store.LoadGraph(element_id);

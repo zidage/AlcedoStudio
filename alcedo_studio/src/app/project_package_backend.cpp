@@ -10,7 +10,6 @@
 #include <QDir>
 #include <QRandomGenerator>
 #include <QStandardPaths>
-
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -26,7 +25,6 @@
 #include <system_error>
 #include <vector>
 
-#include <duckdb.h>
 #include <json.hpp>
 #include <xxhash.h>
 
@@ -47,7 +45,6 @@
 #endif
 
 #include "app/project_service.hpp"
-#include "storage/store/duckdb_extension.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 #include "utils/string/convert.hpp"
@@ -812,148 +809,6 @@ auto BuildRuntimeProjectPair(const std::filesystem::path& workspace,
   return {workspace / (stem + L".db"), workspace / (stem + L".json")};
 }
 
-auto RunDuckDbQuery(duckdb_connection conn, const std::string& sql,
-                    const char* stage, QString* errorOut) -> bool {
-  duckdb_result result;
-  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* err_msg = duckdb_result_error(&result);
-    if (errorOut) {
-      *errorOut = Tr("DuckDB %1 failed: %2")
-                      .arg(QString::fromUtf8(stage))
-                      .arg(QString::fromUtf8(err_msg ? err_msg : ""));
-    }
-    duckdb_destroy_result(&result);
-    return false;
-  }
-  duckdb_destroy_result(&result);
-  return true;
-}
-
-auto QueryHasHnswIndex(duckdb_connection conn, bool* hasHnswIndexOut,
-                       QString* errorOut) -> bool {
-  duckdb_result result;
-  static constexpr const char* kQuery =
-      "SELECT COUNT(*) FROM duckdb_indexes() "
-      "WHERE lower(COALESCE(sql, '')) LIKE '%using hnsw%';";
-  if (duckdb_query(conn, kQuery, &result) != DuckDBSuccess) {
-    const char* err_msg = duckdb_result_error(&result);
-    if (errorOut) {
-      *errorOut = Tr("DuckDB query HNSW indexes failed: %1")
-                      .arg(QString::fromUtf8(err_msg ? err_msg : ""));
-    }
-    duckdb_destroy_result(&result);
-    return false;
-  }
-
-  const bool has_value = duckdb_row_count(&result) > 0 && duckdb_column_count(&result) > 0 &&
-                         !duckdb_value_is_null(&result, 0, 0);
-  *hasHnswIndexOut = has_value && duckdb_value_int64(&result, 0, 0) > 0;
-  duckdb_destroy_result(&result);
-  return true;
-}
-
-// Loads the packaged vss extension, which DuckDB needs to bind or drop an
-// existing HNSW index (snapshot creation and DropHnswIndexesOfOlderProject).
-auto LoadVssExtension(duckdb_connection conn, QString* errorOut) -> bool {
-  std::string load_error;
-  if (LoadPackagedDuckDbExtension(conn, "vss", &load_error)) {
-    return true;
-  }
-  if (errorOut) {
-    *errorOut = Tr("DuckDB requires the VSS extension for existing HNSW indexes.%1")
-                    .arg(QStringLiteral("\n") + QString::fromStdString(load_error));
-  }
-  return false;
-}
-
-auto DropHnswIndexesOfOlderProject(duckdb_connection conn, QString* errorOut) -> bool {
-  bool has_hnsw = false;
-  if (!QueryHasHnswIndex(conn, &has_hnsw, errorOut)) {
-    return false;
-  }
-  if (!has_hnsw) {
-    return true;
-  }
-  if (!LoadVssExtension(conn, errorOut)) {
-    return false;
-  }
-
-  duckdb_result result;
-  static constexpr const char* kIndexQuery =
-      "SELECT schema_name, index_name FROM duckdb_indexes() "
-      "WHERE lower(COALESCE(sql, '')) LIKE '%using hnsw%' ORDER BY schema_name, index_name;";
-  if (duckdb_query(conn, kIndexQuery, &result) != DuckDBSuccess) {
-    const char* err_msg = duckdb_result_error(&result);
-    if (errorOut) {
-      *errorOut = Tr("DuckDB query HNSW indexes failed: %1")
-                      .arg(QString::fromUtf8(err_msg ? err_msg : ""));
-    }
-    duckdb_destroy_result(&result);
-    return false;
-  }
-  std::vector<std::string> drop_statements;
-  const auto               row_count = duckdb_row_count(&result);
-  for (idx_t row = 0; row < row_count; ++row) {
-    char*             schema = duckdb_value_varchar(&result, 0, row);
-    char*             index  = duckdb_value_varchar(&result, 1, row);
-    const std::string schema_name(schema ? schema : "");
-    const std::string index_name(index ? index : "");
-    duckdb_free(schema);
-    duckdb_free(index);
-    drop_statements.push_back("DROP INDEX IF EXISTS \"" +
-                              album_util::EscapeSqlIdentifier(schema_name) + "\".\"" +
-                              album_util::EscapeSqlIdentifier(index_name) + "\";");
-  }
-  duckdb_destroy_result(&result);
-
-  for (const auto& statement : drop_statements) {
-    if (!RunDuckDbQuery(conn, statement, "drop HNSW index", errorOut)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-auto QueryCurrentCatalog(duckdb_connection conn, std::string* catalogOut,
-                         QString* errorOut) -> bool {
-  duckdb_result result;
-  if (duckdb_query(conn, "SELECT current_catalog();", &result) != DuckDBSuccess) {
-    const char* err_msg = duckdb_result_error(&result);
-    if (errorOut) {
-      *errorOut = Tr("DuckDB query current catalog failed: %1")
-                      .arg(QString::fromUtf8(err_msg ? err_msg : ""));
-    }
-    duckdb_destroy_result(&result);
-    return false;
-  }
-
-  const idx_t row_count = duckdb_row_count(&result);
-  const idx_t col_count = duckdb_column_count(&result);
-  if (row_count == 0 || col_count == 0) {
-    if (errorOut) {
-      *errorOut = Tr("DuckDB query current catalog returned no rows.");
-    }
-    duckdb_destroy_result(&result);
-    return false;
-  }
-
-  const char* value = duckdb_value_varchar(&result, 0, 0);
-  if (!value || value[0] == '\0') {
-    if (errorOut) {
-      *errorOut = Tr("DuckDB query current catalog returned empty value.");
-    }
-    if (value) {
-      duckdb_free(const_cast<char*>(value));
-    }
-    duckdb_destroy_result(&result);
-    return false;
-  }
-  *catalogOut = value;
-  duckdb_free(const_cast<char*>(value));
-  duckdb_destroy_result(&result);
-  return true;
-}
-
 auto BuildTempDbSnapshotPath(std::filesystem::path* snapshotPathOut,
                              QString* errorOut) -> bool {
   const auto root = ProjectTempRoot();
@@ -1005,10 +860,6 @@ auto CreateLiveDbSnapshot(const std::shared_ptr<ProjectService>& project,
       return false;
     }
 
-    auto& db_ctrl = storage->GetDatabase();
-    auto  guard   = db_ctrl.GetConnectionGuard();
-    auto  db_lock = guard.Lock();
-
     std::error_code ec;
     auto            wal_path = snapshotPath;
     wal_path += ".wal";
@@ -1019,40 +870,12 @@ auto CreateLiveDbSnapshot(const std::shared_ptr<ProjectService>& project,
     };
     remove_snapshot_files();
 
-    bool has_hnsw_index = false;
-    if (!QueryHasHnswIndex(guard.conn_, &has_hnsw_index, errorOut) ||
-        (has_hnsw_index && !LoadVssExtension(guard.conn_, errorOut))) {
-      remove_snapshot_files();
-      return false;
-    }
-
-    const std::string path_utf8 = conv::ToBytes(snapshotPath.generic_wstring());
-    const std::string escaped   = album_util::EscapeSqlStringLiteral(path_utf8);
-    std::string       source_catalog;
-    if (!QueryCurrentCatalog(guard.conn_, &source_catalog, errorOut)) {
-      remove_snapshot_files();
-      return false;
-    }
-    const std::string source_ident =
-        "\"" + album_util::EscapeSqlIdentifier(source_catalog) + "\"";
-
-    if (!RunDuckDbQuery(guard.conn_, "CHECKPOINT;", "checkpoint", errorOut) ||
-        !RunDuckDbQuery(guard.conn_, "ATTACH '" + escaped + "' AS pack_snapshot;",
-                        "attach snapshot", errorOut)) {
-      remove_snapshot_files();
-      return false;
-    }
-    if (!RunDuckDbQuery(guard.conn_, "COPY FROM DATABASE " + source_ident + " TO pack_snapshot;",
-                        "copy database", errorOut) ||
-        !RunDuckDbQuery(guard.conn_, "CHECKPOINT pack_snapshot;", "checkpoint snapshot",
-                        errorOut) ||
-        !RunDuckDbQuery(guard.conn_, "DETACH pack_snapshot;", "detach snapshot", errorOut)) {
-      // The attached snapshot keeps its file open, and its alias would make the ATTACH of
-      // every later snapshot on this connection fail. The error of this DETACH is not
-      // reported: errorOut already holds the failure, and a failed DETACH (the snapshot was
-      // already detached) changes nothing.
-      (void)RunDuckDbQuery(guard.conn_, "DETACH DATABASE IF EXISTS pack_snapshot;",
-                           "detach failed snapshot", nullptr);
+    try {
+      storage->Maintenance().WriteSnapshot(snapshotPath);
+    } catch (const std::exception& e) {
+      if (errorOut) {
+        *errorOut = Tr("DuckDB snapshot failed: %1").arg(QString::fromUtf8(e.what()));
+      }
       remove_snapshot_files();
       return false;
     }

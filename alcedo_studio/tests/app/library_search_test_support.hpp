@@ -31,6 +31,7 @@
 #include "sleeve/storage.hpp"
 #include "storage/store/database.hpp"
 #include "utils/string/convert.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo::library_search_test {
 
@@ -185,7 +186,7 @@ inline auto LibraryRootFolderId(ProjectService& project) -> sl_element_id_t {
 
 /// Run `SELECT COUNT(*)` on one project table.
 inline auto CountTableRows(ProjectService& project, const std::string& table) -> int64_t {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   const auto    sql = "SELECT COUNT(*) FROM " + table;

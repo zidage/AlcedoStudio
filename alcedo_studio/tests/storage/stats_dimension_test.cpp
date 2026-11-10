@@ -33,6 +33,7 @@
 #include "storage/store/sleeve/element_store.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -45,7 +46,7 @@ constexpr const char* kNewYork   = "America/New_York";
 constexpr size_t      kFileCount = 24;
 
 void                  RunStatement(ProjectService& project, const std::string& sql) {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   ASSERT_EQ(duckdb_query(guard.conn_, sql.c_str(), &result), DuckDBSuccess)

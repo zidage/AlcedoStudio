@@ -2,8 +2,7 @@
 
 Date: 2026-11-09
 
-Status: in progress. S1 and S2 complete (2026-11-09); S3, S4, and S5 complete (2026-11-10); S6
-planned.
+Status: complete. S1 and S2 complete (2026-11-09); S3, S4, S5, and S6 complete (2026-11-10).
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and the callers of storage in
 `app/` and `sleeve/`.
@@ -193,7 +192,7 @@ storage/  -> duckorm, Mapper, Store, StatsDimension, LibrarySearchPredicates, SQ
 | S3 | `ElementStore` read paths on typed rows | element store, album query | S1 | 1000-1500 | complete (#788) |
 | S4 | One stats dimension definition; filter compiler in storage | storage query, sleeve filter, element store | S3 | 1200-1800 | complete (#789) |
 | S5 | Search predicates in storage; domain values in service signatures | storage query, app filter and browse services, library module | S4 | 1200-1800 | complete (#790) |
-| S6 | Storage owns connections; maintenance API; boundary check in CI | Storage facade, app services, package backend, CI | S2, S5 | 1300-1900 | planned (#791) |
+| S6 | Storage owns connections; maintenance API; boundary check in CI | Storage facade, app services, package backend, CI | S2, S5 | 1300-1900 | complete (#791) |
 
 Each phase keeps its upper estimate under 2000 lines. S3 and S4 are separate phases because
 S4 moves files between layers, and the move adds removed and added lines to one diff.
@@ -1391,11 +1390,131 @@ python scripts/check_storage_boundary.py
 
 **Exit criteria**
 
-- [ ] Code outside storage has zero `duckdb_` calls, zero `duckorm::` references, and zero
+- [x] Code outside storage has zero `duckdb_` calls, zero `duckorm::` references, and zero
       connection guard reads.
-- [ ] The boundary check runs in CI and reports zero findings.
+- [x] The boundary check runs in CI and reports zero findings.
 
 **Expected diff:** 1300-1900 lines.
+
+##### Phase S6 completion record (2026-11-10)
+
+**Status:** complete. Branch `refactor/storage-session-maintenance-791`, stacked on the S5 branch
+`refactor/storage-search-predicates-790` (PR #800).
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| Storage session | new `include/storage/store/storage_session.hpp`, `storage/store/storage_session.cpp` | `StorageSession` opens a connection, takes the database lock in its constructor, and releases it in its destructor; `CommitGraph()`, `MaskAssets()`, and `InsertImageRoots(roots, element_pipeline_json)`; copy and move deleted (the stores refer to its connection) |
+| Storage maintenance | new `include/storage/store/storage_maintenance.hpp`, `storage/store/storage_maintenance.cpp` | `ReadDataSummary()` returns `StorageTableSummary{table, rows, min_key, max_key}` rows; `DropHnswIndexesOfOlderProject()`; `WriteSnapshot(path)`. Each call holds the database lock for the whole operation and throws `std::runtime_error` that names the failed step |
+| Storage facade | `include/sleeve/storage.hpp`, `sleeve/storage.cpp` | `OpenSession()` and `Maintenance()` added; `GetDatabase()` deleted; `friend struct StorageTestAccess` for test fixtures |
+| Storage query | new `include/storage/query/capture_date_time.hpp`, `storage/query/capture_date_time.cpp`; `image_search_columns.hpp/.cpp` | `CaptureDateTime` and `ParseCaptureDateTime` moved out of the mapper; members renamed to `date` and `date_time`; `SleeveMapper` links `StorageQuery` |
+| App | `pipeline_service.cpp`, `committed_snapshot_cache.cpp`, `editor_mini_git_commit_writer.cpp`, `editor_mini_git_journal_recovery.cpp`, `editor_mini_git_materializer.cpp`, `project_mask_asset_reader.cpp` | each guard, lock, and store construction is one `storage.OpenSession()`; `WriteImageRoots` calls `InsertImageRoots` |
+| App | `project_service.cpp`, `project_package_backend.cpp/.hpp` | `ComputeProjectDataSummary` builds the same JSON from `ReadDataSummary()`; the open path calls `DropHnswIndexesOfOlderProject()`; `CreateLiveDbSnapshot` calls `WriteSnapshot` and keeps the file removal and the file check; `RunDuckDbQuery`, `QueryCurrentCatalog`, `DropHnswIndexesOfOlderProject(duckdb_connection, ...)`, and the `duckdb.h` include deleted from the backend |
+| UI | `automation/commands/library_commands.cpp` | includes `storage/query/capture_date_time.hpp` instead of the mapper header |
+| CI | new `scripts/check_storage_boundary.py`, `scripts/tests/check_storage_boundary_test.py`; `.github/workflows/cpp-ci.yml` | job `storage-boundary` (ubuntu) runs the script tests and the check |
+| Tests | new `tests/support/storage_test_access.hpp`, `tests/storage/storage_session_test.cpp`, `tests/storage/storage_maintenance_test.cpp`; 29 test files | fixtures that write rows no store writes call `StorageTestAccess::GetDatabase(storage)` |
+
+**Detail decisions made during the work** (the plan left them open or did not fit the code):
+
+- **Session stores.** The plan listed `PipelineMapper&` in the session. The only app use of the
+  mapper was the element pipeline JSON that `WriteImageRoots` writes in the transaction of the
+  history roots. `StorageSession::InsertImageRoots(roots, element_pipeline_json)` does that
+  write, so the mapper stays inside storage and app code names no mapper type.
+- **Maintenance API.** `HasHnswIndex` and `CurrentCatalog` are steps of `WriteSnapshot` and
+  `DropHnswIndexesOfOlderProject` with no other caller, so they are private functions of
+  `storage_maintenance.cpp`. `ReadDataSummary` returns rows instead of JSON; `ProjectService`
+  keeps the JSON shape of the project file (`version`, `tables`, `rows`, `min_id`, `max_id`).
+- **Summary values.** The summary of earlier releases read each cell with
+  `duckdb_value_int64`, which gives 0 for a text key that is not a number (`VersionRef.version_id`,
+  `EditCommit.commit_hash`). The new read gives the same values with
+  `CASE WHEN MIN(k) IS NULL THEN NULL ELSE COALESCE(TRY_CAST(MIN(k) AS BIGINT), 0) END` in one
+  statement for each table. `DataSummaryCountsRowsOfEveryTable` compares every table with the
+  earlier C API read.
+- **Snapshot errors.** The storage error names the step (`DuckDB copy database failed: ...`);
+  the backend shows it in the existing translated text `DuckDB snapshot failed: %1`. The
+  statements and their order are unchanged, so the snapshot bytes are unchanged.
+- **Test database access.** 95 fixture reads of `GetDatabase()` in 29 test files write old
+  schemas, broken rows, and dropped tables that no store writes. They call
+  `StorageTestAccess::GetDatabase`, a friend of `Storage` that only `tests/support` defines; the
+  check rejects the name in `alcedo_studio/src`.
+- **Check scope.** The Storage facade files (`sleeve/storage.cpp`, `include/sleeve/storage.hpp`)
+  belong to the Storage target and are skipped, and so is the vendored `third_party/`.
+- **Compiled filter predicate.** `app/` still calls `CompileFilterPredicate`
+  (`storage/query/filter_compiler.hpp`) and passes the result to the `ElementStore` reads
+  without naming a duckorm type. The store reads keep the compiled predicate as their parameter,
+  because tests give hand-written predicates to them (S5 decision). The check covers the
+  boundary: app code that names `duckorm::` fails it.
+
+**Primary success call chain:**
+
+```text
+EditorMiniGitMaterializer::Materialize
+  -> storage_->OpenSession()           (connection + database lock)
+  -> session.CommitGraph().LoadGraph / Materialize
+  -> session ends                      (unlock, disconnect)
+
+ProjectPackageService::CreateLiveDbSnapshot -> project_pack::CreateLiveDbSnapshot
+  -> Storage::Maintenance().WriteSnapshot(path)   (one lock for every step)
+  -> HNSW read (vss load) -> current_catalog -> CHECKPOINT -> ATTACH -> COPY FROM DATABASE
+     -> CHECKPOINT pack_snapshot -> DETACH
+  -> backend checks the snapshot file -> WritePackedProject
+```
+
+**Primary failure and restore call chain:**
+
+```text
+StorageMaintenance::WriteSnapshot fails at COPY FROM DATABASE (or CHECKPOINT / DETACH)
+  -> DETACH DATABASE IF EXISTS pack_snapshot (cleanup path) -> std::runtime_error naming the step
+  -> CreateLiveDbSnapshot removes the snapshot file and its .wal, returns false with
+     "DuckDB snapshot failed: ..." -> the package write reports the error; the open project
+     database is unchanged and the next snapshot attaches the alias again
+StorageSession::InsertImageRoots with a stored root or a mismatched JSON count
+  -> std::runtime_error / std::invalid_argument; the transaction rolls back; no root and no
+     PipelineParam row is written
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `DataSummaryCountsRowsOfEveryTable` (all 19 tables equal the earlier C API read, text keys included) | `StorageMaintenanceTest` | PASS |
+| `SnapshotFailureKeepsSourceDatabase` (step named, alias detached, rows unchanged, next snapshot succeeds) | `StorageMaintenanceTest` | PASS |
+| `DataSummaryLeavesOutATableThatTheDatabaseDoesNotHave`, `SnapshotHoldsTheRowsOfTheSourceDatabase`, `HnswDropWithoutAnIndexChangesNothing` | `StorageMaintenanceTest` | PASS (5/5) |
+| `SessionHoldsDatabaseLockForItsLifetime`, `ImageRootWriteStoresRootAndElementPipelineJson`, `ImageRootWriteOfAStoredRootWritesNoPipelineJson`, `ImageRootWriteRejectsAPipelineJsonCountThatDiffersFromTheRoots` | `StorageSessionTest` | PASS (4/4) |
+| `ProjectPackageBackendTest`, `ProjectCompatibilityTest`, `PipelineMapperTest`, `CommitGraphTest`, `MaskAssetStoreTest` with the two new suites | ctest | 109/110; the failure is the intermittent temp sweep test (#801), 3/3 PASS alone and PASS in the final run |
+| Suites with rewritten fixtures (storage, app, history, filter) | ctest | 363/365; the failures are #793 (`ExistingSemanticModelWithoutActiveColumnPromotesLatestModel`) and #555 (`CheckoutAndPasteHashesAreUnchanged`), both open before this phase |
+| UI suites with rewritten fixtures (offscreen) | ctest | 99/99 PASS |
+| `ThumbnailServiceTests.DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved` | `ThumbnailServiceTest` (filtered) | PASS |
+| Boundary check on the branch; an input with `duckdb_query(` in `app/` | `scripts/check_storage_boundary.py` | exit 0; exit 1 |
+| Script tests (each rule, skipped directories, missing root, repository sources) | `scripts/tests/check_storage_boundary_test.py` | 7/7 PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 6   (full debug tree, 1692 steps, exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(StorageSessionTest|StorageMaintenanceTest|ProjectPackageBackendTest|ProjectCompatibilityTest|PipelineMapperTest|CommitGraphTest|MaskAssetStoreTest)\."
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(AiStorageControllerTest|SemanticStorageControllerTest|StatsDimensionTest|LibrarySearchPredicatesTest|AlbumQueryTest|AlbumQueryRelevanceTest|ImportContentClassificationTest|LibraryHistoryAndExportTest|LibrarySearchColumnsTest|LibrarySearchRecallTest|PipelineDngProfileBindingTest|SemanticGenerationServiceTest|SleeveServiceTest|EditorMiniGitJournalRecoveryTest|EditorMiniGitMaterializerTest|EditorSessionCheckpointStoreTest|EditorSessionHistoryPortTest|DuckDbExtensionTest|SleeveFilterCompileTest|FilterServiceTest)\."
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(AlbumBackendImageDeleteTest|AlbumBackendLibraryQueryTest|AlbumBackendProjectTest|ApplicationModuleHostShutdownTest|EditorWorkspaceSwitchQmlTest)\."   (QT_QPA_PLATFORM=offscreen)
+python -m unittest scripts/tests/check_storage_boundary_test.py
+python scripts/check_storage_boundary.py
+```
+
+After `git clang-format`, a rebuild of `StorageMaintenanceTest StorageSessionTest
+ProjectPackageBackendTest ProjectCompatibilityTest` ran 21/21 PASS. The full suite is for the
+user to start.
+
+**Checklist / exit condition:** both boxes checked. A search of `alcedo_studio/src` outside
+storage finds zero `duckdb_` calls, `duckorm::` references, `GetConnectionGuard` reads, and
+`GetDatabase` calls.
+
+**LOC note:** `storage_maintenance.cpp` 229, `storage_session.cpp` 46,
+`storage_maintenance_test.cpp` 283, `storage_session_test.cpp` 134, `check_storage_boundary.py`
+132; `project_package_backend.cpp` +6 and -183 lines, `project_service.cpp` +17 and -79. Diff before this
+record: 57 files, +1493 and -532 lines (the 29 test files are one-line call changes and their
+includes).
+
+**Remaining gaps:** none for S6. #801 (temp sweep timing) was found during the work.
 
 **Completion record:** see section 8.
 

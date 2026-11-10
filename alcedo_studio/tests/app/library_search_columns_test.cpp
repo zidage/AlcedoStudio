@@ -42,6 +42,7 @@
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
 #include "utils/string/search_text.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -55,7 +56,7 @@ constexpr const char* kNull = "<null>";
 
 /// Run a query and return the first row as text, with kNull for a NULL cell.
 auto QueryFirstRow(ProjectService& project, const std::string& sql) -> std::vector<std::string> {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
@@ -80,7 +81,7 @@ auto QueryFirstRow(ProjectService& project, const std::string& sql) -> std::vect
 }
 
 void RunStatement(ProjectService& project, const std::string& sql) {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   ASSERT_EQ(duckdb_query(guard.conn_, sql.c_str(), &result), DuckDBSuccess)
@@ -175,16 +176,16 @@ TEST(SearchTextFoldTest, FoldWordsKeepsOneSpaceBetweenWordsAndMatchesTheFoldWith
 TEST(CaptureDateTimeTest, ParsesExifDateFormsAndRejectsInvalidDates) {
   const auto dash = ParseCaptureDateTime("2026-06-07 13:12:41");
   ASSERT_TRUE(dash.has_value());
-  EXPECT_EQ(dash->date_, "2026-06-07");
-  EXPECT_EQ(dash->date_time_, "2026-06-07 13:12:41");
+  EXPECT_EQ(dash->date, "2026-06-07");
+  EXPECT_EQ(dash->date_time, "2026-06-07 13:12:41");
 
   const auto colon = ParseCaptureDateTime("2024:02:29 00:00:05");  // EXIF form, leap day
   ASSERT_TRUE(colon.has_value());
-  EXPECT_EQ(colon->date_time_, "2024-02-29 00:00:05");
+  EXPECT_EQ(colon->date_time, "2024-02-29 00:00:05");
 
   const auto date_only = ParseCaptureDateTime("2025-12-31");
   ASSERT_TRUE(date_only.has_value());
-  EXPECT_EQ(date_only->date_time_, "2025-12-31 00:00:00");
+  EXPECT_EQ(date_only->date_time, "2025-12-31 00:00:00");
 
   for (const auto* invalid : {"", "2026-06", "0000:00:00 00:00:00", "2023-02-29 10:00:00",
                               "2026-13-01 10:00:00", "2026-06-31 10:00:00", "2026-06-07 24:00:00",
@@ -549,7 +550,7 @@ TEST_F(LibrarySearchColumnsTest, SearchResultPageReadsDisplayColumnsAndTotalInOn
 /// lock is released. Fails the test when the build is still waiting after five seconds.
 auto BuildWhereWhileDatabaseIsLocked(ProjectService& project, const SleeveFilterService& service,
                                      const std::wstring& query) -> std::optional<FilterNode> {
-  auto guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto       guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto lock  = guard.Lock();
   auto build = std::async(std::launch::async, [&service, &query] {
     return service.BuildFuzzySearchWhere(query, kAllSearchFields);
@@ -854,7 +855,7 @@ void CountPredicateRows(duckdb_function_info, duckdb_data_chunk input, duckdb_ve
 /// Register `count_predicate_rows` in the project database. Functions registered through one
 /// connection are in the system catalog, so the store connections can call it.
 void RegisterPredicateRowCounter(ProjectService& project) {
-  auto                   guard    = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto                   lock     = guard.Lock();
   duckdb_scalar_function function = duckdb_create_scalar_function();
   duckdb_scalar_function_set_name(function, "count_predicate_rows");

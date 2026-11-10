@@ -12,7 +12,7 @@
 #include "app/editor_save_checkpoint_coordinator.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
-#include "storage/store/edit_history/commit_graph_store.hpp"
+#include "storage/store/storage_session.hpp"
 
 namespace alcedo {
 namespace {
@@ -146,9 +146,8 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
   bool head_moved = false;
 
   try {
-    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto               db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
+    auto                     session       = storage_->OpenSession();
+    auto&                    graph_service = session.CommitGraph();
     auto               stored_graph = graph_service.LoadGraph(capture.element_id);
 
     head_commit_hash_t       prior_head  = std::nullopt;

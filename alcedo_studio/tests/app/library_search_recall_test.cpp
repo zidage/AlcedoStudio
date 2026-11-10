@@ -45,6 +45,7 @@
 #include "storage/store/semantic/semantic_records.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/import/import_log.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -508,7 +509,7 @@ auto SeparateStatementBuckets(duckorm::Connection conn, const std::string& sql,
 auto SeparateStatementStats(ProjectService& project, sl_element_id_t folder_id,
                             const std::optional<FilterNode>& filter, const std::string& model_key)
     -> AlbumStatsView {
-  auto           guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto           guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto           lock  = guard.Lock();
   const auto     scope = BuildScopedFileQuery(folder_id, CompileFilterPredicate(filter));
   const auto&    from  = scope.from_where_;
