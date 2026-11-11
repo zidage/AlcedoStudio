@@ -537,7 +537,9 @@ TEST_F(LibraryConcurrentAccessTest, ConcurrentReadsAndWritesKeepStorageInvariant
   std::latch        start(static_cast<std::ptrdiff_t>(workers.size()) + 1);
   Clock::time_point deadline;
   {
-    std::vector<std::jthread> threads;
+    // std::thread with explicit joins: Apple libc++ has no std::jthread.
+    std::vector<std::thread> threads;
+    threads.reserve(workers.size());
     for (auto& worker : workers) {
       threads.emplace_back([&worker, &failures, &start, &deadline] {
         start.arrive_and_wait();
@@ -556,6 +558,9 @@ TEST_F(LibraryConcurrentAccessTest, ConcurrentReadsAndWritesKeepStorageInvariant
     }
     deadline = Clock::now() + kRunDuration;
     start.arrive_and_wait();
+    for (auto& thread : threads) {
+      thread.join();
+    }
   }
 
   std::string step_counts;
