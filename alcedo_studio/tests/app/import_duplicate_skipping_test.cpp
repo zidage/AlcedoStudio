@@ -24,6 +24,7 @@
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/store/image/source_file_store.hpp"
+#include "support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -81,12 +82,12 @@ class ImportDuplicateSkippingTest : public ::testing::Test {
     return result;
   }
   void Execute(const std::string& sql) {
-    auto guard = project_->GetStorage()->GetDatabase().GetConnectionGuard();
+    auto guard = StorageTestAccess::GetDatabase(*project_->GetStorage()).GetConnectionGuard();
     auto lock  = guard.Lock();
     duckorm::execute(guard.conn_, duckorm::expr::raw(sql));
   }
   auto Count(const std::string& table) -> int64_t {
-    auto guard = project_->GetStorage()->GetDatabase().GetConnectionGuard();
+    auto guard = StorageTestAccess::GetDatabase(*project_->GetStorage()).GetConnectionGuard();
     auto lock  = guard.Lock();
     return duckorm::select_int64(guard.conn_, duckorm::expr::raw("SELECT COUNT(*) FROM " + table))
         .value();
@@ -95,7 +96,7 @@ class ImportDuplicateSkippingTest : public ::testing::Test {
     return last_job_->import_log_->Snapshot().created_.front().image_id_;
   }
   auto StoredRows(const std::string& table) -> std::string {
-    auto guard = project_->GetStorage()->GetDatabase().GetConnectionGuard();
+    auto guard = StorageTestAccess::GetDatabase(*project_->GetStorage()).GetConnectionGuard();
     auto lock  = guard.Lock();
     return duckorm::select_string(
                guard.conn_, duckorm::expr::raw("SELECT to_json(list(t)) FROM (SELECT * FROM " +
@@ -140,7 +141,7 @@ TEST_F(ImportDuplicateSkippingTest, MissingSizeOwnerRejectsTheWholeUpdateWithout
   ASSERT_EQ(Run({source_}).imported_, 1);
   const auto                                         id     = ImageId();
   const auto                                         before = StoredRows("ImageSourceSize");
-  SourceFileStore                                    store(project_->GetStorage()->GetDatabase());
+  auto& store = project_->GetStorage()->GetSourceFileStore();
   const std::vector<std::pair<image_id_t, uint64_t>> sizes{{id, 17}, {id + 1000, 18}};
   EXPECT_THROW(store.RecordSizes(sizes), std::runtime_error);
   EXPECT_EQ(StoredRows("ImageSourceSize"), before);

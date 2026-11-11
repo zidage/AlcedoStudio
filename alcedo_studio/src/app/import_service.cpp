@@ -87,7 +87,7 @@ void ImportServiceImpl::RunImport(const std::vector<image_path_t>& paths, const 
                                   const std::shared_ptr<ImportJob>& job) {
   auto&           progress = *job->progress_;
   ImportResult    result;
-  SourceFileStore sources(fs_service_->GetStorage()->GetDatabase());
+  auto&           sources = fs_service_->GetStorage()->GetSourceFileStore();
   std::map<std::wstring, std::vector<SourceFileBinding>> bindings;
   std::vector<PendingImport>                             batch;
   std::set<std::wstring>                                 pending_paths;
@@ -117,9 +117,8 @@ void ImportServiceImpl::RunImport(const std::vector<image_path_t>& paths, const 
     try {
       sources.Remove(images);
       {
-        auto             guard = fs_service_->GetStorage()->GetDatabase().GetConnectionGuard();
-        auto             lock  = guard.Lock();
-        CommitGraphStore history(guard.conn_);
+        auto  session = fs_service_->GetStorage()->OpenSession();
+        auto& history = session.CommitGraph();
         for (auto id : elements) history.DeleteGraphForElement(id);
       }
       fs_service_->Write_NoSync<void>([&](FileSystem& fs) { fs.DeleteFilesEverywhere(elements); });

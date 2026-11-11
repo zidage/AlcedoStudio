@@ -3,7 +3,7 @@ set(ALCEDO_TEST_APP_ROOT "${ALCEDO_TEST_ROOT}/app")
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 
 add_executable(ImportDuplicateSkippingTest ${ALCEDO_TEST_ROOT}/app/import_duplicate_skipping_test.cpp)
-target_include_directories(ImportDuplicateSkippingTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+target_include_directories(ImportDuplicateSkippingTest PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ImportDuplicateSkippingTest PRIVATE ImportService ProjectService GTest::gtest_main)
 target_compile_definitions(ImportDuplicateSkippingTest PRIVATE
     ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")

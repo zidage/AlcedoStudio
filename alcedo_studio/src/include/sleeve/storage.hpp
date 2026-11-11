@@ -13,6 +13,7 @@
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/image/image_store.hpp"
+#include "storage/store/image/source_file_store.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "storage/store/semantic/semantic_label_store.hpp"
 #include "storage/store/semantic/semantic_model_registry.hpp"
@@ -51,6 +52,7 @@ class Storage {
   Database                                                              database_;
   ElementStore                                                         element_store_;
   ImageStore                                                           image_store_;
+  SourceFileStore                                                       source_files_;
   SemanticModelRegistry                                                 semantic_models_;
   SemanticEmbeddingStore                                                semantic_embeddings_;
   SemanticLabelStore                                                    semantic_labels_;
@@ -77,6 +79,8 @@ class Storage {
   auto Maintenance() -> StorageMaintenance&;
   auto GetElementStore() -> ElementStore&;
   auto GetImageStore() -> ImageStore&;
+  /// Source path and byte-size records; each operation owns its database connection.
+  auto GetSourceFileStore() -> SourceFileStore&;
   auto GetSemanticModelRegistry() -> SemanticModelRegistry&;
   auto GetSemanticEmbeddingStore() -> SemanticEmbeddingStore&;
   auto GetSemanticLabelStore() -> SemanticLabelStore&;
