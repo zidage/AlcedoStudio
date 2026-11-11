@@ -64,6 +64,15 @@ add_library(AlcedoInProcessTestMain OBJECT ${ALCEDO_TEST_ROOT}/ui/ui_test_main.c
 target_include_directories(AlcedoInProcessTestMain PRIVATE ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(AlcedoInProcessTestMain PUBLIC Exiv2 GTest::gtest Qt6::Core)
 
+# Storage invariant check (#805): the rules that the rows of a project database keep after any
+# sequence of production writes. Tests that write through production paths link this library and
+# run the check after their writes.
+add_library(StorageInvariantsTestSupport STATIC EXCLUDE_FROM_ALL
+  ${ALCEDO_TEST_SUPPORT_ROOT}/storage_invariants.cpp)
+target_include_directories(StorageInvariantsTestSupport
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(StorageInvariantsTestSupport PUBLIC Storage GTest::gtest)
+
 # ==============================================================================
 # Phase 3D test domain manifests
 # ==============================================================================

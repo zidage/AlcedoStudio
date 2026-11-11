@@ -17,6 +17,7 @@
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "utils/string/convert.hpp"
+#include "support/storage_invariants.hpp"
 #include "support/test_temp_directory.hpp"
 
 namespace alcedo {
@@ -64,6 +65,9 @@ void RewriteProjectFileVersion(const std::filesystem::path& meta_path, const std
 
 class ProjectServiceUUIDTests : public ::testing::Test {
  protected:
+  /// The test closed its project after production writes; TearDown checks the stored rows
+  /// (#805). A test that writes broken rows on purpose sets it to false.
+  bool check_storage_invariants_ = true;
   test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
@@ -74,6 +78,9 @@ class ProjectServiceUUIDTests : public ::testing::Test {
   }
 
   void TearDown() override {
+    if (check_storage_invariants_) {
+      test::ExpectStoredStorageInvariants(db_path_);
+    }
     if (std::filesystem::exists(db_path_)) {
       std::filesystem::remove(db_path_);
     }

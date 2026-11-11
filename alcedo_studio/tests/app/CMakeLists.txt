@@ -272,7 +272,7 @@ endif()
 
 add_executable(ImportServiceTest ${ALCEDO_TEST_ROOT}/app/import_service_test.cpp)
 target_include_directories(ImportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(ImportServiceTest ImportService ProjectService GTest::gtest_main)
+target_link_libraries(ImportServiceTest StorageInvariantsTestSupport ImportService ProjectService GTest::gtest_main)
 
 alcedo_register_test_target(ImportServiceTest app)
 
@@ -296,11 +296,11 @@ alcedo_register_test_target(ProjectOpenBenchmark app)
 
 # A project packed by an earlier build opens and renders unchanged (raster_image_input_plan.md,
 # section 7.4). The render hash is recorded for CUDA.
-add_executable(ProjectCompatibilityTest ${ALCEDO_TEST_ROOT}/app/project_compatibility_test.cpp
-  ${ALCEDO_TEST_ROOT}/support/storage_invariants.cpp)
+add_executable(ProjectCompatibilityTest ${ALCEDO_TEST_ROOT}/app/project_compatibility_test.cpp)
 target_include_directories(ProjectCompatibilityTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ProjectCompatibilityTest
+  StorageInvariantsTestSupport
   ThumbnailService ProjectService PipelineMgmtService PipelineHistory GTest::gtest_main)
 target_compile_definitions(ProjectCompatibilityTest PRIVATE
   ALCEDO_COMPAT_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/compat")
@@ -314,6 +314,7 @@ add_executable(ImportContentClassificationTest
 target_include_directories(ImportContentClassificationTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ImportContentClassificationTest
+  StorageInvariantsTestSupport
   ImportService ProjectService PipelineMgmtService OpenImageIO::OpenImageIO GTest::gtest_main)
 target_compile_definitions(ImportContentClassificationTest PRIVATE
   ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
@@ -378,7 +379,7 @@ alcedo_register_test_target(SemanticRelevanceCalibrationTest app)
 
 add_executable(FilterServiceTest ${ALCEDO_TEST_ROOT}/app/filter_service_test.cpp)
 target_include_directories(FilterServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(FilterServiceTest ImportService ProjectService SleeveFilterService GTest::gtest_main)
+target_link_libraries(FilterServiceTest StorageInvariantsTestSupport ImportService ProjectService SleeveFilterService GTest::gtest_main)
 gtest_discover_tests(FilterServiceTest TEST_PREFIX "FilterServiceTest."
   PROPERTIES LABELS "ci_core_flow")
 
@@ -411,10 +412,10 @@ alcedo_register_test_target(AlbumQueryTest app ci_core)
 # album query results, orders, groups, and statistics against an in-memory model, and the storage
 # invariant check (#805) after each operation.
 add_executable(LibraryReferenceModelTest
-  ${ALCEDO_TEST_ROOT}/app/library_reference_model_test.cpp
-  ${ALCEDO_TEST_ROOT}/support/storage_invariants.cpp)
+  ${ALCEDO_TEST_ROOT}/app/library_reference_model_test.cpp)
 target_include_directories(LibraryReferenceModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(LibraryReferenceModelTest
+  StorageInvariantsTestSupport
   AdjustmentTransferService
   EditorPipelineCommandService
   ProjectService
@@ -432,11 +433,11 @@ alcedo_register_test_target(LibraryReferenceModelTest app ci_core)
 # several threads for a fixed time, then the storage invariant check (#805). Run it with the
 # AddressSanitizer build (preset win_debug_asan) and the ThreadSanitizer build (macos_debug_tsan).
 add_executable(LibraryConcurrentAccessTest
-  ${ALCEDO_TEST_ROOT}/app/library_concurrent_access_test.cpp
-  ${ALCEDO_TEST_ROOT}/support/storage_invariants.cpp)
+  ${ALCEDO_TEST_ROOT}/app/library_concurrent_access_test.cpp)
 target_include_directories(LibraryConcurrentAccessTest PUBLIC
   ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(LibraryConcurrentAccessTest
+  StorageInvariantsTestSupport
   AdjustmentTransferService
   EditorPipelineCommandService
   ProjectService
@@ -454,11 +455,11 @@ alcedo_register_test_target(LibraryConcurrentAccessTest app ci_core)
 # scripts/storage_cli_compare/compare_storage_cli_reads.py). Built only on request and not
 # registered with ctest: the comparison script runs it.
 add_executable(StorageCliCompareProjectWriter EXCLUDE_FROM_ALL
-  ${ALCEDO_TEST_ROOT}/app/storage_cli_compare_project_writer.cpp
-  ${ALCEDO_TEST_ROOT}/support/storage_invariants.cpp)
+  ${ALCEDO_TEST_ROOT}/app/storage_cli_compare_project_writer.cpp)
 target_include_directories(StorageCliCompareProjectWriter PUBLIC
   ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(StorageCliCompareProjectWriter
+  StorageInvariantsTestSupport
   AdjustmentTransferService
   EditorPipelineCommandService
   ProjectService
@@ -827,7 +828,7 @@ alcedo_register_test_target(EditorHistoryOperationPublisherTest app ci_core)
 
 add_executable(ProjectServiceTest ${ALCEDO_TEST_ROOT}/app/project_service_test.cpp)
 target_include_directories(ProjectServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(ProjectServiceTest ProjectService GTest::gtest_main)
+target_link_libraries(ProjectServiceTest StorageInvariantsTestSupport ProjectService GTest::gtest_main)
 gtest_discover_tests(ProjectServiceTest TEST_PREFIX "ProjectServiceTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(ProjectServiceTest app ci_core)
@@ -969,7 +970,7 @@ alcedo_register_test_target(ExecutorSnapshotRenderTest app)
 # PipelineGuard and construct no executor outside the owning service.
 add_executable(LibraryHistoryAndExportTest ${ALCEDO_TEST_ROOT}/app/library_history_and_export_test.cpp)
 target_include_directories(LibraryHistoryAndExportTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(LibraryHistoryAndExportTest ExportService ProjectService ImportService ImageWriter
+target_link_libraries(LibraryHistoryAndExportTest StorageInvariantsTestSupport ExportService ProjectService ImportService ImageWriter
   GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(LibraryHistoryAndExportTest TEST_PREFIX "LibraryHistoryAndExportTest.")
 alcedo_register_test_target(LibraryHistoryAndExportTest app)
@@ -991,7 +992,7 @@ alcedo_register_test_target(ThumbnailDiskCacheServiceTest app)
 
 add_executable(ExportServiceTest ${ALCEDO_TEST_ROOT}/app/export_service_test.cpp)
 target_include_directories(ExportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(ExportServiceTest ExportService ProjectService ImportService GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+target_link_libraries(ExportServiceTest StorageInvariantsTestSupport ExportService ProjectService ImportService GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 target_compile_definitions(ExportServiceTest PRIVATE
   ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
 gtest_discover_tests(ExportServiceTest TEST_PREFIX "ExportServiceTest.")

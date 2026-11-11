@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -52,5 +53,16 @@ inline void ExpectStorageInvariants(Storage& storage) {
   const auto violations = FindStorageInvariantViolations(storage);
   EXPECT_TRUE(violations.empty()) << FormatStorageInvariantViolations(violations);
 }
+
+/**
+ * @brief Open the project database at @p db_path and add a test failure that lists every
+ *        storage invariant violation of its stored rows.
+ *
+ * @details A fixture calls this in TearDown, after the test closed its project: the check then
+ * reads the rows that the production write paths stored, as the next project open reads them.
+ * Nothing is checked when the file does not exist (the test did not create a project) or when
+ * the test already failed or was skipped.
+ */
+void ExpectStoredStorageInvariants(const std::filesystem::path& db_path);
 
 }  // namespace alcedo::test

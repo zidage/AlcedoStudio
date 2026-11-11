@@ -39,6 +39,7 @@
 #include "utils/clock/time_provider.hpp"
 #include "utils/profiler/profiler.hpp"
 #include "utils/string/convert.hpp"
+#include "support/storage_invariants.hpp"
 #include "support/test_temp_directory.hpp"
 
 namespace alcedo {
@@ -154,6 +155,9 @@ auto ReadFileBytes(const std::filesystem::path& path) -> std::vector<uint8_t> {
 
 class ExportServiceTests : public ::testing::Test {
  protected:
+  /// The test closed its project after production writes; TearDown checks the stored rows
+  /// (#805). A test that writes broken rows on purpose sets it to false.
+  bool check_storage_invariants_ = true;
   test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
@@ -190,6 +194,9 @@ class ExportServiceTests : public ::testing::Test {
   }
 
   void TearDown() override {
+    if (check_storage_invariants_) {
+      test::ExpectStoredStorageInvariants(db_path_);
+    }
     if (std::filesystem::exists(db_path_)) {
       std::filesystem::remove(db_path_);
     }
@@ -239,6 +246,9 @@ TEST_F(ExportServiceTests, ExportOneImage_WritesReadableFile) {
     ASSERT_NE(import_job->import_log_, nullptr);
     auto snapshot = import_job->import_log_->Snapshot();
     ASSERT_FALSE(snapshot.created_.empty());
+    // The application writes the imported file elements before it exports them (#819: an
+    // import that ends here leaves history roots without file elements).
+    import_service.SyncImports(snapshot, L"");
 
     const auto element_id = snapshot.created_[0].element_id_;
     const auto image_id   = snapshot.created_[0].image_id_;

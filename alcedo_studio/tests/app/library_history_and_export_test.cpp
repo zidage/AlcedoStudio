@@ -46,6 +46,7 @@
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "storage/store/sleeve/element_store.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
+#include "support/storage_invariants.hpp"
 #include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "type/type.hpp"
@@ -184,6 +185,16 @@ auto AddExposureCommit(PipelineMgmtService& pipelines, sl_element_id_t element_i
 
 class LibraryHistoryAndExportTest : public ::testing::Test {
  protected:
+  /// The test closed its project after production writes; TearDown checks the stored rows
+  /// (#805). A test that writes broken rows on purpose sets it to false.
+  bool check_storage_invariants_ = true;
+
+  void TearDown() override {
+    if (check_storage_invariants_) {
+      test::ExpectStoredStorageInvariants(db_path_);
+    }
+  }
+
   test::TestTempDirectory temp_dir_;
   void SetUp() override {
     if (!std::filesystem::exists(LinearDngPath())) {
