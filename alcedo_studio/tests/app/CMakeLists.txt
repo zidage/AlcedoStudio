@@ -421,6 +421,7 @@ target_link_libraries(LibraryReferenceModelTest
   PipelineMgmtService
   PipelineHistory
   EditGraph
+  Qt6::Core
   GTest::gtest_main)
 gtest_discover_tests(LibraryReferenceModelTest TEST_PREFIX "LibraryReferenceModelTest."
   PROPERTIES LABELS "ci_core_flow")

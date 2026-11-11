@@ -17,6 +17,9 @@
 
 #include <gtest/gtest.h>
 
+#include <QDate>
+#include <QDateTime>
+#include <QTimeZone>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -208,16 +211,13 @@ auto UtcText(int64_t unix_seconds) -> std::string {
                      std::chrono::sys_seconds{std::chrono::seconds{unix_seconds}});
 }
 
-auto DayText(const std::chrono::year_month_day& day) -> std::string {
-  return std::format("{:04}-{:02}-{:02}", static_cast<int>(day.year()),
-                     static_cast<unsigned>(day.month()), static_cast<unsigned>(day.day()));
-}
-
-/// Local calendar day of @p unix_seconds in @p time_zone.
+/// Local calendar day of @p unix_seconds in the IANA zone @p time_zone. QTimeZone reads the zone
+/// rules; std::chrono::locate_zone is missing from Apple libc++.
 auto LocalDay(int64_t unix_seconds, const std::string& time_zone) -> std::string {
-  const auto* zone  = std::chrono::locate_zone(time_zone);
-  const auto  local = zone->to_local(std::chrono::sys_seconds{std::chrono::seconds{unix_seconds}});
-  return DayText(std::chrono::year_month_day{std::chrono::floor<std::chrono::days>(local)});
+  const QTimeZone zone(QByteArray::fromStdString(time_zone));
+  EXPECT_TRUE(zone.isValid()) << "Unknown time zone " << time_zone;
+  const QDate day = QDateTime::fromSecsSinceEpoch(unix_seconds, zone).date();
+  return std::format("{:04}-{:02}-{:02}", day.year(), day.month(), day.day());
 }
 
 auto TmText(const std::tm& value) -> std::string {
