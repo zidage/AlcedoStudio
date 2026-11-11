@@ -296,7 +296,8 @@ alcedo_register_test_target(ProjectOpenBenchmark app)
 
 # A project packed by an earlier build opens and renders unchanged (raster_image_input_plan.md,
 # section 7.4). The render hash is recorded for CUDA.
-add_executable(ProjectCompatibilityTest ${ALCEDO_TEST_ROOT}/app/project_compatibility_test.cpp)
+add_executable(ProjectCompatibilityTest ${ALCEDO_TEST_ROOT}/app/project_compatibility_test.cpp
+  ${ALCEDO_TEST_ROOT}/support/storage_invariants.cpp)
 target_include_directories(ProjectCompatibilityTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ProjectCompatibilityTest
@@ -405,6 +406,27 @@ gtest_discover_tests(AlbumQueryTest TEST_PREFIX "AlbumQueryTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_copy_duckdb_fts_extension(AlbumQueryTest)
 alcedo_register_test_target(AlbumQueryTest app ci_core)
+
+# Storage reference model (#806): random library operations through the production write paths;
+# album query results, orders, groups, and statistics against an in-memory model, and the storage
+# invariant check (#805) after each operation.
+add_executable(LibraryReferenceModelTest
+  ${ALCEDO_TEST_ROOT}/app/library_reference_model_test.cpp
+  ${ALCEDO_TEST_ROOT}/support/storage_invariants.cpp)
+target_include_directories(LibraryReferenceModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(LibraryReferenceModelTest
+  AdjustmentTransferService
+  EditorPipelineCommandService
+  ProjectService
+  PipelineMgmtService
+  PipelineHistory
+  EditGraph
+  Qt6::Core
+  GTest::gtest_main)
+gtest_discover_tests(LibraryReferenceModelTest TEST_PREFIX "LibraryReferenceModelTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_extensions(LibraryReferenceModelTest)
+alcedo_register_test_target(LibraryReferenceModelTest app ci_core)
 
 # Typed Image and AI search columns and the SQL that reads them (same plan, Phase S3).
 add_executable(LibrarySearchColumnsTest ${ALCEDO_TEST_ROOT}/app/library_search_columns_test.cpp)

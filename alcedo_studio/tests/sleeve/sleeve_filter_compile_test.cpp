@@ -45,7 +45,7 @@ TEST(SleeveFilterCompileTest, NestedAndOrUsesExprFragmentsWithBinds) {
   const auto sql = FilterSQLCompiler::Compile(root);
   EXPECT_EQ(sql.sql_,
             "((i.camera_model = ?) AND "
-            "(UPPER(i.file_name) LIKE ?))");
+            "(UPPER(i.file_name) LIKE ? ESCAPE '~'))");
   ASSERT_EQ(sql.binds_.size(), 2u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Nikon D850");
   EXPECT_EQ(std::get<std::string>(sql.binds_[1]), "%.NEF");
@@ -60,7 +60,7 @@ TEST(SleeveFilterCompileTest, BindsQuoteInsideStringFilterValueWithoutEmbedding)
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(i.camera_model LIKE ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model LIKE ? ESCAPE '~')");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "%O'Brien%");
 }
@@ -196,17 +196,18 @@ TEST(SleeveFilterCompileTest, BetweenWithoutSecondValueCompilesToFalsePredicate)
   EXPECT_TRUE(sql.binds_.empty());
 }
 
-TEST(SleeveFilterCompileTest, ContainsDoesNotEmbedLikeWildcardsIntoSqlText) {
+// #812: `%`, `_`, and the escape character in the text match only themselves.
+TEST(SleeveFilterCompileTest, ContainsBindsTheTextWithEscapedLikeWildcards) {
   FieldCondition cond{
       .field_ = FilterField::ExifCameraModel,
       .op_    = CompareOp::CONTAINS,
-      .value_ = std::wstring(L"100%_dune"),
+      .value_ = std::wstring(L"100%_du~ne"),
   };
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(i.camera_model LIKE ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model LIKE ? ESCAPE '~')");
   ASSERT_EQ(sql.binds_.size(), 1u);
-  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "%100%_dune%");
-  EXPECT_EQ(sql.sql_.find("%100%_dune%"), std::string::npos);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "%100~%~_du~~ne%");
+  EXPECT_EQ(sql.sql_.find("100"), std::string::npos);
 }
