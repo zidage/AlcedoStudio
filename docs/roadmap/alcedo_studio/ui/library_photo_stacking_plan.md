@@ -2,7 +2,8 @@
 
 Date: 2026-11-11
 
-Status: planned. No implementation phase has started. No product test has run for this plan.
+Status: PS1 complete (2026-11-11). All other phases remain planned.
+The PS1 verification passed 22 targeted tests on Windows Release.
 
 Feature request: [#486](https://github.com/zidage/AlcedoStudio/issues/486), stacking section only.
 
@@ -13,7 +14,8 @@ Last source review: 2026-11-11.
 Source audit: upstream `main` at `e59529c66d2d0bfdc53c5c5cf2d88e6e68d9138d`.
 A fresh upstream fetch confirmed this revision. Local `main` and the planning branch
 `feature/library-photo-stacking` have the same base commit.
-The worktree contains only the uncommitted stacking plan and its two roadmap entries.
+The plan and its two roadmap entries were committed as `4830980d` before PS1 implementation.
+The source audit below describes the implementation base before PS1.
 
 This plan has no dependency on `feature/project-maintenance` or
 `feature/import-duplicate-skipping`. Their unmerged APIs, documents, and test targets are absent
@@ -753,7 +755,7 @@ Do not place the complete implementation in one PR if its added diff can exceed 
 
 | Phase | Result | Dependency | Expected changed lines | Split reason | Status |
 | --- | --- | --- | ---: | --- | --- |
-| PS1 | Stack schema, store, and application operations | Source audit | 1300-1850 | Keep persistent invariants in one reviewed unit. | planned |
+| PS1 | Stack schema, store, and application operations | Source audit | 1300-1850 | Keep persistent invariants in one reviewed unit. | complete |
 | PS2A | Atomic element sync and stack-aware project deletion | PS1 | 1200-1850 | Main needs a complete sync transaction and focused owner restore. | planned |
 | PS2B | Migration, package preservation, and diagnostics | PS1 | 750-1250 | Keep format and package evidence separate from deletion changes. | planned |
 | PS3 | Filter-first fragments, covers, and collapsed display reads | PS1 | 1200-1800 | Isolate query semantics from expansion and UI. | planned |
@@ -770,6 +772,37 @@ No phase is complete because a type compiles or a constructor succeeds.
 PS1 through PS6, including all PS2 and PS5 sub-phases, must not expose an incomplete stack feature
 in the production UI.
 PS7 and PS8 form one product delivery: do not release a build with a layout that ignores stacks.
+
+### 7.1 Pull request delivery
+
+The user selected five sequential pull requests on 2026-11-11.
+The twelve phases remain the implementation and verification units. They do not require twelve PRs.
+Keep a focused, tested commit for each phase. Use functional commit and PR titles without phase IDs.
+Put the phase IDs and this plan link in the PR body's Plan section.
+
+| PR | Phases | Review scope | Estimated changed lines |
+| --- | --- | --- | ---: |
+| 1 | PS1, PS2A, PS2B | Stack persistence, atomic deletion, compatibility, and packaging | 3250-4950 |
+| 2 | PS3, PS4 | Filter-first fragments, temporary covers, expansion, and paging | 2300-3550 |
+| 3 | PS5A | Display models and complete query publication | 800-1300 |
+| 4 | PS5B, PS5C, PS6 | Commands, save and close handling, selection, and editor navigation | 2600-4300 |
+| 5 | PS7, PS8, PS9 | All Library layouts, localization, and integrated acceptance | 2750-4650 |
+
+The estimates exclude the initial plan-document commit. Include that commit in PR 1.
+Keep PR 1's persistence, deletion repair, and format compatibility together before the first merge.
+Keep all layouts and integrated acceptance together in PR 5 before product release.
+PS1 through PS6 must not expose stack commands or incomplete stack presentation in the production UI.
+
+Use `feature/library-photo-stacking` for PR 1. After each PR merges, create the next functional
+branch from updated main. Open one PR in this series at a time. Search for overlapping work first.
+Use the current alcedo-create-pr skill and its Plan, Why, Changes, and Verification sections.
+Report the targeted test evidence collected during implementation.
+Each PR must stay within CONTRIBUTING.md's limit of 10,000 added lines.
+The 2000 changed-line phase limit still applies separately to each phase.
+
+Use `Refs #486` in partial PRs and commits. Use a closing keyword only when a PR satisfies the
+entire issue. This plan implements only its stacking section. Human authors handle review replies
+and subsequent discussion, as CONTRIBUTING.md requires.
 
 ## 8. Detailed phases
 
@@ -808,10 +841,117 @@ Use ordered IDs as an explicit command, not an editable stored-stack copy.
 - `DuplicateAdditionAndUnchangedCoverPerformNoMembershipChange`: verify returned no-op and stable order.
 
 **Build and run.** Run command group V1 in Section 10. Proposed target: PhotoStackStoreTest.
-**Exit criteria.** [ ] All write invariants pass. [ ] Injected failure changes no rows.
-[ ] No SQL or long-lived connection exists in the service. [ ] Public APIs have Doxygen ownership notes.
+**Exit criteria.** [x] All write invariants pass. [x] Injected failure changes no rows.
+[x] No SQL or long-lived connection exists in the service. [x] Public APIs have Doxygen ownership notes.
 **Expected diff.** 1300-1850 lines.
-**Completion record.** Not started. Fill the Section 12 template here after implementation.
+
+#### PS1 completion record (2026-11-11)
+
+**Status:** complete. Implemented only persisted stacks and application commands.
+Branch: `feature/library-photo-stacking`. Source base: `e59529c66d2d0bfdc53c5c5cf2d88e6e68d9138d`.
+The plan commit is `4830980d`. The implementation and this record follow that commit.
+
+**Changed modules.** Added `PhotoStackChange`, `PhotoStackMove`, two typed table Mappers,
+PhotoStackStore, and PhotoStackService. Storage owns the store. ProjectService creates the service
+for new and loaded projects. The service retains project storage for its callers.
+Database creates the two empty tables and their index with idempotent statements.
+Added PhotoStackStoreTest and stack rules in StorageInvariantsTestSupport.
+Registered the sources, service, and test target in the existing CMake manifests.
+
+**Implemented behavior and selected details.**
+
+- Create, append, remove, ungroup, saved-cover change, adjacent-member move, and ordered ID reads
+  use one connection, database lock, and transaction per operation.
+- Commands deduplicate input IDs by first occurrence. A complete existing stack, repeated additions,
+  an unchanged cover, and a move beyond an endpoint return no changed IDs.
+- Moving selected Files repairs every source in the destination transaction. Cover removal promotes
+  the earliest remaining saved member. A source with fewer than two members dissolves.
+- Removal retains gaps in saved positions. Append uses the largest saved position plus one.
+  Adjacent moves use saved neighbors across those gaps. Position overflow reports an explicit error.
+- Mappers accept focused scalar values and run prepared writes. They do not commit independently.
+  The service generates canonical UUIDs with Qt. Storage checks the UUID text and uniqueness.
+- Validation rejects missing Files, folders, absent or duplicate image bindings, dangling image
+  bindings, invalid covers, unknown stacks, and damaged affected relations before writes.
+- Results contain only affected stack IDs and File IDs. There is no membership cache, editable stack
+  copy, production failure switch, new consistency identifier, or connection retained by the service.
+
+**Primary success call chain:**
+
+```text
+ProjectService::GetPhotoStackService -> explicit command and File IDs
+  -> PhotoStackStore -> operation connection and database lock -> transaction
+  -> validate all targets and affected stacks -> typed Mapper writes and source repair
+  -> commit -> caller-owned changed IDs
+```
+
+**Primary failure call chain:**
+
+```text
+invalid input or destination INSERT constraint failure
+  -> exception -> transaction rollback before releasing the database lock
+  -> unchanged source membership, source cover, dissolved source, and destination rows
+  -> original diagnostic reaches the caller -> reopened project reads the committed prior rows
+```
+
+**Executed evidence.** All six required tests ran through the real application service and project
+storage. The rollback test inserts one destination member before rejecting another. It verifies
+that rollback restores a promoted cover and a dissolved second source, then reopens the project.
+It also verifies that a later valid command succeeds.
+
+| Required test | Target | Result |
+| --- | --- | --- |
+| `CreateStackPersistsMembersOrderAndSelectedCover` | PhotoStackStoreTest | PASS |
+| `MovingSelectedMembersRepairsSourceStacksAtomically` | PhotoStackStoreTest | PASS |
+| `InvalidCoverOrMissingFileLeavesEveryStackUnchanged` | PhotoStackStoreTest | PASS |
+| `FailureAfterSourceRemovalRestoresAllMemberships` | PhotoStackStoreTest | PASS |
+| `CoverAndMemberMovePreserveImageHistoryMarksAndAlbumLinks` | PhotoStackStoreTest | PASS |
+| `DuplicateAdditionAndUnchangedCoverPerformNoMembershipChange` | PhotoStackStoreTest | PASS |
+
+The other eight stack cases verify partial-source selection, removal and position gaps, malformed
+and duplicate IDs, damaged covers, missing bindings and folder targets, position overflow, damaged
+member bindings, and schema constraints. Each successful case checks the stored invariants on reopen.
+The corruption cases check the error and unchanged stack rows, then restore only their test damage.
+The history test compares root and head IDs. It also compares image bindings, ratings, color labels,
+Delete marks, and album links before and after cover and order changes.
+
+**Commands and environment.** Used the existing `win_release` build with tests already enabled.
+This keeps the supported preset and reuses the installed dependencies. No second build tree was made.
+The configured Qt prefix is `C:/Qt/6.12.0/msvc2022_64/lib/cmake`.
+Run from the repository root:
+
+```powershell
+$env:VCVARS_USER_VERSION = '14.44'
+$env:PATH = "$PWD/build/release/vcpkg_installed/x64-windows/debug/bin;$PWD/vcpkg/installed/x64-windows/debug/bin;$PWD/vcpkg/installed/x64-windows/bin;C:/Qt/6.12.0/msvc2022_64/bin;$PWD/build/dependencies/duckdb-v1.5.6;$env:PATH"
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target PhotoStackStoreTest ProjectServiceTest --parallel 4
+ctest --test-dir build/release -N -R '^(PhotoStackStoreTest|ProjectServiceTest)\.'
+ctest --test-dir build/release -j 1 -R '^(PhotoStackStoreTest|ProjectServiceTest)\.' --output-on-failure
+python scripts/check_storage_boundary.py
+git diff --check --ignore-submodules=all
+```
+
+Build and discovery exit codes: 0. Final test exit code: 0.
+Discovered: 22. Passed: 22 (14 stack cases and 8 ProjectService cases). Failed: 0. Skipped: 0.
+Final test duration: 13.82 seconds. Storage boundary check: no findings.
+The first execution passed 20 cases and failed two new test-fixture cases. The fixture now removes
+the dependent index before renaming its table and uses Statement for its expected exception type.
+The final execution above includes both corrected cases. No existing test failed.
+
+**Review and LOC.** The new store has 373 lines. The stack test file has 418 lines.
+The other new C++ files each have at most 55 lines. Code and registration changes total 1151 lines.
+PS1 changed 1272 lines with its original completion record. The existing app test manifest has
+1034 lines; this phase adds only one focused target registration there. It contains no new business
+logic that needs a separate owner. No changed C++ source or header exceeds 1000 lines.
+Public APIs document ownership, transaction scope, synchronous calls, and errors.
+New files were formatted in full. Existing C++ files were formatted only at changed lines.
+The source, test, and documentation terminology searches found no prohibited usage in touched files
+and no prohibited roadmap filename. All changed files use LF.
+
+**Scope and unavailable evidence.** No later phase started. Project version 0.12, old-project
+compatibility validation, package diagnostics, and File-deletion integration remain in PS2A/PS2B.
+Display queries, temporary covers, groups, selection, save tasks, and QML remain in their listed phases.
+No full test suite, Debug build, macOS build, UI check, or performance benchmark ran for PS1.
+There is no unresolved failure in the targeted evidence. Task logs under
+`build/tmp/photo_stacking/` were removed after these results were recorded.
 
 ### PS2A - Atomic element sync and stack-aware project deletion
 

@@ -39,6 +39,8 @@ struct StorageInvariantViolation {
  *   without an error (it checks the parent rules and the materialized head and chain).
  * - File side tables: pipeline JSON, semantic embedding and label, and AI annotation rows
  *   name an existing file element (file removal deletes them in the same operation).
+ * - Photo stacks: members name live Files with image bindings and an existing stack; a stack
+ *   has at least two members, unique nonnegative positions, and a cover in its own membership.
  *
  * The read takes the database lock. Throws std::runtime_error when a statement fails.
  */

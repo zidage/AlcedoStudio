@@ -75,6 +75,25 @@ auto InvariantRules() -> std::vector<InvariantRule> {
        "SELECT 'folder ' || fc.folder_id || ' element ' || fc.element_id FROM FolderContent fc "
        "WHERE fc.element_id NOT IN (SELECT id FROM Element)"},
 
+      // Photo stacks.
+      {"stack member names a live File with an image binding",
+       std::format("SELECT 'file ' || m.file_id FROM PhotoStackMember m WHERE NOT EXISTS "
+                   "(SELECT 1 FROM Element e JOIN FileImage fi ON fi.file_id = e.id "
+                   "LEFT JOIN Image i ON i.id = fi.image_id WHERE e.id = m.file_id AND e.type = {} "
+                   "GROUP BY e.id HAVING COUNT(*) = 1 AND COUNT(i.id) = 1)",
+                   FileType())},
+      {"stack member names an existing stack",
+       "SELECT 'file ' || m.file_id FROM PhotoStackMember m WHERE NOT EXISTS "
+       "(SELECT 1 FROM PhotoStack s WHERE s.stack_id = m.stack_id)"},
+      {"stack has at least two members and unique nonnegative positions",
+       "SELECT 'stack ' || s.stack_id FROM PhotoStack s LEFT JOIN PhotoStackMember m "
+       "ON m.stack_id = s.stack_id GROUP BY s.stack_id HAVING COUNT(m.file_id) < 2 "
+       "OR COUNT(DISTINCT m.member_order) <> COUNT(m.file_id) OR MIN(m.member_order) < 0"},
+      {"stack cover belongs to its membership",
+       "SELECT 'stack ' || s.stack_id FROM PhotoStack s WHERE NOT EXISTS "
+       "(SELECT 1 FROM PhotoStackMember m WHERE m.stack_id = s.stack_id "
+       "AND m.file_id = s.cover_file_id)"},
+
       // Edit history.
       {"file has a history root",
        std::format("SELECT 'file ' || e.id FROM Element e WHERE e.type = {} AND e.id NOT IN "
