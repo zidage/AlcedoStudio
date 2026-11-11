@@ -154,21 +154,40 @@ auto SourceStacks(duckdb_connection conn, std::span<const sl_element_id_t> ids)
   return result;
 }
 
-/// Include each affected stack and File once, before a membership may disappear.
-void RecordChange(duckdb_connection conn, const std::string& id, PhotoStackChange& change) {
-  if (std::find(change.changed_stack_ids.begin(), change.changed_stack_ids.end(), id) !=
-      change.changed_stack_ids.end()) {
-    return;
+/// Own one command's result and deduplication indices. Each ID is inserted once, without
+/// rebuilding an index of previous output. No connection or live stack state is retained.
+class PhotoStackChangeBuilder {
+ public:
+  explicit PhotoStackChangeBuilder(std::string stack_id = {}) {
+    change_.stack_id = std::move(stack_id);
   }
-  change.changed_stack_ids.push_back(id);
-  std::unordered_set<sl_element_id_t> seen(change.changed_file_ids.begin(),
-                                           change.changed_file_ids.end());
-  for (const auto file : MemberIds(conn, id)) {
-    if (seen.insert(file).second) {
-      change.changed_file_ids.push_back(file);
+
+  /// Capture affected saved members before a membership may disappear, in first-use order.
+  void RecordStack(duckdb_connection conn, const std::string& id) {
+    if (!stack_ids_.insert(id).second) {
+      return;
+    }
+    change_.changed_stack_ids.push_back(id);
+    for (const auto file : MemberIds(conn, id)) {
+      RecordFile(file);
     }
   }
-}
+
+  /// Include an explicit new or moved File once in the command's ordered output.
+  void RecordFile(sl_element_id_t file) {
+    if (file_ids_.insert(file).second) {
+      change_.changed_file_ids.push_back(file);
+    }
+  }
+
+  /// Transfer the completed result to the transaction caller; call only once per command.
+  auto Finish() -> PhotoStackChange { return std::move(change_); }
+
+ private:
+  PhotoStackChange                    change_;
+  std::unordered_set<std::string>     stack_ids_;
+  std::unordered_set<sl_element_id_t> file_ids_;
+};
 
 /// Repair a source after explicit removal, within the caller's still-uncommitted transaction.
 void RepairStack(duckdb_connection& conn, const std::string& id) {
@@ -243,9 +262,9 @@ auto PhotoStackStore::CreateStack(const std::string&               stack_id,
         return PhotoStackChange{.stack_id = sources.front()};
       }
     }
-    PhotoStackChange change{.stack_id = stack_id};
+    PhotoStackChangeBuilder change(stack_id);
     for (const auto& source : sources) {
-      RecordChange(conn, source, change);
+      change.RecordStack(conn, source);
     }
     Detach(conn, ids, sources);
     PhotoStackMapper(conn).Insert(stack_id, cover_file_id);
@@ -253,8 +272,8 @@ auto PhotoStackStore::CreateStack(const std::string&               stack_id,
     for (std::size_t i = 0; i < ids.size(); ++i) {
       members.Insert(ids[i], stack_id, static_cast<std::int64_t>(i));
     }
-    RecordChange(conn, stack_id, change);
-    return change;
+    change.RecordStack(conn, stack_id);
+    return change.Finish();
   });
 }
 
@@ -267,9 +286,8 @@ auto PhotoStackStore::AddMembers(const std::string&               stack_id,
     const auto                                current = MemberIds(conn, stack_id);
     const std::unordered_set<sl_element_id_t> current_ids(current.begin(), current.end());
     std::erase_if(ids, [&](auto id) { return current_ids.contains(id); });
-    PhotoStackChange change{.stack_id = stack_id};
     if (ids.empty()) {
-      return change;
+      return PhotoStackChange{.stack_id = stack_id};
     }
     const auto sources = SourceStacks(conn, ids);
     const auto last =
@@ -279,22 +297,19 @@ auto PhotoStackStore::AddMembers(const std::string&               stack_id,
     if (ids.size() > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max() - last)) {
       throw std::invalid_argument("Photo stack member order exceeds the supported range");
     }
-    RecordChange(conn, stack_id, change);
+    PhotoStackChangeBuilder change(stack_id);
+    change.RecordStack(conn, stack_id);
     for (const auto& source : sources) {
-      RecordChange(conn, source, change);
+      change.RecordStack(conn, source);
     }
     Detach(conn, ids, sources);
     PhotoStackMemberMapper              members(conn);
     auto                                order = last;
-    std::unordered_set<sl_element_id_t> seen(change.changed_file_ids.begin(),
-                                             change.changed_file_ids.end());
     for (const auto id : ids) {
       members.Insert(id, stack_id, ++order);
-      if (seen.insert(id).second) {
-        change.changed_file_ids.push_back(id);
-      }
+      change.RecordFile(id);
     }
-    return change;
+    return change.Finish();
   });
 }
 
@@ -303,23 +318,23 @@ auto PhotoStackStore::RemoveMembers(std::span<const sl_element_id_t> file_ids) -
     const auto ids = UniqueFiles(file_ids);
     ValidateFiles(conn, ids);
     const auto       sources = SourceStacks(conn, ids);
-    PhotoStackChange change;
+    PhotoStackChangeBuilder change;
     for (const auto& source : sources) {
-      RecordChange(conn, source, change);
+      change.RecordStack(conn, source);
     }
     Detach(conn, ids, sources);
-    return change;
+    return change.Finish();
   });
 }
 
 auto PhotoStackStore::UngroupStack(const std::string& stack_id) -> PhotoStackChange {
   return InTransaction(database_, [&](duckdb_connection& conn) {
     ValidateStack(conn, stack_id);
-    PhotoStackChange change{.stack_id = stack_id};
-    RecordChange(conn, stack_id, change);
+    PhotoStackChangeBuilder change(stack_id);
+    change.RecordStack(conn, stack_id);
     PhotoStackMemberMapper(conn).RemoveStack(stack_id);
     PhotoStackMapper(conn).Remove(stack_id);
-    return change;
+    return change.Finish();
   });
 }
 
@@ -331,12 +346,12 @@ auto PhotoStackStore::SetCover(const std::string& stack_id, sl_element_id_t file
     if (std::find(ids.begin(), ids.end(), file_id) == ids.end()) {
       throw std::invalid_argument("Photo stack cover must belong to that stack");
     }
-    PhotoStackChange change{.stack_id = stack_id};
+    PhotoStackChangeBuilder change(stack_id);
     if (cover != file_id) {
-      RecordChange(conn, stack_id, change);
+      change.RecordStack(conn, stack_id);
       PhotoStackMapper(conn).SetCover(stack_id, file_id);
     }
-    return change;
+    return change.Finish();
   });
 }
 
@@ -348,18 +363,18 @@ auto PhotoStackStore::MoveMember(sl_element_id_t file_id, PhotoStackMove directi
     }
     const std::array ids{file_id};
     ValidateFiles(conn, ids);
-    const auto       sources = SourceStacks(conn, ids);
-    PhotoStackChange change;
+    const auto sources = SourceStacks(conn, ids);
     if (sources.empty()) {
-      return change;
+      return PhotoStackChange{};
     }
-    change.stack_id    = sources.front();
-    const auto ordered = MemberIds(conn, change.stack_id);
+    const auto&             stack_id = sources.front();
+    PhotoStackChangeBuilder change(stack_id);
+    const auto              ordered = MemberIds(conn, stack_id);
     auto       index = static_cast<std::size_t>(std::find(ordered.begin(), ordered.end(), file_id) -
                                                 ordered.begin());
     if ((direction == PhotoStackMove::kEarlier && index == 0) ||
         (direction == PhotoStackMove::kLater && index + 1 == ordered.size())) {
-      return change;
+      return change.Finish();
     }
     const auto neighbor = ordered[direction == PhotoStackMove::kEarlier ? index - 1 : index + 1];
     const auto order_of = [&](sl_element_id_t id) {
@@ -370,13 +385,13 @@ auto PhotoStackStore::MoveMember(sl_element_id_t file_id, PhotoStackMove directi
     };
     const auto first_order  = order_of(file_id);
     const auto second_order = order_of(neighbor);
-    RecordChange(conn, change.stack_id, change);
+    change.RecordStack(conn, stack_id);
     const std::array       pair{file_id, neighbor};
     PhotoStackMemberMapper members(conn);
     members.RemoveFiles(pair);
-    members.Insert(file_id, change.stack_id, second_order);
-    members.Insert(neighbor, change.stack_id, first_order);
-    return change;
+    members.Insert(file_id, stack_id, second_order);
+    members.Insert(neighbor, stack_id, first_order);
+    return change.Finish();
   });
 }
 

@@ -3,8 +3,9 @@
 Date: 2026-11-11
 
 Status: PS1, PS2A, and PS2B complete (2026-11-11). All other phases remain planned.
-The latest Windows Release verification passed 93 targeted tests, skipped three, and failed none.
-One GPU rendering comparison was excluded. See the PS2A and PS2B completion records.
+The latest Windows Release verification has 113 distinct passes, three skips, and no unresolved
+test failures after fixture preparation and reruns. One GPU rendering comparison was excluded.
+See the PS1 and PS2A review-fix records and the original PS2B completion record.
 
 Feature request: [#486](https://github.com/zidage/AlcedoStudio/issues/486), stacking section only.
 
@@ -954,6 +955,31 @@ No full test suite, Debug build, macOS build, UI check, or performance benchmark
 There is no unresolved failure in the targeted evidence. Task logs under
 `build/tmp/photo_stacking/` were removed after these results were recorded.
 
+#### PS1 review fixes (2026-11-11)
+
+**Status:** complete. Removed repeated indexing of accumulated change output within PR 1.
+Base implementation: `a5503149`; review-fix source base: `a4cd2689`.
+
+PhotoStackChangeBuilder owns one command's new result and its temporary stack/File ID indices.
+Each index grows with the result and ends with the command. Create, add, remove, ungroup, cover,
+and adjacent-move operations retain their first-use result order and existing transaction scope.
+There is no new stored stack representation or retained connection.
+
+Success: command -> store transaction -> one change builder -> affected writes -> commit -> result.
+Failure: validation or SQL error -> rollback -> discard the local builder -> original diagnostic.
+
+`ManySourceStacksReportEachAffectedStackAndFileOnce` passed with 128 two-member source stacks.
+It checks the exact unique affected stack/File sets after regrouping, duplicate command inputs,
+the appended member order, and the saved result after reopen. All 15 PhotoStackStoreTest cases
+passed, including existing no-op, rollback, cover, order, metadata, and history assertions.
+The PS2A review-fix record below contains the executed commands and combined totals.
+
+Source review confirms that command bookkeeping no longer scans or re-indexes growing prior
+output for each stack. This is expected linear hash-index work over the reported IDs. Per-stack
+SQL validation and repair remain unchanged. No command-throughput benchmark or UI measurement ran.
+PhotoStackStore is 435 lines and its test file is 472 lines. No responsibility split is needed.
+All PS1 exit criteria remain satisfied. PS3 and later phases are unchanged.
+
 ### PS2A - Atomic element sync and stack-aware project deletion
 
 **Objective and prerequisites.** Make project File deletion and stack repair one database change.
@@ -1005,7 +1031,7 @@ Build SleeveServiceTest and ImportServiceTest, then run their direct filters fro
 
 **Status:** complete. Atomic element sync, stack-aware File removal, and failed-sync recovery.
 Branch: `feature/library-photo-stacking`. Implementation base: PS1 commit `a5503149`.
-PS2A is committed as `6261e0a7`. PS2B follows in a separate functional commit. No PR was opened.
+PS2A is committed as `6261e0a7`; PS2B is committed as `a4cd2689`. No PR was opened.
 
 **Changed modules and selected details.** ElementStore owns one transaction over additions,
 modifications, and deletions. Its existing multi-row insertion and folder-delta helpers remain in use.
@@ -1125,6 +1151,90 @@ absent: `DeleteImages_RemovesImageAndRelatedRows`,
 pixel-hash comparison is unrelated to these persistence changes. No full suite, Debug or macOS
 build, manual UI check, sanitizer, or performance benchmark ran. This phase adds no UI or layout.
 Task evidence under `build/tmp/photo_stack_first_pr/` was removed after recording the final results.
+
+#### PS2A review fixes (2026-11-11)
+
+**Status:** complete. Addressed the PR 1 review findings on folder rebuild cost, failed rename/move
+coverage, and the stale removal comment. The LF-only prerequisite commit is `e7666970`.
+It converts the two mixed-ending SleeveFolder files before their content changes.
+
+**Owner operation and call chains.** SleeveFolder::RestoreContents rebuilds the existing name map
+and ordered child IDs in one pass, with reserved capacity and hash lookups. It resolves stable
+owner-held children under the FileSystem lock, preserves child references and sync flags, clears
+pending membership/filter indices, and rejects invalid children or conflicting names. FileSystem
+uses it after all affected scalar fields have been restored. The existing restoration-error policy
+still prevents service access when owner restoration fails. The Element-row removal comment now
+names SyncLocked, ApplyElementChanges, and the transaction-local RemoveElementRows helper.
+
+Success: Write/Sync -> atomic store commit -> synced flags and garbage collection.
+Failure: SQL error -> rollback -> restore affected scalar fields -> RestoreContents -> failed result;
+explicit retry starts from the restored identities. Restoration error -> retained diagnostics -> reopen.
+
+| Added test | Target | Final result |
+| --- | --- | --- |
+| `RestoresOrderNamesAndFlagsWithoutChangingChildReferences` | SleeveFolderRestoreTest | PASS; order, duplicate IDs, names, references, flags, pending changes, and filters |
+| `EmptyCommittedContentClearsPendingMembershipAndFilterIndices` | SleeveFolderRestoreTest | PASS |
+| `InvalidChildrenAndNameConflictsReportRestorationErrors` | SleeveFolderRestoreTest | PASS; null, wrong ID, deleted child, name conflict, and explicit successful restore |
+| `LargeFoldersResolveEachInputOnceAndKeepExactMembership` | SleeveFolderRestoreTest | PASS; 2000, 8000, and 32000 children, exact names/order/references/flags, one resolution per input |
+| `FailedFolderRenameRestoresNamesPathsAndOwnersBeforeExplicitRetry` | PhotoStackLifecycleTest | PASS; real SQL failure, exact stored rows, same parents/children, old paths, cleared changes, retry, and reopen |
+| `FailedFolderMoveRestoresBothParentsPathsAndOwnersBeforeRetry` | PhotoStackLifecycleTest | PASS; real FK failure, both parent maps, same identities, paths, references, retry, and reopen |
+
+The standalone owner test needs no ProjectService fixture. Rename/move cases use the existing
+six-photo real-project fixture and test-only SQL constraints. Existing lifecycle/package tests
+continue to exercise the production recovery and save paths.
+
+**Executed commands.** Used the existing win_release tree, Qt 6.12.0, MSVC 14.44, and the same
+runtime PATH/QT_QPA_PLATFORM setup as the original PS2A record. All build exits were 0.
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target SleeveFolderRestoreTest PhotoStackStoreTest PhotoStackLifecycleTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target SleeveFolderRestoreTest PhotoStackStoreTest PhotoStackLifecycleTest SleeveFSTest SleeveServiceTest ImportServiceTest AlbumBackendImageDeleteTest ProjectCompatibilityTest StorageMaintenanceTest ProjectServiceTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target PhotoStackLifecycleTest --parallel 4
+$newCases = '^SleeveFolderRestoreTest\.|ManySourceStacksReportEachAffectedStackAndFileOnce|FailedFolderRenameRestoresNamesPathsAndOwnersBeforeExplicitRetry|FailedFolderMoveRestoresBothParentsPathsAndOwnersBeforeRetry'
+ctest --test-dir build/release -j 1 -R $newCases --output-on-failure
+$testPattern = '^(SleeveFolderRestoreTest|SleeveFSTest|PhotoStackStoreTest|PhotoStackLifecycleTest|ProjectCompatibilityTest|StorageMaintenanceTest|ProjectServiceTest|AlbumBackendImageDeleteTest)\.'
+ctest --test-dir build/release -N -R $testPattern -E 'ProjectWrittenByCurrentMainOpensAndRendersUnchanged'
+ctest --test-dir build/release -j 1 -R $testPattern -E 'ProjectWrittenByCurrentMainOpensAndRendersUnchanged' --output-on-failure --output-junit "$PWD/build/tmp/photo_stack_review_fixes/tests-targeted.xml"
+& ./build/release/alcedo_studio/tests/app/SleeveServiceTest_runtime/SleeveServiceTest.exe '--gtest_filter=SleeveServiceTests.*:ProjectVersionTests.*'
+& ./build/release/alcedo_studio/tests/app/ImportServiceTest_runtime/ImportServiceTest.exe '--gtest_filter=ImportServiceTests.ImportEmptyTest:ImportServiceTests.ImportWithNonExistentFiles:ImportServiceTests.ImportedElementNameMatchesFileName:ImportServiceTests.ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoint'
+ctest --test-dir build/release -j 1 -R '^SleeveFSTest\.' --output-on-failure
+```
+
+**Results and fixture corrections.** The first new-case run passed four owner tests and failed
+three reopen steps: the new test code still retained Sleeve/Pipeline services from the old project.
+Releasing those local holders before reopen corrected the fixtures. The final seven-case run
+passed in 7.10 seconds. No production behavior was changed to satisfy those reopen checks.
+
+The broader run discovered 83 cases: 70 passed, ten failed, and three skipped in 95.89 seconds.
+All ten failures were existing SleeveFSTest cases whose shared TEST_DB_PATH parent was absent.
+Reported this clean-checkout dependency in [#827](https://github.com/zidage/AlcedoStudio/issues/827).
+A temporary junction routed that expected resource directory into
+`build/tmp/photo_stack_review_fixes/legacy_fs/`. The unchanged 13-case FileSystem suite then passed
+in 1.69 seconds. The junction was removed immediately. No legacy test source or production path
+was changed. The direct Sleeve filter passed 29 cases in 3.872 seconds; Import passed four in 0.698.
+
+Final distinct results are 80 CTest passes plus 33 direct passes: **113 passed, three skipped,
+zero unresolved failures**. Counts by target: owner 4, FileSystem 13, stack store 15,
+lifecycle/package 20, compatibility 5, maintenance 6, ProjectService 8, deletion caller 9,
+Sleeve 29, and Import 4. The three missing-private-RAW skips and excluded GPU pixel-hash case
+remain the same as in the original record. The existing legacy suite still needs fixture preparation
+until #827 is resolved.
+
+**Measurements and review.** Folder restore took 309, 1684, and 9661 microseconds for 2000, 8000,
+and 32000 children in the executed unit case. These are observations without a timing threshold;
+they exclude database reads and do not establish an application latency target or old/new ratio.
+The source has no repeated full child-ID scan in restoration. No command-throughput, UI, memory,
+sanitizer, Debug/macOS, or full-suite run was made.
+
+Content-change LOC (total / changed): SleeveFolder header 114/10, implementation 319/27,
+FileSystem 703/7, ElementStore 1372/5, PhotoStackStore 435/105, lifecycle tests 290/95,
+store tests 472/55, sleeve test manifest 124/7, and the new owner test 130/130.
+ElementStore's change is documentation only; its existing database-reference ownership is unchanged.
+The new operation remains in the folder owner, and the new builder owns only command output and
+its short-lived indices. No additional owner copy, connection, or consistency mechanism was added.
+Changed-line formatting, LF, whitespace, storage boundaries, and terminology checks passed.
+All PS1/PS2A completion criteria remain satisfied. No PS3 or later behavior was implemented.
+Task logs and fixture files under `build/tmp/photo_stack_review_fixes/` were removed after recording.
 
 ### PS2B - Project compatibility, packaging, and diagnostics
 
@@ -1246,8 +1356,8 @@ ProjectService version assertion still expected 0.11; it now checks the selected
 Both corrected cases passed in the final 60-pass, three-skip CTest run. No unresolved failure
 remains in the executed targeted evidence. The import fixture issue is recorded as #826 under PS2A.
 
-**Ownership, file size, and review.** PS2A and PS2B together change about 1700 lines, including tests
-and these records. This combined count is below the 2000-line limit for either individual phase.
+**Ownership, file size, and review of the initial delivery.** PS2A and PS2B together changed about
+1700 lines, including tests and those records. That count is below the limit for either phase.
 The persistence store, FileSystem owner, application orchestration, and package owner retain their
 existing boundaries. New code adds no retained connection, owner mirror, or speculative race state.
 
@@ -1300,6 +1410,11 @@ the three missing-sample skips and excluded GPU rendering comparison. No full su
 build, manual layout/theme/language check, sanitizer, or resource/performance measurement ran.
 PS3 and later work is unchanged. No production Library stack command or presentation is exposed.
 Task logs under `build/tmp/photo_stack_first_pr/` were removed after results were recorded.
+
+**PR 1 review-fix verification (2026-11-11).** Rebuilt and reran all five selected compatibility
+cases, six maintenance cases, eight ProjectService cases, and nine package cases successfully.
+The PS2A review-fix record contains the exact commands, fixture preparation, and combined results.
+This follow-up changes no version bound, persisted schema, package operation, or PS2B format identity.
 
 ### PS3 - Matching fragments and temporary covers
 

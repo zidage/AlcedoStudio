@@ -191,5 +191,100 @@ TEST_F(PhotoStackLifecycleTest, FailedAlbumUnlinkRestoresTheSameFolderAndKeepsTh
   EXPECT_EQ(Stacks().ReadMemberIds(stack), Files({0, 1, 2}));
 }
 
+TEST_F(PhotoStackLifecycleTest, FailedFolderRenameRestoresNamesPathsAndOwnersBeforeExplicitRetry) {
+  Create({0, 1, 2}, 0);
+  auto       service = project->GetSleeveService();
+  const auto root    = service->ResolveFolder(L"/");
+  const auto parent  = service->CreateFolder(L"/", L"Parent").first;
+  const auto album   = service->CreateFolder(L"/Parent", L"Album").first;
+  const auto child   = service->CreateFolder(L"/Parent/Album", L"Child").first;
+  ASSERT_TRUE(service->LinkFileToFolder(files[0], album->element_id_).success_);
+  ASSERT_EQ(service->ResolveFolder(L"/Parent/Album/Child"), child);
+  const auto before     = OrganizationRows();
+  const auto stacks     = StackRows();
+  const auto references = album->ref_count_;
+  Execute("CREATE TABLE ProtectedRename (id BIGINT REFERENCES Element(id))");
+  Execute(std::format("INSERT INTO ProtectedRename VALUES ({})", album->element_id_));
+  const auto failed = service->RenameFolder(L"/Parent/Album", L"Renamed");
+  ASSERT_FALSE(failed.success_) << failed.message_;
+  EXPECT_FALSE(failed.message_.empty());
+  EXPECT_EQ(failed.elements_synced_, 0);
+  EXPECT_EQ(OrganizationRows(), before);
+  EXPECT_EQ(service->ResolveFolder(L"/"), root);
+  EXPECT_EQ(service->ResolveFolder(L"/Parent"), parent);
+  EXPECT_EQ(service->ResolveFolder(L"/Parent/Album"), album);
+  EXPECT_EQ(service->ResolveFolder(L"/Parent/Album/Child"), child);
+  EXPECT_EQ(service->ResolveFile(L"/Parent/Album/stack0.jpg")->element_id_, files[0]);
+  EXPECT_THROW(service->ResolveFolder(L"/Parent/Renamed"), std::runtime_error);
+  EXPECT_FALSE(parent->Contains(L"Renamed"));
+  EXPECT_EQ(album->element_name_, L"Album");
+  EXPECT_EQ(album->ref_count_, references);
+  for (const auto& folder : {root, parent, album}) {
+    EXPECT_EQ(folder->sync_flag_, SyncFlag::SYNCED);
+    EXPECT_TRUE(folder->ContentAddedSinceSync().empty());
+    EXPECT_TRUE(folder->ContentRemovedSinceSync().empty());
+  }
+  Execute("DROP TABLE ProtectedRename");
+  ASSERT_TRUE(service->RenameFolder(L"/Parent/Album", L"Renamed").success_);
+  EXPECT_EQ(service->ResolveFolder(L"/Parent/Renamed"), album);
+  EXPECT_EQ(service->ResolveFolder(L"/Parent/Renamed/Child"), child);
+  EXPECT_THROW(service->ResolveFolder(L"/Parent/Album"), std::runtime_error);
+  EXPECT_EQ(StackRows(), stacks);
+  service.reset();
+  Reopen();
+  EXPECT_EQ(project->GetSleeveService()->ResolveFolder(L"/Parent/Renamed")->element_id_,
+            album->element_id_);
+  EXPECT_EQ(StackRows(), stacks);
+}
+
+TEST_F(PhotoStackLifecycleTest, FailedFolderMoveRestoresBothParentsPathsAndOwnersBeforeRetry) {
+  Create({0, 1, 2}, 0);
+  auto       service     = project->GetSleeveService();
+  const auto source      = service->CreateFolder(L"/", L"Source").first;
+  const auto destination = service->CreateFolder(L"/", L"Destination").first;
+  const auto album       = service->CreateFolder(L"/Source", L"Album").first;
+  const auto child       = service->CreateFolder(L"/Source/Album", L"Child").first;
+  ASSERT_TRUE(service->LinkFileToFolder(files[0], album->element_id_).success_);
+  ASSERT_EQ(service->ResolveFolder(L"/Source/Album/Child"), child);
+  const auto before     = OrganizationRows();
+  const auto stacks     = StackRows();
+  const auto references = album->ref_count_;
+  Execute(
+      "CREATE TABLE ProtectedMove (folder_id BIGINT, element_id BIGINT, "
+      "FOREIGN KEY(folder_id, element_id) REFERENCES FolderContent(folder_id, element_id))");
+  Execute(std::format("INSERT INTO ProtectedMove VALUES ({}, {})", source->element_id_,
+                      album->element_id_));
+  const auto failed = service->MoveFolder(L"/Source/Album", L"/Destination");
+  ASSERT_FALSE(failed.success_) << failed.message_;
+  EXPECT_FALSE(failed.message_.empty());
+  EXPECT_EQ(failed.elements_synced_, 0);
+  EXPECT_EQ(OrganizationRows(), before);
+  EXPECT_EQ(service->ResolveFolder(L"/Source"), source);
+  EXPECT_EQ(service->ResolveFolder(L"/Destination"), destination);
+  EXPECT_EQ(service->ResolveFolder(L"/Source/Album"), album);
+  EXPECT_EQ(service->ResolveFolder(L"/Source/Album/Child"), child);
+  EXPECT_EQ(service->ResolveFile(L"/Source/Album/stack0.jpg")->element_id_, files[0]);
+  EXPECT_THROW(service->ResolveFolder(L"/Destination/Album"), std::runtime_error);
+  EXPECT_TRUE(source->ContainsElementId(album->element_id_));
+  EXPECT_FALSE(destination->ContainsElementId(album->element_id_));
+  EXPECT_EQ(album->ref_count_, references);
+  for (const auto& folder : {source, destination, album}) {
+    EXPECT_EQ(folder->sync_flag_, SyncFlag::SYNCED);
+    EXPECT_TRUE(folder->ContentAddedSinceSync().empty());
+    EXPECT_TRUE(folder->ContentRemovedSinceSync().empty());
+  }
+  Execute("DROP TABLE ProtectedMove");
+  ASSERT_TRUE(service->MoveFolder(L"/Source/Album", L"/Destination").success_);
+  EXPECT_EQ(service->ResolveFolder(L"/Destination/Album"), album);
+  EXPECT_EQ(service->ResolveFolder(L"/Destination/Album/Child"), child);
+  EXPECT_THROW(service->ResolveFolder(L"/Source/Album"), std::runtime_error);
+  EXPECT_EQ(StackRows(), stacks);
+  service.reset();
+  Reopen();
+  EXPECT_EQ(project->GetSleeveService()->ResolveFolder(L"/Destination/Album")->element_id_,
+            album->element_id_);
+  EXPECT_EQ(StackRows(), stacks);
+}
+
 }  // namespace
 }  // namespace alcedo

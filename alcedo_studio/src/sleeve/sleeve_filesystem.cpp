@@ -656,11 +656,8 @@ void FileSystem::RestoreAfterFailedSync(std::span<const sl_element_id_t> affecte
     }
   }
   for (const auto& folder : folders) {
-    folder->Clear();
-    for (const auto child_id : store.GetFolderContent(folder->element_id_)) {
-      folder->AddElementToMap(Get(child_id), false, false);
-    }
-    folder->MarkContentSynced();
+    folder->RestoreContents(store.GetFolderContent(folder->element_id_),
+                            [this](sl_element_id_t id) { return Get(id); });
   }
 }
 

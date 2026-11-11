@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -14,6 +15,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "app/photo_stack_service.hpp"
@@ -144,6 +146,59 @@ TEST_F(PhotoStackStoreTest, CreateStackPersistsMembersOrderAndSelectedCover) {
   EXPECT_EQ(Stacks().ReadMemberIds(stack), Files({2, 0, 1}));
   EXPECT_EQ(Cover(stack), files[0]);
   EXPECT_EQ(StackRows(), rows);
+}
+
+TEST_F(PhotoStackStoreTest, ManySourceStacksReportEachAffectedStackAndFileOnce) {
+  constexpr std::size_t                                stack_count = 128;
+  std::vector<library_search_test::SyntheticImageSpec> specs;
+  for (std::size_t i = 0; i < stack_count * 2; ++i) {
+    specs.push_back({.file_name_   = std::format(L"many{}.jpg", i),
+                     .image_path_  = std::format(L"D:/photos/many{}.jpg", i),
+                     .is_raw_file_ = false});
+  }
+  const auto added = library_search_test::SyntheticLibraryBuilder(*project).AddFiles(specs);
+  ASSERT_EQ(added.size(), stack_count * 2);
+  std::unordered_set<std::string> expected_stacks;
+  std::vector<sl_element_id_t>    selected;
+  std::vector<sl_element_id_t>    remaining;
+  {
+    PipelineMgmtService pipelines(project->GetStorage());
+    for (std::size_t i = 0; i < added.size(); ++i) {
+      pipelines.InitializeImageRoot(added[i], CreateDefaultPipelineDocument(), nullptr);
+    }
+  }
+  for (std::size_t i = 0; i < added.size(); i += 2) {
+    const std::array pair{added[i], added[i + 1]};
+    expected_stacks.insert(Stacks().CreateStack(pair, pair[0]).stack_id);
+    selected.push_back(pair[0]);
+    remaining.push_back(pair[1]);
+  }
+  // Duplicate command inputs must not duplicate persisted membership or reported changes.
+  auto targets = selected;
+  targets.insert(targets.end(), selected.begin(), selected.end());
+  const auto change = Stacks().CreateStack(targets, selected.front());
+  expected_stacks.insert(change.stack_id);
+  EXPECT_EQ(change.changed_stack_ids.size(), expected_stacks.size());
+  EXPECT_EQ((std::unordered_set<std::string>(change.changed_stack_ids.begin(),
+                                             change.changed_stack_ids.end())),
+            expected_stacks);
+  const std::unordered_set<sl_element_id_t> expected_files(added.begin(), added.end());
+  EXPECT_EQ(change.changed_file_ids.size(), expected_files.size());
+  EXPECT_EQ((std::unordered_set<sl_element_id_t>(change.changed_file_ids.begin(),
+                                                 change.changed_file_ids.end())),
+            expected_files);
+  EXPECT_EQ(Stacks().ReadMemberIds(change.stack_id), selected);
+  const auto appended = Stacks().AddMembers(change.stack_id, added);
+  EXPECT_EQ(appended.changed_stack_ids, (std::vector<std::string>{change.stack_id}));
+  EXPECT_EQ(appended.changed_file_ids.size(), expected_files.size());
+  EXPECT_EQ((std::unordered_set<sl_element_id_t>(appended.changed_file_ids.begin(),
+                                                 appended.changed_file_ids.end())),
+            expected_files);
+  auto order = selected;
+  order.insert(order.end(), remaining.begin(), remaining.end());
+  EXPECT_EQ(Stacks().ReadMemberIds(change.stack_id), order);
+  Reopen();
+  EXPECT_EQ(Stacks().ReadMemberIds(change.stack_id), order);
 }
 
 TEST_F(PhotoStackStoreTest, MovingSelectedMembersRepairsSourceStacksAtomically) {

@@ -876,8 +876,9 @@ auto ElementStore::GetFolderContent(const sl_element_id_t folder_id)
  * Low-level row delete: removes the Element row only. It does NOT cascade
  * AI / semantic / pipeline / file-binding rows — that orchestration
  * lives at the service layer (SleeveServiceImpl::DeleteElement flows through
- * Write -> Sync -> RemoveElements / RemoveElement(shared_ptr), which call
- * DeleteSemanticAndAiRowsForFiles on the same connection). Keep this primitive
+ * Write -> SyncLocked -> ApplyElementChanges -> RemoveElementRows; standalone full removal
+ * also uses RemoveElementRows, including stack repair and DeleteSemanticAndAiRowsForFiles
+ * on the same transaction connection). Keep this primitive
  * a pure row delete so the storage-controller layer does not reach back up
  * into element-fetch / cascade orchestration.
  *

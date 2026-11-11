@@ -5,9 +5,11 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -56,6 +58,14 @@ class SleeveFolder : public SleeveElement {
   ///                     from its existing `FolderContent` row (loading the folder).
   void AddElementToMap(const std::shared_ptr<SleeveElement> element, bool change_sync,
                        bool increment_ref_count);
+  /// Restore committed membership in input order, without changing child reference counts or
+  /// sync flags. The caller holds the FileSystem lock; resolve returns its stable, owner-held
+  /// child for each ID. Repeated IDs are ignored. Pending changes and filter indices are cleared.
+  /// Throws on invalid children, conflicting names, or read failure; the caller must prevent
+  /// access to the owner until restoration succeeds or the project is reopened.
+  void RestoreContents(
+      std::span<const sl_element_id_t>                                      child_ids,
+      const std::function<std::shared_ptr<SleeveElement>(sl_element_id_t)>& resolve);
   void ReplaceChild(const sl_element_id_t from, const sl_element_id_t to);
   void UpdateElementMap(const file_name_t& name, const sl_element_id_t old_id,
                         const sl_element_id_t new_id);
