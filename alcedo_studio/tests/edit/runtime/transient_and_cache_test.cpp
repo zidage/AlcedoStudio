@@ -8,7 +8,6 @@
 
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/texture_format.hpp"
-#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 namespace {
