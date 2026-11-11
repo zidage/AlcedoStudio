@@ -1456,10 +1456,10 @@ Item {
                     border.width: root.columns >= 11 ? 1 : 2
                     border.color: appTheme.dividerColor
                 }
-                ThumbnailLoadingSpinner {
+                StaggeredGridMark {
                     anchors.centerIn: parent
-                    width: 28
-                    height: 28
+                    width: 27
+                    height: 27
                     visible: cardDelegate.thumbnailLoadingState
                 }
                 Image {

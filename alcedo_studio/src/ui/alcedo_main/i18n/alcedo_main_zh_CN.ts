@@ -7789,6 +7789,14 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>StaggeredGridMark</name>
+    <message>
+        <location filename="../qml/StaggeredGridMark.qml" line="+25"/>
+        <source>Loading</source>
+        <translation>正在加载</translation>
+    </message>
+</context>
+<context>
     <name>StatsCard</name>
     <message>
         <source>Search</source>

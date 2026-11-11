@@ -629,20 +629,11 @@ RowLayout {
                         }
                     }
 
-                    StaggeredGridLoader {
+                    StaggeredGridMark {
                         anchors.centerIn: parent
                         width: 36
                         height: 36
                         running: root.libraryLoadingShown
-                        columns: 3
-                        rows: 3
-                        spacing: 4
-                        tileRadius: 2
-                        tileColor: appTheme.bgBaseColor
-                        restLevel: 0.15
-                        scaleDepth: 0.3
-                        waveStrength: 0.85
-                        cycleMs: 1200
                         accessibleName: qsTr("Updating")
                     }
                 }

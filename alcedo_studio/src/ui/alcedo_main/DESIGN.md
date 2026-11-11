@@ -10,7 +10,8 @@ Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `DialogActionButton.qml`, `IconButton.qml`, `SegmentedCardSwitcher.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
 `AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
-`ThemeSwitch.qml`, `SkeletonBlock.qml`, `StaggeredGridLoader.qml`, `AlertBadge.qml`
+`ThemeSwitch.qml`, `SkeletonBlock.qml`, `StaggeredGridLoader.qml`,
+`StaggeredGridMark.qml`, `AlertBadge.qml`
 
 Per-file decisions: `docs/VI/README.md`. That catalog specializes this global
 system for individual QML files and is updated with each approved visual change.
@@ -569,11 +570,18 @@ loader. The C++ side reports the first kind through `LibraryModule.queryReplacin
 | State | Surface |
 | --- | --- |
 | No result shown (collection switch) | Placeholder grid: `bgBaseColor` cards at the column count, gap, card proportion, and radius of the classic photo grid at the current zoom level. A `textColor` wave at 10 % runs along the diagonals, top left to bottom right, 1600 ms per pass. The empty state ("No Photos Yet") stays hidden until the read publishes |
-| Previous result shown (filter or search change) | The previous grid dims to 30 % over `motionFoldOpenMs`; a 72 px `bgPanelColor` card with a `glassStrokeColor` hairline stands at its centre and holds a 36 px 3 x 3 staggered grid. Each tile rests at 75 % size and 15 % wave level and grows to full size and full `textColor` as the wave passes, 1200 ms per pass |
+| Previous result shown (filter or search change) | The previous grid dims to 30 % over `motionFoldOpenMs`; a 72 px `bgPanelColor` card with a `glassStrokeColor` hairline stands at its centre and holds a 36 px `StaggeredGridMark` |
+| One photo loading (a card, a justified tile, an Editor filmstrip card) | A `StaggeredGridMark` at the centre of the photo area until the thumbnail is ready: 27 px on Library cards and tiles, `iconOpticalSize` on filmstrip cards |
 | Read failed | The previous result stays; the query row shows the error in `dangerColor` with Retry |
 
-The loader is drawn from rectangles; it uses no Material `BusyIndicator` and no
-spinner. Under `reduceMotion` the wave stops and every tile draws at its rest level.
+`StaggeredGridMark.qml` is the compact 3 x 3 staggered grid. Each tile rests at 75 %
+size and 15 % wave level and grows to full size and full `textColor` as the wave
+passes, 1200 ms per pass. Its spacing is the mark width / 9 and its tile radius the
+mark width / 18, both rounded, so one mark serves every size.
+
+Every loader is drawn from rectangles; the Library and its thumbnails use no
+Material `BusyIndicator` and no spinner. Under `reduceMotion` the wave stops and
+every tile draws at its rest level.
 
 | Parameter | Value | Meaning |
 | --- | --- | --- |
@@ -1364,7 +1372,7 @@ perpetual animations are the `SkeletonBlock` content placeholder and the
 | Workspace + adjustment thumbs | Slide on `x` (OutBack, land scale pulse) | Documented capsule exception to “no overshoot” for mechanical feel |
 | Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
 | Content placeholder (`SkeletonBlock`) | A `hoverColor` band moves on `x` from left to right inside the clipped `bgBaseColor` block, `skeletonCycleMs` per sweep, `Easing.InOutSine`, repeated while the content loads | Approved exception to "no perpetual animation", for content placeholders only. The band stops when the block is invisible. Under `reduceMotion` the band does not run and the block is static |
-| Library loading grid (`StaggeredGridLoader`) | A `textColor` wave runs along the tile diagonals, top left to bottom right; one GUI-thread `NumberAnimation` drives every tile. Placeholder grid: opacity wave, 1600 ms per pass. Compact mark: opacity and scale wave, 1200 ms per pass | Approved exception to "no perpetual animation", for Library loading only (Spacing "Library loading"). The wave stops when the loader is invisible. Under `reduceMotion` every tile is static at its rest level |
+| Library loading grid (`StaggeredGridLoader`) | A `textColor` wave runs along the tile diagonals, top left to bottom right; one GUI-thread `NumberAnimation` drives every tile. Placeholder grid: opacity wave, 1600 ms per pass. Compact mark: opacity and scale wave, 1200 ms per pass | Approved exception to "no perpetual animation", for Library loading and photo loading marks only (Spacing "Library loading"). The wave stops when the loader is invisible. Under `reduceMotion` every tile is static at its rest level |
 | Project loading overlay | Snap on immediately; after load, hold `motionFadeMs` then fade out `motionFoldCloseMs` | No fade-in — that flashed the empty library after Welcome closed |
 | Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
 | Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`. macOS keeps the system traffic lights over the leading side of the full-width toolbar and hides the title-bar surface with `Qt.ExpandedClientAreaHint` + `Qt.NoTitleBarBackgroundHint`; toolbar content reserves that leading region. Other platforms use Qt frameless behavior plus drawn caption buttons. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
@@ -1522,6 +1530,7 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | `AlertBadge.qml` | Warning and error message: wrapped white caption text on an `alertBadgeFillColor` badge; hidden while empty |
 | `SkeletonBlock.qml` | Content placeholder: `bgBaseColor` block with the moving `hoverColor` band (Motion); `animated: false` draws a static tile |
 | `StaggeredGridLoader.qml` | Library loading: a grid of rounded tiles with a diagonal wave (Motion, "Library loading"); `rows: 0` fills the height as a placeholder grid, a fixed 3 x 3 grid with `scaleDepth` is the compact mark |
+| `StaggeredGridMark.qml` | The compact 3 x 3 `StaggeredGridLoader`: the loading mark of a photo (Library card, justified tile, Editor filmstrip card) and of the Library over a kept result |
 
 ---
 
