@@ -328,6 +328,38 @@ TEST_F(LibraryQueryTests, RatingChangeReadsOnlyStatisticsUnlessThePresentationRe
             (std::vector<sl_element_id_t>{id[0], id[1], id[4], id[5], id[2], id[3]}));
 }
 
+// The Library shows its loading grid only for a refresh that replaces the shown result
+// (queryReplacing); an in-place refresh reports only queryUpdating. A replacing request in the
+// same turn as an in-place one makes the combined refresh replacing and notifies.
+TEST_F(LibraryQueryTests, QueryReplacingReportsOnlyReplacingRefreshes) {
+  ApplicationModuleHost backend;
+  LoadedLibrary         library;
+  ASSERT_TRUE(library.Load(temp_dir_, backend, SixPhotoSpecs()));
+  auto* module = backend.library();
+  EXPECT_FALSE(module->QueryReplacing());
+
+  backend.stats()->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Nikon Z8"));
+  EXPECT_TRUE(module->QueryUpdating());
+  EXPECT_TRUE(module->QueryReplacing());
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_FALSE(module->QueryUpdating());
+  EXPECT_FALSE(module->QueryReplacing());
+
+  QSignalSpy state_changes(module, &LibraryModule::QueryStateChanged);
+  module->RequestLibraryContentRefresh();
+  EXPECT_TRUE(module->QueryUpdating());
+  EXPECT_FALSE(module->QueryReplacing());
+  EXPECT_EQ(state_changes.count(), 1);
+
+  module->RequestLibraryRefresh();
+  EXPECT_TRUE(module->QueryReplacing());
+  EXPECT_EQ(state_changes.count(), 2);
+  ASSERT_TRUE(Settle(backend));
+  EXPECT_FALSE(module->QueryUpdating());
+  EXPECT_FALSE(module->QueryReplacing());
+  EXPECT_EQ(module->TotalCount(), 2);
+}
+
 TEST_F(LibraryQueryTests, SelectingNewGroupReplacesPreviousGroupWithoutChangingFilters) {
   ApplicationModuleHost backend;
   LoadedLibrary         library;

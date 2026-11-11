@@ -542,10 +542,14 @@ labels.
 
 - The grouped mode loads `AlbumSectionView`; the flat mode keeps
   `ThumbnailGridView`.
-- A running query shows a muted Updating caption above the kept content. A
-  failed query shows the error in `dangerColor` with a compact Retry
-  `DialogActionButton`. A successful empty filtered result shows No Matching
-  Photos.
+- A query that replaces the result shows `StaggeredGridLoader` 150 ms after it
+  starts (DESIGN.md "Library loading"). With no result shown (a collection
+  switch), placeholder cards fill the grid area at the current zoom level and
+  the empty state stays hidden. Over a kept result (a filter or search change),
+  the grid dims to 30 % and a 72 px panel card at its centre holds the 3 x 3
+  mark. An in-place refresh (a rating write) shows no loader. A failed query
+  shows the error in `dangerColor` with a compact Retry `DialogActionButton`. A
+  successful empty filtered result shows No Matching Photos.
 - Load Project (empty Library) and the Export queue button are the neutral
   filled action of `CollectionsPanel.qml` (Import From Folder). No gradient and
   no `#457B9D`.
@@ -567,7 +571,8 @@ labels.
 
 Review in Alcedo and Classic themes, at a narrow Inspector width, with the
 Inspector closed, with collapsed groups, with a failed query, and with an empty
-filtered result. No accent color is visible in the Library workspace except the
+filtered result. Switch to a large collection and change a filter on it: the
+placeholder grid and the compact mark appear, never No Photos Yet. No accent color is visible in the Library workspace except the
 wordmark and the import progress ring. Check the cards at 4, 8, and 14 columns
 in the flat and the grouped view (edit mark chip, stars, hover preview, star
 click, no scroll jump after a rating),

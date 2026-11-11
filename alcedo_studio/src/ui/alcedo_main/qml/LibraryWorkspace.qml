@@ -88,6 +88,62 @@ Item {
     property real libraryGridRevealOpacity: 1
     property real libraryGridRevealShift: 0
 
+    // Library loading (DESIGN.md "Library loading"). A refresh that replaces the shown result
+    // (a collection switch, a filter, the search) shows the staggered grid loader after
+    // libraryLoadingRevealDelayMs, so a fast read draws no frame of it. In-place refreshes
+    // (a rating write, an import into the shown collection) keep the grid as it is.
+    readonly property bool libraryQueryReplacing: appModules.library.queryReplacing
+                                                  && appModules.library.queryError.length === 0
+    readonly property int libraryLoadingRevealDelayMs: 150
+    property bool libraryLoadingShown: false
+    // Opacity of the previous result: it dims while a replacing read runs over it.
+    property real libraryStaleViewOpacity: libraryLoadingShown && contentViewLoader.active
+                                           ? 0.3 : 1
+    Behavior on libraryStaleViewOpacity {
+        NumberAnimation {
+            duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldOpenMs
+            easing.type: appTheme.motionEasing
+        }
+    }
+    readonly property var libraryZoomColumns: [2, 3, 4, 5, 6, 8, 11, 14]
+
+    onLibraryQueryReplacingChanged: {
+        if (libraryQueryReplacing) {
+            libraryLoadingRevealTimer.restart()
+        } else {
+            libraryLoadingRevealTimer.stop()
+            libraryLoadingShown = false
+        }
+    }
+
+    Timer {
+        id: libraryLoadingRevealTimer
+        interval: root.libraryLoadingRevealDelayMs
+        onTriggered: root.libraryLoadingShown = root.libraryQueryReplacing
+    }
+
+    // Card geometry of the classic photo grid at the current zoom level and @p viewWidth; the
+    // same formula as ThumbnailGridView.metricsForZoomLevel, so the placeholder tiles stand
+    // where the photo cards appear.
+    function libraryLoadingGridMetrics(viewWidth) {
+        const level = Math.max(0, Math.min(libraryZoomColumns.length - 1, gridZoomLevel))
+        const visualCols = libraryZoomColumns[level]
+        const inset = visualCols >= 11 ? 4 : (visualCols >= 8 ? 6 : 8)
+        const gap = visualCols >= 11 ? 4 : (visualCols >= 8 ? 6 : 12)
+        const textHeight = visualCols >= 14 ? 0 : (visualCols >= 8 ? 18 : 50)
+        const cellW = Math.max(72, Math.floor(viewWidth / visualCols))
+        const cellH = Math.max(64, Math.round((cellW - inset * 2) * 2 / 3
+                                              + textHeight + inset * 2 + gap))
+        const cols = Math.max(1, Math.floor(viewWidth / cellW))
+        return {
+            cols: cols,
+            width: cols * cellW - gap,
+            gap: gap,
+            aspect: (cellW - gap) / Math.max(1, cellH - gap),
+            radius: visualCols >= 11 ? 6 : appTheme.panelRadius
+        }
+    }
+
     function prepareLibraryGridReveal() {
         libraryGridRevealAnim.stop()
         if (appTheme.reduceMotion) {
@@ -267,6 +323,9 @@ Item {
     Component.onCompleted: {
         root.applyHostViewState()
         Qt.callLater(root.revealPendingFile)
+        if (root.libraryQueryReplacing) {
+            libraryLoadingRevealTimer.restart()
+        }
     }
     Component.onDestruction: root.persistViewState()
 
@@ -386,8 +445,8 @@ RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
-                // Query state: the last accepted view stays visible while a read runs; a
-                // failure keeps it and offers Retry.
+                // Query failure: the last accepted view stays visible and the row offers
+                // Retry. A running read shows the loading grid instead (libraryLoadingShown).
                 RowLayout {
                     id: libraryQueryStateRow
                     objectName: "libraryQueryStateRow"
@@ -396,16 +455,12 @@ RowLayout {
                     anchors.top: parent.top
                     z: 2
                     visible: appModules.library.queryError.length > 0
-                             || appModules.library.queryUpdating
                     spacing: appTheme.spaceSm
 
                     Label {
                         Layout.fillWidth: true
-                        text: appModules.library.queryError.length > 0
-                              ? qsTr("Library query failed: %1").arg(appModules.library.queryError)
-                              : qsTr("Updating")
-                        color: appModules.library.queryError.length > 0
-                               ? appTheme.dangerColor : appTheme.textMutedColor
+                        text: qsTr("Library query failed: %1").arg(appModules.library.queryError)
+                        color: appTheme.dangerColor
                         font.family: appTheme.uiFontFamily
                         font.pixelSize: appTheme.fontSizeCaption
                         wrapMode: Text.Wrap
@@ -435,7 +490,7 @@ RowLayout {
                             ? appModules.library.sectionModel.groupCount > 0
                             : appModules.library.shownCount > 0
                     sourceComponent: appModules.library.grouped ? sectionComp : gridComp
-                    opacity: root.libraryGridRevealOpacity
+                    opacity: root.libraryGridRevealOpacity * root.libraryStaleViewOpacity
                     transform: Translate { y: root.libraryGridRevealShift }
                     onLoaded: {
                         if (host && host.projectLoadingOverlayVisible) {
@@ -444,6 +499,76 @@ RowLayout {
                             root.playLibraryGridReveal()
                         }
                         Qt.callLater(root.restoreScrollPosition)
+                    }
+                }
+
+                // Loading, no result shown (a collection switch): placeholder cards at the
+                // grid's column count and card proportion, in place of the empty state.
+                Item {
+                    id: libraryLoadingGrid
+                    objectName: "libraryLoadingGrid"
+                    anchors.fill: parent
+                    anchors.topMargin: contentViewLoader.anchors.topMargin
+                    z: 1
+                    clip: true
+                    visible: root.libraryLoadingShown && !contentViewLoader.active
+
+                    readonly property var metrics: root.libraryLoadingGridMetrics(width)
+
+                    StaggeredGridLoader {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: libraryLoadingGrid.metrics.width
+                        running: libraryLoadingGrid.visible
+                        columns: libraryLoadingGrid.metrics.cols
+                        rows: 0
+                        spacing: libraryLoadingGrid.metrics.gap
+                        tileAspect: libraryLoadingGrid.metrics.aspect
+                        tileRadius: libraryLoadingGrid.metrics.radius
+                        cycleMs: 1600
+                        waveStrength: 0.1
+                        accessibleName: qsTr("Updating")
+                    }
+                }
+
+                // Loading over the previous result (a filter or search change): the dimmed
+                // grid stays and a compact staggered grid stands at its centre.
+                Rectangle {
+                    id: libraryLoadingMark
+                    objectName: "libraryLoadingMark"
+                    anchors.centerIn: parent
+                    z: 3
+                    width: 72
+                    height: 72
+                    radius: appTheme.panelRadius
+                    color: root.colBgPanel
+                    border.width: 1
+                    border.color: root.colGlassStroke
+                    visible: opacity > 0
+                    opacity: root.libraryLoadingShown && contentViewLoader.active ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: appTheme.reduceMotion ? 0 : appTheme.motionFadeMs
+                            easing.type: appTheme.motionEasing
+                        }
+                    }
+
+                    StaggeredGridLoader {
+                        anchors.centerIn: parent
+                        width: 36
+                        height: 36
+                        running: root.libraryLoadingShown
+                        columns: 3
+                        rows: 3
+                        spacing: 4
+                        tileRadius: 2
+                        tileColor: appTheme.bgBaseColor
+                        restLevel: 0.15
+                        scaleDepth: 0.3
+                        waveStrength: 0.85
+                        cycleMs: 1200
+                        accessibleName: qsTr("Updating")
                     }
                 }
 
@@ -480,8 +605,11 @@ RowLayout {
                     anchors.right: parent.right
                     anchors.top: parent.top
                     anchors.topMargin: contentViewLoader.anchors.topMargin
+                    // A replacing read decides whether the scope is empty; until it publishes,
+                    // the loading grid (after its delay) stands here.
                     visible: appModules.library.shownCount === 0
                              && appModules.library.queryError.length === 0
+                             && !root.libraryQueryReplacing
                     spacing: 8
                     Label {
                         text: parent.noMatchingPhotos ? qsTr("No Matching Photos")

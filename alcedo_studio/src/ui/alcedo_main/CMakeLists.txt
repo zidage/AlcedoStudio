@@ -742,6 +742,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/ShortcutCaptureField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SkeletonBlock.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/StaggeredGridLoader.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeActionButton.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeCoverMosaic.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeNewProjectForm.qml"
