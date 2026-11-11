@@ -147,8 +147,8 @@ ColumnLayout {
                 Label {
                     text: qsTr("Cache directory")
                     color: panel.textColor
-                    font.pixelSize: 15
-                    font.weight: 600
+                    font.pixelSize: appTheme.fontSizeTitle
+                    font.weight: appTheme.fontWeightStrong
                 }
 
                 Rectangle {
@@ -210,8 +210,8 @@ ColumnLayout {
                 Layout.preferredWidth: 180
                 text: qsTr("Disk cache")
                 color: panel.textColor
-                font.pixelSize: 15
-                font.weight: 600
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightStrong
             }
 
             Switch {
@@ -258,8 +258,8 @@ ColumnLayout {
                     text: cacheEnabledSwitch.checked
                           ? qsTr("Enabled") : qsTr("Disabled")
                     color: panel.textColor
-                    font.pixelSize: 15
-                    font.weight: 600
+                    font.pixelSize: appTheme.fontSizeTitle
+                    font.weight: appTheme.fontWeightStrong
                     leftPadding: cacheEnabledSwitch.indicator.width + 12
                     verticalAlignment: Text.AlignVCenter
                 }
@@ -274,8 +274,8 @@ ColumnLayout {
                 Layout.preferredWidth: 180
                 text: qsTr("Max entries per project")
                 color: panel.textColor
-                font.pixelSize: 15
-                font.weight: 600
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightStrong
             }
 
             SettingsSpinBox {
@@ -298,8 +298,8 @@ ColumnLayout {
                 Layout.preferredWidth: 180
                 text: qsTr("JPEG quality")
                 color: panel.textColor
-                font.pixelSize: 15
-                font.weight: 600
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightStrong
             }
 
             SettingsSpinBox {
@@ -385,8 +385,8 @@ ColumnLayout {
             Layout.fillWidth: true
             text: title
             color: textColor
-            font.pixelSize: 18
-            font.weight: 800
+            font.pixelSize: appTheme.fontSizeSection
+            font.weight: appTheme.fontWeightStrong
         }
 
         Rectangle {
@@ -489,8 +489,8 @@ ColumnLayout {
                 Layout.fillWidth: true
                 text: label
                 color: panel.mutedTextColor
-                font.pixelSize: 12
-                font.weight: 700
+                font.pixelSize: appTheme.fontSizeBody
+                font.weight: appTheme.fontWeightStrong
                 wrapMode: Text.Wrap
             }
 
@@ -499,8 +499,8 @@ ColumnLayout {
                 text: value
                 color: panel.textColor
                 font.family: panel.dataFontFamily
-                font.pixelSize: 18
-                font.weight: 700
+                font.pixelSize: appTheme.fontSizeSection
+                font.weight: appTheme.fontWeightStrong
                 wrapMode: Text.Wrap
             }
         }

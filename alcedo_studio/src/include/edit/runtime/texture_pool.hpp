@@ -373,11 +373,11 @@ class TexturePool {
   /// added. A new slot count that is a power of two writes an Info line, so a pool of N slots
   /// writes about log2(N) lines; the other slot additions are Debug detail.
   void NoteSlotGrowth() {
-    const auto slots = entries_.size();
-    if ((slots & (slots - 1)) == 0) {
+    const auto slot_count = entries_.size();
+    if ((slot_count & (slot_count - 1)) == 0) {
       ALCEDO_LOG_INFO(GpuPool) << "gpu.pool.grow backend=" << GpuBackendName<Backend>()
-                               << " pool=texture_pool old_slots=" << slots - 1
-                               << " new_slots=" << slots << " used_bytes=" << used_bytes_
+                               << " pool=texture_pool old_slots=" << slot_count - 1
+                               << " new_slots=" << slot_count << " used_bytes=" << used_bytes_
                                << " peak_used_bytes=" << peak_used_bytes_;
     }
   }

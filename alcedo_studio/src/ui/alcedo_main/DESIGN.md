@@ -49,6 +49,7 @@ Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checkl
 | UI caption | `uiFontFamily` | `fontSizeCaption` (11) | `fontWeightRegular` | `lineHeightCaption` (14) | Secondary chrome |
 | Headline | `headlineFontFamily` | `fontSizeHeadline` (22) | `fontWeightHeading` | `lineHeightHeadline` (28) | Empty-state titles |
 | Settings card title | `headlineFontFamily` | `fontSizeSection` (14) | DemiBold | 1.1 | Title of a `PackageCard` (Settings > LUTs, Settings > AI Models) and of the folder tiles of those pages. Below it, after a `spaceSm` gap, one sentence in `uiFontFamily` + `fontSizeBody` muted text says what the package or model does; no list and no version text there (a Pill shows the version). A GitHub button beside the title opens the project of the package when it has one. Do not use a display size: a model name must stay on one line in the two-column page. |
+| Display count | `headlineFontFamily` | `fontSizeDisplay` (72) | ExtraLight | 1 | The one large number of a Settings bento count tile (`CountTile`): LUT total, photo count, the version of About. |
 | Data / numeric | `headlineFontFamily` (Manrope) with `font.features: { "tnum": 1 }` | body to display | DemiBold for inline counts, ExtraLight for display counts | matching | Counts, sizes, revisions, progress values, and remaining times. `dataFontFamily` (IBM Plex Sans) is retired page by page: a new or changed surface uses Manrope. Counts use the digit grouping of the locale (`DataFormat.grouped`); see "Settings bento pages" for large counts. |
 | Mono | `monoFontFamily` | body/caption | regular | matching | Minigit history/Versions data (commit hashes, before/after delta lines) and the adjustment-header EXIF tokens. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, crop degrees, or the selected node display name. |
 
@@ -1408,11 +1409,42 @@ are not a valid target.
 
 ## Settings bento pages
 
-Settings > LUTs, Settings > AI Models, and Settings > Local Content Recognition use `BentoTile`
-surfaces with the page margins 26 px (top) and 34 px (sides) and `spaceMd` between tiles.
+Settings > LUTs, Settings > AI Models, Settings > Local Content Recognition, and Settings > About
+use `BentoTile` surfaces with the page margins 26 px (top) and 34 px (sides) and `spaceMd`
+between tiles.
+
+**Settings type scale** (#824). Every `Text` and `Label` of `SettingDialog.qml` and the
+Settings pages uses an `appTheme` size token (11, 12, 13, 14, 22, and `fontSizeDisplay` 72 for
+the count tile) and a weight of 600 or less; `SettingsAboutQmlTest` checks every page.
+
+| Text | Size | Weight |
+| --- | --- | --- |
+| Dialog title ("Setting") and page title | `fontSizeHeadline` (Manrope) | `fontWeightStrong` |
+| Section and tile titles | `fontSizeSection` | `fontWeightStrong` |
+| Navigation item | `fontSizeTitle` | `fontWeightRegular`; selected `fontWeightStrong` |
+| Row name | `fontSizeTitle` | `fontWeightStrong` |
+| Values, descriptions, lists | `fontSizeBody` | `fontWeightRegular` |
+| Buttons (`DialogActionButton`) | `fontSizeSection` | `fontWeightStrong` |
+
+The dialog chrome is neutral: the selected navigation item is a `textColor` wash at 0.08 (rows
+36 px, icons 16 px), the header is 72 px, and Done is the light `DialogActionButton` (34 px) in a
+64 px footer. The Alcedo Studio wordmark on About is the one exception to the weight limit: it
+is the wordmark of the welcome dialog (`headlineFontFamily`, `fontSizeHeadline`,
+`fontWeightHeading`, "Alcedo" in `accentColor`).
+
+**About** (`AboutPage.qml`): row 1 is the wordmark tile (copyright and license as muted name and
+value rows; Sponsor, GitHub, and Docs with `heart.svg`, `github.svg`, and `book.svg`, Docs as the
+light button) beside a `CountTile` with the version and the build. Row 2 holds the rows Logs
+(Open Log Folder, the only log control of Settings), AI model download statement (View), and
+Third-party licenses (View all opens a two-column list in the tile). Row 3 lists the
+acknowledgements and components of README.md "Acknowledgments": the subject on one line in
+`fontSizeBody` (236 px column) and its source links in muted Manrope `fontSizeBody` with
+`↗`, then the trademark notice. `SettingsAboutQmlTest` fails when a README link is missing.
 
 - **Count tile** (`CountTile.qml`, 190 px wide): the name in muted Manrope `fontSizeSection`
-  Medium, the count in Manrope 72 px ExtraLight with tabular figures, centered. A page that can
+  Medium, the count in Manrope `fontSizeDisplay` (72) ExtraLight with tabular figures, centered.
+  `valueText` shows a text in place of the count and `detailText` a line below it (About:
+  the version and the build). A page that can
   hold 10,000 or more items sets `compactLargeCounts`: the count then shows at most three
   significant digits, truncated (12.8K, 102K, 1.25M; in Chinese 1.28万, 10.2万, 1.23亿), and the
   exact grouped count stands below it in muted Manrope `fontSizeBody`.
@@ -1444,7 +1476,7 @@ surfaces with the page margins 26 px (top) and 34 px (sides) and `spaceMd` betwe
 | --- | --- |
 | `IconActionButton.qml` | Structural SVG action (Item root, true square chrome): hit/optical/source, tooltip, a11y, hover, focus, selected fill; SVG tint via `ColorImage` (same as `Button.icon.color`) |
 | `CollapsibleSection.qml` | Folding group shell with shared motion driver |
-| `DialogActionButton.qml` | Text dialog actions (46 px floor; wrapped labels grow the button); kinds `normal`, `light` (main action of a neutral surface), `accent`, `danger`, `warning` |
+| `DialogActionButton.qml` | Text dialog actions (46 px floor; wrapped labels grow the button; `fontWeightStrong`); kinds `normal`, `light` (main action of a neutral surface), `accent`, `danger`, `warning`; optional `iconSource` (16 px monochrome SVG before the text, tinted with the text color) |
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
 | `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive |
 | `AdjustmentSlider.qml` | Shared numeric slider + field bound to `EditorAdjustmentValueModel` |

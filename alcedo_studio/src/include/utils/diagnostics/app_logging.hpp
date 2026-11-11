@@ -42,6 +42,10 @@ auto InitializeApplicationLogging(const QString& preferred_directory = {}) -> QS
 auto InitializeApplicationLoggingToFile(const QString& file_path) -> QString;
 void ShutdownApplicationLogging();
 auto CurrentLogFilePath() -> QString;
+/// The directory of the application log: the directory of the open log file, or, before a log
+/// file is open, the directory InitializeApplicationLogging uses without a preferred directory
+/// (`ALCEDO_LOG_DIR`, else `AppLocalData/logs`). Settings > About opens it in the file manager.
+auto LogDirectory() -> QString;
 /// The log file of another process of this session, such as the AI sidecar: the name of the open
 /// log file with `_<process_name>` before `.log`, in the same directory. For
 /// `alcedo_20261111_101500_1234.log` and `mind` it is `alcedo_20261111_101500_1234_mind.log`, so

@@ -1,9 +1,11 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 
 // kind: "normal" (raised dark control), "light" (the main action of a neutral page or dialog:
 // light fill, dark text; DESIGN.md "Neutral actions"), "accent", "danger", "warning".
+// iconSource: an optional monochrome SVG before the text, tinted with the text color.
 Button {
     id: control
 
@@ -11,6 +13,9 @@ Button {
     property int buttonWidth: 168
     property int buttonHeight: 46
     property int buttonRadius: 10
+    property url iconSource: ""
+    property int iconSize: 16
+    readonly property bool hasIcon: iconSource.toString().length > 0
 
     function withAlpha(colorValue, alphaValue) {
         return Qt.rgba(colorValue.r, colorValue.g, colorValue.b, alphaValue)
@@ -45,17 +50,44 @@ Button {
     hoverEnabled: true
     font.family: appTheme.uiFontFamily
     font.pixelSize: appTheme.fontSizeSection
-    font.weight: appTheme.fontWeightHeading
+    font.weight: appTheme.fontWeightStrong
 
-    contentItem: Label {
-        id: buttonLabel
-        text: control.text
-        color: !control.enabled ? appTheme.textMutedColor
-                                : (control.kind === "light" ? appTheme.bgCanvasColor : "#FFFFFF")
-        font: control.font
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
-        wrapMode: Text.Wrap
+    // With an icon, the label keeps the icon space as left padding and the icon stands left of
+    // the text, so the icon and the text are centered together.
+    contentItem: Item {
+        readonly property real iconSpace: control.hasIcon ? control.iconSize + appTheme.spaceSm : 0
+        readonly property color inkColor: !control.enabled
+                                          ? appTheme.textMutedColor
+                                          : (control.kind === "light" ? appTheme.bgCanvasColor
+                                                                       : "#FFFFFF")
+
+        implicitWidth: buttonLabel.implicitWidth
+        implicitHeight: buttonLabel.implicitHeight
+
+        Label {
+            id: buttonLabel
+            anchors.fill: parent
+            leftPadding: parent.iconSpace
+            text: control.text
+            color: parent.inkColor
+            font: control.font
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            wrapMode: Text.Wrap
+        }
+
+        ColorImage {
+            visible: control.hasIcon
+            width: control.iconSize
+            height: control.iconSize
+            x: parent.iconSpace + (parent.width - parent.iconSpace - buttonLabel.contentWidth) / 2
+               - parent.iconSpace
+            anchors.verticalCenter: parent.verticalCenter
+            source: control.iconSource
+            sourceSize.width: control.iconSize * 2
+            sourceSize.height: control.iconSize * 2
+            color: parent.inkColor
+        }
     }
 
     background: Rectangle {

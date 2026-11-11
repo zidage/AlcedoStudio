@@ -1119,6 +1119,41 @@ alcedo_ui_gtest_discover_tests(LibraryColorLabelSettingsQmlTest
 )
 alcedo_register_test_target(LibraryColorLabelSettingsQmlTest ui)
 
+# Settings > About and the Settings type scale (#824) on the production SettingDialog and module
+# host: Open Log Folder with a file-manager stand-in, theme type tokens on every page, and the
+# README acknowledgement links on About.
+add_executable(SettingsAboutQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/settings_about_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(SettingsAboutQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(SettingsAboutQmlTest
+    PRIVATE
+        AlbumBackendLib
+        AppDiagnostics
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(SettingsAboutQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(SettingsAboutQmlTest
+    TEST_PREFIX "SettingsAboutQmlTest."
+    PROPERTIES LABELS "workspace_qml;settings"
+)
+alcedo_register_test_target(SettingsAboutQmlTest ui)
+
 # AI Models plan AM4: Settings > AI Models on the production SettingDialog and module host with
 # the signed AI model test feed and a held downloader (feed check per page opening, download
 # statement), and the page alone with CLIP stand-ins (active border, Activate, Remove).

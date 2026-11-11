@@ -382,7 +382,7 @@ ColumnLayout {
                 text: qsTr("AI Mask")
                 color: appTheme.textColor
                 font.family: appTheme.headlineFontFamily
-                font.pixelSize: 18
+                font.pixelSize: appTheme.fontSizeSection
                 font.weight: Font.DemiBold
             }
             // Only a failed check is reported; a running check spins the refresh icon.
@@ -506,7 +506,7 @@ ColumnLayout {
                 text: qsTr("Content Recognition (CLIP)")
                 color: appTheme.textColor
                 font.family: appTheme.headlineFontFamily
-                font.pixelSize: 18
+                font.pixelSize: appTheme.fontSizeSection
                 font.weight: Font.DemiBold
             }
             Label {

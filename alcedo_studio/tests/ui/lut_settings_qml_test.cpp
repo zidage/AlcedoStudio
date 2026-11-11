@@ -153,11 +153,17 @@ class HeldArchiveDownloader final : public alcedo::PackageArchiveDownloader {
     state_->canceled_ids.push_back(request_id);
     if (!state_->pending) return;
     FinishedCallback finished = std::move(state_->pending);
-    QTimer::singleShot(0, [finished] { finished(false, true, QStringLiteral("canceled")); });
+    // The posted completion calls into the LutPackageService that owns this downloader. Bound to
+    // context_, it is dropped when the service (and this downloader) is destroyed first, as at
+    // the end of a test that cancels a download; otherwise it ran in the next test's event loop
+    // on the freed service.
+    QTimer::singleShot(0, context_.get(),
+                       [finished] { finished(false, true, QStringLiteral("canceled")); });
   }
 
  private:
-  std::shared_ptr<State> state_;
+  std::shared_ptr<State>   state_;
+  std::unique_ptr<QObject> context_ = std::make_unique<QObject>();
 };
 
 class MemoryLibraryPreferences final : public alcedo::LutLibraryPreferences {

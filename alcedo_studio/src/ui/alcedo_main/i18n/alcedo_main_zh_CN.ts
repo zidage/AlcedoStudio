@@ -159,6 +159,138 @@
         <source>Licenses and training data of the AI models</source>
         <translation>AI 模型的许可证与训练数据</translation>
     </message>
+    <message>
+        <source>Film simulation LUTs</source>
+        <translation>胶片模拟 LUT</translation>
+    </message>
+    <message>
+        <source>Film Print spectral simulation</source>
+        <translation>胶片印片光谱模拟</translation>
+    </message>
+    <message>
+        <source>Film Print film data</source>
+        <translation>胶片印片片种数据</translation>
+    </message>
+    <message>
+        <source>AI Mask point, path, and box selection</source>
+        <translation>AI 蒙版点选、路径和框选</translation>
+    </message>
+    <message>
+        <source>AI Mask Subject matting</source>
+        <translation>AI 蒙版主体抠图</translation>
+    </message>
+    <message>
+        <source>Camera color matrices</source>
+        <translation>相机色彩矩阵</translation>
+    </message>
+    <message>
+        <source>Neural demosaicing</source>
+        <translation>神经网络去马赛克</translation>
+    </message>
+    <message>
+        <source>Inpaint-opposed highlight reconstruction</source>
+        <translation>Inpaint-opposed 高光重建</translation>
+    </message>
+    <message>
+        <source>RCD demosaicing</source>
+        <translation>RCD 去马赛克</translation>
+    </message>
+    <message>
+        <source>OpenDRT</source>
+        <translation>OpenDRT</translation>
+    </message>
+    <message>
+        <source>ACES 2.0 output transforms</source>
+        <translation>ACES 2.0 输出变换</translation>
+    </message>
+    <message>
+        <source>Film grain</source>
+        <translation>胶片颗粒</translation>
+    </message>
+    <message>
+        <source>RAW decoding</source>
+        <translation>RAW 解码</translation>
+    </message>
+    <message>
+        <source>Lens correction</source>
+        <translation>镜头校正</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>元数据</translation>
+    </message>
+    <message>
+        <source>Image IO</source>
+        <translation>图像读写</translation>
+    </message>
+    <message>
+        <source>Color management</source>
+        <translation>色彩管理</translation>
+    </message>
+    <message>
+        <source>Catalog database</source>
+        <translation>图库数据库</translation>
+    </message>
+    <message>
+        <source>UI</source>
+        <translation>界面</translation>
+    </message>
+    <message>
+        <source>Alcedo</source>
+        <translation>Alcedo</translation>
+    </message>
+    <message>
+        <source>Studio</source>
+        <translation>Studio</translation>
+    </message>
+    <message>
+        <source>Copyright</source>
+        <translation>版权</translation>
+    </message>
+    <message>
+        <source>License</source>
+        <translation>许可证</translation>
+    </message>
+    <message>
+        <source>GPL-3.0-only, with an additional permission under GPLv3 section 7 for combining and distributing the required NVIDIA CUDA components.</source>
+        <translation>基于 GPL-3.0-only 许可，并依据 GPLv3 第 7 条附加许可，允许组合与分发所需的 NVIDIA CUDA 组件。</translation>
+    </message>
+    <message>
+        <source>GitHub</source>
+        <translation>GitHub</translation>
+    </message>
+    <message>
+        <source>Docs</source>
+        <translation>文档</translation>
+    </message>
+    <message>
+        <source>Build %1</source>
+        <translation>构建 %1</translation>
+    </message>
+    <message>
+        <source>Logs</source>
+        <translation>日志</translation>
+    </message>
+    <message>
+        <source>Open Log Folder</source>
+        <translation>打开日志文件夹</translation>
+    </message>
+    <message>
+        <source>View</source>
+        <translation>查看</translation>
+    </message>
+    <message>
+        <source>View all</source>
+        <translation>查看全部</translation>
+    </message>
+    <message>
+        <source>Components</source>
+        <translation>组件</translation>
+    </message>
+    <message>
+        <source>ACES is a trademark of the Academy of Motion Picture Arts and Sciences (A.M.P.A.S.). Alcedo Studio is an independent project and is not affiliated with, certified, or endorsed by A.M.P.A.S., Academy Software Foundation, Jed Smith, or any other upstream authors mentioned above. These names are used solely to identify the respective technologies. Film stock names such as Kodak and Fujifilm are trademarks of their owners and identify the films that Film Print simulates.</source>
+        <translation>ACES 是美国电影艺术与科学学院（A.M.P.A.S.）的商标。Alcedo Studio 是独立项目，与 A.M.P.A.S.、Academy Software Foundation、Jed Smith 及上述其他上游作者均无关联，也未获其认证或认可。这些名称仅用于标识相应技术。Kodak、Fujifilm 等胶片名称是其所有者的商标，用于标识胶片印片所模拟的胶片。</translation>
+    </message>
 </context>
 <context>
     <name>AcceleratorPreparationOverlay</name>

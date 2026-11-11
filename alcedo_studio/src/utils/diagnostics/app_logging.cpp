@@ -390,6 +390,14 @@ auto CurrentLogFilePath() -> QString {
   return g_log_file_path;
 }
 
+auto LogDirectory() -> QString {
+  const QString log_file_path = CurrentLogFilePath();
+  if (!log_file_path.isEmpty()) {
+    return QFileInfo(log_file_path).absolutePath();
+  }
+  return QDir(ResolveLogDirectory({})).absolutePath();
+}
+
 auto CompanionLogFilePath(const QString& process_name) -> QString {
   std::lock_guard lock(g_log_lock);
   if (!g_log_file || !g_log_file->isOpen()) {

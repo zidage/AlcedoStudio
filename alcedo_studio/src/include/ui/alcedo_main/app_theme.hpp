@@ -149,6 +149,8 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int fontSizeTitle READ fontSizeTitle CONSTANT)
   Q_PROPERTY(int fontSizeSection READ fontSizeSection CONSTANT)
   Q_PROPERTY(int fontSizeHeadline READ fontSizeHeadline CONSTANT)
+  /// The large count of a Settings bento tile (CountTile): the one display size.
+  Q_PROPERTY(int fontSizeDisplay READ fontSizeDisplay CONSTANT)
   Q_PROPERTY(int fontWeightRegular READ fontWeightRegular CONSTANT)
   Q_PROPERTY(int fontWeightStrong READ fontWeightStrong CONSTANT)
   Q_PROPERTY(int fontWeightHeading READ fontWeightHeading CONSTANT)
@@ -421,6 +423,7 @@ class AppTheme final : public QObject {
   auto        fontSizeTitle() const -> int;
   auto        fontSizeSection() const -> int;
   auto        fontSizeHeadline() const -> int;
+  auto        fontSizeDisplay() const -> int;
   auto        fontWeightRegular() const -> int;
   auto        fontWeightStrong() const -> int;
   auto        fontWeightHeading() const -> int;
