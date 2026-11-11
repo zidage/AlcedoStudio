@@ -170,12 +170,9 @@ TEST_F(EditorAppLoggingTest, QtRulesSetTheEnabledLevelsOfTheQtFreeInterface) {
   EXPECT_FALSE(log::IsEnabled(log::Level::Info, log::Category::EditorPresent));
 
   QLoggingCategory::setFilterRules(QStringLiteral(
-      "*.debug=false
-"
-      "alcedo.render.roi.debug=true
-"
-      "alcedo.gpu.pool.info=false
-"));
+      "*.debug=false\n"
+      "alcedo.render.roi.debug=true\n"
+      "alcedo.gpu.pool.info=false\n"));
 
   EXPECT_TRUE(log::IsEnabled(log::Level::Debug, log::Category::RenderRoi));
   EXPECT_FALSE(log::IsEnabled(log::Level::Debug, log::Category::Render));

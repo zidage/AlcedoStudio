@@ -19,6 +19,7 @@ if(ALCEDO_CUDA_ENABLED)
             CUDA::cudart
             NnSafetensors
             ${ALCEDO_OPENCV_CORE_DEPS}
+            AlcedoLog
     )
     set_target_properties(CudaUtils PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
     target_compile_definitions(CudaUtils PUBLIC HAVE_CUDA)
