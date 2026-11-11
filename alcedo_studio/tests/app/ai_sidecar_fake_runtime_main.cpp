@@ -70,6 +70,23 @@ int main(int argc, char** argv) {
 
   std::cout << "semantic fake runtime started" << std::endl;
 
+  // Lines in the stdout form of the sidecar `tracing` output, in one write.
+  if (HasArg(args, "--print-tracing-lines")) {
+    std::cout << "2026-11-11T10:00:00.000001Z  INFO fake info line marker-info\n"
+                 "2026-11-11T10:00:00.000002Z  WARN fake warn line marker-warn\n"
+                 "2026-11-11T10:00:00.000003Z ERROR fake error line marker-error\n"
+              << std::flush;
+  }
+  // One WARN line in two writes, with a pause between them, followed by its continuation line.
+  if (HasArg(args, "--print-split-warn-line")) {
+    std::cout << "2026-11-11T10:00:00.000004Z  WARN fake split line first-half" << std::flush;
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::cout << " second-half\n"
+                 "  continuation of the warn message marker-continuation\n"
+                 "2026-11-11T10:00:00.000005Z  INFO fake info after warn marker-end\n"
+              << std::flush;
+  }
+
   const auto exit_after_ms = std::stoi(ArgValue(args, "--exit-after-ms", "0"));
   const auto sleep_ms = std::stoi(ArgValue(args, "--sleep-ms", "30000"));
   const auto start = std::chrono::steady_clock::now();

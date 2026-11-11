@@ -847,7 +847,8 @@ add_executable(AiSidecarRuntimeServiceTest ${ALCEDO_TEST_ROOT}/app/ai_sidecar_ru
 target_include_directories(AiSidecarRuntimeServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_compile_definitions(AiSidecarRuntimeServiceTest PRIVATE
   ALCEDO_AI_SIDECAR_FAKE_RUNTIME_PATH="$<TARGET_FILE:AiSidecarFakeRuntime>")
-target_link_libraries(AiSidecarRuntimeServiceTest AiSidecarRuntimeService ProjectService GTest::gtest)
+target_link_libraries(AiSidecarRuntimeServiceTest AiSidecarRuntimeService ProjectService AppDiagnostics
+  GTest::gtest)
 add_dependencies(AiSidecarRuntimeServiceTest AiSidecarFakeRuntime)
 gtest_discover_tests(AiSidecarRuntimeServiceTest TEST_PREFIX "AiSidecarRuntimeServiceTest."
   PROPERTIES LABELS "ci_core_flow")
