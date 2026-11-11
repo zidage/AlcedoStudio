@@ -200,7 +200,7 @@ TEST_F(ProjectServiceUUIDTests, CopyPreservesUUID) {
   }
 }
 
-/// A new project saves the current metadata version (0.11.0) and its database has no legacy
+/// A new project saves the current metadata version (0.12.0) and its database has no legacy
 /// edit-history or recovery-metadata table. The Mini-Git tables are still created.
 TEST_F(ProjectServiceUUIDTests, NewProjectWritesCurrentVersionAndHasNoEditHistoryTable) {
   {
@@ -213,9 +213,9 @@ TEST_F(ProjectServiceUUIDTests, NewProjectWritesCurrentVersionAndHasNoEditHistor
   nlohmann::json metadata;
   in >> metadata;
   in.close();
-  EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.11.0");
+  EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.12.0");
   EXPECT_EQ(metadata.at("project_file_min_supported_version").get<std::string>(), "0.10.0");
-  EXPECT_EQ(metadata.at("project_file_max_supported_version").get<std::string>(), "0.11.0");
+  EXPECT_EQ(metadata.at("project_file_max_supported_version").get<std::string>(), "0.12.0");
 
   // Split literals keep the archived type names out of the source tree.
   const std::string legacy_tables = std::string("('Edit") + "History', 'EditorRecovery" +

@@ -2,9 +2,9 @@
 
 Date: 2026-11-11
 
-Status: PS1 and PS2A complete (2026-11-11). All other phases remain planned.
+Status: PS1, PS2A, and PS2B complete (2026-11-11). All other phases remain planned.
 The latest Windows Release verification passed 93 targeted tests, skipped three, and failed none.
-One GPU rendering comparison was excluded. Evidence used the combined PS2A/PS2B working tree; see PS2A.
+One GPU rendering comparison was excluded. See the PS2A and PS2B completion records.
 
 Feature request: [#486](https://github.com/zidage/AlcedoStudio/issues/486), stacking section only.
 
@@ -758,7 +758,7 @@ Do not place the complete implementation in one PR if its added diff can exceed 
 | --- | --- | --- | ---: | --- | --- |
 | PS1 | Stack schema, store, and application operations | Source audit | 1300-1850 | Keep persistent invariants in one reviewed unit. | complete |
 | PS2A | Atomic element sync and stack-aware project deletion | PS1 | 1200-1850 | Main needs a complete sync transaction and focused owner restore. | complete |
-| PS2B | Migration, package preservation, and diagnostics | PS1 | 750-1250 | Keep format and package evidence separate from deletion changes. | planned |
+| PS2B | Migration, package preservation, and diagnostics | PS1 | 750-1250 | Keep format and package evidence separate from deletion changes. | complete |
 | PS3 | Filter-first fragments, covers, and collapsed display reads | PS1 | 1200-1800 | Isolate query semantics from expansion and UI. | planned |
 | PS4 | Expansion, bounded pages, positions, and matching-member reads | PS3 | 1100-1750 | Paging and three position spaces need dedicated tests. | planned |
 | PS5A | C++ display owner and complete query publication | PS4 | 800-1300 | Separate display state from command and save state. | planned |
@@ -1005,7 +1005,7 @@ Build SleeveServiceTest and ImportServiceTest, then run their direct filters fro
 
 **Status:** complete. Atomic element sync, stack-aware File removal, and failed-sync recovery.
 Branch: `feature/library-photo-stacking`. Implementation base: PS1 commit `a5503149`.
-PS2A and PS2B are recorded in separate functional commits after that commit. No PR was opened.
+PS2A is committed as `6261e0a7`. PS2B follows in a separate functional commit. No PR was opened.
 
 **Changed modules and selected details.** ElementStore owns one transaction over additions,
 modifications, and deletions. Its existing multi-row insertion and folder-delta helpers remain in use.
@@ -1133,7 +1133,11 @@ Requires PS1. No maintenance or source-replacement branch is required.
 
 **Modules and deliverables.** Update version constants, Database migration, package comments, and
 StorageMaintenance's diagnostic table list. Extend ProjectCompatibilityTest, StorageMaintenanceTest,
-and the package cases of PhotoStackLifecycleTest.
+and the package cases of PhotoStackLifecycleTest. Keep those package cases in
+`tests/app/photo_stack_package_test.cpp`, separate from the File-lifecycle cases.
+Both sources share the focused `tests/support/photo_stack_test_library.hpp` fixture.
+Keep the historical 0.11 version reader in `tests/resources/compat/project_version_reader_011.hpp`
+as a fixed test fixture. It must not become a production alternate read path.
 
 **Data rules.** Old projects gain empty stack tables. Image-edit format identities stay unchanged.
 The existing database-copy owner preserves all stack rows. Diagnostic counts do not prove integrity.
@@ -1164,10 +1168,138 @@ Package-copy/write failure leaves the working database valid and reports a faile
 
 **Build and run.** V2B: PhotoStackLifecycleTest, ProjectCompatibilityTest, StorageMaintenanceTest,
 and ProjectServiceTest through CTest. Run the direct ImportServiceTest and SleeveServiceTest filters too.
-**Exit criteria.** [ ] Both supported old versions open. [ ] New format has rejection evidence for old readers.
-[ ] Package reopen preserves exact stack state. [ ] Every required existing target is registered on main.
+**Exit criteria.** [x] Both supported old versions open. [x] New format has rejection evidence for old readers.
+[x] Package reopen preserves exact stack state. [x] Every required existing target is registered on main.
 **Expected diff.** 750-1250 lines.
-**Completion record.** Not started. Fill the Section 12 template here after implementation.
+
+#### PS2B completion record (2026-11-11)
+
+**Status:** complete. Supported-version migration, stored-stack validation, package preservation,
+and diagnostic table counts. Branch and audited source base are the same as the PS2A record.
+The prerequisite PS2A commit is `6261e0a7`.
+
+**Changed modules and selected details.** The writer and maximum metadata version are 0.12.0;
+the minimum remains 0.10.0. Packed project, pipeline, image-edit, commit, chain, root, checkpoint,
+WAL record, and adjustment-transfer format identities are unchanged. The WAL documentation now
+states the existing value 7. PS1's idempotent Database table creation also performs the empty-table
+migration; no parallel migration owner was added.
+
+ProjectService validates every persisted stack immediately after Storage opens and before services
+become available. PhotoStackStore::ValidateAll uses one read transaction, an orphan check, canonical
+UUID validation, and one grouped relation query. It checks covers, member count/order, live File
+identity, and exactly one valid image binding. It neither repairs nor discards damaged relations.
+This avoids one query per stack at open. No performance benchmark was run.
+
+StorageMaintenance::ReadDataSummary includes PhotoStack and PhotoStackMember with the existing
+summary schema and key conversion. The existing database-copy and packed-project paths preserve
+the whole database. They need no stack sidecar or second persisted representation.
+
+The fixed historical 0.11 reader fixture comes from the audited upstream revision, independently
+of current version constants. Only tests include it. Package tests use the real copy, pack, unpack,
+and load operations. Their assertion-row copies belong only to tests and are never written back.
+
+**Primary success call chain:**
+
+```text
+ProjectService load -> Storage/Database idempotent table creation
+  -> PhotoStackStore::ValidateAll -> expose existing application services
+  -> SaveProject writes 0.12 metadata and stack table counts
+  -> existing StorageMaintenance database copy -> WritePackedProject
+  -> UnpackProjectToWorkspace -> ProjectService load -> exact cover, member IDs, and saved order
+```
+
+**Primary failure call chain:**
+
+```text
+invalid persisted cover / orphan member / empty stack / malformed stack ID
+  -> project-open validation throws the actual diagnostic -> stored stack rows stay unchanged
+database-copy or package-replacement failure
+  -> existing copy/package owner reports failure -> source stack rows stay unchanged
+  -> later explicit copy or project reopen succeeds after the test obstruction is removed
+```
+
+**Executed evidence:**
+
+| Required test or additional behavior | Target | Result |
+| --- | --- | --- |
+| `Version011ProjectGainsEmptyStackTablesAndKeepsRootIds` | PhotoStackLifecycleTest | PASS; absent tables, marks, roots, 0.12 save, and repeat open |
+| `Version010ProjectGainsLibraryMarksAndKeepsRootIds` | ProjectCompatibilityTest | PASS; existing 0.10 fixture, empty stacks, marks, edits, and root IDs |
+| `Version012MetadataIsRejectedByTheVersion011Reader` | ProjectCompatibilityTest | PASS; historical bounds reject 0.12 and accept 0.10/0.11; other format IDs unchanged |
+| `PackagedProjectReopensWithExactStackMembershipAndCover` | PhotoStackLifecycleTest | PASS; two stacks, order gaps, cover changes, exact rows, roots, and invariants |
+| `DataSummaryIncludesBothStackTablesWithExactRowCounts` | StorageMaintenanceTest | PASS; existing summary schema and numeric key conversion |
+| `PackageDatabaseCopyPreservesStackRowsAndFailureKeepsSource` | PhotoStackLifecycleTest | PASS; real copied database, failed copy, detach cleanup, and later copy |
+| `ImportAndMetadataWritesPreserveExistingStackMembership` | PhotoStackLifecycleTest | PASS; real import with SyncImports, marks, exact stack rows, reopen, and invariants |
+| `PackageWriteFailureReportsErrorAndKeepsWorkingStackRows` | PhotoStackLifecycleTest | PASS; failed destination replacement, diagnostic, source rows, and reopen |
+| Invalid cover, orphan membership, empty stack, malformed saved UUID | PhotoStackLifecycleTest, four named cases | PASS; explicit open failure and exact unchanged stack rows |
+
+**Commands and totals.** The PS2A record contains the exact combined commands, target counts,
+follow-up runs, and environment. All final build and test exits were 0. All required targets exist
+and were built on this branch. The new lifecycle target registers both focused test sources with
+CTest. Sleeve and Import use direct filters because audited main does not discover their cases.
+The combined 93-pass result includes all nine package cases, five compatibility cases, six storage
+maintenance cases, eight ProjectService cases, and the required direct filters.
+
+**Failures found and resolved.** The first combined run passed 58 cases, skipped three, and failed
+two. The package-write test used an empty destination directory that the package owner could
+replace; it now uses a nonempty directory and asserts that its marker remains. The existing
+ProjectService version assertion still expected 0.11; it now checks the selected 0.12 version.
+Both corrected cases passed in the final 60-pass, three-skip CTest run. No unresolved failure
+remains in the executed targeted evidence. The import fixture issue is recorded as #826 under PS2A.
+
+**Ownership, file size, and review.** PS2A and PS2B together change about 1700 lines, including tests
+and these records. This combined count is below the 2000-line limit for either individual phase.
+The persistence store, FileSystem owner, application orchestration, and package owner retain their
+existing boundaries. New code adds no retained connection, owner mirror, or speculative race state.
+
+| Changed code or registration file | Total lines |
+| --- | ---: |
+| `src/app/project_service.cpp` | 641 |
+| `src/app/sleeve_service.cpp` | 314 |
+| `src/include/app/project_package_backend.hpp` | 148 |
+| `src/include/app/sleeve_service.hpp` | 155 |
+| `src/include/edit/history/pipeline_history_format.hpp` | 90 |
+| `src/include/sleeve/sleeve_filesystem.hpp` | 112 |
+| `src/include/storage/mapper/sleeve/element/element_mapper.hpp` | 69 |
+| `src/include/storage/store/database.hpp` | 338 |
+| `src/include/storage/store/sleeve/element_store.hpp` | 407 |
+| `src/include/storage/store/sleeve/photo_stack_store.hpp` | 59 |
+| `src/sleeve/sleeve_filesystem.cpp` | 706 |
+| `src/storage/mapper/sleeve/element/element_mapper.cpp` | 155 |
+| `src/storage/store/sleeve/element_store.cpp` | 1371 |
+| `src/storage/store/sleeve/photo_stack_store.cpp` | 420 |
+| `src/storage/store/storage_maintenance.cpp` | 231 |
+| `tests/app/CMakeLists.txt` | 1046 |
+| `tests/app/import_service_test.cpp` | 771 |
+| `tests/app/photo_stack_store_test.cpp` | 417 |
+| `tests/app/project_compatibility_test.cpp` | 454 |
+| `tests/app/project_service_test.cpp` | 263 |
+| `tests/app/sleeve_service_test.cpp` | 1155 |
+| `tests/storage/storage_maintenance_test.cpp` | 304 |
+| `tests/app/photo_stack_lifecycle_test.cpp` | 195 |
+| `tests/app/photo_stack_package_test.cpp` | 228 |
+| `tests/resources/compat/project_version_reader_011.hpp` | 61 |
+| `tests/support/photo_stack_test_library.hpp` | 144 |
+
+ElementStore already exceeded 1000 lines (1369 before this change). It owns only a Database
+reference; this phase consolidates existing persistence operations into its focused atomic API.
+Album query helpers remain separate modules, stack invariants remain in PhotoStackStore, and
+restoration of live state remains in FileSystem. Moving these transaction helpers into a second
+method file would not establish a new owner. No new mutable responsibility was added to the store.
+The existing 1155-line SleeveServiceTest keeps its FileSystem behavior fixture; only two focused
+sync cases and version assertions were added. The new lifecycle and package files stay separate
+and share a small six-photo project builder. The 1046-line CMake manifest gains one registration
+and no runtime responsibility. The PS1 fixture cleanup only removes trailing underscores from
+protected members; it changes no assertions or tested behavior.
+
+Public API comments state lock/transaction requirements, ownership, side effects, and errors.
+New files were formatted in full; existing files only at changed lines. Changed files use LF.
+Storage boundary, whitespace, roadmap filename, and touched-file terminology checks passed.
+
+**Checklist and unavailable evidence.** All PS2B exit criteria are satisfied. The PS2A record lists
+the three missing-sample skips and excluded GPU rendering comparison. No full suite, Debug/macOS
+build, manual layout/theme/language check, sanitizer, or resource/performance measurement ran.
+PS3 and later work is unchanged. No production Library stack command or presentation is exposed.
+Task logs under `build/tmp/photo_stack_first_pr/` were removed after results were recorded.
 
 ### PS3 - Matching fragments and temporary covers
 
@@ -1721,7 +1853,8 @@ Unavailable coverage and linked issues:
 Temporary evidence removed after recording:
 ```
 
-Plan verification: source and documentation audit only. The 2026-11-11 review checked the latest
+Original plan verification: source and documentation audit only. The 2026-11-11 review checked the latest
 upstream main revision, existing owner APIs, caller chains, and CMake test registration.
 All maintenance-branch prerequisites were removed. The approved product matching rules are unchanged.
-Product code is unchanged. No build, automated product test, or manual application verification ran.
+Product code was unchanged during that plan review. No build, automated product test, or manual
+application verification ran during that review. Phase records above contain later execution evidence.

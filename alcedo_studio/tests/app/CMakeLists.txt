@@ -408,10 +408,12 @@ alcedo_copy_duckdb_fts_extension(PhotoStackStoreTest)
 alcedo_register_test_target(PhotoStackStoreTest app ci_core)
 
 add_executable(PhotoStackLifecycleTest
-  ${ALCEDO_TEST_ROOT}/app/photo_stack_lifecycle_test.cpp)
+  ${ALCEDO_TEST_ROOT}/app/photo_stack_lifecycle_test.cpp
+  ${ALCEDO_TEST_ROOT}/app/photo_stack_package_test.cpp)
 target_include_directories(PhotoStackLifecycleTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(PhotoStackLifecycleTest
-  PhotoStackService ProjectService PipelineMgmtService StorageInvariantsTestSupport GTest::gtest_main)
+  PhotoStackService ProjectService PipelineMgmtService ImportService StorageInvariantsTestSupport
+  OpenImageIO::OpenImageIO GTest::gtest_main)
 gtest_discover_tests(PhotoStackLifecycleTest TEST_PREFIX "PhotoStackLifecycleTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_copy_duckdb_fts_extension(PhotoStackLifecycleTest)

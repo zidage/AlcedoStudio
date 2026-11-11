@@ -530,6 +530,8 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
 
   storage_ = std::make_shared<Storage>(db_path_);
 
+  storage_->GetPhotoStackStore().ValidateAll();
+
   // Older projects have HNSW indexes on the semantic embedding tables. Search no
   // longer uses them, and while one exists every embedding write needs the vss
   // extension. Drop them; when that fails, the project does not open.

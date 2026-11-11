@@ -37,6 +37,8 @@ constexpr SummaryTable kSummaryTables[] = {
     {"Element", "id"},
     {"FolderContent", nullptr},
     {"FileImage", "file_id"},
+    {"PhotoStack", "stack_id"},
+    {"PhotoStackMember", "file_id"},
     {"ComboFolder", "combo_id"},
     {"Filter", "combo_id"},
     {"VersionRef", "version_id"},

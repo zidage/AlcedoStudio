@@ -42,6 +42,10 @@ class PhotoStackStore {
   auto MoveMember(sl_element_id_t file_id, PhotoStackMove direction) -> PhotoStackChange;
   /// Read validated, saved member order; unknown stacks are errors, never empty successes.
   auto ReadMemberIds(const std::string& stack_id) -> std::vector<sl_element_id_t>;
+  /// Validate every stored stack and detect orphan memberships under one read transaction.
+  /// Project open calls this before exposing services. Throws the persisted-data diagnostic;
+  /// never repairs damaged data or changes covers, memberships, or positions.
+  void        ValidateAll();
   /// Remove memberships before File deletion on the caller's locked transaction connection.
   /// Validate affected stacks, then repair covers or dissolve them. Opens no connection or
   /// transaction; the caller must retain live File bindings until this method returns.

@@ -138,6 +138,10 @@ void WriteStoredExposure(Storage& storage, sl_element_id_t id, float exposure_ev
 
 TEST(ProjectVersionTests, MiniGitSchemaBumpRejectsPreviousProjectVersion) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.12.0");
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.10.0"));
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.11.0"));
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.13.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.5"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.4"));
 }

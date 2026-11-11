@@ -96,6 +96,36 @@ void ValidateFiles(duckdb_connection conn, std::span<const sl_element_id_t> ids)
   }
 }
 
+/// Check the same persisted invariants for one stack or every header, with one grouped query.
+/// The caller holds the connection lock and transaction; this read never repairs stored rows.
+void ValidateRelations(duckdb_connection conn, const std::string* stack_id = nullptr) {
+  auto query = expr::raw(
+      "SELECT s.stack_id FROM PhotoStack s LEFT JOIN PhotoStackMember m "
+      "ON m.stack_id = s.stack_id");
+  if (stack_id) {
+    query.append(expr::raw(" WHERE s.stack_id = "));
+    query.append(expr::param(*stack_id));
+  }
+  query.append(
+      expr::raw(" GROUP BY s.stack_id, s.cover_file_id HAVING COUNT(m.file_id) < 2 "
+                "OR COUNT(DISTINCT m.member_order) <> COUNT(m.file_id) OR MIN(m.member_order) < 0 "
+                "OR COUNT(*) FILTER (WHERE m.file_id = s.cover_file_id) <> 1 "
+                "OR COUNT(*) FILTER (WHERE m.file_id < 0 OR m.file_id > "));
+  query.append(expr::param(static_cast<std::int64_t>(std::numeric_limits<sl_element_id_t>::max())));
+  query.append(
+      expr::raw(") > 0 OR COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM Element e "
+                "JOIN FileImage fi ON fi.file_id = e.id LEFT JOIN Image i ON i.id = fi.image_id "
+                "WHERE e.id = m.file_id AND e.type = "));
+  query.append(expr::param(static_cast<std::int64_t>(ElementType::FILE)));
+  query.append(
+      expr::raw(" GROUP BY e.id HAVING COUNT(*) = 1 AND COUNT(i.id) = 1)) > 0 "
+                "ORDER BY s.stack_id LIMIT 1"));
+  const auto invalid = duckorm::query<StackIdRow>(conn, query);
+  if (!invalid.empty()) {
+    throw std::runtime_error("Invalid persisted photo stack relation: " + invalid.front().stack_id);
+  }
+}
+
 /// Validate the complete affected relation on this connection; return only its saved cover ID.
 auto ValidateStack(duckdb_connection conn, const std::string& id) -> sl_element_id_t {
   ValidateStackId(id);
@@ -104,20 +134,7 @@ auto ValidateStack(duckdb_connection conn, const std::string& id) -> sl_element_
   if (!cover) {
     throw std::invalid_argument("Unknown photo stack: " + id);
   }
-  const auto invalid = duckorm::select_int64(
-      conn, {"SELECT CASE WHEN COUNT(*) < 2 OR COUNT(DISTINCT member_order) <> COUNT(*) "
-             "OR MIN(member_order) < 0 OR COUNT(*) FILTER (WHERE file_id = ?) <> 1 "
-             "OR COUNT(*) FILTER (WHERE file_id < 0 OR file_id > ?) > 0 "
-             "OR COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM Element e "
-             "JOIN FileImage fi ON fi.file_id = e.id LEFT JOIN Image i ON i.id = fi.image_id "
-             "WHERE e.id = m.file_id AND e.type = ? "
-             "GROUP BY e.id HAVING COUNT(*) = 1 AND COUNT(i.id) = 1)) > 0 "
-             "THEN 1 ELSE 0 END FROM PhotoStackMember m WHERE stack_id = ?",
-             {*cover, static_cast<std::int64_t>(std::numeric_limits<sl_element_id_t>::max()),
-              static_cast<std::int64_t>(ElementType::FILE), id}});
-  if (invalid.value_or(1) != 0) {
-    throw std::runtime_error("Invalid persisted photo stack relation: " + id);
-  }
+  ValidateRelations(conn, &id);
   return FileId(*cover);
 }
 
@@ -368,6 +385,30 @@ auto PhotoStackStore::ReadMemberIds(const std::string& stack_id) -> std::vector<
     ValidateStack(conn, stack_id);
     return MemberIds(conn, stack_id);
   });
+}
+
+void PhotoStackStore::ValidateAll() {
+  auto                 guard = database_.GetConnectionGuard();
+  auto                 lock  = guard.Lock();
+  duckorm::Transaction transaction(guard.conn_);
+  const auto           orphan = duckorm::query<StackIdRow>(
+      guard.conn_, expr::raw("SELECT m.stack_id FROM PhotoStackMember m LEFT JOIN PhotoStack s "
+                             "ON s.stack_id = m.stack_id WHERE s.stack_id IS NULL LIMIT 1"));
+  if (!orphan.empty()) {
+    throw std::runtime_error("Photo stack membership has no saved stack: " +
+                             orphan.front().stack_id);
+  }
+  for (const auto& row :
+       duckorm::query<StackIdRow>(guard.conn_, expr::raw("SELECT stack_id FROM PhotoStack"))) {
+    try {
+      ValidateStackId(row.stack_id);
+    } catch (const std::invalid_argument& error) {
+      throw std::runtime_error("Invalid persisted photo stack ID: " + row.stack_id + ": " +
+                               error.what());
+    }
+  }
+  ValidateRelations(guard.conn_);
+  transaction.commit();
 }
 
 void PhotoStackStore::RemoveFileMemberships(duckdb_connection&               connection,
