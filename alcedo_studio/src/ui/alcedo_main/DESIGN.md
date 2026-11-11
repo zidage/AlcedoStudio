@@ -513,8 +513,10 @@ edit state and the rating. The shared parts are `ThumbnailEditMark.qml` and
   that point at the same height on the screen. Cards that leave the view move
   to their new place and fade out; cards that enter fade in. A step during the
   animation starts from the drawn rectangles of that moment. The thumbnail of a
-  new tier replaces the shown one when it is ready. The grouped view uses the
-  same rules (260 ms).
+  larger tier replaces the shown one when it is ready. A card that already shows
+  a thumbnail larger than a smaller new tier keeps it and its pin, and requests
+  no render (`ThumbnailTier.js`); a card without a thumbnail requests the new
+  tier. The grouped view uses the same rules (260 ms).
 
 ### Library justified rows
 

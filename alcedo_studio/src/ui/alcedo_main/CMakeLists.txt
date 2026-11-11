@@ -792,6 +792,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollectionTree.js"
     "${ALCEDO_UI_SHELL_ROOT}/qml/DataFormat.js"
     "${ALCEDO_UI_SHELL_ROOT}/qml/FileDrop.js"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailTier.js"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SearchPalette.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/StatsCard.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/DateCommitGraph.qml"
