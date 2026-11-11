@@ -171,7 +171,7 @@ endif()
 def_cuda_library(EditRuntimeLens
     SOURCES ${EDIT_RUNTIME_LENS_SRCS}
     PUBLIC_DEPS EditGraph EditGeometry ${ALCEDO_OPENCV_CORE_DEPS}
-    PRIVATE_DEPS puerhlab_lensfun
+    PRIVATE_DEPS puerhlab_lensfun AlcedoLog
 )
 if(ALCEDO_CUDA_ENABLED)
     set_target_properties(EditRuntimeLens PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
