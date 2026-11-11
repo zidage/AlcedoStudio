@@ -6,6 +6,7 @@
 
 #include <duckdb.h>
 
+#include <QString>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +22,7 @@
 #include <vector>
 
 #include "duckdb_value.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace duckorm {
 namespace {
@@ -39,8 +41,13 @@ auto                  SqlHead(std::string_view sql) -> std::string_view {
   return sql.substr(0, end);
 }
 
+/// Logs @p message with the head of @p sql and throws StatementError. The exception text is
+/// @p message only: callers pass it on to the user, and the SQL text belongs in the log.
 [[noreturn]] void Fail(std::string_view message, std::string_view sql) {
-  throw std::runtime_error(std::format("{} [SQL: {}]", message, SqlHead(sql)));
+  const std::string_view head = SqlHead(sql);
+  qCWarning(alcedo::diag::appLog).noquote()
+      << QString::fromUtf8(std::format("duckorm: {} [SQL: {}]", message, head));
+  throw StatementError(std::string(message), std::string(head));
 }
 
 auto DuckTypeName(duckdb_type type) -> std::string {

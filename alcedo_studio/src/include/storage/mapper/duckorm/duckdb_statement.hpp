@@ -12,15 +12,36 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_types.hpp"
 
 namespace duckorm {
+
+/**
+ * @brief The error of a failed Statement or Result call.
+ *
+ * `what()` is the DuckDB or duckorm message: the text that a caller can show to the user.
+ * sql_head() is the first 120 bytes of the SQL text (cut before a UTF-8 continuation byte). The
+ * throw writes both to the application log as a warning, so the statement stays known for
+ * diagnosis.
+ */
+class StatementError : public std::runtime_error {
+ public:
+  StatementError(const std::string& message, std::string sql_head)
+      : std::runtime_error(message), sql_head_(std::move(sql_head)) {}
+
+  [[nodiscard]] auto sql_head() const -> const std::string& { return sql_head_; }
+
+ private:
+  std::string sql_head_;
+};
 
 /**
  * @brief C++ types that one result cell decodes into and that a row struct member can have.
@@ -123,8 +144,8 @@ consteval auto MemberKindOf() -> MemberKind {
  *
  * Owned by its Statement. It stays valid until the next Execute of that statement or the
  * statement's destruction. Cell reads check the column type against the requested C++ type
- * (see ColumnTypeFitsMember) and throw `std::runtime_error` that names the column, its DuckDB
- * type, the C++ type, and the head of the SQL text.
+ * (see ColumnTypeFitsMember) and throw StatementError that names the column, its DuckDB type,
+ * and the C++ type.
  *
  * Not thread-safe: use it on the thread that holds the connection's lock.
  */
@@ -233,8 +254,8 @@ class Result {
  *
  * The constructor prepares the SQL text; Bind sets parameters (1-based, as in DuckDB); Execute
  * runs the statement and returns the result. A statement can be bound and executed again; each
- * Execute releases the previous result. Every failed DuckDB call throws `std::runtime_error`
- * with DuckDB's message and the first 120 bytes of the SQL text.
+ * Execute releases the previous result. Every failed DuckDB call throws StatementError with
+ * DuckDB's message.
  *
  * Not thread-safe: use it on the thread that holds the connection's lock. The connection must
  * outlive the statement. The statement cannot be copied or moved, because its result refers to
