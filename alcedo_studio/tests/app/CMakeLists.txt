@@ -428,6 +428,28 @@ gtest_discover_tests(LibraryReferenceModelTest TEST_PREFIX "LibraryReferenceMode
 alcedo_copy_duckdb_extensions(LibraryReferenceModelTest)
 alcedo_register_test_target(LibraryReferenceModelTest app ci_core)
 
+# Storage concurrent access (#809): library reads and writes of the production services on
+# several threads for a fixed time, then the storage invariant check (#805). Run it with the
+# AddressSanitizer build (preset win_debug_asan) and the ThreadSanitizer build (macos_debug_tsan).
+add_executable(LibraryConcurrentAccessTest
+  ${ALCEDO_TEST_ROOT}/app/library_concurrent_access_test.cpp
+  ${ALCEDO_TEST_ROOT}/support/storage_invariants.cpp)
+target_include_directories(LibraryConcurrentAccessTest PUBLIC
+  ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(LibraryConcurrentAccessTest
+  AdjustmentTransferService
+  EditorPipelineCommandService
+  ProjectService
+  PipelineMgmtService
+  PipelineHistory
+  EditGraph
+  SleeveFilterService
+  GTest::gtest_main)
+gtest_discover_tests(LibraryConcurrentAccessTest TEST_PREFIX "LibraryConcurrentAccessTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_extensions(LibraryConcurrentAccessTest)
+alcedo_register_test_target(LibraryConcurrentAccessTest app ci_core)
+
 # Writes the marked project of the alcedo-cli read comparison of two builds (#807,
 # scripts/storage_cli_compare/compare_storage_cli_reads.py). Built only on request and not
 # registered with ctest: the comparison script runs it.
