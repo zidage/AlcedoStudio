@@ -129,27 +129,28 @@ class SyntheticLibraryBuilder {
     pinned.reserve(end - begin);
     image_ids.reserve(end - begin);
     for (std::size_t i = begin; i < end; ++i) {
-      const auto& spec   = specs[i];
-      auto        handle = image_pool->CreateAndReturnPinnedEmpty();
-      auto&       image  = *handle.Get();
-      image.image_name_  = spec.file_name_;
-      image.image_path_  = std::filesystem::path(spec.image_path_);
-      image.image_type_  = spec.has_dng_profile_ ? ImageType::DNG : ImageType::DEFAULT;
+      const auto& spec = specs[i];
+      // The image is filled under the pool lock: another thread may sync the pool meanwhile.
+      auto handle = image_pool->CreateAndReturnPinned([&](Image& image) {
+        image.image_name_ = spec.file_name_;
+        image.image_path_ = std::filesystem::path(spec.image_path_);
+        image.image_type_ = spec.has_dng_profile_ ? ImageType::DNG : ImageType::DEFAULT;
 
-      ExifDisplayMetaData metadata;
-      metadata.make_          = spec.make_;
-      metadata.model_         = spec.model_;
-      metadata.lens_          = spec.lens_;
-      metadata.date_time_str_ = spec.date_time_;
-      metadata.iso_           = spec.iso_;
-      metadata.aperture_      = spec.aperture_;
-      metadata.focal_         = spec.focal_;
-      metadata.rating_        = spec.rating_;
-      image.SetExifDisplayMetaData(std::move(metadata));
-      if (spec.is_raw_file_) {
-        image.SetRawColorContext(MakeRawColorContext(spec, dng_profile_));
-      }
-      image_ids.push_back(image.image_id_);
+        ExifDisplayMetaData metadata;
+        metadata.make_          = spec.make_;
+        metadata.model_         = spec.model_;
+        metadata.lens_          = spec.lens_;
+        metadata.date_time_str_ = spec.date_time_;
+        metadata.iso_           = spec.iso_;
+        metadata.aperture_      = spec.aperture_;
+        metadata.focal_         = spec.focal_;
+        metadata.rating_        = spec.rating_;
+        image.SetExifDisplayMetaData(std::move(metadata));
+        if (spec.is_raw_file_) {
+          image.SetRawColorContext(MakeRawColorContext(spec, dng_profile_));
+        }
+      });
+      image_ids.push_back(handle->image_id_);
       pinned.push_back(std::move(handle));
     }
     image_pool->SyncWithStorage();
