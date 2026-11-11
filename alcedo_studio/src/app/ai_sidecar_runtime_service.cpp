@@ -14,6 +14,7 @@
 #include <QTcpServer>
 #include <QThread>
 #include <chrono>
+#include <optional>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -43,6 +44,31 @@ auto TailAppend(std::string* target, const QByteArray& bytes) -> void {
   target->append(bytes.constData(), static_cast<size_t>(bytes.size()));
   if (target->size() > kLogTailBytes) {
     target->erase(0, target->size() - kLogTailBytes);
+  }
+}
+
+/// Appends @p bytes to @p partial_line and calls @p write_line for each complete line, without its
+/// newline. The bytes after the last newline stay in @p partial_line.
+template <typename WriteLine>
+auto ForEachCompleteLine(QByteArray* partial_line, const QByteArray& bytes, WriteLine&& write_line)
+    -> void {
+  partial_line->append(bytes);
+  qsizetype start = 0;
+  for (qsizetype end = partial_line->indexOf('\n'); end >= 0;
+       end           = partial_line->indexOf('\n', start)) {
+    write_line(QByteArrayView(*partial_line).sliced(start, end - start));
+    start = end + 1;
+  }
+  partial_line->remove(0, start);
+}
+
+/// One application log warning for one stderr line of the sidecar (panic output, native library
+/// output).
+auto WriteStderrLine(QByteArrayView line) -> void {
+  const QByteArrayView text = line.trimmed();
+  if (!text.isEmpty()) {
+    qCWarning(diag::semanticLog).noquote()
+        << QStringLiteral("semantic.runtime.stderr ") + QString::fromUtf8(text);
   }
 }
 
@@ -414,6 +440,9 @@ auto AiSidecarRuntimeService::StartAndWaitBody(const AiSidecarRuntimeOptions& op
   client_.reset();
   status_.stdout_tail.clear();
   status_.stderr_tail.clear();
+  stdout_partial_line_.clear();
+  stderr_partial_line_.clear();
+  stdout_line_level_ = SidecarLogLevel::kInfo;
   status_.model_info.reset();
   status_.remote_status.reset();
 
@@ -625,8 +654,7 @@ void AiSidecarRuntimeService::FinishIdleStop() {
   idle_stop_kill_timer_.stop();
   idle_stop_pending_   = false;
   idle_stop_kill_sent_ = false;
-  AppendStdout(process_.readAllStandardOutput());
-  AppendStderr(process_.readAllStandardError());
+  ReadRemainingProcessOutput();
   ReleaseChildTreeCleanup();
   client_.reset();
   status_.process_id = 0;
@@ -714,20 +742,71 @@ void AiSidecarRuntimeService::SetStatus(AiSidecarRuntimeState state, AiSidecarRu
 
 void AiSidecarRuntimeService::AppendStdout(const QByteArray& bytes) {
   TailAppend(&status_.stdout_tail, bytes);
-  const QString text = QString::fromUtf8(bytes).trimmed();
-  if (!text.isEmpty()) {
-    qCInfo(diag::semanticLog).noquote()
-        << QStringLiteral("semantic.runtime.stdout %1").arg(text.left(1000));
+  ForEachCompleteLine(&stdout_partial_line_, bytes,
+                      [this](QByteArrayView line) { WriteStdoutLine(line); });
+}
+
+auto AiSidecarRuntimeService::TracingLineLevel(QByteArrayView line)
+    -> std::optional<SidecarLogLevel> {
+  // The level is right-aligned to five characters, so one or two spaces follow the timestamp.
+  const auto is_space  = [](char c) { return c == ' ' || c == '\t'; };
+  qsizetype  pos       = 0;
+  const auto next_word = [&]() -> QByteArrayView {
+    while (pos < line.size() && is_space(line[pos])) {
+      ++pos;
+    }
+    const qsizetype begin = pos;
+    while (pos < line.size() && !is_space(line[pos])) {
+      ++pos;
+    }
+    return line.sliced(begin, pos - begin);
+  };
+  next_word();  // The timestamp.
+  const QByteArrayView level = next_word();
+  if (level == "ERROR") return SidecarLogLevel::kError;
+  if (level == "WARN") return SidecarLogLevel::kWarn;
+  if (level == "INFO") return SidecarLogLevel::kInfo;
+  if (level == "DEBUG") return SidecarLogLevel::kDebug;
+  if (level == "TRACE") return SidecarLogLevel::kTrace;
+  return std::nullopt;
+}
+
+void AiSidecarRuntimeService::WriteStdoutLine(QByteArrayView line) {
+  const QByteArrayView text = line.trimmed();
+  if (text.isEmpty()) {
+    return;
+  }
+  if (const auto level = TracingLineLevel(text)) {
+    stdout_line_level_ = *level;
+  }
+  switch (stdout_line_level_) {
+    case SidecarLogLevel::kWarn:
+      qCWarning(diag::semanticLog).noquote()
+          << QStringLiteral("semantic.runtime.stdout ") + QString::fromUtf8(text);
+      return;
+    case SidecarLogLevel::kError:
+      qCCritical(diag::semanticLog).noquote()
+          << QStringLiteral("semantic.runtime.stdout ") + QString::fromUtf8(text);
+      return;
+    case SidecarLogLevel::kTrace:
+    case SidecarLogLevel::kDebug:
+    case SidecarLogLevel::kInfo:
+      return;
   }
 }
 
 void AiSidecarRuntimeService::AppendStderr(const QByteArray& bytes) {
   TailAppend(&status_.stderr_tail, bytes);
-  const QString text = QString::fromUtf8(bytes).trimmed();
-  if (!text.isEmpty()) {
-    qCWarning(diag::semanticLog).noquote()
-        << QStringLiteral("semantic.runtime.stderr %1").arg(text.left(1000));
-  }
+  ForEachCompleteLine(&stderr_partial_line_, bytes, WriteStderrLine);
+}
+
+void AiSidecarRuntimeService::ReadRemainingProcessOutput() {
+  AppendStdout(process_.readAllStandardOutput());
+  AppendStderr(process_.readAllStandardError());
+  WriteStdoutLine(stdout_partial_line_);
+  stdout_partial_line_.clear();
+  WriteStderrLine(stderr_partial_line_);
+  stderr_partial_line_.clear();
 }
 
 void AiSidecarRuntimeService::RefreshProcessExit() {
@@ -749,8 +828,7 @@ void AiSidecarRuntimeService::RefreshProcessExit() {
 
   ReleaseChildTreeCleanup();
   client_.reset();
-  AppendStdout(process_.readAllStandardOutput());
-  AppendStderr(process_.readAllStandardError());
+  ReadRemainingProcessOutput();
   status_.process_id = 0;
   const bool crashed = process_.exitStatus() == QProcess::CrashExit || process_.exitCode() != 0;
   std::ostringstream message;
@@ -793,6 +871,12 @@ auto AiSidecarRuntimeService::BuildArguments() const -> QStringList {
   args << "--batch-cap" << QString::number(options_.batch_cap);
   args << "--batch-wait-ms" << QString::number(options_.batch_wait_ms);
   args << "--max-message-bytes" << QString::number(options_.max_message_bytes);
+  // The sidecar log of this session, next to the application log. Without an open application
+  // log the sidecar writes to stderr only.
+  const QString log_file = diag::CompanionLogFilePath(QStringLiteral("mind"));
+  if (!log_file.isEmpty()) {
+    args << "--log-file" << log_file;
+  }
   for (const auto& arg : options_.extra_arguments) {
     args << QString::fromStdString(arg);
   }

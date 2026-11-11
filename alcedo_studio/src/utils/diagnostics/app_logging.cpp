@@ -10,13 +10,18 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QThread>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -218,14 +223,72 @@ auto ResolveLogDirectory(const QString& preferred_directory) -> QString {
   return QDir(base).filePath(QStringLiteral("logs"));
 }
 
+/// The files of one session in the log directory: one `<yyyyMMdd_HHmmss>_<pid>` stem.
+struct LogSessionFiles {
+  QFileInfoList files;
+  qint64        bytes = 0;
+};
+
+/// Applies the retention rule of InitializeApplicationLogging to @p directory. Returns one line for
+/// each file that could not be removed, for the log that opens after this call.
+auto RemoveOldLogSessions(const QString& directory, qint64 current_pid) -> QStringList {
+  static const QRegularExpression kSessionFileName(
+      QStringLiteral("^alcedo_(\\d{8}_\\d{6})_(\\d+)(?:_[A-Za-z0-9]+)?\\.log$"));
+
+  // Ordered by timestamp, then process ID: the oldest session first.
+  std::map<std::pair<QString, qint64>, LogSessionFiles> sessions;
+  const QFileInfoList                                   entries = QDir(directory).entryInfoList(
+      QStringList{QStringLiteral("alcedo_*.log")}, QDir::Files | QDir::NoDotAndDotDot);
+  for (const QFileInfo& entry : entries) {
+    const QRegularExpressionMatch match = kSessionFileName.match(entry.fileName());
+    if (!match.hasMatch()) {
+      continue;
+    }
+    const qint64 pid = match.captured(2).toLongLong();
+    if (pid == current_pid) {
+      continue;
+    }
+    LogSessionFiles& session = sessions[{match.captured(1), pid}];
+    session.files.append(entry);
+    session.bytes += entry.size();
+  }
+
+  std::size_t remove_count = 0;
+  if (sessions.size() > static_cast<std::size_t>(kRetainedLogSessionCount)) {
+    remove_count = sessions.size() - static_cast<std::size_t>(kRetainedLogSessionCount);
+  }
+  qint64 kept_bytes = 0;
+  auto   first_kept = std::next(sessions.begin(), static_cast<std::ptrdiff_t>(remove_count));
+  for (auto it = first_kept; it != sessions.end(); ++it) {
+    kept_bytes += it->second.bytes;
+  }
+  for (; first_kept != sessions.end() && kept_bytes > kRetainedLogSessionBytes; ++first_kept) {
+    kept_bytes -= first_kept->second.bytes;
+  }
+
+  QStringList failures;
+  for (auto it = sessions.begin(); it != first_kept; ++it) {
+    for (const QFileInfo& entry : it->second.files) {
+      QFile file(entry.absoluteFilePath());
+      if (!file.remove()) {
+        failures.append(QStringLiteral("logging.retention.remove_failed path=%1 error=%2")
+                            .arg(entry.absoluteFilePath(), file.errorString()));
+      }
+    }
+  }
+  return failures;
+}
+
 }  // namespace
 
 namespace {
 
-/// Opens @p file_path and installs the message handler. Returns the open path, or an empty
-/// string when the file cannot be opened.
-auto InitializeApplicationLoggingAt(const QString& file_path) -> QString {
-  QString initialized_path;
+/// Opens @p file_path and installs the message handler. With @p apply_retention, it first removes
+/// old sessions from the directory of @p file_path (RemoveOldLogSessions). Returns the open path,
+/// or an empty string when the file cannot be opened.
+auto InitializeApplicationLoggingAt(const QString& file_path, bool apply_retention) -> QString {
+  QString     initialized_path;
+  QStringList retention_failures;
   {
     std::lock_guard lock(g_log_lock);
     if (g_log_file && g_log_file->isOpen()) {
@@ -233,6 +296,10 @@ auto InitializeApplicationLoggingAt(const QString& file_path) -> QString {
     }
 
     QDir().mkpath(QFileInfo(file_path).absolutePath());
+    if (apply_retention) {
+      retention_failures = RemoveOldLogSessions(QFileInfo(file_path).absolutePath(),
+                                                QCoreApplication::applicationPid());
+    }
     g_log_file_path = file_path;
 
     auto file = std::make_unique<QFile>(g_log_file_path);
@@ -269,6 +336,9 @@ auto InitializeApplicationLoggingAt(const QString& file_path) -> QString {
 
   qCInfo(appLog).noquote()
       << QStringLiteral("logging.initialized path=%1").arg(initialized_path);
+  for (const QString& failure : retention_failures) {
+    qCWarning(appLog).noquote() << failure;
+  }
   return initialized_path;
 }
 
@@ -280,11 +350,12 @@ auto InitializeApplicationLogging(const QString& preferred_directory) -> QString
   const qint64 pid = QCoreApplication::applicationPid();
   return InitializeApplicationLoggingAt(
       QDir(ResolveLogDirectory(preferred_directory))
-          .filePath(QStringLiteral("alcedo_%1_%2.log").arg(timestamp).arg(pid)));
+          .filePath(QStringLiteral("alcedo_%1_%2.log").arg(timestamp).arg(pid)),
+      true);
 }
 
 auto InitializeApplicationLoggingToFile(const QString& file_path) -> QString {
-  return InitializeApplicationLoggingAt(QFileInfo(file_path).absoluteFilePath());
+  return InitializeApplicationLoggingAt(QFileInfo(file_path).absoluteFilePath(), false);
 }
 
 void ShutdownApplicationLogging() {
@@ -317,6 +388,16 @@ void FlushApplicationLog() {
 auto CurrentLogFilePath() -> QString {
   std::lock_guard lock(g_log_lock);
   return g_log_file_path;
+}
+
+auto CompanionLogFilePath(const QString& process_name) -> QString {
+  std::lock_guard lock(g_log_lock);
+  if (!g_log_file || !g_log_file->isOpen()) {
+    return {};
+  }
+  const QFileInfo log_file(g_log_file_path);
+  return log_file.dir().filePath(log_file.completeBaseName() + QLatin1Char('_') + process_name +
+                                 QStringLiteral(".log"));
 }
 
 auto DiagnosticCountersSnapshot() -> DiagnosticCounters {

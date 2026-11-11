@@ -20,8 +20,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_server() -> anyhow::Result<()> {
-    logging::init_logging();
     let config = config::AppConfig::load()?;
+    logging::init_logging(config.log_file.as_deref())?;
     // The CLIP profile is prepared on the first semantic request, not here: the AI Mask tool
     // starts this process too and needs no CLIP model (#518). Without `--model-id` the open
     // project has no active model: semantic requests report that, the other services run.
