@@ -213,11 +213,12 @@ class ElementStore {
  private:
   Database&   database_;
 
-  // Insert the element row plus its child rows (file binding / folder content) on @p conn.
-  // Does not touch sync_flag_ and does not manage a transaction, so it can run
-  // either autocommit (AddElement) or inside a shared transaction (AddElements).
-  static void InsertElementRows(duckorm::Connection&                  conn,
-                                const std::shared_ptr<SleeveElement>& element);
+  /// Batched insert on the caller's transaction, without changing live sync flags.
+  static void InsertElementRows(duckorm::Connection&                            conn,
+                                std::span<const std::shared_ptr<SleeveElement>> elements);
+  /// Full element removal and stack repair on the caller's transaction connection.
+  static void RemoveElementRows(duckorm::Connection&                            conn,
+                                std::span<const std::shared_ptr<SleeveElement>> elements);
   // Update the element row plus its child rows. For a folder, only the FolderContent rows of
   // the children added or removed since the last sync are written. Same
   // transaction-neutrality behavior as InsertElementRows; the caller clears the folder's
@@ -228,6 +229,18 @@ class ElementStore {
  public:
   explicit ElementStore(Database& database);
 
+  /// Atomically apply one Sleeve sync on one connection under the database lock. The spans
+  /// refer to owner-held elements, with no repeated or overlapping IDs. Publish sync flags and
+  /// clear pending folder changes only after commit. Throws on invalid input or any SQL failure.
+  void ApplyElementChanges(std::span<const std::shared_ptr<SleeveElement>> additions,
+                           std::span<const std::shared_ptr<SleeveElement>> modifications,
+                           std::span<const std::shared_ptr<SleeveElement>> deletions);
+  /// Reload committed scalar fields and the File binding into an existing live identity.
+  /// The FileSystem owner must hold its lock. Returns false only when no stored row exists;
+  /// throws on malformed rows or SQL failure. Does not copy or replace the live object.
+  auto RestoreElement(SleeveElement& element) -> bool;
+
+  /// Single-element form of ApplyElementChanges; updates sync flags only after commit.
   void AddElement(const std::shared_ptr<SleeveElement> element);
   // Bulk-insert a batch of elements (and their file/folder-content child
   // rows) in a single transaction. Import sync should prefer this over the per-row
@@ -239,9 +252,13 @@ class ElementStore {
   void RemoveFolderContent(sl_element_id_t folder_id, sl_element_id_t content_id);
   auto GetFolderContent(const sl_element_id_t folder_id) -> std::vector<sl_element_id_t>;
 
+  /// Primitive Element-row deletion only. Full live File removal must use the overload below.
   void RemoveElement(const sl_element_id_t id);
+  /// Full removal on one transaction, including File bindings, folder links, and stack repair.
   void RemoveElement(const std::shared_ptr<SleeveElement> element);
+  /// Full batch removal through the same transaction-local helper. SQL failures roll back all rows.
   void RemoveElements(std::span<const std::shared_ptr<SleeveElement>> elements);
+  /// Single-element form of ApplyElementChanges; retains pending state until commit.
   void UpdateElement(const std::shared_ptr<SleeveElement> element);
   // Bulk-update a batch of elements in a single transaction.
   void UpdateElements(std::span<const std::shared_ptr<SleeveElement>> elements);

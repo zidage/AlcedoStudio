@@ -592,9 +592,10 @@ TEST_F(ImportServiceTests, ImportedElementNameMatchesFileName) {
   std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
       fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
-  // Import a single known image
+  // Use the tracked RAW fixture so this test does not require a private photo collection.
   const std::filesystem::path test_image_path =
-      std::filesystem::path(TEST_IMG_PATH) / "raw" / "airplane" / "_DSC1704.NEF";
+      std::filesystem::path(TEST_IMG_PATH) / "ci_rawfiles" / "credit @ryanbreitkreutz _DSC0027.ARW";
+  ASSERT_TRUE(std::filesystem::is_regular_file(test_image_path));
   const std::wstring expected_name = test_image_path.filename().wstring();
 
   std::vector<image_path_t>  paths;
@@ -654,7 +655,10 @@ TEST_F(ImportServiceTests, ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoin
   ASSERT_TRUE(created.second.success_);
 
   std::vector<image_path_t> paths;
-  paths.push_back(TEST_IMG_PATH "/raw/airplane/_DSC1704.NEF");
+  const auto                test_image_path =
+      std::filesystem::path(TEST_IMG_PATH) / "ci_rawfiles" / "credit @ryanbreitkreutz _DSC0027.ARW";
+  ASSERT_TRUE(std::filesystem::is_regular_file(test_image_path));
+  paths.push_back(test_image_path);
 
   std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> final_result;

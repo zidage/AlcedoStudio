@@ -122,6 +122,21 @@ auto ElementMapper::GetElementById(const sl_element_id_t id) -> std::shared_ptr<
   return FromParams(std::move(*row));
 }
 
+void ElementMapper::RestoreFields(SleeveElement& element, const ElementMapperParams& param) {
+  if (element.element_id_ != param.id || element.type_ != static_cast<ElementType>(param.type) ||
+      !param.element_name) {
+    throw std::runtime_error("ElementMapper: stored element identity does not match live element");
+  }
+  auto       name             = conv::FromBytes(*param.element_name);
+  const auto added            = param.added_time ? ParseUtcTimestamp(*param.added_time) : 0;
+  const auto modified         = param.modified_time ? ParseUtcTimestamp(*param.modified_time) : 0;
+  element.element_name_       = std::move(name);
+  element.added_time_         = added;
+  element.last_modified_time_ = modified;
+  element.ref_count_          = param.ref_count;
+  element.sync_flag_          = SyncFlag::SYNCED;
+}
+
 auto ElementMapper::GetElementByName(const std::wstring& name)
     -> std::vector<std::shared_ptr<SleeveElement>> {
   return GetByPredicate(duckorm::expr::column_eq("element_name", conv::ToBytes(name)));

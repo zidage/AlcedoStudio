@@ -2,8 +2,9 @@
 
 Date: 2026-11-11
 
-Status: PS1 complete (2026-11-11). All other phases remain planned.
-The PS1 verification passed 22 targeted tests on Windows Release.
+Status: PS1 and PS2A complete (2026-11-11). All other phases remain planned.
+The latest Windows Release verification passed 93 targeted tests, skipped three, and failed none.
+One GPU rendering comparison was excluded. Evidence used the combined PS2A/PS2B working tree; see PS2A.
 
 Feature request: [#486](https://github.com/zidage/AlcedoStudio/issues/486), stacking section only.
 
@@ -729,7 +730,7 @@ Any statement failure rolls back the entire database removal and stack repair.
 An album unlink follows its existing FolderContent operation and never calls stack-member removal.
 Failure rolls back storage, reloads affected FileSystem entries through their owner, and reports
 no successful removal. An explicit retry starts a new operation from the restored state.
-Do not imply that this complete transaction exists before PS2A.
+PS2A implements the atomic element sync and owner restoration in this chain.
 
 ### 6.4 Pending stack save and close
 
@@ -756,7 +757,7 @@ Do not place the complete implementation in one PR if its added diff can exceed 
 | Phase | Result | Dependency | Expected changed lines | Split reason | Status |
 | --- | --- | --- | ---: | --- | --- |
 | PS1 | Stack schema, store, and application operations | Source audit | 1300-1850 | Keep persistent invariants in one reviewed unit. | complete |
-| PS2A | Atomic element sync and stack-aware project deletion | PS1 | 1200-1850 | Main needs a complete sync transaction and focused owner restore. | planned |
+| PS2A | Atomic element sync and stack-aware project deletion | PS1 | 1200-1850 | Main needs a complete sync transaction and focused owner restore. | complete |
 | PS2B | Migration, package preservation, and diagnostics | PS1 | 750-1250 | Keep format and package evidence separate from deletion changes. | planned |
 | PS3 | Filter-first fragments, covers, and collapsed display reads | PS1 | 1200-1800 | Isolate query semantics from expansion and UI. | planned |
 | PS4 | Expansion, bounded pages, positions, and matching-member reads | PS3 | 1100-1750 | Paging and three position spaces need dedicated tests. | planned |
@@ -849,7 +850,7 @@ Use ordered IDs as an explicit command, not an editable stored-stack copy.
 
 **Status:** complete. Implemented only persisted stacks and application commands.
 Branch: `feature/library-photo-stacking`. Source base: `e59529c66d2d0bfdc53c5c5cf2d88e6e68d9138d`.
-The plan commit is `4830980d`. The implementation and this record follow that commit.
+The plan commit is `4830980d`. PS1 and the five-PR split were committed as `a5503149`.
 
 **Changed modules.** Added `PhotoStackChange`, `PhotoStackMove`, two typed table Mappers,
 PhotoStackStore, and PhotoStackService. Storage owns the store. ProjectService creates the service
@@ -946,8 +947,8 @@ New files were formatted in full. Existing C++ files were formatted only at chan
 The source, test, and documentation terminology searches found no prohibited usage in touched files
 and no prohibited roadmap filename. All changed files use LF.
 
-**Scope and unavailable evidence.** No later phase started. Project version 0.12, old-project
-compatibility validation, package diagnostics, and File-deletion integration remain in PS2A/PS2B.
+**Scope and unavailable evidence at PS1 completion.** PS1 left project version 0.12, old-project
+compatibility validation, package diagnostics, and File-deletion integration to PS2A/PS2B.
 Display queries, temporary covers, groups, selection, save tasks, and QML remain in their listed phases.
 No full test suite, Debug build, macOS build, UI check, or performance benchmark ran for PS1.
 There is no unresolved failure in the targeted evidence. Task logs under
@@ -996,10 +997,134 @@ Mark owner changes synced only after commit. Restore affected owner entries from
 
 **Build and run.** V2A: PhotoStackLifecycleTest and AlbumBackendImageDeleteTest through CTest.
 Build SleeveServiceTest and ImportServiceTest, then run their direct filters from Section 10.1.
-**Exit criteria.** [ ] One connection and transaction cover element changes and stack repair.
-[ ] Failed sync preserves the database and restores affected owner entries. [ ] Existing import sync still passes.
+**Exit criteria.** [x] One connection and transaction cover element changes and stack repair.
+[x] Failed sync preserves the database and restores affected owner entries. [x] Existing import sync still passes.
 **Expected diff.** 1200-1850 lines.
-**Completion record.** Not started. Fill the Section 12 template here after implementation.
+
+#### PS2A completion record (2026-11-11)
+
+**Status:** complete. Atomic element sync, stack-aware File removal, and failed-sync recovery.
+Branch: `feature/library-photo-stacking`. Implementation base: PS1 commit `a5503149`.
+PS2A and PS2B are recorded in separate functional commits after that commit. No PR was opened.
+
+**Changed modules and selected details.** ElementStore owns one transaction over additions,
+modifications, and deletions. Its existing multi-row insertion and folder-delta helpers remain in use.
+Standalone full-element removal uses the same connection-local removal helper. That helper repairs
+stacks before it removes File bindings. The ID-only Element-row removal primitive keeps its meaning.
+Image/history cleanup remains with its existing caller; this phase does not move that ownership.
+
+SleeveService serializes public Sync with Read and Write through its existing FileSystem mutex.
+Write and DuplicateFileToFolder call SyncLocked while holding that mutex. Sync reports a count and
+collects deleted entries only after the transaction commits. Album unlink changes folder links only.
+
+FileSystem::RestoreAfterFailedSync reads affected entries through ElementStore and restores the
+same live objects under the existing owner lock and storage session. ElementMapper applies its
+existing persisted row fields. Folder membership is then reloaded without incrementing references.
+The operation invalidates path resolution, clears pending folder deltas, discards only uncommitted
+new entries, and never rewinds ID allocation. If the first root insert rolled back, the same empty
+root remains unsynced and usable. No editable owner copy or new consistency identifier was added.
+
+If owner restoration itself fails, the service retains both the original SQL error and restoration
+error and rejects subsequent reads and writes. Reopening the project creates a usable owner from
+committed data. This explicit error state prevents access to a partly restored FileSystem.
+
+**Primary success call chain:**
+
+```text
+DeletePath / DeleteFileEverywhere / DeleteElement / public Sync
+  -> SleeveServiceImpl owner lock -> SyncLocked
+  -> ElementStore::ApplyElementChanges -> one connection, database lock, and transaction
+  -> folder writes -> PhotoStackStore::RemoveFileMemberships -> File and Element removal
+  -> commit -> mark additions/modifications synced and clear pending folder deltas
+  -> FileSystem::GarbageCollect -> successful SyncResult and stored repaired cover/membership
+```
+
+**Primary failure call chain:**
+
+```text
+constraint failure after folder writes or stack repair, before the final Element delete commits
+  -> transaction rollback -> zero successful sync count
+  -> FileSystem::RestoreAfterFailedSync -> restore committed fields and folder membership in place
+  -> failed SyncResult with actual diagnostic -> explicit retry uses restored live objects
+restoration failure
+  -> retain original and restoration diagnostics -> reject service access until project reopen
+```
+
+**Executed evidence.** The new lifecycle cases use real ProjectService, SleeveService, and DuckDB.
+Test-only foreign keys reject real statement boundaries. Exact Element, FolderContent, FileImage,
+PhotoStack, and PhotoStackMember rows are compared across rollback. Recovery cases also assert live
+pointer identity, resolution, sync flags, pending folder changes, and successful explicit retries.
+
+| Required test or additional behavior | Target | Result |
+| --- | --- | --- |
+| `DeletingSavedCoverPromotesFirstRemainingMemberInTheSameCommit` | PhotoStackLifecycleTest | PASS; saved order, cover, deleted rows, and reopen |
+| `DeletingDownToOneMemberDissolvesTheSavedStack` | PhotoStackLifecycleTest | PASS; remaining File and album link retained |
+| `AlbumUnlinkKeepsProjectStackMembership` | PhotoStackLifecycleTest | PASS; exact stack rows and reopen |
+| `FailureAfterFolderUnlinkRestoresFolderFileAndStackRows` | PhotoStackLifecycleTest | PASS; transaction rollback and live folder membership |
+| `FailedSyncRestoresFileSystemAndAllowsExplicitRetry` | PhotoStackLifecycleTest | PASS; failure after stack repair, same live owners, and retry |
+| `StandaloneElementRemovalUsesTheSameStackRepair` | PhotoStackLifecycleTest | PASS; shared-pointer and span entry points |
+| `FailedSyncDiscardsOnlyNewEntriesAndDoesNotReuseTheirIds` | PhotoStackLifecycleTest | PASS; mixed create/delete rollback |
+| `FailedOwnerRestoreReportsBothErrorsAndRequiresProjectReopen` | PhotoStackLifecycleTest | PASS; both diagnostic parts, rejected access, and reopen |
+| `FailedAlbumUnlinkRestoresTheSameFolderAndKeepsTheStack` | PhotoStackLifecycleTest | PASS; same folder, cleared pending changes, and retry |
+| `PublicSyncCommitsPendingFolderChangesAndPreservesIdentity` | SleeveServiceTest | PASS; committed child link, same owners, then zero pending changes |
+| `FailedFirstSyncKeepsRootUsableAndDoesNotReuseDiscardedIds` | SleeveServiceTest | PASS; no committed root/File after failure, same root, and later successful write |
+
+**Commands, discovery, and totals.** PS2A and PS2B share the final build and test run below. It ran
+on their combined working tree before the changes were separated into commits. It used
+the existing supported `win_release` tree with tests enabled and Qt 6.12.0. No new build tree was made.
+All commands ran from the repository root in PowerShell. Build, discovery, and final test exits: 0.
+
+```powershell
+$env:VCVARS_USER_VERSION = '14.44'
+$env:PATH = "C:/Qt/6.12.0/msvc2022_64/bin;$PWD/build/dependencies/duckdb-v1.5.6;$PWD/build/debug/vcpkg_installed/x64-windows/debug/bin;$PWD/vcpkg/installed/x64-windows/debug/bin;$PWD/vcpkg/installed/x64-windows/bin;$env:PATH"
+$env:QT_QPA_PLATFORM = 'offscreen'
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target PhotoStackLifecycleTest PhotoStackStoreTest ProjectCompatibilityTest StorageMaintenanceTest ProjectServiceTest SleeveServiceTest ImportServiceTest AlbumBackendImageDeleteTest --parallel 4
+$testPattern = '^(PhotoStackLifecycleTest|PhotoStackStoreTest|ProjectCompatibilityTest|StorageMaintenanceTest|ProjectServiceTest|AlbumBackendImageDeleteTest)\.'
+ctest --test-dir build/release -N -R $testPattern -E 'ProjectWrittenByCurrentMainOpensAndRendersUnchanged'
+ctest --test-dir build/release -j 1 -R $testPattern -E 'ProjectWrittenByCurrentMainOpensAndRendersUnchanged' --output-on-failure
+& ./build/release/alcedo_studio/tests/app/SleeveServiceTest_runtime/SleeveServiceTest.exe '--gtest_filter=SleeveServiceTests.*:ProjectVersionTests.*'
+& ./build/release/alcedo_studio/tests/app/ImportServiceTest_runtime/ImportServiceTest.exe '--gtest_filter=ImportServiceTests.ImportEmptyTest:ImportServiceTests.ImportWithNonExistentFiles:ImportServiceTests.ImportedElementNameMatchesFileName:ImportServiceTests.ImportToSubfolder_KeepsUnsyncedAndModifiedSetsDisjoint'
+```
+
+| Target | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: |
+| PhotoStackStoreTest | 14 | 0 | 0 |
+| PhotoStackLifecycleTest, including package cases | 18 | 0 | 0 |
+| ProjectCompatibilityTest | 5 | 0 | 0 |
+| StorageMaintenanceTest | 6 | 0 | 0 |
+| ProjectServiceTest | 8 | 0 | 0 |
+| AlbumBackendImageDeleteTest | 9 | 0 | 3 |
+| SleeveServiceTest, direct filter | 29 | 0 | 0 |
+| ImportServiceTest, direct filter | 4 | 0 | 0 |
+| Total | 93 | 0 | 3 |
+
+CTest discovered 63 selected cases; 60 passed and three skipped in 87.82 seconds.
+The final direct Sleeve run passed 29 cases in 3.684 seconds; the direct Import run passed four in
+0.607 seconds. After strengthening the two-part restoration diagnostic assertions, the lifecycle
+target was rebuilt and that exact CTest case passed again in 0.67 seconds. After adding the first-sync
+root test, SleeveServiceTest was rebuilt and the final 29-case direct run above passed.
+
+**Failures found and resolved.** The first Import run passed two cases and failed two because they
+required the absent private `_DSC1704.NEF`. Reported this dependency in
+[#826](https://github.com/zidage/AlcedoStudio/issues/826). Both tests now assert the presence of the
+tracked real RAW `sample_images/ci_rawfiles/credit @ryanbreitkreutz _DSC0027.ARW` and keep their
+original behavior assertions. All four import cases passed. The initial first-sync failure test
+could not drop Element because of schema dependencies; its corrected test setup rejects the
+FileImage insert instead. The corrected test exercises the same first-sync rollback and passed.
+
+**Checklist and scope.** All PS2A exit criteria are satisfied. The storage boundary check found no
+violations. Review of copied values, includes, ownership, and terminology found no new prohibited
+state copy, unsupported forward declaration, or changed-file terminology usage. The shared LOC
+review is recorded under PS2B. No PS3 or later behavior or production stack UI was implemented.
+
+**Unavailable evidence.** Three existing deletion cases skipped because private RAW samples are
+absent: `DeleteImages_RemovesImageAndRelatedRows`,
+`DeleteTargetsRejectsUnacknowledgedImportAtDirectEntryPoint`, and
+`DeleteImages_BestEffortPartialFailure`. The nine other deletion caller cases passed.
+`ProjectWrittenByCurrentMainOpensAndRendersUnchanged` was explicitly excluded because its GPU
+pixel-hash comparison is unrelated to these persistence changes. No full suite, Debug or macOS
+build, manual UI check, sanitizer, or performance benchmark ran. This phase adds no UI or layout.
+Task evidence under `build/tmp/photo_stack_first_pr/` was removed after recording the final results.
 
 ### PS2B - Project compatibility, packaging, and diagnostics
 

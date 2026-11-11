@@ -370,4 +370,10 @@ auto PhotoStackStore::ReadMemberIds(const std::string& stack_id) -> std::vector<
   });
 }
 
+void PhotoStackStore::RemoveFileMemberships(duckdb_connection&               connection,
+                                            std::span<const sl_element_id_t> file_ids) {
+  const auto sources = SourceStacks(connection, file_ids);
+  Detach(connection, file_ids, sources);
+}
+
 }  // namespace alcedo

@@ -35,6 +35,7 @@
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/album_edit_state_sql.hpp"
 #include "storage/store/sleeve/album_query_sql.hpp"
+#include "storage/store/sleeve/photo_stack_store.hpp"
 #include "type/type.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 #include "utils/string/convert.hpp"
@@ -693,29 +694,11 @@ ElementStore::ElementStore(Database& database) : database_(database) {}
  * @param element
  */
 void ElementStore::AddElement(const std::shared_ptr<SleeveElement> element) {
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
-  InsertElementRows(guard.conn_, element);
-  MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>>(&element, 1));
-  element->sync_flag_ = SyncFlag::SYNCED;
+  ApplyElementChanges(std::span<const std::shared_ptr<SleeveElement>>(&element, 1), {}, {});
 }
 
-void ElementStore::InsertElementRows(duckorm::Connection&                  conn,
-                                     const std::shared_ptr<SleeveElement>& element) {
-  ElementMapper(conn).Insert(element);
-  if (element->type_ == ElementType::FILE) {
-    auto file = std::static_pointer_cast<SleeveFile>(element);
-    FileMapper(conn).Insert({file->element_id_, file->image_id_});
-  } else if (element->type_ == ElementType::FOLDER) {
-    auto folder = std::static_pointer_cast<SleeveFolder>(element);
-    FolderMapper(conn).InsertFolderContents(folder->element_id_, folder->ListElements());
-  }
-}
-
-void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> elements) {
-  if (elements.empty()) {
-    return;
-  }
+void ElementStore::InsertElementRows(duckorm::Connection&                            conn,
+                                     std::span<const std::shared_ptr<SleeveElement>> elements) {
   // Element and file binding rows go in multi-row statements; one prepared insert per row
   // dominated the project sync after an import.
   std::vector<ElementMapperParams> element_rows;
@@ -730,25 +713,69 @@ void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> e
     }
   }
 
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
-  {
-    duckorm::Transaction transaction(guard.conn_);
-    ElementMapper(guard.conn_).InsertParamsRows(element_rows);
-    FileMapper(guard.conn_).InsertParamsRows(file_rows);
-    FolderMapper folder_mapper(guard.conn_);
+  ElementMapper(conn).InsertParamsRows(element_rows);
+  FileMapper(conn).InsertParamsRows(file_rows);
+  FolderMapper folders(conn);
+  for (const auto& element : elements) {
+    if (element->type_ == ElementType::FOLDER) {
+      const auto folder = std::static_pointer_cast<SleeveFolder>(element);
+      folders.InsertFolderContents(folder->element_id_, folder->ListElements());
+    }
+  }
+}
+
+void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> elements) {
+  ApplyElementChanges(elements, {}, {});
+}
+
+void ElementStore::ApplyElementChanges(
+    std::span<const std::shared_ptr<SleeveElement>> additions,
+    std::span<const std::shared_ptr<SleeveElement>> modifications,
+    std::span<const std::shared_ptr<SleeveElement>> deletions) {
+  if (additions.empty() && modifications.empty() && deletions.empty()) {
+    return;
+  }
+  auto                                guard = database_.GetConnectionGuard();
+  auto                                lock  = guard.Lock();
+  duckorm::Transaction                transaction(guard.conn_);
+  std::unordered_set<sl_element_id_t> seen;
+  for (const auto elements : {additions, modifications, deletions}) {
     for (const auto& element : elements) {
-      if (element->type_ == ElementType::FOLDER) {
-        const auto folder = std::static_pointer_cast<SleeveFolder>(element);
-        folder_mapper.InsertFolderContents(folder->element_id_, folder->ListElements());
+      if (!element || !seen.insert(element->element_id_).second) {
+        throw std::invalid_argument("Element sync requires distinct, non-null targets");
       }
     }
-    transaction.commit();
   }
-  MarkFolderContentsSynced(elements);
-  for (const auto& element : elements) {
-    element->sync_flag_ = SyncFlag::SYNCED;
+  InsertElementRows(guard.conn_, additions);
+  for (const auto& element : modifications) {
+    UpdateElementRows(guard.conn_, element);
   }
+  RemoveElementRows(guard.conn_, deletions);
+  transaction.commit();
+  for (const auto elements : {additions, modifications}) {
+    MarkFolderContentsSynced(elements);
+    for (const auto& element : elements) {
+      element->sync_flag_ = SyncFlag::SYNCED;
+    }
+  }
+}
+
+auto ElementStore::RestoreElement(SleeveElement& element) -> bool {
+  auto       guard = database_.GetConnectionGuard();
+  auto       lock  = guard.Lock();
+  const auto row   = ElementMapper(guard.conn_).GetById(element.element_id_);
+  if (!row) {
+    return false;
+  }
+  std::optional<image_id_t> image_id;
+  if (element.type_ == ElementType::FILE) {
+    image_id = FileMapper(guard.conn_).GetBoundImageById(element.element_id_);
+  }
+  ElementMapper::RestoreFields(element, *row);
+  if (image_id) {
+    static_cast<SleeveFile&>(element).image_id_ = *image_id;
+  }
+  return true;
 }
 
 /**
@@ -863,29 +890,22 @@ void ElementStore::RemoveElement(const sl_element_id_t id) {
 }
 
 void ElementStore::RemoveElement(const std::shared_ptr<SleeveElement> element) {
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
-  if (element->type_ == ElementType::FILE) {
-    auto file = std::static_pointer_cast<SleeveFile>(element);
-    DeleteSemanticAndAiRowsForFiles(guard.conn_,
-                                    std::span<const sl_element_id_t>(&file->element_id_, 1));
-    PipelineMapper(guard.conn_).RemoveById(file->element_id_);
-    FileMapper(guard.conn_).RemoveById(file->element_id_);
-    FolderMapper(guard.conn_).RemoveContentById(file->element_id_);
-  } else if (element->type_ == ElementType::FOLDER) {
-    auto folder = std::static_pointer_cast<SleeveFolder>(element);
-    FolderMapper(guard.conn_).RemoveById(folder->element_id_);
-  }
-  ElementMapper(guard.conn_).RemoveById(element->element_id_);
+  RemoveElements(std::span<const std::shared_ptr<SleeveElement>>(&element, 1));
 }
 
 void ElementStore::RemoveElements(std::span<const std::shared_ptr<SleeveElement>> elements) {
   if (elements.empty()) {
     return;
   }
-  auto                         guard   = database_.GetConnectionGuard();
-  auto                         db_lock = guard.Lock();
+  auto                 guard = database_.GetConnectionGuard();
+  auto                 lock  = guard.Lock();
+  duckorm::Transaction transaction(guard.conn_);
+  RemoveElementRows(guard.conn_, elements);
+  transaction.commit();
+}
 
+void ElementStore::RemoveElementRows(duckorm::Connection&                            conn,
+                                     std::span<const std::shared_ptr<SleeveElement>> elements) {
   std::vector<sl_element_id_t> file_ids;
   std::vector<sl_element_id_t> folder_ids;
   std::vector<sl_element_id_t> element_ids;
@@ -908,18 +928,19 @@ void ElementStore::RemoveElements(std::span<const std::shared_ptr<SleeveElement>
     }
   }
 
-  FolderMapper folder_mapper(guard.conn_);
+  FolderMapper folder_mapper(conn);
   if (!file_ids.empty()) {
-    DeleteSemanticAndAiRowsForFiles(guard.conn_, file_ids);
-    PipelineMapper(guard.conn_).RemoveByIds(file_ids);
-    FileMapper(guard.conn_).RemoveByIds(file_ids);
-    folder_mapper.RemoveContentByIds(file_ids);
+    PhotoStackStore::RemoveFileMemberships(conn, file_ids);
+    DeleteSemanticAndAiRowsForFiles(conn, file_ids);
+    PipelineMapper(conn).RemoveByIds(file_ids);
+    FileMapper(conn).RemoveByIds(file_ids);
   }
   if (!folder_ids.empty()) {
     folder_mapper.RemoveByIds(folder_ids);
   }
   if (!element_ids.empty()) {
-    ElementMapper(guard.conn_).RemoveByIds(element_ids);
+    folder_mapper.RemoveContentByIds(element_ids);
+    ElementMapper(conn).RemoveByIds(element_ids);
   }
 }
 
@@ -929,11 +950,7 @@ void ElementStore::RemoveElements(std::span<const std::shared_ptr<SleeveElement>
  * @param element
  */
 void ElementStore::UpdateElement(const std::shared_ptr<SleeveElement> element) {
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
-  UpdateElementRows(guard.conn_, element);
-  MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>>(&element, 1));
-  element->sync_flag_ = SyncFlag::SYNCED;
+  ApplyElementChanges({}, std::span<const std::shared_ptr<SleeveElement>>(&element, 1), {});
 }
 
 void ElementStore::UpdateElementRows(duckorm::Connection&                  conn,
@@ -955,22 +972,7 @@ void ElementStore::UpdateElementRows(duckorm::Connection&                  conn,
 }
 
 void ElementStore::UpdateElements(std::span<const std::shared_ptr<SleeveElement>> elements) {
-  if (elements.empty()) {
-    return;
-  }
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
-  {
-    duckorm::Transaction transaction(guard.conn_);
-    for (const auto& element : elements) {
-      UpdateElementRows(guard.conn_, element);
-    }
-    transaction.commit();
-  }
-  MarkFolderContentsSynced(elements);
-  for (const auto& element : elements) {
-    element->sync_flag_ = SyncFlag::SYNCED;
-  }
+  ApplyElementChanges({}, elements, {});
 }
 
 auto ElementStore::GetElementsInFolderByFilter(const std::shared_ptr<FilterCombo> filter,

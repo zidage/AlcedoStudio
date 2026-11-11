@@ -42,6 +42,11 @@ class PhotoStackStore {
   auto MoveMember(sl_element_id_t file_id, PhotoStackMove direction) -> PhotoStackChange;
   /// Read validated, saved member order; unknown stacks are errors, never empty successes.
   auto ReadMemberIds(const std::string& stack_id) -> std::vector<sl_element_id_t>;
+  /// Remove memberships before File deletion on the caller's locked transaction connection.
+  /// Validate affected stacks, then repair covers or dissolve them. Opens no connection or
+  /// transaction; the caller must retain live File bindings until this method returns.
+  static void RemoveFileMemberships(duckdb_connection&               connection,
+                                    std::span<const sl_element_id_t> file_ids);
 
  private:
   Database& database_;

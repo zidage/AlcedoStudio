@@ -629,6 +629,41 @@ auto FileSystem::GetDeletedElements() -> std::vector<std::shared_ptr<SleeveEleme
   return deleted_elements;
 }
 
+void FileSystem::RestoreAfterFailedSync(std::span<const sl_element_id_t> affected_ids) {
+  auto  session = storage_service_.OpenSession();
+  auto& store   = storage_service_.GetElementStore();
+  resolver_.InvalidateAll();
+  std::vector<std::shared_ptr<SleeveFolder>> folders;
+  for (const auto id : affected_ids) {
+    const auto it = storage_.find(id);
+    if (it == storage_.end()) {
+      continue;
+    }
+    auto& element = it->second;
+    if (!store.RestoreElement(*element)) {
+      if (id == 0) {
+        root_->Clear();
+        root_->MarkContentSynced();
+        root_->sync_flag_ = SyncFlag::UNSYNC;
+      } else {
+        element->sync_flag_ = SyncFlag::DELETED;
+        storage_.erase(it);
+      }
+      continue;
+    }
+    if (element->type_ == ElementType::FOLDER) {
+      folders.push_back(std::static_pointer_cast<SleeveFolder>(element));
+    }
+  }
+  for (const auto& folder : folders) {
+    folder->Clear();
+    for (const auto child_id : store.GetFolderContent(folder->element_id_)) {
+      folder->AddElementToMap(Get(child_id), false, false);
+    }
+    folder->MarkContentSynced();
+  }
+}
+
 void FileSystem::SyncToDB() {
   auto& element_ctrl = storage_service_.GetElementStore();
   for (auto& pair : storage_) {
