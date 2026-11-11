@@ -48,6 +48,7 @@
 #include "json.hpp"
 #include "renderer/pipeline_task.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -248,19 +249,13 @@ auto ExportJpeg(ExportService& service, sl_element_id_t element_id, image_id_t i
 
 class LutEncodingRenderPathsTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     if (!std::filesystem::exists(LinearDngPath())) {
       GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
     }
     TimeProvider::Refresh();
-    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    work_dir_ = std::filesystem::temp_directory_path() / ("lut_encoding_render_paths_" + stamp);
-    std::filesystem::create_directories(work_dir_);
-  }
-
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove_all(work_dir_, ec);
+    work_dir_ = temp_dir_.Path();
   }
 
   std::filesystem::path work_dir_;

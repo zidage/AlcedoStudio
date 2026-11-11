@@ -60,6 +60,7 @@
 #include "support/document_transfer_test_support.hpp"
 #include "support/storage_invariants.hpp"
 #include "support/storage_test_access.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
@@ -607,21 +608,17 @@ auto BucketMap(const std::vector<StorageStatsBucket>& buckets) -> std::map<std::
 
 class LibraryReferenceModelTest : public ::testing::TestWithParam<uint64_t> {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
     rng_.seed(GetParam());
-    dir_ =
-        std::filesystem::temp_directory_path() /
-        std::format("alcedo_LibraryReferenceModelTest_{}_{}", GetParam(), std::random_device{}());
-    std::filesystem::create_directories(dir_);
+    dir_ = temp_dir_.Path();
     OpenProject();
   }
 
   void TearDown() override {
     pipelines_.reset();
     project_.reset();
-    std::error_code ec;
-    std::filesystem::remove_all(dir_, ec);
   }
 
   void OpenProject() {
@@ -1428,9 +1425,8 @@ auto ViolatedRules(Storage& storage) -> std::multiset<std::string> {
 // #805: the check reports the rows that break a rule, one violation per row.
 TEST(StorageInvariantCheckTest, ReportsFilesWithoutHistoryRootAndDanglingFolderContent) {
   TimeProvider::Refresh();
-  const auto dir = std::filesystem::temp_directory_path() /
-                   std::format("alcedo_StorageInvariantCheckTest_{}", std::random_device{}());
-  std::filesystem::create_directories(dir);
+  const test::TestTempDirectory temp_dir;
+  const auto&                   dir = temp_dir.Path();
   {
     ProjectService      project(dir / "library.db", dir / "library.json");
     PipelineMgmtService pipelines(project.GetStorage());
@@ -1461,8 +1457,6 @@ TEST(StorageInvariantCheckTest, ReportsFilesWithoutHistoryRootAndDanglingFolderC
     EXPECT_EQ(ViolatedRules(storage),
               (std::multiset<std::string>{"folder content row names an existing element"}));
   }
-  std::error_code ec;
-  std::filesystem::remove_all(dir, ec);
 }
 
 }  // namespace

@@ -46,6 +46,7 @@
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "storage/store/sleeve/element_store.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -183,24 +184,16 @@ auto AddExposureCommit(PipelineMgmtService& pipelines, sl_element_id_t element_i
 
 class LibraryHistoryAndExportTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     if (!std::filesystem::exists(LinearDngPath())) {
       GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
     }
     TimeProvider::Refresh();
-    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    const auto base  = std::filesystem::temp_directory_path();
-    db_path_         = base / ("library_history_export_" + stamp + ".db");
-    meta_path_       = base / ("library_history_export_" + stamp + ".json");
-    export_dir_      = base / ("library_history_export_out_" + stamp);
+    db_path_    = temp_dir_ / "project.db";
+    meta_path_  = temp_dir_ / "project.json";
+    export_dir_ = temp_dir_ / "export";
     std::filesystem::create_directories(export_dir_);
-  }
-
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(meta_path_, ec);
-    std::filesystem::remove_all(export_dir_, ec);
   }
 
   std::filesystem::path db_path_;

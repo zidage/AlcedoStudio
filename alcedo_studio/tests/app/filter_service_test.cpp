@@ -29,6 +29,7 @@
 #include "storage/query/filter_compiler.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "support/semantic_stores_test_support.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
@@ -172,6 +173,7 @@ struct SyntheticFileSpec {
 
 class FilterServiceTests : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
@@ -179,15 +181,8 @@ class FilterServiceTests : public ::testing::Test {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
 
-    db_path_ = std::filesystem::temp_directory_path() / "filter_service_test.db";
-    meta_path_ = std::filesystem::temp_directory_path() / "filter_service_test.json";
-
-    if (std::filesystem::exists(db_path_)) {
-      std::filesystem::remove(db_path_);
-    }
-    if (std::filesystem::exists(meta_path_)) {
-      std::filesystem::remove(meta_path_);
-    }
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   void TearDown() override {

@@ -25,6 +25,7 @@
 #include "app/project_service.hpp"
 #include "sidecar_client/dto/model_manager.hpp"
 #include "sidecar_client/dto/semantic_embedding.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -264,7 +265,7 @@ auto FakeRuntimePath() -> std::filesystem::path {
 auto BaseOptions() -> AiSidecarRuntimeOptions {
   AiSidecarRuntimeOptions options;
   options.runtime_binary  = FakeRuntimePath();
-  options.model_root      = std::filesystem::temp_directory_path() / "semantic_runtime_test_model";
+  options.model_root      = test::TestTempRoot() / test::CurrentTestTempDirectoryName() / "model";
   options.model_id        = "test/mobileclip";
   options.revision        = "rev-a";
   options.device          = "cpu";
@@ -342,6 +343,7 @@ TEST(AiSidecarRuntimeServiceTest, StartStopReportsReadyAndStopped) {
 }
 
 TEST(AiSidecarRuntimeServiceTest, RunningSidecarReusesExistingProcessForDifferentOptions) {
+  const test::TestTempDirectory temp_dir;
   auto                    client = std::make_shared<FakeSidecarClient>();
   AiSidecarRuntimeService service(FakeFactory(client));
 
@@ -358,7 +360,7 @@ TEST(AiSidecarRuntimeServiceTest, RunningSidecarReusesExistingProcessForDifferen
   auto different_options       = options;
   different_options.model_id   = "another/model";
   different_options.revision   = "rev-b";
-  different_options.model_root = std::filesystem::temp_directory_path() / "another_model_root";
+  different_options.model_root = temp_dir.Path() / "another_model_root";
   ASSERT_TRUE(service.StartAndWait(different_options));
   EXPECT_EQ(service.Status().process_id, first_pid);
   EXPECT_EQ(service.Options().model_id, "test/mobileclip");
@@ -392,10 +394,11 @@ TEST(AiSidecarRuntimeServiceTest, LeasesStopRuntimeOnlyAfterLastRelease) {
 }
 
 TEST(AiSidecarRuntimeServiceTest, MissingBinaryFailsBeforeProcessStart) {
+  const test::TestTempDirectory temp_dir;
   auto                    client = std::make_shared<FakeSidecarClient>();
   AiSidecarRuntimeService service(FakeFactory(client));
   auto                    options = BaseOptions();
-  options.runtime_binary = std::filesystem::temp_directory_path() / "missing_alcedo_mind.exe";
+  options.runtime_binary = temp_dir.Path() / "missing_alcedo_mind.exe";
 
   EXPECT_FALSE(service.StartAndWait(options));
   const auto status = service.Status();
@@ -525,9 +528,10 @@ TEST(AiSidecarRuntimeServiceTest, StopKillsHungRuntime) {
 }
 
 TEST(AiSidecarRuntimeServiceTest, RuntimeArgumentsCarryModelAndDeviceConfiguration) {
+  const test::TestTempDirectory temp_dir;
   auto                    client = std::make_shared<FakeSidecarClient>();
   AiSidecarRuntimeService service(FakeFactory(client));
-  const auto record_path = std::filesystem::temp_directory_path() / "semantic_runtime_args.txt";
+  const auto record_path = temp_dir.Path() / "semantic_runtime_args.txt";
   std::filesystem::remove(record_path);
 
   auto options            = BaseOptions();
@@ -565,10 +569,10 @@ TEST(AiSidecarRuntimeServiceTest, RuntimeArgumentsCarryModelAndDeviceConfigurati
 // A project without an active CLIP model starts the sidecar without a model (AI Models plan,
 // P10): no --model-id and no --revision on the command line.
 TEST(AiSidecarRuntimeServiceTest, RuntimeArgumentsOmitModelIdWithoutActiveModel) {
+  const test::TestTempDirectory temp_dir;
   auto                    client = std::make_shared<FakeSidecarClient>();
   AiSidecarRuntimeService service(FakeFactory(client));
-  const auto              record_path =
-      std::filesystem::temp_directory_path() / "semantic_runtime_no_model_args.txt";
+  const auto record_path = temp_dir.Path() / "semantic_runtime_no_model_args.txt";
   std::filesystem::remove(record_path);
 
   auto options               = BaseOptions();
@@ -592,8 +596,8 @@ TEST(AiSidecarRuntimeServiceTest, RuntimeArgumentsOmitModelIdWithoutActiveModel)
 }
 
 TEST(AiSidecarRuntimeServiceTest, TextIdleUnloadFollowsIdleStopDelay) {
-  const auto record_path =
-      std::filesystem::temp_directory_path() / "semantic_runtime_idle_args.txt";
+  const test::TestTempDirectory temp_dir;
+  const auto record_path = temp_dir.Path() / "semantic_runtime_idle_args.txt";
   const auto read_args = [&record_path] {
     std::ifstream in(record_path);
     return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -687,12 +691,11 @@ TEST(AiSidecarRuntimeServiceTest, ClientSessionPreservesEmbeddingBatchRequestIds
 }
 
 TEST(AiSidecarRuntimeServiceTest, EmptyModelRootUsesEnvironmentFallback) {
+  const test::TestTempDirectory temp_dir;
   auto                    client = std::make_shared<FakeSidecarClient>();
   AiSidecarRuntimeService service(FakeFactory(client));
-  const auto              record_path =
-      std::filesystem::temp_directory_path() / "semantic_runtime_env_model_args.txt";
-  const auto model_root =
-      std::filesystem::temp_directory_path() / "semantic_runtime_env_model_root";
+  const auto record_path = temp_dir.Path() / "semantic_runtime_env_model_args.txt";
+  const auto model_root = temp_dir.Path() / "semantic_runtime_env_model_root";
   std::filesystem::remove(record_path);
   std::filesystem::create_directories(model_root);
 
@@ -715,8 +718,9 @@ TEST(AiSidecarRuntimeServiceTest, EmptyModelRootUsesEnvironmentFallback) {
 }
 
 TEST(AiSidecarRuntimeServiceTest, ProjectServiceOwnsStoppedRuntimeService) {
-  const auto db_path   = std::filesystem::temp_directory_path() / "semantic_runtime_project.db";
-  const auto meta_path = std::filesystem::temp_directory_path() / "semantic_runtime_project.json";
+  const test::TestTempDirectory temp_dir;
+  const auto db_path   = temp_dir.Path() / "semantic_runtime_project.db";
+  const auto meta_path = temp_dir.Path() / "semantic_runtime_project.json";
   std::filesystem::remove(db_path);
   std::filesystem::remove(meta_path);
 
@@ -733,8 +737,9 @@ TEST(AiSidecarRuntimeServiceTest, ProjectServiceOwnsStoppedRuntimeService) {
 }
 
 TEST(AiSidecarRuntimeServiceTest, ProjectServiceCreatesRuntimeOnCallerThreadAfterBackgroundLoad) {
-  const auto db_path   = std::filesystem::temp_directory_path() / "semantic_runtime_thread.db";
-  const auto meta_path = std::filesystem::temp_directory_path() / "semantic_runtime_thread.json";
+  const test::TestTempDirectory temp_dir;
+  const auto db_path   = temp_dir.Path() / "semantic_runtime_thread.db";
+  const auto meta_path = temp_dir.Path() / "semantic_runtime_thread.json";
   std::filesystem::remove(db_path);
   std::filesystem::remove(meta_path);
 
@@ -1065,8 +1070,9 @@ TEST(AiSidecarRuntimeServiceTest, ZeroDelayWhileIdleStopsRunningProcess) {
 // The project service forwards the setting to the runtime service at once. That a delay of 0
 // stops an idle running process is checked by ZeroDelayWhileIdleStopsRunningProcess.
 TEST(AiSidecarRuntimeServiceTest, IdleStopSettingAppliesToRunningService) {
-  const auto db_path   = std::filesystem::temp_directory_path() / "semantic_runtime_idle.db";
-  const auto meta_path = std::filesystem::temp_directory_path() / "semantic_runtime_idle.json";
+  const test::TestTempDirectory temp_dir;
+  const auto db_path   = temp_dir.Path() / "semantic_runtime_idle.db";
+  const auto meta_path = temp_dir.Path() / "semantic_runtime_idle.json";
   std::filesystem::remove(db_path);
   std::filesystem::remove(meta_path);
   {
@@ -1084,14 +1090,15 @@ TEST(AiSidecarRuntimeServiceTest, IdleStopSettingAppliesToRunningService) {
 }
 
 TEST(AiSidecarRuntimeServiceTest, UnknownIdleStopSettingReadsAsDefault) {
+  const test::TestTempDirectory temp_dir;
   EXPECT_EQ(ProjectService::NormalizedAiSidecarIdleStopSeconds(42), 30);
   EXPECT_EQ(ProjectService::NormalizedAiSidecarIdleStopSeconds(-7), 30);
   for (const int value : {0, 30, 60, 300, 900, -1}) {
     EXPECT_EQ(ProjectService::NormalizedAiSidecarIdleStopSeconds(value), value);
   }
 
-  const auto db_path   = std::filesystem::temp_directory_path() / "semantic_runtime_unknown.db";
-  const auto meta_path = std::filesystem::temp_directory_path() / "semantic_runtime_unknown.json";
+  const auto db_path   = temp_dir.Path() / "semantic_runtime_unknown.db";
+  const auto meta_path = temp_dir.Path() / "semantic_runtime_unknown.json";
   std::filesystem::remove(db_path);
   std::filesystem::remove(meta_path);
   {
@@ -1107,6 +1114,7 @@ TEST(AiSidecarRuntimeServiceTest, UnknownIdleStopSettingReadsAsDefault) {
 // a semantic request reports that no model is active (AI_ERROR_MODEL_NOT_READY in the response
 // header) instead of an embedding.
 TEST(AiSidecarRuntimeServiceLiveTest, RustRuntimeStartsWithoutModelIdAndRejectsSemanticRequests) {
+  const test::TestTempDirectory temp_dir;
   const char* runtime_path_env = std::getenv("ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH");
   if (runtime_path_env == nullptr) {
     GTEST_SKIP() << "Set ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH to run against the Rust runtime.";
@@ -1115,7 +1123,7 @@ TEST(AiSidecarRuntimeServiceLiveTest, RustRuntimeStartsWithoutModelIdAndRejectsS
   AiSidecarRuntimeService service;
   AiSidecarRuntimeOptions options;
   options.runtime_binary     = std::filesystem::path(runtime_path_env);
-  options.model_root         = std::filesystem::temp_directory_path() / "alcedo_no_model_root";
+  options.model_root         = temp_dir.Path() / "alcedo_no_model_root";
   options.device             = "cpu";
   options.require_model_info = false;
   options.startup_timeout    = std::chrono::milliseconds(60000);

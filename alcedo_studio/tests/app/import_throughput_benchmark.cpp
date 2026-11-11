@@ -57,6 +57,7 @@
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -158,6 +159,7 @@ auto CollectRawFiles(const std::filesystem::path& folder, size_t limit)
 // ImportToFolder, SyncImports, sleeve and image-pool sync, SaveProject and the project package
 // write. Reports the wall time of each step and the peak working set.
 TEST(ImportThroughputBenchmark, ImportsFoldersAndReportsStepTimings) {
+  const test::TestTempDirectory temp_dir;
   const auto folders = ReadBenchFolders();
   if (folders.empty()) {
     GTEST_SKIP() << "ALCEDO_IMPORT_BENCH_DIRS is not set";
@@ -165,7 +167,7 @@ TEST(ImportThroughputBenchmark, ImportsFoldersAndReportsStepTimings) {
   TimeProvider::Refresh();
   Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
 
-  const auto work_dir = std::filesystem::temp_directory_path() / "alcedo_import_benchmark";
+  const auto work_dir = temp_dir.Path() / "alcedo_import_benchmark";
   std::filesystem::remove_all(work_dir);
   std::filesystem::create_directories(work_dir);
   const auto db_path       = work_dir / "bench.db";
@@ -247,6 +249,7 @@ TEST(ImportThroughputBenchmark, ImportsFoldersAndReportsStepTimings) {
 // Sequential cost per RAW file of each import step, one thread, so the numbers are per-file
 // CPU + I/O cost without contention. LibRaw unpack is reported as the cost import no longer pays.
 TEST(ImportThroughputBenchmark, ReportsSequentialPerStepCost) {
+  const test::TestTempDirectory temp_dir;
   const auto folders = ReadBenchFolders();
   if (folders.empty()) {
     GTEST_SKIP() << "ALCEDO_IMPORT_BENCH_DIRS is not set";
@@ -258,7 +261,7 @@ TEST(ImportThroughputBenchmark, ReportsSequentialPerStepCost) {
     sample = static_cast<size_t>(std::max(1, std::atoi(raw)));
   }
 
-  const auto work_dir = std::filesystem::temp_directory_path() / "alcedo_import_step_benchmark";
+  const auto work_dir = temp_dir.Path() / "alcedo_import_step_benchmark";
   std::filesystem::remove_all(work_dir);
   std::filesystem::create_directories(work_dir);
 
@@ -409,9 +412,10 @@ TEST(ImportThroughputBenchmark, MappedDngGeometryMatchesWholeFileRead) {
 // The thumbnail service opens a temporary copy of the project's directory in the user's
 // thumbnail cache, so it reads an index of the real size and never writes the user's cache.
 TEST(ImportThroughputBenchmark, OpensProjectAndReportsStepTimings) {
+  const test::TestTempDirectory temp_dir;
   TimeProvider::Refresh();
   Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-  const auto work_dir = std::filesystem::temp_directory_path() / "alcedo_open_benchmark";
+  const auto work_dir = temp_dir.Path() / "alcedo_open_benchmark";
   std::filesystem::remove_all(work_dir);
   std::filesystem::create_directories(work_dir);
 
@@ -553,6 +557,7 @@ TEST(ImportThroughputBenchmark, OpensProjectAndReportsStepTimings) {
 // again with the thumbnails the first open wrote (second open). The user's cache is not used.
 // Needs ALCEDO_IMPORT_BENCH_OPEN_PACKAGE.
 TEST(ImportThroughputBenchmark, ReportsFirstPageThumbnailTimings) {
+  const test::TestTempDirectory temp_dir;
   std::filesystem::path package_path;
 #if defined(_WIN32)
   if (const wchar_t* raw = _wgetenv(L"ALCEDO_IMPORT_BENCH_OPEN_PACKAGE")) {
@@ -568,7 +573,7 @@ TEST(ImportThroughputBenchmark, ReportsFirstPageThumbnailTimings) {
   }
   TimeProvider::Refresh();
   Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-  const auto work_dir = std::filesystem::temp_directory_path() / "alcedo_thumbnail_benchmark";
+  const auto work_dir = temp_dir.Path() / "alcedo_thumbnail_benchmark";
   std::filesystem::remove_all(work_dir);
   std::filesystem::create_directories(work_dir);
 

@@ -25,6 +25,7 @@
 #include "library_search_test_support.hpp"
 #include "sleeve/sleeve_filter/library_search_request.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -56,20 +57,11 @@ auto Contains(const std::vector<std::string>& values, const std::string& value) 
 
 class LibrarySearchPredicatesTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
-    const auto dir = std::filesystem::temp_directory_path();
-    db_path_       = dir / "library_search_predicates_test.db";
-    meta_path_     = dir / "library_search_predicates_test.json";
-    RemoveProjectFiles();
-  }
-  void TearDown() override { RemoveProjectFiles(); }
-
-  void RemoveProjectFiles() {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(db_path_.string() + ".wal", ec);
-    std::filesystem::remove(meta_path_, ec);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   std::filesystem::path db_path_;

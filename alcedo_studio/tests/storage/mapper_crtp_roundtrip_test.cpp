@@ -21,6 +21,7 @@
 #include "storage/mapper/sleeve/edit_history/version_ref_mapper.hpp"
 #include "storage/store/database.hpp"
 #include "type/type.hpp"
+#include "support/test_temp_directory.hpp"
 
 using namespace alcedo;
 
@@ -28,13 +29,9 @@ namespace {
 
 class ImageMapperCrtpFixture : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
-    // Match CommitGraphPersistenceTests: unique temp file; Database opens and inits tables.
-    const auto stamp =
-        std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
-    db_path_ = std::filesystem::temp_directory_path() / ("mapper_crtp_" + stamp + ".db");
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
+    db_path_  = temp_dir_ / "mapper.db";
     database_ = std::make_unique<Database>(db_path_);
     guard_    = std::make_unique<ConnectionGuard>(database_->GetConnectionGuard());
     mapper_   = std::make_unique<ImageMapper>(guard_->conn_);
@@ -44,8 +41,6 @@ class ImageMapperCrtpFixture : public ::testing::Test {
     mapper_.reset();
     guard_.reset();
     database_.reset();
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
   }
 
   std::filesystem::path            db_path_;

@@ -33,6 +33,7 @@
 #include "library_search_test_support.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
 #include "support/non_raw_import_files.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/import/import_error_code.hpp"
@@ -157,26 +158,14 @@ auto ImportToLibraryRoot(ProjectService& project, const std::vector<image_path_t
 
 class ImportContentClassificationTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    const auto* test_name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
-    const auto  temp_dir  = std::filesystem::temp_directory_path();
-    db_path_              = temp_dir / (std::string("import_content_class_") + test_name + ".db");
-    meta_path_            = temp_dir / (std::string("import_content_class_") + test_name + ".json");
-    scratch_dir_          = temp_dir / (std::string("import_content_class_") + test_name);
-    RemoveTestFiles();
+    db_path_     = temp_dir_ / "project.db";
+    meta_path_   = temp_dir_ / "project.json";
+    scratch_dir_ = temp_dir_ / "scratch";
     std::filesystem::create_directories(scratch_dir_);
-  }
-
-  void TearDown() override { RemoveTestFiles(); }
-
-  void RemoveTestFiles() {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(db_path_.string() + ".wal", ec);
-    std::filesystem::remove(meta_path_, ec);
-    std::filesystem::remove_all(scratch_dir_, ec);
   }
 
   /// Element id of the imported file @p file_name.

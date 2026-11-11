@@ -11,10 +11,12 @@
 
 #include "utils/clock/time_provider.hpp"
 #include "utils/profiler/profiler.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 class ImportServiceTests : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
@@ -22,15 +24,8 @@ class ImportServiceTests : public ::testing::Test {
   void                  SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    // Create a unique db file location
-    db_path_ = std::filesystem::temp_directory_path() / "test_db.db";
-    meta_path_ = std::filesystem::temp_directory_path() / "import_service_test.json";
-    if (std::filesystem::exists(db_path_)) {
-      std::filesystem::remove(db_path_);
-    }
-    if (std::filesystem::exists(meta_path_)) {
-      std::filesystem::remove(meta_path_);
-    }
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
 #ifdef EASY_PROFILER_ENABLE
     EASY_PROFILER_ENABLE;
 #endif
@@ -38,13 +33,6 @@ class ImportServiceTests : public ::testing::Test {
 
   // Run before any unit test runs
   void TearDown() override {
-    // Clean up the DB file
-    if (std::filesystem::exists(db_path_)) {
-      std::filesystem::remove(db_path_);
-    }
-    if (std::filesystem::exists(meta_path_)) {
-      std::filesystem::remove(meta_path_);
-    }
 #ifdef EASY_PROFILER_ENABLE
     profiler::dumpBlocksToFile(TEST_PROFILER_OUTPUT_PATH);
     EASY_PROFILER_DISABLE;

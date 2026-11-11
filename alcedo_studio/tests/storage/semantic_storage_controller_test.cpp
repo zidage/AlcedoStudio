@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "support/semantic_stores_test_support.hpp"
+#include "support/test_temp_directory.hpp"
 
 #include <duckdb.h>
 #include <gtest/gtest.h>
@@ -175,21 +176,13 @@ void RegisterSiglipTestModel(const semantic_test::SemanticStores& semantic) {
 
 class SemanticStoreTest : public ::testing::Test {
  protected:
-  std::filesystem::path db_path_;
-  std::filesystem::path meta_path_;
+  test::TestTempDirectory temp_dir_;
+  std::filesystem::path   db_path_;
+  std::filesystem::path   meta_path_;
 
   void                  SetUp() override {
-    const auto*       test_info = ::testing::UnitTest::GetInstance()->current_test_info();
-    const std::string suffix = std::string(test_info->test_suite_name()) + "_" + test_info->name();
-    db_path_   = std::filesystem::temp_directory_path() / (suffix + ".db");
-    meta_path_ = std::filesystem::temp_directory_path() / (suffix + ".json");
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
-  }
-
-  void TearDown() override {
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   static auto CreateSyntheticFile(ProjectService& project, const file_name_t& file_name)

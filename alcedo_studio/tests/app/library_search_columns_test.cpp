@@ -39,6 +39,7 @@
 #include "storage/query/filter_compiler.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "support/semantic_stores_test_support.hpp"
+#include "support/test_temp_directory.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
 #include "utils/string/search_text.hpp"
@@ -130,19 +131,11 @@ auto TwoFileSpecs() -> std::vector<SyntheticImageSpec> {
 
 class LibrarySearchColumnsTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
-    const auto dir = std::filesystem::temp_directory_path();
-    db_path_       = dir / "library_search_columns_test.db";
-    meta_path_     = dir / "library_search_columns_test.json";
-    RemoveProjectFiles();
-  }
-  void TearDown() override { RemoveProjectFiles(); }
-
-  void RemoveProjectFiles() {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(meta_path_, ec);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   std::filesystem::path db_path_;

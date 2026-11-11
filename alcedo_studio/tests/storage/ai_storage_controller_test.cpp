@@ -20,6 +20,7 @@
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "storage/store/database.hpp"
 #include "../support/storage_test_access.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -123,21 +124,13 @@ auto MakeRating(sl_element_id_t file_id, const std::string& task_id, int rating,
 
 class AiStoreTest : public ::testing::Test {
  protected:
-  std::filesystem::path db_path_;
-  std::filesystem::path meta_path_;
+  test::TestTempDirectory temp_dir_;
+  std::filesystem::path   db_path_;
+  std::filesystem::path   meta_path_;
 
   void                  SetUp() override {
-    const auto*       test_info = ::testing::UnitTest::GetInstance()->current_test_info();
-    const std::string suffix = std::string(test_info->test_suite_name()) + "_" + test_info->name();
-    db_path_   = std::filesystem::temp_directory_path() / (suffix + ".db");
-    meta_path_ = std::filesystem::temp_directory_path() / (suffix + ".json");
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
-  }
-
-  void TearDown() override {
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   static auto CreateSyntheticFile(ProjectService& project, const file_name_t& file_name)

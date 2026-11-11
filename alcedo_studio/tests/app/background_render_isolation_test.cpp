@@ -47,6 +47,7 @@
 #include "json.hpp"
 #include "sleeve/storage.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -175,24 +176,16 @@ auto RenderEditorFrame(PipelineExecutor& executor, const PipelineGraphSnapshot& 
 
 class BackgroundRenderIsolationTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
   std::filesystem::path export_dir_;
 
   void                  SetUp() override {
     TimeProvider::Refresh();
-    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    const auto base = std::filesystem::temp_directory_path();
-    db_path_        = base / ("background_render_isolation_" + stamp + ".db");
-    meta_path_      = base / ("background_render_isolation_" + stamp + ".json");
-    export_dir_     = base / ("background_render_isolation_export_" + stamp);
-  }
-
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(meta_path_, ec);
-    std::filesystem::remove_all(export_dir_, ec);
+    db_path_    = temp_dir_ / "project.db";
+    meta_path_  = temp_dir_ / "project.json";
+    export_dir_ = temp_dir_ / "export";
   }
 };
 
@@ -317,21 +310,14 @@ TEST_F(BackgroundRenderIsolationTest,
 // executor constructor built the stage table through that registry and this test crashed.
 class PipelineExecutorWithoutOperatorRegistryTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
   void                  SetUp() override {
     TimeProvider::Refresh();
-    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    db_path_ = std::filesystem::temp_directory_path() / ("executor_no_registry_" + stamp + ".db");
-    meta_path_ =
-        std::filesystem::temp_directory_path() / ("executor_no_registry_" + stamp + ".json");
-  }
-
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(meta_path_, ec);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 };
 

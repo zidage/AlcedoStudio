@@ -27,6 +27,7 @@
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
 #include "../support/storage_test_access.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -141,19 +142,14 @@ TEST(ProjectVersionTests, MiniGitSchemaBumpRejectsPreviousProjectVersion) {
 
 class SleeveServiceTests : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
   void                  SetUp() override {
     TimeProvider::Refresh();
-    db_path_ = std::filesystem::temp_directory_path() / "sleeve_service_test.db";
-    meta_path_ = std::filesystem::temp_directory_path() / "sleeve_service_test.json";
-    if (std::filesystem::exists(db_path_)) {
-      std::filesystem::remove(db_path_);
-    }
-    if (std::filesystem::exists(meta_path_)) {
-      std::filesystem::remove(meta_path_);
-    }
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   void TearDown() override {

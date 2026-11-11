@@ -46,6 +46,7 @@
 #include "io/image/export_recipe.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
 #include "support/render_snapshot_source.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -117,11 +118,6 @@ auto ReadExportedPixels(const std::filesystem::path& path) -> cv::Mat {
   const bool ok = input->read_image(0, 0, 0, spec.nchannels, OIIO::TypeDesc::UINT8, pixels.data);
   input->close();
   return ok ? pixels : cv::Mat{};
-}
-
-auto UniqueTempPath(const std::string& prefix) -> std::filesystem::path {
-  return std::filesystem::temp_directory_path() /
-         (prefix + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
 }
 
 /// Counters of the interactive renderer that @p executor uses; zero when none exists.
@@ -202,6 +198,7 @@ auto FormatFramePassCounts(const std::string& frame, const EditorFramePassCounts
 
 class ExecutorIsolationTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
   std::filesystem::path export_dir_;
@@ -211,17 +208,10 @@ class ExecutorIsolationTest : public ::testing::Test {
       GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
     }
     TimeProvider::Refresh();
-    db_path_    = UniqueTempPath("executor_isolation_") += ".db";
-    meta_path_  = UniqueTempPath("executor_isolation_") += ".json";
-    export_dir_ = UniqueTempPath("executor_isolation_export_");
+    db_path_    = temp_dir_ / "project.db";
+    meta_path_  = temp_dir_ / "project.json";
+    export_dir_ = temp_dir_ / "export";
     std::filesystem::create_directories(export_dir_);
-  }
-
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(meta_path_, ec);
-    std::filesystem::remove_all(export_dir_, ec);
   }
 
   static auto MakeRequest(ExecutorRole role) -> PipelineApplyRequest {

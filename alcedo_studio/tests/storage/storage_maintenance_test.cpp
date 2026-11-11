@@ -22,6 +22,7 @@
 
 #include "../support/storage_test_access.hpp"
 #include "sleeve/storage.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -128,19 +129,14 @@ auto CountAttachedSnapshots(Storage& storage) -> int64_t {
 
 class StorageMaintenanceTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
-    const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
-    root_            = std::filesystem::temp_directory_path() /
-            ("StorageMaintenanceTest_" + std::string{info->name()});
-    std::filesystem::remove_all(root_);
-    std::filesystem::create_directories(root_);
+    root_    = temp_dir_.Path();
     storage_ = std::make_unique<Storage>(root_ / "project.db");
   }
 
   void TearDown() override {
     storage_.reset();
-    std::error_code ec;
-    std::filesystem::remove_all(root_, ec);
   }
 
   /// Rows in several tables: numeric keys, a text key that is a number and one that is not,

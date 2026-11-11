@@ -46,6 +46,7 @@
 #include "sleeve/storage.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/editor_parameter_target_test.hpp"
+#include "support/test_temp_directory.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "../support/storage_test_access.hpp"
 
@@ -53,19 +54,14 @@ namespace alcedo {
 
 class PipelineMapperTests : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
   void                  SetUp() override {
     TimeProvider::Refresh();
-    db_path_ = std::filesystem::temp_directory_path() / "sleeve_service_test.db";
-    meta_path_ = std::filesystem::temp_directory_path() / "sleeve_service_test.json";
-    if (std::filesystem::exists(db_path_)) {
-      std::filesystem::remove(db_path_);
-    }
-    if (std::filesystem::exists(meta_path_)) {
-      std::filesystem::remove(meta_path_);
-    }
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   void TearDown() override {
@@ -1463,11 +1459,9 @@ auto ReadMaskAssetError(PipelineMgmtService& pipelines, const MaskAssetKey& key)
   return {};
 }
 
-auto CleanupJournalDirectory(std::string_view name) -> std::filesystem::path {
-  const auto      directory = std::filesystem::temp_directory_path() / std::string{name};
-  std::error_code ec;
-  std::filesystem::remove_all(directory, ec);
-  return directory;
+auto CleanupJournalDirectory(const test::TestTempDirectory& temp_dir, std::string_view name)
+    -> std::filesystem::path {
+  return temp_dir / std::string{name};
 }
 
 // SM6.1 R2: the executors of a project read its stored assets through MaskAssets().
@@ -1529,7 +1523,8 @@ TEST_F(PipelineMapperTests, CleanupKeepsAssetsOfReachableHistory) {
   pipelines.ReleaseEditorLease(822);
 
   // An edit that only the editor journal holds.
-  const auto journal_directory = CleanupJournalDirectory("mask_asset_cleanup_keep_journal");
+  const auto journal_directory =
+      CleanupJournalDirectory(temp_dir_, "mask_asset_cleanup_keep_journal");
   {
     MiniGitJournal       journal(journal_directory / "image-822.mini-git.wal");
     MiniGitJournalRecord record;
@@ -1583,7 +1578,8 @@ TEST_F(PipelineMapperTests, CleanupRemovesUnreferencedAssets) {
       << error;
   pipelines.ReleaseEditorLease(831);
 
-  const auto journal_directory = CleanupJournalDirectory("mask_asset_cleanup_remove_journal");
+  const auto journal_directory =
+      CleanupJournalDirectory(temp_dir_, "mask_asset_cleanup_remove_journal");
   EXPECT_EQ(pipelines.CollectUnreachableEditCommits(), 1u);
   EXPECT_EQ(pipelines.CollectUnreferencedMaskAssets(journal_directory), 2u);
   for (const auto* asset : {&orphan_asset, &unreachable_asset}) {
