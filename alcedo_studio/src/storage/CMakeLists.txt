@@ -8,6 +8,7 @@ def_library(DuckORM
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_expr.cpp"
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_select.cpp"
     PUBLIC_DEPS DuckDB
+    PRIVATE_DEPS AppDiagnostics
 )
 
 # Query definitions: the SQL of the stats dimensions and of the library search, and the

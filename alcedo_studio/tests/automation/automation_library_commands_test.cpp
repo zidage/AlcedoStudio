@@ -570,5 +570,32 @@ TEST_F(AutomationLibraryCommandsTest, StatsBucketLabelsSelectTheirPhotoCounts) {
   EXPECT_FALSE(described.value("changes_state").toBool());
 }
 
+// A failed read answers with the database message; the SQL text of the statement stays in the
+// log (#814).
+TEST_F(AutomationLibraryCommandsTest, FailedReadAnswersWithTheDatabaseMessageWithoutSql) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "stats_error_project"}})
+                   .isEmpty());
+  // DuckDB reads the time zone only for a photo: an empty library gives an empty answer.
+  const QString import_id =
+      session
+          .CallResult(QStringLiteral("library.import"),
+                      QJsonObject{{"folder", QStringLiteral(TEST_IMG_PATH "/ci_rawfiles")},
+                                  {"recursive", false}})
+          .value("task_id")
+          .toString();
+  session.CallResult(QStringLiteral("tasks.wait"),
+                     QJsonObject{{"task_id", import_id}, {"timeout_ms", 600000}});
+  const auto failed = session.Call(QStringLiteral("library.stats"),
+                                   QJsonObject{{"time_zone", "Mars/Olympus_Mons"}});
+  ASSERT_EQ(ErrorCode(failed), AutomationErrorCode::Failed);
+  const QString message = failed->error->message;
+  EXPECT_TRUE(message.contains(QStringLiteral("Mars/Olympus_Mons"))) << message.toStdString();
+  EXPECT_FALSE(message.contains(QStringLiteral("SQL"))) << message.toStdString();
+  EXPECT_FALSE(message.contains(QStringLiteral("SELECT"))) << message.toStdString();
+}
+
 }  // namespace
 }  // namespace alcedo::automation

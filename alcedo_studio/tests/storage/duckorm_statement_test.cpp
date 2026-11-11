@@ -95,11 +95,13 @@ TEST_F(DuckormStatementTest, ScalarRejectsColumnTypeAndColumnCountMismatch) {
   try {
     (void)duckorm::select_string(conn_, expr::raw("SELECT score FROM Item"));
     FAIL() << "a DOUBLE column must not read as text";
-  } catch (const std::runtime_error& error) {
+  } catch (const duckorm::StatementError& error) {
     const std::string message = error.what();
     EXPECT_NE(message.find("column 0 'score' has type DOUBLE"), std::string::npos) << message;
     EXPECT_NE(message.find("std::string"), std::string::npos) << message;
-    EXPECT_NE(message.find("[SQL: SELECT score FROM Item]"), std::string::npos) << message;
+    // The SQL text goes to the log and to sql_head(), never into the message a user sees.
+    EXPECT_EQ(message.find("SELECT score"), std::string::npos) << message;
+    EXPECT_EQ(error.sql_head(), "SELECT score FROM Item");
   }
   EXPECT_THROW((void)duckorm::scalar<int64_t>(conn_, expr::raw("SELECT id, name FROM Item")),
                std::runtime_error);
@@ -390,6 +392,16 @@ auto ThrownMessage(const std::function<void()>& run) -> std::string {
   return {};
 }
 
+/// The sql_head() of the StatementError that @p run throws; "<none>" without one.
+auto ThrownSqlHead(const std::function<void()>& run) -> std::string {
+  try {
+    run();
+  } catch (const duckorm::StatementError& error) {
+    return error.sql_head();
+  }
+  return "<none>";
+}
+
 TEST_F(DuckormStatementTest, QueryDecodesRowsIntoMemberPointerColumns) {
   duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name) VALUES (1, 'b'), (2, 'a'), "
                                     "(3, 'b'), (4, 'b')"));
@@ -608,16 +620,15 @@ TEST_F(DuckormStatementTest, StatementRebindsAndReportsPrepareAndBindErrors) {
   EXPECT_EQ(by_name.Execute().Get<int64_t>(0, 0), 0);
 
   EXPECT_THROW(insert.Bind(4, int64_t{1}), std::runtime_error);
-  const auto prepare_error =
-      ThrownMessage([&] { duckorm::Statement broken(conn_, "SELECT FROM WHERE nothing"); });
-  EXPECT_NE(prepare_error.find("[SQL: SELECT FROM WHERE nothing]"), std::string::npos)
-      << prepare_error;
-  // The SQL head in a message stops at 120 bytes.
-  const std::string long_sql   = "SELECT nope" + std::string(200, ' ') + "FROM Item";
-  const auto        long_error = ThrownMessage([&] { duckorm::Statement broken(conn_, long_sql); });
-  const auto        head_start = long_error.rfind("[SQL: ");
-  ASSERT_NE(head_start, std::string::npos) << long_error;
-  EXPECT_EQ(long_error.size() - head_start, std::string("[SQL: ]").size() + 120) << long_error;
+  const auto prepare       = [&] { duckorm::Statement broken(conn_, "SELECT FROM WHERE nothing"); };
+  const auto prepare_error = ThrownMessage(prepare);
+  EXPECT_FALSE(prepare_error.empty());
+  EXPECT_EQ(prepare_error.find("[SQL:"), std::string::npos) << prepare_error;
+  EXPECT_EQ(ThrownSqlHead(prepare), "SELECT FROM WHERE nothing");
+  // The SQL head stops at 120 bytes.
+  const std::string long_sql = "SELECT nope" + std::string(200, ' ') + "FROM Item";
+  EXPECT_EQ(ThrownSqlHead([&] { duckorm::Statement broken(conn_, long_sql); }),
+            long_sql.substr(0, 120));
 }
 
 }  // namespace
