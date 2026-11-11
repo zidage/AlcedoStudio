@@ -2,18 +2,18 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "utils/diagnostics/app_logging.hpp"
-
 #include <gtest/gtest.h>
 
 #include <QFile>
 #include <QLoggingCategory>
 #include <QString>
 #include <QTemporaryDir>
-
 #include <chrono>
 #include <cstddef>
 #include <string>
+
+#include "utils/diagnostics/app_logging.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo::diag {
 namespace {
@@ -132,6 +132,55 @@ TEST_F(EditorAppLoggingTest, WarningAndCriticalFlushImmediately) {
   EXPECT_EQ(counters.immediate_flushes, 2u)
       << "warning and critical messages must each flush immediately";
   EXPECT_GE(counters.present_messages_written, 1u);
+}
+
+/// A message of the Qt-free interface (utils/logging/log.hpp) reaches the application log file with
+/// its category name and the source location of the ALCEDO_LOG_* call.
+TEST_F(EditorAppLoggingTest, QtFreeInterfaceMessageReachesLogFileWithCategoryAndSourceLocation) {
+  ASSERT_FALSE(initialized_path_.isEmpty());
+  const int expected_line = __LINE__ + 1;
+  ALCEDO_LOG_WARN(Gpu) << "core-interface-marker requested_bytes=" << 4096;
+
+  // Warnings flush immediately, so the line is in the file now.
+  QFile file(CurrentLogFilePath());
+  ASSERT_TRUE(file.open(QIODevice::ReadOnly | QIODevice::Text));
+  QByteArray marker_line;
+  while (!file.atEnd()) {
+    const QByteArray line = file.readLine();
+    if (line.contains("core-interface-marker")) {
+      marker_line = line;
+    }
+  }
+  ASSERT_FALSE(marker_line.isEmpty()) << "the core message is missing from the log file";
+  EXPECT_TRUE(marker_line.contains("[WARN]")) << marker_line.constData();
+  EXPECT_TRUE(marker_line.contains("[alcedo.gpu]")) << marker_line.constData();
+  EXPECT_TRUE(marker_line.contains("core-interface-marker requested_bytes=4096"))
+      << marker_line.constData();
+  const QByteArray location =
+      QByteArrayLiteral("editor_app_logging_test.cpp:") + QByteArray::number(expected_line) + ')';
+  EXPECT_TRUE(marker_line.contains(location)) << marker_line.constData();
+}
+
+/// The Qt rules decide the enabled levels of the Qt-free interface, also when they change after
+/// initialization.
+TEST_F(EditorAppLoggingTest, QtRulesSetTheEnabledLevelsOfTheQtFreeInterface) {
+  ASSERT_FALSE(initialized_path_.isEmpty());
+  EXPECT_FALSE(log::IsEnabled(log::Level::Debug, log::Category::RenderRoi));
+  EXPECT_TRUE(log::IsEnabled(log::Level::Info, log::Category::GpuPool));
+  EXPECT_FALSE(log::IsEnabled(log::Level::Info, log::Category::EditorPresent));
+
+  QLoggingCategory::setFilterRules(QStringLiteral(
+      "*.debug=false
+"
+      "alcedo.render.roi.debug=true
+"
+      "alcedo.gpu.pool.info=false
+"));
+
+  EXPECT_TRUE(log::IsEnabled(log::Level::Debug, log::Category::RenderRoi));
+  EXPECT_FALSE(log::IsEnabled(log::Level::Debug, log::Category::Render));
+  EXPECT_FALSE(log::IsEnabled(log::Level::Info, log::Category::GpuPool));
+  EXPECT_TRUE(log::IsEnabled(log::Level::Warn, log::Category::GpuPool));
 }
 
 }  // namespace

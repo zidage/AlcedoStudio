@@ -20,6 +20,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 
@@ -194,8 +195,9 @@ void EditorHistoryState::ReleaseState(sl_element_id_t element_id, bool discard_u
   if (discard_unmaterialized && state->journal) {
     std::string error;
     if (!state->journal->TruncateMaterialized(&error)) {
-      qWarning("Editor history of image %llu: discarded changes stay in the journal: %s",
-               static_cast<unsigned long long>(element_id), error.c_str());
+      qCWarning(alcedo::diag::editorLog,
+                "Editor history of image %llu: discarded changes stay in the journal: %s",
+                static_cast<unsigned long long>(element_id), error.c_str());
     }
   }
   if (pipeline_port) pipeline_port->ReleaseLease(element_id);
@@ -239,8 +241,9 @@ void EditorHistoryState::PublishWorkingSnapshots(sl_element_id_t element_id) {
   try {
     preview = state->document->PublishPreview();
   } catch (const std::exception& ex) {
-    qWarning("Editor history: preview snapshot of image %llu was not published: %s",
-             static_cast<unsigned long long>(element_id), ex.what());
+    qCWarning(alcedo::diag::editorLog,
+              "Editor history: preview snapshot of image %llu was not published: %s",
+              static_cast<unsigned long long>(element_id), ex.what());
     return;
   }
   if (state->HasUncommittedLiveValues()) {
@@ -264,8 +267,9 @@ void EditorHistoryState::PublishWorkingSnapshots(sl_element_id_t element_id) {
         preview->SharedDocument(), element_id, lineage, head, chain));
     state->last_published_commit = HistoryWorkingState::PublishedCommit{lineage, head, chain};
   } catch (const std::exception& ex) {
-    qWarning("Editor history: committed snapshot of image %llu was not published: %s",
-             static_cast<unsigned long long>(element_id), ex.what());
+    qCWarning(alcedo::diag::editorLog,
+              "Editor history: committed snapshot of image %llu was not published: %s",
+              static_cast<unsigned long long>(element_id), ex.what());
   }
 }
 

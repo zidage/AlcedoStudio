@@ -19,7 +19,7 @@
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
-#include "gpu/gpu_pool_trace.hpp"
+#include "gpu/gpu_device_memory.hpp"
 
 namespace alcedo {
 

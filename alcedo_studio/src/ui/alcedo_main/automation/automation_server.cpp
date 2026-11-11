@@ -9,6 +9,8 @@
 #include <utility>
 #include <variant>
 
+#include "utils/diagnostics/app_logging.hpp"
+
 namespace alcedo::automation {
 
 AutomationServer::AutomationServer(const AutomationCommandRegistry& registry, QObject* parent)
@@ -142,8 +144,9 @@ void AutomationServer::HandleLine(QLocalSocket* socket, const QByteArray& line) 
 }
 
 void AutomationServer::RejectOversizedLine(QLocalSocket* socket) {
-  qWarning().noquote() << "automation connection sent a line longer than" << kMaxAutomationLineBytes
-                       << "bytes; closing it";
+  qCWarning(alcedo::diag::automationLog).noquote()
+      << "automation connection sent a line longer than" << kMaxAutomationLineBytes
+      << "bytes; closing it";
   // The connection reads no more input. It is deleted when the close completes.
   read_buffers_.remove(socket);
   socket->disconnect(this);

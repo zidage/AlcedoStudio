@@ -4,26 +4,31 @@
 
 #pragma once
 
-#include <cstddef>
-
 #include <QLoggingCategory>
 #include <QString>
-
 #include <chrono>
+#include <cstddef>
+
+#include "utils/logging/log_categories.hpp"
 
 namespace alcedo::diag {
 
-Q_DECLARE_LOGGING_CATEGORY(appLog)
-Q_DECLARE_LOGGING_CATEGORY(semanticLog)
-Q_DECLARE_LOGGING_CATEGORY(semanticRpcLog)
-Q_DECLARE_LOGGING_CATEGORY(semanticDbLog)
-Q_DECLARE_LOGGING_CATEGORY(editorLog)
-/// Per-frame editor presentation diagnostics. Disabled at info level by default
-/// (see InitializeApplicationLogging); per-frame detail lives at debug level and
-/// requires an explicit runtime rule to enable. Keeps presentation traffic off
+/// One QLoggingCategory function for each entry of ALCEDO_LOG_CATEGORY_LIST
+/// (utils/logging/log_categories.hpp), for example `appLog` (alcedo.app) and `gpuLog` (alcedo.gpu).
+/// Every production log call names one of them.
+///
+/// `editorPresentLog` (alcedo.editor.present) holds per-frame editor presentation diagnostics. It
+/// is disabled at info level by default (see InitializeApplicationLogging); per-frame detail lives
+/// at debug level and requires an explicit runtime rule to enable. Keeps presentation traffic off
 /// the frame budget: no per-info-line disk flush and no default output.
-Q_DECLARE_LOGGING_CATEGORY(editorPresentLog)
+#define ALCEDO_DECLARE_QT_LOG_CATEGORY_(core_id, qt_category_function, name) \
+  Q_DECLARE_LOGGING_CATEGORY(qt_category_function)
+ALCEDO_LOG_CATEGORY_LIST(ALCEDO_DECLARE_QT_LOG_CATEGORY_)
+#undef ALCEDO_DECLARE_QT_LOG_CATEGORY_
 
+/// Opens the log file and installs the Qt message handler. Also installs the AlcedoLog handler
+/// (utils/logging/log.hpp): a message of the Qt-free interface goes to the QLoggingCategory of the
+/// same name, so the Qt rules filter it and this log file receives it.
 auto InitializeApplicationLogging(const QString& preferred_directory = {}) -> QString;
 /// Writes the application log to @p file_path (appends). Creates the parent directory. Returns
 /// the absolute path, or an empty string when the file cannot be opened.

@@ -15,7 +15,6 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/result_representation.hpp"
 #include "edit/runtime/runtime_revision.hpp"
-#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
@@ -74,8 +73,6 @@ class NodeResultCache {
     }
     return total;
   }
-
-  void DumpToStderr(const char* reason) const { (void)reason; }
 
   [[nodiscard]] auto Find(const GraphValueId& id) -> typename Backend::Buffer* {
     const auto it = values_.find(id);

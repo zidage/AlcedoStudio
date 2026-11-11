@@ -25,6 +25,7 @@
 #include "ui/alcedo_main/automation/automation_search_commands.hpp"
 #include "ui/alcedo_main/automation/automation_session_commands.hpp"
 #include "ui/alcedo_main/automation/automation_task_commands.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::automation {
 namespace {
@@ -116,7 +117,8 @@ auto AutomationHostSession::Start(QString* error) -> bool {
     if (session_file_written_ && !host_->project()->ProjectLoading()) {
       QString rewrite_error;
       if (!WriteSessionFile(&rewrite_error)) {
-        qWarning().noquote() << "automation.session.file.rewrite.failed" << rewrite_error;
+        qCWarning(alcedo::diag::automationLog).noquote()
+            << "automation.session.file.rewrite.failed" << rewrite_error;
       }
     }
   });

@@ -6,18 +6,18 @@
 
 #include <QMetaObject>
 #include <QPointer>
-
 #include <exception>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
 
-#include "app/project_package_service.hpp"
 #include "app/mask_thumbnail_service.hpp"
+#include "app/project_package_service.hpp"
 #include "image/image.hpp"
-#include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 
@@ -198,8 +198,8 @@ bool ProjectHandler::StartProjectLoad(
       result->project_   = std::make_shared<ProjectService>(dbPath, metaPath, openMode);
       result->pipeline_             = std::make_shared<PipelineMgmtService>(
           result->project_->GetStorage(), accelerator_preference, lut_resources);
-      qInfo("pipeline.accelerator backend=%s source=active-editor-backend",
-            AcceleratorBackendPreferenceToString(accelerator_preference).data());
+      qCInfo(alcedo::diag::appLog, "pipeline.accelerator backend=%s source=active-editor-backend",
+             AcceleratorBackendPreferenceToString(accelerator_preference).data());
       result->thumbnail_ = std::make_shared<ThumbnailService>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
           result->pipeline_, result->project_->GetStorage(), result->project_->GetProjectUUID());

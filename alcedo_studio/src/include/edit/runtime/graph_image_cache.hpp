@@ -17,7 +17,6 @@
 #include "edit/runtime/result_representation.hpp"
 #include "edit/runtime/runtime_revision.hpp"
 #include "edit/runtime/texture_pool.hpp"
-#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
@@ -354,16 +353,6 @@ class GraphImageCache {
       ids.push_back(id);
     }
     return ids;
-  }
-
-  /**
-   * @brief Print published and unpublished image results with pool handles.
-   *
-   * @p pool is the TexturePool that owns the leases.
-   */
-  void DumpToStderr(const char* reason, const TexturePool<Backend>& pool) const {
-    (void)reason;
-    (void)pool;
   }
 
  private:

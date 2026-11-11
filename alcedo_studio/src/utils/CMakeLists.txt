@@ -6,6 +6,29 @@ def_library(TimeProvider
     SOURCES ${ALCEDO_SRC_ROOT}/utils/clock/time_provider.cpp
 )
 
+# Qt-free logging of the core libraries (utils/logging/log.hpp). On Windows it is a DLL: the CUDA
+# implementation libraries are DLLs too, and every module must share one handler and one set of
+# enabled levels. A static copy in each DLL would keep the default stderr handler there.
+set(ALCEDO_LOG_SOURCES
+    ${ALCEDO_SRC_ROOT}/utils/logging/log.cpp
+    ${ALCEDO_SRC_ROOT}/include/utils/logging/log.hpp
+    ${ALCEDO_SRC_ROOT}/include/utils/logging/log_categories.hpp
+)
+if(WIN32)
+    def_library(AlcedoLog TYPE SHARED SOURCES ${ALCEDO_LOG_SOURCES})
+    set_target_properties(AlcedoLog PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    target_compile_options(AlcedoLog PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>>:/GL->
+    )
+    install(TARGETS AlcedoLog RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+else()
+    def_library(AlcedoLog SOURCES ${ALCEDO_LOG_SOURCES})
+endif()
+# Compile-time floor: Debug builds compile in ALCEDO_LOG_DEBUG; other build types compile it out.
+target_compile_definitions(AlcedoLog PUBLIC
+    $<IF:$<CONFIG:Debug>,ALCEDO_LOG_MIN_LEVEL=0,ALCEDO_LOG_MIN_LEVEL=1>
+)
+
 if(WIN32)
     def_library(PreviewPerformance TYPE SHARED
         SOURCES
@@ -37,7 +60,7 @@ def_library(AppDiagnostics
         ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/app_logging.hpp
         ${ALCEDO_SRC_ROOT}/utils/diagnostics/render_e2e_timing.cpp
         ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/render_e2e_timing.hpp
-    PUBLIC_DEPS Qt6::Core PreviewPerformance
+    PUBLIC_DEPS Qt6::Core PreviewPerformance AlcedoLog
 )
 
 def_library(CudaDriverRequirements

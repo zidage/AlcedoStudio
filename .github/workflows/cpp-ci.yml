@@ -32,6 +32,14 @@ jobs:
       - name: Check the storage boundary
         run: python3 scripts/check_storage_boundary.py
 
+      - name: Test the console output check
+        run: python3 -m unittest scripts/tests/check_console_output_test.py
+
+      # Production code logs through ALCEDO_LOG_* or a qC* category; stdout and stderr have no
+      # console in the Windows release build (issue #822).
+      - name: Check console output
+        run: python3 scripts/check_console_output.py
+
   macos-arm-metal:
     name: macOS arm64 Metal
     runs-on: macos-15

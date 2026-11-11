@@ -43,7 +43,7 @@ void           ReportFailure(const QString& message) {
   const QByteArray bytes = QStringLiteral("alcedo_main --headless: %1\n").arg(message).toUtf8();
   std::fwrite(bytes.constData(), 1, static_cast<std::size_t>(bytes.size()), stderr);
   std::fflush(stderr);
-  qCritical().noquote() << "headless.start.failed" << message;
+  qCCritical(alcedo::diag::automationLog).noquote() << "headless.start.failed" << message;
 }
 
 auto ParseBackendToken(const QString& token) -> std::optional<editor_rhi::EditorBackend> {
@@ -62,7 +62,8 @@ auto ReadConfiguredBackend() -> std::optional<editor_rhi::EditorBackend> {
   }
   const auto backend = ParseBackendToken(stored);
   if (!backend.has_value() || !editor_rhi::IsBackendAvailableInThisBuild(*backend)) {
-    qWarning().noquote() << "Ignoring the saved accelerator backend" << stored;
+    qCWarning(alcedo::diag::automationLog).noquote()
+        << "Ignoring the saved accelerator backend" << stored;
     return std::nullopt;
   }
   return backend;

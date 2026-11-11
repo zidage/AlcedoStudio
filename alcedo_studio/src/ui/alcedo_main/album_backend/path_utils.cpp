@@ -34,6 +34,7 @@
 #endif
 
 #include "ui/alcedo_main/i18n.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui::album_util {
 
@@ -467,8 +468,8 @@ void ReportUnremovableWorkspaceFiles(const std::filesystem::path& root) {
 #ifdef _WIN32
     detail += QStringLiteral("; ") + DescribeFileHolders(it->path());
 #endif
-    qWarning().noquote() << "Runtime workspace file is locked:" << PathToQString(it->path())
-                         << detail;
+    qCWarning(alcedo::diag::projectLog).noquote()
+        << "Runtime workspace file is locked:" << PathToQString(it->path()) << detail;
   }
 }
 
@@ -483,8 +484,9 @@ auto CleanupWorkspaceDirectory(const std::filesystem::path& dir) -> bool {
   if (!ec) {
     return true;
   }
-  qWarning().noquote() << "Runtime workspace removal failed:" << PathToQString(dir)
-                       << QString::fromStdString(ec.message());
+  qCWarning(alcedo::diag::projectLog).noquote()
+      << "Runtime workspace removal failed:" << PathToQString(dir)
+      << QString::fromStdString(ec.message());
   ReportUnremovableWorkspaceFiles(dir);
   // The file-by-file pass can remove what remove_all left; the empty folders then remain.
   ec.clear();

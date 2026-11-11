@@ -16,6 +16,7 @@
 #include <variant>
 
 #include "color/color_encoding_catalog.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 #include "utils/lut/lut_inventory_digest.hpp"
 
 namespace alcedo {
@@ -30,7 +31,7 @@ constexpr const char* kLegacyFavoritesKey = "editor/lutPanel/favoritePaths";
 /// does not keep them.
 void ReportDroppedUserStateItems(const LutLibraryUserStateReadResult& read) {
   for (const std::string& item : read.dropped_items) {
-    qWarning("LUT library state item ignored: %s", item.c_str());
+    qCWarning(alcedo::diag::editorLog, "LUT library state item ignored: %s", item.c_str());
   }
 }
 

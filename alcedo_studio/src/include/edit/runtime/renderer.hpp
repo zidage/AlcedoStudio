@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -34,6 +34,7 @@
 #include "io/image/export_color_profile_config.hpp"
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
 
@@ -276,8 +277,7 @@ void Renderer<Backend>::EnsureDevice() {
   }
   const char* label = role_ == ExecutorRole::Batch ? "batch" : "interactive";
   device_->SetErrorReporter([label](std::string_view message) {
-    std::fprintf(stderr, "[ERROR] %s DAG %s render failed: %.*s\n", Backend::kName, label,
-                 static_cast<int>(message.size()), message.data());
+    ALCEDO_LOG_ERROR(Render) << Backend::kName << " DAG " << label << " render failed: " << message;
   });
 }
 

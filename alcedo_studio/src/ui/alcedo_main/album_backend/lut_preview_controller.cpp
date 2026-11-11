@@ -11,6 +11,7 @@
 
 #include "ui/alcedo_main/album_backend/comparison_presentation_image.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -260,7 +261,7 @@ void LutPreviewController::SubmitRender(const QString& entry_id, const QString& 
   if (!submitted) {
     // The session refused the command; a later state change refreshes the tiles again.
     in_flight_.reset();
-    qWarning().noquote() << "LUT preview not started:" << ToQString(error);
+    qCWarning(alcedo::diag::editorLog).noquote() << "LUT preview not started:" << ToQString(error);
   }
 }
 
@@ -273,11 +274,13 @@ void LutPreviewController::OnRendered(const QString& entry_id, const QString& ke
       CachePut(key, std::move(presentation.image));
     } catch (const std::exception& ex) {
       failed_.insert(key);
-      qWarning().noquote() << "LUT preview of" << entry_id << "cannot be shown:" << ex.what();
+      qCWarning(alcedo::diag::editorLog).noquote()
+          << "LUT preview of" << entry_id << "cannot be shown:" << ex.what();
     }
   } else if (result.status == EditorLutPreviewStatus::Failed) {
     failed_.insert(key);
-    qWarning().noquote() << "LUT preview of" << entry_id << "failed:" << ToQString(result.message);
+    qCWarning(alcedo::diag::editorLog).noquote()
+        << "LUT preview of" << entry_id << "failed:" << ToQString(result.message);
   }
   // Rejected: the session cannot render now; the entry renders after the next refresh.
   if (watched_.contains(entry_id)) {

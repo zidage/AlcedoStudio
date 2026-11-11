@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
-#include <iostream>
 
 #include "app/album_browse_service.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
@@ -20,6 +19,7 @@
 #include "ui/alcedo_main/album_backend/search_request_worker.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo::ui {
@@ -107,7 +107,8 @@ auto FolderController::EnsureNode(const std::filesystem::path& folderPath,
 }
 
 void FolderController::LoadChildren(const std::filesystem::path& parentPath) {
-  std::cout << "[LOG] FolderController: Loading Child for: " << parentPath.string() << std::endl;
+  qCDebug(diag::libraryLog).noquote()
+      << "FolderController: loading children of" << QString::fromStdWString(parentPath.wstring());
   auto proj = project_->handler().project();
   if (!proj) {
     return;
@@ -211,16 +212,14 @@ void FolderController::AppendVisibleEntries(const std::filesystem::path&      fo
     return;
   }
 
-  std::cout << "[LOG] FolderController: Finding child for " << conv::ToBytes(key) << std::endl;
   const auto child_it = child_keys_by_path_.find(key);
   if (child_it == child_keys_by_path_.end()) {
-    std::cout << "No child for " << conv::ToBytes(key) << std::endl;
+    qCDebug(diag::libraryLog).noquote()
+        << "FolderController: no children for" << QString::fromStdString(conv::ToBytes(key));
     return;
   }
 
   for (const auto& child_key : child_it->second) {
-    std::cout << "[LOG] FolderController: Child for " << conv::ToBytes(key)
-              << " found: " << conv::ToBytes(child_key) << std::endl;
     const auto node_it = nodes_by_path_.find(child_key);
     if (node_it == nodes_by_path_.end()) {
       continue;
@@ -321,7 +320,7 @@ void FolderController::ApplyImageCounts(std::uint64_t generation, uint64_t proje
   }
   if (!error.isEmpty()) {
     // A failed read shows no count rather than an old one.
-    qWarning().noquote() << "Collection photo count read failed:" << error;
+    qCWarning(diag::libraryLog).noquote() << "Collection photo count read failed:" << error;
     image_counts_loaded_ = false;
     image_count_by_folder_.clear();
   } else {
@@ -372,8 +371,7 @@ void FolderController::ApplyFolderSelection(uint folderUiId, bool emitSignal) {
   const bool    text_changed  = current_folder_path_text_ != next_path_ui;
   current_folder_path_text_   = next_path_ui;
 
-  std::cout << "[LOG] FolderController: Folder Selected: " << next_path_ui.toStdString()
-            << std::endl;
+  qCDebug(diag::libraryLog).noquote() << "FolderController: folder selected:" << next_path_ui;
 
   RebuildFolderView();
 

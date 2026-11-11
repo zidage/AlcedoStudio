@@ -12,21 +12,24 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QThread>
-
+#include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <utility>
+
+#include "utils/logging/log.hpp"
 
 namespace alcedo::diag {
 
-Q_LOGGING_CATEGORY(appLog, "alcedo.app")
-Q_LOGGING_CATEGORY(semanticLog, "alcedo.semantic")
-Q_LOGGING_CATEGORY(semanticRpcLog, "alcedo.semantic.rpc")
-Q_LOGGING_CATEGORY(semanticDbLog, "alcedo.semantic.db")
-Q_LOGGING_CATEGORY(editorLog, "alcedo.editor")
-Q_LOGGING_CATEGORY(editorPresentLog, "alcedo.editor.present")
+#define ALCEDO_DEFINE_QT_LOG_CATEGORY_(core_id, qt_category_function, name) \
+  Q_LOGGING_CATEGORY(qt_category_function, name)
+ALCEDO_LOG_CATEGORY_LIST(ALCEDO_DEFINE_QT_LOG_CATEGORY_)
+#undef ALCEDO_DEFINE_QT_LOG_CATEGORY_
 
 namespace {
 
@@ -38,8 +41,10 @@ constexpr std::size_t kBufferedFlushThreshold = 1 << 16;  // 64 KiB
 std::mutex             g_log_lock;
 std::unique_ptr<QFile> g_log_file;
 QtMessageHandler      g_previous_handler = nullptr;
+QLoggingCategory::CategoryFilter g_previous_category_filter = nullptr;
 QString               g_log_file_path;
-bool                  g_console_enabled = false;
+// Written under g_log_lock at initialization, read without it after each message.
+std::atomic<bool>                g_console_enabled{false};
 std::size_t           g_buffered_bytes   = 0;
 
 // Test-only counters. Guarded by g_log_lock. They count messages that actually
@@ -118,7 +123,7 @@ void ApplicationMessageHandler(QtMsgType type, const QMessageLogContext& context
     }
   }
 
-  if (g_console_enabled) {
+  if (g_console_enabled.load(std::memory_order_relaxed)) {
     std::fwrite(bytes.constData(), 1, static_cast<size_t>(bytes.size()), stderr);
     // Console output is opt-in (ALCEDO_LOG_CONSOLE); keep stderr responsive but
     // do not fflush per info/debug line — the OS stream buffers it.
@@ -130,6 +135,72 @@ void ApplicationMessageHandler(QtMsgType type, const QMessageLogContext& context
   if (type == QtFatalMsg) {
     std::abort();
   }
+}
+
+/// The QLoggingCategory of each core category, in the order of alcedo::log::Category.
+auto QtCategories() -> const std::array<const QLoggingCategory*, log::kCategoryCount>& {
+  static const std::array<const QLoggingCategory*, log::kCategoryCount> categories = {
+#define ALCEDO_QT_LOG_CATEGORY_ADDRESS_(core_id, qt_category_function, name) \
+  &qt_category_function(),
+      ALCEDO_LOG_CATEGORY_LIST(ALCEDO_QT_LOG_CATEGORY_ADDRESS_)
+#undef ALCEDO_QT_LOG_CATEGORY_ADDRESS_
+  };
+  return categories;
+}
+
+/// Handler of the Qt-free interface: one message to the QLoggingCategory of the same name, with
+/// the source location of the ALCEDO_LOG_* call. QMessageLogger checks the category rules again,
+/// so a rule change between the two checks drops the message rather than writing it.
+void ForwardCoreLogMessage(const log::Record& record) {
+  const auto index = static_cast<std::size_t>(record.category);
+  if (index >= log::kCategoryCount) {
+    return;
+  }
+  const QLoggingCategory& category = *QtCategories()[index];
+  const QMessageLogger    logger(record.file, record.line, record.function);
+  const int               size = static_cast<int>(record.message.size());
+  const char*             text = record.message.data();
+  switch (record.level) {
+    case log::Level::Debug:
+      logger.debug(category, "%.*s", size, text);
+      return;
+    case log::Level::Info:
+      logger.info(category, "%.*s", size, text);
+      return;
+    case log::Level::Warn:
+      logger.warning(category, "%.*s", size, text);
+      return;
+    case log::Level::Error:
+      logger.critical(category, "%.*s", size, text);
+      return;
+  }
+}
+
+/// Copies the enabled levels of @p category into the AlcedoLog flags when it is one of the
+/// categories of ALCEDO_LOG_CATEGORY_LIST, so a disabled level costs one flag check in the core.
+void ApplyQtRulesToCoreCategory(const QLoggingCategory& category) {
+  const std::string_view name(category.categoryName());
+  for (std::size_t index = 0; index < log::kCategoryCount; ++index) {
+    const auto core = static_cast<log::Category>(index);
+    if (log::CategoryName(core) != name) {
+      continue;
+    }
+    log::SetEnabled(core, log::Level::Debug, category.isDebugEnabled());
+    log::SetEnabled(core, log::Level::Info, category.isInfoEnabled());
+    log::SetEnabled(core, log::Level::Warn, category.isWarningEnabled());
+    log::SetEnabled(core, log::Level::Error, category.isCriticalEnabled());
+    return;
+  }
+}
+
+/// Qt calls the category filter for every category when it is installed and when the rules
+/// change (QLoggingCategory::setFilterRules, QT_LOGGING_RULES). The previous filter applies the
+/// rules first.
+void CoreLogCategoryFilter(QLoggingCategory* category) {
+  if (g_previous_category_filter != nullptr) {
+    g_previous_category_filter(category);
+  }
+  ApplyQtRulesToCoreCategory(*category);
 }
 
 auto ResolveLogDirectory(const QString& preferred_directory) -> QString {
@@ -171,7 +242,8 @@ auto InitializeApplicationLoggingAt(const QString& file_path) -> QString {
     }
 
     g_log_file        = std::move(file);
-    g_console_enabled = qEnvironmentVariableIntValue("ALCEDO_LOG_CONSOLE") != 0;
+    g_console_enabled.store(qEnvironmentVariableIntValue("ALCEDO_LOG_CONSOLE") != 0,
+                            std::memory_order_relaxed);
     g_buffered_bytes  = 0;
 
     if (qEnvironmentVariableIsEmpty("QT_LOGGING_RULES")) {
@@ -186,6 +258,14 @@ auto InitializeApplicationLoggingAt(const QString& file_path) -> QString {
     g_previous_handler = qInstallMessageHandler(ApplicationMessageHandler);
     initialized_path   = g_log_file_path;
   }
+
+  // Each category already holds the result of the rules. installFilter calls the new filter
+  // before it returns the previous one, so the states are copied here once more after it.
+  g_previous_category_filter = QLoggingCategory::installFilter(CoreLogCategoryFilter);
+  for (const QLoggingCategory* category : QtCategories()) {
+    ApplyQtRulesToCoreCategory(*category);
+  }
+  log::SetHandler(ForwardCoreLogMessage);
 
   qCInfo(appLog).noquote()
       << QStringLiteral("logging.initialized path=%1").arg(initialized_path);
@@ -208,6 +288,13 @@ auto InitializeApplicationLoggingToFile(const QString& file_path) -> QString {
 }
 
 void ShutdownApplicationLogging() {
+  log::SetHandler(nullptr);
+  if (g_previous_category_filter != nullptr) {
+    QLoggingCategory::installFilter(g_previous_category_filter);
+    g_previous_category_filter = nullptr;
+  }
+  log::ResetEnabledLevels();
+
   std::lock_guard lock(g_log_lock);
   qInstallMessageHandler(g_previous_handler);
   g_previous_handler = nullptr;
