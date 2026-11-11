@@ -428,6 +428,25 @@ gtest_discover_tests(LibraryReferenceModelTest TEST_PREFIX "LibraryReferenceMode
 alcedo_copy_duckdb_extensions(LibraryReferenceModelTest)
 alcedo_register_test_target(LibraryReferenceModelTest app ci_core)
 
+# Writes the marked project of the alcedo-cli read comparison of two builds (#807,
+# scripts/storage_cli_compare/compare_storage_cli_reads.py). Built only on request and not
+# registered with ctest: the comparison script runs it.
+add_executable(StorageCliCompareProjectWriter EXCLUDE_FROM_ALL
+  ${ALCEDO_TEST_ROOT}/app/storage_cli_compare_project_writer.cpp
+  ${ALCEDO_TEST_ROOT}/support/storage_invariants.cpp)
+target_include_directories(StorageCliCompareProjectWriter PUBLIC
+  ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(StorageCliCompareProjectWriter
+  AdjustmentTransferService
+  EditorPipelineCommandService
+  ProjectService
+  PipelineMgmtService
+  PipelineHistory
+  EditGraph
+  GTest::gtest_main)
+alcedo_copy_duckdb_extensions(StorageCliCompareProjectWriter)
+alcedo_register_test_target(StorageCliCompareProjectWriter)
+
 # Typed Image and AI search columns and the SQL that reads them (same plan, Phase S3).
 add_executable(LibrarySearchColumnsTest ${ALCEDO_TEST_ROOT}/app/library_search_columns_test.cpp)
 target_include_directories(LibrarySearchColumnsTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
