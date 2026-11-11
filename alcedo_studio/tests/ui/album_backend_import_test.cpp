@@ -24,11 +24,19 @@
 #include "ui/alcedo_main/album_backend/folder_import_scan_model.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
+#include "ui/saved_project_invariants.hpp"
 
 namespace alcedo::ui::test {
 namespace {
 
-using ImportTests = ApplicationModuleHostTestFixture;
+class ImportTests : public ApplicationModuleHostTestFixture {
+ protected:
+  /// Checks the storage invariants of each project package that the test saved (#805).
+  void TearDown() override {
+    ExpectSavedProjectInvariants(temp_dir_);
+    ApplicationModuleHostTestFixture::TearDown();
+  }
+};
 
 auto FindPackedProjectPath(const std::filesystem::path& dir)
     -> std::optional<std::filesystem::path> {

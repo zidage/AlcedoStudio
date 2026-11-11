@@ -301,7 +301,11 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     // Create the corresponding image file
     auto sleeve_file   = std::static_pointer_cast<SleeveFile>(element);
 
-    auto image_handler = image_pool_service_->CreateAndReturnPinnedEmpty();
+    // MetadataExtractor sets image_type_ from the file content.
+    auto image_handler = image_pool_service_->CreateAndReturnPinned([&](Image& image) {
+      image.image_path_ = image_path;
+      image.image_name_ = file_name;
+    });
 
     if (!image_handler) {
       CountFailedFile(*progress_ptr, raw_extension);
@@ -312,9 +316,6 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     auto image_handler_ptr =
         std::make_shared<ImagePoolManager::PinnedImageHandle>(std::move(image_handler));
     auto image_ptr = image_handler_ptr->Get();
-    image_ptr->image_path_ = image_path;
-    image_ptr->image_name_ = file_name;
-    // MetadataExtractor sets image_type_ from the file content.
 
     // Link the image to the SleeveFile
     sleeve_file->SetImage(image_ptr);

@@ -51,6 +51,7 @@
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "../support/storage_test_access.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -238,16 +239,10 @@ void ReportLatency(const std::string& library_label, const std::vector<QueryLate
 
 class LibrarySearchBenchmarkTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
-    work_dir_ = std::filesystem::temp_directory_path() / "library_search_benchmark_test";
-    std::error_code ec;
-    std::filesystem::remove_all(work_dir_, ec);
-    std::filesystem::create_directories(work_dir_);
-  }
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove_all(work_dir_, ec);
+    work_dir_ = temp_dir_.Path();
   }
 
   void RunSyntheticBenchmark(size_t count, size_t dng_per_mille) {

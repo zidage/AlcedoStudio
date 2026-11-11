@@ -22,27 +22,21 @@
 #include "../support/storage_test_access.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "sleeve/storage.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
 
 class StorageSessionTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
-    const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
-    db_path_         = std::filesystem::temp_directory_path() /
-               ("StorageSessionTest_" + std::string{info->name()} + ".db");
-    std::filesystem::remove(db_path_);
+    db_path_ = temp_dir_ / "project.db";
     storage_ = std::make_unique<Storage>(db_path_);
   }
 
   void TearDown() override {
     storage_.reset();
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    auto wal_path = db_path_;
-    wal_path += ".wal";
-    std::filesystem::remove(wal_path, ec);
   }
 
   /// True when a thread other than the caller can take the database lock now.

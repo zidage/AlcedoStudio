@@ -46,6 +46,7 @@
 #include "json.hpp"
 #include "support/document_transfer_test_support.hpp"
 #include "support/editor_parameter_target_test.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -1062,8 +1063,9 @@ TEST(DocumentTransferTest, DrtOnlyPackageIdenticalToTargetFailsWithoutChanges) {
 // L4: transferring the LUT adjustment copies its reference, strength and both encodings, and the
 // target samples the same composite LUT table as the source (so it renders like the source).
 TEST(DocumentTransferTest, LutTransferCopiesEncodingsAndTargetSamplesTheSourceTable) {
+  const test::TestTempDirectory temp_dir;
   const auto cube =
-      std::filesystem::temp_directory_path() /
+      temp_dir.Path() /
       ("lut_transfer_" +
        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".cube");
   {

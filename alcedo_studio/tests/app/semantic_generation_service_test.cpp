@@ -29,6 +29,7 @@
 #include "app/semantic_input_image_service.hpp"
 #include "image/image.hpp"
 #include "support/semantic_stores_test_support.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "../support/storage_test_access.hpp"
@@ -733,19 +734,11 @@ auto CollectSemanticRawFixturePaths(size_t max_count, bool recursive) -> std::ve
 
 class SemanticGenerationServiceTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
-    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    db_path_ = std::filesystem::temp_directory_path() / ("semantic_generation_" + unique + ".db");
-    meta_path_ =
-        std::filesystem::temp_directory_path() / ("semantic_generation_" + unique + ".json");
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
-  }
-
-  void TearDown() override {
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   auto ImportItems(ProjectService& project, size_t count) -> std::vector<SemanticGenerationItem> {

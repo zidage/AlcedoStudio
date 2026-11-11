@@ -51,6 +51,7 @@
 #include "renderer/pipeline_task.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
 
@@ -241,20 +242,12 @@ auto RequestSemanticInput(SemanticInputImageService& service, sl_element_id_t el
 
 class ThumbnailCommittedRenderTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
-    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    const auto base  = std::filesystem::temp_directory_path();
-    db_path_         = base / ("thumbnail_committed_" + stamp + ".db");
-    meta_path_       = base / ("thumbnail_committed_" + stamp + ".json");
-    cache_root_      = base / ("thumbnail_committed_cache_" + stamp);
-  }
-
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(meta_path_, ec);
-    std::filesystem::remove_all(cache_root_, ec);
+    db_path_    = temp_dir_ / "project.db";
+    meta_path_  = temp_dir_ / "project.json";
+    cache_root_ = temp_dir_ / "thumbnail_cache";
   }
 
   std::filesystem::path db_path_;

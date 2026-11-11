@@ -52,6 +52,7 @@
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/element_store.hpp"
 #include "support/non_raw_import_files.hpp"
+#include "support/test_temp_directory.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/import/import_log.hpp"
 #include "../support/storage_test_access.hpp"
@@ -163,24 +164,21 @@ auto FixturePhotos() -> std::vector<FixturePhoto> {
 
 class AlbumQueryTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
-    const auto* test_name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
-    const auto  dir       = std::filesystem::temp_directory_path();
-    db_path_              = dir / (std::string("album_query_") + test_name + ".db");
-    meta_path_            = dir / (std::string("album_query_") + test_name + ".json");
-    scratch_dir_          = dir / (std::string("album_query_") + test_name);
-    RemoveProjectFiles();
+    db_path_     = temp_dir_ / "project.db";
+    meta_path_   = temp_dir_ / "project.json";
+    scratch_dir_ = temp_dir_ / "scratch";
     std::filesystem::create_directories(scratch_dir_);
   }
-  void TearDown() override { RemoveProjectFiles(); }
 
+  /// Remove the project files, so the next ProjectService creates a new project.
   void RemoveProjectFiles() {
     std::error_code ec;
     std::filesystem::remove(db_path_, ec);
     std::filesystem::remove(db_path_.string() + ".wal", ec);
     std::filesystem::remove(meta_path_, ec);
-    std::filesystem::remove_all(scratch_dir_, ec);
   }
 
   /// Build the eight fixture photos and @p extra_photos after them, and remember their file

@@ -24,12 +24,20 @@
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
+#include "ui/saved_project_invariants.hpp"
 #include "../support/storage_test_access.hpp"
 
 namespace alcedo::ui::test {
 namespace {
 
-using DeleteTests = ApplicationModuleHostTestFixture;
+class DeleteTests : public ApplicationModuleHostTestFixture {
+ protected:
+  /// Checks the storage invariants of each project package that the test saved (#805).
+  void TearDown() override {
+    ExpectSavedProjectInvariants(temp_dir_);
+    ApplicationModuleHostTestFixture::TearDown();
+  }
+};
 
 auto WaitUntil(const std::function<bool()>& predicate, int timeoutMs = 60000) -> bool {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);

@@ -40,6 +40,7 @@
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/project_compat_render.hpp"
 #include "support/storage_invariants.hpp"
+#include "support/test_temp_directory.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
 #include "../support/storage_test_access.hpp"
@@ -70,6 +71,7 @@ void RewriteImagePath(const std::filesystem::path& db_path, const std::filesyste
 }
 
 TEST(ProjectCompatibilityTest, ProjectWrittenByCurrentMainOpensAndRendersUnchanged) {
+  const test::TestTempDirectory temp_dir;
   TimeProvider::Refresh();
   nlohmann::json expected;
   {
@@ -83,7 +85,7 @@ TEST(ProjectCompatibilityTest, ProjectWrittenByCurrentMainOpensAndRendersUnchang
     GTEST_SKIP() << "CI RAW fixture is missing (Git LFS): " << raw_path.string();
   }
 
-  const auto      workspace = std::filesystem::temp_directory_path() / "alcedo_project_compat";
+  const auto      workspace = temp_dir.Path() / "alcedo_project_compat";
   std::error_code ec;
   std::filesystem::remove_all(workspace, ec);
   std::filesystem::path db_path;
@@ -118,6 +120,7 @@ TEST(ProjectCompatibilityTest, ProjectWrittenByCurrentMainOpensAndRendersUnchang
 }
 
 TEST(ProjectCompatibilityTest, OldProjectCommitsReadAsUserAndSaveAnAgentCommit) {
+  const test::TestTempDirectory temp_dir;
   TimeProvider::Refresh();
   nlohmann::json expected;
   {
@@ -125,8 +128,7 @@ TEST(ProjectCompatibilityTest, OldProjectCommitsReadAsUserAndSaveAnAgentCommit) 
     ASSERT_TRUE(in.is_open());
     expected = nlohmann::json::parse(in);
   }
-  const auto workspace =
-      std::filesystem::temp_directory_path() / "alcedo_project_compat_attribution";
+  const auto workspace = temp_dir.Path() / "alcedo_project_compat_attribution";
   std::error_code ec;
   std::filesystem::remove_all(workspace, ec);
   std::filesystem::path db_path;
@@ -235,9 +237,9 @@ auto MakeCompatMaskAsset() -> MaskAsset {
 // SM5.1 M10 and D19: a project database written before the MaskAsset table gains the table at
 // open and keeps its rows; no project version change is needed.
 TEST(ProjectCompatibilityTest, ExistingProjectDatabaseGetsTheMaskAssetTable) {
+  const test::TestTempDirectory temp_dir;
   TimeProvider::Refresh();
-  const auto workspace =
-      std::filesystem::temp_directory_path() / "alcedo_project_compat_mask_asset";
+  const auto workspace = temp_dir.Path() / "alcedo_project_compat_mask_asset";
   std::error_code ec;
   std::filesystem::remove_all(workspace, ec);
   std::filesystem::path db_path;
@@ -269,13 +271,11 @@ TEST(ProjectCompatibilityTest, ExistingProjectDatabaseGetsTheMaskAssetTable) {
 
 // SM5.1 M10: Save packs the DuckDB file, so the asset rows travel with the .alcd package.
 TEST(ProjectCompatibilityTest, PackedProjectKeepsMaskAssetRows) {
+  const test::TestTempDirectory temp_dir;
   TimeProvider::Refresh();
-  const auto source_workspace =
-      std::filesystem::temp_directory_path() / "alcedo_project_compat_mask_pack_source";
-  const auto unpacked_workspace =
-      std::filesystem::temp_directory_path() / "alcedo_project_compat_mask_pack_unpacked";
-  const auto packed_path =
-      std::filesystem::temp_directory_path() / "alcedo_project_compat_mask_pack.alcd";
+  const auto source_workspace = temp_dir.Path() / "alcedo_project_compat_mask_pack_source";
+  const auto unpacked_workspace = temp_dir.Path() / "alcedo_project_compat_mask_pack_unpacked";
+  const auto packed_path = temp_dir.Path() / "alcedo_project_compat_mask_pack.alcd";
   std::error_code ec;
   std::filesystem::remove_all(source_workspace, ec);
   std::filesystem::remove_all(unpacked_workspace, ec);
@@ -359,6 +359,7 @@ constexpr const char* kEditStateRootIdsSql =
 // #769: a 0.10.0 project opens, gains the library mark columns with empty marks, keeps its root
 // ids, stores marks, and saves as 0.11.0.
 TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds) {
+  const test::TestTempDirectory temp_dir;
   TimeProvider::Refresh();
   nlohmann::json expected;
   {
@@ -366,7 +367,7 @@ TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds
     ASSERT_TRUE(in.is_open());
     expected = nlohmann::json::parse(in);
   }
-  const auto      workspace = std::filesystem::temp_directory_path() / "alcedo_project_compat_marks";
+  const auto      workspace = temp_dir.Path() / "alcedo_project_compat_marks";
   std::error_code ec;
   std::filesystem::remove_all(workspace, ec);
   std::filesystem::path db_path;

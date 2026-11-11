@@ -133,6 +133,21 @@ option(ALCEDO_BUILD_CUDA_DLLS
        "Build first-party CUDA implementation targets as DLLs to reduce incremental link time."
        ${WIN32})
 option(ALCEDO_BUILD_TESTS "Build alcedo tests and demos." ON)
+# Sanitizer of the first-party code (#809): "address" (MSVC or Clang AddressSanitizer) or
+# "thread" (Clang ThreadSanitizer). Third-party code built in the tree is not instrumented.
+# A sanitizer build has its own build directory (presets win_debug_asan, macos_debug_tsan).
+set(ALCEDO_SANITIZER ""
+    CACHE STRING
+    "Instrument first-party code with a sanitizer: empty (none), address, or thread.")
+set_property(CACHE ALCEDO_SANITIZER PROPERTY STRINGS "" address thread)
+if(NOT ALCEDO_SANITIZER STREQUAL "" AND
+   NOT ALCEDO_SANITIZER STREQUAL "address" AND
+   NOT ALCEDO_SANITIZER STREQUAL "thread")
+    message(FATAL_ERROR "ALCEDO_SANITIZER must be empty, address, or thread: '${ALCEDO_SANITIZER}'")
+endif()
+if(ALCEDO_SANITIZER STREQUAL "thread" AND MSVC)
+    message(FATAL_ERROR "ALCEDO_SANITIZER=thread needs Clang; MSVC has no ThreadSanitizer.")
+endif()
 option(ALCEDO_MACOS_BUNDLE
        "Build alcedo_main as a macOS .app bundle (intended for packaging/install)."
        OFF)
@@ -282,6 +297,21 @@ if (MSVC)
     set(CMAKE_CXX_FLAGS_RELEASE "/O2 /utf-8 /arch:AVX2 /bigobj /W4 /external:anglebrackets /external:W0 /EHsc /openmp /GL /Zc:preprocessor /MP")
     # add_link_options(/DEBUG)
     set(CMAKE_VS_USE_DEBUG_LIBRARIES "$<CONFIG:Debug,Custom>")
+    if(ALCEDO_SANITIZER STREQUAL "address")
+        # The STL container annotations of AddressSanitizer need every object of a binary built
+        # with /fsanitize=address (LNK2038 annotate_vector / annotate_string). Third-party and
+        # prebuilt libraries are not instrumented, so the annotations are off in every object.
+        add_compile_definitions(_DISABLE_VECTOR_ANNOTATION _DISABLE_STRING_ANNOTATION)
+        # /RTC and incremental linking do not work with /fsanitize=address.
+        string(REGEX REPLACE "/RTC[1csu]*" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+        foreach(_alcedo_link_flags_var
+                CMAKE_EXE_LINKER_FLAGS_DEBUG CMAKE_SHARED_LINKER_FLAGS_DEBUG
+                CMAKE_MODULE_LINKER_FLAGS_DEBUG)
+            string(REGEX REPLACE "/INCREMENTAL(:YES)?( |$)" " " ${_alcedo_link_flags_var}
+                   "${${_alcedo_link_flags_var}}")
+            string(APPEND ${_alcedo_link_flags_var} " /INCREMENTAL:NO")
+        endforeach()
+    endif()
     # FIXME: Hardcoded Qt path for Windows, consider making it configurable
     set(CMAKE_PREFIX_PATH "D:/misc/Qt/6.9.3/msvc2022_64/lib/cmake;${CMAKE_PREFIX_PATH}")
 else()
@@ -1003,6 +1033,27 @@ endfunction()
 add_subdirectory(${CMAKE_SOURCE_DIR}/alcedo_studio/src/third_party)
 if(DEFINED ALCEDO_LENSFUN_LIBRARY_DIR AND NOT "${ALCEDO_LENSFUN_LIBRARY_DIR}" STREQUAL "")
     list(APPEND CMAKE_BUILD_RPATH "${ALCEDO_LENSFUN_LIBRARY_DIR}")
+endif()
+# ALCEDO_SANITIZER instruments the first-party code below; the third-party code above is not.
+if(ALCEDO_SANITIZER STREQUAL "address")
+    if(MSVC)
+        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/fsanitize=address>)
+        # The executables load the AddressSanitizer runtime DLL from the compiler directory;
+        # alcedo_copy_linked_runtime_dlls searches it and copies the DLL next to them.
+        get_filename_component(ALCEDO_SANITIZER_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        if(NOT EXISTS "${ALCEDO_SANITIZER_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.dll")
+            message(FATAL_ERROR
+                    "AddressSanitizer runtime DLL not found in ${ALCEDO_SANITIZER_RUNTIME_DIR}")
+        endif()
+    else()
+        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fsanitize=address>
+                            $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fno-omit-frame-pointer>)
+        add_link_options(-fsanitize=address)
+    endif()
+elseif(ALCEDO_SANITIZER STREQUAL "thread")
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fsanitize=thread>
+                        $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fno-omit-frame-pointer>)
+    add_link_options(-fsanitize=thread)
 endif()
 add_subdirectory(${CMAKE_SOURCE_DIR}/alcedo_studio/src)
 if(ALCEDO_BUILD_TESTS)

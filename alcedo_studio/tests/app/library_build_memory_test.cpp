@@ -21,6 +21,7 @@
 #include "library_search_test_support.hpp"
 #include "process_memory_test_support.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -74,16 +75,10 @@ auto BuildInBatches(ProjectService& project, const std::vector<SyntheticImageSpe
 
 class LibraryBuildMemoryTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
-    work_dir_ = std::filesystem::temp_directory_path() / "library_build_memory_test";
-    std::error_code ec;
-    std::filesystem::remove_all(work_dir_, ec);
-    std::filesystem::create_directories(work_dir_);
-  }
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove_all(work_dir_, ec);
+    work_dir_ = temp_dir_.Path();
   }
 
   std::filesystem::path work_dir_;
