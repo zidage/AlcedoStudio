@@ -30,6 +30,7 @@
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo::ui {
@@ -695,7 +696,8 @@ void LibraryModule::SubmitStatisticsRead() {
             return;
           }
           if (!output.error_.isEmpty()) {
-            qWarning().noquote() << "Library statistics read failed:" << output.error_;
+            qCWarning(alcedo::diag::libraryLog).noquote()
+                << "Library statistics read failed:" << output.error_;
             SetQueryError(output.error_);
             return;
           }
@@ -856,7 +858,7 @@ auto LibraryModule::ItemFromRow(const AlbumQueryRow& query_row, const AlbumItem&
 
 void LibraryModule::FailRefresh(const QString& error) {
   // The accepted content and settings stay; the pending changes stay for Retry.
-  qWarning().noquote() << "Library query failed:" << error;
+  qCWarning(alcedo::diag::libraryLog).noquote() << "Library query failed:" << error;
   refresh_in_flight_ = refresh_scheduled_;
   after_refresh_.clear();
   SetQueryError(error);

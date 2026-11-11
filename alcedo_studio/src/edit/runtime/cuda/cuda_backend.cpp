@@ -6,11 +6,29 @@
 
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "cuda/cuda_check.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
+namespace {
+
+/// `cuda:<ordinal> <name>` of the current device, for the first-allocation log line.
+auto CurrentCudaDeviceName() -> std::string {
+  int device = -1;
+  if (::cudaGetDevice(&device) != cudaSuccess) {
+    return "cuda:unknown";
+  }
+  cudaDeviceProp properties{};
+  if (::cudaGetDeviceProperties(&properties, device) != cudaSuccess) {
+    return "cuda:" + std::to_string(device);
+  }
+  return "cuda:" + std::to_string(device) + " " + properties.name;
+}
+
+}  // namespace
 
 CudaCommandContext::CudaCommandContext() {
   cuda::CheckCuda(::cudaStreamCreate(&stream_), "CudaCommandContext::cudaStreamCreate");
@@ -85,7 +103,7 @@ auto CudaBackend::Buffer::operator=(Buffer&& other) noexcept -> Buffer& {
 void CudaBackend::Buffer::Reset() noexcept {
   if (ptr_ != nullptr) {
     if (owner_ != nullptr) {
-      owner_->NoteFree();
+      owner_->NoteFree(bytes_);
     }
     ::cudaFree(ptr_);
     ptr_ = nullptr;
@@ -147,7 +165,7 @@ auto CudaBackend::Texture2D::operator=(Texture2D&& other) noexcept -> Texture2D&
 void CudaBackend::Texture2D::Reset() noexcept {
   if (ptr_ != nullptr) {
     if (owner_ != nullptr) {
-      owner_->NoteFree();
+      owner_->NoteFree(bytes_);
     }
     ::cudaFree(ptr_);
     ptr_ = nullptr;
@@ -159,13 +177,32 @@ void CudaBackend::Texture2D::Reset() noexcept {
   resource_id_ = 0;
 }
 
+auto CudaBackend::AllocateDevice(std::size_t bytes, const char* operation) -> void* {
+  void*             ptr    = nullptr;
+  const cudaError_t status = ::cudaMalloc(&ptr, bytes);
+  if (status != cudaSuccess) {
+    gpu_memory_log::AllocationFailed(kName, operation, bytes, QueryDeviceMemory(),
+                                     AllocationTotals(), ::cudaGetErrorString(status));
+    cuda::CheckCuda(status, operation);
+  }
+  if (!first_allocation_logged_) {
+    first_allocation_logged_ = true;
+    if (log::IsEnabled(log::Level::Info, log::Category::GpuPool)) {
+      gpu_memory_log::FirstAllocation(kName, CurrentCudaDeviceName(), bytes, QueryDeviceMemory());
+    }
+  }
+  NoteMalloc(bytes);
+  ALCEDO_LOG_DEBUG(GpuPool) << "cuda.alloc op=" << operation << " bytes=" << bytes
+                            << " live_bytes=" << live_bytes_
+                            << " live_allocations=" << live_allocations_;
+  return ptr;
+}
+
 auto CudaBackend::CreateBuffer(std::size_t bytes) -> Buffer {
   if (bytes == 0) {
     return {};
   }
-  void* ptr = nullptr;
-  cuda::CheckCuda(::cudaMalloc(&ptr, bytes), "CudaBackend::CreateBuffer");
-  NoteMalloc();
+  void* ptr = AllocateDevice(bytes, "CudaBackend::CreateBuffer");
   return Buffer{this, ptr, bytes, next_resource_id_++};
 }
 
@@ -178,9 +215,7 @@ auto CudaBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, Tex
   if (ConsumeInjectedFailure(allocations_before_failure_)) {
     throw std::runtime_error("CudaBackend::CreateTexture2D: injected failure");
   }
-  void* ptr = nullptr;
-  cuda::CheckCuda(::cudaMalloc(&ptr, bytes), "CudaBackend::CreateTexture2D");
-  NoteMalloc();
+  void* ptr = AllocateDevice(bytes, "CudaBackend::CreateTexture2D");
   return Texture2D{this, ptr, bytes, width, height, format, next_resource_id_++};
 }
 

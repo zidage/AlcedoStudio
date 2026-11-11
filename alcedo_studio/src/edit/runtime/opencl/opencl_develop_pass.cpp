@@ -38,7 +38,6 @@
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/raster_develop_params.hpp"
 #include "edit/runtime/texture_format.hpp"
-#include "gpu/gpu_pool_trace.hpp"
 #include "gpu/transient_allocation_policy.hpp"
 #include "gpu/transient_buffer_scope.hpp"
 #include "gpu/transient_last_use.hpp"

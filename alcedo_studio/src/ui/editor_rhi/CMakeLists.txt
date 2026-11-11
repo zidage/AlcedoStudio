@@ -25,7 +25,7 @@ endif()
 
 def_library(EditorRhiContracts
     SOURCES ${EDITOR_RHI_CONTRACT_SRCS}
-    PUBLIC_DEPS Qt6::Core
+    PUBLIC_DEPS Qt6::Core AlcedoLog
 )
 if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(EditorRhiContracts PUBLIC HAVE_CUDA)

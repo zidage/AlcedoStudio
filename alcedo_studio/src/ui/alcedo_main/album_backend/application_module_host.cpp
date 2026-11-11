@@ -26,26 +26,27 @@
 
 #include "app/editor_adjustment_context.hpp"
 #include "app/editor_pending_input.hpp"
+#include "app/editor_session_bootstrap.hpp"
 #include "app/image_pool_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "image/image.hpp"
-#include "app/editor_session_bootstrap.hpp"
+#include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
-#include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_mask_asset_port.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
-#include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
-#include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/justified_layout_model.hpp"
 #include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -83,8 +84,8 @@ auto WatchProjectServices(const ProjectModule* project) -> ProjectServiceWatch {
 void ReportSurvivingProjectServices(const ProjectServiceWatch& watch) {
   const auto report = [](const char* name, long use_count) {
     if (use_count > 0) {
-      qWarning().noquote() << "Project service outlived ProjectModule:" << name
-                           << "use_count=" << use_count;
+      qCWarning(alcedo::diag::appLog).noquote()
+          << "Project service outlived ProjectModule:" << name << "use_count=" << use_count;
     }
   };
   report("ProjectService", watch.project_.use_count());

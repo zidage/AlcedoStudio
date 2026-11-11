@@ -15,6 +15,8 @@
 #include <cstring>
 #include <sstream>
 
+#include "utils/logging/log.hpp"
+
 namespace alcedo::editor_rhi {
 namespace {
 
@@ -57,23 +59,25 @@ auto BindCudaDeviceOnCurrentThread(int cuda_device, const char* context) -> bool
 
   const cudaError_t set_err = cudaSetDevice(cuda_device);
   if (set_err != cudaSuccess) {
-    std::fprintf(stderr, "cuda_adapter_discovery: cudaSetDevice(%d) failed in %s: %s\n",
-                 cuda_device, context ? context : "?", cudaGetErrorString(set_err));
+    ALCEDO_LOG_WARN(Gpu) << "cuda_adapter_discovery: cudaSetDevice(" << cuda_device
+                         << ") failed in " << (context ? context : "?") << ": "
+                         << cudaGetErrorString(set_err);
     return false;
   }
 
   const cudaError_t init_err = cudaFree(nullptr);
   if (init_err != cudaSuccess) {
-    std::fprintf(stderr, "cuda_adapter_discovery: cudaFree(0) failed in %s for device %d: %s\n",
-                 context ? context : "?", cuda_device, cudaGetErrorString(init_err));
+    ALCEDO_LOG_WARN(Gpu) << "cuda_adapter_discovery: cudaFree(0) failed in "
+                         << (context ? context : "?") << " for device " << cuda_device << ": "
+                         << cudaGetErrorString(init_err);
     return false;
   }
 
   const cudaError_t stale_err = cudaGetLastError();
   if (stale_err != cudaSuccess) {
-    std::fprintf(stderr,
-                 "cuda_adapter_discovery: cleared stale CUDA error before %s on device %d: %s\n",
-                 context ? context : "?", cuda_device, cudaGetErrorString(stale_err));
+    ALCEDO_LOG_WARN(Gpu) << "cuda_adapter_discovery: cleared stale CUDA error before "
+                         << (context ? context : "?") << " on device " << cuda_device << ": "
+                         << cudaGetErrorString(stale_err);
   }
   return true;
 }

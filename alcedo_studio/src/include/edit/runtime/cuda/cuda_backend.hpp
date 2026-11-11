@@ -18,7 +18,7 @@
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/cuda/cuda_gpu_timestamp_pool.hpp"
 #include "edit/runtime/texture_format.hpp"
-#include "gpu/gpu_pool_trace.hpp"
+#include "gpu/gpu_device_memory.hpp"
 
 namespace alcedo {
 
@@ -250,7 +250,11 @@ class CudaBackend {
   }
   [[nodiscard]] auto NextSubmissionId() -> std::uint64_t { return ++next_submission_; }
 
-  void               NoteFree() noexcept { ++free_count_; }
+  void               NoteFree(std::size_t bytes) noexcept {
+    ++free_count_;
+    live_bytes_ -= bytes;
+    --live_allocations_;
+  }
 
   void               ResetCounters();
   void               FailNextUpload();
@@ -285,6 +289,10 @@ class CudaBackend {
   [[nodiscard]] auto LastLutResourceId() const -> std::uint64_t { return last_lut_resource_id_; }
 
   [[nodiscard]] auto QueryDeviceMemory() const -> GpuDeviceMemorySnapshot;
+  /// Device memory of the live buffers and textures of this backend.
+  [[nodiscard]] auto AllocationTotals() const -> GpuBackendAllocationTotals {
+    return {.live_bytes = live_bytes_, .live_allocations = live_allocations_};
+  }
 
  private:
   /// True when the armed test failure is due on this call; disarms it then.
@@ -307,13 +315,24 @@ class CudaBackend {
   friend class Buffer;
   friend class Texture2D;
 
-  void                   NoteMalloc() noexcept { ++malloc_count_; }
+  void NoteMalloc(std::size_t bytes) noexcept {
+    ++malloc_count_;
+    live_bytes_ += bytes;
+    ++live_allocations_;
+  }
+  /// cudaMalloc of @p bytes. A failure writes the gpu.alloc.failed line, then throws. The first
+  /// allocation of this backend writes gpu.alloc.first.
+  [[nodiscard]] auto     AllocateDevice(std::size_t bytes, const char* operation) -> void*;
   /// The cached device buffer of @p key and @p edge, after an upload when the device has none.
   [[nodiscard]] auto     AcquireCachedBuffer(ContentKey key, std::span<const std::byte> bytes,
                                              std::uint32_t edge, CommandContext& command_context)
       -> CudaLutBinding;
 
   std::uint64_t          malloc_count_         = 0;
+  // Not cleared by ResetCounters: they describe the device memory, not a measurement window.
+  std::size_t                  live_bytes_              = 0;
+  std::uint64_t                live_allocations_        = 0;
+  bool                         first_allocation_logged_ = false;
   std::uint64_t          free_count_           = 0;
   std::uint64_t          h2d_copy_count_       = 0;
   mutable std::uint64_t        d2h_copy_count_       = 0;

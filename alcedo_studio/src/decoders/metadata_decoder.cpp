@@ -14,12 +14,12 @@
 #include <exiv2/types.hpp>
 #include <filesystem>
 #include <functional>
-#include <iostream>
 #include <optional>
 #include <stdexcept>
 
 #include "image/metadata_extractor.hpp"
 #include "type/type.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
 namespace {
@@ -157,8 +157,8 @@ void MetadataDecoder::Decode(std::vector<char> buffer, std::filesystem::path fil
 
     return;
   } catch (std::exception& e) {
-    // TODO: Append error message to log
-    std::cout << e.what() << std::endl;
+    ALCEDO_LOG_WARN(Decode) << "MetadataDecoder: metadata of " << file_path.string()
+                            << " cannot be read: " << e.what();
   }
   // If it fails to read metadata, produce a plain image with minimum metadata
   std::shared_ptr<Image> img =
@@ -180,8 +180,8 @@ void MetadataDecoder::Decode(std::vector<char> buffer, std::shared_ptr<Image> so
 
     return;
   } catch (std::exception& e) {
-    // TODO: Append error message to log
-    std::cout << e.what() << std::endl;
+    ALCEDO_LOG_WARN(Decode) << "MetadataDecoder: metadata of image " << source_img->image_id_
+                            << " cannot be read from its buffer: " << e.what();
   }
   // If it fails to read metadata, produce a plain image with minimum metadata
   result->push(source_img);

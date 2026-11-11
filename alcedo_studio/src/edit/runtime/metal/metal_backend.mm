@@ -17,6 +17,7 @@
 #include "metal/compute_pipeline_cache.hpp"
 #include "metal/metal_context.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
 void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan);
@@ -238,6 +239,22 @@ class MetalBackendImpl {
     }
   }
 
+  /// Heap pages of this backend: the device memory it holds for private buffers and textures.
+  static auto HeapTotals(const MetalBackend::Gpu& gpu) -> GpuBackendAllocationTotals {
+    GpuBackendAllocationTotals totals;
+    for (const auto& page : gpu.heaps) {
+      totals.live_bytes += page.bytes;
+    }
+    totals.live_allocations = gpu.heaps.size();
+    return totals;
+  }
+
+  static void LogAllocationFailure(const MetalBackend& backend, const MetalBackend::Gpu& gpu,
+                                   const char* operation, std::size_t bytes, const char* message) {
+    gpu_memory_log::AllocationFailed(MetalBackend::kName, operation, bytes,
+                                     backend.QueryDeviceMemory(), HeapTotals(gpu), message);
+  }
+
   static void GrowHeap(MetalBackend& backend, MetalBackend::Gpu& gpu, std::size_t at_least) {
     ThrowIfHeapBusy(backend);
     auto descriptor = NS::TransferPtr(MTL::HeapDescriptor::alloc()->init());
@@ -246,12 +263,25 @@ class MetalBackendImpl {
     descriptor->setHazardTrackingMode(MTL::HazardTrackingModeTracked);
     descriptor->setType(MTL::HeapTypeAutomatic);
     auto heap = NS::TransferPtr(gpu.device->newHeap(descriptor.get()));
+    if (heap.get() == nullptr) {
+      LogAllocationFailure(backend, gpu, "MTLDevice::newHeap", descriptor->size(),
+                           "MetalBackend: failed to allocate MTLHeap page");
+    }
     ThrowIfNull(heap.get(), "MetalBackend: failed to allocate MTLHeap page");
-    HeapPage page;
+    const auto old_capacity = HeapTotals(gpu).live_bytes;
+    HeapPage   page;
     page.heap  = std::move(heap);
     page.bytes = descriptor->size();
     gpu.heaps.push_back(std::move(page));
     backend.NoteHeapCreate();
+    if (gpu.heaps.size() == 1 && log::IsEnabled(log::Level::Info, log::Category::GpuPool)) {
+      const auto* name = gpu.device->name();
+      gpu_memory_log::FirstAllocation(MetalBackend::kName,
+                                      name != nullptr ? name->utf8String() : "metal",
+                                      gpu.heaps.back().bytes, backend.QueryDeviceMemory());
+    }
+    gpu_memory_log::PoolGrowth(MetalBackend::kName, "metal_heap", "new_page", old_capacity,
+                               old_capacity + gpu.heaps.back().bytes, gpu.heaps.size());
   }
 
   static auto AllocatePrivateBuffer(MetalBackend& backend, MetalBackend::Gpu& gpu,
@@ -274,6 +304,10 @@ class MetalBackendImpl {
     }
     GrowHeap(backend, gpu, needed.size);
     auto* buffer = try_allocate();
+    if (buffer == nullptr) {
+      LogAllocationFailure(backend, gpu, "MTLHeap::newBuffer", bytes,
+                           "MetalBackend: failed to allocate private buffer from MTLHeap");
+    }
     ThrowIfNull(buffer, "MetalBackend: failed to allocate private buffer from MTLHeap");
     return buffer;
   }
@@ -297,6 +331,10 @@ class MetalBackendImpl {
     }
     GrowHeap(backend, gpu, needed.size);
     auto* texture = try_allocate();
+    if (texture == nullptr) {
+      LogAllocationFailure(backend, gpu, "MTLHeap::newTexture", needed.size,
+                           "MetalBackend: failed to allocate private texture from MTLHeap");
+    }
     ThrowIfNull(texture, "MetalBackend: failed to allocate private texture from MTLHeap");
     return texture;
   }
@@ -533,6 +571,10 @@ auto MetalBackend::CreateBuffer(std::size_t bytes) -> Buffer {
   }
   MetalBackendImpl::AttachGpu(*gpu_);
   auto* native = gpu_->device->newBuffer(bytes, ParameterResourceOptions(gpu_->device));
+  if (native == nullptr) {
+    MetalBackendImpl::LogAllocationFailure(*this, *gpu_, "MTLDevice::newBuffer", bytes,
+                                           "MetalBackend: failed to allocate parameter buffer");
+  }
   ThrowIfNull(native, "MetalBackend: failed to allocate parameter buffer");
   NoteBufferCreate();
   gpu_->live_buffers.push_back(LiveBuffer{native, native->gpuAddress(), bytes});
@@ -546,6 +588,8 @@ auto MetalBackend::CreateSlab(std::size_t bytes) -> Buffer {
   MetalBackendImpl::AttachGpu(*gpu_);
   auto* native = MetalBackendImpl::AllocatePrivateBuffer(*this, *gpu_, bytes);
   NoteBufferCreate();
+  ALCEDO_LOG_DEBUG(GpuPool) << "metal.alloc op=CreateSlab bytes=" << bytes
+                            << " heap_pages=" << gpu_->heaps.size();
   gpu_->live_buffers.push_back(LiveBuffer{native, native->gpuAddress(), bytes});
   return Buffer{this, native, reinterpret_cast<void*>(static_cast<uintptr_t>(native->gpuAddress())),
                 bytes, next_resource_id_++};
@@ -564,6 +608,8 @@ auto MetalBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, Te
   auto  descriptor = MakePrivateTextureDescriptor(width, height, format);
   auto* native     = MetalBackendImpl::AllocatePrivateTexture(*this, *gpu_, descriptor.get());
   NoteTextureCreate();
+  ALCEDO_LOG_DEBUG(GpuPool) << "metal.alloc op=CreateTexture2D bytes=" << bytes
+                            << " heap_pages=" << gpu_->heaps.size();
   return Texture2D{this, native, bytes, width, height, format, next_resource_id_++};
 }
 

@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <exception>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -18,6 +17,7 @@
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
+#include "utils/logging/log.hpp"
 #include "utils/profiler/profiler.hpp"
 
 namespace alcedo {
@@ -360,7 +360,8 @@ auto PipelineScheduler::RunTask(PipelineTask& task) -> TaskOutcome {
       auto result = task.pipeline_executor_->Apply(*task.snapshot_, task.input_, apply_request);
 
       if (IsStaleForSink(output_sink, task.request_id_)) {
-        std::cout << "PipelineScheduler: Stale for sink detected!\n";
+        ALCEDO_LOG_DEBUG(Render) << "PipelineScheduler: request " << task.request_id_
+                                 << " is stale for its sink after Apply";
         return abandon();
       }
 

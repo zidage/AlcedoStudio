@@ -20,6 +20,7 @@
 
 #include "io/image/export_color_profile_config.hpp"
 #include "io/image/export_icc_profile_resolver.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo {
 namespace {
@@ -200,7 +201,7 @@ void LogFallbackColorSpace(const ViewerDisplayConfig& config, CFStringRef resolv
       resolved = QString::fromUtf8(buffer);
     }
   }
-  qWarning().noquote()
+  qCWarning(alcedo::diag::editorLog).noquote()
       << QStringLiteral("ColorManager: falling back to %1 for encoding_space=%2 encoding_eotf=%3")
              .arg(resolved,
                   QString::fromStdString(ColorUtils::ColorSpaceToString(config.encoding_space)),

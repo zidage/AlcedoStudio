@@ -11,7 +11,11 @@ add_library(ImageBuffer ${IMAGE_BUFFER_SRCS})
 target_include_directories(ImageBuffer PUBLIC "${ALCEDO_INCLUDE_ROOT}")
 
 # Common dependencies
-set(IMAGE_BUFFER_DEPS Exiv2 ${ALCEDO_OPENCV_CORE_DEPS} libraw::raw_r TimeProvider JSON StrConv)
+# AlcedoLog is public here because ImageBuffer is the base of every core library: the templates in
+# the edit runtime and gpu headers (renderer, arenas, texture pool) log from any target that
+# includes them.
+set(IMAGE_BUFFER_DEPS Exiv2 ${ALCEDO_OPENCV_CORE_DEPS} libraw::raw_r TimeProvider JSON StrConv
+    AlcedoLog)
 
 # Platform specific dependencies
 if (WIN32)

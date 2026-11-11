@@ -19,6 +19,7 @@
 #include "app/editor_parameter_catalog.hpp"
 #include "app/film_stock_presentation.hpp"
 #include "edit/graph/film_print_model.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -235,7 +236,7 @@ QVariantMap EditorParameterCatalogAdapter::uiValue(const QString&  field,
   const auto  ui = EditorParameterCatalog::ToUiValue(
       field.toStdString(), ToJson(snapshotEntry.toMap()), &error);
   if (!ui.has_value() || !ui->is_object()) {
-    qWarning("EditorParameterCatalog: %s", error.c_str());
+    qCWarning(alcedo::diag::editorLog, "EditorParameterCatalog: %s", error.c_str());
     return {};
   }
   return ToVariantMap(*ui);
@@ -247,7 +248,7 @@ QString EditorParameterCatalogAdapter::modelParamsJson(const QString&     field,
   const auto  model =
       EditorParameterCatalog::UiStateToModelJson(field.toStdString(), ToJson(uiState), &error);
   if (!model.has_value()) {
-    qWarning("EditorParameterCatalog: %s", error.c_str());
+    qCWarning(alcedo::diag::editorLog, "EditorParameterCatalog: %s", error.c_str());
     return {};
   }
   return QString::fromStdString(model->dump());
@@ -259,7 +260,7 @@ QVariantMap EditorParameterCatalogAdapter::constrainCrop(const QVariantMap& crop
   std::string error;
   const auto  state = ValidCropState(cropState, &error);
   if (!state.has_value()) {
-    qWarning("EditorParameterCatalog: %s", error.c_str());
+    qCWarning(alcedo::diag::editorLog, "EditorParameterCatalog: %s", error.c_str());
     return {};
   }
   return ToVariantMap(EditorParameterCatalog::ConstrainCrop(*state, ParseCropDriver(driver),
@@ -272,7 +273,7 @@ QVariant EditorParameterCatalogAdapter::cropLockedAspectRatio(const QVariantMap&
   std::string error;
   const auto  state = ValidCropState(cropState, &error);
   if (!state.has_value()) {
-    qWarning("EditorParameterCatalog: %s", error.c_str());
+    qCWarning(alcedo::diag::editorLog, "EditorParameterCatalog: %s", error.c_str());
     return {};
   }
   const auto ratio =

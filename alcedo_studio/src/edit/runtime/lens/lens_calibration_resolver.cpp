@@ -12,13 +12,14 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
+
+#include "utils/logging/log.hpp"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -747,18 +748,20 @@ auto LensCalibrationResolver::ResolveProfile(const LensInputMeta&          meta,
   result.matched_lens_maker_ = lens->Maker ? lens->Maker : "";
   result.matched_lens_model_ = lens->Model ? lens->Model : "";
 
-  std::cout << "LensCalibrationResolver: lens=\"" << meta.lens_model_ << "\""
-            << " profile=\"" << result.matched_lens_maker_ << " / " << result.matched_lens_model_
-            << "\""
-            << " focal=" << meta.focal_length_mm_ << " crop_factor=" << crop_factor
-            << " apply_vignetting=" << runtime.apply_vignetting
-            << " apply_distortion=" << runtime.apply_distortion
-            << " apply_tca=" << runtime.apply_tca
-            << " apply_projection=" << runtime.apply_projection
-            << " apply_crop=" << runtime.apply_crop << " dng_geometry_wins=" << dng_geometry_wins
-            << " crop_mode=" << runtime.crop_mode << " resolved_scale=" << runtime.resolved_scale
-            << " crop_bounds=[" << runtime.crop_bounds[0] << ", " << runtime.crop_bounds[1] << ", "
-            << runtime.crop_bounds[2] << ", " << runtime.crop_bounds[3] << "]" << std::endl;
+  ALCEDO_LOG_DEBUG(Lens) << "LensCalibrationResolver: lens=\"" << meta.lens_model_ << "\""
+                         << " profile=\"" << result.matched_lens_maker_ << " / "
+                         << result.matched_lens_model_ << "\""
+                         << " focal=" << meta.focal_length_mm_ << " crop_factor=" << crop_factor
+                         << " apply_vignetting=" << runtime.apply_vignetting
+                         << " apply_distortion=" << runtime.apply_distortion
+                         << " apply_tca=" << runtime.apply_tca
+                         << " apply_projection=" << runtime.apply_projection
+                         << " apply_crop=" << runtime.apply_crop
+                         << " dng_geometry_wins=" << dng_geometry_wins
+                         << " crop_mode=" << runtime.crop_mode
+                         << " resolved_scale=" << runtime.resolved_scale << " crop_bounds=["
+                         << runtime.crop_bounds[0] << ", " << runtime.crop_bounds[1] << ", "
+                         << runtime.crop_bounds[2] << ", " << runtime.crop_bounds[3] << "]";
 
   result.params_ = runtime;
   result.status_ =

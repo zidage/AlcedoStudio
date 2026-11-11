@@ -27,7 +27,7 @@
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
-#include "gpu/gpu_pool_trace.hpp"
+#include "gpu/gpu_device_memory.hpp"
 #include "opencl/opencl_context.hpp"
 
 namespace alcedo {
@@ -418,7 +418,11 @@ class OpenClBackend {
   }
   [[nodiscard]] auto NextSubmissionId() -> std::uint64_t { return ++next_submission_; }
 
-  void               NoteFree() noexcept { ++free_count_; }
+  void               NoteFree(std::size_t bytes) noexcept {
+    ++free_count_;
+    live_bytes_ -= bytes;
+    --live_allocations_;
+  }
   void               ResetCounters();
   void               FailNextUpload();
   /**
@@ -440,6 +444,10 @@ class OpenClBackend {
   [[nodiscard]] auto NativeQueue() const -> cl_command_queue { return queue_; }
   [[nodiscard]] auto WorkingSetBudgetBytes() const -> std::size_t;
   [[nodiscard]] auto QueryDeviceMemory() const -> GpuDeviceMemorySnapshot;
+  /// Device memory of the live buffers and images of this backend.
+  [[nodiscard]] auto AllocationTotals() const -> GpuBackendAllocationTotals {
+    return {.live_bytes = live_bytes_, .live_allocations = live_allocations_};
+  }
   [[nodiscard]] auto MallocCount() const -> std::uint64_t { return malloc_count_; }
   [[nodiscard]] auto FreeCount() const -> std::uint64_t { return free_count_; }
   [[nodiscard]] auto BufferCreateCount() const -> std::uint64_t { return buffer_create_count_; }
@@ -495,15 +503,20 @@ class OpenClBackend {
     std::size_t   bytes       = 0;
   };
 
-  void NoteMalloc() noexcept { ++malloc_count_; }
-  void NoteBufferCreate() noexcept {
+  /// Counts a successful allocation of @p bytes. The first one of this backend writes
+  /// gpu.alloc.first.
+  void NoteMalloc(std::size_t bytes, const char* operation);
+  void NoteBufferCreate(std::size_t bytes) {
     ++buffer_create_count_;
-    NoteMalloc();
+    NoteMalloc(bytes, "OpenClBackend::CreateBuffer");
   }
-  void NoteTextureCreate() noexcept {
+  void NoteTextureCreate(std::size_t bytes) {
     ++texture_create_count_;
-    NoteMalloc();
+    NoteMalloc(bytes, "OpenClBackend::CreateTexture2D");
   }
+  /// Writes gpu.alloc.failed, then throws std::runtime_error with @p message.
+  [[noreturn]] void  ThrowAllocationFailure(const char* operation, std::size_t bytes,
+                                            const std::string& message) const;
   void NoteEventCreate() noexcept { ++event_create_count_; }
   void NoteEventRelease(std::size_t count = 1) noexcept { event_release_count_ += count; }
   void UnregisterBuffer(cl_mem native) noexcept;
@@ -525,6 +538,10 @@ class OpenClBackend {
   std::vector<LiveBuffer> live_buffers_;
   std::uint64_t          next_virtual_address_     = 0x100000000ull;
   std::uint64_t          malloc_count_             = 0;
+  // Not cleared by ResetCounters: they describe the device memory, not a measurement window.
+  std::size_t                  live_bytes_               = 0;
+  std::uint64_t                live_allocations_         = 0;
+  bool                         first_allocation_logged_  = false;
   std::uint64_t          free_count_               = 0;
   std::uint64_t          buffer_create_count_      = 0;
   std::uint64_t          texture_create_count_     = 0;
