@@ -41,6 +41,7 @@ use their own top-level category.
 
 ## Alcedo Studio — UI
 
+- [Library Photo Stacking Plan](alcedo_studio/ui/library_photo_stacking_plan.md)
 - [Editor Adjustment and Version Comparison Plan](alcedo_studio/ui/editor_adjustment_comparison_plan.md)
 - [LUT Library and Package Management Plan](alcedo_studio/ui/lut_library_and_package_management_plan.md)
 - [AI Sidecar Frontend Plan](alcedo_studio/ui/ai_sidecar_frontend_plan.md)

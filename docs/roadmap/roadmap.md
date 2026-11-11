@@ -35,6 +35,9 @@
 
 ## Still Planned
 
+- [ ] Add Library photo stacks with filter-first matching, temporary covers, and separate stack
+      fragments in each Library group; see the
+      [Library Photo Stacking Plan](alcedo_studio/ui/library_photo_stacking_plan.md).
 - [ ] Add the film print DRT method: spectral film and print tables on the host, then CUDA, Metal, and
       OpenCL passes; see the [Film Print DRT Plan](alcedo_studio/edit/film_print_drt_plan.md).
 - [ ] Fix the review findings of the executor ownership refactor, starting with history moves
