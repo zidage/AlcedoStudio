@@ -1232,6 +1232,10 @@
 <context>
     <name>Alcedo</name>
     <message>
+        <source>The collection is no longer in the library.</source>
+        <translation>该影集已不在图库中。</translation>
+    </message>
+    <message>
         <location filename="../album_backend/image_controller.cpp" line="+51"/>
         <source>Capture</source>
         <translation>拍摄信息</translation>
@@ -5845,6 +5849,22 @@ Refresh the library afterwards; they are listed under the User category. Import 
 <context>
     <name>FolderImportConfirmDialog</name>
     <message>
+        <source>The dropped items could not be read.</source>
+        <translation>无法读取拖入的项目。</translation>
+    </message>
+    <message>
+        <source>No files found in the dropped items.</source>
+        <translation>拖入的项目中没有文件。</translation>
+    </message>
+    <message>
+        <source>Import to %1</source>
+        <translation>导入到 %1</translation>
+    </message>
+    <message>
+        <source>%1 dropped file(s) are imported with every type.</source>
+        <translation>拖入的 %1 个文件不按类型筛选，全部导入。</translation>
+    </message>
+    <message>
         <location filename="../qml/FolderImportConfirmDialog.qml" line="+84"/>
         <source>Import From Folder</source>
         <translation>从文件夹导入</translation>
@@ -6339,6 +6359,10 @@ Refresh the library afterwards; they are listed under the User category. Import 
 <context>
     <name>LibraryWorkspace</name>
     <message>
+        <source>Import to %1</source>
+        <translation>导入到 %1</translation>
+    </message>
+    <message>
         <location filename="../qml/LibraryWorkspace.qml" line="+255"/>
         <source>Browser</source>
         <translation>浏览</translation>
@@ -6831,6 +6855,10 @@ Create a new layer above it and draw the Mask there?</source>
 </context>
 <context>
     <name>Main</name>
+    <message>
+        <source>All Photos</source>
+        <translation>全部图片</translation>
+    </message>
     <message>
         <location filename="../qml/Main.qml" line="+48"/>
         <source>Alcedo Studio</source>

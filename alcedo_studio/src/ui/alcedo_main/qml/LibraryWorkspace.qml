@@ -1,8 +1,10 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
+import "FileDrop.js" as FileDrop
 
 // Extracted library/album surface. Layout and behavior match the former Main.qml body.
 Item {
@@ -444,6 +446,79 @@ RowLayout {
                             root.playLibraryGridReveal()
                         }
                         Qt.callLater(root.restoreScrollPosition)
+                    }
+                }
+
+                // Drop of local files and folders onto the grid: import into the current
+                // collection, the same as the Import buttons (issue #757).
+                DropArea {
+                    id: gridFileDropArea
+                    objectName: "libraryGridFileDropArea"
+                    anchors.fill: parent
+                    keys: ["text/uri-list"]
+
+                    readonly property int targetFolderId: Number(appModules.folders.currentFolderId)
+                    property var urls: []
+
+                    // The action is always Copy: import reads the files in place, and a Move
+                    // answer lets the file manager delete them.
+                    onEntered: function(drag) {
+                        urls = host && host.fileDropImportAllowed ? FileDrop.localFileUrls(drag) : []
+                        if (urls.length > 0) {
+                            drag.accept(Qt.CopyAction)
+                        } else {
+                            drag.accepted = false
+                        }
+                    }
+                    onExited: urls = []
+                    onDropped: function(drop) {
+                        const dropped = urls.length > 0 ? urls : FileDrop.localFileUrls(drop)
+                        urls = []
+                        if (!host || !host.fileDropImportAllowed || dropped.length === 0) {
+                            drop.accepted = false
+                            return
+                        }
+                        drop.accept(Qt.CopyAction)
+                        host.importDroppedUrls(dropped, targetFolderId)
+                    }
+                }
+
+                // Drop overlay: a hairline frame on a dimmed grid with the target collection.
+                Rectangle {
+                    objectName: "libraryGridFileDropOverlay"
+                    anchors.fill: parent
+                    z: 5
+                    visible: gridFileDropArea.containsDrag && gridFileDropArea.urls.length > 0
+                    radius: appTheme.controlRadiusSmall
+                    color: Qt.rgba(root.colBgDeep.r, root.colBgDeep.g, root.colBgDeep.b, 0.78)
+                    border.width: 1
+                    border.color: appTheme.textMutedColor
+
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        width: Math.min(parent.width - appTheme.spaceXl * 2, 420)
+                        spacing: appTheme.spaceSm
+
+                        IconImage {
+                            Layout.alignment: Qt.AlignHCenter
+                            Layout.preferredWidth: 28
+                            Layout.preferredHeight: 28
+                            source: "qrc:/panel_icons/import.svg"
+                            sourceSize: Qt.size(28, 28)
+                            color: root.colText
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
+                            elide: Text.ElideMiddle
+                            text: qsTr("Import to %1")
+                                  .arg(host ? host.collectionDisplayName(gridFileDropArea.targetFolderId) : "")
+                            color: root.colText
+                            font.family: root.headlineFontFamily
+                            font.pixelSize: appTheme.fontSizeSection
+                            font.weight: appTheme.fontWeightHeading
+                        }
                     }
                 }
 

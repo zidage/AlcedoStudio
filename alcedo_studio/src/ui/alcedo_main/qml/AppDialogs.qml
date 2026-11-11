@@ -84,7 +84,23 @@ Item {
         theme: host
         host: root.host
         blurSource: root.blurSource
-        onConfirmed: appModules.importExport.StartFolderImportAsUser()
+        onConfirmed: {
+            if (dropTargetFolderId >= 0)
+                appModules.importExport.StartFolderImportToFolderAsUser(dropTargetFolderId)
+            else
+                appModules.importExport.StartFolderImportAsUser()
+        }
+    }
+
+    // Library file drop (issue #757): files only import at once, as Import Images does; a drop
+    // that holds a folder opens the folder dialog with every dropped item as a scan source.
+    function importDroppedUrls(urls, folderId, collectionName) {
+        if (!urls || urls.length === 0)
+            return
+        if (appModules.importExport.DropHoldsFolder(urls))
+            folderImportConfirmDialogObj.openWithSources(urls, folderId, collectionName)
+        else
+            appModules.importExport.StartImportToFolder(urls, folderId)
     }
 
     SettingDialog {

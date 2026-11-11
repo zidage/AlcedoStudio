@@ -4,6 +4,7 @@ import QtQuick.Controls.Material
 import QtQuick.Controls.impl
 import QtQuick.Layouts
 import "CollectionTree.js" as CollectionTree
+import "FileDrop.js" as FileDrop
 
 // Collections sidebar: wordmark, utility tabs, and a compact file-browser tree of the
 // project collections (expand/collapse, inline create and rename, drag to move, keyboard).
@@ -31,6 +32,8 @@ ColumnLayout {
     ]
     signal importRequested()
     signal importFromFolderRequested()
+    // Local files and folders dropped on the row of folderId (issue #757).
+    signal filesDropped(var urls, int folderId)
     signal searchRequested()
     signal backgroundTasksRequested()
 
@@ -60,6 +63,11 @@ ColumnLayout {
     property bool dragActive: false
     property int dropTargetFolderId: -1
     property point dragPoint: Qt.point(0, 0)
+
+    // File drop from the system file manager (issue #757). The host enables it while an
+    // import may start; fileDropFolderId is the row under the drag, -1 when none takes it.
+    property bool fileDropEnabled: false
+    property int fileDropFolderId: -1
 
     function withAlpha(colorValue, alphaValue) {
         return Qt.rgba(colorValue.r, colorValue.g, colorValue.b, alphaValue)
@@ -477,6 +485,21 @@ ColumnLayout {
         dropTargetFolderId = -1
     }
 
+    // ── File drop to import ─────────────────────────────────────────────────
+
+    // A collection row takes a file drop; the draft row and the row being renamed do not.
+    function canTakeFileDrop(row) {
+        return fileDropEnabled && row !== null && row !== undefined && !row.isDraft
+               && Number(row.elementId) !== renamingElementId
+    }
+
+    function updateFileDropTarget(listX, listY) {
+        const index = folderList.indexAt(listX, listY + folderList.contentY)
+        const target = index >= 0 ? folderRows[index] : null
+        fileDropFolderId = canTakeFileDrop(target) ? Number(target.folderId) : -1
+        return fileDropFolderId >= 0
+    }
+
     width: appTheme.collectionsSidebarWidth
     implicitWidth: appTheme.collectionsSidebarWidth
     Layout.preferredWidth: appTheme.collectionsSidebarWidth
@@ -502,6 +525,11 @@ ColumnLayout {
     onCurrentFolderIdChanged: {
         rebuildFolderRows()
         revealFolder(currentFolderId)
+    }
+    onFileDropEnabledChanged: {
+        if (!fileDropEnabled) {
+            fileDropFolderId = -1
+        }
     }
     onBackendInteractiveChanged: {
         if (!backendInteractive) {
@@ -798,8 +826,10 @@ ColumnLayout {
                     readonly property bool selected: !isDraft
                         && Number(modelData.folderId) === panel.currentFolderId
                     readonly property bool hovered: !isDraft && treeMouse.hoverIndex === index
-                    readonly property bool dropTarget: panel.dragActive
-                        && Number(modelData.folderId) === panel.dropTargetFolderId
+                    readonly property bool dropTarget: !isDraft
+                        && ((panel.dragActive
+                             && Number(modelData.folderId) === panel.dropTargetFolderId)
+                            || Number(modelData.folderId) === panel.fileDropFolderId)
                     readonly property bool renaming: !isDraft
                         && Number(modelData.elementId) === panel.renamingElementId
                     readonly property bool editing: isDraft || renaming
@@ -1067,16 +1097,80 @@ ColumnLayout {
                     }
                 }
 
+                // Drop of local files and folders onto a row: import into that collection.
+                // Only text/uri-list drags reach it; the internal collection drag above is a
+                // MouseArea drag and carries no URLs.
+                DropArea {
+                    id: fileDropArea
+                    objectName: "collectionsFileDropArea"
+                    parent: folderList
+                    anchors.fill: parent
+                    keys: ["text/uri-list"]
+
+                    property var urls: []
+                    property point point: Qt.point(0, 0)
+
+                    function track(drag) {
+                        point = Qt.point(drag.x, drag.y)
+                        autoScroll.edgeDelta = drag.y < 24 ? -1 : (drag.y > height - 24 ? 1 : 0)
+                        return panel.updateFileDropTarget(drag.x, drag.y)
+                    }
+
+                    // Entering takes every local file drag, so the moves keep arriving while
+                    // the pointer crosses the gaps between rows; a move reports whether the row
+                    // under it takes the drop. The action is always Copy: import reads the
+                    // files in place, and a Move answer lets the file manager delete them.
+                    onEntered: function(drag) {
+                        urls = panel.fileDropEnabled ? FileDrop.localFileUrls(drag) : []
+                        if (urls.length === 0) {
+                            drag.accepted = false
+                            return
+                        }
+                        track(drag)
+                        drag.accept(Qt.CopyAction)
+                    }
+                    onPositionChanged: function(drag) {
+                        if (urls.length > 0 && track(drag)) {
+                            drag.accept(Qt.CopyAction)
+                        } else {
+                            drag.accepted = false
+                        }
+                    }
+                    onExited: {
+                        autoScroll.edgeDelta = 0
+                        panel.fileDropFolderId = -1
+                        urls = []
+                    }
+                    onDropped: function(drop) {
+                        autoScroll.edgeDelta = 0
+                        const target = panel.updateFileDropTarget(drop.x, drop.y)
+                                       ? panel.fileDropFolderId : -1
+                        const dropped = urls.length > 0 ? urls : FileDrop.localFileUrls(drop)
+                        panel.fileDropFolderId = -1
+                        urls = []
+                        if (target < 0 || dropped.length === 0) {
+                            drop.accepted = false
+                            return
+                        }
+                        drop.accept(Qt.CopyAction)
+                        panel.filesDropped(dropped, target)
+                    }
+                }
+
                 Timer {
                     id: autoScroll
                     property int edgeDelta: 0
                     interval: 30
                     repeat: true
-                    running: panel.dragActive && edgeDelta !== 0
+                    running: (panel.dragActive || fileDropArea.containsDrag) && edgeDelta !== 0
                     onTriggered: {
                         const maxY = Math.max(0, folderList.contentHeight - folderList.height)
                         folderList.contentY = Math.max(0, Math.min(maxY,
                             folderList.contentY + edgeDelta * 6))
+                        if (fileDropArea.containsDrag) {
+                            panel.updateFileDropTarget(fileDropArea.point.x, fileDropArea.point.y)
+                            return
+                        }
                         const local = collectionsSurface.mapToItem(folderList,
                                                                    panel.dragPoint.x,
                                                                    panel.dragPoint.y)

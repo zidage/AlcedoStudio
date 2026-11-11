@@ -933,5 +933,185 @@ TEST_F(ImportTests, FilterRebuildOver200kPathsTakesAtMost30Milliseconds) {
   EXPECT_LE(elapsed_ms, 30.0);
 }
 
+// ── Library file drop (issue #757) ─────────────────────────────────────────
+
+TEST(LibraryDropImport, CommonParentFolderIsTheDeepestFolderOfEveryItem) {
+  const std::filesystem::path base = std::filesystem::path("D:/photos").make_preferred();
+  const std::vector<std::filesystem::path> same_folder{base / "a.ARW", base / "trip"};
+  EXPECT_EQ(CommonParentFolder(same_folder), base);
+
+  const std::vector<std::filesystem::path> nested{base / "2026" / "a.ARW",
+                                                  base / "2025" / "spring" / "b.NEF"};
+  EXPECT_EQ(CommonParentFolder(nested), base);
+
+  const std::vector<std::filesystem::path> one_folder{base / "trip"};
+  EXPECT_EQ(CommonParentFolder(one_folder), base);
+  EXPECT_TRUE(CommonParentFolder({}).empty());
+}
+
+/// Select @p folder_id and return how many photos the Library shows for it.
+auto ShownCountInFolder(ApplicationModuleHost& backend, uint folder_id) -> int {
+  backend.folders()->SelectFolder(folder_id);
+  ProcessEvents(500);
+  return backend.library()->ShownCount();
+}
+
+TEST_F(ImportTests, DropScanKeepsDroppedFilesOfEveryTypeAndFiltersTheFolderFiles) {
+  FolderImportSettingsReset settings;
+  ApplicationModuleHost     backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto drop   = temp_dir_ / "drop_source";
+  const auto folder = drop / "trip";
+  for (const auto& path : {folder / "a.ARW", folder / "b.jpg", folder / "sub" / "c.png",
+                           folder / "notes.txt", drop / "loose.jpg", drop / "readme.txt"}) {
+    WriteEmptyFile(path);
+  }
+  QStringList sources{PathToQString(folder), PathToQString(drop / "loose.jpg"),
+                      PathToQString(drop / "readme.txt"), PathToQString(folder / "b.jpg")};
+  EXPECT_TRUE(backend.import_export()->DropHoldsFolder(sources));
+  EXPECT_FALSE(backend.import_export()->DropHoldsFolder(
+      {PathToQString(drop / "loose.jpg"), PathToQString(drop / "readme.txt")}));
+
+  auto* scan = backend.import_export()->FolderScan();
+  scan->StartSources(sources);
+  WaitForScanFinished(*scan);
+  ASSERT_TRUE(scan->ScanFinished());
+  EXPECT_TRUE(scan->FolderValid());
+  EXPECT_EQ(scan->FolderPath(), PathToQString(drop.lexically_normal()));
+  // b.jpg is dropped and inside the dropped folder: one dropped row.
+  EXPECT_EQ(scan->FileCount(), 6);
+  EXPECT_EQ(scan->DroppedFileCount(), 3);
+  // The type counts cover the folder files only: a.ARW, c.png, notes.txt.
+  const QVariantList expected_counts{1, 0, 0, 1, 0, 1};
+  EXPECT_EQ(scan->CategoryCounts(), expected_counts);
+  // Every dropped file (readme.txt included) plus the folder RAW and PNG.
+  EXPECT_EQ(scan->AllowedFileCount(), 5);
+
+  scan->SetCategoryAllowed(static_cast<int>(ImportFileCategory::Raw), false);
+  scan->SetCategoryAllowed(static_cast<int>(ImportFileCategory::Jpeg), false);
+  ASSERT_EQ(scan->rowCount(), 4);
+  QStringList rows;
+  for (int row = 0; row < scan->rowCount(); ++row) {
+    const auto index = scan->index(row);
+    rows.push_back(scan->data(index, FolderImportScanModel::RelativeDirectoryRole).toString() +
+                   QLatin1Char('|') +
+                   scan->data(index, FolderImportScanModel::FileNameRole).toString() +
+                   QLatin1Char('|') +
+                   (scan->data(index, FolderImportScanModel::DroppedRole).toBool()
+                        ? QStringLiteral("dropped")
+                        : QStringLiteral("folder")));
+  }
+  const auto trip     = PathToQString(std::filesystem::path("trip"));
+  const auto trip_sub = PathToQString((std::filesystem::path("trip") / "sub").make_preferred());
+  rows.sort();
+  QStringList expected_rows{QStringLiteral("|loose.jpg|dropped"),
+                                  QStringLiteral("|readme.txt|dropped"),
+                                  trip + QStringLiteral("|b.jpg|dropped"),
+                                  trip_sub + QStringLiteral("|c.png|folder")};
+  expected_rows.sort();
+  EXPECT_EQ(rows, expected_rows);
+
+  ImportPathSet dropped;
+  const auto    paths = scan->TakeFilePaths(&dropped);
+  EXPECT_EQ(paths.size(), 4u);
+  EXPECT_EQ(dropped.size(), 3u);
+  EXPECT_TRUE(dropped.contains((drop / "loose.jpg").lexically_normal().native()));
+  EXPECT_FALSE(dropped.contains((folder / "sub" / "c.png").lexically_normal().native()));
+}
+
+TEST_F(ImportTests, DropScanOfMissingItemsIsInvalid) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  auto* scan = backend.import_export()->FolderScan();
+  scan->StartSources({PathToQString(temp_dir_ / "gone_folder"),
+                      PathToQString(temp_dir_ / "gone.ARW")});
+  WaitForScanFinished(*scan);
+  EXPECT_TRUE(scan->ScanFinished());
+  EXPECT_FALSE(scan->FolderValid());
+  EXPECT_EQ(scan->FileCount(), 0);
+}
+
+TEST_F(ImportTests, FileDropImportsIntoTheDropTargetAndKeepsTheCurrentCollection) {
+  auto images = CollectRawTestImages("airplane", 2);
+  if (images.empty()) {
+    GTEST_SKIP() << "No test RAW images available";
+  }
+  const int             count = static_cast<int>(images.size());
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend, "drop_target_import"));
+  ASSERT_NE(backend.folders()->CreateFolderIn(0, "Current"), 0u);
+  ProcessEvents(300);
+  ASSERT_NE(backend.folders()->CreateFolderIn(0, "Target"), 0u);
+  ProcessEvents(300);
+  const uint current_id = FindFolderId(backend.folders()->Folders(), "Current");
+  const uint target_id  = FindFolderId(backend.folders()->Folders(), "Target");
+  ASSERT_NE(current_id, 0u);
+  ASSERT_NE(target_id, 0u);
+  backend.folders()->SelectFolder(current_id);
+  ProcessEvents(300);
+  const auto current_path = backend.folders()->CurrentFolderFsPath();
+
+  // A drop that holds no file names nothing to import.
+  backend.import_export()->StartImportToFolder({PathToQString(temp_dir_)}, static_cast<int>(target_id));
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.project()->TaskStatus(), QStringLiteral("No files selected."));
+  // A folder row that does not exist is refused.
+  backend.import_export()->StartImportToFolder(PathsToQStringList(images), 987654);
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.project()->TaskStatus(),
+            QStringLiteral("The collection is no longer in the library."));
+
+  backend.import_export()->StartImportToFolder(PathsToQStringList(images),
+                                               static_cast<int>(target_id));
+  ASSERT_TRUE(backend.import_export()->ImportRunning());
+  EXPECT_NE(backend.import_export()->import_target_folder_path(), current_path);
+  WaitForImportFinished(backend, 120000);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), count);
+
+  // The current collection stays selected and the target returns to it.
+  EXPECT_EQ(backend.folders()->CurrentFolderId(), current_id);
+  EXPECT_EQ(backend.import_export()->import_target_folder_path(), current_path);
+  EXPECT_EQ(backend.library()->ShownCount(), 0);
+  // The photos are in the target collection and in All Photos.
+  EXPECT_EQ(ShownCountInFolder(backend, target_id), count);
+  EXPECT_EQ(ShownCountInFolder(backend, 0), count);
+}
+
+TEST_F(ImportTests, MixedDropImportsDroppedFilesOfEveryTypeAndCheckedFolderTypes) {
+  FolderImportSettingsReset settings;
+  ApplicationModuleHost     backend;
+  ASSERT_TRUE(CreateTestProject(backend, "mixed_drop_import"));
+  ASSERT_NE(backend.folders()->CreateFolderIn(0, "Target"), 0u);
+  ProcessEvents(300);
+  const uint target_id = FindFolderId(backend.folders()->Folders(), "Target");
+  ASSERT_NE(target_id, 0u);
+
+  const auto drop   = temp_dir_ / "mixed_drop";
+  const auto folder = drop / "scans";
+  std::filesystem::create_directories(folder);
+  std::filesystem::copy_file(RasterFixture("srgb_chunk.png"), folder / "graphic.png");
+  // JPEG content under a RAW extension: listed as RAW, read as JPEG.
+  std::filesystem::copy_file(RasterFixture("srgb_icc_8bit.jpg"), folder / "renamed.nef");
+  std::filesystem::copy_file(RasterFixture("srgb_icc_8bit.jpg"), drop / "loose.nef");
+
+  auto* scan = backend.import_export()->FolderScan();
+  scan->StartSources({PathToQString(folder), PathToQString(drop / "loose.nef")});
+  WaitForScanFinished(*scan);
+  scan->SetAllowedCategories(ImportCategoryBit(ImportFileCategory::Raw) | ImportFileCategory::Png);
+  ASSERT_EQ(scan->AllowedFileCount(), 3);
+
+  backend.import_export()->StartFolderImportToFolderAsUser(static_cast<int>(target_id));
+  ASSERT_TRUE(backend.import_export()->ImportRunning());
+  WaitForImportFinished(backend, 120000);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  // The folder file follows the content check of the checked types; the dropped file does not.
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), 2);
+  EXPECT_EQ(backend.import_export()->ImportExcluded(), 1);
+  EXPECT_EQ(ShownCountInFolder(backend, target_id), 2);
+  EXPECT_EQ(ShownCountInFolder(backend, 0), 2);
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test
