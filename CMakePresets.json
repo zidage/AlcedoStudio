@@ -23,6 +23,24 @@
       }
     },
     {
+      "name": "win_debug_asan",
+      "displayName": "Debug AddressSanitizer Build",
+      "description": "Windows: debug build with MSVC AddressSanitizer on the first-party code (#809)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug-asan",
+      "environment": {
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlays"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "ALCEDO_BUILD_TESTS": "ON",
+        "ALCEDO_BUILD_TESTS_BY_DEFAULT": "OFF",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF",
+        "ALCEDO_SANITIZER": "address"
+      }
+    },
+    {
       "name": "win_release",
       "displayName": "Release Build",
       "description": "Windows: Build release",
@@ -113,6 +131,23 @@
         "ALCEDO_GENERATE_QMLTYPES": "ON",
         "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
         "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
+      }
+    },
+    {
+      "name": "macos_debug_tsan",
+      "displayName": "macOS Debug ThreadSanitizer",
+      "description": "macOS: debug test build with ThreadSanitizer on the first-party code (#809)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/macos-debug-tsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ALCEDO_ENABLE_CUDA": "OFF",
+        "ALCEDO_BUILD_TESTS": "ON",
+        "ALCEDO_BUILD_TESTS_BY_DEFAULT": "OFF",
+        "ALCEDO_MACOS_BUNDLE": "OFF",
+        "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF",
+        "ALCEDO_SANITIZER": "thread"
       }
     },
     {
