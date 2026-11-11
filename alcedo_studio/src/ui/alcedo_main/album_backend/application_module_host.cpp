@@ -483,6 +483,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("EditorBehaviorPreferences", editor_behavior_.get());
   library_view_ = std::make_unique<LibraryViewPreferences>(this);
   RecordConstruction("LibraryViewPreferences", library_view_.get());
+  log_folder_ = std::make_unique<LogFolderController>(this);
+  RecordConstruction("LogFolderController", log_folder_.get());
   project_launch_ = std::make_unique<ProjectLaunchCoordinator>(project_.get(), this);
   RecordConstruction("ProjectLaunchCoordinator", project_launch_.get());
   project_launch_->SetInteractionPolicy(interaction_policy_.get());
@@ -735,6 +737,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(library_mutations_, "LibraryMutationOperations");
   destroy(application_close_, "ApplicationCloseCoordinator");
   destroy(project_launch_, "ProjectLaunchCoordinator");
+  destroy(log_folder_, "LogFolderController");
   destroy(library_view_, "LibraryViewPreferences");
   destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");

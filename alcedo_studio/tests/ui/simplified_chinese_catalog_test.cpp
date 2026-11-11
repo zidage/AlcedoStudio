@@ -422,6 +422,10 @@ TEST(SimplifiedChineseCatalogTest, CompiledCatalogTranslatesTheAiModelDownloadSt
   // The About page opens the statement read-only.
   EXPECT_EQ(QCoreApplication::translate("AboutPage", "AI model download statement"),
             QStringLiteral("AI 模型下载声明"));
+  // The About page bento (#824): the log folder and the docs button.
+  EXPECT_EQ(QCoreApplication::translate("AboutPage", "Open Log Folder"),
+            QStringLiteral("打开日志文件夹"));
+  EXPECT_EQ(QCoreApplication::translate("AboutPage", "Docs"), QStringLiteral("文档"));
 
   ASSERT_TRUE(QCoreApplication::removeTranslator(&translator));
 }

@@ -133,7 +133,7 @@ ColumnLayout {
                     color: panel.textColor
                     font.family: panel.uiFontFamily
                     font.pixelSize: appTheme.fontSizeSection
-                    font.weight: appTheme.fontWeightHeading
+                    font.weight: appTheme.fontWeightStrong
                     wrapMode: Text.Wrap
                 }
 

@@ -439,7 +439,7 @@ ColumnLayout {
                     color: page.textColor
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeSection
-                    font.weight: appTheme.fontWeightHeading
+                    font.weight: appTheme.fontWeightStrong
                 }
                 LegendItem {
                     objectName: "lutSettingsFilmCount"
@@ -482,7 +482,7 @@ ColumnLayout {
                 text: qsTr("Official LUT Packages")
                 color: page.textColor
                 font.family: appTheme.headlineFontFamily
-                font.pixelSize: 18
+                font.pixelSize: appTheme.fontSizeSection
                 font.weight: Font.DemiBold
             }
             // Only a failed check is reported; a running check spins the refresh icon.

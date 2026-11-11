@@ -1303,6 +1303,7 @@ auto AppTheme::fontSizeBody() const -> int { return 12; }
 auto AppTheme::fontSizeTitle() const -> int { return 13; }
 auto AppTheme::fontSizeSection() const -> int { return 14; }
 auto AppTheme::fontSizeHeadline() const -> int { return 22; }
+auto AppTheme::fontSizeDisplay() const -> int { return 72; }
 auto AppTheme::fontWeightRegular() const -> int { return 500; }
 auto AppTheme::fontWeightStrong() const -> int { return 600; }
 auto AppTheme::fontWeightHeading() const -> int { return 700; }

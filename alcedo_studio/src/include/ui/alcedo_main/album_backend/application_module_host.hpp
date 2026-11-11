@@ -39,6 +39,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
 #include "ui/alcedo_main/album_backend/library_view_preferences.hpp"
+#include "ui/alcedo_main/album_backend/log_folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_preview_controller.hpp"
@@ -95,6 +96,8 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(EditorBehaviorPreferences* editorBehavior READ editor_behavior CONSTANT)
   /// Library view settings (the layout of the ungrouped Library grid).
   Q_PROPERTY(LibraryViewPreferences* libraryView READ library_view CONSTANT)
+  /// The Open Log Folder action of Settings > About.
+  Q_PROPERTY(LogFolderController* logFolder READ log_folder CONSTANT)
   /// Project open and create launch state and requests.
   Q_PROPERTY(ProjectLaunchCoordinator* projectLaunch READ project_launch CONSTANT)
   /// Application quit decision and the editor finalize sequence of a window or project close.
@@ -181,6 +184,7 @@ class ApplicationModuleHost final : public QObject {
     return editor_behavior_.get();
   }
   [[nodiscard]] auto library_view() -> LibraryViewPreferences* { return library_view_.get(); }
+  [[nodiscard]] auto log_folder() -> LogFolderController* { return log_folder_.get(); }
   [[nodiscard]] auto project_launch() -> ProjectLaunchCoordinator* { return project_launch_.get(); }
   [[nodiscard]] auto application_close() -> ApplicationCloseCoordinator* {
     return application_close_.get();
@@ -262,6 +266,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<WorkspaceRouter>                     workspace_router_;
   std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
   std::unique_ptr<LibraryViewPreferences>              library_view_;
+  std::unique_ptr<LogFolderController>                 log_folder_;
   std::unique_ptr<ProjectLaunchCoordinator>            project_launch_;
   std::unique_ptr<ApplicationCloseCoordinator>         application_close_;
   std::unique_ptr<LibraryMutationOperations>           library_mutations_;
