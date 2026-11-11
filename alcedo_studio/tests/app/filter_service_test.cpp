@@ -29,6 +29,7 @@
 #include "storage/query/filter_compiler.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "support/semantic_stores_test_support.hpp"
+#include "support/storage_invariants.hpp"
 #include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -173,6 +174,9 @@ struct SyntheticFileSpec {
 
 class FilterServiceTests : public ::testing::Test {
  protected:
+  /// The test closed its project after production writes; TearDown checks the stored rows
+  /// (#805). A test that writes broken rows on purpose sets it to false.
+  bool check_storage_invariants_ = true;
   test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
@@ -186,6 +190,9 @@ class FilterServiceTests : public ::testing::Test {
   }
 
   void TearDown() override {
+    if (check_storage_invariants_) {
+      test::ExpectStoredStorageInvariants(db_path_);
+    }
     if (std::filesystem::exists(db_path_)) {
       std::filesystem::remove(db_path_);
     }
@@ -248,8 +255,8 @@ class FilterServiceTests : public ::testing::Test {
     return result.imported_;
   }
 
-  static auto CreateSyntheticFile(ProjectService& project, const file_name_t& file_name,
-                                  const std::string& camera_model) -> sl_element_id_t {
+  auto CreateSyntheticFile(ProjectService& project, const file_name_t& file_name,
+                           const std::string& camera_model) -> sl_element_id_t {
     return CreateSyntheticFile(project,
                                SyntheticFileSpec{.file_name_    = file_name,
                                                  .image_path_   = std::filesystem::path{file_name},
@@ -257,8 +264,11 @@ class FilterServiceTests : public ::testing::Test {
                                                  .lens_         = "Synthetic 50mm"});
   }
 
-  static auto CreateSyntheticFile(ProjectService& project, const SyntheticFileSpec& spec)
+  /// A library file whose Image row the test writes directly, with no import and no history
+  /// root. The project then does not keep the storage invariants, so TearDown does not check it.
+  auto CreateSyntheticFile(ProjectService& project, const SyntheticFileSpec& spec)
       -> sl_element_id_t {
+    check_storage_invariants_ = false;
     auto image_pool          = project.GetImagePoolService();
     auto image               = image_pool->CreateAndReturnPinnedEmpty();
     auto image_id            = image.Get()->image_id_;

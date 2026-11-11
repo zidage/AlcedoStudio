@@ -6,9 +6,11 @@
 
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <format>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
@@ -164,6 +166,20 @@ auto FindStorageInvariantViolations(Storage& storage) -> std::vector<StorageInva
     }
   }
   return violations;
+}
+
+void ExpectStoredStorageInvariants(const std::filesystem::path& db_path) {
+  if (::testing::Test::HasFailure() || ::testing::Test::IsSkipped()) {
+    return;
+  }
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(db_path, ec)) {
+    return;
+  }
+  Storage storage(db_path);
+  const auto violations = FindStorageInvariantViolations(storage);
+  EXPECT_TRUE(violations.empty()) << "Stored project " << db_path.string() << ": "
+                                  << FormatStorageInvariantViolations(violations);
 }
 
 auto FormatStorageInvariantViolations(const std::vector<StorageInvariantViolation>& violations)
