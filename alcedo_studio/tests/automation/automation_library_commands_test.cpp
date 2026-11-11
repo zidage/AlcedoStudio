@@ -616,5 +616,120 @@ TEST_F(AutomationLibraryCommandsTest, DeleteOfPhotoInSavingMarkBatchIsRejected) 
             items.size() - 1);
 }
 
+// Each bucket that library.stats returns selects its photo count in the bucket parameter of
+// library.list and of library.stats.
+TEST_F(AutomationLibraryCommandsTest, StatsBucketLabelsSelectTheirPhotoCounts) {
+  const QString raw_root = QStringLiteral(TEST_IMG_PATH) + QStringLiteral("/ci_rawfiles");
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "stats_project"}})
+                   .isEmpty());
+  const QString import_id = session
+                                .CallResult(QStringLiteral("library.import"),
+                                            QJsonObject{{"folder", raw_root}, {"recursive", false}})
+                                .value("task_id")
+                                .toString();
+  session.CallResult(QStringLiteral("tasks.wait"),
+                     QJsonObject{{"task_id", import_id}, {"timeout_ms", 600000}});
+  const QJsonArray items =
+      session.CallResult(QStringLiteral("library.list"), QJsonObject{{"limit", 1000}})
+          .value("items")
+          .toArray();
+  ASSERT_GE(items.size(), 2);
+  const QJsonObject marked = session.CallResult(
+      QStringLiteral("library.color_label"),
+      QJsonObject{{"element_ids", QJsonArray{items.at(0).toObject().value("element_id")}},
+                  {"code", "green"},
+                  {"on", true}});
+  session.CallResult(QStringLiteral("tasks.wait"),
+                     QJsonObject{{"task_id", marked.value("task_id")}});
+
+  const QString     zone = QStringLiteral("America/New_York");
+  const QJsonObject stats =
+      session.CallResult(QStringLiteral("library.stats"), QJsonObject{{"time_zone", zone}});
+  EXPECT_EQ(stats.value("total").toInt(), items.size());
+  EXPECT_EQ(stats.value("delete_mark").toInt(), 0);
+  const QJsonArray color_labels = stats.value("color_labels").toArray();
+  ASSERT_EQ(color_labels.size(), 7);
+  for (const QJsonValue& value : color_labels) {
+    const QJsonObject code = value.toObject();
+    EXPECT_EQ(code.value("count").toInt(), code.value("code").toString() == u"green" ? 1 : 0)
+        << code.value("code").toString().toStdString();
+  }
+
+  for (const char* dimension : {"capture_date", "camera", "lens", "rating", "import_date"}) {
+    const QJsonArray buckets = stats.value(QLatin1String(dimension)).toArray();
+    ASSERT_FALSE(buckets.isEmpty()) << dimension;
+    int sum = 0;
+    for (const QJsonValue& value : buckets) {
+      const QJsonObject bucket = value.toObject();
+      const int         count  = bucket.value("count").toInt();
+      sum += count;
+      const QJsonObject filter{
+          {QLatin1String(dimension), bucket.value("label")}, {"time_zone", zone}, {"limit", 1000}};
+      const QJsonObject list = session.CallResult(QStringLiteral("library.list"), filter);
+      EXPECT_EQ(list.value("total").toInt(), count)
+          << dimension << " " << bucket.value("label").toString().toStdString();
+      EXPECT_EQ(list.value("items").toArray().size(), count) << dimension;
+      QJsonObject stats_filter = filter;
+      stats_filter.remove("limit");
+      EXPECT_EQ(
+          session.CallResult(QStringLiteral("library.stats"), stats_filter).value("total").toInt(),
+          count)
+          << dimension << " " << bucket.value("label").toString().toStdString();
+    }
+    EXPECT_EQ(sum, items.size()) << dimension;
+  }
+
+  // The import_date buckets need a time zone, and so does the import_date filter.
+  EXPECT_FALSE(session.CallResult(QStringLiteral("library.stats")).contains("import_date"));
+  const auto no_zone =
+      session.Call(QStringLiteral("library.list"), QJsonObject{{"import_date", "2026-01-01"}});
+  EXPECT_EQ(ErrorCode(no_zone), AutomationErrorCode::InvalidParams);
+  const auto bad_day =
+      session.Call(QStringLiteral("library.stats"),
+                   QJsonObject{{"import_date", "2026-02-30"}, {"time_zone", zone}});
+  EXPECT_EQ(ErrorCode(bad_day), AutomationErrorCode::InvalidParams);
+
+  // Without an active semantic model no photo has a label bucket.
+  EXPECT_TRUE(stats.value("label").toArray().isEmpty());
+  EXPECT_EQ(session.CallResult(QStringLiteral("library.list"), QJsonObject{{"label", "sky"}})
+                .value("total")
+                .toInt(),
+            0);
+
+  const QJsonObject described = DescribedCommand(session, QStringLiteral("library.stats"));
+  ASSERT_FALSE(described.isEmpty());
+  EXPECT_FALSE(described.value("changes_state").toBool());
+}
+
+// A failed read answers with the database message; the SQL text of the statement stays in the
+// log (#814).
+TEST_F(AutomationLibraryCommandsTest, FailedReadAnswersWithTheDatabaseMessageWithoutSql) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "stats_error_project"}})
+                   .isEmpty());
+  // DuckDB reads the time zone only for a photo: an empty library gives an empty answer.
+  const QString import_id =
+      session
+          .CallResult(QStringLiteral("library.import"),
+                      QJsonObject{{"folder", QStringLiteral(TEST_IMG_PATH "/ci_rawfiles")},
+                                  {"recursive", false}})
+          .value("task_id")
+          .toString();
+  session.CallResult(QStringLiteral("tasks.wait"),
+                     QJsonObject{{"task_id", import_id}, {"timeout_ms", 600000}});
+  const auto failed = session.Call(QStringLiteral("library.stats"),
+                                   QJsonObject{{"time_zone", "Mars/Olympus_Mons"}});
+  ASSERT_EQ(ErrorCode(failed), AutomationErrorCode::Failed);
+  const QString message = failed->error->message;
+  EXPECT_TRUE(message.contains(QStringLiteral("Mars/Olympus_Mons"))) << message.toStdString();
+  EXPECT_FALSE(message.contains(QStringLiteral("SQL"))) << message.toStdString();
+  EXPECT_FALSE(message.contains(QStringLiteral("SELECT"))) << message.toStdString();
+}
+
 }  // namespace
 }  // namespace alcedo::automation

@@ -21,6 +21,7 @@
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/saved_project_invariants.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -127,6 +128,12 @@ auto DeleteAndWait(LibraryMutationOperations& operations, const QVariantList& ta
 
 class LibraryMutationOperationsTest : public ApplicationModuleHostTestFixture {
  protected:
+  /// Checks the storage invariants of each project package that the test saved (#805).
+  void TearDown() override {
+    ExpectSavedProjectInvariants(temp_dir_);
+    ApplicationModuleHostTestFixture::TearDown();
+  }
+
   /// Creates a project, imports @p count CI RAW files, and returns their library rows.
   auto ImportCiRawFiles(ApplicationModuleHost& host, size_t count) -> QVariantList {
     const auto files = CollectCiRawFiles(count);

@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <format>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -17,6 +16,7 @@
 #include "image/color_label.hpp"
 #include "image/image.hpp"
 #include "image/metadata.hpp"
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/image/image_search_columns.hpp"
 #include "utils/string/convert.hpp"
 
@@ -94,23 +94,21 @@ auto ImageMapper::FromParams(ImageMapperParams&& param) -> std::shared_ptr<Image
 }
 
 auto ImageMapper::GetImageById(const image_id_t id) -> std::vector<std::shared_ptr<Image>> {
-  std::string predicate = std::format("id={}", id);
-  return GetByPredicate(std::move(predicate));
+  return GetByPredicate(KeyEquals(id));
 }
 
 auto ImageMapper::GetImageByName(const std::wstring& name) -> std::vector<std::shared_ptr<Image>> {
-  std::wstring predicate_w = std::format(L"file_name={}", name);
-  return GetByPredicate(conv::ToBytes(predicate_w));
+  return GetByPredicate(duckorm::expr::column_eq("file_name", conv::ToBytes(name)));
 }
 
 auto ImageMapper::GetImageByPath(const std::filesystem::path path)
     -> std::vector<std::shared_ptr<Image>> {
-  std::wstring predicate_w = std::format(L"image_path={}", path.wstring());
-  return GetByPredicate(conv::ToBytes(predicate_w));
+  // ToParams stores conv::ToBytes(path.wstring()), so the bound text equals the stored text.
+  return GetByPredicate(duckorm::expr::column_eq("image_path", conv::ToBytes(path.wstring())));
 }
 
 auto ImageMapper::GetImageByType(const ImageType type) -> std::vector<std::shared_ptr<Image>> {
-  std::string predicate = std::format("type={}", static_cast<uint32_t>(type));
-  return GetByPredicate(std::move(predicate));
+  return GetByPredicate(
+      duckorm::expr::column_eq("type", static_cast<std::int64_t>(static_cast<uint32_t>(type))));
 }
 }  // namespace alcedo

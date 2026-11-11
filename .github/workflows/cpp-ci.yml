@@ -16,6 +16,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  storage-boundary:
+    name: Storage boundary check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test the boundary check
+        run: python3 -m unittest scripts/tests/check_storage_boundary_test.py
+
+      # Code outside alcedo_studio/src/storage reaches the database only through Storage
+      # (storage_query_boundary_plan.md, Phase S6).
+      - name: Check the storage boundary
+        run: python3 scripts/check_storage_boundary.py
+
   macos-arm-metal:
     name: macOS arm64 Metal
     runs-on: macos-15
@@ -151,6 +167,30 @@ jobs:
 
       - name: Test
         run: ctest --preset macos_arm_metal_ci --output-on-failure
+
+      # Storage concurrent access (#809) with ThreadSanitizer on the first-party code. The tree
+      # builds only the test target and its libraries. The steps do not use the CI build tree,
+      # so they run when an earlier build or test step fails.
+      - name: Configure the ThreadSanitizer build
+        if: ${{ !cancelled() }}
+        run: |
+          cmake --preset macos_debug_tsan \
+            -DDUCKDB_INC="${ALCEDO_DUCKDB_INC}" \
+            -DDUCKDB_LIB="${ALCEDO_DUCKDB_LIB}" \
+            -DALCEDO_DUCKDB_VSS_EXTENSION="${ALCEDO_DUCKDB_VSS_EXTENSION}" \
+            -DALCEDO_DUCKDB_FTS_EXTENSION="${ALCEDO_DUCKDB_FTS_EXTENSION}" \
+            -DALCEDO_FILM_PRINT_RESOURCE_DIR="${ALCEDO_FILM_PRINT_RESOURCE_DIR}"
+
+      - name: Build the storage concurrency test with ThreadSanitizer
+        if: ${{ !cancelled() }}
+        run: cmake --build build/macos-debug-tsan --target LibraryConcurrentAccessTest --parallel 4
+
+      - name: Run the storage concurrency test with ThreadSanitizer
+        if: ${{ !cancelled() }}
+        # A data race report makes the process exit with a failure code.
+        env:
+          TSAN_OPTIONS: second_deadlock_stack=1
+        run: build/macos-debug-tsan/alcedo_studio/tests/app/LibraryConcurrentAccessTest
 
       - name: Upload automation failure logs
         if: failure()

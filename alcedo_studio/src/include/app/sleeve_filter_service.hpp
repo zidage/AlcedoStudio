@@ -16,6 +16,7 @@
 
 #include "image/color_label.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "sleeve/sleeve_filter/library_search_request.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/store/semantic/semantic_records.hpp"
 #include "storage/store/sleeve/element_store.hpp"
@@ -24,51 +25,6 @@
 #include "utils/id/id_generator.hpp"
 
 namespace alcedo {
-
-/// Optional field-scope mask for the fuzzy search path. Each bit restricts the
-/// search to one contributing field group so the search-settings drawer can
-/// scope results. Bits are combinable; `kAllSearchFields` reproduces the
-/// pre-mask behavior (every field contributes — the default).
-///   - `Filename`:      Image `file_search_text` (file name and parent folder
-///                      name) + file kind terms on `file_ext`.
-///   - `Exif`:          Image `exif_search_text` (make, model, lens, lens make,
-///                      date text) + capture parameter terms on ISO / focal
-///                      length / aperture + date terms on `capture_date`.
-///   - `AiDescription`: `AiImageSearchText.caption_search_text` (caption + scene).
-///   - `AiTags`:        `AiImageSearchText.tags_search_text` + the local CLIP
-///                      `SemanticImageLabel` taxonomy (AI-derived labels).
-///
-/// Declared `enum class` (scoped) deliberately: an unscoped enum would leak the
-/// enumerator names (notably `AiDescription`, which collides with the
-/// `alcedo::AiDescription` struct in ai/ai_description.hpp) into the `alcedo`
-/// namespace. The bitmask operators below let callers write
-/// `mask |= SearchField::Filename` / `mask & SearchField::Exif` directly.
-enum class SearchField : std::uint8_t {
-  Filename      = 1u << 0u,
-  Exif          = 1u << 1u,
-  AiDescription = 1u << 2u,
-  AiTags        = 1u << 3u,
-};
-using SearchFieldMask = std::uint8_t;
-inline constexpr SearchFieldMask kAllSearchFields =
-    static_cast<SearchFieldMask>(SearchField::Filename)
-    | static_cast<SearchFieldMask>(SearchField::Exif)
-    | static_cast<SearchFieldMask>(SearchField::AiDescription)
-    | static_cast<SearchFieldMask>(SearchField::AiTags);
-
-inline constexpr SearchFieldMask operator|(SearchFieldMask m, SearchField f) {
-  return m | static_cast<SearchFieldMask>(f);
-}
-inline constexpr SearchFieldMask operator|(SearchField f, SearchFieldMask m) {
-  return static_cast<SearchFieldMask>(f) | m;
-}
-inline constexpr SearchFieldMask& operator|=(SearchFieldMask& m, SearchField f) {
-  m = m | static_cast<SearchFieldMask>(f);
-  return m;
-}
-inline constexpr SearchFieldMask operator&(SearchFieldMask m, SearchField f) {
-  return m & static_cast<SearchFieldMask>(f);
-}
 
 struct StatsBucket {
   std::string label_{};
@@ -179,14 +135,16 @@ class SleeveFilterService {
   /// query into typed terms (date, file kind, capture parameter, text); every
   /// term must match. A typed term matches its column or its folded text in
   /// the enabled search text columns; a text term matches only the text
-  /// columns (and the CLIP labels under AiTags). The returned node owns
-  /// compiler output only (literals escaped by duckorm expr). Returns
-  /// std::nullopt for an empty query, and a FALSE node when no field is
-  /// selected (match nothing, distinct from "no filter").
+  /// columns (and the CLIP labels under AiTags). The returned node is a
+  /// LibrarySearch node: the parsed request and the capabilities (active
+  /// semantic model, AI full-text index) read once here; storage builds the
+  /// predicate (BuildLibrarySearchPredicate). Returns std::nullopt for an
+  /// empty query; with @p mask 0 the node matches no file (distinct from
+  /// "no filter").
   [[nodiscard]] auto BuildFuzzySearchWhere(const std::wstring& query,
                                            SearchFieldMask      mask = kAllSearchFields) const
       -> std::optional<FilterNode>;
-  /// Build a filter tree that matches exactly one file row (`e.id = file_id`).
+  /// Build a filter tree that matches exactly one file (a FileId condition).
   [[nodiscard]] auto BuildExactFileWhere(sl_element_id_t file_id) const -> FilterNode;
   [[nodiscard]] auto SearchFolder(sl_element_id_t parent_id, const std::wstring& query,
                                   size_t offset = 0, size_t limit = 48,
@@ -229,14 +187,6 @@ class SleeveFilterService {
   /// a provider. Prewarm throws the provider error.
   [[nodiscard]] auto IsSemanticSearchPrewarmed() const -> bool;
   void               PrewarmSemanticSearch() const;
-  /// The SELECT of the files of @p parent_id that the relevance rule keeps for @p embedding
-  /// (SemanticVectorSearch::BuildRelevanceSelect), for the library reads of a natural-language
-  /// search. Calls no provider. The fragment is valid for one statement on this project.
-  /// @throws std::runtime_error when the storage is missing, the model is not registered, or
-  ///         the embedding does not have the model dimension.
-  [[nodiscard]] auto BuildSemanticRelevanceSelect(sl_element_id_t               parent_id,
-                                                  const SemanticQueryEmbedding& embedding) const
-      -> duckorm::SqlFragment;
   /// One page of the files kept by the relevance rule, in relevance order, and the number of
   /// kept files. Empty when no provider is set or the query is empty.
   /// @throws std::runtime_error when the embedding or the ranking fails.

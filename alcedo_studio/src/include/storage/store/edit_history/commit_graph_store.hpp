@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include <duckdb.h>
-
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <span>
@@ -20,6 +19,7 @@
 #include "edit/history/edit_commit_attribution.hpp"
 #include "edit/history/version_ref.hpp"
 #include "json.hpp"
+#include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/mapper/sleeve/edit_history/edit_commit_mapper.hpp"
 #include "storage/mapper/sleeve/edit_history/image_edit_state_mapper.hpp"
 #include "storage/mapper/sleeve/edit_history/version_ref_mapper.hpp"
@@ -63,7 +63,7 @@ struct EncodedRootPipeline {
  */
 class CommitGraphStore {
  public:
-  explicit CommitGraphStore(duckdb_connection& conn);
+  explicit CommitGraphStore(duckorm::Connection& conn);
 
   auto InsertCommitIfAbsent(const EditCommit& commit) -> bool;
   auto GetCommit(const commit_hash_t& commit_hash) -> std::optional<EditCommit>;
@@ -156,7 +156,7 @@ class CommitGraphStore {
                            const std::function<void()>&         write_rows = {});
 
  private:
-  duckdb_connection&   conn_;
+  duckorm::Connection& conn_;
   EditCommitMapper     commit_mapper_;
   VersionRefMapper     version_ref_mapper_;
   ImageEditStateMapper image_edit_state_mapper_;

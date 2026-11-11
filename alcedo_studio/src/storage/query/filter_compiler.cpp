@@ -2,14 +2,19 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "storage/query/filter_compiler.hpp"
 
 #include <ctime>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/query/library_search_predicates.hpp"
+#include "storage/query/stats_dimension.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -25,6 +30,16 @@ auto FormatTimestampLiteral(const std::tm& tm_value) -> SqlFragment {
     return expr::lit_null();
   }
   return expr::raw(std::string("TIMESTAMP ") + expr::lit(std::string_view(buffer)).sql_);
+}
+
+/// `column LIKE ? ESCAPE '~'` with the bound pattern @p prefix + @p text + @p suffix. The text
+/// is escaped, so `%`, `_`, and `~` in it match only themselves (#812).
+auto LiteralTextLike(SqlFragment column, std::string_view prefix, const std::wstring& text,
+                     std::string_view suffix) -> SqlFragment {
+  std::string pattern(prefix);
+  pattern += expr::escape_like_pattern(conv::ToBytes(text));
+  pattern += suffix;
+  return expr::like_escape(std::move(column), expr::param(std::move(pattern)));
 }
 
 }  // namespace
@@ -61,17 +76,11 @@ auto FilterSQLCompiler::FieldToColumn(FilterField field) -> SqlFragment {
       return expr::col("i.rating");
     case FilterField::ImagePath:
       return expr::col("i.image_path");
-    case FilterField::CameraModelLabel:
-      return expr::col("COALESCE(NULLIF(i.camera_model, ''), '(unknown)')");
-    case FilterField::LensLabel:
-      return expr::col("COALESCE(NULLIF(i.lens, ''), '(unknown)')");
-    case FilterField::CaptureDateLabel:
-      return expr::col("CAST(i.capture_date AS VARCHAR)");
-    case FilterField::RatingLabel:
-      return expr::col("i.rating");
     case FilterField::SemanticTags:
-      // Domain semantic-label filters use EXISTS factories (Phase 2). Placeholder only.
+      // Semantic label filters are StatsBucket nodes (kSemanticLabel). Placeholder only.
       return expr::col("i.embedding");
+    case FilterField::FileId:
+      return expr::col("e.id");
   }
   return expr::raw("1=0");
 }
@@ -109,22 +118,15 @@ auto FilterSQLCompiler::GenerateCondition(const FieldCondition& cond) -> SqlFrag
       }
       return expr::between(std::move(column), ValueToFragment(cond.value_),
                            ValueToFragment(*cond.second_value_));
-    case CompareOp::CONTAINS: {
-      const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::like(std::move(column), expr::param("%" + conv::ToBytes(text) + "%"));
-    }
-    case CompareOp::NOT_CONTAINS: {
-      const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::not_like(std::move(column), expr::param("%" + conv::ToBytes(text) + "%"));
-    }
-    case CompareOp::STARTS_WITH: {
-      const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::like(std::move(column), expr::param(conv::ToBytes(text) + "%"));
-    }
-    case CompareOp::ENDS_WITH: {
-      const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::like(std::move(column), expr::param("%" + conv::ToBytes(text)));
-    }
+    case CompareOp::CONTAINS:
+      return LiteralTextLike(std::move(column), "%", std::get<std::wstring>(cond.value_), "%");
+    case CompareOp::NOT_CONTAINS:
+      return expr::not_(
+          LiteralTextLike(std::move(column), "%", std::get<std::wstring>(cond.value_), "%"));
+    case CompareOp::STARTS_WITH:
+      return LiteralTextLike(std::move(column), "", std::get<std::wstring>(cond.value_), "%");
+    case CompareOp::ENDS_WITH:
+      return LiteralTextLike(std::move(column), "%", std::get<std::wstring>(cond.value_), "");
     case CompareOp::EQUALS:
       return expr::eq(std::move(column), ValueToFragment(cond.value_));
     case CompareOp::NOT_EQUALS:
@@ -182,12 +184,14 @@ auto FilterSQLCompiler::CompileNode(const FilterNode& node) -> SqlFragment {
     return expr::and_(children);
   }
 
-  if (node.type_ == FilterNode::Type::RawSQL && node.raw_sql_.has_value()) {
-    // Bridge: trusted SQL text plus any prepared binds the factory kept.
-    SqlFragment frag;
-    frag.sql_   = conv::ToBytes(*node.raw_sql_);
-    frag.binds_ = node.raw_binds_;
-    return frag;
+  if (node.type_ == FilterNode::Type::StatsBucket && node.stats_bucket_.has_value()) {
+    return stats_dimension::BucketPredicate(*node.stats_bucket_,
+                                            stats_dimension::ColumnSource::kLiveTables);
+  }
+
+  if (node.type_ == FilterNode::Type::LibrarySearch && node.library_search_.has_value()) {
+    return BuildLibrarySearchPredicate(node.library_search_->request,
+                                       node.library_search_->capabilities);
   }
 
   return {};
@@ -195,18 +199,6 @@ auto FilterSQLCompiler::CompileNode(const FilterNode& node) -> SqlFragment {
 
 auto FilterSQLCompiler::Compile(const FilterNode& node) -> SqlFragment {
   return CompileNode(node);
-}
-
-auto MergeFilterNodes(const std::optional<FilterNode>& left,
-                      const std::optional<FilterNode>& right) -> std::optional<FilterNode> {
-  if (!left.has_value()) {
-    return right;
-  }
-  if (!right.has_value()) {
-    return left;
-  }
-  return FilterNode{FilterNode::Type::Logical, FilterOp::AND, {*left, *right}, std::nullopt,
-                    std::nullopt};
 }
 
 auto CompileFilterPredicate(const std::optional<FilterNode>& node)

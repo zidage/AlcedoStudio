@@ -4,7 +4,6 @@
 
 #include "storage/mapper/pipeline/pipeline_mapper.hpp"
 
-#include <format>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -29,13 +28,10 @@ auto PipelineMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> Pipel
 
 auto PipelineMapper::GetPipelineJsonByFileId(sl_element_id_t file_id)
     -> std::optional<nlohmann::json> {
-  auto rows = GetParams(std::format(PipelineMapper::PrimeKeyClause(), file_id).c_str());
-  if (rows.size() > 1) {
-    throw std::runtime_error("PipelineMapper: multiple pipeline JSON rows for file_id " +
-                             std::to_string(file_id));
-  }
-  if (rows.empty() || !rows.front().param_json) return std::nullopt;
-  return nlohmann::json::parse(*rows.front().param_json);
+  // PipelineParam.file_id is the primary key, so GetById reads at most one row.
+  auto row = GetById(file_id);
+  if (!row.has_value() || !row->param_json) return std::nullopt;
+  return nlohmann::json::parse(*row->param_json);
 }
 
 void PipelineMapper::UpdatePipelineJsonByFileId(sl_element_id_t       file_id,

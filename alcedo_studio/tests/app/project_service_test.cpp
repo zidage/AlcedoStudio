@@ -17,6 +17,8 @@
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "utils/string/convert.hpp"
+#include "support/storage_invariants.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -63,22 +65,22 @@ void RewriteProjectFileVersion(const std::filesystem::path& meta_path, const std
 
 class ProjectServiceUUIDTests : public ::testing::Test {
  protected:
+  /// The test closed its project after production writes; TearDown checks the stored rows
+  /// (#805). A test that writes broken rows on purpose sets it to false.
+  bool check_storage_invariants_ = true;
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
   void SetUp() override {
-    db_path_  = std::filesystem::temp_directory_path() / "project_uuid_test.db";
-    meta_path_ = std::filesystem::temp_directory_path() / "project_uuid_test.json";
-
-    if (std::filesystem::exists(db_path_)) {
-      std::filesystem::remove(db_path_);
-    }
-    if (std::filesystem::exists(meta_path_)) {
-      std::filesystem::remove(meta_path_);
-    }
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   void TearDown() override {
+    if (check_storage_invariants_) {
+      test::ExpectStoredStorageInvariants(db_path_);
+    }
     if (std::filesystem::exists(db_path_)) {
       std::filesystem::remove(db_path_);
     }
@@ -171,7 +173,7 @@ TEST_F(ProjectServiceUUIDTests, UUIDGeneratedForMetadataWithoutUUID) {
 TEST_F(ProjectServiceUUIDTests, CopyPreservesUUID) {
   // A project copy (same db, different meta path) keeps the same UUID.
   std::string original_uuid;
-  auto        meta_copy_path = std::filesystem::temp_directory_path() / "project_uuid_copy.json";
+  auto        meta_copy_path = temp_dir_ / "project_copy.json";
 
   // Clean up copy path
   if (std::filesystem::exists(meta_copy_path)) {
@@ -237,9 +239,8 @@ TEST_F(ProjectServiceUUIDTests, PackedProjectVersion080FailsBeforeDatabaseOpen) 
   }
   RewriteProjectFileVersion(meta_path_, "0.8.0");
 
-  const auto temp      = std::filesystem::temp_directory_path();
-  const auto packed    = temp / "project_version_080.alcd";
-  const auto workspace = temp / "project_version_080_workspace";
+  const auto packed    = temp_dir_ / "project_version_080.alcd";
+  const auto workspace = temp_dir_ / "project_version_080_workspace";
   std::error_code ec;
   std::filesystem::remove(packed, ec);
   std::filesystem::remove_all(workspace, ec);

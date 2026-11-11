@@ -27,6 +27,8 @@
 #include <vector>
 
 #include "app/project_service.hpp"
+#include "../support/storage_test_access.hpp"
+#include "support/test_temp_directory.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -48,14 +50,6 @@ namespace {
 
 constexpr uint64_t kMiB = 1024ULL * 1024ULL;
 constexpr uint64_t kGiB = 1024ULL * kMiB;
-
-auto               MakeTestRoot(const std::string& name) -> std::filesystem::path {
-  std::random_device rd;
-  const auto         root = std::filesystem::temp_directory_path() /
-                    ("alcedo_package_test_" + name + "_" + std::to_string(rd()));
-  std::filesystem::create_directories(root);
-  return root;
-}
 
 void WriteText(const std::filesystem::path& path, const std::string& text) {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -160,15 +154,10 @@ auto ReadBytesAt(const std::filesystem::path& path, uint64_t offset, size_t coun
 
 class ProjectPackageBackendTest : public ::testing::Test {
  protected:
-  void SetUp() override {
-    root_ = MakeTestRoot(::testing::UnitTest::GetInstance()->current_test_info()->name());
-  }
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove_all(root_, ec);
-  }
+  void SetUp() override { root_ = temp_dir_.Path(); }
 
-  std::filesystem::path root_;
+  test::TestTempDirectory temp_dir_;
+  std::filesystem::path   root_;
 };
 
 // ── Streaming of large payloads ─────────────────────────────────────────────
@@ -415,7 +404,7 @@ TEST_F(ProjectPackageBackendTest, CreatedWorkspaceHoldsItsOwnerLock) {
 // ── DB snapshot failure ─────────────────────────────────────────────────────
 
 auto RunSql(const std::shared_ptr<ProjectService>& project, const std::string& sql) -> bool {
-  auto&         db_ctrl = project->GetStorage()->GetDatabase();
+  auto&         db_ctrl = StorageTestAccess::GetDatabase(*project->GetStorage());
   auto          guard   = db_ctrl.GetConnectionGuard();
   auto          lock    = guard.Lock();
   duckdb_result result;
@@ -425,7 +414,7 @@ auto RunSql(const std::shared_ptr<ProjectService>& project, const std::string& s
 }
 
 auto CountAttachedSnapshots(const std::shared_ptr<ProjectService>& project) -> int64_t {
-  auto&         db_ctrl = project->GetStorage()->GetDatabase();
+  auto&         db_ctrl = StorageTestAccess::GetDatabase(*project->GetStorage());
   auto          guard   = db_ctrl.GetConnectionGuard();
   auto          lock    = guard.Lock();
   duckdb_result result;

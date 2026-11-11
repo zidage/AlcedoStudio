@@ -31,6 +31,7 @@
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/saved_project_invariants.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -85,6 +86,12 @@ auto ItemRowForKey(const QAbstractItemModel* model, const QString& key) -> int {
 
 class AdjustmentTransferControllerTest : public ApplicationModuleHostTestFixture {
  protected:
+  /// Checks the storage invariants of each project package that the test saved (#805).
+  void TearDown() override {
+    ExpectSavedProjectInvariants(temp_dir_);
+    ApplicationModuleHostTestFixture::TearDown();
+  }
+
   auto LoadSeededBackend(ApplicationModuleHost& backend, std::size_t image_count = 2)
       -> std::optional<PopulatedProject> {
     auto seeded = CreatePopulatedPackedProject(temp_dir_, {}, image_count);

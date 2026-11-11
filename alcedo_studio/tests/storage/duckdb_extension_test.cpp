@@ -91,9 +91,10 @@ TEST_F(DuckDbExtensionTest, MissingExtensionReportsEachFailedAttemptWithoutDownl
             std::string::npos)
       << error;
   EXPECT_NE(error.find("Extension load failed by name"), std::string::npos) << error;
-  EXPECT_EQ(duckorm::select_string(conn_, duckorm::expr::raw(
-                                              "SELECT current_setting('autoinstall_known_extensions')")),
-            std::optional<std::string>("false"));
+  EXPECT_EQ(
+      duckorm::scalar<bool>(
+          conn_, duckorm::expr::raw("SELECT current_setting('autoinstall_known_extensions')")),
+      std::optional<bool>(false));
 
   std::error_code ec;
   std::filesystem::remove(bogus, ec);

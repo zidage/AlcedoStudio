@@ -13,6 +13,7 @@
 
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_select.hpp"
+#include "storage/query/stats_dimension.hpp"
 #include "storage/store/sleeve/album_edit_state_sql.hpp"
 #include "storage/store/sleeve/album_query_sql.hpp"
 
@@ -80,19 +81,6 @@ using duckorm::OrderDirection;
 using duckorm::OrderTerm;
 using duckorm::SqlFragment;
 
-auto ImportDayColumn(const std::string& time_zone) -> SqlFragment {
-  if (time_zone.empty()) {
-    return expr::raw("CAST(NULL AS DATE)");
-  }
-  // timezone('UTC', TIMESTAMP) reads the stored UTC text as an instant; timezone(zone,
-  // TIMESTAMPTZ) gives the local wall time in that zone. Neither reads the connection's
-  // TimeZone setting.
-  auto column = expr::raw("CAST(timezone(CAST(");
-  column.append(expr::param(time_zone));
-  column.sql_.append(" AS VARCHAR), timezone('UTC', e.added_time)) AS DATE)");
-  return column;
-}
-
 auto UsesLabelRelation(const AlbumQueryOptions& options) -> bool {
   return options.group_field_ == AlbumGroupField::kLabels ||
          options.sort_field_ == AlbumSortField::kLabels;
@@ -101,14 +89,15 @@ auto UsesLabelRelation(const AlbumQueryOptions& options) -> bool {
 auto LabelRelations(const std::string& active_semantic_model_key) -> SqlFragment {
   // Label assignment stores canonical keys, and opening a project rewrites older alias texts
   // (SemanticLabelStore::CanonicalizeImageLabels), so the stored label is the key. LOWER and
-  // TRIM only fold the case and spaces of a label outside the taxonomy.
-  auto relations = expr::raw(
-      "label_membership AS (SELECT DISTINCT sl.file_id, LOWER(TRIM(sl.label)) AS label_key "
-      "FROM SemanticImageLabel sl ");
-  relations.sql_.append("WHERE sl.model_key = ");
-  relations.append(expr::param(active_semantic_model_key));
+  // TRIM only fold the case and spaces of a label outside the taxonomy. The key and the rows
+  // are those of the semantic label stats dimension, so a label group, a label bucket count,
+  // and a clicked label bucket hold the same files.
+  auto relations = expr::raw("label_membership AS (SELECT DISTINCT sl.file_id, ");
+  relations.append(stats_dimension::GroupExpression(StatsDimensionId::kSemanticLabel));
+  relations.sql_.append(" AS label_key FROM SemanticImageLabel sl WHERE ");
+  relations.append(stats_dimension::SemanticLabelRowCondition(active_semantic_model_key));
   relations.sql_.append(std::format(
-      " AND TRIM(sl.label) <> '' AND sl.file_id IN (SELECT file_id FROM {})), "
+      " AND sl.file_id IN (SELECT file_id FROM {})), "
       "label_sort AS (SELECT file_id, MIN(label_key) AS label_sort_key FROM label_membership "
       "GROUP BY file_id)",
       kMatchSetTable));

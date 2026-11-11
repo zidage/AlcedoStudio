@@ -161,13 +161,9 @@ auto BuildRelevanceSelectWithDim(sl_element_id_t folder_id, const SemanticQueryE
 
 SemanticVectorSearch::SemanticVectorSearch(Database& db_ctrl) : database_(db_ctrl) {}
 
-auto SemanticVectorSearch::BuildRelevanceSelect(sl_element_id_t               folder_id,
-                                                const SemanticQueryEmbedding& embedding) const
-    -> duckorm::SqlFragment {
-  auto       guard     = database_.GetConnectionGuard();
-  auto       db_lock   = guard.Lock();
-  const auto model_dim = ValidatedModelDim(guard.conn_, embedding);
-  return BuildRelevanceSelectWithDim(folder_id, embedding, model_dim);
+auto BuildSemanticRelevanceSelect(duckorm::Connection conn, sl_element_id_t folder_id,
+                                  const SemanticQueryEmbedding& embedding) -> duckorm::SqlFragment {
+  return BuildRelevanceSelectWithDim(folder_id, embedding, ValidatedModelDim(conn, embedding));
 }
 
 auto SemanticVectorSearch::SearchImageEmbeddings(sl_element_id_t               folder_id,

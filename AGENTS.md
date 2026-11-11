@@ -374,6 +374,10 @@ These rules come from the Windows development machine. They apply to every agent
 - Do not use `win_release_test`, `macos_debug_tests`, `macos_arm_metal_ci`, or a new preset or
   build directory without a good reason (for example, the user asks for it). A new build directory
   builds the whole tree again. On Windows this includes gRPC, about 3000 extra steps.
+- Sanitizer runs use `win_debug_asan` (`build/debug-asan`, MSVC AddressSanitizer) and
+  `macos_debug_tsan` (`build/macos-debug-tsan`, ThreadSanitizer). They instrument the first-party
+  code only (`ALCEDO_SANITIZER`). Build only the test targets that the run needs there, for
+  example `LibraryConcurrentAccessTest`.
 - `macos_debug` sets `ALCEDO_BUILD_TESTS=OFF`. To build tests on macOS, configure `macos_debug`
   with `-DALCEDO_BUILD_TESTS=ON` (and `-DALCEDO_BUILD_CI_TESTS=ON` for the CI source checks) in
   `build/macos-debug`.

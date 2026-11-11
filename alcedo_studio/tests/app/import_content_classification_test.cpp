@@ -33,11 +33,14 @@
 #include "library_search_test_support.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
 #include "support/non_raw_import_files.hpp"
+#include "support/storage_invariants.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/import/import_error_code.hpp"
 #include "utils/import/import_log.hpp"
 #include "utils/string/convert.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -51,7 +54,7 @@ auto RawFixturePath() -> std::filesystem::path {
 }
 
 auto QueryCount(ProjectService& project, const std::string& sql) -> int64_t {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
@@ -71,7 +74,7 @@ struct ImageRow {
 };
 
 auto QueryImageRow(ProjectService& project, const std::string& file_name) -> ImageRow {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   ImageRow      row;
@@ -108,7 +111,7 @@ auto CountFileImageRowsWithoutImage(ProjectService& project) -> int64_t {
 }
 
 auto LibraryFileNames(ProjectService& project) -> std::set<std::string> {
-  auto                  guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto                  lock  = guard.Lock();
   duckdb_result         result;
   std::set<std::string> names;
@@ -156,26 +159,24 @@ auto ImportToLibraryRoot(ProjectService& project, const std::vector<image_path_t
 
 class ImportContentClassificationTest : public ::testing::Test {
  protected:
+  /// The test closed its project after production writes; TearDown checks the stored rows
+  /// (#805). A test that writes broken rows on purpose sets it to false.
+  bool check_storage_invariants_ = true;
+
+  void TearDown() override {
+    if (check_storage_invariants_) {
+      test::ExpectStoredStorageInvariants(db_path_);
+    }
+  }
+
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    const auto* test_name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
-    const auto  temp_dir  = std::filesystem::temp_directory_path();
-    db_path_              = temp_dir / (std::string("import_content_class_") + test_name + ".db");
-    meta_path_            = temp_dir / (std::string("import_content_class_") + test_name + ".json");
-    scratch_dir_          = temp_dir / (std::string("import_content_class_") + test_name);
-    RemoveTestFiles();
+    db_path_     = temp_dir_ / "project.db";
+    meta_path_   = temp_dir_ / "project.json";
+    scratch_dir_ = temp_dir_ / "scratch";
     std::filesystem::create_directories(scratch_dir_);
-  }
-
-  void TearDown() override { RemoveTestFiles(); }
-
-  void RemoveTestFiles() {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(db_path_.string() + ".wal", ec);
-    std::filesystem::remove(meta_path_, ec);
-    std::filesystem::remove_all(scratch_dir_, ec);
   }
 
   /// Element id of the imported file @p file_name.
@@ -427,6 +428,9 @@ TEST_F(ImportContentClassificationTest, CmykJpegIsUnsupportedAndLeavesNoImageRow
 // their pins: here the library grid reads the Image of a file imported earlier.
 TEST_F(ImportContentClassificationTest,
        ImportLargerThanImagePoolCapacityWritesAnImageRowForEveryFile) {
+  // The synthetic library file has no history root (no import), so the stored
+  // rows do not keep the storage invariants (#805).
+  check_storage_invariants_ = false;
   if (!std::filesystem::exists(RawFixturePath())) {
     GTEST_SKIP() << "CI RAW fixture is missing: " << RawFixturePath().string();
   }
@@ -479,6 +483,8 @@ TEST_F(ImportContentClassificationTest,
 // The pool-level rule behind the large import: an Image with a pending write stays in the pool
 // past its capacity until SyncWithStorage writes it.
 TEST_F(ImportContentClassificationTest, ImagePoolKeepsUnwrittenImagesPastCapacityUntilSync) {
+  // The test writes Image rows without a library file on purpose (#805).
+  check_storage_invariants_ = false;
   constexpr uint32_t kImageCount = ImagePoolManager::kDefaultPoolCapacity + 76;
   ProjectService     project(db_path_, meta_path_);
   auto               pool = project.GetImagePoolService();
@@ -495,6 +501,9 @@ TEST_F(ImportContentClassificationTest, ImagePoolKeepsUnwrittenImagesPastCapacit
 }
 
 TEST_F(ImportContentClassificationTest, ProjectLoadRemovesImageRowsWithoutLibraryFile) {
+  // The synthetic library file has no history root (no import), so the stored
+  // rows do not keep the storage invariants (#805).
+  check_storage_invariants_ = false;
   {
     ProjectService          project(db_path_, meta_path_);
     SyntheticLibraryBuilder builder(project);

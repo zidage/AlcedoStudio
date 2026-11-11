@@ -4,28 +4,32 @@
 
 #pragma once
 
-#include <span>
 #include <string>
-#include <vector>
 
 #include "image/color_label.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
+
+// Builders of the stats bar bucket filters. Each returns a StatsBucket node, a domain value;
+// storage compiles it with the bucket predicate of its stats dimension
+// (storage/query/stats_dimension.hpp), the definition that the stats read counts with.
 
 namespace alcedo::sleeve_filter {
 
 /**
  * @brief Build a filter node for a camera-model stats-bar bucket label.
  *
- * @param label Bucket label as shown by the stats bar (may be "(unknown)").
- * @return Typed condition against the camera bucket column.
+ * @param label Bucket label as the stats read returns it (may be the unknown label
+ *        "(unknown)").
+ * @return StatsBucket node of kCameraModel.
  */
 [[nodiscard]] auto BuildCameraModelBucketFilter(const std::wstring& label) -> FilterNode;
 
 /**
  * @brief Build a filter node for a lens stats-bar bucket label.
  *
- * @param label Bucket label as shown by the stats bar (may be "(unknown)").
- * @return Typed condition against the lens bucket column.
+ * @param label Bucket label as the stats read returns it (may be the unknown label
+ *        "(unknown)").
+ * @return StatsBucket node of kLens.
  */
 [[nodiscard]] auto BuildLensBucketFilter(const std::wstring& label) -> FilterNode;
 
@@ -33,15 +37,15 @@ namespace alcedo::sleeve_filter {
  * @brief Build a filter node for a capture-date bucket label.
  *
  * @param date_yyyy_mm_dd Bucket label in `YYYY-MM-DD` form.
- * @return Typed condition against the date bucket column.
+ * @return StatsBucket node of kCaptureDate.
  */
 [[nodiscard]] auto BuildCaptureDateBucketFilter(const std::wstring& date_yyyy_mm_dd) -> FilterNode;
 
 /**
  * @brief Build a filter node that matches files with no usable capture date.
  *
- * @return Predicate: the Image `capture_date` column is NULL (no date, or a date text that
- *         does not parse). This is the NULL bucket of the capture date stats.
+ * @return StatsBucket node of the kCaptureDate bucket without a value: the Image
+ *         `capture_date` column is NULL (no date, or a date text that does not parse).
  */
 [[nodiscard]] auto BuildCaptureDateUnknownFilter() -> FilterNode;
 
@@ -50,9 +54,8 @@ namespace alcedo::sleeve_filter {
  *
  * @param date_yyyy_mm_dd Local calendar day in `YYYY-MM-DD` form.
  * @param time_zone IANA time zone of that day, the same zone as the import-day groups.
- * @return Half-open range `e.added_time >= start AND e.added_time < next` on the stored UTC
- *         import time. Both bounds are that zone's local midnights converted to UTC
- *         independently, so a daylight-saving day keeps its real length.
+ * @return StatsBucket node of kImportDay. Storage compiles it to a half-open range on the
+ *         stored UTC import time between the local midnights of the day and the next day.
  * @throws std::invalid_argument when the date is not a valid `YYYY-MM-DD` day or the zone is
  *         empty. DuckDB reports an unknown zone when the predicate runs.
  */
@@ -67,9 +70,9 @@ namespace alcedo::sleeve_filter {
 /**
  * @brief Build a filter node for a rating stats-bar bucket label.
  *
- * @param label Bucket label. A numeric label becomes an integer equality;
- * any other label (for example "(unknown)") becomes a NULL check.
- * @return Typed condition or a NULL-check predicate.
+ * @param label Bucket label. A numeric label selects that rating; any other label (for example
+ *        "(unknown)") selects the photos without a rating.
+ * @return StatsBucket node of kRating.
  */
 [[nodiscard]] auto BuildRatingBucketFilter(const std::wstring& label) -> FilterNode;
 
@@ -86,15 +89,16 @@ namespace alcedo::sleeve_filter {
 [[nodiscard]] auto BuildDeleteMarkFilter() -> FilterNode;
 
 /**
- * @brief Build a filter node that matches files with a semantic label.
+ * @brief Build a filter node for one semantic label bucket.
  *
- * @param model_key Active semantic model key. An empty key yields a false
- * predicate (no active model can produce labels).
- * @param aliases Label aliases to match with a case-insensitive comparison.
- * @return EXISTS subquery over SemanticImageLabel scoped to the file row.
+ * @param model_key Active semantic model key. An empty key selects no photo (no active model
+ *        can produce labels).
+ * @param label_key Semantic label key of the bucket, as the stats read returns it. Storage
+ *        compares it after the LOWER and TRIM of the stored label, so a key in another case
+ *        selects the same bucket.
+ * @return StatsBucket node of kSemanticLabel.
  */
-[[nodiscard]] auto BuildSemanticLabelExistsFilter(const std::string&           model_key,
-                                                  std::span<const std::string> aliases)
-    -> FilterNode;
+[[nodiscard]] auto BuildSemanticLabelBucketFilter(const std::string& model_key,
+                                                  const std::string& label_key) -> FilterNode;
 
 }  // namespace alcedo::sleeve_filter

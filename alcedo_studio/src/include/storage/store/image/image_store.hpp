@@ -37,7 +37,6 @@ class ImageStore {
   /// lock; throws when DuckDB rejects the statement.
   void RemoveImagesWithoutFileBinding();
   void RemoveImageByType(const ImageType type);
-  void RemoveImageByPath(const std::wstring& path);
 
   void UpdateImage(const std::shared_ptr<Image> image);
   // Bulk-update a batch of images in a single transaction, keyed by image id.

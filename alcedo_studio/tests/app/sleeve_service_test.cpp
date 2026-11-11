@@ -26,6 +26,8 @@
 #include "sleeve/storage.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
+#include "../support/storage_test_access.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -85,7 +87,7 @@ auto QueryDuckDbInt64(const std::filesystem::path& db_path, const std::string& s
 /// A row that a sync deletes and inserts again gets a new rowid.
 auto FolderContentRowIds(ProjectService& project, sl_element_id_t folder_id)
     -> std::map<sl_element_id_t, int64_t> {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   const auto    sql = "SELECT element_id, rowid FROM FolderContent WHERE folder_id = " +
@@ -140,19 +142,14 @@ TEST(ProjectVersionTests, MiniGitSchemaBumpRejectsPreviousProjectVersion) {
 
 class SleeveServiceTests : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
   void                  SetUp() override {
     TimeProvider::Refresh();
-    db_path_ = std::filesystem::temp_directory_path() / "sleeve_service_test.db";
-    meta_path_ = std::filesystem::temp_directory_path() / "sleeve_service_test.json";
-    if (std::filesystem::exists(db_path_)) {
-      std::filesystem::remove(db_path_);
-    }
-    if (std::filesystem::exists(meta_path_)) {
-      std::filesystem::remove(meta_path_);
-    }
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   void TearDown() override {

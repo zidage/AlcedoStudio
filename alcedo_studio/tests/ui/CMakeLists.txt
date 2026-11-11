@@ -105,6 +105,7 @@ macro(def_ui_test TARGET_NAME SOURCE_FILE)
         PRIVATE
             AlcedoInProcessTestMain
             AlbumBackendLib
+            StorageInvariantsTestSupport
             GTest::gtest
             Qt6::Test
             Qt6::Core

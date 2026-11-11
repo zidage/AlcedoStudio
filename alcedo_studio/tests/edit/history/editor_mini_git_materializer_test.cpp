@@ -16,6 +16,7 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/editor_mini_git_project_fixture.hpp"
+#include "../../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -676,7 +677,7 @@ TEST_F(EditorMiniGitMaterializerTest,
     EXPECT_EQ(unreachable.front(), *abandoned_head);
   }
 
-  auto               db_guard = project_.storage()->GetDatabase().GetConnectionGuard();
+  auto db_guard = StorageTestAccess::GetDatabase(*project_.storage()).GetConnectionGuard();
   auto               db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   EXPECT_EQ(graph_service.DeleteUnreachableCommits(element_id), 1u);

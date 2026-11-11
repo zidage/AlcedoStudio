@@ -2,14 +2,16 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Statement execution, single-value reads, transactions, and the appender of duckorm, run
-// against an in-memory DuckDB database.
+// Statement execution, typed rows, single-value reads, transactions, and the appender of
+// duckorm, run against an in-memory DuckDB database.
 
 #include <duckdb.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -21,6 +23,7 @@
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/mapper/duckorm/duckdb_select.hpp"
+#include "storage/mapper/duckorm/duckdb_statement.hpp"
 
 namespace {
 
@@ -80,10 +83,30 @@ TEST_F(DuckormStatementTest, ScalarSelectsReturnNulloptForNoRowAndForNull) {
   EXPECT_EQ(duckorm::select_int64(conn_, expr::raw("SELECT id FROM Item WHERE id = 8")),
             std::nullopt);
   EXPECT_EQ(duckorm::select_string(conn_, expr::raw("SELECT name FROM Item")), std::nullopt);
-  EXPECT_EQ(duckorm::select_string(conn_, expr::raw("SELECT score FROM Item")),
-            std::optional<std::string>("2.5"));
+  EXPECT_EQ(duckorm::scalar<double>(conn_, expr::raw("SELECT score FROM Item")), 2.5);
+  // An INTEGER column widens into int64_t.
+  EXPECT_EQ(duckorm::select_int64(conn_, expr::raw("SELECT 1 FROM Item")), 1);
   EXPECT_THROW((void)duckorm::select_int64(conn_, expr::raw("SELECT nope FROM Item")),
                std::runtime_error);
+}
+
+TEST_F(DuckormStatementTest, ScalarRejectsColumnTypeAndColumnCountMismatch) {
+  duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name, score) VALUES (7, 'a', 2.5)"));
+  try {
+    (void)duckorm::select_string(conn_, expr::raw("SELECT score FROM Item"));
+    FAIL() << "a DOUBLE column must not read as text";
+  } catch (const duckorm::StatementError& error) {
+    const std::string message = error.what();
+    EXPECT_NE(message.find("column 0 'score' has type DOUBLE"), std::string::npos) << message;
+    EXPECT_NE(message.find("std::string"), std::string::npos) << message;
+    // The SQL text goes to the log and to sql_head(), never into the message a user sees.
+    EXPECT_EQ(message.find("SELECT score"), std::string::npos) << message;
+    EXPECT_EQ(error.sql_head(), "SELECT score FROM Item");
+  }
+  EXPECT_THROW((void)duckorm::scalar<int64_t>(conn_, expr::raw("SELECT id, name FROM Item")),
+               std::runtime_error);
+  EXPECT_THROW((void)duckorm::scalar<int64_t>(conn_, expr::raw("SELECT SUM(id) FROM Item")),
+               std::runtime_error);  // HUGEINT does not fit int64_t
 }
 
 TEST_F(DuckormStatementTest, SelectByQueryBindsValuesAndDecodesRows) {
@@ -180,8 +203,7 @@ TEST_F(DuckormStatementTest, AppenderWritesEveryValueTypeInsideTheTransaction) {
             std::optional<std::string>("first"));
   EXPECT_EQ(duckorm::select_string(conn_, expr::raw("SELECT name FROM Item WHERE id = 2")),
             std::nullopt);
-  EXPECT_EQ(duckorm::select_string(conn_, expr::raw("SELECT vec[3] FROM Item WHERE id = 2")),
-            std::optional<std::string>("3.5"));
+  EXPECT_EQ(duckorm::scalar<float>(conn_, expr::raw("SELECT vec[3] FROM Item WHERE id = 2")), 3.5F);
 
   // A wrong array size fails with the appender's error.
   duckorm::Appender          appender(conn_, "Item", columns);
@@ -215,6 +237,26 @@ TEST(DuckormExprListTest, FloatArrayLiteralKeepsEveryFloatDigit) {
 
 namespace clause = duckorm::clause;
 
+struct ItemBonusRow {
+  int64_t item_id = 0;
+  int64_t bonus   = 0;
+  using Columns   = duckorm::RowColumns<&ItemBonusRow::item_id, &ItemBonusRow::bonus>;
+};
+
+// GROUPING() is BIGINT, so the grouping id reads as int64_t.
+struct GroupingRow {
+  int64_t                    grouping_id = 0;
+  std::optional<std::string> name;
+  int64_t                    count = 0;
+  using Columns =
+      duckorm::RowColumns<&GroupingRow::grouping_id, &GroupingRow::name, &GroupingRow::count>;
+};
+
+struct IdRow {
+  int64_t id    = 0;
+  using Columns = duckorm::RowColumns<&IdRow::id>;
+};
+
 TEST_F(DuckormStatementTest, SelectClausesKeepBindsInSqlOrder) {
   duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name, score) VALUES (1, 'a', 1.0), "
                                     "(2, 'b', 2.0), (3, 'a', 3.0), (4, 'c', 4.0), (5, 'a', 5.0)"));
@@ -234,13 +276,10 @@ TEST_F(DuckormStatementTest, SelectClausesKeepBindsInSqlOrder) {
   statement.append(clause::limit_offset(2, 1, 1000));
   ASSERT_EQ(statement.binds_.size(), 5u);
 
-  duckdb_result result;
-  ASSERT_EQ(duckorm::execute_query(conn_, statement.sql_, statement, &result), DuckDBSuccess)
-      << duckdb_result_error(&result);
-  ASSERT_EQ(duckdb_row_count(&result), 1u);  // rows 5 and 3 match; offset 1 leaves 3
-  EXPECT_EQ(duckdb_value_int64(&result, 0, 0), 3);
-  EXPECT_EQ(duckdb_value_int64(&result, 1, 0), 13);
-  duckdb_destroy_result(&result);
+  const auto rows = duckorm::query<ItemBonusRow>(conn_, statement);
+  ASSERT_EQ(rows.size(), 1u);  // rows 5 and 3 match; offset 1 leaves 3
+  EXPECT_EQ(rows[0].item_id, 3);
+  EXPECT_EQ(rows[0].bonus, 13);
 }
 
 TEST_F(DuckormStatementTest, GroupingSetsDistinguishUnknownFromTotal) {
@@ -256,18 +295,15 @@ TEST_F(DuckormStatementTest, GroupingSetsDistinguishUnknownFromTotal) {
       {expr::col("g"), duckorm::OrderDirection::kAscending, duckorm::NullPlacement::kLast},
       {expr::col("name"), duckorm::OrderDirection::kAscending, duckorm::NullPlacement::kLast}}));
 
-  duckdb_result result;
-  ASSERT_EQ(duckorm::execute_query(conn_, statement.sql_, statement, &result), DuckDBSuccess)
-      << duckdb_result_error(&result);
-  ASSERT_EQ(duckdb_row_count(&result), 4u);
+  const auto rows = duckorm::query<GroupingRow>(conn_, statement);
+  ASSERT_EQ(rows.size(), 4u);
   // a, b, the real NULL-key group (GROUPING 0), then the total (GROUPING 1, also NULL name).
-  EXPECT_EQ(duckdb_value_int64(&result, 0, 2), 0);
-  EXPECT_TRUE(duckdb_value_is_null(&result, 1, 2));
-  EXPECT_EQ(duckdb_value_int64(&result, 2, 2), 2);
-  EXPECT_EQ(duckdb_value_int64(&result, 0, 3), 1);
-  EXPECT_TRUE(duckdb_value_is_null(&result, 1, 3));
-  EXPECT_EQ(duckdb_value_int64(&result, 2, 3), 5);
-  duckdb_destroy_result(&result);
+  EXPECT_EQ(rows[2].grouping_id, 0);
+  EXPECT_EQ(rows[2].name, std::nullopt);
+  EXPECT_EQ(rows[2].count, 2);
+  EXPECT_EQ(rows[3].grouping_id, 1);
+  EXPECT_EQ(rows[3].name, std::nullopt);
+  EXPECT_EQ(rows[3].count, 5);
 }
 
 TEST_F(DuckormStatementTest, OrderByWritesExplicitNullPlacementForBothDirections) {
@@ -279,10 +315,9 @@ TEST_F(DuckormStatementTest, OrderByWritesExplicitNullPlacementForBothDirections
     statement.append(clause::order_by(std::vector<duckorm::OrderTerm>{
         {expr::col("score"), direction, duckorm::NullPlacement::kLast}}));
     EXPECT_NE(statement.sql_.find("NULLS LAST"), std::string::npos);
-    duckdb_result result;
-    ASSERT_EQ(duckorm::execute_query(conn_, statement.sql_, statement, &result), DuckDBSuccess);
-    EXPECT_EQ(duckdb_value_int64(&result, 0, 2), 2);  // the NULL score is last
-    duckdb_destroy_result(&result);
+    const auto rows = duckorm::query<IdRow>(conn_, statement);
+    ASSERT_EQ(rows.size(), 3u);
+    EXPECT_EQ(rows[2].id, 2);  // the NULL score is last
   }
 }
 
@@ -312,6 +347,288 @@ TEST(DuckormClauseTest, ClauseBuildersRejectInvalidInput) {
   EXPECT_THROW(clause::limit_offset(1001, 0, 1000), std::invalid_argument);
   EXPECT_THROW(clause::limit_offset(10, -1, 1000), std::invalid_argument);
   EXPECT_TRUE(clause::where(duckorm::SqlFragment{}).empty());
+}
+
+// --- Typed rows (storage plan S1) ------------------------------------------------------------
+
+struct NameCountRow {
+  std::string name;
+  int64_t     count = 0;
+  using Columns     = duckorm::RowColumns<&NameCountRow::name, &NameCountRow::count>;
+};
+
+struct OptionalNameRow {
+  int64_t                    id = 0;
+  std::optional<std::string> name;
+  std::optional<double>      score;
+  using Columns =
+      duckorm::RowColumns<&OptionalNameRow::id, &OptionalNameRow::name, &OptionalNameRow::score>;
+};
+
+struct BlobRow {
+  int64_t                   id = 0;
+  std::vector<std::uint8_t> data;
+  using Columns = duckorm::RowColumns<&BlobRow::id, &BlobRow::data>;
+};
+
+struct NarrowRow {
+  float        value = 0.0F;
+  std::uint8_t level = 0;
+  int16_t      small = 0;
+  using Columns      = duckorm::RowColumns<&NarrowRow::value, &NarrowRow::level, &NarrowRow::small>;
+};
+
+struct DateRow {
+  std::chrono::sys_days day;
+  using Columns = duckorm::RowColumns<&DateRow::day>;
+};
+
+auto ThrownMessage(const std::function<void()>& run) -> std::string {
+  try {
+    run();
+  } catch (const std::runtime_error& error) {
+    return error.what();
+  }
+  return {};
+}
+
+/// The sql_head() of the StatementError that @p run throws; "<none>" without one.
+auto ThrownSqlHead(const std::function<void()>& run) -> std::string {
+  try {
+    run();
+  } catch (const duckorm::StatementError& error) {
+    return error.sql_head();
+  }
+  return "<none>";
+}
+
+TEST_F(DuckormStatementTest, QueryDecodesRowsIntoMemberPointerColumns) {
+  duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name) VALUES (1, 'b'), (2, 'a'), "
+                                    "(3, 'b'), (4, 'b')"));
+  const auto rows = duckorm::query<NameCountRow>(
+      conn_, Statement("SELECT name, COUNT(*) FROM Item WHERE id <= ? GROUP BY name ORDER BY name",
+                       {int64_t{3}}));
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].name, "a");
+  EXPECT_EQ(rows[0].count, 1);
+  EXPECT_EQ(rows[1].name, "b");
+  EXPECT_EQ(rows[1].count, 2);
+
+  EXPECT_TRUE(
+      duckorm::query<NameCountRow>(conn_, expr::raw("SELECT name, id FROM Item WHERE id > 9"))
+          .empty());
+}
+
+struct NameCountTotalRow : NameCountRow {
+  int64_t total = 0;
+  using Columns = duckorm::AppendRowColumns<NameCountRow::Columns, &NameCountTotalRow::total>;
+};
+
+TEST_F(DuckormStatementTest, DerivedRowReadsBaseColumnsThenOwnColumns) {
+  static_assert(NameCountTotalRow::Columns::kCount == 3);
+  duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name) VALUES (1, 'b'), (2, 'a'), "
+                                    "(3, 'b')"));
+  const auto rows = duckorm::query<NameCountTotalRow>(
+      conn_, expr::raw("SELECT name, COUNT(*), SUM(COUNT(*)) OVER ()::BIGINT FROM Item "
+                       "GROUP BY name ORDER BY name"));
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].name, "a");
+  EXPECT_EQ(rows[0].count, 1);
+  EXPECT_EQ(rows[0].total, 3);
+  EXPECT_EQ(rows[1].name, "b");
+  EXPECT_EQ(rows[1].count, 2);
+  EXPECT_EQ(rows[1].total, 3);
+
+  // The base columns come first: a total column in the place of the name column is rejected.
+  const auto message = ThrownMessage([&] {
+    (void)duckorm::query<NameCountTotalRow>(conn_, expr::raw("SELECT id, id, id FROM Item"));
+  });
+  EXPECT_NE(message.find("column 0 'id' has type BIGINT"), std::string::npos) << message;
+  EXPECT_NE(message.find("member type std::string"), std::string::npos) << message;
+}
+
+TEST_F(DuckormStatementTest, QueryRejectsColumnCountMismatch) {
+  duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name) VALUES (1, 'a')"));
+  const auto message = ThrownMessage([&] {
+    (void)duckorm::query<NameCountRow>(conn_, expr::raw("SELECT name, id, score FROM Item"));
+  });
+  EXPECT_NE(message.find("returns 3 columns; the row type lists 2"), std::string::npos) << message;
+  // The count is checked before any row is read, so an empty result fails the same way.
+  EXPECT_THROW((void)duckorm::query<NameCountRow>(
+                   conn_, expr::raw("SELECT name, id, score FROM Item WHERE FALSE")),
+               std::runtime_error);
+}
+
+TEST_F(DuckormStatementTest, QueryRejectsColumnTypeMismatch) {
+  duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name) VALUES (1, 'a')"));
+  const auto message = ThrownMessage(
+      [&] { (void)duckorm::query<NameCountRow>(conn_, expr::raw("SELECT id, name FROM Item")); });
+  EXPECT_NE(message.find("column 0 'id' has type BIGINT"), std::string::npos) << message;
+  EXPECT_NE(message.find("member type std::string"), std::string::npos) << message;
+
+  // A VARCHAR column into the int64_t member names column 1.
+  const auto second = ThrownMessage(
+      [&] { (void)duckorm::query<NameCountRow>(conn_, expr::raw("SELECT name, name FROM Item")); });
+  EXPECT_NE(second.find("column 1 'name' has type VARCHAR"), std::string::npos) << second;
+  EXPECT_NE(second.find("member type int64_t"), std::string::npos) << second;
+}
+
+TEST_F(DuckormStatementTest, NullCellReadsAsNulloptForOptionalMember) {
+  duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name, score) VALUES (1, NULL, NULL), "
+                                    "(2, 'b', 0.5)"));
+  const auto rows = duckorm::query<OptionalNameRow>(
+      conn_, expr::raw("SELECT id, name, score FROM Item ORDER BY id"));
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].name, std::nullopt);
+  EXPECT_EQ(rows[0].score, std::nullopt);
+  EXPECT_EQ(rows[1].name, std::optional<std::string>("b"));
+  EXPECT_EQ(rows[1].score, std::optional<double>(0.5));
+
+  const auto literal_null =
+      duckorm::query<OptionalNameRow>(conn_, expr::raw("SELECT 1, NULL::VARCHAR, NULL::DOUBLE"));
+  ASSERT_EQ(literal_null.size(), 1u);
+  EXPECT_EQ(literal_null[0].name, std::nullopt);
+}
+
+TEST_F(DuckormStatementTest, NullCellThrowsForPlainMember) {
+  duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name) VALUES (1, 'a'), (2, NULL)"));
+  const auto message = ThrownMessage([&] {
+    (void)duckorm::query<NameCountRow>(conn_, expr::raw("SELECT name, id FROM Item ORDER BY id"));
+  });
+  EXPECT_NE(message.find("column 0 'name' is NULL in row 1"), std::string::npos) << message;
+  EXPECT_NE(ThrownMessage([&] {
+              (void)duckorm::query<NameCountRow>(conn_, expr::raw("SELECT NULL::VARCHAR, 1"));
+            }).find("is NULL in row 0"),
+            std::string::npos);
+}
+
+TEST_F(DuckormStatementTest, BlobBindAndReadKeepsBytes) {
+  duckorm::execute(conn_, expr::raw("CREATE TABLE Packed (id BIGINT PRIMARY KEY, data BLOB)"));
+  std::vector<std::uint8_t> bytes(256);
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    bytes[i] = static_cast<std::uint8_t>(i);
+  }
+  // A Statement bind of a span, and a SqlFragment bind through expr::param.
+  {
+    duckorm::Statement insert(conn_, "INSERT INTO Packed VALUES (?, ?)");
+    insert.Bind(1, int64_t{1});
+    insert.Bind(2, std::span<const std::uint8_t>(bytes));
+    EXPECT_EQ(insert.Execute().RowsChanged(), 1u);
+    insert.Bind(1, int64_t{2});
+    insert.Bind(2, std::span<const std::uint8_t>());
+    EXPECT_EQ(insert.Execute().RowsChanged(), 1u);
+  }
+  auto insert = expr::raw("INSERT INTO Packed VALUES (3, ");
+  insert.append(expr::param(std::span<const std::uint8_t>(bytes).subspan(250)));
+  insert.append(expr::raw(")"));
+  EXPECT_EQ(duckorm::execute_count(conn_, insert), 1u);
+
+  const auto rows =
+      duckorm::query<BlobRow>(conn_, expr::raw("SELECT id, data FROM Packed ORDER BY id"));
+  ASSERT_EQ(rows.size(), 3u);
+  EXPECT_EQ(rows[0].data, bytes);
+  EXPECT_TRUE(rows[1].data.empty());
+  EXPECT_EQ(rows[2].data, std::vector<std::uint8_t>(bytes.begin() + 250, bytes.end()));
+  EXPECT_EQ(duckorm::select_int64(conn_, expr::raw("SELECT octet_length(data) FROM Packed WHERE "
+                                                   "id = 1")),
+            256);
+}
+
+TEST_F(DuckormStatementTest, FloatAndUtinyintColumnsDecode) {
+  duckorm::execute(conn_, expr::raw("CREATE TABLE Narrow (value FLOAT, level UTINYINT, small "
+                                    "SMALLINT)"));
+  duckorm::Statement insert(conn_, "INSERT INTO Narrow VALUES (?, ?, ?)");
+  insert.Bind(1, 0.375F);
+  insert.Bind(2, std::uint8_t{255});
+  insert.Bind(3, int16_t{-7});
+  (void)insert.Execute();
+
+  const auto row = duckorm::query_one<NarrowRow>(conn_, expr::raw("SELECT * FROM Narrow"));
+  ASSERT_TRUE(row.has_value());
+  EXPECT_EQ(row->value, 0.375F);
+  EXPECT_EQ(row->level, 255);
+  EXPECT_EQ(row->small, -7);
+  // FLOAT widens into double; UTINYINT widens into uint32_t and into int16_t.
+  EXPECT_EQ(duckorm::scalar<double>(conn_, expr::raw("SELECT value FROM Narrow")), 0.375);
+  EXPECT_EQ(duckorm::scalar<uint32_t>(conn_, expr::raw("SELECT level FROM Narrow")), 255u);
+  EXPECT_EQ(duckorm::scalar<int16_t>(conn_, expr::raw("SELECT level FROM Narrow")), 255);
+  // Narrowing and signedness changes are rejected: DOUBLE into float, SMALLINT into uint16_t,
+  // BIGINT into int32_t.
+  EXPECT_THROW((void)duckorm::scalar<float>(conn_, expr::raw("SELECT value::DOUBLE FROM Narrow")),
+               std::runtime_error);
+  EXPECT_THROW((void)duckorm::scalar<uint16_t>(conn_, expr::raw("SELECT small FROM Narrow")),
+               std::runtime_error);
+  EXPECT_THROW((void)duckorm::scalar<int32_t>(conn_, expr::raw("SELECT 7::BIGINT")),
+               std::runtime_error);
+}
+
+TEST_F(DuckormStatementTest, DateColumnDecodesAndBindsAsSysDays) {
+  using namespace std::chrono;
+  const sys_days     day = year{2026} / November / 9;
+  duckorm::Statement select(conn_, "SELECT ?::DATE + 1");
+  select.Bind(1, day);
+  EXPECT_EQ(select.Execute().Get<sys_days>(0, 0), day + days{1});
+
+  const auto row = duckorm::query_one<DateRow>(conn_, expr::raw("SELECT DATE '1969-12-31'"));
+  ASSERT_TRUE(row.has_value());
+  EXPECT_EQ(row->day, sys_days{year{1969} / December / 31});
+}
+
+TEST_F(DuckormStatementTest, ExecuteCountReportsChangedRows) {
+  const auto insert = Statement("INSERT INTO Item (id, name) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                                {int64_t{1}, std::string("a")});
+  EXPECT_EQ(duckorm::execute_count(conn_, insert), 1u);
+  EXPECT_EQ(duckorm::execute_count(conn_, insert), 0u);  // a stored key writes nothing
+  duckorm::execute(conn_, expr::raw("INSERT INTO Item (id) VALUES (2), (3)"));
+  EXPECT_EQ(duckorm::execute_count(
+                conn_, Statement("UPDATE Item SET score = ? WHERE id > ?", {1.5, int64_t{1}})),
+            2u);
+  EXPECT_EQ(duckorm::execute_count(conn_, expr::raw("DELETE FROM Item")), 3u);
+}
+
+TEST_F(DuckormStatementTest, QueryOneReturnsNulloptForNoRowAndThrowsForTwoRows) {
+  duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name) VALUES (1, 'a'), (2, 'b')"));
+  EXPECT_EQ(
+      duckorm::query_one<NameCountRow>(conn_, expr::raw("SELECT name, id FROM Item WHERE id = 9")),
+      std::nullopt);
+  const auto row = duckorm::query_one<NameCountRow>(
+      conn_, Statement("SELECT name, id FROM Item WHERE id = ?", {int64_t{2}}));
+  ASSERT_TRUE(row.has_value());
+  EXPECT_EQ(row->name, "b");
+  const auto message = ThrownMessage([&] {
+    (void)duckorm::query_one<NameCountRow>(conn_, expr::raw("SELECT name, id FROM Item"));
+  });
+  EXPECT_NE(message.find("returns 2 rows"), std::string::npos) << message;
+}
+
+TEST_F(DuckormStatementTest, StatementRebindsAndReportsPrepareAndBindErrors) {
+  duckorm::Statement insert(conn_, "INSERT INTO Item (id, name, ok) VALUES (?, ?, ?)");
+  EXPECT_EQ(insert.ParameterCount(), 3u);
+  for (int64_t id = 1; id <= 3; ++id) {
+    insert.Bind(1, id);
+    insert.Bind(2, std::optional<std::string>{});  // NULL
+    insert.Bind(3, id % 2 == 1);
+    EXPECT_EQ(insert.Execute().RowsChanged(), 1u);
+  }
+  EXPECT_EQ(CountItems(), 3);
+  EXPECT_EQ(duckorm::select_int64(conn_, expr::raw("SELECT COUNT(*) FROM Item WHERE ok AND name "
+                                                   "IS NULL")),
+            2);
+  // A C string binds as VARCHAR, never as bool.
+  duckorm::Statement by_name(conn_, "SELECT COUNT(*) FROM Item WHERE name = ?");
+  by_name.Bind(1, "x");
+  EXPECT_EQ(by_name.Execute().Get<int64_t>(0, 0), 0);
+
+  EXPECT_THROW(insert.Bind(4, int64_t{1}), std::runtime_error);
+  const auto prepare       = [&] { duckorm::Statement broken(conn_, "SELECT FROM WHERE nothing"); };
+  const auto prepare_error = ThrownMessage(prepare);
+  EXPECT_FALSE(prepare_error.empty());
+  EXPECT_EQ(prepare_error.find("[SQL:"), std::string::npos) << prepare_error;
+  EXPECT_EQ(ThrownSqlHead(prepare), "SELECT FROM WHERE nothing");
+  // The SQL head stops at 120 bytes.
+  const std::string long_sql = "SELECT nope" + std::string(200, ' ') + "FROM Item";
+  EXPECT_EQ(ThrownSqlHead([&] { duckorm::Statement broken(conn_, long_sql); }),
+            long_sql.substr(0, 120));
 }
 
 }  // namespace

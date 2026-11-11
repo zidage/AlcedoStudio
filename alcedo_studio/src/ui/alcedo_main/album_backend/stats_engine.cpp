@@ -264,9 +264,10 @@ auto StatsEngine::BuildStatsFilterNode() const -> std::optional<FilterNode> {
 
   if (!filter_label_.isEmpty()) {
     const auto active_model_key = semantic_ ? semantic_->ActiveModelKey() : std::string{};
-    const auto aliases = SemanticLabelAliases(filter_label_.toUtf8().toStdString());
-    children.push_back(
-        sleeve_filter::BuildSemanticLabelExistsFilter(active_model_key, aliases));
+    // The bar shows the translated text of the stored key; StoredSemanticLabel maps a
+    // translated text back to that key (a label outside the taxonomy stays its own key).
+    const auto label_key        = StoredSemanticLabel(filter_label_.toUtf8().toStdString());
+    children.push_back(sleeve_filter::BuildSemanticLabelBucketFilter(active_model_key, label_key));
   }
 
   if (!filter_rating_.isEmpty()) {

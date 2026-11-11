@@ -31,6 +31,7 @@
 #include "sleeve/storage.hpp"
 #include "storage/store/database.hpp"
 #include "utils/string/convert.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo::library_search_test {
 
@@ -128,27 +129,28 @@ class SyntheticLibraryBuilder {
     pinned.reserve(end - begin);
     image_ids.reserve(end - begin);
     for (std::size_t i = begin; i < end; ++i) {
-      const auto& spec   = specs[i];
-      auto        handle = image_pool->CreateAndReturnPinnedEmpty();
-      auto&       image  = *handle.Get();
-      image.image_name_  = spec.file_name_;
-      image.image_path_  = std::filesystem::path(spec.image_path_);
-      image.image_type_  = spec.has_dng_profile_ ? ImageType::DNG : ImageType::DEFAULT;
+      const auto& spec = specs[i];
+      // The image is filled under the pool lock: another thread may sync the pool meanwhile.
+      auto handle = image_pool->CreateAndReturnPinned([&](Image& image) {
+        image.image_name_ = spec.file_name_;
+        image.image_path_ = std::filesystem::path(spec.image_path_);
+        image.image_type_ = spec.has_dng_profile_ ? ImageType::DNG : ImageType::DEFAULT;
 
-      ExifDisplayMetaData metadata;
-      metadata.make_          = spec.make_;
-      metadata.model_         = spec.model_;
-      metadata.lens_          = spec.lens_;
-      metadata.date_time_str_ = spec.date_time_;
-      metadata.iso_           = spec.iso_;
-      metadata.aperture_      = spec.aperture_;
-      metadata.focal_         = spec.focal_;
-      metadata.rating_        = spec.rating_;
-      image.SetExifDisplayMetaData(std::move(metadata));
-      if (spec.is_raw_file_) {
-        image.SetRawColorContext(MakeRawColorContext(spec, dng_profile_));
-      }
-      image_ids.push_back(image.image_id_);
+        ExifDisplayMetaData metadata;
+        metadata.make_          = spec.make_;
+        metadata.model_         = spec.model_;
+        metadata.lens_          = spec.lens_;
+        metadata.date_time_str_ = spec.date_time_;
+        metadata.iso_           = spec.iso_;
+        metadata.aperture_      = spec.aperture_;
+        metadata.focal_         = spec.focal_;
+        metadata.rating_        = spec.rating_;
+        image.SetExifDisplayMetaData(std::move(metadata));
+        if (spec.is_raw_file_) {
+          image.SetRawColorContext(MakeRawColorContext(spec, dng_profile_));
+        }
+      });
+      image_ids.push_back(handle->image_id_);
       pinned.push_back(std::move(handle));
     }
     image_pool->SyncWithStorage();
@@ -185,7 +187,7 @@ inline auto LibraryRootFolderId(ProjectService& project) -> sl_element_id_t {
 
 /// Run `SELECT COUNT(*)` on one project table.
 inline auto CountTableRows(ProjectService& project, const std::string& table) -> int64_t {
-  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto          lock  = guard.Lock();
   duckdb_result result;
   const auto    sql = "SELECT COUNT(*) FROM " + table;

@@ -10,17 +10,27 @@
 #include <utility>
 #include <vector>
 
+#include "app/pipeline_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "image/image.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
+#include "ui/saved_project_invariants.hpp"
 
 namespace alcedo::ui::test {
 namespace {
 
-using RatingTests = ApplicationModuleHostTestFixture;
+class RatingTests : public ApplicationModuleHostTestFixture {
+ protected:
+  /// Checks the storage invariants of each project package that the test saved (#805).
+  void TearDown() override {
+    ExpectSavedProjectInvariants(temp_dir_);
+    ApplicationModuleHostTestFixture::TearDown();
+  }
+};
 
 struct PopulatedProject {
   std::filesystem::path packed_path_{};
@@ -83,6 +93,12 @@ auto CreatePopulatedPackedProjectWithImages(const std::filesystem::path& tempDir
     return std::nullopt;
   }
   project->SaveProject(meta_path);
+  // Import gives every image its history root; these images skip import, so create the roots
+  // the same way (default document, working-space profile for the synthetic sources).
+  PipelineMgmtService pipelines(project->GetStorage());
+  for (const auto& image : seeded.images_) {
+    pipelines.InitializeImageRoot(image.element_id_, CreateDefaultPipelineDocument(), nullptr);
+  }
 
   std::filesystem::path snapshot_path;
   if (!project_pack::BuildTempDbSnapshotPath(&snapshot_path, nullptr)) {

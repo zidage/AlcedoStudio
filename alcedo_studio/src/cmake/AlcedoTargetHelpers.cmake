@@ -108,6 +108,10 @@ function(alcedo_copy_linked_runtime_dlls target_name)
   if(TARGET Qt6::Core)
     list(APPEND _alcedo_runtime_search_dirs "$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
+  # ALCEDO_SANITIZER=address with MSVC: the AddressSanitizer runtime DLL of the compiler.
+  if(DEFINED ALCEDO_SANITIZER_RUNTIME_DIR)
+    list(APPEND _alcedo_runtime_search_dirs "${ALCEDO_SANITIZER_RUNTIME_DIR}")
+  endif()
 
   add_custom_command(TARGET ${target_name} POST_BUILD
     COMMAND ${CMAKE_COMMAND}

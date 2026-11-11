@@ -16,6 +16,7 @@
 #include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "storage_test_access.hpp"
 
 namespace alcedo::test {
 namespace {
@@ -159,7 +160,7 @@ void EditorMiniGitProjectFixture::CloseAndReopenProject() {
 
 auto EditorMiniGitProjectFixture::LoadStoredGraph(sl_element_id_t element_id)
     -> std::optional<CommitGraph> {
-  auto guard = storage_->GetDatabase().GetConnectionGuard();
+  auto             guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto lock  = guard.Lock();
   CommitGraphStore graph_service(guard.conn_);
   return graph_service.LoadGraph(element_id);
@@ -176,7 +177,7 @@ auto EditorMiniGitProjectFixture::ReadJournalRecords(sl_element_id_t element_id,
 }
 
 auto EditorMiniGitProjectFixture::CountStoredCommits(sl_element_id_t element_id) -> std::uint64_t {
-  auto guard = storage_->GetDatabase().GetConnectionGuard();
+  auto             guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto lock  = guard.Lock();
   CommitGraphStore graph_service(guard.conn_);
   return graph_service.CountCommitsForRoot(root_id(element_id));
@@ -262,7 +263,7 @@ void EditorMiniGitProjectFixture::CreatePersistedImage(ImageRuntime&       runti
                                                        const std::string&  version_name) {
   runtime.element_id   = element_id;
   runtime.journal_path = root_dir_ / ("image_" + std::to_string(element_id) + ".mini-git.wal");
-  auto guard           = storage_->GetDatabase().GetConnectionGuard();
+  auto               guard = StorageTestAccess::GetDatabase(*storage_).GetConnectionGuard();
   auto lock            = guard.Lock();
   CommitGraphStore graph_service(guard.conn_);
   auto               graph = graph_service.CreateRootPipelinePersisted(

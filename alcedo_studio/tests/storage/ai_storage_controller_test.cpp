@@ -19,6 +19,8 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "storage/store/database.hpp"
+#include "../support/storage_test_access.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -122,21 +124,13 @@ auto MakeRating(sl_element_id_t file_id, const std::string& task_id, int rating,
 
 class AiStoreTest : public ::testing::Test {
  protected:
-  std::filesystem::path db_path_;
-  std::filesystem::path meta_path_;
+  test::TestTempDirectory temp_dir_;
+  std::filesystem::path   db_path_;
+  std::filesystem::path   meta_path_;
 
   void                  SetUp() override {
-    const auto*       test_info = ::testing::UnitTest::GetInstance()->current_test_info();
-    const std::string suffix = std::string(test_info->test_suite_name()) + "_" + test_info->name();
-    db_path_   = std::filesystem::temp_directory_path() / (suffix + ".db");
-    meta_path_ = std::filesystem::temp_directory_path() / (suffix + ".json");
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
-  }
-
-  void TearDown() override {
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   static auto CreateSyntheticFile(ProjectService& project, const file_name_t& file_name)
@@ -199,10 +193,10 @@ TEST_F(AiStoreTest, ReplaceUnderstandingForSamePairKeepsOneRow) {
 
   ASSERT_TRUE(
       ai.UpsertUnderstanding(MakeUnderstanding(file_id, "describe", "old caption", {"old"})));
-  ASSERT_EQ(CountUnderstandingRows(project.GetStorage()->GetDatabase()), 1u);
+  ASSERT_EQ(CountUnderstandingRows(StorageTestAccess::GetDatabase(*project.GetStorage())), 1u);
   ASSERT_TRUE(
       ai.UpsertUnderstanding(MakeUnderstanding(file_id, "describe", "new caption", {"new"})));
-  EXPECT_EQ(CountUnderstandingRows(project.GetStorage()->GetDatabase()), 1u)
+  EXPECT_EQ(CountUnderstandingRows(StorageTestAccess::GetDatabase(*project.GetStorage())), 1u)
       << "insert_or_replace must not append a second row for the same (file_id, task_id)";
 
   const auto got = ai.GetUnderstanding(file_id, "describe");
@@ -225,7 +219,7 @@ TEST_F(AiStoreTest, DifferentTaskIdsForSameFileCoexist) {
       ai.UpsertUnderstanding(MakeUnderstanding(file_id, "describe-v1", "caption v1", {"a"})));
   ASSERT_TRUE(
       ai.UpsertUnderstanding(MakeUnderstanding(file_id, "describe-v2", "caption v2", {"b"})));
-  EXPECT_EQ(CountUnderstandingRows(project.GetStorage()->GetDatabase()), 2u);
+  EXPECT_EQ(CountUnderstandingRows(StorageTestAccess::GetDatabase(*project.GetStorage())), 2u);
   EXPECT_EQ(ai.GetUnderstanding(file_id, "describe-v1")->caption_, "caption v1");
   EXPECT_EQ(ai.GetUnderstanding(file_id, "describe-v2")->caption_, "caption v2");
 }
@@ -242,14 +236,16 @@ TEST_F(AiStoreTest, BatchUpsertUnderstandingUpdatesFtsDocumentsOnce) {
       MakeUnderstanding(alpha_id, "describe", "sahara dunes at sunset", {"desert", "sand"}),
       MakeUnderstanding(beta_id, "describe", "city street at night", {"urban"})};
   EXPECT_EQ(ai.UpsertUnderstandings(descriptions), 2u);
-  EXPECT_EQ(CountUnderstandingRows(project.GetStorage()->GetDatabase()), 2u);
-  EXPECT_EQ(CountFtsDocumentRows(project.GetStorage()->GetDatabase()), 2u);
+  EXPECT_EQ(CountUnderstandingRows(StorageTestAccess::GetDatabase(*project.GetStorage())), 2u);
+  EXPECT_EQ(CountFtsDocumentRows(StorageTestAccess::GetDatabase(*project.GetStorage())), 2u);
 
-  const auto alpha_body = FtsDocumentBody(project.GetStorage()->GetDatabase(), alpha_id);
+  const auto alpha_body =
+      FtsDocumentBody(StorageTestAccess::GetDatabase(*project.GetStorage()), alpha_id);
   EXPECT_NE(alpha_body.find("sahara dunes"), std::string::npos);
   EXPECT_NE(alpha_body.find("desert"), std::string::npos);
 
-  const auto beta_body = FtsDocumentBody(project.GetStorage()->GetDatabase(), beta_id);
+  const auto beta_body =
+      FtsDocumentBody(StorageTestAccess::GetDatabase(*project.GetStorage()), beta_id);
   EXPECT_NE(beta_body.find("city street"), std::string::npos);
   EXPECT_NE(beta_body.find("urban"), std::string::npos);
 }
@@ -259,13 +255,13 @@ TEST_F(AiStoreTest, UpsertUnderstandingCreatesMissingFtsDocumentTable) {
   const auto     file_id = CreateSyntheticFile(project, L"ai_missing_fts_doc_alpha.dng");
   ASSERT_NE(file_id, 0u);
 
-  DropFtsDocumentTable(project.GetStorage()->GetDatabase());
+  DropFtsDocumentTable(StorageTestAccess::GetDatabase(*project.GetStorage()));
   auto& ai = project.GetStorage()->GetAiStore();
   ASSERT_TRUE(ai.UpsertUnderstanding(
       MakeUnderstanding(file_id, "describe", "sahara dunes at sunset", {"desert"})));
 
-  EXPECT_EQ(CountFtsDocumentRows(project.GetStorage()->GetDatabase()), 1u);
-  const auto body = FtsDocumentBody(project.GetStorage()->GetDatabase(), file_id);
+  EXPECT_EQ(CountFtsDocumentRows(StorageTestAccess::GetDatabase(*project.GetStorage())), 1u);
+  const auto body = FtsDocumentBody(StorageTestAccess::GetDatabase(*project.GetStorage()), file_id);
   EXPECT_NE(body.find("sahara dunes"), std::string::npos);
   EXPECT_NE(body.find("desert"), std::string::npos);
 }
@@ -282,7 +278,7 @@ TEST_F(AiStoreTest, InvalidUnderstandingNotPersisted) {
   bad.provider_id_ = "";  // IsValid() == false
   EXPECT_FALSE(ai.UpsertUnderstanding(bad));
   EXPECT_FALSE(ai.GetUnderstanding(file_id, "describe").has_value());
-  EXPECT_EQ(CountUnderstandingRows(project.GetStorage()->GetDatabase()), 0u);
+  EXPECT_EQ(CountUnderstandingRows(StorageTestAccess::GetDatabase(*project.GetStorage())), 0u);
 }
 
 TEST_F(AiStoreTest, GetActiveUnderstandingReturnsPersistedRow) {
@@ -497,7 +493,7 @@ TEST_F(AiStoreTest, OrphanFileIdNotPersisted) {
 
   EXPECT_FALSE(ai.GetUnderstanding(kOrphanFileId, "describe").has_value());
   EXPECT_FALSE(ai.GetRating(kOrphanFileId, "rate").has_value());
-  EXPECT_EQ(CountUnderstandingRows(project.GetStorage()->GetDatabase()), 0u);
+  EXPECT_EQ(CountUnderstandingRows(StorageTestAccess::GetDatabase(*project.GetStorage())), 0u);
 }
 
 // The file-deletion cascade (ElementStore::RemoveElements) drops AI annotation rows

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
@@ -38,7 +39,7 @@ class ElementMapper
  private:
   static constexpr uint32_t                                         field_count_      = 6;
   static constexpr const char*                                      table_name_       = "Element";
-  static constexpr const char*                                      prime_key_clause_ = "id={}";
+  static constexpr const char*                                      primary_key_column_ = "id";
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_      = {
       FIELD(ElementMapperParams, id, UINT32),
       FIELD(ElementMapperParams, type, UINT32),
@@ -55,7 +56,8 @@ class ElementMapper
   auto        GetElementById(const sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
   auto GetElementByName(const std::wstring& name) -> std::vector<std::shared_ptr<SleeveElement>>;
   auto GetElementByType(const ElementType type) -> std::vector<std::shared_ptr<SleeveElement>>;
-  auto GetElementsInFolderByFilter(const std::wstring& filter_sql)
+  /// Elements of a full SELECT whose projection is the six Element columns in table order.
+  auto        GetElementsByQuery(const duckorm::SqlFragment& query)
       -> std::vector<std::shared_ptr<SleeveElement>>;
 
   friend struct FieldReflectable<ElementMapper>;

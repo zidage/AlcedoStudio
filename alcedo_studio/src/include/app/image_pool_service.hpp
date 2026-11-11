@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <span>
 #include <type_traits>
@@ -138,6 +139,11 @@ class ImagePoolService {
   }
 
   auto CreateAndReturnPinnedEmpty() -> ImagePoolManager::PinnedImageHandle;
+  /// Creates an UNSYNCED image, runs @p fill on it, and returns it pinned. The pool lock is held
+  /// through @p fill, so SyncWithStorage on another thread never inserts a half-filled image.
+  /// @p fill must not call this service.
+  auto CreateAndReturnPinned(const std::function<void(Image&)>& fill)
+      -> ImagePoolManager::PinnedImageHandle;
 
   void Remove(image_id_t image_id);
   void RemoveBatch(std::span<const image_id_t> image_ids);

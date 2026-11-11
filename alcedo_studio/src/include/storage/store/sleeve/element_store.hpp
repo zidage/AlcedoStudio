@@ -19,12 +19,14 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/mapper/pipeline/pipeline_mapper.hpp"
 #include "storage/mapper/sleeve/element/element_id_mapper.hpp"
 #include "storage/mapper/sleeve/element/element_mapper.hpp"
 #include "storage/mapper/sleeve/element/file_mapper.hpp"
 #include "storage/mapper/sleeve/element/folder_mapper.hpp"
 #include "storage/store/database.hpp"
+#include "storage/store/semantic/semantic_records.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -72,7 +74,7 @@ struct ScopedFileQuery {
 /// so the scope never joins them.
 ///
 /// @param relevance_select When set, a SELECT of `file_id, image_id, relevance` (see
-///        SemanticVectorSearch::BuildRelevanceSelect) built for the same @p folder_id. The scope
+///        BuildSemanticRelevanceSelect) built for the same @p folder_id. The scope
 ///        then joins it as `rel` on the file and image ids, so only its files match, and AND-s
 ///        it with @p extra_filter. Without it the scope joins nothing more.
 auto BuildScopedFileQuery(
@@ -214,13 +216,13 @@ class ElementStore {
   // Insert the element row plus its child rows (file binding / folder content) on @p conn.
   // Does not touch sync_flag_ and does not manage a transaction, so it can run
   // either autocommit (AddElement) or inside a shared transaction (AddElements).
-  static void InsertElementRows(duckdb_connection&                    conn,
+  static void InsertElementRows(duckorm::Connection&                  conn,
                                 const std::shared_ptr<SleeveElement>& element);
   // Update the element row plus its child rows. For a folder, only the FolderContent rows of
   // the children added or removed since the last sync are written. Same
   // transaction-neutrality behavior as InsertElementRows; the caller clears the folder's
   // pending content changes after the commit.
-  static void UpdateElementRows(duckdb_connection&                    conn,
+  static void UpdateElementRows(duckorm::Connection&                  conn,
                                 const std::shared_ptr<SleeveElement>& element);
 
  public:
@@ -258,14 +260,14 @@ class ElementStore {
                                      const sl_element_id_t              folder_id)
       -> std::vector<sl_element_id_t>;
   /// Total, date, camera, lens, semantic label (when @p active_semantic_model_key is set), and
-  /// rating buckets of the files that match @p extra_filter (and, when set, are kept by
-  /// @p relevance_select; see BuildScopedFileQuery). The filter is evaluated once: the
-  /// matching rows go into a temporary table on this store's connection and every bucket is
-  /// read from it. Throws std::runtime_error when a statement fails.
-  auto BuildFolderStats(sl_element_id_t                            folder_id,
-                        const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt,
-                        const std::string&                         active_semantic_model_key = {},
-                        const std::optional<duckorm::SqlFragment>& relevance_select =
+  /// rating buckets of the files that match @p extra_filter (and, when set, are kept by the
+  /// relevance rule for @p semantic_relevance; see ReadAlbumQuery). The filter is evaluated
+  /// once: the matching rows go into a temporary table on this store's connection and every
+  /// bucket is read from it. Throws std::runtime_error when a statement fails.
+  auto BuildFolderStats(sl_element_id_t                              folder_id,
+                        const std::optional<duckorm::SqlFragment>&   extra_filter = std::nullopt,
+                        const std::string&                           active_semantic_model_key = {},
+                        const std::optional<SemanticQueryEmbedding>& semantic_relevance =
                             std::nullopt) const -> FolderStatsView;
   /// One page of the files that match @p extra_filter (ordered by element id; @p limit 0
   /// returns every row), the total, and the BuildFolderStats buckets, from one evaluation of
@@ -331,20 +333,23 @@ class ElementStore {
    * set is dropped before the connection is released. The label group and the label sort use
    * the canonical labels of @p active_semantic_model_key only.
    *
-   * With @p relevance_select (see BuildScopedFileQuery), the match set holds only the files
-   * that the select keeps, with their relevance, and the select runs once for the call. Without
-   * a selected photo sort the photos then order by relevance descending, then file id (see
-   * AlbumQueryOptions).
+   * With @p semantic_relevance (the embeddings of a natural-language search), the match set
+   * holds only the files of @p folder_id that the relevance rule of SemanticVectorSearch keeps
+   * (BuildSemanticRelevanceSelect, joined by BuildScopedFileQuery), with their relevance, and
+   * the relevance select runs once for the call. Without a selected photo sort the photos then
+   * order by relevance descending, then file id (see AlbumQueryOptions).
    *
    * @throws std::invalid_argument for invalid options or page bounds (a limit above
    *         kMaxAlbumQueryPageRows or a negative offset).
-   * @throws std::runtime_error with the DuckDB message when a statement fails.
+   * @throws std::runtime_error with the DuckDB message when a statement fails, and when
+   *         @p semantic_relevance names a model that is not registered or has vectors that do
+   *         not fit the model.
    */
   auto ReadAlbumQuery(
       sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
-      const AlbumQueryRead&                      read,
-      const std::optional<duckorm::SqlFragment>& relevance_select = std::nullopt) const
+      const AlbumQueryRead&                        read,
+      const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> AlbumQueryResult;
 
   /**
@@ -359,7 +364,7 @@ class ElementStore {
       sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
       sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
-      const std::optional<duckorm::SqlFragment>& relevance_select = std::nullopt) const
+      const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> std::optional<AlbumFilePosition>;
 
   /**
@@ -371,7 +376,7 @@ class ElementStore {
       sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
       int64_t occurrence_begin, int64_t occurrence_end,
-      const std::optional<duckorm::SqlFragment>& relevance_select = std::nullopt) const
+      const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> std::vector<sl_element_id_t>;
 
   void EnsureChildrenLoaded(sl_element_id_t folder_id);

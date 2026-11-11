@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "support/semantic_stores_test_support.hpp"
+#include "support/test_temp_directory.hpp"
 
 #include <duckdb.h>
 #include <gtest/gtest.h>
@@ -23,6 +24,7 @@
 #include "storage/image_pool/image_pool_manager.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/duckdb_extension.hpp"
+#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -174,21 +176,13 @@ void RegisterSiglipTestModel(const semantic_test::SemanticStores& semantic) {
 
 class SemanticStoreTest : public ::testing::Test {
  protected:
-  std::filesystem::path db_path_;
-  std::filesystem::path meta_path_;
+  test::TestTempDirectory temp_dir_;
+  std::filesystem::path   db_path_;
+  std::filesystem::path   meta_path_;
 
   void                  SetUp() override {
-    const auto*       test_info = ::testing::UnitTest::GetInstance()->current_test_info();
-    const std::string suffix = std::string(test_info->test_suite_name()) + "_" + test_info->name();
-    db_path_   = std::filesystem::temp_directory_path() / (suffix + ".db");
-    meta_path_ = std::filesystem::temp_directory_path() / (suffix + ".json");
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
-  }
-
-  void TearDown() override {
-    std::filesystem::remove(db_path_);
-    std::filesystem::remove(meta_path_);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   static auto CreateSyntheticFile(ProjectService& project, const file_name_t& file_name)
@@ -548,7 +542,7 @@ TEST_F(SemanticStoreTest, FilesWithoutReadyEmbeddingAreNotResults) {
   StoreEmbedding(semantic, files[0].file_id_, files[0].image_id_, OneHot(0));
   StoreEmbedding(semantic, files[1].file_id_, files[1].image_id_, OneHot(0));
   {
-    auto guard   = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto guard   = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto db_lock = guard.Lock();
     RunSql(guard.conn_, std::format("UPDATE SemanticImageEmbedding SET status = 'pending' "
                                     "WHERE file_id = {};",
@@ -575,7 +569,7 @@ TEST_F(SemanticStoreTest, OlderProjectHnswIndexIsDroppedOnOpen) {
 
     // The index that older versions created on the first natural-language search.
     {
-      auto        guard   = project.GetStorage()->GetDatabase().GetConnectionGuard();
+      auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
       auto        db_lock = guard.Lock();
       std::string load_error;
       ASSERT_TRUE(LoadPackagedDuckDbExtension(guard.conn_, "vss", &load_error)) << load_error;
@@ -591,7 +585,7 @@ TEST_F(SemanticStoreTest, OlderProjectHnswIndexIsDroppedOnOpen) {
   {
     ProjectService reopened(db_path_, meta_path_, ProjectOpenMode::kLoadExisting);
     {
-      auto guard   = reopened.GetStorage()->GetDatabase().GetConnectionGuard();
+      auto guard   = StorageTestAccess::GetDatabase(*reopened.GetStorage()).GetConnectionGuard();
       auto db_lock = guard.Lock();
       EXPECT_EQ(CountHnswIndexes(guard.conn_), 0);
     }
@@ -605,7 +599,7 @@ TEST_F(SemanticStoreTest, OlderProjectHnswIndexIsDroppedOnOpen) {
 
   // The drop is stored in the file: a second open finds no index.
   ProjectService second_open(db_path_, meta_path_, ProjectOpenMode::kLoadExisting);
-  auto           guard   = second_open.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto guard = StorageTestAccess::GetDatabase(*second_open.GetStorage()).GetConnectionGuard();
   auto           db_lock = guard.Lock();
   EXPECT_EQ(CountHnswIndexes(guard.conn_), 0);
 }

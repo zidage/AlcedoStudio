@@ -32,6 +32,8 @@
 #include "image/metadata_extractor.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/import/import_log.hpp"
+#include "../support/storage_test_access.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -48,7 +50,7 @@ auto OtherCameraDngPath() -> std::filesystem::path {
 
 /// Text of every value in the first column of @p sql.
 auto QueryTexts(ProjectService& project, const std::string& sql) -> std::vector<std::string> {
-  auto                     guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto                     lock  = guard.Lock();
   duckdb_result            result;
   std::vector<std::string> texts;
@@ -86,18 +88,16 @@ void ExpectNoProfileTables(const std::vector<std::string>& texts, const std::str
 
 class PipelineDngProfileBindingTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
     if (!std::filesystem::exists(DngFixturePath())) {
       GTEST_SKIP() << "CI DNG fixture missing: " << DngFixturePath().string();
     }
-    const auto* test_name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
-    const auto  temp_dir  = std::filesystem::temp_directory_path();
-    db_path_              = temp_dir / (std::string("dng_profile_binding_") + test_name + ".db");
-    meta_path_            = temp_dir / (std::string("dng_profile_binding_") + test_name + ".json");
-    scratch_dir_          = temp_dir / (std::string("dng_profile_binding_") + test_name);
-    RemoveTestFiles();
+    db_path_     = temp_dir_ / "project.db";
+    meta_path_   = temp_dir_ / "project.json";
+    scratch_dir_ = temp_dir_ / "scratch";
     std::filesystem::create_directories(scratch_dir_);
     source_ = scratch_dir_ / "DSC06683.dng";
     std::filesystem::copy_file(DngFixturePath(), source_);
@@ -128,18 +128,7 @@ class PipelineDngProfileBindingTest : public ::testing::Test {
                  imported_profile_->look_table.entries.empty());
   }
 
-  void TearDown() override {
-    project_.reset();
-    RemoveTestFiles();
-  }
-
-  void RemoveTestFiles() {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(db_path_.string() + ".wal", ec);
-    std::filesystem::remove(meta_path_, ec);
-    std::filesystem::remove_all(scratch_dir_, ec);
-  }
+  void TearDown() override { project_.reset(); }
 
   [[nodiscard]] auto Fingerprint() const -> std::string {
     return DngColorProfileFingerprintToText(imported_profile_->fingerprint);

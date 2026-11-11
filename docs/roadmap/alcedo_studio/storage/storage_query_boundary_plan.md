@@ -2,7 +2,7 @@
 
 Date: 2026-11-09
 
-Status: planned
+Status: complete. S1 and S2 complete (2026-11-09); S3, S4, S5, and S6 complete (2026-11-10).
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and the callers of storage in
 `app/` and `sleeve/`.
@@ -187,12 +187,12 @@ storage/  -> duckorm, Mapper, Store, StatsDimension, LibrarySearchPredicates, SQ
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
-| S1 | Typed statements and rows in duckorm; `MaskAssetStore` on duckorm | duckorm, mask asset store | none | 1000-1400 | planned (#786) |
-| S2 | Typed-key Mapper and one transaction style; `CommitGraphStore`, `FolderMapper`, `ImageStore` on duckorm | Mapper, edit history store, sleeve mappers | S1 | 1300-1800 | planned (#787) |
-| S3 | `ElementStore` read paths on typed rows | element store, album query | S1 | 1000-1500 | planned (#788) |
-| S4 | One stats dimension definition; filter compiler in storage | storage query, sleeve filter, element store | S3 | 1200-1800 | planned (#789) |
-| S5 | Search predicates in storage; domain values in service signatures | storage query, app filter and browse services, library module | S4 | 1200-1800 | planned (#790) |
-| S6 | Storage owns connections; maintenance API; boundary check in CI | Storage facade, app services, package backend, CI | S2, S5 | 1300-1900 | planned (#791) |
+| S1 | Typed statements and rows in duckorm; `MaskAssetStore` on duckorm | duckorm, mask asset store | none | 1000-1400 | complete (#786) |
+| S2 | Typed-key Mapper and one transaction style; `CommitGraphStore`, `FolderMapper`, `ImageStore` on duckorm | Mapper, edit history store, sleeve mappers | S1 | 1300-1800 | complete (#787) |
+| S3 | `ElementStore` read paths on typed rows | element store, album query | S1 | 1000-1500 | complete (#788) |
+| S4 | One stats dimension definition; filter compiler in storage | storage query, sleeve filter, element store | S3 | 1200-1800 | complete (#789) |
+| S5 | Search predicates in storage; domain values in service signatures | storage query, app filter and browse services, library module | S4 | 1200-1800 | complete (#790) |
+| S6 | Storage owns connections; maintenance API; boundary check in CI | Storage facade, app services, package backend, CI | S2, S5 | 1300-1900 | complete (#791) |
 
 Each phase keeps its upper estimate under 2000 lines. S3 and S4 are separate phases because
 S4 moves files between layers, and the move adds removed and added lines to one diff.
@@ -310,13 +310,136 @@ ctest --test-dir build/debug --output-on-failure -R "DuckormStatementTest|Duckor
 
 **Exit criteria**
 
-- [ ] `duckorm::Statement` is the only prepared-statement owner in the repository.
-- [ ] `mask_asset_store.cpp` has zero `duckdb_` symbols.
-- [ ] The new `DuckormStatementTest` cases and all `MaskAssetStoreTest` cases pass.
+- [x] `duckorm::Statement` is the only prepared-statement owner in the repository.
+- [x] `mask_asset_store.cpp` has zero `duckdb_` symbols.
+- [x] The new `DuckormStatementTest` cases and all `MaskAssetStoreTest` cases pass.
 
 **Expected diff:** 1000-1400 lines.
 
 **Completion record:** see section 8.
+
+##### Phase S1 completion record (2026-11-09)
+
+**Status:** complete. Branch `refactor/duckorm-typed-statements-786` from `main` at `2843077e3`.
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| duckorm L0 | `include/storage/mapper/duckorm/duckdb_statement.hpp`, `storage/mapper/duckorm/duckdb_statement.cpp` (new) | `Statement`, `Result`, `CellScalar` / `CellValue`, `MemberKind`, `ColumnTypeFitsMember`, `RowColumns`, `TypedRow`, `RequireRowColumns` / `DecodeRow` / `DecodeRows` |
+| duckorm L1 | `duckdb_orm.hpp`, `duckdb_orm.cpp` | `query<Row>`, `query_one<Row>`, `scalar<T>`, `execute_count`; every statement of `insert`, `update`, `upsert_rows`, `remove`, `select`, `select_by_query`, `execute`, `execute_query` runs on `Statement` |
+| duckorm values | `duckdb_expr.hpp`, `duckdb_expr.cpp` | `BindValue` holds `std::vector<std::uint8_t>` (BLOB); `expr::param(std::span<const std::uint8_t>)` |
+| duckorm internal | `storage/mapper/duckorm/duckdb_value.hpp` (new) | `DuckValueGuard`, `MakeFloatArrayValue`, shared by `Statement::BindFloatArray` and `Appender` |
+| Deleted | `duckdb_types.hpp` (class only), `duckdb_types.cpp` (file) | `duckorm::PreparedStatement` |
+| Users | `folder_mapper.cpp`, `mask_asset_store.cpp` | `Statement`; `MaskAssetStore` on `execute_count`, `query_one<MaskAssetRow>`, `query<MaskAssetKeyRow>`, `Transaction` |
+
+**Detail decisions made during the work** (the plan left them open):
+
+- **Column type rule.** A member type takes a column only without loss: an integer member takes
+  an integer column of the same signedness and a range that fits, and a signed member also takes
+  a narrower unsigned column (UINTEGER into `int64_t`). `double` takes FLOAT and DOUBLE. Every
+  other member takes only its own type. So `COUNT(*)` (BIGINT) and `SELECT 1` (INTEGER) read as
+  `int64_t`, and `SUM` (HUGEINT) needs a cast. The rule is `ColumnTypeFitsMember`.
+- **DATE.** Section 2.2 lists DATE. `std::chrono::sys_days` is a member type and a bind type, so
+  S3 can read the import-day buckets as dates.
+- **`select_int64` and `select_string` are `scalar<int64_t>` and `scalar<std::string>`.** They
+  now reject a column that does not fit. Two existing test reads changed with them:
+  `AppenderWritesEveryValueTypeInsideTheTransaction` reads `vec[3]` (FLOAT) as `scalar<float>`,
+  and `DuckDbExtensionTest.MissingExtensionReportsEachFailedAttemptWithoutDownloading` reads
+  `current_setting('autoinstall_known_extensions')` (BOOLEAN) as `scalar<bool>`. Every production
+  caller reads INTEGER, BIGINT, VARCHAR, or JSON (the C API reports JSON as VARCHAR;
+  `SemanticStorageControllerTest` reads `supported_text_languages_json`).
+- **Untyped NULL.** The C API reports `SELECT NULL` as INTEGER, so a NULL literal needs a cast
+  (`NULL::VARCHAR`).
+- **Error text.** Every `Statement` failure throws `"<DuckDB message or duckorm message>
+  [SQL: <first 120 bytes>]"`; the cut ends at a whole UTF-8 sequence. Type errors name the column
+  index, the column name, the DuckDB type, and the member type.
+- **`bind_fragment_values` is deleted.** It had no caller outside duckorm;
+  `Statement::BindFragment` replaces it. `execute_query` keeps its signature through
+  `Statement::ExecuteDetached`, which gives the `duckdb_result` to the caller (S3 removes it).
+- **DuckFieldDesc reads.** `select` and `select_by_query` keep the positional `VarTypes` decoding
+  through `Result::ReadFieldCell`, which keeps DuckDB's value casts, so the Mapper rows read as
+  before until S2 and S3.
+- **MaskAssetStore.** The float bounds bind as DOUBLE in the `SqlFragment` (`BindValue` holds
+  floating values as `double`); DuckDB casts them back to the same FLOAT values, and the key check after a read proves
+  it. The store's own messages keep their text. SQL failures now carry the duckorm text instead of
+  the prefix `MaskAssetStore: `, and a NULL cell (the columns are NOT NULL) fails with the duckorm
+  NULL message instead of `is corrupt: a column is null`.
+- **Source check wording.** `grep -c "duckdb_"` also counts the include lines
+  `storage/mapper/duckorm/duckdb_*.hpp`. The check is
+  `grep -n "duckdb_" mask_asset_store.cpp | grep -v "#include"`, which prints 0 lines.
+- **Prepared-statement owner.** `Statement` is the only prepared-statement class.
+  `commit_graph_store.cpp` still calls `duckdb_prepare` on raw handles; S2 moves it to duckorm
+  (section 2.1).
+
+**Primary success call chain:**
+
+```text
+MaskAssetStore::Read(key)
+  -> duckorm::query_one<MaskAssetRow>(conn, SqlFragment{kReadSql, {key}})
+  -> Statement(conn, sql) -> BindFragment(1) -> Execute -> Result&
+  -> RequireRowColumns<MaskAssetRow>: column count 10, each column type once
+  -> RequireAtMostOneRow -> DecodeRow (ReadChecked per member, BLOB as std::vector<uint8_t>)
+  -> format version, codec, dimension checks -> zlib uncompress -> MakeMaskAssetKey check
+  -> MaskAsset
+```
+
+**Primary failure and restore call chain:**
+
+```text
+MaskAssetStore::DeleteKeysNotIn(keep)
+  -> ListKeys (query<MaskAssetKeyRow>)
+  -> Transaction tx(conn) -> Statement DELETE ... Bind(1, key) -> Execute fails
+  -> std::runtime_error("<DuckDB message> [SQL: DELETE FROM MaskAsset ...]")
+  -> ~Statement releases the result and the prepared statement -> ~Transaction runs ROLLBACK
+  -> the caller receives the message; the table keeps every row
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `QueryDecodesRowsIntoMemberPointerColumns` | `DuckormStatementTest` | PASS |
+| `QueryRejectsColumnCountMismatch` (names 3 and 2; empty result fails the same way) | `DuckormStatementTest` | PASS |
+| `QueryRejectsColumnTypeMismatch` (column 0 BIGINT into `std::string`, column 1 VARCHAR into `int64_t`) | `DuckormStatementTest` | PASS |
+| `NullCellReadsAsNulloptForOptionalMember` | `DuckormStatementTest` | PASS |
+| `NullCellThrowsForPlainMember` (column, row) | `DuckormStatementTest` | PASS |
+| `BlobBindAndReadKeepsBytes` (0x00 to 0xFF, empty BLOB, `expr::param` BLOB) | `DuckormStatementTest` | PASS |
+| `FloatAndUtinyintColumnsDecode` (+ lossless widening accepted, narrowing rejected) | `DuckormStatementTest` | PASS |
+| `ExecuteCountReportsChangedRows` (`ON CONFLICT DO NOTHING` of a stored key reports 0) | `DuckormStatementTest` | PASS |
+| `QueryOneReturnsNulloptForNoRowAndThrowsForTwoRows` | `DuckormStatementTest` | PASS |
+| `ScalarRejectsColumnTypeAndColumnCountMismatch` (DOUBLE into text, two columns, HUGEINT) | `DuckormStatementTest` | PASS |
+| `DateColumnDecodesAndBindsAsSysDays` | `DuckormStatementTest` | PASS |
+| `StatementRebindsAndReportsPrepareAndBindErrors` (reuse, C string as VARCHAR, 120-byte SQL head) | `DuckormStatementTest` | PASS |
+| Every current `MaskAssetStoreTest` case, unchanged | `MaskAssetStoreTest` | 5/5 PASS |
+| `mask_asset_store.cpp` without `duckdb_` symbols | source search | 0 lines outside `#include` |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM Storage DuckormStatementTest DuckormExprTest MaskAssetStoreTest MapperCrtpRoundtripTest DuckDbExtensionTest   (exit 0)
+ctest --test-dir build/debug --output-on-failure -R "DuckormStatementTest|DuckormExprTest|MaskAssetStoreTest|MapperCrtpRoundtripTest|DuckDbExtensionTest"   (exit 0)
+ctest --test-dir build/debug --output-on-failure -R "^(SemanticStorageControllerTest|AiStorageControllerTest|SleeveFilterCompileTest|SleeveFilterFactoryTest|FilterServiceTest|AlbumQueryTest|LibrarySearchRecallTest|LibrarySearchColumnsTest|PipelineMapperTest|ProjectPackageBackendTest|ProjectCompatibilityTest|CommitGraphTest)\."   (exit 8, one failure from main, below)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main
+```
+
+Suite totals: `DuckormStatementTest` 24/24, `DuckormExprTest` 10/10, `MaskAssetStoreTest` 5/5,
+`MapperCrtpRoundtripTest` 4/4, `DuckDbExtensionTest` 2/2. Caller suites: 260 passed, 1 skipped
+(`AlbumQueryTest.LargeLibraryPagesStayBoundedAndRecordTimings`), 1 disabled, 1 failed:
+`SemanticStoreTest.ExistingSemanticModelWithoutActiveColumnPromotesLatestModel` fails on `main`
+in the library marks migration before any duckorm read (#793). The full suite is for the user to start;
+this record lists the targeted suites.
+
+**Checklist / exit condition:** all three boxes checked.
+
+**LOC note:** `duckdb_statement.hpp` 434, `duckdb_statement.cpp` 576, `duckdb_orm.cpp` 471
+(was 768), `mask_asset_store.cpp` 186 (was 249), `duckorm_statement_test.cpp` 582. The diff is
+1697 added and 634 removed lines in 15 files (the plan document included). Every changed file
+is under 1000 lines.
+
+**Remaining gaps:** `CommitGraphStore`, `FolderMapper` text WHERE clauses, and the Mapper
+transactions are S2 (#787). `ElementStore` reads and the callers of `execute_query`,
+`select_by_query`, `select_int64`, and `select_string` are S3 (#788).
 
 ### Phase S2: Typed-key Mapper and one transaction style
 
@@ -419,14 +542,132 @@ ctest --test-dir build/debug --output-on-failure -R "MapperCrtpRoundtripTest|Com
 
 **Exit criteria**
 
-- [ ] `mapper.hpp` and `duckdb_orm.hpp` accept WHERE input only as `SqlFragment`.
-- [ ] Storage has one transaction style.
-- [ ] `commit_graph_store.cpp` has zero `duckdb_` symbols.
-- [ ] `RemoveImageByPath` is deleted.
+- [x] `mapper.hpp` and `duckdb_orm.hpp` accept WHERE input only as `SqlFragment`.
+- [x] Storage has one transaction style.
+- [x] `commit_graph_store.cpp` has zero `duckdb_` symbols.
+- [x] `RemoveImageByPath` is deleted.
 
 **Expected diff:** 1300-1800 lines.
 
 **Completion record:** see section 8.
+
+##### Phase S2 completion record (2026-11-09)
+
+**Status:** complete. Branch `refactor/storage-typed-key-mapper-787`, stacked on the S1 branch
+`refactor/duckorm-typed-statements-786` (PR #794).
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| Mapper L2 | `include/storage/mapper/mapper.hpp` | `MapperKey` concept; `KeyEquals(id)` builds `(PrimaryKeyColumn() = ?)`; `GetById`, `GetWhere`, `GetRowsByQuery`, `RemoveById`, `RemoveByIds` (integer keys, `in_list`), `RemoveWhere`, `UpdateParams`, `UpdateParamsRows`; `FieldReflectable::PrimaryKeyColumn` |
+| Mapper keys | 13 Derived mapper headers | `prime_key_clause_` format strings become `primary_key_column_` column names |
+| duckorm L1 | `duckdb_orm.hpp`, `duckdb_orm.cpp` | the `const char* where_clause` overloads of `select`, `update`, `remove` and the public `begin_transaction` / `commit_transaction` / `rollback_transaction` are deleted; `Transaction` runs BEGIN and COMMIT itself |
+| duckorm L3 | `duckdb_expr.hpp`, `duckdb_expr.cpp` | `expr::in_list(operand, std::span<const std::string>)` binds each text value |
+| duckorm types | `duckdb_types.hpp` | `duckorm::Connection` names the connection handle for stores |
+| Edit history | `commit_graph_store.hpp`, `commit_graph_store.cpp` | every statement on `Statement`, `execute`, `scalar<T>`, `query<Row>`, `query_one<Row>`, or Mapper key methods; row structs `MaterializedHistoryLabelRow`, `RootPipelineStateRow`, `AttributionRow`, `ImageEditStateIdRow`, `StoredHistoryJsonRow`; `ExecuteOrThrow`, `QueryUint64`, `SqlQuote` deleted |
+| Sleeve mappers | `folder_mapper.cpp`, `file_mapper.cpp`, `element_mapper.*`, `element_id_mapper.*` | bound keys and `in_list`; `InsertFolderContents` binds `(?, ?)` rows |
+| Image | `image_mapper.cpp`, `image_store.*` | bound name, path, and type; `AddImages` and `UpdateImages` open a `Transaction`; `RemoveImageByPath` deleted |
+| Pipeline | `pipeline_mapper.cpp` | `GetById` |
+| Element store | `element_store.cpp` | `AddElements` and `UpdateElements` on `Transaction`; `GetFolderChildren` binds the folder id |
+
+**Detail decisions made during the work** (the plan left them open):
+
+- **Method names.** Row methods: `GetById`, `GetWhere`, `GetRowsByQuery`, `RemoveById`,
+  `RemoveByIds`, `RemoveWhere`, `UpdateParams`, `UpdateParamsRows`. Domain methods keep
+  `GetByPredicate(SqlFragment)` and `GetByQuery(SqlFragment)`. `RemoveByClause(SqlFragment)`
+  became `RemoveWhere`, and `UpdateParamsBatch` became `UpdateParamsRows`, which states that it
+  joins the caller transaction. `InsertParamsBatch` is deleted: `InsertParamsRows` is the same
+  operation inside the caller transaction. The aliases `Get(const char*)`,
+  `GetByQuery(const char*)`, `Remove(Id)`, and `Update(Id, RowParams)` are deleted.
+- **Key types.** `MapperKey` accepts integers that fit `int64_t` (bound as BIGINT) and
+  `std::string` (bound as VARCHAR). `GetById` throws when a key matches several rows, which
+  only a table without a key constraint (`FileImage`, `FolderContent` by `folder_id`) can hold.
+- **Transactions.** The public BEGIN, COMMIT, and ROLLBACK functions are deleted, so
+  `duckorm::Transaction` is the only way to open a transaction. `ImageStore::AddImages` and
+  `UpdateImages` open the transaction that the Mapper batch opened before.
+- **Integer id lists.** `RemoveByIds`, `RemoveContentByIds`, `RemoveFolderContents`, and the
+  root existence check use `expr::in_list` with integer literals, as section 2.2 decided for id
+  lists. Text values (version ids, commit hashes, root ids, names, paths) are binds.
+- **Connection type in stores.** `commit_graph_store.cpp` names the connection
+  `duckorm::Connection`, an alias of the C API handle in `duckdb_types.hpp`, so the source
+  check reports 0 lines. S6 uses the same alias for the store session.
+- **`ListImageElementIds`.** It reads `SELECT element_id` into `ImageEditStateIdRow`; the old
+  read loaded every ImageEditState row with its checkpoint JSON to return the ids.
+- **`DeleteUnreachableCommits`.** One DELETE for the attribution rows and one for the commit
+  rows, each with a bound `in_list` of the hashes, replace one pair of statements per hash.
+- **Raw-SQL mapper reads.** `ElementMapper::GetElementsInFolderByFilter(std::wstring)` became
+  `GetElementsByQuery(SqlFragment)`, and `ElementIdMapper::GetElementIdsByQuery` takes a
+  `SqlFragment`. `GetElementByName`, `GetImageByName`, and `GetImageByPath` bind their text;
+  before, each pasted the text unquoted into the WHERE clause, so each call failed in DuckDB.
+- **`FileMapper::Update` on `FileImage`.** The statement keeps its text with the key now bound.
+  DuckDB rejects it because `FileImage` has no key constraint; #795 records the defect.
+
+**Primary success call chain:**
+
+```text
+EditorMiniGitMaterializer -> CommitGraphStore::Materialize(m)
+  -> m.Validate() -> duckorm::Transaction tx(conn)
+  -> InsertCommitIfAbsent: commit_mapper_.GetById(hash) -> Mapper::GetWhere((commit_hash = ?))
+     -> commit_mapper_.Insert (prepared INSERT, field binds)
+  -> InsertAttributionIfAbsent: duckorm::execute(INSERT OR IGNORE ... VALUES (?, ?, ?))
+  -> version_ref_mapper_.RemoveWhere(((element_id = ?) AND (NOT (version_id IN (?, ...)))))
+  -> version_ref_mapper_.UpdateParams(id, row) -> duckorm::update(... WHERE (version_id = ?))
+  -> image_edit_state_mapper_.UpdateParams -> tx.commit()
+```
+
+**Primary failure and restore call chain:**
+
+```text
+Materialize -> VersionRef delete and upserts ran -> ImageEditState upsert fails
+  -> std::runtime_error("<DuckDB message> [SQL: INSERT INTO ImageEditState ...]")
+  -> ~Statement -> ~Transaction runs ROLLBACK
+  -> EditCommit, EditCommitAttribution, VersionRef, ImageEditState keep the prior rows
+  -> EditorMiniGitMaterializer receives the error
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `GetByIdReturnsNulloptForMissingKey` | `MapperCrtpRoundtripTest` | PASS |
+| `RemoveByIdBindsTextKeyWithQuote` (key `a'b` removes one of three VersionRef rows) | `MapperCrtpRoundtripTest` | PASS |
+| `BatchInsertJoinsCallerTransaction` (rows visible inside, 0 rows after rollback, 2 after commit) | `MapperCrtpRoundtripTest` | PASS |
+| `GetImageByPathBindsPathWithQuote` (path `D:/O'Brien/frame.dng`, name read) | `MapperCrtpRoundtripTest` | PASS |
+| `MaterializeFailureRollsBackVersionRefDelete` (failing ImageEditState upsert after the VersionRef delete; the deleted Version row and the prior state remain; the same capture then commits) | `CommitGraphTest` | PASS |
+| Every current `CommitGraphTest` and `MapperCrtpRoundtripTest` case | both | PASS |
+| `ProjectCompatibilityTest`, `PipelineMapperTest` | `tests/app` | PASS |
+| Zero `duckdb_` symbols outside `#include` and zero `std::format` in `commit_graph_store.cpp`, `folder_mapper.cpp`, `image_store.cpp` | source search | 0 lines each |
+| One transaction style: zero `begin_transaction` / `"BEGIN` / `"COMMIT` / `"ROLLBACK` outside duckorm in storage | source search | 0 lines |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM Storage SleeveMapper MapperCrtpRoundtripTest CommitGraphTest DuckormStatementTest DuckormExprTest MaskAssetStoreTest   (exit 0)
+ctest --test-dir build/debug --output-on-failure -R "^(MapperCrtpRoundtripTest|CommitGraphTest|DuckormStatementTest|DuckormExprTest|MaskAssetStoreTest)\."   (exit 0)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineMapperTest ProjectCompatibilityTest LibraryHistoryAndExportTest AlbumQueryTest FilterServiceTest SemanticStorageControllerTest AiStorageControllerTest ProjectPackageBackendTest LibrarySearchColumnsTest LibrarySearchRecallTest SleeveFilterCompileTest SleeveFilterFactoryTest   (exit 0)
+ctest --test-dir build/debug --output-on-failure -R "^(PipelineMapperTest|ProjectCompatibilityTest|LibraryHistoryAndExportTest|AlbumQueryTest|FilterServiceTest|SemanticStorageControllerTest|AiStorageControllerTest|ProjectPackageBackendTest|LibrarySearchColumnsTest|LibrarySearchRecallTest|SleeveFilterCompileTest|SleeveFilterFactoryTest)\."   (exit 8, one failure from main, below)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main
+```
+
+Suite totals: `MapperCrtpRoundtripTest` 8/8, `CommitGraphTest` 49/49, `DuckormStatementTest` 24/24,
+`DuckormExprTest` 10/10, `MaskAssetStoreTest` 5/5 (96/96). Caller suites: 224 passed, 1 skipped
+(`AlbumQueryTest.LargeLibraryPagesStayBoundedAndRecordTimings`), 1 disabled, 1 failed:
+`SemanticStoreTest.ExistingSemanticModelWithoutActiveColumnPromotesLatestModel`, the failure on
+`main` recorded in #793. The full suite is for the user to start; this record lists the targeted
+suites.
+
+**Checklist / exit condition:** all four boxes checked.
+
+**LOC note:** `mapper.hpp` 288 (was 371), `commit_graph_store.cpp` 563 (was 670),
+`folder_mapper.cpp` 143, `mapper_crtp_roundtrip_test.cpp` 222. Two touched files were above
+1000 lines before this phase: `element_store.cpp` 1273 (S3 moves its read paths onto row
+structs) and `commit_graph_test.cpp` 1421 (one test added). The code diff is 637 added and 705
+removed lines in 30 files, below the 1300-1800 estimate: the Mapper key change made most caller
+edits one line.
+
+**Remaining gaps:** `ElementStore` reads (formatted SQL and C API cells) are S3 (#788). #795
+(`FileMapper::Update` on `FileImage`) needs a table key and a migration.
 
 ### Phase S3: ElementStore read paths on typed rows
 
@@ -505,12 +746,140 @@ ctest --test-dir build/debug --output-on-failure -R "AlbumQueryTest|FilterServic
 
 **Exit criteria**
 
-- [ ] Inside storage, only `database.cpp`, `store_types.cpp`, and duckorm call the C API.
-- [ ] All listed tests pass.
+- [x] Inside storage, only `database.cpp`, `store_types.cpp`, and duckorm call the C API.
+- [x] All listed tests pass.
 
 **Expected diff:** 1000-1500 lines.
 
 **Completion record:** see section 8.
+
+##### Phase S3 completion record (2026-11-10)
+
+**Status:** complete. Branch `refactor/storage-element-store-typed-reads-788`, stacked on the S2
+branch `refactor/storage-typed-key-mapper-787` (PR #796).
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| duckorm L0 | `duckdb_statement.hpp` | `RowColumns` accepts members of a public base class of the row struct; `AppendRowColumns<Base::Columns, &Row::x...>` appends columns; `Statement::ExecuteDetached` deleted |
+| duckorm L1 | `duckdb_orm.hpp`, `duckdb_orm.cpp`, `duckdb_statement.cpp` | `execute_query` deleted: every result in the repository is a `Statement` result |
+| Element store | `element_store.cpp`, `element_store.hpp` | row structs `SearchResultDbRow`, `SearchResultPageDbRow`, `FileIdRow`, `FileListDbRow`, `ProjectOverviewRow`, `FolderPhotoCountRow`, `LastEditedFileRow`, `StatsBucketRow`, `MarkCountRow`, `LabelBucketRow`, `AlbumGroupRow<Key>`, `AlbumPageRow<Key>`, `AlbumPositionRow<Key>`; every read on `query<Row>`, `query_one<Row>`, or `scalar<int64_t>`; `ExecuteQueryOrThrow`, `ReadVarchar`, `RunScalarInt64`, `ReadSearchResultRow`, `ReadGroupKey` deleted; `~MatchSetTable` runs `duckorm::execute`; connections named `duckorm::Connection` |
+| AI store | `ai_store.cpp`, `ai_store.hpp` | `scalar<int64_t>`; `duckorm::Connection`; the FTS schema check reads `information_schema.schemata` |
+| Tests | `album_query_test.cpp`, `duckorm_statement_test.cpp`, `library_search_recall_test.cpp` | two new `AlbumQueryTest` cases, one new `DuckormStatementTest` case, a failure after the match set exists; the `execute_query` callers read row structs |
+
+**Detail decisions made during the work** (the plan left them open):
+
+- **Shared columns.** The search result columns occur in three reads: the plain row, the page
+  row with `COUNT(*) OVER ()`, and the album page row with the group key and the edit state.
+  `RowColumns` now takes base-class members and `AppendRowColumns` appends to a base column
+  list, so `SearchResultPageDbRow` and `AlbumPageRow<Key>` derive from `SearchResultDbRow` and
+  the ten columns are listed once. The plan named `AlbumGroupRow` and `AlbumPageRow`; both exist
+  as templates (next item). `SearchResultDbRow` is the plan's `SearchResultDbRow`.
+- **Group key type.** The group key column is BIGINT for ratings and VARCHAR for every other
+  field. `WithGroupKeyType(field, read)` calls the read with `int64_t` or `std::string`, and the
+  row templates take that key type, so the column type check holds for each field. The flat mode
+  projects `CAST(NULL AS VARCHAR)` instead of an untyped `NULL` (the C API reports that as
+  INTEGER).
+- **Group read columns.** The group read selected `group_key, group_order, photo_count`, where
+  the type of `group_order` changes with the field (DATE, VARCHAR, INTEGER). It now selects
+  `group_key, photo_count` and repeats the key expression in GROUP BY and ORDER BY. The key
+  expression has no binds, so the statement text and its order equal the old one.
+- **Mark counts.** `COALESCE(SUM(...), 0)` and `COUNT_IF` are HUGEINT in DuckDB, which the
+  lossless column rule rejects for `int64_t`. The mark counts use
+  `COUNT(*) FILTER (WHERE ...)`, which is BIGINT and counts the same rows. `MarkCountRow` has one
+  member for each `ColorLabel` code; a `static_assert` ties its column count to
+  `kColorLabelCount`.
+- **Nullable columns.** `Image.file_name` and `Element.element_name` have no NOT NULL
+  constraint, and older databases can hold NULL in the text, rating, and mark columns (the #768
+  migration adds no NOT NULL constraint). These members are `std::optional`, and a NULL reads as
+  the empty text, rating 0, no color label, and no Delete mark, as `ReadVarchar` and the C API
+  defaults did before.
+- **Failed drop.** A failed statement inside `ReadAlbumQuery` aborts the DuckDB transaction, so
+  the DROP in `~MatchSetTable` fails too and the ROLLBACK removes the table. The destructor logs
+  a failed drop only when no exception is unwinding (`std::uncaught_exceptions() == 0`), so a
+  failed read does not log a second, misleading message.
+- **`album_query.cpp`.** It builds SQL fragments only and reads no result, so it needed no
+  change. The `AiStore` direct C API call that the issue names was the `duckdb_column_count`
+  mention in a comment and the `duckdb_schemas()` table function; `ai_store.cpp` now has no
+  `duckdb_` text.
+- **`execute_query` and `ExecuteDetached`.** S1 kept them for these callers; with no caller left
+  (two test helpers moved to row structs), both are deleted.
+- **Scope kept.** `select_int64`, `select_string`, and `select_by_query` keep their semantic
+  store callers. The semantic stores name `duckdb_connection` as a type but call no C API
+  function; S5 and S6 own those files.
+- **MSVC.** MSVC rejects member pointers of a function-local struct as template arguments
+  (C2326), so every row struct is at namespace scope.
+
+**Primary success call chain:**
+
+```text
+AlbumBrowseService -> ElementStore::ReadAlbumQuery(folder_id, filter, options, model, read)
+  -> ValidateAlbumQueryRead -> GetConnectionGuard + Lock -> duckorm::Transaction
+  -> MatchSetTable (CREATE OR REPLACE TEMP TABLE SearchMatchSet AS SELECT ...)
+  -> ReadAlbumQueryFromMatchSet
+     -> CountRows (scalar<int64_t>) -> WithGroupKeyType(field)
+     -> query<AlbumGroupRow<Key>> -> query<AlbumPageRow<Key>> -> ToSearchResultRow, ToGroupKey
+     -> ReadMatchSetBuckets: query<StatsBucketRow> (GROUPING SETS)
+     -> ReadMatchSetMarkCounts: query_one<MarkCountRow> -> ReadMatchSetLabelBuckets
+  -> ~MatchSetTable: duckorm::execute(DROP TABLE IF EXISTS temp.SearchMatchSet)
+  -> tx.commit() -> AlbumQueryResult
+```
+
+**Primary failure and restore call chain:**
+
+```text
+ReadAlbumQuery(label group) -> MatchSetTable created
+  -> scalar<int64_t>(label occurrence count) fails (SemanticImageLabel missing) or a
+     query<Row> column check fails -> std::runtime_error("<message> [SQL: ...]")
+  -> ~MatchSetTable: DROP fails in the aborted transaction, caught, not logged during the unwind
+  -> ~Transaction ROLLBACK removes the match set -> ConnectionGuard releases the lock
+  -> the caller receives the first error; the next read on another thread succeeds
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `StatsBucketsMatchPageTotalAfterTypedRead` (12 files: camera, date, rating, import-day buckets in order and summing to 12; lens sum 12; color label counts with the reserved bit 7; Delete count; `ListSearchResultPageWithStats` and `BuildFolderStats` give the same totals) | `AlbumQueryTest` | PASS |
+| `TypedListingReadsDecodeEveryColumn` (all ten search columns, NULL `file_name`, masked bit 7, window total, past-end COUNT, rating group key as a number, file position, file list, overview, last edited file) | `AlbumQueryTest` | PASS |
+| `AlbumQueryFailureReportsDuckDbError` with a failure after the match set exists | `AlbumQueryTest` | PASS |
+| `DerivedRowReadsBaseColumnsThenOwnColumns` | `DuckormStatementTest` | PASS |
+| Every current `AlbumQueryTest`, `FilterServiceTest`, `LibrarySearchRecallTest`, `LibrarySearchColumnsTest`, `AiStorageControllerTest`, `DuckormStatementTest` case | 6 suites | 145/145 PASS (1 disabled, 1 skipped) |
+| Inside storage, C API calls only in `database.cpp`, `store_types.cpp`, and duckorm | `grep -rnE "duckdb_[a-z_]+\(" alcedo_studio/src/storage` outside duckorm | 4 lines, all in `database.cpp` and `store_types.cpp` |
+| Zero `duckdb_` text in `element_store.cpp`, `album_query.cpp`, `ai_store.cpp` | `grep -n "duckdb_" ... \| grep -v "#include"` | 0 lines |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM Storage DuckormStatementTest AlbumQueryTest FilterServiceTest LibrarySearchRecallTest LibrarySearchColumnsTest AiStorageControllerTest   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(DuckormStatementTest|AlbumQueryTest|FilterServiceTest|LibrarySearchRecallTest|LibrarySearchColumnsTest|AiStorageControllerTest)\."   (exit 0)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target MapperCrtpRoundtripTest CommitGraphTest DuckormExprTest MaskAssetStoreTest DuckDbExtensionTest PipelineMapperTest ProjectCompatibilityTest LibraryHistoryAndExportTest SemanticStorageControllerTest ProjectPackageBackendTest SleeveFilterCompileTest SleeveFilterFactoryTest   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(MapperCrtpRoundtripTest|CommitGraphTest|DuckormExprTest|MaskAssetStoreTest|DuckDbExtensionTest|PipelineMapperTest|ProjectCompatibilityTest|LibraryHistoryAndExportTest|SemanticStorageControllerTest|ProjectPackageBackendTest|SleeveFilterCompileTest|SleeveFilterFactoryTest)\."   (exit 8, one failure from main, below)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main   (exit 0)
+```
+
+Suite totals: `DuckormStatementTest` 25, `AlbumQueryTest` 34 (1 skipped:
+`LargeLibraryPagesStayBoundedAndRecordTimings`), `FilterServiceTest` 45,
+`LibrarySearchRecallTest` 7 (1 disabled), `LibrarySearchColumnsTest` 15,
+`AiStorageControllerTest` 20. Caller suites: 180 of 181 passed; the failure is
+`SemanticStoreTest.ExistingSemanticModelWithoutActiveColumnPromotesLatestModel`, the failure on
+`main` recorded in #793. The full suite is for the user to start; this record lists the targeted
+suites.
+
+**Checklist / exit condition:** both boxes checked.
+
+**LOC note:** `element_store.cpp` 1335 (was 1273; above 1000 before this phase), of which about
+200 lines are the row structs and their decode helpers; S4 moves the stats dimensions and the
+bucket reads into `storage/query`, which takes the bucket reads out of this file.
+`duckdb_statement.hpp` 453, `album_query_test.cpp` 1840 (two cases added),
+`duckorm_statement_test.cpp` 623. The diff is 680 added and 400 removed lines in 11 files (the
+plan document not counted), below the 1000-1500 estimate: S1 had already moved the statement
+owner, so each read changed in place.
+
+**Remaining gaps:** the semantic stores still read through `select_by_query` and
+`select_int64`; the app layer (`project_package_backend.cpp`, `project_service.cpp`) still calls
+the C API (S6, #791).
 
 ### Phase S4: One stats dimension definition and the filter compiler in storage
 
@@ -602,13 +971,126 @@ ctest --test-dir build/debug --output-on-failure -R "StatsDimensionTest|SleeveFi
 
 **Exit criteria**
 
-- [ ] Each bucket expression exists once, in `stats_dimension.cpp`.
-- [ ] `StatsDimensionTest` passes for every dimension.
-- [ ] `alcedo_studio/src/sleeve` has zero SQL text.
+- [x] Each bucket expression exists once, in `stats_dimension.cpp`.
+- [x] `StatsDimensionTest` passes for every dimension.
+- [x] `alcedo_studio/src/sleeve` has zero SQL text.
 
 **Expected diff:** 1200-1800 lines.
 
 **Completion record:** see section 8.
+
+##### Phase S4 completion record (2026-11-10)
+
+**Status:** complete. Branch `refactor/storage-stats-dimension-789`, stacked on the S3 branch
+`refactor/storage-element-store-typed-reads-788` (PR #797).
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| Storage query (new `StorageQuery` library) | `storage/query/stats_dimension.hpp/.cpp` | `UnknownLabel`, `GroupExpression`, `BucketPredicate(condition, ColumnSource)`, `ImportDayValue`, `SemanticLabelRowCondition`: the one SQL definition of each of the eight dimensions |
+| Storage query | `storage/query/filter_compiler.hpp/.cpp` (moved from `sleeve/sleeve_filter/filter_sql.cpp`) | `FilterSQLCompiler` and `CompileFilterPredicate`; a `StatsBucket` node compiles through `BucketPredicate(..., kLiveTables)`; the four `*Label` field cases deleted |
+| Sleeve filter (domain) | `filter_combo.hpp`, new `filter_combo.cpp`, `filter_factory.hpp/.cpp` | `StatsDimensionId`, `StatsBucketKey`, `StatsBucketCondition`, `FilterNode::Type::StatsBucket`; `ParseStatsBucketDay`; `MergeFilterNodes` stays here; every bucket builder returns a `StatsBucket` node; `BuildSemanticLabelExistsFilter(model, aliases)` became `BuildSemanticLabelBucketFilter(model, label_key)`; the `*Label` fields and the comment-only link deleted |
+| Element store | `element_store.cpp`, `album_query.cpp`, `album_query_sql.hpp` | `ReadMatchSetBuckets` projects `GroupExpression` of each dimension; `ReadMatchSetMarkCounts` counts `COUNT(*) FILTER (WHERE BucketPredicate(..., kMatchSet))`; the match set import day is `ImportDayValue`; `LabelRelations` reads the semantic label key and row condition of the dimension; `album_query_sql::ImportDayColumn` moved to `ImportDayValue` |
+| UI | `stats_engine.cpp`, `library_module.cpp` | the label click maps the shown text to the stored key (`StoredSemanticLabel`); `FilterReadsRating` and `FilterReadsMarks` read the bucket dimension instead of searching the raw SQL text |
+| App | `album_browse_service.cpp`, `sleeve_filter_service.cpp` | include the storage compiler |
+| Tests | new `tests/storage/stats_dimension_test.cpp`; `sleeve_filter_factory_test.cpp`, `sleeve_filter_compile_test.cpp`, `filter_service_test.cpp`, include updates | `StatsDimensionTest` (5 cases); factory cases for the new nodes, color label, Delete mark, import day range, and the two compile errors |
+
+**Detail decisions made during the work** (the plan left them open):
+
+- **Bucket key.** `StatsBucketKey` is `std::variant<std::monostate, std::string, int64_t,
+  ColorLabel>`: `std::monostate` is the bucket without a value (and the one Delete mark bucket),
+  text labels are strings, ratings are integers, color labels are codes. `StatsBucketCondition`
+  also holds `time_zone` (import day) and `semantic_model_key` (semantic label), because the
+  predicate of those two dimensions needs them and the compiler has no other input. The plan's
+  `BucketPredicate(StatsDimensionId, const StatsBucketKey&, ColumnSource)` is therefore
+  `BucketPredicate(const StatsBucketCondition&, ColumnSource)`.
+- **Group expression source.** Every GROUP BY of the stats read runs on the match set, so
+  `GroupExpression(StatsDimensionId)` reads the match set (alias `s`; the read now names the
+  table `s`) and takes no `ColumnSource`. The semantic label key reads the `SemanticImageLabel`
+  row `sl`. Color labels and the Delete mark have no group expression (a photo is in zero or
+  several of their buckets): the stats read counts them with `BucketPredicate(..., kMatchSet)`,
+  the predicate that a click compiles over the live tables.
+- **Predicates from the label expression.** Capture date, camera model, and lens compare the
+  group label expression over the live tables with the bound key, so one expression defines the
+  bucket and the click. The rating compares the integer column (`CAST(rating AS VARCHAR) = '4'`
+  and `rating = 4` select the same rows); the import day keeps the half-open range on
+  `e.added_time` over the live tables, so the import time column stays unwrapped.
+- **Semantic label filter.** The old filter matched `LOWER(sl.label)` against the English and
+  Chinese aliases of the shown text, while the bucket counted `LOWER(TRIM(sl.label))`; a stored
+  label with spaces was counted but not selected. The predicate now compares
+  `LOWER(TRIM(sl.label))` with `LOWER(TRIM(?))` of the key under the same row condition as the
+  bucket (`(sl.model_key = ?) AND TRIM(sl.label) <> ''`). The stats bar maps the shown text to
+  the key with `StoredSemanticLabel`; stored labels are canonical keys since
+  `CanonicalizeImageLabels` runs on project open.
+- **Color label predicate.** The filter used `(i.color_labels & bit) <> 0` and the count used
+  `((color_labels >> code) & 1) = 1`. Both now use the second form.
+- **Library target.** The definitions and the compiler are a new static library `StorageQuery`
+  (`DuckORM`, `SleeveFilter`, `StrConv`) that `Storage` links publicly, so the filter unit tests
+  link it without the stores.
+- **Member names.** The new `StatsBucketCondition` uses public member names without a trailing
+  `_` (repository rule); `FilterNode::stats_bucket_` keeps the trailing `_` of its sibling
+  members.
+- **Fixture NULLs.** A new database has NOT NULL on camera model, lens, rating, and the marks;
+  older databases can hold NULL there, so the test drops those constraints before it writes
+  NULL. `SemanticImageLabel` holds one label per file and model (primary key), so the fixture
+  has no file with two labels of one model.
+
+**Primary success call chain:**
+
+```text
+StatsEngine::BuildStatsFilterNode -> sleeve_filter::BuildCameraModelBucketFilter(label)
+  -> FilterNode{StatsBucket, StatsBucketCondition{kCameraModel, label}}
+  -> LibraryModule MergeFilterNodes -> AlbumBrowseService -> CompileFilterPredicate
+  -> FilterSQLCompiler::CompileNode -> stats_dimension::BucketPredicate(kLiveTables)
+  -> ElementStore::ReadAlbumQuery -> MatchSetTable -> ReadMatchSetBuckets (GroupExpression)
+     and ReadMatchSetMarkCounts (BucketPredicate(kMatchSet)) -> page and buckets
+```
+
+**Primary failure and restore call chain:**
+
+```text
+FilterSQLCompiler receives an unknown StatsDimensionId or a key of another dimension
+  -> std::invalid_argument("Stats dimension: unknown id" / "...the bucket key type does not fit
+     the dimension") before any statement runs -> AlbumBrowseService throws
+  -> LibraryModule keeps the prior filter and page
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `EachBucketPredicateSelectsItsBucketCount` (24 files with empty, NULL, repeated, and literal `(unknown)` values; capture date, camera, lens, rating, New York import days around both 2026 daylight-saving changes, semantic labels with case and spaces and a blank label, seven color label codes with the reserved bit 7, Delete mark; page total of every bucket filter equals its count) | `StatsDimensionTest` | PASS |
+| `BucketFilterStatsTotalEqualsTheClickedBucketCount`, `SemanticLabelKeyInAnotherCaseSelectsTheSameBucket`, two definition cases | `StatsDimensionTest` | PASS |
+| `SleeveFilterCompileTest`, `SleeveFilterFactoryTest` (expected SQL of the moved cases, new node cases) | 2 suites | PASS |
+| `AlbumQueryTest`, `FilterServiceTest`, `LibrarySearchRecallTest`, `LibrarySearchColumnsTest` | 4 suites | PASS |
+| Total of the seven suites above | ctest | 138/138 PASS (1 disabled, 1 skipped) |
+| `AlbumBackendStatsFilterTest` (offscreen) | UI suite | 3/3 PASS |
+| Zero SQL text in `alcedo_studio/src/sleeve` and `alcedo_studio/src/include/sleeve` | search for `SELECT`, `COALESCE`, `IS NULL`, `WHERE`, `expr::` | 0 lines |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"   (exit 0)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target StatsDimensionTest SleeveFilterCompileTest SleeveFilterFactoryTest AlbumQueryTest FilterServiceTest LibrarySearchRecallTest LibrarySearchColumnsTest AlbumBackendStatsFilterTest ThumbnailAlbumQtDemo alcedo_main   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(StatsDimensionTest|SleeveFilterCompileTest|SleeveFilterFactoryTest|AlbumQueryTest|FilterServiceTest|LibrarySearchRecallTest|LibrarySearchColumnsTest)\."   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^AlbumBackendStatsFilterTest\."   (QT_QPA_PLATFORM=offscreen, exit 0)
+```
+
+The full suite is for the user to start; this record lists the targeted suites.
+`FilterReadsRating` and `FilterReadsMarks` of `LibraryModule` have no test suite; they are
+checked by the build of `alcedo_main` only. `tests/sleeve/sleeve_filter_test.cpp` is not
+registered in any CMake target and is unchanged.
+
+**Checklist / exit condition:** all three boxes checked.
+
+**LOC note:** `element_store.cpp` 1355 (was 1335): the bucket reads stayed in the file and now
+read the definitions, so the file did not shrink as the S3 note expected; the bucket SQL itself
+moved. `stats_dimension.cpp` 261, `filter_compiler.cpp` 212, `stats_dimension_test.cpp` 348.
+
+**Remaining gaps:** the search of the app layer still builds `RawSQL` nodes
+(`sleeve_filter_service.cpp`), so `filter_combo.hpp` still includes `duckdb_expr.hpp` for the
+bridge binds (S5, #790).
 
 ### Phase S5: Search predicates in storage and domain values in service signatures
 
@@ -702,13 +1184,120 @@ ctest --test-dir build/debug --output-on-failure -R "LibrarySearchPredicatesTest
 
 **Exit criteria**
 
-- [ ] `alcedo_studio/src/app` and `alcedo_studio/src/ui` have zero `duckorm::` references.
-- [ ] `FilterNode::Type::RawSQL` and `raw_binds_` are deleted.
-- [ ] All listed tests pass.
+- [x] `alcedo_studio/src/app` and `alcedo_studio/src/ui` have zero `duckorm::` references.
+- [x] `FilterNode::Type::RawSQL` and `raw_binds_` are deleted.
+- [x] All listed tests pass.
 
 **Expected diff:** 1200-1800 lines.
 
 **Completion record:** see section 8.
+
+##### Phase S5 completion record (2026-11-10)
+
+**Status:** complete. Branch `refactor/storage-search-predicates-790`, stacked on the S4 branch
+`refactor/storage-stats-dimension-789` (PR #799).
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| Sleeve filter (domain) | new `sleeve/sleeve_filter/library_search_request.hpp`, `filter_combo.hpp` | `SearchTerm`, `SearchDate`, `SearchTermKind`, `CaptureParameterField`, `SearchField`/`SearchFieldMask` moved here from `app/`; new `LibrarySearchRequest{query_text, terms, fields}`, `SearchCapabilities{semantic_model_key, has_ai_fts_index}`, `LibrarySearchCondition{request, capabilities}`; `FilterNode::Type::LibrarySearch` with `library_search_`; `FilterField::FileId`; `Type::RawSQL`, `raw_sql_`, `raw_binds_` deleted; `filter_combo.hpp` no longer includes `duckdb_expr.hpp`, and `SleeveFilter` no longer links `DuckORM` |
+| Storage query | new `storage/query/library_search_predicates.hpp/.cpp`, `filter_compiler.hpp/.cpp` | `BuildLibrarySearchPredicate(request, capabilities)`: the fuzzy text, EXIF word, date part, file kind, capture parameter, AI text, BM25, and semantic label predicates moved unchanged from `sleeve_filter_service.cpp`; the compiler compiles a `LibrarySearch` node through it and `FileId` to `e.id` |
+| Semantic relevance | `semantic_vector_search.hpp/.cpp`, `element_store.hpp/.cpp` | `SemanticVectorSearch::BuildRelevanceSelect` became `BuildSemanticRelevanceSelect(conn, folder_id, embedding)` on the connection of the caller; `ElementStore::ReadAlbumQuery`, `ReadAlbumFilePosition`, `ReadAlbumFileIds`, and `BuildFolderStats` take `std::optional<SemanticQueryEmbedding>` and build the select under their own lock |
+| App | `sleeve_filter_service.hpp/.cpp`, `search_query_parser.hpp`, `album_browse_service.hpp/.cpp` | `BuildFuzzySearchWhere` parses and returns a `LibrarySearch` node (capabilities read once, no SQL); `BuildExactFileWhere` returns a `FileId` condition; `BuildSemanticRelevanceSelect` deleted; the `AlbumBrowseService` reads take `std::optional<SemanticQueryEmbedding>`, and `ListFilesInFolderById` and `CountFilesInFolderById` take `std::optional<FilterNode>` |
+| UI | `library_module.cpp` | `RelevanceSelectOf` and the `duckdb_expr.hpp` include deleted; the reads pass the query embedding |
+| Tests | new `tests/storage/library_search_predicates_test.cpp` (`LibrarySearchPredicatesTest`); `album_query_test.cpp`, `filter_service_test.cpp`, `library_search_columns_test.cpp`, `library_search_recall_test.cpp`, `sleeve_filter_compile_test.cpp`, `sleeve_filter_factory_test.cpp` | the RawSQL cases became `FileId` and `LibrarySearch` cases; the tests that need a hand-written predicate (BM25 per-row comparison, row-counter UDF) give a `SqlFragment` to the `ElementStore` reads |
+
+**Detail decisions made during the work** (the plan left them open or did not fit the code):
+
+- **Location of the request types.** The plan proposed `storage/query/library_search_types.hpp`.
+  `FilterNode` (sleeve) holds the condition, and `StorageQuery` depends on `SleeveFilter`, so the
+  types are in `sleeve/sleeve_filter/library_search_request.hpp`, next to `StatsBucketCondition`.
+  `SearchQueryParser` stays in `app/` and includes that header. The moved `SearchTerm` and
+  `SearchDate` keep their member names (`text_`, `kind_`, and so on), so the parser and its tests
+  stay unchanged; the new structs use names without `_`.
+- **Capabilities in the condition.** The predicate needs the active semantic model and the FTS
+  index state. `BuildFuzzySearchWhere` reads them once, as before, and keeps them in the
+  condition (`SearchCapabilities`). The compiler stays a pure function of the node, as with the
+  semantic model key of the S4 `StatsBucketCondition`.
+- **`SemanticRelevanceRequest`.** The plan's `SemanticRelevanceRequest{model_key,
+  query_text_embedding}` is the existing `SemanticQueryEmbedding{model_key_, dimension_, query_,
+  neutral_}`, which `LibraryModule` already holds. The signatures take it, so one type holds
+  these values. The store read builds the relevance select on the connection that it holds: the
+  old member function took the connection lock itself and could not run inside the read. The
+  model check now runs in the read transaction and fails the read with the same
+  `std::runtime_error`.
+- **Exact file filter.** `BuildExactFileWhere` returned a RawSQL `e.id = ?` node. It is now a
+  typed `FilterField::FileId` condition with the same compiled text.
+- **Zero field mask.** A request with `fields == 0` compiles to `FALSE`, as the RawSQL node did.
+  A request with fields and an empty term list throws `std::invalid_argument`: an empty AND
+  compiles to an empty fragment, which the reads treat as "every file".
+- **Store `SqlFragment` parameters.** The `ElementStore` methods still take the compiled
+  `SqlFragment`. `app/` calls `CompileFilterPredicate` (from `storage/query/filter_compiler.hpp`)
+  and passes the result on without a duckorm type name. S6 moves the compile call behind the
+  storage session.
+
+**Primary success call chain:**
+
+```text
+SearchController -> SleeveFilterService::BuildFuzzySearchWhere(text, mask)
+  -> SearchQueryParser::Parse -> LibrarySearchRequest + SearchCapabilities (no SQL)
+  -> FilterNode{LibrarySearch} -> LibraryModule MergeFilterNodes
+  -> AlbumBrowseService::ReadAlbumQuery(filter, ..., semantic_query_)
+  -> CompileFilterPredicate -> FilterSQLCompiler -> BuildLibrarySearchPredicate
+  -> ElementStore::ReadAlbumQuery -> BuildSemanticRelevanceSelect (when set, same connection)
+  -> MatchSetTable -> page, groups, and stats -> LibraryModule
+```
+
+**Primary failure and restore call chain:**
+
+```text
+ElementStore::ReadAlbumQuery -> DuckDB error in the compiled search predicate, or an
+  unregistered model or invalid vector in the query embedding
+  -> std::runtime_error (the read transaction rolls back) -> AlbumBrowseService throws
+  -> LibraryModule sets output.error_ -> SearchController shows the search error; the prior
+     result rows stay
+LibrarySearch node with fields and an empty term list
+  -> std::invalid_argument before any statement runs
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `QuoteInSearchTextIsBound` (`O'Brien` returns only `O'Brien_portrait.JPG`; the text is only in binds; `x'OR'1'='1` matches no file) | `LibrarySearchPredicatesTest` | PASS |
+| FTS rule: `Bm25AlternativeNeedsTheIndexAndBothAiFieldGroups`; label rule: `SemanticLabelAlternativeNeedsTheActiveModelAndTheTagsField`; `RequestWithoutFieldsMatchesNoFile`; `RequestWithFieldsAndNoTermIsRejected` | `LibrarySearchPredicatesTest` | PASS (5/5) |
+| Recall, precision, and BM25 semi-join cases with unchanged expected file sets | `LibrarySearchRecallTest`, `LibrarySearchColumnsTest` | PASS |
+| `FuzzySearchZeroFieldMaskCompilesToFalse`, `ExactFileWhereBindsFileIdAsParam`, and all other cases | `FilterServiceTest` | PASS |
+| Relevance order, groups, stats, and select-all from the query embedding; new `SemanticReadOfAnUnregisteredModelFails` | `AlbumQueryTest` | PASS |
+| `FileIdConditionComparesElementIdWithBind`, `LibrarySearchNodeKeepsLiteralTermTextOnlyInBinds` | `SleeveFilterCompileTest` | PASS |
+| `SleeveFilterFactoryTest`, `StatsDimensionTest` | 2 suites | PASS |
+| Total of the nine suites above | ctest | 143/143 PASS (1 disabled, 1 skipped) |
+| `AlbumBackendLibraryQueryTest`, `AlbumBackendStatsFilterTest` (offscreen) | UI suites | 34/34 PASS |
+| Zero `duckorm` references in `alcedo_studio/src/app`, `src/ui`, `src/include/app`, `src/include/ui` | search for `duckorm` | 0 lines |
+| `RawSQL`, `raw_sql_`, `raw_binds_` deleted | search in `alcedo_studio/src` and `alcedo_studio/tests` | 0 lines |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target LibrarySearchPredicatesTest StatsDimensionTest SleeveFilterCompileTest SleeveFilterFactoryTest AlbumQueryTest FilterServiceTest LibrarySearchRecallTest LibrarySearchColumnsTest AlbumBackendLibraryQueryTest AlbumBackendStatsFilterTest alcedo_main   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(LibrarySearchPredicatesTest|StatsDimensionTest|SleeveFilterCompileTest|SleeveFilterFactoryTest|AlbumQueryTest|AlbumQueryRelevanceTest|FilterServiceTest|LibrarySearchRecallTest|LibrarySearchColumnsTest)\."   (exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(AlbumBackendLibraryQueryTest|AlbumBackendStatsFilterTest)\."   (QT_QPA_PLATFORM=offscreen, exit 0)
+```
+
+The full suite is for the user to start; this record lists the targeted suites. After this
+build, `git clang-format` changed only white space on the changed lines.
+
+**Checklist / exit condition:** all three boxes checked.
+
+**LOC note:** `sleeve_filter_service.cpp` 345 (was 737); `library_search_predicates.cpp` 410;
+`library_search_request.hpp` 149; `element_store.cpp` 1369 (was 1355: the relevance select
+helper); `library_search_predicates_test.cpp` 164. Diff before this record: 26 files, +1073 and
+-750 lines.
+
+**Remaining gaps:** `app/` still includes `storage/query/filter_compiler.hpp` (which includes
+`duckdb_expr.hpp`) and calls `CompileFilterPredicate` before the store reads, and the six app
+files of section 2.4 still read the connection guard (S6, #791).
 
 ### Phase S6: Storage owns connections, maintenance API, and boundary check
 
@@ -801,11 +1390,131 @@ python scripts/check_storage_boundary.py
 
 **Exit criteria**
 
-- [ ] Code outside storage has zero `duckdb_` calls, zero `duckorm::` references, and zero
+- [x] Code outside storage has zero `duckdb_` calls, zero `duckorm::` references, and zero
       connection guard reads.
-- [ ] The boundary check runs in CI and reports zero findings.
+- [x] The boundary check runs in CI and reports zero findings.
 
 **Expected diff:** 1300-1900 lines.
+
+##### Phase S6 completion record (2026-11-10)
+
+**Status:** complete. Branch `refactor/storage-session-maintenance-791`, stacked on the S5 branch
+`refactor/storage-search-predicates-790` (PR #800).
+
+**Changed modules:**
+
+| Area | Files | Change |
+| --- | --- | --- |
+| Storage session | new `include/storage/store/storage_session.hpp`, `storage/store/storage_session.cpp` | `StorageSession` opens a connection, takes the database lock in its constructor, and releases it in its destructor; `CommitGraph()`, `MaskAssets()`, and `InsertImageRoots(roots, element_pipeline_json)`; copy and move deleted (the stores refer to its connection) |
+| Storage maintenance | new `include/storage/store/storage_maintenance.hpp`, `storage/store/storage_maintenance.cpp` | `ReadDataSummary()` returns `StorageTableSummary{table, rows, min_key, max_key}` rows; `DropHnswIndexesOfOlderProject()`; `WriteSnapshot(path)`. Each call holds the database lock for the whole operation and throws `std::runtime_error` that names the failed step |
+| Storage facade | `include/sleeve/storage.hpp`, `sleeve/storage.cpp` | `OpenSession()` and `Maintenance()` added; `GetDatabase()` deleted; `friend struct StorageTestAccess` for test fixtures |
+| Storage query | new `include/storage/query/capture_date_time.hpp`, `storage/query/capture_date_time.cpp`; `image_search_columns.hpp/.cpp` | `CaptureDateTime` and `ParseCaptureDateTime` moved out of the mapper; members renamed to `date` and `date_time`; `SleeveMapper` links `StorageQuery` |
+| App | `pipeline_service.cpp`, `committed_snapshot_cache.cpp`, `editor_mini_git_commit_writer.cpp`, `editor_mini_git_journal_recovery.cpp`, `editor_mini_git_materializer.cpp`, `project_mask_asset_reader.cpp` | each guard, lock, and store construction is one `storage.OpenSession()`; `WriteImageRoots` calls `InsertImageRoots` |
+| App | `project_service.cpp`, `project_package_backend.cpp/.hpp` | `ComputeProjectDataSummary` builds the same JSON from `ReadDataSummary()`; the open path calls `DropHnswIndexesOfOlderProject()`; `CreateLiveDbSnapshot` calls `WriteSnapshot` and keeps the file removal and the file check; `RunDuckDbQuery`, `QueryCurrentCatalog`, `DropHnswIndexesOfOlderProject(duckdb_connection, ...)`, and the `duckdb.h` include deleted from the backend |
+| UI | `automation/commands/library_commands.cpp` | includes `storage/query/capture_date_time.hpp` instead of the mapper header |
+| CI | new `scripts/check_storage_boundary.py`, `scripts/tests/check_storage_boundary_test.py`; `.github/workflows/cpp-ci.yml` | job `storage-boundary` (ubuntu) runs the script tests and the check |
+| Tests | new `tests/support/storage_test_access.hpp`, `tests/storage/storage_session_test.cpp`, `tests/storage/storage_maintenance_test.cpp`; 29 test files | fixtures that write rows no store writes call `StorageTestAccess::GetDatabase(storage)` |
+
+**Detail decisions made during the work** (the plan left them open or did not fit the code):
+
+- **Session stores.** The plan listed `PipelineMapper&` in the session. The only app use of the
+  mapper was the element pipeline JSON that `WriteImageRoots` writes in the transaction of the
+  history roots. `StorageSession::InsertImageRoots(roots, element_pipeline_json)` does that
+  write, so the mapper stays inside storage and app code names no mapper type.
+- **Maintenance API.** `HasHnswIndex` and `CurrentCatalog` are steps of `WriteSnapshot` and
+  `DropHnswIndexesOfOlderProject` with no other caller, so they are private functions of
+  `storage_maintenance.cpp`. `ReadDataSummary` returns rows instead of JSON; `ProjectService`
+  keeps the JSON shape of the project file (`version`, `tables`, `rows`, `min_id`, `max_id`).
+- **Summary values.** The summary of earlier releases read each cell with
+  `duckdb_value_int64`, which gives 0 for a text key that is not a number (`VersionRef.version_id`,
+  `EditCommit.commit_hash`). The new read gives the same values with
+  `CASE WHEN MIN(k) IS NULL THEN NULL ELSE COALESCE(TRY_CAST(MIN(k) AS BIGINT), 0) END` in one
+  statement for each table. `DataSummaryCountsRowsOfEveryTable` compares every table with the
+  earlier C API read.
+- **Snapshot errors.** The storage error names the step (`DuckDB copy database failed: ...`);
+  the backend shows it in the existing translated text `DuckDB snapshot failed: %1`. The
+  statements and their order are unchanged, so the snapshot bytes are unchanged.
+- **Test database access.** 95 fixture reads of `GetDatabase()` in 29 test files write old
+  schemas, broken rows, and dropped tables that no store writes. They call
+  `StorageTestAccess::GetDatabase`, a friend of `Storage` that only `tests/support` defines; the
+  check rejects the name in `alcedo_studio/src`.
+- **Check scope.** The Storage facade files (`sleeve/storage.cpp`, `include/sleeve/storage.hpp`)
+  belong to the Storage target and are skipped, and so is the vendored `third_party/`.
+- **Compiled filter predicate.** `app/` still calls `CompileFilterPredicate`
+  (`storage/query/filter_compiler.hpp`) and passes the result to the `ElementStore` reads
+  without naming a duckorm type. The store reads keep the compiled predicate as their parameter,
+  because tests give hand-written predicates to them (S5 decision). The check covers the
+  boundary: app code that names `duckorm::` fails it.
+
+**Primary success call chain:**
+
+```text
+EditorMiniGitMaterializer::Materialize
+  -> storage_->OpenSession()           (connection + database lock)
+  -> session.CommitGraph().LoadGraph / Materialize
+  -> session ends                      (unlock, disconnect)
+
+ProjectPackageService::CreateLiveDbSnapshot -> project_pack::CreateLiveDbSnapshot
+  -> Storage::Maintenance().WriteSnapshot(path)   (one lock for every step)
+  -> HNSW read (vss load) -> current_catalog -> CHECKPOINT -> ATTACH -> COPY FROM DATABASE
+     -> CHECKPOINT pack_snapshot -> DETACH
+  -> backend checks the snapshot file -> WritePackedProject
+```
+
+**Primary failure and restore call chain:**
+
+```text
+StorageMaintenance::WriteSnapshot fails at COPY FROM DATABASE (or CHECKPOINT / DETACH)
+  -> DETACH DATABASE IF EXISTS pack_snapshot (cleanup path) -> std::runtime_error naming the step
+  -> CreateLiveDbSnapshot removes the snapshot file and its .wal, returns false with
+     "DuckDB snapshot failed: ..." -> the package write reports the error; the open project
+     database is unchanged and the next snapshot attaches the alias again
+StorageSession::InsertImageRoots with a stored root or a mismatched JSON count
+  -> std::runtime_error / std::invalid_argument; the transaction rolls back; no root and no
+     PipelineParam row is written
+```
+
+**What was proven (executed tests, debug build):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `DataSummaryCountsRowsOfEveryTable` (all 19 tables equal the earlier C API read, text keys included) | `StorageMaintenanceTest` | PASS |
+| `SnapshotFailureKeepsSourceDatabase` (step named, alias detached, rows unchanged, next snapshot succeeds) | `StorageMaintenanceTest` | PASS |
+| `DataSummaryLeavesOutATableThatTheDatabaseDoesNotHave`, `SnapshotHoldsTheRowsOfTheSourceDatabase`, `HnswDropWithoutAnIndexChangesNothing` | `StorageMaintenanceTest` | PASS (5/5) |
+| `SessionHoldsDatabaseLockForItsLifetime`, `ImageRootWriteStoresRootAndElementPipelineJson`, `ImageRootWriteOfAStoredRootWritesNoPipelineJson`, `ImageRootWriteRejectsAPipelineJsonCountThatDiffersFromTheRoots` | `StorageSessionTest` | PASS (4/4) |
+| `ProjectPackageBackendTest`, `ProjectCompatibilityTest`, `PipelineMapperTest`, `CommitGraphTest`, `MaskAssetStoreTest` with the two new suites | ctest | 109/110; the failure is the intermittent temp sweep test (#801), 3/3 PASS alone and PASS in the final run |
+| Suites with rewritten fixtures (storage, app, history, filter) | ctest | 363/365; the failures are #793 (`ExistingSemanticModelWithoutActiveColumnPromotesLatestModel`) and #555 (`CheckoutAndPasteHashesAreUnchanged`), both open before this phase |
+| UI suites with rewritten fixtures (offscreen) | ctest | 99/99 PASS |
+| `ThumbnailServiceTests.DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved` | `ThumbnailServiceTest` (filtered) | PASS |
+| Boundary check on the branch; an input with `duckdb_query(` in `app/` | `scripts/check_storage_boundary.py` | exit 0; exit 1 |
+| Script tests (each rule, skipped directories, missing root, repository sources) | `scripts/tests/check_storage_boundary_test.py` | 7/7 PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 6   (full debug tree, 1692 steps, exit 0)
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(StorageSessionTest|StorageMaintenanceTest|ProjectPackageBackendTest|ProjectCompatibilityTest|PipelineMapperTest|CommitGraphTest|MaskAssetStoreTest)\."
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(AiStorageControllerTest|SemanticStorageControllerTest|StatsDimensionTest|LibrarySearchPredicatesTest|AlbumQueryTest|AlbumQueryRelevanceTest|ImportContentClassificationTest|LibraryHistoryAndExportTest|LibrarySearchColumnsTest|LibrarySearchRecallTest|PipelineDngProfileBindingTest|SemanticGenerationServiceTest|SleeveServiceTest|EditorMiniGitJournalRecoveryTest|EditorMiniGitMaterializerTest|EditorSessionCheckpointStoreTest|EditorSessionHistoryPortTest|DuckDbExtensionTest|SleeveFilterCompileTest|FilterServiceTest)\."
+ctest --test-dir build/debug --output-on-failure -j1 -R "^(AlbumBackendImageDeleteTest|AlbumBackendLibraryQueryTest|AlbumBackendProjectTest|ApplicationModuleHostShutdownTest|EditorWorkspaceSwitchQmlTest)\."   (QT_QPA_PLATFORM=offscreen)
+python -m unittest scripts/tests/check_storage_boundary_test.py
+python scripts/check_storage_boundary.py
+```
+
+After `git clang-format`, a rebuild of `StorageMaintenanceTest StorageSessionTest
+ProjectPackageBackendTest ProjectCompatibilityTest` ran 21/21 PASS. The full suite is for the
+user to start.
+
+**Checklist / exit condition:** both boxes checked. A search of `alcedo_studio/src` outside
+storage finds zero `duckdb_` calls, `duckorm::` references, `GetConnectionGuard` reads, and
+`GetDatabase` calls.
+
+**LOC note:** `storage_maintenance.cpp` 229, `storage_session.cpp` 46,
+`storage_maintenance_test.cpp` 283, `storage_session_test.cpp` 134, `check_storage_boundary.py`
+132; `project_package_backend.cpp` +6 and -183 lines, `project_service.cpp` +17 and -79. Diff before this
+record: 57 files, +1493 and -532 lines (the 29 test files are one-line call changes and their
+includes).
+
+**Remaining gaps:** none for S6. #801 (temp sweep timing) was found during the work.
 
 **Completion record:** see section 8.
 

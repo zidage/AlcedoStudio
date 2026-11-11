@@ -10,10 +10,10 @@
 // the expected set. When a later phase fixes the defect, the test fails and asks for the flag
 // to be cleared, so the table always states the real behavior.
 
-#include <duckdb.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
@@ -24,6 +24,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -37,12 +38,15 @@
 #include "sleeve/sleeve_filter/filter_factory.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "storage/query/filter_compiler.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "storage/store/semantic/semantic_model_registry.hpp"
 #include "storage/store/semantic/semantic_records.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/import/import_log.hpp"
+#include "../support/storage_test_access.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -232,19 +236,11 @@ auto RecallCases() -> std::vector<RecallCase> {
 
 class LibrarySearchRecallTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
     TimeProvider::Refresh();
-    const auto dir = std::filesystem::temp_directory_path();
-    db_path_       = dir / "library_search_recall_test.db";
-    meta_path_     = dir / "library_search_recall_test.json";
-    RemoveProjectFiles();
-  }
-  void TearDown() override { RemoveProjectFiles(); }
-
-  void RemoveProjectFiles() {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(meta_path_, ec);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   std::filesystem::path db_path_;
@@ -390,11 +386,12 @@ TEST_F(LibrarySearchRecallTest, YearMonthAndMonthTermsCoverDecember) {
             (std::set<std::string>{"A0002.NEF"}));
 }
 
-/// File names of the rows that @p filter selects in the folder (one page with every row).
-auto FilteredFileNames(const SleeveFilterService& filter_service, sl_element_id_t folder_id,
-                       const FilterNode& filter) -> std::set<std::string> {
+/// File names of the rows that the predicate @p filter selects in the folder (one page with
+/// every row).
+auto FilteredFileNames(const ElementStore& store, sl_element_id_t folder_id,
+                       const duckorm::SqlFragment& filter) -> std::set<std::string> {
   std::set<std::string> names;
-  const auto page = filter_service.ListSearchResultPage(folder_id, filter, 0, 1000);
+  const auto            page = store.ListSearchResultPage(folder_id, 0, 1000, filter);
   for (const auto& row : page.rows_) {
     names.insert(row.file_name_);
   }
@@ -402,11 +399,9 @@ auto FilteredFileNames(const SleeveFilterService& filter_service, sl_element_id_
   return names;
 }
 
-/// A RawSQL filter with one string bind for each `?` in @p sql.
-auto RawFilter(const std::wstring& sql, const std::string& query) -> FilterNode {
-  FilterNode node{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt, sql};
-  node.raw_binds_ = {query};
-  return node;
+/// The predicate @p sql with one string bind for its `?`.
+auto RawFilter(const std::string& sql, const std::string& query) -> duckorm::SqlFragment {
+  return duckorm::SqlFragment{sql, {query}};
 }
 
 // Phase S7 step 3: the BM25 alternative is a semi-join on the scored AI documents. It selects
@@ -441,22 +436,20 @@ TEST_F(LibrarySearchRecallTest, Bm25SemiJoinMatchesTheSameFilesAsThePerRowClause
 
   SleeveFilterService filter_service(project.GetStorage());
   const auto          folder_id = LibraryRootFolderId(project);
-  const std::wstring  per_row_sql =
-      L"(fts_main_AiImageFtsDocument.match_bm25(e.id, ?) IS NOT NULL)";
-  const std::wstring semi_join_sql =
-      L"e.id IN (SELECT file_id FROM (SELECT file_id, "
-      L"fts_main_AiImageFtsDocument.match_bm25(file_id, ?) AS score FROM AiImageFtsDocument) "
-      L"WHERE score IS NOT NULL)";
+  const auto&         store       = project.GetStorage()->GetElementStore();
+  const std::string   per_row_sql = "(fts_main_AiImageFtsDocument.match_bm25(e.id, ?) IS NOT NULL)";
+  const std::string   semi_join_sql =
+      "e.id IN (SELECT file_id FROM (SELECT file_id, "
+      "fts_main_AiImageFtsDocument.match_bm25(file_id, ?) AS score FROM AiImageFtsDocument) "
+      "WHERE score IS NOT NULL)";
 
   const std::vector<std::string> queries = {
       "lighthouse", "lighthouses", "coast",        "coast dusk", "fog", "mountain village",
       "icebergs",   "outdoor",     "maple garden", "red cliff",  "desert"};
   size_t queries_with_matches = 0;
   for (const auto& query : queries) {
-    const auto per_row   = FilteredFileNames(filter_service, folder_id,
-                                             RawFilter(per_row_sql, query));
-    const auto semi_join = FilteredFileNames(filter_service, folder_id,
-                                             RawFilter(semi_join_sql, query));
+    const auto per_row   = FilteredFileNames(store, folder_id, RawFilter(per_row_sql, query));
+    const auto semi_join = FilteredFileNames(store, folder_id, RawFilter(semi_join_sql, query));
     EXPECT_EQ(semi_join, per_row) << "query `" << query << "`";
     if (!per_row.empty()) {
       ++queries_with_matches;
@@ -465,44 +458,43 @@ TEST_F(LibrarySearchRecallTest, Bm25SemiJoinMatchesTheSameFilesAsThePerRowClause
   // Every query but `desert` scores at least one document; `outdoor` (the scene of every
   // understanding) scores all five files that have one.
   EXPECT_EQ(queries_with_matches, queries.size() - 1);
-  EXPECT_EQ(FilteredFileNames(filter_service, folder_id, RawFilter(semi_join_sql, "outdoor")).size(),
-            5u);
+  EXPECT_EQ(FilteredFileNames(store, folder_id, RawFilter(semi_join_sql, "outdoor")).size(), 5u);
 
   // The production WHERE uses the semi-join. `lighthouses` matches file 1 by its folded
   // caption and file 0 only through BM25 stemming (its text has `lighthouse`, not the plural).
   const auto where = filter_service.BuildFuzzySearchWhere(L"lighthouses", kAllSearchFields);
-  ASSERT_TRUE(where.has_value() && where->raw_sql_.has_value());
-  EXPECT_NE(where->raw_sql_->find(semi_join_sql.substr(0, semi_join_sql.find(L'?'))),
-            std::wstring::npos);
-  EXPECT_EQ(where->raw_sql_->find(L"match_bm25(e.id"), std::wstring::npos);
+  ASSERT_TRUE(where.has_value());
+  const auto where_sql = FilterSQLCompiler::Compile(*where).sql_;
+  EXPECT_NE(where_sql.find(semi_join_sql.substr(0, semi_join_sql.find('?'))), std::string::npos);
+  EXPECT_EQ(where_sql.find("match_bm25(e.id"), std::string::npos);
   EXPECT_EQ(SearchFileNames(filter_service, folder_id, L"lighthouses"),
             (std::set<std::string>{"P2635860.RW2", "P2635861.RW2"}));
 }
 
 // ── Stats from one match set (Phase S8) ──────────────────────────────────────────────────
 
+/// One bucket of a separate stats statement: its label (NULL for an unknown date) and its
+/// photo count.
+struct SeparateBucketRow {
+  std::optional<std::string> label;
+  int64_t                    count = 0;
+  using Columns = duckorm::RowColumns<&SeparateBucketRow::label, &SeparateBucketRow::count>;
+};
+
 /// Buckets of one query from the stats statements that ElementStore::BuildFolderStats ran
 /// before Phase S8, one statement for each bucket kind, each evaluating the filter again.
-auto SeparateStatementBuckets(duckdb_connection conn, const std::string& sql,
+auto SeparateStatementBuckets(duckorm::Connection conn, const std::string& sql,
                               const duckorm::SqlFragment& binds) -> std::vector<StatsBucket> {
   std::vector<StatsBucket> buckets;
-  duckdb_result            result;
-  if (duckorm::execute_query(conn, sql, binds, &result) != DuckDBSuccess) {
-    ADD_FAILURE() << sql << ": " << duckdb_result_error(&result);
-    duckdb_destroy_result(&result);
-    return buckets;
-  }
-  for (idx_t row = 0; row < duckdb_row_count(&result); ++row) {
-    StatsBucket bucket;
-    if (!duckdb_value_is_null(&result, 0, row)) {
-      char* label   = duckdb_value_varchar(&result, 0, row);
-      bucket.label_ = label;
-      duckdb_free(label);
+  try {
+    for (auto& row :
+         duckorm::query<SeparateBucketRow>(conn, duckorm::SqlFragment{sql, binds.binds_})) {
+      buckets.push_back({.label_ = std::move(row.label).value_or(std::string{}),
+                         .count_ = static_cast<int>(row.count)});
     }
-    bucket.count_ = static_cast<int>(duckdb_value_int64(&result, 1, row));
-    buckets.push_back(std::move(bucket));
+  } catch (const std::runtime_error& error) {
+    ADD_FAILURE() << sql << ": " << error.what();
   }
-  duckdb_destroy_result(&result);
   return buckets;
 }
 
@@ -510,7 +502,7 @@ auto SeparateStatementBuckets(duckdb_connection conn, const std::string& sql,
 auto SeparateStatementStats(ProjectService& project, sl_element_id_t folder_id,
                             const std::optional<FilterNode>& filter, const std::string& model_key)
     -> AlbumStatsView {
-  auto           guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto           guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
   auto           lock  = guard.Lock();
   const auto     scope = BuildScopedFileQuery(folder_id, CompileFilterPredicate(filter));
   const auto&    from  = scope.from_where_;

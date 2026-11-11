@@ -30,7 +30,7 @@ class FolderMapper
  private:
   static constexpr uint32_t    field_count_                                      = 2;
   static constexpr const char* table_name_                                       = "FolderContent";
-  static constexpr const char* prime_key_clause_                                 = "folder_id={}";
+  static constexpr const char* primary_key_column_                               = "folder_id";
   static constexpr std::array<duckorm::DuckFieldDesc, field_count_> field_descs_ = {
       FIELD(FolderMapperParams, folder_id, UINT32), FIELD(FolderMapperParams, element_id, UINT32)};
 

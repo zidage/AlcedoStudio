@@ -13,8 +13,6 @@
 #include <string_view>
 #include <utility>
 
-#include <duckdb.h>
-
 #include "edit/history/pipeline_history_format.hpp"
 
 class QString;
@@ -115,27 +113,13 @@ auto BuildRuntimeProjectPair(const std::filesystem::path& workspace,
                              const QString& projectName)
     -> std::pair<std::filesystem::path, std::filesystem::path>;
 
-auto RunDuckDbQuery(duckdb_connection conn, const std::string& sql,
-                    const char* stage, QString* errorOut) -> bool;
-auto QueryCurrentCatalog(duckdb_connection conn, std::string* catalogOut,
-                         QString* errorOut) -> bool;
-
-// Drops the HNSW indexes that older projects created on the semantic embedding
-// tables. Natural-language search scans the folder scope exactly and uses no
-// vector index, and an HNSW index that stays in the file makes every write to
-// its table require the vss extension. When an index exists, loads the packaged
-// vss extension (DuckDB cannot bind or drop the index without it) and drops each
-// index. Returns true when no HNSW index is left; false with errorOut set when
-// the read, the extension load, or a drop fails. Project open fails on false.
-// Requires the database lock of @p conn.
-auto DropHnswIndexesOfOlderProject(duckdb_connection conn, QString* errorOut) -> bool;
-
 auto BuildTempDbSnapshotPath(std::filesystem::path* snapshotPathOut,
                              QString* errorOut) -> bool;
-/// Copies the live project database into @p snapshotPath (ATTACH, COPY FROM DATABASE,
-/// CHECKPOINT, DETACH). On a failure after the ATTACH, the snapshot is detached from the live
-/// connection, so a later snapshot can attach the alias again, and the snapshot file and its
-/// `.wal` are removed.
+/// Copies the live project database into @p snapshotPath through
+/// StorageMaintenance::WriteSnapshot (ATTACH, COPY FROM DATABASE, CHECKPOINT, DETACH). On a
+/// failure the snapshot is detached from the live connection, so a later snapshot can attach the
+/// alias again, the snapshot file and its `.wal` are removed, and @p errorOut names the failed
+/// step.
 auto CreateLiveDbSnapshot(const std::shared_ptr<ProjectService>& project,
                           const std::filesystem::path& snapshotPath,
                           QString* errorOut) -> bool;

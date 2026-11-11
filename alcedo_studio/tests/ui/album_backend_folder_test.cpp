@@ -13,11 +13,19 @@
 #include "app/album_browse_service.hpp"
 #include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/saved_project_invariants.hpp"
 
 namespace alcedo::ui::test {
 namespace {
 
-using FolderTests = ApplicationModuleHostTestFixture;
+class FolderTests : public ApplicationModuleHostTestFixture {
+ protected:
+  /// Checks the storage invariants of each project package that the test saved (#805).
+  void TearDown() override {
+    ExpectSavedProjectInvariants(temp_dir_);
+    ApplicationModuleHostTestFixture::TearDown();
+  }
+};
 
 // ── Create folder — signal emitted, folder visible ─────────────────────────
 

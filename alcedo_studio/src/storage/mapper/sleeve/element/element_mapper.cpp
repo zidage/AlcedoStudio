@@ -114,32 +114,27 @@ auto ElementMapper::FromParams(ElementMapperParams&& param) -> std::shared_ptr<S
 }
 
 auto ElementMapper::GetElementById(const sl_element_id_t id) -> std::shared_ptr<SleeveElement> {
-  auto result = GetByPredicate(std::format("id={}", id));
-  if (result.size() > 1) {
-    throw std::runtime_error("ElementMapper: Sleeve element id is not unique. Broken DB file");
-  }
-  if (result.size() == 0) {
+  auto row = GetById(id);
+  if (!row.has_value()) {
     throw std::runtime_error(
         std::format("ElementMapper: No element with id {} is stored in DB", id));
   }
-  return result[0];
+  return FromParams(std::move(*row));
 }
 
 auto ElementMapper::GetElementByName(const std::wstring& name)
     -> std::vector<std::shared_ptr<SleeveElement>> {
-  std::string predicate = conv::ToBytes(std::format(L"element_name={}", name));
-  return GetByPredicate(std::move(predicate));
+  return GetByPredicate(duckorm::expr::column_eq("element_name", conv::ToBytes(name)));
 }
 
 auto ElementMapper::GetElementByType(const ElementType type)
     -> std::vector<std::shared_ptr<SleeveElement>> {
-  std::string predicate = std::format("type={}", static_cast<uint32_t>(type));
-  return GetByPredicate(std::move(predicate));
+  return GetByPredicate(
+      duckorm::expr::column_eq("type", static_cast<std::int64_t>(static_cast<uint32_t>(type))));
 }
 
-auto ElementMapper::GetElementsInFolderByFilter(const std::wstring& filter_sql)
+auto ElementMapper::GetElementsByQuery(const duckorm::SqlFragment& query)
     -> std::vector<std::shared_ptr<SleeveElement>> {
-  std::string filter_sql_u8 = conv::ToBytes(filter_sql);
-  return GetByQuery(std::move(filter_sql_u8));
+  return GetByQuery(query);
 }
 }  // namespace alcedo

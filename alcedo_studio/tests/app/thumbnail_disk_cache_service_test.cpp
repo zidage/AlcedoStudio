@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/thumbnail_disk_cache_service.hpp"
+#include "support/test_temp_directory.hpp"
 
 #include <gtest/gtest.h>
 
@@ -22,14 +23,9 @@ namespace {
 
 class ThumbnailDiskCacheServiceTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory test_dir_;
   void SetUp() override {
-    temp_dir_ = std::filesystem::temp_directory_path() / "alcedo_test_cache";
-    std::filesystem::create_directories(temp_dir_);
-  }
-
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove_all(temp_dir_, ec);
+    temp_dir_ = test_dir_.Path();
   }
 
   static cv::Mat CreateTestImage(int width, int height, uint8_t r, uint8_t g, uint8_t b) {

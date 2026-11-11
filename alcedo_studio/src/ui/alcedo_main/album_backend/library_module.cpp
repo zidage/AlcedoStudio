@@ -24,7 +24,6 @@
 #include "image/image.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "sleeve/storage.hpp"
-#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
@@ -45,20 +44,6 @@ constexpr size_t kAlbumMetadataPageSize  = 1000;
 constexpr size_t kSearchMetadataPageSize = 120;
 /// Occurrence pages that a grouped view keeps loaded near its viewport.
 constexpr size_t kMaxRetainedSectionPages = 3;
-
-/// The relevance select of @p semantic_query for the folder of @p input, or empty without a
-/// natural-language search. Calls no provider. Runs on the thread of the read.
-auto             RelevanceSelectOf(const LibraryQueryInput&                     input,
-                                   const std::optional<SemanticQueryEmbedding>& semantic_query)
-    -> std::optional<duckorm::SqlFragment> {
-  if (!semantic_query.has_value()) {
-    return std::nullopt;
-  }
-  if (!input.filter_service_) {
-    throw std::runtime_error("Search requires the project filter service.");
-  }
-  return input.filter_service_->BuildSemanticRelevanceSelect(input.folder_id_, *semantic_query);
-}
 
 auto FormatCacheSize(size_t bytes) -> QString {
   if (bytes == 0) {
@@ -238,9 +223,9 @@ void LibraryModule::SelectAllInCurrentView() {
     QString                                      error;
     try {
       const auto filter = MergeFilterNodes(input->stats_filter_, input->search_.filter_);
-      const auto ids    = input->browse_->ReadAlbumFileIds(
-          input->folder_id_, filter, input->options_, input->active_model_key_, 0, occurrence_end,
-          RelevanceSelectOf(*input, input->search_.semantic_query_));
+      const auto ids  = input->browse_->ReadAlbumFileIds(input->folder_id_, filter, input->options_,
+                                                         input->active_model_key_, 0, occurrence_end,
+                                                         input->search_.semantic_query_);
       // Ids and names from typed columns, no thumbnail metadata.
       const auto rows = input->browse_->ReadAlbumFileRows(ids);
       images.reserve(rows.size());
@@ -458,8 +443,7 @@ auto RunLibraryQuery(const LibraryQueryInput& input) -> LibraryQueryOutput {
     }
     output.result_ = input.browse_->ReadAlbumQuery(
         input.folder_id_, MergeFilterNodes(input.stats_filter_, output.search_filter_),
-        input.options_, input.active_model_key_, input.read_,
-        RelevanceSelectOf(input, output.semantic_query_));
+        input.options_, input.active_model_key_, input.read_, output.semantic_query_);
     ReadRowDisplayValues(input, output);
   } catch (const std::exception& e) {
     output.error_ = QString::fromUtf8(e.what());
@@ -489,24 +473,27 @@ auto GroupKeyFromTitle(AlbumGroupField field, const QString& title, bool unknown
   return AlbumGroupKey{title.toStdString()};
 }
 
-/// True when @p node has a condition on the rating (typed, or raw SQL on `i.rating`).
+/// True when @p node is a stats bucket of @p dimension.
+auto IsStatsBucketOf(const FilterNode& node, StatsDimensionId dimension) -> bool {
+  return node.stats_bucket_.has_value() && node.stats_bucket_->dimension == dimension;
+}
+
+/// True when @p node has a condition on the rating (a typed condition or a rating bucket).
 auto FilterReadsRating(const FilterNode& node) -> bool {
-  if (node.condition_.has_value() && (node.condition_->field_ == FilterField::Rating ||
-                                      node.condition_->field_ == FilterField::RatingLabel)) {
+  if (node.condition_.has_value() && node.condition_->field_ == FilterField::Rating) {
     return true;
   }
-  if (node.raw_sql_.has_value() && node.raw_sql_->find(L"rating") != std::wstring::npos) {
+  if (IsStatsBucketOf(node, StatsDimensionId::kRating)) {
     return true;
   }
   return std::any_of(node.children_.begin(), node.children_.end(),
                      [](const FilterNode& child) { return FilterReadsRating(child); });
 }
 
-/// True when @p node reads a library mark (the raw SQL of BuildColorLabelFilter or
-/// BuildDeleteMarkFilter).
+/// True when @p node reads a library mark (a color label or Delete mark bucket).
 auto FilterReadsMarks(const FilterNode& node) -> bool {
-  if (node.raw_sql_.has_value() && (node.raw_sql_->find(L"color_labels") != std::wstring::npos ||
-                                    node.raw_sql_->find(L"delete_mark") != std::wstring::npos)) {
+  if (IsStatsBucketOf(node, StatsDimensionId::kColorLabel) ||
+      IsStatsBucketOf(node, StatsDimensionId::kDeleteMark)) {
     return true;
   }
   return std::any_of(node.children_.begin(), node.children_.end(),
@@ -1311,11 +1298,11 @@ auto LibraryModule::RequestOrderedFileIds(const QVariantList& ranges) -> qulongl
           std::unordered_set<sl_element_id_t> seen;
           std::vector<sl_element_id_t>        ordered;
           const auto filter = MergeFilterNodes(input->stats_filter_, input->search_.filter_);
-          const auto relevance = RelevanceSelectOf(*input, input->search_.semantic_query_);
+          const auto relevance = input->search_.semantic_query_;
           for (const auto& [begin, end] : occurrence_ranges) {
             for (const auto id : input->browse_->ReadAlbumFileIds(
                      input->folder_id_, filter, input->options_, input->active_model_key_, begin,
-                     end, relevance)) {
+                     end, input->search_.semantic_query_)) {
               if (seen.insert(id).second) {
                 ordered.push_back(id);
               }
@@ -1375,7 +1362,7 @@ void LibraryModule::RequestFocusPosition(uint fileId, const QString& preferredGr
       position = input->browse_->ReadAlbumFilePosition(
           input->folder_id_, MergeFilterNodes(input->stats_filter_, input->search_.filter_),
           input->options_, input->active_model_key_, static_cast<sl_element_id_t>(fileId),
-          preferred, RelevanceSelectOf(*input, input->search_.semantic_query_));
+          preferred, input->search_.semantic_query_);
     } catch (const std::exception& e) {
       error = QString::fromUtf8(e.what());
     }
@@ -1447,7 +1434,7 @@ void LibraryModule::SubmitEditorListPosition(qulonglong requestId, uint fileId, 
       position = input->browse_->ReadAlbumFilePosition(
           input->folder_id_, MergeFilterNodes(input->stats_filter_, input->search_.filter_),
           input->options_, input->active_model_key_, static_cast<sl_element_id_t>(fileId),
-          std::nullopt, RelevanceSelectOf(*input, input->search_.semantic_query_));
+          std::nullopt, input->search_.semantic_query_);
     } catch (const std::exception& e) {
       error = QString::fromUtf8(e.what());
     }

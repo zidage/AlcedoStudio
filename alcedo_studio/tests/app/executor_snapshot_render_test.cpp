@@ -52,6 +52,7 @@
 #include "renderer/pipeline_task.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
 #include "support/render_snapshot_source.hpp"
+#include "support/test_temp_directory.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
 #ifdef HAVE_CUDA
@@ -86,11 +87,6 @@ auto SampleImages() -> std::vector<SampleImage> {
   return {{"linear_dng", LinearDngPath()},
           {"bayer_arw", SampleRawPath("_DSC0726.ARW")},
           {"xtrans_raf", SampleRawPath("xtrans_edge/DSCF0019.RAF")}};
-}
-
-auto UniqueTempPath(const std::string& prefix) -> std::filesystem::path {
-  return std::filesystem::temp_directory_path() /
-         (prefix + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
 }
 
 auto MaxAbsDifference(const cv::Mat& lhs, const cv::Mat& rhs) -> double {
@@ -288,6 +284,7 @@ struct RoleExecutors {
 
 class ExecutorSnapshotRenderTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
@@ -296,14 +293,8 @@ class ExecutorSnapshotRenderTest : public ::testing::Test {
       GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
     }
     TimeProvider::Refresh();
-    db_path_   = UniqueTempPath("executor_snapshot_render_") += ".db";
-    meta_path_ = UniqueTempPath("executor_snapshot_render_") += ".json";
-  }
-
-  void TearDown() override {
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(meta_path_, ec);
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
   }
 
   struct LoadedImage {

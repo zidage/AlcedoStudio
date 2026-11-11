@@ -4,10 +4,22 @@
 def_library(DuckORM
     SOURCES
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_orm.cpp"
-        "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_types.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_statement.cpp"
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_expr.cpp"
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_select.cpp"
     PUBLIC_DEPS DuckDB
+    PRIVATE_DEPS AppDiagnostics
+)
+
+# Query definitions: the SQL of the stats dimensions and of the library search, and the
+# compiler of the domain filters.
+def_library(StorageQuery
+    SOURCES
+        "${ALCEDO_SRC_ROOT}/storage/query/stats_dimension.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/query/library_search_predicates.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/query/filter_compiler.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/query/capture_date_time.cpp"
+    PUBLIC_DEPS DuckORM SleeveFilter StrConv
 )
 
 # Mappers
@@ -29,7 +41,8 @@ set(MAPPER_SRCS
 
 def_library(SleeveMapper
     SOURCES ${MAPPER_SRCS}
-    PUBLIC_DEPS DuckDB DuckORM Image SleeveElement ImagePool PipelineHistory EditPipeline PipelineScheduler StrConv
+    PUBLIC_DEPS DuckDB DuckORM Image SleeveElement ImagePool PipelineHistory EditPipeline
+        PipelineScheduler StorageQuery StrConv
 )
 
 # Stores + Storage facade (no storage/service rank)
@@ -53,11 +66,13 @@ set(STORAGE_SRCS
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/album_edit_state_sql.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/edit_history/commit_graph_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/mask_asset/mask_asset_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/storage_session.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/storage_maintenance.cpp"
 )
 
 def_library(Storage
     SOURCES ${STORAGE_SRCS}
-    PUBLIC_DEPS Ai DuckDB DuckORM SleeveMapper StrConv PipelineScheduler
+    PUBLIC_DEPS Ai DuckDB DuckORM SleeveMapper StorageQuery StrConv PipelineScheduler
     PRIVATE_DEPS AppDiagnostics SourceImageFile
 )
 # MaskAssetStore compresses R8 pixels with zlib. The bundled gRPC static zlib is used when it

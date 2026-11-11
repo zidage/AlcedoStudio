@@ -27,11 +27,19 @@
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/saved_project_invariants.hpp"
 
 namespace alcedo::ui::test {
 namespace {
 
-using LibraryMarksTests = ApplicationModuleHostTestFixture;
+class LibraryMarksTests : public ApplicationModuleHostTestFixture {
+ protected:
+  /// Checks the storage invariants of each project package that the test saved (#805).
+  void TearDown() override {
+    ExpectSavedProjectInvariants(temp_dir_);
+    ApplicationModuleHostTestFixture::TearDown();
+  }
+};
 
 constexpr ColorLabelMask kRed    = ColorLabelBit(ColorLabel::kRed);
 constexpr ColorLabelMask kGreen  = ColorLabelBit(ColorLabel::kGreen);

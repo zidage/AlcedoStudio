@@ -19,6 +19,7 @@
 
 #include "edit/mask/mask_asset.hpp"
 #include "storage/store/database.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -114,17 +115,14 @@ auto ReadError(Database& database, const MaskAssetKey& key) -> std::string {
 
 class MaskAssetStoreTest : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   void SetUp() override {
-    const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
-    db_path_         = std::filesystem::temp_directory_path() /
-               ("MaskAssetStoreTest_" + std::string{info->name()} + ".db");
-    std::filesystem::remove(db_path_);
+    db_path_  = temp_dir_ / "mask_assets.db";
     database_ = std::make_unique<Database>(db_path_);
   }
 
   void TearDown() override {
     database_.reset();
-    std::filesystem::remove(db_path_);
   }
 
   auto Put(const MaskAsset& asset) -> bool {

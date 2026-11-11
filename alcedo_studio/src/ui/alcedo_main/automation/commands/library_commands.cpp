@@ -37,7 +37,7 @@
 #include "image/image_buffer.hpp"
 #include "sleeve/album_query.hpp"
 #include "sleeve/sleeve_filter/filter_factory.hpp"
-#include "storage/mapper/image/image_search_columns.hpp"
+#include "storage/query/capture_date_time.hpp"
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/automation/automation_command_support.hpp"
@@ -363,7 +363,7 @@ auto PhotoInfoItem(ImagePoolService* image_pool, const SearchResultRow& row) -> 
       }
       const ExifDisplayMetaData& metadata = image->exif_display_;
       if (const auto capture = ParseCaptureDateTime(metadata.date_time_str_)) {
-        item.insert("capture_time", QString::fromStdString(capture->date_time_));
+        item.insert("capture_time", QString::fromStdString(capture->date_time));
       }
       insert_text("camera_make", metadata.make_);
       insert_text("camera_model", metadata.model_);
@@ -590,9 +590,69 @@ auto InfoItemSchema() -> QJsonObject {
       QJsonArray{"element_id", "image_id", "file_name", "rating", "color_labels", "delete_mark"});
 }
 
-/// The library.list filter of the `color_label` and `deleted` parameters, or empty without them.
-auto MarkFilterOfParams(const QJsonObject& params) -> std::optional<FilterNode> {
+/// The parameters of library.list and library.stats that select the photos of one bucket of each
+/// library.stats dimension. Each value is a bucket label as library.stats returns it.
+auto BucketFilterParams() -> QJsonObject {
+  const auto text = [](const char* description) {
+    return QJsonObject{{"type", "string"}, {"description", description}};
+  };
+  return QJsonObject{
+      {"camera", text("Only photos of this library.stats camera bucket; '(unknown)' is the bucket "
+                      "without a camera model.")},
+      {"lens", text("Only photos of this library.stats lens bucket; '(unknown)' is the bucket "
+                    "without a lens.")},
+      {"capture_date", text("Only photos of this library.stats capture_date bucket (YYYY-MM-DD); "
+                            "the empty text is the bucket without a capture date.")},
+      {"rating", text("Only photos of this library.stats rating bucket; a text that is not a "
+                      "number is the bucket without a rating.")},
+      {"import_date", text("Only photos of this library.stats import_date bucket (YYYY-MM-DD in "
+                           "'time_zone'); the empty text is the bucket without an import time. "
+                           "Needs 'time_zone'.")},
+      {"label", text("Only photos of this library.stats label bucket: a semantic label key of "
+                     "the active model.")},
+      {"time_zone", text("The IANA time zone of the import days: 'import_date' and the "
+                         "import_date buckets of library.stats need it.")}};
+}
+
+/// The library.list and library.stats filter of the `color_label`, `deleted`, and bucket
+/// parameters, or empty without them. Each bucket parameter selects the photos of the bucket with
+/// the filter of the Library statistics bar. @p semantic_model_key is the active model of the
+/// label bucket.
+/// @throws std::invalid_argument for an import day that is not a day, or one without a time zone.
+auto LibraryFilterOfParams(const QJsonObject& params, const std::string& semantic_model_key)
+    -> std::optional<FilterNode> {
   std::vector<FilterNode> children;
+  const auto              text = [&params](const char* key) {
+    return params.value(QLatin1String(key)).toString().toStdWString();
+  };
+  if (params.contains("camera")) {
+    children.push_back(sleeve_filter::BuildCameraModelBucketFilter(text("camera")));
+  }
+  if (params.contains("lens")) {
+    children.push_back(sleeve_filter::BuildLensBucketFilter(text("lens")));
+  }
+  if (params.contains("capture_date")) {
+    children.push_back(params.value("capture_date").toString().isEmpty()
+                           ? sleeve_filter::BuildCaptureDateUnknownFilter()
+                           : sleeve_filter::BuildCaptureDateBucketFilter(text("capture_date")));
+  }
+  if (params.contains("rating")) {
+    children.push_back(sleeve_filter::BuildRatingBucketFilter(text("rating")));
+  }
+  if (params.contains("import_date")) {
+    const std::string time_zone = params.value("time_zone").toString().toStdString();
+    if (time_zone.empty()) {
+      throw std::invalid_argument("'import_date' needs 'time_zone'");
+    }
+    children.push_back(
+        params.value("import_date").toString().isEmpty()
+            ? sleeve_filter::BuildImportDateUnknownFilter()
+            : sleeve_filter::BuildImportDateBucketFilter(text("import_date"), time_zone));
+  }
+  if (params.contains("label")) {
+    children.push_back(sleeve_filter::BuildSemanticLabelBucketFilter(
+        semantic_model_key, params.value("label").toString().toStdString()));
+  }
   if (params.contains("color_label")) {
     if (const auto code = ColorLabelOfParam(params.value("color_label"))) {
       children.push_back(sleeve_filter::BuildColorLabelFilter(*code));
@@ -618,6 +678,61 @@ auto MarkFilterOfParams(const QJsonObject& params) -> std::optional<FilterNode> 
   }
   return FilterNode{FilterNode::Type::Logical, FilterOp::AND, std::move(children), std::nullopt,
                     std::nullopt};
+}
+
+/// @p params with the filter parameters of library.list and library.stats added.
+auto WithLibraryFilterParams(QJsonObject params) -> QJsonObject {
+  params.insert("color_label", ColorLabelCodeParam(QStringLiteral("Only photos with this code.")));
+  params.insert(
+      "deleted",
+      QJsonObject{{"type", "boolean"},
+                  {"description", "Only photos with (true) or without (false) the Delete mark."}});
+  const QJsonObject buckets = BucketFilterParams();
+  for (auto it = buckets.begin(); it != buckets.end(); ++it) {
+    params.insert(it.key(), it.value());
+  }
+  return params;
+}
+
+/// The folder of the `folder_id` parameter, or the root folder without it. Answers @p reply and
+/// returns empty when the id is not valid or the library cannot be read.
+auto LibraryFolderOfParams(ProjectService& project, const QJsonObject& params,
+                           AutomationReply& reply) -> std::optional<sl_element_id_t> {
+  std::optional<sl_element_id_t> folder_id;
+  if (params.contains("folder_id")) {
+    folder_id = AutomationElementIdParam(params, QStringLiteral("folder_id"), reply);
+    if (!folder_id.has_value()) {
+      return std::nullopt;
+    }
+  } else {
+    folder_id = RootFolderId(project);
+  }
+  if (!project.GetAlbumBrowseService() || !folder_id.has_value()) {
+    SendAutomationOwnerError(reply, AutomationErrorCode::Failed,
+                             QStringLiteral("The library cannot be read."));
+    return std::nullopt;
+  }
+  return folder_id;
+}
+
+/// The schema of one library.stats dimension: its buckets in the order of the statistics bar.
+auto StatsBucketsSchema(const char* description) -> QJsonObject {
+  return QJsonObject{
+      {"type", "array"},
+      {"description", description},
+      {"items", AutomationObjectSchema(QJsonObject{{"label", QJsonObject{{"type", "string"}}},
+                                                   {"count", QJsonObject{{"type", "integer"}}}},
+                                       QJsonArray{"label", "count"})}};
+}
+
+/// The library.stats items of @p buckets, in the order of the storage read.
+auto StatsBucketsJson(const std::vector<StorageStatsBucket>& buckets) -> QJsonArray {
+  QJsonArray items;
+  for (const auto& bucket : buckets) {
+    items.push_back(
+        QJsonObject{{"label", QString::fromStdString(bucket.label_)}, {"count", bucket.count_}});
+  }
+  return items;
 }
 
 void RegisterOrFail(AutomationCommandRegistry& registry, AutomationCommandSpec spec, bool* ok,
@@ -752,13 +867,15 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   list.description = QStringLiteral(
       "Returns one page of the photos of a folder (the root folder by default) in the order "
       "of 'sort', then by element id. 'color_label' keeps the photos with that code and "
-      "'deleted' the photos with (true) or without (false) the Delete mark; both together keep "
-      "the photos that match both. 'total' is the photo count of the folder that matches.");
+      "'deleted' the photos with (true) or without (false) the Delete mark. 'camera', 'lens', "
+      "'capture_date', 'rating', 'import_date', and 'label' keep the photos of that "
+      "library.stats bucket. Together the parameters keep the photos that match all of them. "
+      "'total' is the photo count of the folder that matches.");
   QJsonArray sort_names;
   for (const auto& sort : kSortFields) {
     sort_names.push_back(QString::fromLatin1(sort.name));
   }
-  list.params_schema = AutomationClosedParamsSchema(QJsonObject{
+  list.params_schema = AutomationClosedParamsSchema(WithLibraryFilterParams(QJsonObject{
       {"folder_id",
        AutomationElementIdSchema(0, QStringLiteral("A folder id from library.folders."))},
       {"offset", QJsonObject{{"type", "integer"}, {"minimum", 0}, {"default", 0}}},
@@ -767,11 +884,7 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                             {"maximum", static_cast<double>(kMaxAlbumQueryPageRows)},
                             {"default", 100}}},
       {"sort", QJsonObject{{"type", "string"}, {"enum", sort_names}, {"default", "none"}}},
-      {"descending", QJsonObject{{"type", "boolean"}, {"default", false}}},
-      {"color_label", ColorLabelCodeParam(QStringLiteral("Only photos with this code."))},
-      {"deleted", QJsonObject{{"type", "boolean"},
-                              {"description",
-                               "Only photos with (true) or without (false) the Delete mark."}}}});
+      {"descending", QJsonObject{{"type", "boolean"}, {"default", false}}}}));
   list.result_schema = AutomationObjectSchema(
       QJsonObject{{"total", QJsonObject{{"type", "integer"}}},
                   {"offset", QJsonObject{{"type", "integer"}}},
@@ -782,19 +895,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     if (!project) {
       return;
     }
-    const auto                     browse = project->GetAlbumBrowseService();
-    std::optional<sl_element_id_t> folder_id;
-    if (params.contains("folder_id")) {
-      folder_id = AutomationElementIdParam(params, QStringLiteral("folder_id"), reply);
-      if (!folder_id.has_value()) {
-        return;
-      }
-    } else {
-      folder_id = RootFolderId(*project);
-    }
-    if (!browse || !folder_id.has_value()) {
-      SendAutomationOwnerError(reply, AutomationErrorCode::Failed,
-                               QStringLiteral("The library cannot be read."));
+    const auto browse    = project->GetAlbumBrowseService();
+    const auto folder_id = LibraryFolderOfParams(*project, params, reply);
+    if (!folder_id.has_value()) {
       return;
     }
     AlbumQueryOptions options;
@@ -812,9 +915,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     read.offset_ = offset;
     read.limit_  = limit;
     try {
-      const AlbumQueryResult result =
-          browse->ReadAlbumQuery(*folder_id, MarkFilterOfParams(params), options,
-                                 host->stats()->ActiveSemanticModelKey(), read);
+      const std::string      model_key = host->stats()->ActiveSemanticModelKey();
+      const AlbumQueryResult result    = browse->ReadAlbumQuery(
+          *folder_id, LibraryFilterOfParams(params, model_key), options, model_key, read);
       QJsonArray items;
       for (const auto& row : result.rows_) {
         QJsonObject item{{"element_id", static_cast<double>(row.photo_.file_id_)},
@@ -834,6 +937,95 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     }
   };
   RegisterOrFail(registry, std::move(list), &ok, error);
+
+  AutomationCommandSpec stats;
+  stats.method      = QStringLiteral("library.stats");
+  stats.description = QStringLiteral(
+      "Returns the statistics of the photos of a folder (the root folder by default) that the "
+      "Library statistics bar shows: the photos of each capture_date, camera, lens, label, and "
+      "rating bucket, of each color label code, and with the Delete mark. With 'time_zone' it "
+      "also returns the import_date buckets. The filter parameters are the ones of "
+      "library.list. A bucket label selects its photos in the bucket parameter of library.list "
+      "and library.stats.");
+  stats.params_schema = AutomationClosedParamsSchema(WithLibraryFilterParams(
+      QJsonObject{{"folder_id", AutomationElementIdSchema(
+                                    0, QStringLiteral("A folder id from library.folders."))}}));
+  stats.result_schema = AutomationObjectSchema(
+      QJsonObject{
+          {"total", QJsonObject{{"type", "integer"},
+                                {"description", "The photos of the folder that match."}}},
+          {"capture_date",
+           StatsBucketsSchema(
+               "Capture days (YYYY-MM-DD); the empty label is the photos without a capture date.")},
+          {"camera",
+           StatsBucketsSchema("Camera models; '(unknown)' is the photos without a camera model.")},
+          {"lens", StatsBucketsSchema("Lenses; '(unknown)' is the photos without a lens.")},
+          {"label", StatsBucketsSchema("Semantic label keys of the active model.")},
+          {"rating", StatsBucketsSchema("Ratings.")},
+          {"import_date",
+           StatsBucketsSchema("Import days (YYYY-MM-DD) in 'time_zone'; only with 'time_zone'.")},
+          {"color_labels",
+           QJsonObject{
+               {"type", "array"},
+               {"description", "The photos of each color label code, in code order."},
+               {"items", AutomationObjectSchema(
+                             QJsonObject{{"code", QJsonObject{{"type", "string"},
+                                                              {"enum", ColorLabelKeyNames()}}},
+                                         {"count", QJsonObject{{"type", "integer"}}}},
+                             QJsonArray{"code", "count"})}}},
+          {"delete_mark",
+           QJsonObject{{"type", "integer"}, {"description", "The photos with the Delete mark."}}}},
+      QJsonArray{"total", "capture_date", "camera", "lens", "label", "rating", "color_labels",
+                 "delete_mark"});
+  stats.handler = [host](const QJsonObject& params, AutomationReply reply) {
+    const auto project = AutomationEnteredProject(host, reply);
+    if (!project) {
+      return;
+    }
+    const auto browse    = project->GetAlbumBrowseService();
+    const auto folder_id = LibraryFolderOfParams(*project, params, reply);
+    if (!folder_id.has_value()) {
+      return;
+    }
+    AlbumQueryOptions options;
+    options.local_day_time_zone_ = params.value("time_zone").toString().toStdString();
+    AlbumQueryRead read;
+    read.read_statistics_ = true;
+    try {
+      const std::string      model_key = host->stats()->ActiveSemanticModelKey();
+      const AlbumQueryResult result    = browse->ReadAlbumQuery(
+          *folder_id, LibraryFilterOfParams(params, model_key), options, model_key, read);
+      if (!result.statistics_.has_value()) {
+        SendAutomationOwnerError(reply, AutomationErrorCode::Failed,
+                                 QStringLiteral("The library read returned no statistics."));
+        return;
+      }
+      const FolderStatsView& view = *result.statistics_;
+      QJsonArray             color_labels;
+      for (int index = 0; index < kColorLabelCount; ++index) {
+        color_labels.push_back(QJsonObject{
+            {"code", QString::fromLatin1(kColorLabelKeys[static_cast<std::size_t>(index)].data())},
+            {"count", view.color_label_counts_[static_cast<std::size_t>(index)]}});
+      }
+      QJsonObject answer{{"total", static_cast<double>(result.unique_file_count_)},
+                         {"capture_date", StatsBucketsJson(view.date_stats_)},
+                         {"camera", StatsBucketsJson(view.camera_stats_)},
+                         {"lens", StatsBucketsJson(view.lens_stats_)},
+                         {"label", StatsBucketsJson(view.label_stats_)},
+                         {"rating", StatsBucketsJson(view.rating_stats_)},
+                         {"color_labels", color_labels},
+                         {"delete_mark", view.delete_mark_count_}};
+      if (!options.local_day_time_zone_.empty()) {
+        answer.insert("import_date", StatsBucketsJson(view.import_date_stats_));
+      }
+      reply.SendResult(answer);
+    } catch (const std::invalid_argument& e) {
+      SendAutomationParamError(reply, QString(), QString::fromUtf8(e.what()));
+    } catch (const std::exception& e) {
+      SendAutomationOwnerError(reply, AutomationErrorCode::Failed, QString::fromUtf8(e.what()));
+    }
+  };
+  RegisterOrFail(registry, std::move(stats), &ok, error);
 
   AutomationCommandSpec thumbnail;
   thumbnail.method      = QStringLiteral("library.thumbnail");

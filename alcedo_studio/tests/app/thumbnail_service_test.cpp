@@ -48,6 +48,8 @@
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "support/test_temp_directory.hpp"
+#include "../support/storage_test_access.hpp"
 #ifdef HAVE_METAL
 #include "image/metal_image.hpp"
 #endif
@@ -652,52 +654,26 @@ static void FuzzAlbumScrollGridCellsNoThrow(
 
 class ThumbnailServiceTests : public ::testing::Test {
  protected:
+  test::TestTempDirectory temp_dir_;
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
 
   void                  SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    // Use a unique suffix so the global scheduler's worker threads (which may
-    // still hold the previous test's DB) don't block the current test.
-    static int db_seq = 0;
-    const auto suffix = "_" + std::to_string(db_seq++);
-    db_path_ = std::filesystem::temp_directory_path() / ("thumbnail_service_test" + suffix + ".db");
-    meta_path_ =
-        std::filesystem::temp_directory_path() / ("thumbnail_service_test" + suffix + ".json");
-    try {
-      if (std::filesystem::exists(db_path_)) {
-        std::filesystem::remove(db_path_);
-      }
-    } catch (...) {
-    }
-    try {
-      if (std::filesystem::exists(meta_path_)) {
-        std::filesystem::remove(meta_path_);
-      }
-    } catch (...) {
-    }
+    // Each test has its own directory, so the global scheduler's worker threads (which may
+    // still hold the previous test's DB) do not block the current test.
+    db_path_   = temp_dir_ / "project.db";
+    meta_path_ = temp_dir_ / "project.json";
 #ifdef EASY_PROFILER_ENABLE
     EASY_PROFILER_ENABLE;
 #endif
   }
 
   void TearDown() override {
-    // The global PipelineScheduler may still have worker threads holding
-    // DuckDB file handles after the test function returns.  Swallow removal
-    // errors so the test result reflects assertion failures, not teardown races.
-    try {
-      if (std::filesystem::exists(db_path_)) {
-        std::filesystem::remove(db_path_);
-      }
-    } catch (...) {
-    }
-    try {
-      if (std::filesystem::exists(meta_path_)) {
-        std::filesystem::remove(meta_path_);
-      }
-    } catch (...) {
-    }
+    // The global PipelineScheduler may still have worker threads holding DuckDB file handles
+    // after the test function returns. The directory removal ignores errors, so the test
+    // result reflects assertion failures, not teardown races.
 #ifdef EASY_PROFILER_ENABLE
     profiler::dumpBlocksToFile(TEST_PROFILER_OUTPUT_PATH);
     EASY_PROFILER_DISABLE;
@@ -1038,8 +1014,7 @@ namespace {
 void ExpectRasterThumbnailRenders(const std::filesystem::path& db_path,
                                   const std::filesystem::path& meta_path,
                                   const std::string& file_name, OIIO::TypeDesc file_format) {
-  const auto raster_dir =
-      std::filesystem::temp_directory_path() / ("thumbnail_raster_" + file_name);
+  const auto raster_dir = db_path.parent_path() / ("raster_" + file_name);
   std::filesystem::remove_all(raster_dir);
   std::filesystem::create_directories(raster_dir);
   const auto raster_path = raster_dir / file_name;
@@ -1190,10 +1165,7 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
     GTEST_SKIP() << "Sample RAW file is missing: " << raw_path.string();
   }
 
-  const auto cache_root =
-      std::filesystem::temp_directory_path() /
-      ("thumbnail_disk_cache_e2e_" +
-       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const auto cache_root = temp_dir_ / "thumbnail_cache";
   std::error_code cleanup_ec;
   std::filesystem::remove_all(cache_root, cleanup_ec);
 
@@ -1239,7 +1211,7 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
   // commit) and its transaction chain.
   std::string root_label;
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             graph = graph_service.LoadGraph(element_id);
@@ -1286,7 +1258,7 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
   commit_hash_t active_head{};
   std::string   active_label;
   {
-    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto db_guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             graph = graph_service.LoadGraph(element_id);

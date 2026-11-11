@@ -43,6 +43,7 @@
 #include "storage/store/semantic/semantic_records.hpp"
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "utils/string/convert.hpp"
+#include "support/test_temp_directory.hpp"
 
 namespace alcedo {
 namespace {
@@ -117,6 +118,7 @@ auto ReportQuery(const std::string& kind, const std::string& query,
 }
 
 TEST(SemanticRelevanceCalibrationTest, LiveRelevanceKeepsListedPhotosAndRejectsNonsenseQueries) {
+  const test::TestTempDirectory temp_dir;
   const char* project_env = std::getenv("ALCEDO_SEMANTIC_CALIBRATION_PROJECT");
   const char* queries_env = std::getenv("ALCEDO_SEMANTIC_CALIBRATION_QUERIES");
   if (project_env == nullptr || *project_env == '\0' || queries_env == nullptr ||
@@ -133,7 +135,7 @@ TEST(SemanticRelevanceCalibrationTest, LiveRelevanceKeepsListedPhotosAndRejectsN
   }
 
   const auto queries  = ReadCalibrationQueries(std::filesystem::path(queries_env));
-  const auto work_dir = std::filesystem::temp_directory_path() / "semantic_relevance_calibration";
+  const auto work_dir = temp_dir.Path() / "semantic_relevance_calibration";
   std::error_code ec;
   std::filesystem::remove_all(work_dir, ec);
   std::filesystem::create_directories(work_dir);

@@ -274,13 +274,14 @@ void ImportServiceImpl::RunImport(const std::vector<image_path_t>& paths, const 
           fail(path, ImportErrorCode::FILE_NOT_FOUND, "Source is not a readable regular file");
           continue;
         }
-        auto handle = image_pool_service_->CreateAndReturnPinnedEmpty();
+        auto handle = image_pool_service_->CreateAndReturnPinned([&](Image& image) {
+          image.image_path_ = path;
+          image.image_name_ = path.filename().wstring();
+        });
         if (!handle) throw std::runtime_error("Cannot allocate import Image");
         pending.pin   = std::make_shared<ImagePoolManager::PinnedImageHandle>(std::move(handle));
         auto image    = pending.pin->Get();
         pending.image = image->image_id_;
-        image->image_path_ = path;
-        image->image_name_ = path.filename().wstring();
         pending.element    = fs_service_->Write_NoSync<sl_element_id_t>([&](FileSystem& fs) {
           std::shared_ptr<SleeveElement> target;
           const auto                     target_path = dest.lexically_normal();
