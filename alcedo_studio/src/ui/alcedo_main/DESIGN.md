@@ -544,6 +544,22 @@ always use the classic cells.
   Delete mark sit on the photo as on the cards. Selection is the 2 px
   `textColor` outline around the photo.
 
+### Library delegate cost (#836)
+
+A scroll or a zoom at the smallest level shows about 200 photos at once, so the
+Library keeps the work per photo small:
+
+- **Reuse:** a justified tile is a slot of `JustifiedLayoutModel`; a scroll gives
+  the slot of a photo that leaves to a photo that enters. The classic grid reuses
+  its cards (`reuseItems`). A reused delegate pins its new photo once, after the
+  model has written every role of the change.
+- **Parts made when shown:** the hover details of a tile (made on the first
+  hover), the text of a thumbnail problem, and the classic caption of the shown
+  zoom level (none at 14 columns, one line at 8 and 11, three lines at 2 to 6;
+  made between frames).
+- **Thumbnail state:** a delegate reads the thumbnail URL and state from the
+  roles of its model row.
+
 ### Library sort, group, and sections
 
 | Token | px | Use |

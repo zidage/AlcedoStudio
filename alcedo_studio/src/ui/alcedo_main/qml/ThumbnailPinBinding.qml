@@ -12,6 +12,18 @@ import "ThumbnailTier.js" as ThumbnailTier
 // During a zoom the view suspends the binding (view.thumbnailBindingSuspended): a new photo of a
 // delegate shows its state but pins nothing, and a release is deferred to the view, which pins
 // the visible delegates again at the new tier when the zoom settles (view.syncVisibleThumbnailBindings).
+//
+// A thumbnail state change reaches the delegate through the thumbUrl, thumbLoading,
+// thumbMissingSource, and thumbErrorText roles of its model row (dataChanged). The binding does
+// not listen to LibraryModule.thumbnailUpdated: every created delegate would run a handler for
+// every change of every photo.
+//
+// A delegate can get another photo (a justified-rows slot, a reused grid card): the model writes
+// elementId and imageId one after the other, so the binding asks the view to pin it once, after
+// both are set (view.schedulePinBind), and never pins the new photo with the image of the old
+// one. The view, not the binding, defers the call: a deferred call on a delegate that is destroyed
+// meanwhile would run without its context. A delegate that the grid puts in its pool calls
+// release(), and bind(false) when the grid reuses it.
 QtObject {
     id: pin
     objectName: "thumbnailPinBinding"
@@ -27,6 +39,10 @@ QtObject {
     property string thumbErrorText: ""
 
     property string liveThumbUrl: thumbUrl
+    // False when liveThumbUrl names another photo than the URL before it: the Image of the
+    // delegate keeps the shown pixels while a new tier of the same photo loads, never the pixels
+    // of another photo.
+    property bool retainShownImage: true
     property bool liveThumbLoading: thumbLoading
     property bool liveThumbMissingSource: thumbMissingSource
     property string liveThumbErrorText: thumbErrorText
@@ -35,12 +51,23 @@ QtObject {
     property int pinnedImageId: 0
     property int pinnedMaxEdge: 0
 
-    onThumbUrlChanged: liveThumbUrl = thumbUrl
+    onThumbUrlChanged: showThumbUrl(thumbUrl)
     onThumbLoadingChanged: liveThumbLoading = thumbLoading
     onThumbMissingSourceChanged: liveThumbMissingSource = thumbMissingSource
     onThumbErrorTextChanged: liveThumbErrorText = thumbErrorText
-    onElementIdChanged: bind(false)
-    onImageIdChanged: bind(false)
+    onElementIdChanged: schedulePhotoBind()
+    onImageIdChanged: schedulePhotoBind()
+
+    function schedulePhotoBind() {
+        if (view) {
+            view.schedulePinBind(pin)
+        }
+    }
+
+    function showThumbUrl(url) {
+        retainShownImage = ThumbnailTier.samePhoto(liveThumbUrl, url)
+        liveThumbUrl = url
+    }
 
     function releasePinned() {
         if (pinnedElementId !== 0 && pinnedImageId !== 0) {
@@ -57,7 +84,7 @@ QtObject {
         if (!view) {
             return
         }
-        liveThumbUrl = thumbUrl
+        showThumbUrl(thumbUrl)
         liveThumbLoading = thumbLoading
         liveThumbMissingSource = thumbMissingSource
         liveThumbErrorText = thumbErrorText
@@ -116,27 +143,18 @@ QtObject {
     }
 
     Component.onCompleted: bind(false)
-    Component.onDestruction: release()
+    Component.onDestruction: {
+        if (view) {
+            view.unschedulePinBind(pin)
+        }
+        release()
+    }
 
     property Connections viewConnection: Connections {
         target: pin.view
         function onDesiredMaxEdgeChanged() {
             if (!pin.view.thumbnailBindingSuspended) {
                 pin.sync()
-            }
-        }
-    }
-
-    property Connections libraryConnection: Connections {
-        target: appModules.library
-        ignoreUnknownSignals: true
-        function onThumbnailUpdated(updatedElementId, updatedUrl, loading, missingSource,
-                                    errorText) {
-            if (updatedElementId === pin.elementId) {
-                pin.liveThumbUrl = updatedUrl
-                pin.liveThumbLoading = loading
-                pin.liveThumbMissingSource = missingSource
-                pin.liveThumbErrorText = errorText
             }
         }
     }

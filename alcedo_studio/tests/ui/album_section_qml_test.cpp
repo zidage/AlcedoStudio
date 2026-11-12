@@ -312,9 +312,11 @@ auto GridCard(QQuickWindow* window, sl_element_id_t element_id) -> QQuickItem* {
   CollectItems(
       window ? window->contentItem() : nullptr,
       [&](QQuickItem* item) {
+        // A card in the pool of the grid is not drawn and keeps the values of its last photo.
         return item->objectName().startsWith(QStringLiteral("thumbnailGridView_")) &&
                (item->objectName().contains(QStringLiteral("Card")) ||
                 item->objectName().contains(QStringLiteral("card_"))) &&
+               item->isVisible() && !item->property("pooled").toBool() &&
                item->property("elementId").toUInt() == element_id;
       },
       cards);
@@ -1562,7 +1564,7 @@ void UseTestSettings(const std::filesystem::path& dir) {
   settings.sync();
 }
 
-/// The justified tiles under @p root by photo index.
+/// The justified tiles under @p root by photo index; the empty slots (photo index -1) are left out.
 auto JustifiedTiles(QQuickItem* root) -> std::map<int, QQuickItem*> {
   std::vector<QQuickItem*> items;
   CollectItems(
@@ -1573,7 +1575,10 @@ auto JustifiedTiles(QQuickItem* root) -> std::map<int, QQuickItem*> {
       items);
   std::map<int, QQuickItem*> tiles;
   for (auto* item : items) {
-    tiles[item->property("photoIndex").toInt()] = item;
+    const int photo = item->property("photoIndex").toInt();
+    if (photo >= 0) {
+      tiles[photo] = item;
+    }
   }
   return tiles;
 }
@@ -1771,16 +1776,21 @@ TEST_F(AlbumSectionQmlTests, JustifiedRowsFillTheWidthFollowTheAspectRatioAndRat
   ASSERT_TRUE(requests.isValid());
   auto* tile = JustifiedTiles(flick).at(1);
   ASSERT_NE(tile, nullptr);
-  const auto target  = tile->property("elementId").toUInt();
-  auto*      details = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_details"));
-  auto*      camera  = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_camera"));
-  auto*      stars   = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_stars"));
-  ASSERT_NE(details, nullptr);
+  const auto target = tile->property("elementId").toUInt();
+  // The details panel is made when the pointer first enters the tile (issue 836).
+  EXPECT_EQ(FirstItem(tile, QStringLiteral("justifiedThumbnailTile_details")), nullptr);
+  QTest::mouseMove(window, SceneCenter(tile));
+  QQuickItem* details = nullptr;
+  ASSERT_TRUE(WaitUntil(
+      [&]() {
+        details = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_details"));
+        return details != nullptr && details->property("opacity").toReal() >= 1.0;
+      },
+      3000));
+  auto* camera = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_camera"));
+  auto* stars  = FirstItem(tile, QStringLiteral("justifiedThumbnailTile_stars"));
   ASSERT_NE(camera, nullptr);
   ASSERT_NE(stars, nullptr);
-  EXPECT_DOUBLE_EQ(details->property("opacity").toReal(), 0.0);
-  QTest::mouseMove(window, SceneCenter(tile));
-  ASSERT_TRUE(WaitUntil([&]() { return details->property("opacity").toReal() >= 1.0; }, 3000));
   EXPECT_TRUE(
       camera->property("text").toString().contains(QStringLiteral("Synthetic Album Camera")));
   auto* star4 = FirstItem(stars, QStringLiteral("thumbnailStar_4"));
@@ -1849,9 +1859,11 @@ auto ShownPhotoItems(QQuickItem* root) -> std::map<uint, QQuickItem*> {
       root,
       [](QQuickItem* item) {
         const auto name = item->objectName();
-        return item->isVisible() && (name == QStringLiteral("thumbnailGridView_firstCard") ||
-                                     name.startsWith(QStringLiteral("thumbnailGridView_card_")) ||
-                                     name.startsWith(QStringLiteral("thumbnailGridView_tile_")));
+        // A pooled grid card is not drawn but stays visible (issue 836).
+        return item->isVisible() && !item->property("pooled").toBool() &&
+               (name == QStringLiteral("thumbnailGridView_firstCard") ||
+                name.startsWith(QStringLiteral("thumbnailGridView_card_")) ||
+                name.startsWith(QStringLiteral("thumbnailGridView_tile_")));
       },
       items);
   std::map<uint, QQuickItem*> out;

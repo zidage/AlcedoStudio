@@ -28,3 +28,20 @@ function keepsLargerTier(pinnedMaxEdge, requestedMaxEdge, shownUrl, errorText) {
             && String(errorText || "").length === 0
             && urlMaxEdge(shownUrl) > requestedMaxEdge
 }
+
+// Element id that @p url names; 0 when the URL names no thumbnail.
+function urlElementId(url) {
+    const prefix = "image://alcedo-thumb/"
+    const text = String(url || "")
+    if (!text.startsWith(prefix)) {
+        return 0
+    }
+    const id = parseInt(text.substring(prefix.length).split("/")[0], 10)
+    return isNaN(id) ? 0 : id
+}
+
+// True when @p oldUrl and @p newUrl are thumbnails of the same photo (another tier or revision).
+function samePhoto(oldUrl, newUrl) {
+    const id = urlElementId(oldUrl)
+    return id > 0 && id === urlElementId(newUrl)
+}
