@@ -125,6 +125,12 @@ auto MixCameraColorParams(ContentHash& hash, const DevelopPayload& params) -> vo
   }
   hash.MixF64(profile.color_matrix_1_cct);
   hash.MixF64(profile.color_matrix_2_cct);
+  // The fingerprint covers the complete DCP content. Without a reference nothing is mixed, so the
+  // keys of a document without a DCP selection stay as before.
+  if (params.camera_profile_file.has_value()) {
+    hash.MixText("camera_profile_file");
+    hash.MixU64(params.camera_profile_file->fingerprint);
+  }
 }
 
 /**

@@ -4,18 +4,55 @@
 
 #include "edit/graph/develop_node_model.hpp"
 
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/operators/models/json_read.hpp"
 
 namespace alcedo {
+
+auto MakeDevelopCameraProfileFile(DcpCameraProfilePtr profile) -> DevelopCameraProfileFile {
+  if (!profile) {
+    throw std::invalid_argument("Develop: cannot reference a null DCP profile");
+  }
+  DevelopCameraProfileFile reference;
+  reference.camera_model = profile->unique_camera_model;
+  reference.profile_name = profile->profile_name;
+  reference.fingerprint  = profile->fingerprint;
+  reference.profile      = std::move(profile);
+  return reference;
+}
+
+auto DevelopCameraProfileFileToJson(const DevelopCameraProfileFile& reference) -> nlohmann::json {
+  return {{"camera_model", reference.camera_model},
+          {"profile_name", reference.profile_name},
+          {"fingerprint", DngColorProfileFingerprintToText(reference.fingerprint)}};
+}
+
+auto DevelopCameraProfileFileFromJson(const nlohmann::json& json) -> DevelopCameraProfileFile {
+  const auto text = [&json](const char* key) {
+    if (!json.is_object() || !json.contains(key) || !json[key].is_string() ||
+        json[key].get_ref<const std::string&>().empty()) {
+      throw std::runtime_error(std::string("Develop: camera_profile_file needs the string '") +
+                               key + "'");
+    }
+    return json[key].get<std::string>();
+  };
+  DevelopCameraProfileFile reference;
+  reference.camera_model = text("camera_model");
+  reference.profile_name = text("profile_name");
+  reference.fingerprint  = DngColorProfileFingerprintFromText(text("fingerprint"));
+  return reference;
+}
 
 auto DevelopParamsModel::IsDefault() const -> bool {
   const auto payload = PayloadCopy();
   return payload.demosaic_method == "default" && payload.highlights_reconstruct &&
          payload.use_camera_wb && payload.user_wb == 7600.0f && payload.wb_mode == "as_shot" &&
-         !payload.lens_enabled;
+         !payload.lens_enabled && !payload.camera_profile_file.has_value();
 }
 
 auto DevelopParamsModel::DemosaicMethod() const -> std::string {
@@ -274,6 +311,34 @@ void DevelopParamsModel::UseAllSettingsFrom(const DevelopParamsModel& current) {
                            [](DevelopPayload&, const DevelopPayload&) { return DirtyFieldMask{}; });
 }
 
+void DevelopParamsModel::ApplyCameraProfileFileUpdate(DevelopCameraProfileFileUpdate update) {
+  std::optional<DevelopCameraProfileFile> next;
+  if (update.profile) {
+    next = MakeDevelopCameraProfileFile(std::move(update.profile));
+  }
+  MutateWithDirtyFields([&next](DevelopPayload& payload) {
+    if (payload.input.has_value()) {
+      throw std::logic_error("Develop: a raster image has no camera profile");
+    }
+    const auto& current = payload.camera_profile_file;
+    const bool  same_reference =
+        current == next && (!next.has_value() || current->profile == next->profile);
+    const float previous_cct    = payload.as_shot_cct;
+    const float previous_tint   = payload.as_shot_tint;
+    payload.camera_profile_file = std::move(next);
+    SolveDevelopAsShotWhiteBalance(payload);
+    if (same_reference && payload.as_shot_cct == previous_cct &&
+        payload.as_shot_tint == previous_tint) {
+      return DirtyFieldMask{};
+    }
+    return DirtyFieldMask{DevelopDirty::WhiteBalance};
+  });
+}
+
+auto DevelopParamsModel::CameraProfileFile() const -> std::optional<DevelopCameraProfileFile> {
+  return Read([](const DevelopPayload& payload) { return payload.camera_profile_file; });
+}
+
 auto DevelopParamsModel::DngProfile() const -> DngColorProfileRef {
   return Read([](const DevelopPayload& payload) { return payload.camera_profile.dng_profile; });
 }
@@ -332,6 +397,10 @@ auto DevelopParamsModel::ToJson() const -> nlohmann::json {
       {"lens_profile_db_path", payload.lens_profile_db_path},
       {"lens_maker", payload.lens_maker},
       {"lens_model", payload.lens_model}};
+  // Documents without a DCP selection omit the key, so their JSON stays byte for byte what it was.
+  if (payload.camera_profile_file.has_value()) {
+    value["camera_profile_file"] = DevelopCameraProfileFileToJson(*payload.camera_profile_file);
+  }
   // RAW documents omit the key, so their JSON stays byte for byte what it was.
   if (payload.input.has_value()) {
     value["input"] = DevelopRasterInputToJson(*payload.input);
@@ -384,6 +453,16 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
           json_util::ReadDouble(profile_json, "color_matrix_2_cct", profile.color_matrix_2_cct);
       json_util::ReadNumberArray(profile_json, "cam_mul", profile.cam_mul.data(), 3);
     }
+    // JSON holds only the reference. Keep the bound profile when the stored values are the same;
+    // otherwise the reference stays unbound until the DCP binding resolves it.
+    if (json.contains("camera_profile_file")) {
+      auto reference = DevelopCameraProfileFileFromJson(json["camera_profile_file"]);
+      if (payload.camera_profile_file != reference) {
+        payload.camera_profile_file = std::move(reference);
+      }
+    } else {
+      payload.camera_profile_file.reset();
+    }
     payload.lens_enabled = json_util::ReadBool(json, "lens_enabled", payload.lens_enabled);
     payload.apply_vignetting =
         json_util::ReadBool(json, "apply_vignetting", payload.apply_vignetting);
@@ -414,13 +493,21 @@ void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
   MutateWithDirtyFields([payload = std::move(payload)](DevelopPayload& dest) mutable {
     if (dest == payload) {
       // Equal payloads can still differ in binding: equality compares the DNG profile
-      // fingerprint only. Take the bound profile the new payload carries.
-      auto& bound = payload.camera_profile.dng_profile;
+      // fingerprint and the stored DCP reference only. Take the bound profiles the new payload
+      // carries.
+      DirtyFieldMask rebound;
+      auto&          bound = payload.camera_profile.dng_profile;
       if (bound.IsBound() && dest.camera_profile.dng_profile.Profile() != bound.Profile()) {
         dest.camera_profile.dng_profile = std::move(bound);
-        return DirtyFieldMask{DevelopDirty::WhiteBalance};
+        rebound                         = DirtyFieldMask{DevelopDirty::WhiteBalance};
       }
-      return DirtyFieldMask{};
+      auto& file = payload.camera_profile_file;
+      if (file.has_value() && file->IsBound() &&
+          dest.camera_profile_file->profile != file->profile) {
+        dest.camera_profile_file = std::move(file);
+        rebound                  = DirtyFieldMask{DevelopDirty::WhiteBalance};
+      }
+      return rebound;
     }
     DirtyFieldMask changed;
     if (payload.demosaic_method != dest.demosaic_method) {
@@ -445,7 +532,8 @@ void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
         payload.wb_mode != dest.wb_mode || payload.custom_cct != dest.custom_cct ||
         payload.custom_tint != dest.custom_tint || payload.as_shot_cct != dest.as_shot_cct ||
         payload.as_shot_tint != dest.as_shot_tint ||
-        payload.camera_profile != dest.camera_profile) {
+        payload.camera_profile != dest.camera_profile ||
+        payload.camera_profile_file != dest.camera_profile_file) {
       changed |= DirtyFieldMask{DevelopDirty::WhiteBalance};
     }
     if (payload.input != dest.input) {
