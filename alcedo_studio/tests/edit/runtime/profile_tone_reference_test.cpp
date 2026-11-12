@@ -24,6 +24,8 @@
 #include "color/color_encoding_catalog.hpp"
 #include "edit/runtime/aces2_reference_math.h"
 #include "edit/runtime/drt/aces2_reference_runtime.hpp"
+#include "edit/runtime/profile_tone_gpu_math.h"
+#include "edit/runtime/profile_tone_stage.hpp"
 #include "image/dng_tone_curve.hpp"
 #include "oklab_contrast_reference.hpp"
 
@@ -169,6 +171,39 @@ TEST(ProfileToneReferenceTest, StageMatricesAreInversesAndKeepNeutralsNeutral) {
     const float row =
         m.ap1_to_prophoto[r * 3] + m.ap1_to_prophoto[r * 3 + 1] + m.ap1_to_prophoto[r * 3 + 2];
     EXPECT_NEAR(row, 1.0f, 1e-3f) << r;
+  }
+}
+
+// The GPU form of the stage (profile_tone_gpu_math.h on the buffer of PackProfileToneGpuData),
+// compiled for the host, against the scalar reference (phase T2).
+TEST(ProfileToneReferenceTest, GpuMathOnThePackedBufferMatchesTheScalarReference) {
+  const auto curve = CameraLikeCurve();
+  for (const auto method : kMethods) {
+    const auto response = ProfileToneNeutralResponse::Resolve(method);
+    const auto data     = PackProfileToneGpuData(ProfileToneStage{curve, method});
+    ASSERT_EQ(data.size(), static_cast<std::size_t>(PROFILE_TONE_GPU_FLOATS));
+    float largest = 0.0f;
+    for (float stops = -12.0f; stops <= 2.0f; stops += 0.5f) {
+      const float level = std::exp2(stops + kProfileToneExposureAnchorEv);
+      for (int hue = 0; hue < 12; ++hue) {
+        for (float purity : {0.0f, 0.3f, 0.6f, 0.95f}) {
+          const float angle = 6.2831853f * static_cast<float>(hue) / 12.0f;
+          Rgb         ap1{};
+          for (int c = 0; c < 3; ++c) {
+            ap1[c] = level * (1.0f + purity * std::cos(angle - 2.0943951f * static_cast<float>(c)));
+          }
+          const auto reference = ApplyProfileToneStageReference(*curve, *response, ap1);
+          const auto gpu =
+              ProfileToneApplyStage(ProfileToneMakeRgb(ap1[0], ap1[1], ap1[2]), data.data());
+          const Rgb out{gpu.r, gpu.g, gpu.b};
+          for (int c = 0; c < 3; ++c) {
+            largest = std::max(
+                largest, std::abs(out[c] - reference[c]) / std::max(std::abs(reference[c]), 1e-3f));
+          }
+        }
+      }
+    }
+    EXPECT_LT(largest, 1e-5f) << MethodName(method);
   }
 }
 

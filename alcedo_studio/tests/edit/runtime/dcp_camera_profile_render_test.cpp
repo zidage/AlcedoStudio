@@ -25,12 +25,15 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/dng_profile_gpu_data.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/profile_tone_stage.hpp"
 #include "edit/runtime/result_content_key.hpp"
+#include "edit/runtime/runtime_invalidation.hpp"
 #include "image/dcp_camera_profile.hpp"
 #include "image/dcp_profile_library.hpp"
 #include "image/dcp_source_tables.hpp"
 #include "image/dng_color_profile.hpp"
 #include "image/dng_color_profile_import.hpp"
+#include "image/dng_tone_curve.hpp"
 
 namespace alcedo {
 namespace {
@@ -92,6 +95,7 @@ struct DcpFixtureOptions {
   std::array<double, 9> forward_matrix_2 = kDcpForwardMatrixD65;
   std::string           profile_name     = "Camera Standard";
   std::string           calibration_signature;  ///< ProfileCalibrationSignature.
+  DngToneCurvePtr       tone_curve;             ///< ProfileToneCurve; null when the file lacks it.
 };
 
 auto MakeDcp(const DcpFixtureOptions& options = {}) -> DcpCameraProfilePtr {
@@ -114,6 +118,7 @@ auto MakeDcp(const DcpFixtureOptions& options = {}) -> DcpCameraProfilePtr {
   profile.color_matrix_2_cct     = 6504.0;
   profile.profile_calibration_signature = options.calibration_signature;
   profile.tables                        = MakeDngColorProfile(std::move(tables));
+  profile.profile_tone_curve            = options.tone_curve;
   return MakeDcpCameraProfile(std::move(profile));
 }
 
@@ -701,6 +706,202 @@ TEST(DcpCameraProfileRender, ComparisonDocumentTakesReferenceFromCurrent) {
   ASSERT_TRUE(analysis.CameraProfileFile().has_value());
   EXPECT_EQ(analysis.CameraProfileFile()->profile, dcp);
   EXPECT_EQ(analysis.Params(), current.Params());
+}
+
+// --- Profile tone stage (dcp_profile_tone_curve_study.md, phase T2) ---
+
+auto ToneCurve() -> DngToneCurvePtr {
+  return MakeDngToneCurve({{0.0f, 0.0f}, {0.18f, 0.44f}, {0.6f, 0.9f}, {1.0f, 1.0f}});
+}
+
+auto ToneDcp() -> DcpCameraProfilePtr {
+  DcpFixtureOptions options;
+  options.tone_curve = ToneCurve();
+  return MakeDcp(options);
+}
+
+auto SelectTone(DevelopParamsModel& model, const DcpCameraProfilePtr& dcp, bool profile_tone) {
+  DevelopCameraProfileFileUpdate update;
+  update.profile      = dcp;
+  update.profile_tone = profile_tone;
+  model.ApplyCameraProfileFileUpdate(std::move(update));
+}
+
+auto SetDrtMethod(PipelineDocument& document, DrtMethod method) {
+  DrtParameterUpdate update;
+  update.method = method;
+  document.Drt()->Params().ApplyUpdate(update);
+}
+
+TEST(DcpCameraProfileRender, ProfileToneIsWrittenOnlyAsFalse) {
+  auto model = MakeImportedModel();
+  SelectTone(model, ToneDcp(), true);
+  const auto on = model.ToJson().at("camera_profile_file");
+  EXPECT_FALSE(on.contains("profile_tone")) << on.dump();
+  EXPECT_TRUE(DevelopCameraProfileFileFromJson(on).profile_tone);
+
+  SelectTone(model, ToneDcp(), false);
+  const auto off = model.ToJson().at("camera_profile_file");
+  ASSERT_TRUE(off.contains("profile_tone")) << off.dump();
+  EXPECT_EQ(off.at("profile_tone"), false);
+  EXPECT_FALSE(DevelopCameraProfileFileFromJson(off).profile_tone);
+
+  auto malformed            = off;
+  malformed["profile_tone"] = "no";
+  EXPECT_THROW((void)DevelopCameraProfileFileFromJson(malformed), std::runtime_error);
+  // The stored values compare; the profile identity alone does not.
+  const auto stored_on  = DevelopCameraProfileFileFromJson(on);
+  const auto stored_off = DevelopCameraProfileFileFromJson(off);
+  EXPECT_NE(stored_on, stored_off);
+  EXPECT_TRUE(stored_on.SameProfile(stored_off));
+}
+
+TEST(DcpCameraProfileRender, ProfileToneSwitchMarksOnlyTheProfileToneField) {
+  const auto dcp   = ToneDcp();
+  auto       model = MakeImportedModel();
+  SelectTone(model, dcp, true);
+  const DirtyFieldMask white_balance{DevelopDirty::WhiteBalance};
+  const DirtyFieldMask profile_tone{DevelopDirty::ProfileTone};
+  const auto           wb_before   = model.FieldsRevision(white_balance);
+  const auto           tone_before = model.FieldsRevision(profile_tone);
+
+  SelectTone(model, dcp, false);
+  EXPECT_EQ(model.FieldsRevision(white_balance), wb_before);
+  EXPECT_NE(model.FieldsRevision(profile_tone), tone_before);
+  EXPECT_FALSE(model.CameraProfileFile()->profile_tone);
+  EXPECT_TRUE(model.CameraProfileFile()->IsBound());
+
+  // An equal write changes nothing.
+  const auto tone_off = model.FieldsRevision(profile_tone);
+  SelectTone(model, dcp, false);
+  EXPECT_EQ(model.FieldsRevision(profile_tone), tone_off);
+
+  // LoadJson of the switched reference keeps the bound profile.
+  auto json = model.ToJson();
+  json["camera_profile_file"].erase("profile_tone");
+  model.LoadJson(json);
+  EXPECT_TRUE(model.CameraProfileFile()->profile_tone);
+  EXPECT_EQ(model.CameraProfileFile()->profile, dcp);
+
+  // ReplaceParams with only the switch changed marks the switch and not the camera pass.
+  auto payload                              = model.Params();
+  payload.camera_profile_file->profile_tone = false;
+  const auto wb_replace                     = model.FieldsRevision(white_balance);
+  const auto tone_replace                   = model.FieldsRevision(profile_tone);
+  model.ReplaceParams(payload);
+  EXPECT_EQ(model.FieldsRevision(white_balance), wb_replace);
+  EXPECT_NE(model.FieldsRevision(profile_tone), tone_replace);
+}
+
+TEST(DcpCameraProfileRender, ProfileToneStageRunsOnlyForABoundCurveWithAces20OrOpenDrt) {
+  auto document = CreateDefaultPipelineDocument();
+  document.Develop()->Params().ReplaceParams(MakeImportedPayload());
+  EXPECT_FALSE(ResolveProfileToneStage(document).has_value()) << "no reference";
+
+  const auto dcp = ToneDcp();
+  SelectTone(document.Develop()->Params(), dcp, true);
+  for (const auto method : {DrtMethod::Aces20, DrtMethod::OpenDrt}) {
+    SetDrtMethod(document, method);
+    const auto stage = ResolveProfileToneStage(document);
+    ASSERT_TRUE(stage.has_value());
+    EXPECT_EQ(stage->curve, dcp->profile_tone_curve);
+    EXPECT_EQ(stage->method, method);
+  }
+  SetDrtMethod(document, DrtMethod::FilmPrint);
+  EXPECT_FALSE(ResolveProfileToneStage(document).has_value()) << "Film Print";
+  // The stored setting stays under Film Print.
+  EXPECT_TRUE(document.Develop()->Params().CameraProfileFile()->profile_tone);
+
+  SetDrtMethod(document, DrtMethod::Aces20);
+  SelectTone(document.Develop()->Params(), dcp, false);
+  EXPECT_FALSE(ResolveProfileToneStage(document).has_value()) << "profile_tone false";
+  document.Develop()->Params().ApplyCameraProfileFileUpdate({MakeDcp()});
+  EXPECT_FALSE(ResolveProfileToneStage(document).has_value()) << "profile without the curve";
+
+  // An unbound reference whose stage would run fails with its identity.
+  SelectTone(document.Develop()->Params(), dcp, true);
+  auto loaded = CreateDefaultPipelineDocument();
+  SetDrtMethod(loaded, DrtMethod::Aces20);
+  loaded.Develop()->Params().LoadJson(document.Develop()->Params().ToJson());
+  ASSERT_FALSE(loaded.Develop()->Params().CameraProfileFile()->IsBound());
+  try {
+    (void)ResolveProfileToneStage(loaded);
+    ADD_FAILURE() << "ResolveProfileToneStage accepted an unbound reference";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("Camera Standard"), std::string::npos) << error.what();
+  }
+}
+
+TEST(DcpCameraProfileRender, ProfileToneSwitchKeepsTheCameraKeyAndChangesTheDisplayKey) {
+  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
+                                                gpu_dag_test::FullSensor(16, 12));
+  auto document = CreateDefaultPipelineDocument();
+  document.Develop()->Params().ReplaceParams(MakeImportedPayload());
+  const auto plan  = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto dcp   = ToneDcp();
+  auto&      model = document.Develop()->Params();
+
+  SelectTone(model, dcp, false);
+  const auto off = BuildFrameResultContentKeys(plan, prepared, document);
+  SelectTone(model, dcp, true);
+  const auto on = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(on.develop_image, off.develop_image);
+  EXPECT_EQ(on.primary_grade, off.primary_grade);
+  EXPECT_NE(on.drt_display, off.drt_display);
+
+  SetDrtMethod(document, DrtMethod::OpenDrt);
+  const auto open_drt_on = BuildFrameResultContentKeys(plan, prepared, document);
+  SelectTone(model, dcp, false);
+  const auto open_drt_off = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_NE(open_drt_on.drt_display, open_drt_off.drt_display);
+
+  // Film Print keeps the stage out, so the switch keeps its display key.
+  SetDrtMethod(document, DrtMethod::FilmPrint);
+  const auto film_off = BuildFrameResultContentKeys(plan, prepared, document);
+  SelectTone(model, dcp, true);
+  const auto film_on = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(film_on.drt_display, film_off.drt_display);
+
+  // A profile without the curve has the display key of the switch turned off.
+  SetDrtMethod(document, DrtMethod::Aces20);
+  DcpFixtureOptions flat_options;
+  flat_options.profile_name = "Camera Flat";
+  const auto flat           = MakeDcp(flat_options);
+  SelectTone(model, flat, true);
+  const auto flat_on = BuildFrameResultContentKeys(plan, prepared, document);
+  SelectTone(model, flat, false);
+  const auto flat_off = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(flat_on.drt_display, flat_off.drt_display);
+}
+
+TEST(DcpCameraProfileRender, ProfileToneSwitchInvalidatesTheDisplayResultOnly) {
+  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
+                                                gpu_dag_test::FullSensor(16, 12));
+  auto document = CreateDefaultPipelineDocument();
+  document.Develop()->Params().ReplaceParams(MakeImportedPayload());
+  const auto dcp = ToneDcp();
+  SelectTone(document.Develop()->Params(), dcp, true);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  RuntimeInvalidationState state;
+  state.BindCompiledPlan(plan);
+  state.CollectAndPropagate(plan, document, prepared);
+  const auto develop = state.RequiredRevision(plan.develop_output);
+  const auto scene   = state.RequiredRevision(plan.SceneInputForDrt());
+  const auto display = state.RequiredRevision(plan.display_output);
+
+  SelectTone(document.Develop()->Params(), dcp, false);
+  state.CollectAndPropagate(plan, document, prepared);
+  EXPECT_EQ(state.RequiredRevision(plan.develop_output), develop);
+  EXPECT_EQ(state.RequiredRevision(plan.SceneInputForDrt()), scene);
+  EXPECT_NE(state.RequiredRevision(plan.display_output), display);
+
+  // A profile change still invalidates the camera pass.
+  const auto display_off = state.RequiredRevision(plan.display_output);
+  document.Develop()->Params().ApplyCameraProfileFileUpdate({MakeDcp()});
+  state.CollectAndPropagate(plan, document, prepared);
+  EXPECT_NE(state.RequiredRevision(plan.develop_output), develop);
+  EXPECT_NE(state.RequiredRevision(plan.display_output), display_off);
 }
 
 }  // namespace

@@ -27,9 +27,15 @@ auto MakeDevelopCameraProfileFile(DcpCameraProfilePtr profile) -> DevelopCameraP
 }
 
 auto DevelopCameraProfileFileToJson(const DevelopCameraProfileFile& reference) -> nlohmann::json {
-  return {{"camera_model", reference.camera_model},
-          {"profile_name", reference.profile_name},
-          {"fingerprint", DngColorProfileFingerprintToText(reference.fingerprint)}};
+  nlohmann::json json = {{"camera_model", reference.camera_model},
+                         {"profile_name", reference.profile_name},
+                         {"fingerprint", DngColorProfileFingerprintToText(reference.fingerprint)}};
+  // The stage runs by default, so only `false` is written; a reference made before the key keeps
+  // its bytes and its root id.
+  if (!reference.profile_tone) {
+    json["profile_tone"] = false;
+  }
+  return json;
 }
 
 auto DevelopCameraProfileFileFromJson(const nlohmann::json& json) -> DevelopCameraProfileFile {
@@ -45,6 +51,12 @@ auto DevelopCameraProfileFileFromJson(const nlohmann::json& json) -> DevelopCame
   reference.camera_model = text("camera_model");
   reference.profile_name = text("profile_name");
   reference.fingerprint  = DngColorProfileFingerprintFromText(text("fingerprint"));
+  if (json.contains("profile_tone")) {
+    if (!json["profile_tone"].is_boolean()) {
+      throw std::runtime_error("Develop: camera_profile_file needs the boolean 'profile_tone'");
+    }
+    reference.profile_tone = json["profile_tone"].get<bool>();
+  }
   return reference;
 }
 
@@ -325,6 +337,7 @@ void DevelopParamsModel::ApplyCameraProfileFileUpdate(DevelopCameraProfileFileUp
   std::optional<DevelopCameraProfileFile> next = std::move(update.unresolved);
   if (update.profile) {
     next                     = MakeDevelopCameraProfileFile(std::move(update.profile));
+    next->profile_tone       = update.profile_tone;
     next->source_tables      = std::move(update.source_tables);
     next->source_fingerprint = next->source_tables ? update.source_fingerprint : 0;
   }
@@ -341,16 +354,21 @@ void DevelopParamsModel::ApplyCameraProfileFileUpdate(DevelopCameraProfileFileUp
     }
     const auto& current = payload.camera_profile_file;
     const bool  same_reference =
-        current == next && (!next.has_value() || current->SameBinding(*next));
+        SameCameraProfile(current, next) && (!next.has_value() || current->SameBinding(*next));
+    const bool  same_tone       = ProfileToneSelected(current) == ProfileToneSelected(next);
     const float previous_cct    = payload.as_shot_cct;
     const float previous_tint   = payload.as_shot_tint;
     payload.camera_profile_file = std::move(next);
     SolveDevelopAsShotWhiteBalance(payload);
-    if (same_reference && payload.as_shot_cct == previous_cct &&
-        payload.as_shot_tint == previous_tint) {
-      return DirtyFieldMask{};
+    DirtyFieldMask changed;
+    if (!same_reference || payload.as_shot_cct != previous_cct ||
+        payload.as_shot_tint != previous_tint) {
+      changed |= DirtyFieldMask{DevelopDirty::WhiteBalance};
     }
-    return DirtyFieldMask{DevelopDirty::WhiteBalance};
+    if (!same_tone) {
+      changed |= DirtyFieldMask{DevelopDirty::ProfileTone};
+    }
+    return changed;
   });
 }
 
@@ -476,7 +494,10 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
     // otherwise the reference stays unbound until the DCP binding resolves it.
     if (json.contains("camera_profile_file")) {
       auto reference = DevelopCameraProfileFileFromJson(json["camera_profile_file"]);
-      if (payload.camera_profile_file != reference) {
+      if (payload.camera_profile_file.has_value() &&
+          payload.camera_profile_file->SameProfile(reference)) {
+        payload.camera_profile_file->profile_tone = reference.profile_tone;
+      } else {
         payload.camera_profile_file = std::move(reference);
       }
     } else {
@@ -551,8 +572,12 @@ void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
         payload.custom_tint != dest.custom_tint || payload.as_shot_cct != dest.as_shot_cct ||
         payload.as_shot_tint != dest.as_shot_tint ||
         payload.camera_profile != dest.camera_profile ||
-        payload.camera_profile_file != dest.camera_profile_file) {
+        !SameCameraProfile(payload.camera_profile_file, dest.camera_profile_file)) {
       changed |= DirtyFieldMask{DevelopDirty::WhiteBalance};
+    }
+    if (ProfileToneSelected(payload.camera_profile_file) !=
+        ProfileToneSelected(dest.camera_profile_file)) {
+      changed |= DirtyFieldMask{DevelopDirty::ProfileTone};
     }
     if (payload.input != dest.input) {
       changed |= DirtyFieldMask{DevelopDirty::Input};

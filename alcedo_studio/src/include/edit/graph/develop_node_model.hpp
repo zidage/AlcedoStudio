@@ -69,20 +69,26 @@ inline auto operator!=(const DevelopCameraProfile& a, const DevelopCameraProfile
 /**
  * @brief Reference from the Develop data to a DCP file of the user DCP folder.
  *
- * Project data stores only @ref camera_model, @ref profile_name, and @ref fingerprint (Develop JSON
- * key `camera_profile_file`). @ref profile is runtime data: the owner of a loaded document binds it
- * from the DCP library before the document renders. A reference is bound when @ref profile is set,
- * and unbound when it was read from project data and no binding step resolved it. Rendering code
- * must fail for an unbound reference; it never renders it as the import profile.
+ * Project data stores only @ref camera_model, @ref profile_name, @ref fingerprint, and
+ * @ref profile_tone (Develop JSON key `camera_profile_file`). @ref profile is runtime data: the
+ * owner of a loaded document binds it from the DCP library before the document renders. A reference
+ * is bound when @ref profile is set, and unbound when it was read from project data and no binding
+ * step resolved it. Rendering code must fail for an unbound reference; it never renders it as the
+ * import profile.
  *
- * Equality compares the three stored values only, so a bound and an unbound reference to the same
- * file content are equal.
+ * Equality compares the four stored values only, so a bound and an unbound reference to the same
+ * file content are equal. @ref SameProfile compares the profile identity without
+ * @ref profile_tone.
  */
 struct DevelopCameraProfileFile {
-  std::string         camera_model;     ///< UniqueCameraModel of the DCP file.
-  std::string         profile_name;     ///< ProfileName of the DCP file.
-  std::uint64_t       fingerprint = 0;  ///< DcpCameraProfile::fingerprint of the file content.
-  DcpCameraProfilePtr profile;          ///< Bound profile; null for an unbound reference.
+  std::string         camera_model;      ///< UniqueCameraModel of the DCP file.
+  std::string         profile_name;      ///< ProfileName of the DCP file.
+  std::uint64_t       fingerprint  = 0;  ///< DcpCameraProfile::fingerprint of the file content.
+  /// The profile tone stage of the display transform applies the `ProfileToneCurve` of the
+  /// profile (dcp_profile_tone_curve_study.md, section 6). Key `profile_tone`, written only as
+  /// `false`, so a reference made before the key keeps its bytes. The camera pass does not read it.
+  bool                profile_tone = true;
+  DcpCameraProfilePtr profile;  ///< Bound profile; null for an unbound reference.
   /// For a DNG source: the tables of @ref profile merged with the source values (AnalogBalance,
   /// BaselineExposure, CameraCalibration; plan phase C6). Runtime data like @ref profile; null
   /// for a source without an embedded DNG profile, which uses the tables of @ref profile.
@@ -96,12 +102,32 @@ struct DevelopCameraProfileFile {
     return profile == other.profile && source_tables == other.source_tables &&
            source_fingerprint == other.source_fingerprint;
   }
+  /// True when both references store the same profile: identity and fingerprint, without
+  /// @ref profile_tone.
+  [[nodiscard]] auto SameProfile(const DevelopCameraProfileFile& other) const -> bool {
+    return camera_model == other.camera_model && profile_name == other.profile_name &&
+           fingerprint == other.fingerprint;
+  }
 };
 
 inline auto operator==(const DevelopCameraProfileFile& a, const DevelopCameraProfileFile& b)
     -> bool {
-  return a.camera_model == b.camera_model && a.profile_name == b.profile_name &&
-         a.fingerprint == b.fingerprint;
+  return a.SameProfile(b) && a.profile_tone == b.profile_tone;
+}
+
+/// True when both are absent, or both store the same profile (@ref DevelopCameraProfileFile::
+/// SameProfile). The camera pass reads the profile and not `profile_tone`.
+[[nodiscard]] inline auto SameCameraProfile(const std::optional<DevelopCameraProfileFile>& a,
+                                            const std::optional<DevelopCameraProfileFile>& b)
+    -> bool {
+  if (a.has_value() != b.has_value()) return false;
+  return !a.has_value() || a->SameProfile(*b);
+}
+
+/// The `profile_tone` value of @p reference: false without a reference.
+[[nodiscard]] inline auto ProfileToneSelected(
+    const std::optional<DevelopCameraProfileFile>& reference) -> bool {
+  return reference.has_value() && reference->profile_tone;
 }
 
 /**
@@ -126,14 +152,16 @@ inline auto operator==(const DevelopCameraProfileFile& a, const DevelopCameraPro
 [[nodiscard]] auto MakeDevelopCameraProfileFile(DcpCameraProfilePtr profile)
     -> DevelopCameraProfileFile;
 
-/// Persisted form: `{"camera_model", "profile_name", "fingerprint"}`. The profile is not written.
+/// Persisted form: `{"camera_model", "profile_name", "fingerprint"}`, and `"profile_tone": false`
+/// when the stage is off. The profile is not written.
 [[nodiscard]] auto DevelopCameraProfileFileToJson(const DevelopCameraProfileFile& reference)
     -> nlohmann::json;
 
 /**
  * @brief Read a persisted reference. The result is unbound.
  * @throws std::runtime_error when @p json is not an object with two non-empty strings and a
- *         fingerprint text of 16 lowercase hexadecimal digits.
+ *         fingerprint text of 16 lowercase hexadecimal digits, or when `profile_tone` is present
+ *         and not a boolean.
  */
 [[nodiscard]] auto DevelopCameraProfileFileFromJson(const nlohmann::json& json)
     -> DevelopCameraProfileFile;
@@ -202,7 +230,10 @@ enum class DevelopDirty : std::uint32_t {
   /// Raster input description or profile override. Changes the raster linearize step, so it
   /// invalidates from the sensor result.
   Input        = 1U << 4,
-  All          = Demosaic | Highlights | WhiteBalance | Lens | Input,
+  /// `camera_profile_file.profile_tone` alone. The camera pass does not read it, so it invalidates
+  /// the display result only (dcp_profile_tone_curve_study.md, section 6.3).
+  ProfileTone  = 1U << 5,
+  All          = Demosaic | Highlights | WhiteBalance | Lens | Input | ProfileTone,
 };
 
 /**
@@ -268,12 +299,18 @@ struct DevelopInputProfileUpdate {
  * Both set is an invalid update. With @ref profile, a document with an embedded DNG profile also
  * needs @ref source_tables: the tables of @ref profile merged with that DNG profile, whose
  * fingerprint is @ref source_fingerprint (DcpProfileLibrary::SourceTables, plan phase C6).
+ * @ref profile_tone is the `profile_tone` value of the reference that @ref profile gives; an
+ * @ref unresolved reference keeps its own value.
+ *
+ * A change of `profile_tone` alone marks DevelopDirty::ProfileTone and not
+ * DevelopDirty::WhiteBalance, so the camera pass result stays valid.
  */
 struct DevelopCameraProfileFileUpdate {
   DcpCameraProfilePtr                     profile;
   std::optional<DevelopCameraProfileFile> unresolved;
   DngColorProfilePtr                      source_tables;
   std::uint64_t                           source_fingerprint = 0;
+  bool                                    profile_tone       = true;
 };
 
 /**

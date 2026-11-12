@@ -37,11 +37,15 @@ __kernel void drt_display_rgba32f(__read_only image2d_t src, __write_only image2
   write_imagef(dst, gid, (float4)(encoded.x, encoded.y, encoded.z, source.w));
 }
 
+/// @p profile_tone is the buffer of the profile tone stage (profile_tone_gpu_math.h); the stage runs
+/// first when @p profile_tone_enabled is not 0.
 __kernel void drt_display_scene_rgba32f(__read_only image2d_t src_image,
                                         __global const float4* src_buffer, int src_is_buffer,
                                         __write_only image2d_t dst_image, __global float4* dst_buffer,
                                         int dst_is_buffer, __global const uchar* params_bytes,
-                                        const uint params_offset_bytes, uint width, uint height) {
+                                        const uint params_offset_bytes, uint width, uint height,
+                                        __global const float* profile_tone,
+                                        int profile_tone_enabled) {
   const int2 gid = (int2)((int)get_global_id(0), (int)get_global_id(1));
   if (gid.x >= (int)width || gid.y >= (int)height) {
     return;
@@ -52,7 +56,13 @@ __kernel void drt_display_scene_rgba32f(__read_only image2d_t src_image,
                             ? src_buffer[(uint)gid.y * width + (uint)gid.x]
                             : read_imagef(src_image, kNearestClamp, gid);
   // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
-  const float3 encoded = DrtDisplayPixel((float3)(source.x, source.y, source.z), params);
+  float3 ap1 = (float3)(source.x, source.y, source.z);
+  if (profile_tone_enabled != 0) {
+    const ProfileToneRgb toned =
+        ProfileToneApplyStage(ProfileToneMakeRgb(ap1.x, ap1.y, ap1.z), profile_tone);
+    ap1 = (float3)(toned.r, toned.g, toned.b);
+  }
+  const float3 encoded = DrtDisplayPixel(ap1, params);
   const float4 outp = (float4)(encoded.x, encoded.y, encoded.z, source.w);
   if (dst_is_buffer != 0) {
     dst_buffer[(uint)gid.y * width + (uint)gid.x] = outp;

@@ -3,8 +3,9 @@
 Date: 2026-11-12
 
 Status: **Study complete; design approved** (2026-11-12, with the entry reset of section 6.5 from
-the user). Phase T1 #862 is complete (2026-11-12, section 8). Phases T2 #863 and T3 #864 are
-planned. Tracking issue #851.
+the user). Phase T1 #862 is complete (2026-11-12, section 8). Phase T2 #863 is complete on CUDA
+and OpenCL (2026-11-12, section 8); its Metal run is open. Phase T3 #864 is planned. Tracking issue
+#851.
 
 Parent: [DCP Camera Profile Plan](dcp_camera_profile_plan.md). This study replaces decision P-5 of
 that plan ("`ProfileToneCurve` is read past and not applied") with the profile tone stage of
@@ -380,8 +381,93 @@ color transform and camera profile tests of `GpuDagModelGraphTest` pass.
 - DRT compile data and result identity (section 6.3); the Film Print rule (section 6.2).
 - The stage as the first operation of the display transform on CUDA, OpenCL, and Metal.
 - Tests: a neutral ramp per backend against the host `N_m(stage)`; GPU against the scalar
-  reference on color patches; a DCP that lacks the curve and every old document render with their current bytes; a switch
-  reuses the camera-pass result.
+  reference on color patches; a DCP that lacks the curve and every old document render with their
+  current bytes; a switch reuses the camera-pass result.
+
+#### T2 completion (2026-11-12)
+
+Status: **complete on CUDA and OpenCL; Metal written, compile and run pending** (see the Metal
+item below). Branch `feature/dcp-profile-tone-render`, stacked on the T1 PR #865.
+
+Implementation:
+
+- `DevelopCameraProfileFile::profile_tone` (default true). `DevelopCameraProfileFileToJson` writes
+  `"profile_tone": false` only; `DevelopCameraProfileFileFromJson` reads the key and rejects a value
+  that is not a boolean. Equality compares the four stored values; `SameProfile` and
+  `SameCameraProfile` compare the profile identity without the switch.
+- `DevelopDirty::ProfileTone` marks a change of the switch alone. `ApplyCameraProfileFileUpdate` and
+  `ReplaceParams` mark `WhiteBalance` only when the profile, its binding, or the as-shot values
+  change. `LoadJson` keeps the bound profile when only the switch changes.
+  `RuntimeInvalidationState::CollectDevelopChanges` turns a `ProfileTone` revision into an
+  invalidation of the display result only.
+- `DevelopCameraProfileFileUpdate::profile_tone` carries the switch. The field write accepts the
+  optional boolean `profile_tone` next to `camera_model` and `profile_name` (default true). The
+  history value form, `ResolveStoredDcpCameraProfileFile`, and `BindDcpCameraProfile` keep the
+  stored value. The expected-side history check compares the switch with the identity (only the
+  fingerprint is left out).
+- `edit/runtime/profile_tone_stage.hpp`: `ResolveProfileToneStage(document)` returns the curve and
+  the method when the reference is set with `profile_tone` true, the profile has the curve, and the
+  DRT method is ACES 2.0 or OpenDRT; otherwise nullopt (Film Print, switch off, no curve, no
+  reference). An unbound reference whose stage would run throws with its identity.
+  `PackProfileToneGpuData` packs `M`, `M^-1`, the anchor scale, the inverse table exponent, the `C`
+  table, and the `N_m^-1` table (8214 floats). `UploadProfileToneGpuData` keeps the buffer in the
+  workspace values at `{drt, "profile_tone"}`.
+- `edit/runtime/profile_tone_gpu_math.h`: one implementation of the stage for the host, CUDA,
+  OpenCL C, and Metal (`ProfileToneApplyStage`), in the order of `ApplyProfileToneStageReference`.
+- `DrtPostExecutor::Execute` resolves the stage, uploads its buffer before any GPU start, and
+  passes it to `Ops::DispatchDisplayTransform` (null without the stage). The display kernels
+  (`DrtKernel`, `drt_display_scene_rgba32f`, `drt_display`) run the stage before
+  `DrtDisplayPixel`, so before the ACES reference gamut compression. Negative Scan
+  (`film_print_scan`) calls `DrtDisplayPixel` and stays without the stage.
+- `BuildFrameResultContentKeys` mixes `"profile_tone"`, the curve fingerprint, and the method into
+  the DRT display key while the stage runs. The camera key (`MixCameraColorParams`) leaves the
+  switch out. A document without the stage mixes nothing, so its keys stay.
+
+Details chosen during T2:
+
+- The stage runs before the ACES reference gamut compression. The compression leaves neutrals
+  unchanged, so the neutral rendering stays exact, and it compresses the AP1 values outside the AP1
+  gamut that `M^-1` can give for a saturated ProPhoto blue.
+- Without the stage, the OpenCL and Metal kernels receive the parameter buffer in the stage buffer
+  argument and a flag 0; the CUDA kernel receives a null pointer.
+- The T1 open item on the OpenDRT entry: the kernel converts AP1 to P3-D65, but the GPU neutral ramp
+  keeps the three channels within 3e-6 of a code value of each other. The achromatic port holds.
+
+Measurement record (Debug build, RTX 3080 Laptop, camera-like curve of T1; neutral ramp 12 stops
+below raw white to raw white in quarter stops; 128 color patches of
+`profile_tone_gpu_test_support.hpp`; display Rec.709 gamma 2.2, 100 nits):
+
+| Item | Backend | ACES 2.0 | OpenDRT |
+| --- | --- | ---: | ---: |
+| Neutral ramp, GPU display luminance against `C`, largest relative error | OpenCL | 2.5e-6 | 2.7e-6 |
+| Neutral ramp, GPU display luminance against `C`, largest relative error | CUDA | 2.5e-6 | 2.7e-6 |
+| Neutral ramp, against the host `N_m(stage)`, largest relative error | OpenCL | 7.5e-6 | 6.4e-6 |
+| Neutral ramp, against the host `N_m(stage)`, largest relative error | CUDA | 8.0e-6 | 6.5e-6 |
+| Color patches, stage on against the scalar reference, largest difference in 8-bit codes | OpenCL | 0.0008 | 0.0002 |
+| Color patches, stage on against the scalar reference, largest difference in 8-bit codes | CUDA | 0.0003 | 0.0001 |
+| Shared header on the host against the scalar reference, largest relative error | host | below 1e-5 | below 1e-5 |
+
+Tests: `DcpCameraProfileRenderTest` (5 new: JSON form, dirty fields, stage rules, keys,
+invalidation), `ProfileToneReferenceTest` (1 new: the shared header on the packed buffer),
+`PipelineDcpProfileBindingTest` (1 new: write, Undo, Redo, replay, rejected value),
+`OpenClProfileToneFixture`, `CudaProfileToneFixture`, and `MetalProfileToneFixture` (3 each: neutral
+ramp, color patches, documents without the stage render the bytes of a document without a DCP
+reference).
+
+Metal: `drt.metal`, `metal_drt_pass.mm`, and `MetalProfileToneFixture` are written but not compiled
+on this date; the Mac build host did not resolve on the network. The Metal run of the three fixture
+tests stays open for C7.
+
+Primary call chains:
+
+- Render: `DrtPostExecutor::Execute` -> `ResolveProfileToneStage` -> `PackProfileToneGpuData`
+  (`ProfileToneNeutralResponse::Resolve`, `ProfileToneStageMatrices`) -> `UploadProfileToneGpuData`
+  -> `Ops::DispatchDisplayTransform` -> display kernel -> `ProfileToneApplyStage` ->
+  `DrtDisplayPixel`.
+- Identity: `BuildFrameResultContentKeys` -> `ResolveProfileToneStage` -> DRT display key;
+  `CollectDevelopChanges` -> `DevelopDirty::ProfileTone` revision -> display result.
+- Field: `ParseCameraProfileFileUpdate` -> `DevelopCameraProfileFileUpdate::profile_tone` ->
+  `ApplyCameraProfileFileUpdate`; load: `BindDcpCameraProfile` -> stored `profile_tone`.
 
 ### T3. Editor and documents
 
@@ -425,6 +511,8 @@ color transform and camera profile tests of `GpuDagModelGraphTest` pass.
 | `DngToneCurve` | Immutable curve value with its own fingerprint | value type | per profile | Section 6.3 |
 | `kMaxDngToneCurvePoints` | Largest point count of a curve that the reader accepts | points | 4096 | T1 choice; user folder maximum 256 |
 | `kProfileToneInverseTableEntries` | Entries of the `N_m^-1` table | entries | 4097 | Section 6.3 |
+| `PROFILE_TONE_GPU_FLOATS` | Size of the stage buffer: two matrices, anchor scale, inverse exponent, `C` table, `N_m^-1` table | floats | 8214 | T2, `profile_tone_gpu_math.h` |
+| `DevelopDirty::ProfileTone` | Develop dirty field of a change of `profile_tone` alone; invalidates the display result only | bit | `1 << 5` | T2 |
 | `tn_off` | OpenDRT scene offset; `-tn_off` is the OpenDRT scene value at black | relative scene light | 0.005 | OpenDRT Standard look |
 | Surround divisor | OpenDRT divides the contrast by it for the average surround of Rec.709 gamma 2.2 | factor | 1.1 | `open_drt_runtime.cpp` |
 | OpenDRT scene 0.18 at 100 nits | Mid grey rendering of the OpenDRT defaults | display light | 0.124 | T1 measurement |
