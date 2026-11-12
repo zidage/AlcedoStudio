@@ -61,9 +61,10 @@ auto FindItem(QQuickItem* root, const QString& object_name) -> QQuickItem* {
   return nullptr;
 }
 
-// The Library inspector column of LibraryWorkspace.qml: the InspectorPanel above the button row,
-// with the same bindings to the selection and the backend as Main.qml gives LibraryWorkspace.
-constexpr char kHarnessQml[]          = R"(
+// The Library inspector panel of LibraryWorkspace.qml: the InspectorPanel above the marks card and
+// the button row, with the same layout and the same bindings to the selection and the backend as
+// Main.qml gives LibraryWorkspace.
+constexpr char kHarnessQml[] = R"(
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -81,46 +82,62 @@ ApplicationWindow {
         id: selectionStateObj
     }
 
-    ColumnLayout {
+    Rectangle {
         anchors.fill: parent
-        anchors.margins: 10
-        spacing: 10
+        color: appTheme.bgPanelColor
 
-        InspectorPanel {
-            id: inspectorPanel
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            interactionPolicy: appModules.interactionPolicy
-            selectionState: selectionStateObj
-            selectedCount: selectionStateObj.selectedCount
-        }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 0
 
-        LibraryMarksControl {
-            id: marksControl
-            Layout.fillWidth: true
-            visible: !inspectorPanel.exportPageActive
-            selectionState: selectionStateObj
-            selectedCount: selectionStateObj.selectedCount
-            backendInteractive: appModules.project.serviceReady
-        }
+            InspectorPanel {
+                id: inspectorPanel
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.topMargin: 10
+                Layout.leftMargin: 10
+                Layout.rightMargin: 10
+                interactionPolicy: appModules.interactionPolicy
+                selectionState: selectionStateObj
+                selectedCount: selectionStateObj.selectedCount
+            }
 
-        LibraryInspectorActions {
-            id: inspectorActions
-            Layout.fillWidth: true
-            Layout.preferredHeight: 52
-            inspectorPanel: inspectorPanel
-            selectionState: selectionStateObj
-            selectedCount: selectionStateObj.selectedCount
-            backendInteractive: appModules.project.serviceReady
-            exportQueueCount: appModules.exportQueue.count
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: appTheme.spaceSm
+                Layout.leftMargin: 10 + appTheme.spaceMd
+                Layout.rightMargin: 10 + appTheme.spaceMd
+                Layout.bottomMargin: 10 + appTheme.spaceMd
+                spacing: appTheme.spaceSm
+
+                LibraryMarksControl {
+                    id: marksControl
+                    Layout.fillWidth: true
+                    visible: !inspectorPanel.exportPageActive
+                    selectionState: selectionStateObj
+                    selectedCount: selectionStateObj.selectedCount
+                    backendInteractive: appModules.project.serviceReady
+                }
+
+                LibraryInspectorActions {
+                    id: inspectorActions
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: buttonHeight
+                    inspectorPanel: inspectorPanel
+                    selectionState: selectionStateObj
+                    selectedCount: selectionStateObj.selectedCount
+                    backendInteractive: appModules.project.serviceReady
+                    exportQueueCount: appModules.exportQueue.count
+                }
+            }
         }
     }
 }
 )";
 
-constexpr int  kAlbumPage             = 0;
-constexpr int  kImagePage             = 1;
-constexpr int  kExportPage            = 2;
+constexpr int  kAlbumPage    = 0;
+constexpr int  kImagePage    = 1;
+constexpr int  kExportPage   = 2;
 
 // A harness URL in the production QML directory, so InspectorPanel, LibraryInspectorActions,
 // and SelectionState resolve as sibling files.
@@ -340,6 +357,45 @@ TEST_F(LibraryInspectorActionsQmlTests, ExportTabShowsOnlyTheExportButtonAtFullR
     return row->width() > 0 && std::abs(column.ExportButton()->width() - row->width()) < 0.5;
   })) << "export button width "
       << column.ExportButton()->width() << ", row width " << row->width();
+  EXPECT_TRUE(column.ActionWarnings().empty()) << Joined(column.ActionWarnings());
+}
+
+TEST_F(LibraryInspectorActionsQmlTests, MarksCardAndButtonsHaveTheInsetOfTheSectionCards) {
+  ApplicationModuleHost backend;
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 3);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  SelectTwoImages(backend, *packed);
+
+  InspectorColumn column(backend);
+  ASSERT_TRUE(WaitUntil([&]() { return column.AddButton() != nullptr; }))
+      << Joined(column.warnings());
+  column.ShowPage(kAlbumPage);
+
+  auto* inspector = qobject_cast<QQuickItem*>(column.inspector());
+  ASSERT_NE(inspector, nullptr);
+  QQuickItem* section = nullptr;
+  ASSERT_TRUE(WaitUntil([&]() {
+    section = FindItem(inspector, QStringLiteral("captureDateFilterSection"));
+    return section != nullptr && section->width() > 0;
+  }));
+  auto* marks = column.marks();
+  auto* row   = column.actions();
+  ASSERT_NE(marks, nullptr);
+  ASSERT_NE(row, nullptr);
+
+  const auto section_rect = section->mapRectToScene(QRectF(0, 0, section->width(), 1));
+  for (auto* item : {marks, row}) {
+    const auto rect = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+    SCOPED_TRACE(item->objectName().toStdString());
+    EXPECT_NEAR(rect.left(), section_rect.left(), 0.5);
+    EXPECT_NEAR(rect.width(), section_rect.width(), 0.5);
+  }
+  // The marks card sits above the button row, and both sit below the scrolling pages.
+  const auto inspector_bottom = inspector->mapToScene(QPointF(0, inspector->height())).y();
+  EXPECT_LE(inspector_bottom, marks->mapToScene(QPointF(0, 0)).y());
+  EXPECT_LT(marks->mapToScene(QPointF(0, marks->height())).y(), row->mapToScene(QPointF(0, 0)).y());
+  EXPECT_DOUBLE_EQ(row->height(), 44.0);
   EXPECT_TRUE(column.ActionWarnings().empty()) << Joined(column.ActionWarnings());
 }
 
