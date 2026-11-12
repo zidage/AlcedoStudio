@@ -90,12 +90,19 @@ section 6). Its symbols:
 - `M` is the camera-pass matrix pair from AP1 to linear ProPhoto RGB (D50).
 - `E_a` is the exposure anchor, 1.5 EV: Alcedo +1.5 EV renders mid grey as ACR 0 EV.
 - `C` is the profile curve as a 4097-entry spline table.
+- `H` is the highlight shoulder at the curve input: identity up to the knee `k` = 0.5 (one stop
+  below raw white), then `1 - (1 - k)^2 / (v + 1 - 2k)` for an input `v`. It has slope 1 at the
+  knee and stays below 1, so raw white maps to 0.75 and each further stop halves the distance to
+  the curve's white.
 - `N_m^-1` is the inverse neutral response of DRT method `m` (ACES 2.0 or OpenDRT) at its
   default parameters on a 100-nit SDR reference display.
 
-Per pixel, the stage computes `M^-1 * N_m^-1(R_C(clamp(M * x * 2^-E_a, 0, 1)))`, where `R_C` is the
-DNG SDK baseline RGB tone with `C`. The DRT then renders the result, so the DRT maps tone once,
-and a neutral renders the profile curve on the reference display. CUDA, OpenCL, and Metal compile
+Per pixel, the stage computes `M^-1 * N_m^-1(R_C(H(M * x * 2^-E_a)))`, with `H` per channel and
+negative channels at 0, where `R_C` is the DNG SDK baseline RGB tone with `C`. The DRT then
+renders the result, so the DRT maps tone once. A neutral below the knee renders the profile curve
+on the reference display. Scene light above raw white, from a higher exposure or from highlight
+reconstruction, rolls toward display white and keeps its gradation in place of a clip at raw
+white (study section 6.6). CUDA, OpenCL, and Metal compile
 one implementation (`profile_tone_gpu_math.h`). The stage runs when the reference is bound, its
 profile has the curve, the Develop key `camera_profile_file.profile_tone` is true (the default;
 the key is written only as `false`), and the DRT method is ACES 2.0 or OpenDRT. Film Print and
@@ -144,6 +151,8 @@ and [table import](https://android.googlesource.com/platform/external/dng_sdk/+/
 | `M` | AP1 to linear ProPhoto RGB (D50) | matrix | camera-pass matrix | Alcedo |
 | `E_a` | Exposure anchor between Alcedo and ACR | EV | 1.5 | Data, study section 3.3 |
 | `C` | Profile tone curve as a spline table | display light | 4097 entries on [0, 1] | DNG SDK |
+| `H` | Highlight shoulder at the curve input | ACR scale (raw white 1) | identity to `k`, limit 1 | Study section 6.6 |
+| `k` | Knee of `H` (`kProfileToneHighlightKnee`) | ACR scale | 0.5, one stop below raw white | Study section 6.6 |
 | `R_C` | Baseline RGB tone with `C` | display light | per pixel | DNG SDK `RefBaselineRGBTone` |
 | `N_m^-1` | Inverse neutral response of DRT method `m` | relative scene light | 4097 entries | Alcedo DRT, default parameters, 100 nits |
 | `profile_tone` | Develop key of `camera_profile_file`; written only as `false` | boolean | default true | Study section 6.3 |

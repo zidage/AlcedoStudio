@@ -32,6 +32,9 @@ inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 2;
 /// applies the diffusion filter, built on the full-frame scatter canvas, before the display
 /// transform. Version 6 spreads the diffusion highlight boost over a log2 exposure range.
 inline constexpr std::uint32_t kDrtImplementationVersion           = 6;
+/// Bumped when the pixel rules of the profile tone stage change; only a DRT display key with the
+/// stage mixes it. Version 2 replaces the clip at raw white with the highlight shoulder.
+inline constexpr std::uint32_t kProfileToneImplementationVersion   = 2;
 /// Bumped when film print pixel rules change. Other DRT methods do not mix this value.
 /// Version 2 adds the point kernels on CUDA. Before it, a film print stopped with an error.
 /// Version 4 keeps the half-size cells of the inhibitor on their pixels at an odd size.

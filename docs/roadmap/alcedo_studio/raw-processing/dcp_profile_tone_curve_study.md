@@ -5,7 +5,9 @@ Date: 2026-11-12
 Status: **Study complete; design approved** (2026-11-12, with the entry reset of section 6.5 from
 the user). Phase T1 #862 is complete (2026-11-12, section 8). Phase T2 #863 is complete on CUDA
 and OpenCL (2026-11-12, section 8); its Metal run is open. Phase T3 #864 is implemented
-(2026-11-12, section 8); its user check on two camera makes is open. Tracking issue #851.
+(2026-11-12, section 8); its user check on two camera makes is open. The highlight shoulder of
+section 6.6 replaces the clip at raw white (2026-11-12, after the user saw clipped highlights at a
+high exposure). Tracking issue #851.
 
 Parent: [DCP Camera Profile Plan](dcp_camera_profile_plan.md). This study replaces decision P-5 of
 that plan ("`ProfileToneCurve` is read past and not applied") with the profile tone stage of
@@ -163,6 +165,8 @@ Symbols (section 10 lists each with its value):
 - `E_a`: the exposure anchor, `kDefaultPipelineExposureEv` (1.5 EV, constraint K-2).
 - `C`: the profile tone curve: the DNG SDK cubic spline through the tag points, sampled into 4097
   entries on `[0, 1]`.
+- `H`: the highlight shoulder at the curve input (section 6.6): 0 below 0, identity up to the knee
+  `k` = 0.5, and `1 - (1 - k)^2 / (v + 1 - 2k)` above it.
 - `R_C`: baseline RGB tone with `C` (section 2, step 4).
 - `N_m`: neutral response of DRT method `m` with its product default parameters at the SDR
   reference display: scene luminance to display light relative to the peak.
@@ -171,15 +175,15 @@ Symbols (section 10 lists each with its value):
 Stage:
 
 ```
-p      = clamp(M * x * 2^-E_a, 0, 1)        ProPhoto, ACR exposure scale, ramp clip
+p      = H(M * x * 2^-E_a)                  ProPhoto, ACR exposure scale, highlight shoulder
 d      = R_C(p)                              display light, profile rendering
 s      = N_m^-1(d)                           per channel, back to scene light of method m
 x_out  = M^-1 * s                            AP1 into the DRT
 ```
 
-At the default DRT parameters and the SDR display, a neutral input renders exactly as the profile
-curve: `N_m(N_m^-1(C(v))) = C(v)`. Colored input takes the profile's display values through the
-DRT's own chroma model.
+At the default DRT parameters and the SDR display, a neutral input below the knee renders exactly
+as the profile curve: `N_m(N_m^-1(C(v))) = C(v)`. Above the knee it renders as `C(H(v))`. Colored
+input takes the profile's display values through the DRT's own chroma model.
 
 ### 6.2 Rules
 
@@ -189,7 +193,7 @@ DRT's own chroma model.
 | DRT OpenDRT | `N` = OpenDRT achromatic path with the `DrtPayload` default parameters at 100 nits. A changed tone scale control acts relative to the profile tone: `N_user(N_default^-1(C))`. |
 | DRT Film Print | The stage stays out of the render (K-6). The stored setting stays. |
 | HDR display | `N` stays at the SDR reference; the HDR DRT renders `x_out`. ACES 2.0 at 1000 nits renders the profile white (scene 128) at 962 nits. |
-| Scene light above the curve domain | Clips at display white, as the SDK exposure ramp does. Exposure and Highlights pull values back below raw white. |
+| Scene light above the curve domain | The highlight shoulder `H` rolls it toward display white with a step for each stop; it reaches white only in the limit (section 6.6). The SDK exposure ramp clips there. |
 | Negative ProPhoto channels | Clip to 0, as in the SDK. |
 | Curve with a falling segment | Applies as stored, as the SDK does. `N^-1` needs a monotone `N` only. |
 | Profile without the tag | The stage is unavailable for that profile (K-5). |
@@ -242,6 +246,66 @@ The function `ProfileToneEntryResetTargets(document, develop_before, develop_aft
 `app/editor_pipeline_command_service.cpp` returns the targets; `EditorHistoryMutation::
 CommitAdjustment` appends them to the batch of a `camera_profile_file` commit.
 
+### 6.6 Highlight shoulder
+
+Finding (user, 2026-11-12, after T3): with the stage on, a high exposure clips the highlights. The
+first form of the stage clamped the curve input to `[0, 1]`, as the SDK exposure ramp does. Every
+scene value above raw white (ACR scale 1, Alcedo scene `2^E_a`) rendered as display white, where
+the DRT alone keeps about five stops of roll-off above raw white. A curve with a steep top, such as
+Canon EOS R6 Camera Standard (slope 0.91 at raw white), also showed a kink where the clip starts.
+
+Cause: the camera curves spend little display range on highlights. The top stop below raw white
+holds 18.4 codes (median, 8-bit on gamma 2.2; p10 11.7, p90 33.9; `scripts/survey_dcp_tone_curves.py`).
+A rendering that keeps the curve exact up to raw white uses the whole display range at raw white.
+So any highlight range above raw white takes codes from the top of the curve.
+
+Rule: the curve input passes through `H` per ProPhoto channel in place of the clamp:
+
+```
+H(v) = 0                                   v < 0
+H(v) = v                                   0 <= v <= k
+H(v) = 1 - (1 - k)^2 / (v + 1 - 2k)        v > k,   k = 0.5
+```
+
+- `H` is the identity up to `k`, one stop below raw white, so mid grey and the shadows keep the
+  profile curve exactly. At `k`, value and slope (1) agree, so the shoulder starts smoothly.
+- With `k` = 0.5, `H(v) = 1 - 0.25 / v` above the knee: raw white maps to 0.75, and each further
+  stop halves the distance to the curve's white. `H` stays below 1 for every finite scene value,
+  and the curve's own top renders the roll-off.
+- `H` acts per channel, as the clamp did, so a bright saturated color approaches white smoothly in
+  place of a flat patch at the clip.
+- `H` is the same for every profile and DRT method; one constant (`kProfileToneHighlightKnee`,
+  `PROFILE_TONE_HIGHLIGHT_KNEE`) sets it on the host and on the three backends.
+
+Effect on the sample profiles (8-bit codes, display light on gamma 2.2, stops from raw white at
+the ACR scale):
+
+| Profile | Form | -1 | -0.5 | 0 | +1 | +2 | +3 | +4 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Sony ILCE-7M4 Camera ST | clip | 238.2 | 249.1 | 255.0 | 255.0 | 255.0 | 255.0 | 255.0 |
+| Sony ILCE-7M4 Camera ST | shoulder | 238.2 | 246.7 | 250.5 | 253.6 | 254.7 | 254.9 | 255.0 |
+| Canon EOS R6 Camera Standard | clip | 237.3 | 246.4 | 255.0 | 255.0 | 255.0 | 255.0 | 255.0 |
+| Canon EOS R6 Camera Standard | shoulder | 237.3 | 244.4 | 247.7 | 250.9 | 252.3 | 252.9 | 253.3 |
+| Nikon Z 7 Camera Standard v2 | clip | 244.2 | 251.5 | 255.0 | 255.0 | 255.0 | 255.0 | 255.0 |
+| Nikon Z 7 Camera Standard v2 | shoulder | 244.2 | 250.0 | 252.3 | 254.2 | 254.6 | 254.8 | 254.9 |
+| Panasonic DC-S5 Camera Natural | clip | 222.3 | 238.9 | 255.0 | 255.0 | 255.0 | 255.0 | 255.0 |
+| Panasonic DC-S5 Camera Natural | shoulder | 222.3 | 234.4 | 241.7 | 249.4 | 253.0 | 254.6 | 254.8 |
+
+Over the 1390 distinct curves of the user folder, the shoulder lowers the top stop below raw white
+by at most 6.0 codes (median; p90 11.3, max 26.4) and gives the two stops above raw white 4.8
+codes (median; p10 1.9). The candidates of the evidence script:
+
+| Shoulder | Knee | Loss at or below raw white: median, p90, max | Gain from raw white to +2 stops: median, p10 |
+| --- | ---: | --- | --- |
+| Rational (chosen form) | 0.35 | 8.9, 16.5, 37.4 | 6.7, 3.3 |
+| Rational (chosen form) | **0.50** | **6.0, 11.3, 26.4** | **4.8, 1.9** |
+| Rational (chosen form) | 0.60 | 4.5, 8.6, 20.1 | 3.7, 0.8 |
+| Exponential, `k + (1 - k)(1 - e^(-(v - k)/(1 - k)))` | 0.50 | 4.0, 7.9, 18.5 | 3.8, 0.8 |
+
+The knee 0.5 keeps the profile exact over all but its top stop and still gives the steep-top
+curves several codes per stop above raw white. The exponential form costs fewer codes but reaches
+white within about one stop above raw white, which leaves the clip visible one stop later.
+
 ---
 
 ## 7. Alternatives
@@ -255,6 +319,9 @@ CommitAdjustment` appends them to the batch of a `camera_profile_file` commit.
 | A5. `N` from the active DRT parameters | Cancels every DRT tone control on neutrals. | Rejected |
 | A6. ACR3 default curve for profiles that lack the tag | Ships Adobe data (K-5). | Rejected |
 | A7. Entry reset of exposure to 0 EV with `E_a` = 0 | Equal to the anchor for an untouched document. A user exposure, such as +2.0 EV, renders 1.5 stops brighter after a DCP selection. | Rejected; the anchor keeps every exposure |
+| A8. Clip the curve input at raw white, as the SDK exposure ramp | Exact profile up to raw white; every scene value above it renders as display white, with a kink on a steep-top curve (section 6.6). | Replaced by the shoulder `H` (2026-11-12) |
+| A9. Shoulder sized by the primary grade exposure above the anchor (ACR-style exposure) | Exact at the anchor exposure. At +1 EV the pushed range lands on the flat top of the curve and gains 1 to 3 codes over the clip. The DRT stage would read a Grade value, and a second Grade or a Mask exposure would break the rule. | Rejected |
+| A10. Profile curve up to a display knee, then the DRT's own shoulder | About twice the highlight range of `H`, at about twice the loss below raw white (Sony ILCE-7M4 Camera ST: raw white 243.7 for a knee at display 0.7). Needs a curve table for each DRT method. | Rejected; `H` keeps more of the profile look |
 
 ## 8. Phases
 
@@ -574,6 +641,53 @@ reset rules moved to `EntryResetWrites` to keep the mutation a router. The split
 
 Open: the user check on two camera makes with ACES 2.0 and OpenDRT. The Metal run of T2 joins C7.
 
+#### Highlight shoulder (2026-11-12)
+
+Status: **implemented on CUDA and OpenCL; Metal compiles the same header, run pending with the T2
+Metal item.** Branch `feature/dcp-profile-tone-editor` (T3 PR #868). Design: section 6.6.
+
+Implementation:
+
+- `profile_tone_gpu_math.h`: `PROFILE_TONE_HIGHLIGHT_KNEE` and `ProfileToneHighlight`;
+  `ProfileToneApplyStage` applies it per ProPhoto channel in place of `ProfileToneClamp01`. The
+  buffer layout stays (8214 floats).
+- `profile_tone_reference.hpp`: `kProfileToneHighlightKnee` and `ProfileToneHighlightShoulder`,
+  in the float order of the GPU form; `ApplyProfileToneStageReference` uses it.
+  `profile_tone_stage.cpp` checks that the two knees agree.
+- `kProfileToneImplementationVersion` = 2 (`content_key.hpp`): the DRT display key mixes it only
+  while the stage runs, so every other document keeps its keys.
+- `scripts/survey_dcp_tone_curves.py` prints the tables of section 6.6.
+
+Measurement record (Debug build, RTX 3080 Laptop, camera-like curve of T1; neutral ramp now 12
+stops below raw white to 4 stops above it):
+
+| Item | ACES 2.0 | OpenDRT |
+| --- | ---: | ---: |
+| Host: neutral error of `N_m(stage(v))` against `C(H(v))`, relative | 3.1e-5 | 2.4e-5 |
+| OpenCL: neutral ramp against `C(H(v))` / against the host `N_m(stage)`, relative | 6.0e-6 / 7.5e-6 | 6.6e-6 / 6.4e-6 |
+| CUDA: neutral ramp against `C(H(v))` / against the host `N_m(stage)`, relative | 6.4e-6 / 8.0e-6 | 6.9e-6 / 6.5e-6 |
+| OpenCL / CUDA: color patches against the scalar reference, 8-bit codes | 0.0008 / 0.0003 | 0.0002 / 0.0000 |
+
+CIEDE2000 against the SDK-style rendering (T1 patch set, ACES 2.0): mean 1.73, p95 4.47, max 6.72
+after the entry reset (T1 with the clip: 2.17, 6.69, 16.08); 3.49, 7.59, 9.28 before the reset
+(T1: 4.85, 15.25, 26.01). The neutral patches below the knee stay below 0.1; the neutral patch
+0.75 stops below raw white measures 0.25, the shoulder's deviation from the SDK curve there. The
+largest error moves from the bright violet to ProPhoto (0.904, 0.595, 0.286), a bright orange.
+
+Tests: `ProfileToneReferenceTest` (11; new: `HighlightShoulderKeepsTheCurveBelowTheKneeAndStaysBelowWhite`;
+`SceneLightAboveRawWhiteRendersAtThePeak` becomes `SceneLightAboveRawWhiteRollsOffTowardThePeak`),
+`DcpCameraProfileRenderTest` 24/24, `CudaProfileToneFixture` 3/3, `OpenClProfileToneFixture` 3/3.
+
+Primary call chain:
+
+```text
+DrtPostExecutor::Execute -> ResolveProfileToneStage -> PackProfileToneGpuData
+  -> display kernel -> ProfileToneApplyStage
+     -> ProfileToneMatrix (AP1 to ProPhoto) -> ProfileToneHighlight per channel (anchor, H)
+     -> ProfileToneBaselineRgb (C) -> ProfileToneInverse per channel -> ProfileToneMatrix (to AP1)
+  -> DrtDisplayPixel
+```
+
 ## 9. Changes to the parent plan
 
 - P-5 reads: "`ProfileToneCurve` applies through the profile tone stage of the
@@ -591,6 +705,9 @@ Open: the user check on two camera makes with ACES 2.0 and OpenDRT. The Metal ru
 | `M` | AP1 to linear ProPhoto RGB (D50) | matrix | camera-pass matrix | Alcedo |
 | `E_a` | Exposure anchor between Alcedo and ACR | EV | 1.5 (`kDefaultPipelineExposureEv`) | Data, section 3.3 |
 | `C` | Profile tone curve as a spline table | display light | 4097 entries on `[0, 1]` | DNG SDK |
+| `H` | Highlight shoulder at the curve input, per ProPhoto channel | ACR scale (raw white 1) | identity to `k`, then `1 - (1 - k)^2 / (v + 1 - 2k)`, limit 1 | Section 6.6 |
+| `kProfileToneHighlightKnee`, `PROFILE_TONE_HIGHLIGHT_KNEE` | Knee `k` of `H` | ACR scale | 0.5, one stop below raw white | Section 6.6 |
+| `kProfileToneImplementationVersion` | Version of the stage pixel rules in the DRT display key, mixed only while the stage runs | integer | 2 (the shoulder) | Section 8 |
 | `R_C` | Baseline RGB tone with `C` | display light | per pixel | DNG SDK `RefBaselineRGBTone` |
 | `N_m` | Neutral response of DRT method `m`, default parameters, SDR reference | display light relative to peak | per method | Alcedo DRT |
 | `N_m^-1` | Inverse of `N_m`, held at the peak | relative scene light | 4097 entries on `d^(1/2.4)` | Inferred |

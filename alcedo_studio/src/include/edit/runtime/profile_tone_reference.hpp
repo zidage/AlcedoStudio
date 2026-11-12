@@ -31,6 +31,17 @@ inline constexpr float       kProfileToneReferencePeakNits    = 100.0f;
 inline constexpr std::size_t kProfileToneInverseTableEntries  = 4097;
 /// Exponent of the inverse table coordinate: entry i holds `N^-1((i / 4096)^2.4)`.
 inline constexpr float       kProfileToneInverseTableExponent = 2.4f;
+/// Knee `k` of the highlight shoulder at the curve input, ACR scale: one stop below raw white.
+inline constexpr float       kProfileToneHighlightKnee        = 0.5f;
+
+/**
+ * @brief The highlight shoulder `H` at the curve input (study section 6.6), ACR scale.
+ *
+ * 0 below 0; identity up to @ref kProfileToneHighlightKnee `k`; above it
+ * `1 - (1 - k)^2 / (x + 1 - 2k)`, with slope 1 at the knee and a limit of 1. Raw white maps to
+ * 0.75, and each further stop halves the distance to the curve's white.
+ */
+[[nodiscard]] auto           ProfileToneHighlightShoulder(float x) -> float;
 
 /**
  * @brief Neutral response `N_m` of one DRT method and its inverse table `N_m^-1`.
@@ -86,7 +97,7 @@ class ProfileToneNeutralResponse {
 /**
  * @brief The profile tone stage for one AP1 pixel at the DRT entry (study section 6.1).
  *
- * `p = clamp(M * x * 2^-E_a, 0, 1)` in linear ProPhoto (D50), `d = R_C(p)` with the DNG SDK
+ * `p = H(M * x * 2^-E_a)` per channel in linear ProPhoto (D50), `d = R_C(p)` with the DNG SDK
  * baseline RGB tone, `s = N_m^-1(d)` per channel, and `M^-1 * s` back to AP1. `M` is the
  * AP1-to-ProPhoto matrix of the camera pass (ProPhotoToAp1 with XyzD50ToAp1Matrix).
  */

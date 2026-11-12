@@ -18,6 +18,7 @@ static_assert(PROFILE_TONE_TABLE_INTERVALS + 1 == kProfileToneInverseTableEntrie
 static_assert(PROFILE_TONE_INVERSE_TABLE == PROFILE_TONE_CURVE_TABLE + kDngToneTableEntries);
 static_assert(PROFILE_TONE_GPU_FLOATS ==
               PROFILE_TONE_INVERSE_TABLE + kProfileToneInverseTableEntries);
+static_assert(PROFILE_TONE_HIGHLIGHT_KNEE == kProfileToneHighlightKnee);
 
 auto ResolveProfileToneStage(const PipelineDocument& document) -> std::optional<ProfileToneStage> {
   const auto* drt     = document.Drt();

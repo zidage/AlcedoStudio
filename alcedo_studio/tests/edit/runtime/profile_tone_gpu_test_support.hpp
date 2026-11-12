@@ -7,7 +7,8 @@
 // The profile tone stage at the entry of the display transform on one GPU backend
 // (dcp_profile_tone_curve_study.md, phase T2). Each backend test renders only the DRT pass on an
 // AP1 scene image and runs the checks of this file:
-// - a neutral ramp renders the profile curve `C` through the DRT (the host `N_m(stage)`);
+// - a neutral ramp renders the profile curve `C` with the highlight shoulder `H` through the DRT
+//   (the host `N_m(stage)`), above raw white as well;
 // - color patches match the scalar reference ApplyProfileToneStageReference;
 // - a document without the stage renders the bytes of a document without a DCP reference.
 
@@ -111,11 +112,12 @@ inline auto DisplayLuminance(const Rgba& pixel) -> float {
 }
 
 /**
- * @brief Neutral ramp: the GPU display luminance against the profile curve `C` at the ACR exposure
- *        scale, and against the host `N_m(stage)`.
+ * @brief Neutral ramp: the GPU display luminance against the profile curve with its highlight
+ *        shoulder `C(H(v))` at the ACR exposure scale, and against the host `N_m(stage)`.
  *
- * The ramp runs from 12 stops below raw white to raw white (scene `2^E_a` at the DRT entry) in
- * quarter stops. The largest relative errors go to @p report for the measurement record.
+ * The ramp runs from 12 stops below raw white to 4 stops above it (raw white is scene `2^E_a` at
+ * the DRT entry) in quarter stops. The largest relative errors go to @p report for the measurement
+ * record.
  */
 inline void ExpectNeutralRampRendersTheProfileCurve(const RenderDrt& render, std::string* report) {
   const auto curve   = CameraLikeCurve();
@@ -125,7 +127,7 @@ inline void ExpectNeutralRampRendersTheProfileCurve(const RenderDrt& render, std
     const auto         document = MakeToneDocument(method, profile);
     std::vector<Rgba>  ramp;
     std::vector<float> raw;
-    for (float stops = -12.0f; stops <= 0.0f; stops += 0.25f) {
+    for (float stops = -12.0f; stops <= 4.0f; stops += 0.25f) {
       const float value = std::exp2(stops + kProfileToneExposureAnchorEv);
       raw.push_back(std::exp2(stops));
       ramp.push_back({value, value, value, 1.0f});
@@ -137,7 +139,7 @@ inline void ExpectNeutralRampRendersTheProfileCurve(const RenderDrt& render, std
     double neutral_cast = 0.0;
     for (std::size_t i = 0; i < pixels.size(); ++i) {
       const float gpu    = DisplayLuminance(pixels[i]);
-      const float target = curve->Interpolate(raw[i]);
+      const float target = curve->Interpolate(ProfileToneHighlightShoulder(raw[i]));
       const auto  staged =
           ApplyProfileToneStageReference(*curve, *response, {ramp[i].r, ramp[i].g, ramp[i].b});
       const float host     = response->Forward(staged[1]);

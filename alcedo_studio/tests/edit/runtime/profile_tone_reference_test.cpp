@@ -113,15 +113,16 @@ TEST(ProfileToneReferenceTest, InverseTableReturnsTheSceneValueOfEachDisplayValu
   }
 }
 
-/// Largest relative error of `N_m(stage(v))` against `C(v)` on a neutral ramp from 12 stops below
-/// raw white to raw white (measurement (a) of study section 8).
+/// Largest relative error of `N_m(stage(v))` against `C(H(v))` on a neutral ramp from 12 stops
+/// below raw white to 4 stops above it (measurement (a) of study section 8). Below the knee of the
+/// highlight shoulder, `C(H(v))` is `C(v)`.
 auto NeutralRampError(const DngToneCurve& curve, const ProfileToneNeutralResponse& response)
     -> double {
   double max_error = 0.0;
-  for (float stops = -12.0f; stops <= 0.0f; stops += 1.0f / 16.0f) {
+  for (float stops = -12.0f; stops <= 4.0f; stops += 1.0f / 16.0f) {
     const float raw      = std::exp2(stops);
     const Rgb   staged   = ApplyProfileToneStageReference(curve, response, AnchoredNeutral(raw));
-    const float expected = curve.Interpolate(raw);
+    const float expected = curve.Interpolate(ProfileToneHighlightShoulder(raw));
     for (float channel : staged) {
       max_error = std::max(max_error, std::abs(response.Forward(channel) / expected - 1.0));
     }
@@ -139,16 +140,44 @@ TEST(ProfileToneReferenceTest, NeutralRampThroughTheStageRendersTheProfileCurveW
   }
 }
 
-TEST(ProfileToneReferenceTest, SceneLightAboveRawWhiteRendersAtThePeak) {
+TEST(ProfileToneReferenceTest, HighlightShoulderKeepsTheCurveBelowTheKneeAndStaysBelowWhite) {
+  constexpr float k = kProfileToneHighlightKnee;
+  EXPECT_FLOAT_EQ(ProfileToneHighlightShoulder(-0.25f), 0.0f);
+  for (float x : {0.0f, 0.01f, 0.18f, 0.3f, k}) EXPECT_FLOAT_EQ(ProfileToneHighlightShoulder(x), x);
+  // Slope 1 on both sides of the knee: no kink where the shoulder starts.
+  constexpr float h = 1e-4f;
+  const float below = (ProfileToneHighlightShoulder(k) - ProfileToneHighlightShoulder(k - h)) / h;
+  const float above = (ProfileToneHighlightShoulder(k + h) - ProfileToneHighlightShoulder(k)) / h;
+  EXPECT_NEAR(below, 1.0f, 2e-3f);
+  EXPECT_NEAR(above, 1.0f, 2e-3f);
+  // Raw white maps to 0.75; each further stop halves the distance to the curve's white.
+  EXPECT_FLOAT_EQ(ProfileToneHighlightShoulder(1.0f), 0.75f);
+  float previous = ProfileToneHighlightShoulder(k);
+  for (int stop = 1; stop <= 12; ++stop) {
+    const float x     = std::exp2(static_cast<float>(stop - 1));
+    const float value = ProfileToneHighlightShoulder(2.0f * x);
+    EXPECT_NEAR(1.0f - value, 0.5f * (1.0f - ProfileToneHighlightShoulder(x)), 1e-6f) << stop;
+    EXPECT_GT(value, previous) << stop;
+    EXPECT_LT(value, 1.0f) << stop;
+    previous = value;
+  }
+}
+
+TEST(ProfileToneReferenceTest, SceneLightAboveRawWhiteRollsOffTowardThePeak) {
   const auto curve = CameraLikeCurve();
   for (const auto method : kMethods) {
     const auto response = ProfileToneNeutralResponse::Resolve(method);
-    for (float raw : {1.0f, 4.0f, 64.0f}) {
-      const Rgb staged = ApplyProfileToneStageReference(*curve, *response, AnchoredNeutral(raw));
-      for (float channel : staged) {
-        EXPECT_NEAR(response->Forward(channel), 1.0f, 1e-3f) << MethodName(method) << ' ' << raw;
-      }
+    float      previous = 0.0f;
+    for (float raw : {0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f}) {
+      const Rgb   staged  = ApplyProfileToneStageReference(*curve, *response, AnchoredNeutral(raw));
+      const float display = response->Forward(staged[1]);
+      // Each stop above the knee keeps a step in display light: the stage does not clip.
+      EXPECT_GT(display, previous + 1e-4f) << MethodName(method) << ' ' << raw;
+      EXPECT_LT(display, 1.0f) << MethodName(method) << ' ' << raw;
+      previous = display;
     }
+    const Rgb far = ApplyProfileToneStageReference(*curve, *response, AnchoredNeutral(4096.0f));
+    EXPECT_NEAR(response->Forward(far[1]), 1.0f, 1e-3f) << MethodName(method);
   }
 }
 
@@ -431,8 +460,18 @@ TEST(ProfileToneReferenceTest, RecordsCiede2000OfTheAces2StageAgainstTheSdkRende
   EXPECT_TRUE(std::isfinite(stage_stats.max));
   EXPECT_TRUE(std::isfinite(a4_stats.max));
   EXPECT_TRUE(std::isfinite(before_stats.max));
-  // The neutral patches of the per-channel inverse render as the profile renders them.
-  for (std::size_t i = 0; i < patches.size(); i += 25) EXPECT_LT(per_channel[i], 0.1) << i;
+  // The neutral patches below the knee of the highlight shoulder render as the profile renders
+  // them. The neutral patch above the knee (0.75 stops below raw white) records the shoulder: the
+  // SDK clips there and keeps the curve.
+  std::printf("[measurement] neutral patch 0.75 stops below raw white: CIEDE2000 %.2f\n",
+              per_channel[patches.size() - 25]);
+  for (std::size_t i = 0; i < patches.size(); i += 25) {
+    if (patches[i][0] <= kProfileToneHighlightKnee) {
+      EXPECT_LT(per_channel[i], 0.1) << i;
+    } else {
+      EXPECT_LT(per_channel[i], 1.0) << i;
+    }
+  }
 }
 
 }  // namespace

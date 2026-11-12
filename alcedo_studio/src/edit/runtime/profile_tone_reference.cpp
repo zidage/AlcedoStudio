@@ -169,13 +169,21 @@ auto ProfileToneStageMatrices() -> const ProfileToneMatrices& {
   return matrices;
 }
 
+auto ProfileToneHighlightShoulder(float x) -> float {
+  // Float, in the order of ProfileToneHighlight: above raw white the curve output lies where the
+  // inverse table is steep, so the host and the GPU form keep the same rounding.
+  constexpr float k = kProfileToneHighlightKnee;
+  if (x <= k) return std::max(x, 0.0f);
+  return 1.0f - (1.0f - k) * (1.0f - k) / (x + 1.0f - 2.0f * k);
+}
+
 auto ApplyProfileToneStageReference(const DngToneCurve&               curve,
                                     const ProfileToneNeutralResponse& response,
                                     const std::array<float, 3>&       ap1) -> std::array<float, 3> {
   const auto& matrices = ProfileToneStageMatrices();
   const float anchor   = std::exp2(-kProfileToneExposureAnchorEv);
   auto        prophoto = Apply(matrices.ap1_to_prophoto, ap1);
-  for (float& channel : prophoto) channel = std::clamp(channel * anchor, 0.0f, 1.0f);
+  for (float& channel : prophoto) channel = ProfileToneHighlightShoulder(channel * anchor);
   ApplyDngBaselineRgbTone(curve, prophoto);
   for (float& channel : prophoto) channel = response.Inverse(channel);
   return Apply(matrices.prophoto_to_ap1, prophoto);

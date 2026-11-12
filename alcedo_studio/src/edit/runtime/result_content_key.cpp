@@ -666,6 +666,7 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
     drt.MixText("profile_tone");
     drt.MixU64(stage->curve->fingerprint);
     drt.MixU32(static_cast<std::uint32_t>(stage->method));
+    drt.MixU32(kProfileToneImplementationVersion);
   }
   if (plan.output_color_override.has_value()) {
     drt.MixU32(static_cast<std::uint32_t>(plan.output_color_override->encoding_space));
