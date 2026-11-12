@@ -2,8 +2,9 @@
 
 Date: 2026-11-12
 
-Status: **Study complete; design proposed.** Phases T1 to T3 (section 8) wait for the user's
-approval of the design in section 6.
+Status: **Study complete; design approved** (2026-11-12, with the entry reset of section 6.5 from
+the user). Phases T1 to T3 (section 8) are planned: T1 #862, T2 #863, T3 #864. Tracking issue
+#851.
 
 Parent: [DCP Camera Profile Plan](dcp_camera_profile_plan.md). This study replaces decision P-5 of
 that plan ("`ProfileToneCurve` is read past and not applied") with the profile tone stage of
@@ -214,6 +215,32 @@ The switch is visible when the selected DCP profile has a curve, and disabled wh
 is Film Print. A change is one settled edit of the Develop field `camera_profile_file`; Undo, Redo,
 and version checkout restore it.
 
+### 6.5 Entry reset of the RAW import look
+
+The profile curve and LookTable carry the camera's contrast and color. The RAW import look of the
+Default document (contrast `kDefaultPipelineContrast`, saturation `kDefaultPipelineSaturation`)
+adds a second contrast and color on top. The stage takes the rule of the Film Print entry
+(`FilmPrintEntrySaturationTarget`, user decision 2026-11-12):
+
+- **Profile tone entry**: a settled edit of `camera_profile_file` after which the stage runs and
+  before which it stayed out of the render. The stage runs when the reference is bound, its profile
+  has a curve, `profile_tone` is true, and the DRT method is ACES 2.0 or OpenDRT. A DCP selection
+  from the default entry and the Tone Curve switch turned on are both entries.
+- On an entry, when **Color Grade 1** (`grade.primary`, `PipelineDocument::PrimaryGrade`) exists,
+  the same history batch writes its contrast to `kProfileToneEntryContrast` while it still equals
+  `kDefaultPipelineContrast`, and its saturation to `kProfileToneEntrySaturation` while it still
+  equals `kDefaultPipelineSaturation`. A value that the user selected stays. A document that lacks
+  `grade.primary` keeps every Grade value.
+- An input sequence that is open on contrast or saturation keeps its value, as for Film Print.
+- One Undo restores the profile reference and both values; Redo writes them again.
+- Exposure stays. The anchor `E_a` makes the stored +1.5 EV the profile's own exposure
+  (section 3.3), so a user exposure keeps its meaning with the stage on or off.
+- A leave (stage on to stage off) writes no Grade value, as Film Print does.
+
+The function `ProfileToneEntryResetTargets(document, develop_before, develop_after)` in
+`app/editor_pipeline_command_service.cpp` returns the targets; `EditorHistoryMutation::
+CommitAdjustment` appends them to the batch of a `camera_profile_file` commit.
+
 ---
 
 ## 7. Alternatives
@@ -226,6 +253,7 @@ and version checkout restore it.
 | A4. Full ACES 2.0 inverse in place of the per-channel neutral inverse | Exact ACR color on ACES 2.0 SDR. ACES 2.0 only; its forward chroma compression cancels. | Measured in T1; a later mode at most |
 | A5. `N` from the active DRT parameters | Cancels every DRT tone control on neutrals. | Rejected |
 | A6. ACR3 default curve for profiles that lack the tag | Ships Adobe data (K-5). | Rejected |
+| A7. Entry reset of exposure to 0 EV with `E_a` = 0 | Equal to the anchor for an untouched document. A user exposure, such as +2.0 EV, renders 1.5 stops brighter after a DCP selection. | Rejected; the anchor keeps every exposure |
 
 ## 8. Phases
 
@@ -248,8 +276,9 @@ rest of the DCP path.
 - Measurement record in this document: (a) neutral error of `N_m(stage(v))` against `C` for both
   methods, target below 1e-3 relative; (b) CIEDE2000 of the ACES 2.0 host forward of the stage
   against the SDK-style reference (steps 4 and 5, Rec.709, sRGB) on a synthetic patch set, for the
-  per-channel inverse and for A4; (c) the contrast and saturation of the Default document on top of
-  the stage.
+  per-channel inverse and for A4; (c) the same CIEDE2000 for the Default document after the entry
+  reset of section 6.5, which records how far contrast 0 and saturation 1.0 stand from the SDK
+  rendering.
 - Tests use synthetic DCP files. `ProfileToneCurveIsReadPastAndDoesNotChangeTheProfile` becomes
   a test that the curve keeps the profile fingerprint.
 
@@ -265,6 +294,11 @@ rest of the DCP path.
 ### T3. Editor and documents
 
 - Switch in `EditorCameraProfileSection.qml`, list model property for curve presence, settled edit.
+- Entry reset of section 6.5: `ProfileToneEntryResetTargets` and its use in `CommitAdjustment`.
+  Tests next to `FilmPrintEntryResetsImportSaturationInOneUndoStep`: a DCP selection resets both
+  values in one Undo step; a user value stays; a document that lacks `grade.primary` keeps its
+  values; Film Print as the DRT method writes no Grade value; turning the switch off writes no
+  Grade value.
 - `docs/dng_color_profiles.md` and the parent plan describe the stage.
 - User check on two camera makes with ACES 2.0 and OpenDRT.
 
@@ -292,5 +326,9 @@ rest of the DCP path.
 | ACES 2.0 scene value at the SDR peak | `r_hit` at 100 nits | relative scene light | 128 | OpenColorIO ToneScaleParams |
 | ACES 2.0 scene 0.18 at 100 nits | Mid grey rendering | display light | 0.100 | OpenColorIO ToneScaleParams |
 | `profile_tone` | Key of `camera_profile_file`; written only as `false` | boolean | default true | Section 6.3 |
+| `kProfileToneEntryContrast` | Contrast of Color Grade 1 after a profile tone entry | slider value | 0 (catalog identity) | User decision, section 6.5 |
+| `kProfileToneEntrySaturation` | Saturation of Color Grade 1 after a profile tone entry | multiplier | 1.0, as `kFilmPrintEntrySaturation` | User decision, section 6.5 |
+| `kDefaultPipelineContrast` | Contrast of the RAW import look | slider value | 15 | `pipeline_document.hpp` |
+| `kDefaultPipelineSaturation` | Saturation of the RAW import look | multiplier | 1.3 | `pipeline_document.hpp` |
 | `DngToneCurve` | Immutable curve value with its own fingerprint | value type | per profile | Section 6.3 |
 | Raw white | Sensor saturation after black subtraction | relative scene light | 1.0 before the default exposure | Alcedo RAW scale |

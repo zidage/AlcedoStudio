@@ -9,7 +9,7 @@ is open. **C3 complete** (2026-11-12, Develop reference and effective profile in
 implemented** (2026-11-12, editor section and list model); the user check of the section is open.
 **C6 complete** (2026-11-12, DCP profile on a DNG source with the source calibration). C7 planned.
 **P-5 revised** (2026-11-12): the [DCP Profile Tone Curve Study](dcp_profile_tone_curve_study.md)
-brings `ProfileToneCurve` into the product in its phases T1 to T3, before C7.
+brings `ProfileToneCurve` into the product in its phases T1 #862, T2 #863, and T3 #864, before C7.
 
 Parent: [Roadmap](../../roadmap.md).
 
