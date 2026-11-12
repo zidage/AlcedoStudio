@@ -1730,9 +1730,9 @@ Implemented behavior:
     import profile overload without a reference.
 Deviations from this section:
   - The RAW file is the CI fixture ci_rawfiles/...DSC00830.ARW (Sony, Bayer) and not a file of
-    sample_images/raw/. The Mac and CI have no sample_images/raw folder; with the CI fixture the
-    Metal test runs in the macOS CI job (GpuDagMetalDevelopTest is a ci_metal target) and on the
-    Mac without a private fixture.
+    sample_images/raw/. The Mac and CI have no sample_images/raw folder; the CI fixture (Git LFS)
+    is on both, so the test runs on the Mac and can run in the macOS CI job once Metal tests get
+    a CI label (#285).
   - The test name is DcpProfileMatchesScalarReference in the fixtures CudaDevelopFixture,
     OpenClDevelopFixture, and MetalDevelopFixture (binaries GpuDagCudaDevelopTest,
     GpuDagOpenClDevelopTest, GpuDagMetalDevelopTest).
@@ -1778,8 +1778,9 @@ Performance or resource evidence, if required: not required. The DCP test takes 
   1.7 s (OpenCL), and 0.8 s (Metal) in Debug.
 Evidence path: build/tmp/dcp_camera_profile/c7/ on Windows and build/tmp/dcp_c7/ on the Mac
   (build and ctest logs, CUDA previews), removed after the pull request.
-Remaining defects or unavailable platforms: none for this plan. Pre-existing Metal failures
-  outside this plan, reproduced on origin/main: see the issues listed in the pull request.
+Remaining defects or unavailable platforms: none for this plan. The three caller-suite failures
+  reproduce on origin/main c54ac05fa: #869 (Metal geometry resample and camera color tests, stale
+  since 59bc10741) and #870 (film grain tests dereference null lab values after the skip).
 ```
 
 ---
