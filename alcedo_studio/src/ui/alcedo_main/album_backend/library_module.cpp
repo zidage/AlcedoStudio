@@ -570,18 +570,23 @@ void LibraryModule::RequestLibraryRefresh() { ScheduleRefresh(RefreshKind::kRepl
 void LibraryModule::RequestLibraryContentRefresh() { ScheduleRefresh(RefreshKind::kInPlace); }
 
 void LibraryModule::ScheduleRefresh(RefreshKind kind) {
-  if (!refresh_in_flight_) {
-    refresh_in_flight_ = true;
-    emit QueryStateChanged();
-  }
+  const bool was_updating  = refresh_in_flight_;
+  const bool was_replacing = QueryReplacing();
+  refresh_in_flight_       = true;
   if (refresh_scheduled_) {
     if (kind == RefreshKind::kReplace) {
       scheduled_refresh_kind_ = RefreshKind::kReplace;
+    }
+    if (!was_updating || was_replacing != QueryReplacing()) {
+      emit QueryStateChanged();
     }
     return;
   }
   refresh_scheduled_      = true;
   scheduled_refresh_kind_ = kind;
+  if (!was_updating || was_replacing != QueryReplacing()) {
+    emit QueryStateChanged();
+  }
   // Combine the requests of this event loop turn: a caller that clears a filter and then
   // reloads the folder gets one read with both changes.
   QMetaObject::invokeMethod(this, [this]() { SubmitPendingRefresh(); }, Qt::QueuedConnection);
@@ -780,8 +785,11 @@ void LibraryModule::SubmitPendingRefresh() {
                                   .read_groups_              = true,
                                   .read_statistics_          = true,
                                   .read_occurrence_file_ids_ = true};
-  } else {
-    unpublished_replace_ = true;
+  } else if (!std::exchange(unpublished_replace_, true) &&
+             requested_kind == RefreshKind::kInPlace) {
+    // A content refresh that must replace (a pending presentation or search change): the
+    // Library now shows the loading grid.
+    emit QueryStateChanged();
   }
 
   // A different scope must not show the previous scope's photos while the new read runs.

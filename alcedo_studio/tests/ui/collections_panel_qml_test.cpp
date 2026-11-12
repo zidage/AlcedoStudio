@@ -12,10 +12,13 @@
 #include <gtest/gtest.h>
 
 #include <QColor>
+#include <QCoreApplication>
+#include <QDropEvent>
 #include <QEventLoop>
 #include <QFont>
 #include <QFontMetricsF>
 #include <QLocale>
+#include <QMimeData>
 #include <QObject>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -252,6 +255,8 @@ ApplicationWindow {
     property var menuItem: null
     property string lastMenuSignal: ""
     property int lastCollectionId: -1
+    property var lastDropUrls: []
+    property int lastDropFolderId: -1
 
     Loader {
         id: panelLoader
@@ -265,6 +270,10 @@ ApplicationWindow {
             item.theme = root
             item.host = root
             item.backendInteractive = true
+            item.filesDropped.connect(function(urls, folderId) {
+                root.lastDropUrls = urls
+                root.lastDropFolderId = folderId
+            })
         }
     }
 
@@ -391,6 +400,35 @@ struct Harness {
     }
     QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, end);
     ProcessEvents(60);
+  }
+  /// Drag @p urls from the system onto the center of @p onto and drop them there. Returns
+  /// whether the row showed the drop-target style before the drop.
+  /// The file manager offers Copy and Move with Shift held, so it proposes Move.
+  auto DropUrls(QQuickItem* onto, const QList<QUrl>& urls) -> bool {
+    constexpr Qt::DropActions kOffered = Qt::CopyAction | Qt::MoveAction;
+    QMimeData                 mime;
+    mime.setUrls(urls);
+    const QPoint    pos = SceneCenter(onto);
+    QDragEnterEvent enter(pos, kOffered, &mime, Qt::NoButton, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(window, &enter);
+    QDragMoveEvent move(pos, kOffered, &mime, Qt::NoButton, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(window, &move);
+    ProcessEvents(30);
+    const bool highlighted = onto->property("dropTarget").toBool();
+    QDropEvent drop(QPointF(pos), kOffered, &mime, Qt::NoButton, Qt::ShiftModifier);
+    EXPECT_EQ(drop.proposedAction(), Qt::MoveAction);
+    QCoreApplication::sendEvent(window, &drop);
+    last_drop_action = drop.isAccepted() ? drop.dropAction() : Qt::IgnoreAction;
+    ProcessEvents(30);
+    return highlighted;
+  }
+  Qt::DropAction last_drop_action = Qt::IgnoreAction;
+  [[nodiscard]] auto LastDropFolderId() const -> int {
+    return window->property("lastDropFolderId").toInt();
+  }
+  void ClearLastDrop() {
+    window->setProperty("lastDropFolderId", -1);
+    window->setProperty("lastDropUrls", QVariantList{});
   }
 };
 
@@ -631,6 +669,52 @@ TEST(CollectionsPanelQmlTest, DragMovesACollectionAndRefusesItsOwnSubtree) {
   EXPECT_FALSE(h.fake.calls.join(',').contains(QStringLiteral("MoveFolder")))
       << h.fake.calls.join(',').toStdString();
   EXPECT_EQ(h.fake.ParentOf(4), 0u);
+}
+
+// Issue #757: local files dropped on a row import into that row's collection.
+TEST(CollectionsPanelQmlTest, FileDropOnARowNamesThatCollection) {
+  Harness h(SmallTree(), /*current_element=*/4);
+  ASSERT_NE(h.panel, nullptr);
+  const QList<QUrl> files{QUrl::fromLocalFile(QStringLiteral("C:/photos/a.ARW")),
+                          QUrl::fromLocalFile(QStringLiteral("C:/photos/trip"))};
+
+  // Disabled (an import runs or an agent holds control): no highlight, no drop.
+  EXPECT_FALSE(h.DropUrls(h.Row(1), files));
+  EXPECT_EQ(h.LastDropFolderId(), -1);
+
+  h.panel->setProperty("fileDropEnabled", true);
+  ProcessEvents(20);
+  // A non-current collection: the drop names that collection, not the current one.
+  EXPECT_TRUE(h.DropUrls(h.Row(1), files));
+  EXPECT_EQ(h.LastDropFolderId(), static_cast<int>(h.fake.UiOf(1)));
+  EXPECT_EQ(h.window->property("lastDropUrls").toList().size(), 2);
+  EXPECT_FALSE(h.Row(1)->property("dropTarget").toBool());
+  // Copy, never Move: a Move answer lets the file manager delete the dropped files.
+  EXPECT_EQ(h.last_drop_action, Qt::CopyAction);
+
+  // All Photos.
+  h.ClearLastDrop();
+  EXPECT_TRUE(h.DropUrls(h.Row(0), files));
+  EXPECT_EQ(h.LastDropFolderId(), 0);
+
+  // A web link is not a local file.
+  h.ClearLastDrop();
+  EXPECT_FALSE(h.DropUrls(h.Row(4), {QUrl(QStringLiteral("https://example.com/a.jpg"))}));
+  EXPECT_EQ(h.LastDropFolderId(), -1);
+}
+
+TEST(CollectionsPanelQmlTest, FileDropOnTheDraftRowIsRefused) {
+  Harness h(SmallTree());
+  ASSERT_NE(h.panel, nullptr);
+  h.panel->setProperty("fileDropEnabled", true);
+  h.Invoke("beginCreateCollection", h.fake.UiOf(4));
+  QQuickItem* draft = nullptr;
+  ASSERT_TRUE(WaitUntil([&] {
+    draft = FindItem(h.window->contentItem(), QStringLiteral("collectionDraftRow"));
+    return draft != nullptr && draft->height() > 0.0;
+  }));
+  EXPECT_FALSE(h.DropUrls(draft, {QUrl::fromLocalFile(QStringLiteral("C:/photos/a.ARW"))}));
+  EXPECT_EQ(h.LastDropFolderId(), -1);
 }
 
 TEST(CollectionsPanelQmlTest, AddToMenuListsExportQueueThenABoundedFilterableTree) {

@@ -15,6 +15,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSpinBox>
+#include <QTimer>
 #include <QVariantMap>
 #include <QWidget>
 #include <algorithm>
@@ -1256,6 +1257,65 @@ auto AppTheme::welcomeEmptyContentWidth() const -> int { return 400; }
 // One sweep of the SkeletonBlock highlight band. Not scaled by reduceMotion:
 // under reduceMotion the band does not run at all.
 auto AppTheme::skeletonCycleMs() const -> int { return 1200; }
+
+// StaggeredGridMark wave clock. One pass of the wave takes loadingWaveCycleMs; the phase advances
+// every loadingWaveFrameMs (about 30 updates per second) while a mark holds the clock. A mark
+// under reduceMotion holds nothing and draws its tiles at rest.
+auto AppTheme::loadingWaveCycleMs() const -> int { return 1200; }
+auto AppTheme::loadingWaveFrameMs() const -> int { return 33; }
+auto AppTheme::loadingWavePhase() const -> qreal { return loading_wave_phase_; }
+auto AppTheme::loadingWaveHolders() const -> int {
+  return static_cast<int>(loading_wave_holders_.size());
+}
+
+void AppTheme::setLoadingWaveHolder(QObject* holder, bool holds) {
+  if (holder == nullptr) {
+    return;
+  }
+  const auto it = loading_wave_holders_.find(holder);
+  if (holds && it == loading_wave_holders_.end()) {
+    loading_wave_holders_.insert(holder,
+                                 connect(holder, &QObject::destroyed, this, [this, holder]() {
+                                   loading_wave_holders_.remove(holder);
+                                   UpdateLoadingWaveTimer();
+                                 }));
+  } else if (!holds && it != loading_wave_holders_.end()) {
+    disconnect(it.value());
+    loading_wave_holders_.erase(it);
+  }
+  UpdateLoadingWaveTimer();
+}
+
+void AppTheme::UpdateLoadingWaveTimer() {
+  const bool run = !loading_wave_holders_.isEmpty();
+  if (!run) {
+    if (loading_wave_timer_ != nullptr) {
+      loading_wave_timer_->stop();
+    }
+    return;
+  }
+  if (loading_wave_timer_ == nullptr) {
+    loading_wave_timer_ = new QTimer(this);
+    loading_wave_timer_->setInterval(loadingWaveFrameMs());
+    connect(loading_wave_timer_, &QTimer::timeout, this, &AppTheme::AdvanceLoadingWave);
+  }
+  if (loading_wave_timer_->isActive()) {
+    return;
+  }
+  if (!loading_wave_clock_.isValid()) {
+    loading_wave_clock_.start();
+  }
+  AdvanceLoadingWave();
+  loading_wave_timer_->start();
+}
+
+void AppTheme::AdvanceLoadingWave() {
+  const auto cycle = static_cast<qint64>(loadingWaveCycleMs());
+  loading_wave_phase_ =
+      static_cast<qreal>(loading_wave_clock_.elapsed() % cycle) / static_cast<qreal>(cycle);
+  emit LoadingWavePhaseChanged();
+}
+
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
 auto AppTheme::lineHeightBody() const -> int { return 16; }
 auto AppTheme::lineHeightTitle() const -> int { return 18; }

@@ -10,7 +10,8 @@ Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `DialogActionButton.qml`, `IconButton.qml`, `SegmentedCardSwitcher.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
 `AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
-`ThemeSwitch.qml`, `SkeletonBlock.qml`, `AlertBadge.qml`
+`ThemeSwitch.qml`, `SkeletonBlock.qml`, `StaggeredGridLoader.qml`,
+`StaggeredGridMark.qml`, `AlertBadge.qml`
 
 Per-file decisions: `docs/VI/README.md`. That catalog specializes this global
 system for individual QML files and is updated with each approved visual change.
@@ -439,6 +440,8 @@ wordmark and the small import progress ring.
 | Collections tree | File-browser rows of `collectionRowHeight`: `collectionIndentStep` indent per level, a `▸`/`▾` disclosure glyph in `textMutedColor` (the Library section-header glyphs), then the name in `fontSizeTitle` `textColor`. No folder icon. Names elide (uniform fixed-height rows). The root row (all images) has no disclosure glyph and aligns with the top-level collections. The photo count of the collection sits right-aligned after the name in `dataFontFamily` `fontSizeCaption` `textMutedColor`, with locale digit grouping; the root row counts the whole project. A row shows no count before the first count read and while its name field is open (issue #733) |
 | Selected collection row | Quiet neutral well: `controlHoveredFillColor` with `controlRadiusSmall` corners; the name keeps `textColor` and turns `fontWeightStrong`; the photo count brightens from `textMutedColor` to `textColor` (user request 2026-11-07: the dark selected ink read dimmer than the idle count); the glyph stays `textMutedColor`. This is the per-file exception to the bright `editorListSelectedFillColor` well (user request 2026-11-07: the bright well was too heavy in the dense tree). No side stripe. Hover is the darker `hoverColor` wash |
 | Collection drop target (drag to move) | `hoverColor` wash with a 1 px `textMutedColor` outline; the dragged name follows the pointer on a `bgBaseColor` label with a 1 px `dividerColor` outline. Rows that cannot take the folder (its own subtree, its current parent) show no outline |
+| Collection drop target (file drop to import) | The same row style as the drag to move, on the row under a drag of local files and folders from the system file manager (issue #757). The draft row and the row being renamed show no outline. Every Library file drop answers Copy, so the file manager never deletes the dropped files |
+| Library grid file drop overlay | Over the grid while local files and folders are dragged onto it: `colBgDeep` at alpha 0.78 with `controlRadiusSmall` corners and a 1 px `textMutedColor` outline; centered `import.svg` (28 px) in `textColor` above "Import to" and the current collection name in `fontSizeSection` `fontWeightHeading`. No explanatory text |
 | New-collection and rename name field | Inline in the tree row: a plain `TextInput` (no Controls `TextField`, so no style-provided floating label or underline) in a `collectionRowHeight` - 4 high `bgBaseColor` box with `controlRadiusSmall` corners; 1 px `dividerColor` border, `textMutedColor` on focus; placeholder in `textMutedColor` inside the box; text selection `textMutedColor` (alpha 0.6) with `textColor` text. The "Add to" filter field uses the same construction |
 | Grid zoom slider | `textColor` fill and handle on the `bgBaseColor` track; the handle has no border |
 | Inspector resize handle | `textMutedColor` on hover and drag |
@@ -510,8 +513,10 @@ edit state and the rating. The shared parts are `ThumbnailEditMark.qml` and
   that point at the same height on the screen. Cards that leave the view move
   to their new place and fade out; cards that enter fade in. A step during the
   animation starts from the drawn rectangles of that moment. The thumbnail of a
-  new tier replaces the shown one when it is ready. The grouped view uses the
-  same rules (260 ms).
+  larger tier replaces the shown one when it is ready. A card that already shows
+  a thumbnail larger than a smaller new tier keeps it and its pin, and requests
+  no render (`ThumbnailTier.js`); a card without a thumbnail requests the new
+  tier. The grouped view uses the same rules (260 ms).
 
 ### Library justified rows
 
@@ -554,6 +559,45 @@ The sort and Group icons are the user-provided Tabler `sort-ascending`,
 upstream 2 px stroke and drawn at `iconOpticalSizeCompact`.
 Selected actions use the monochrome list well (`editorListSelectedFillColor` /
 `editorListSelectedInkColor`). Per-file details: `docs/VI/README.md`.
+
+### Library loading
+
+A Library read that replaces the shown result (a collection switch, an Inspector
+filter, the search, a sort or group change) shows `StaggeredGridLoader.qml`. The
+loader appears `libraryLoadingRevealDelayMs` after the read starts, so a fast read
+draws no frame of it. A read that changes the shown result in place (a rating
+write, an import into the shown collection) keeps the grid as it is and shows no
+loader. The C++ side reports the first kind through `LibraryModule.queryReplacing`.
+
+| State | Surface |
+| --- | --- |
+| No result shown (collection switch) | Placeholder grid: `bgBaseColor` cards at the column count, gap, card proportion, and radius of the classic photo grid at the current zoom level. A `textColor` wave at 10 % runs along the diagonals, top left to bottom right, 1600 ms per pass. The empty state ("No Photos Yet") stays hidden until the read publishes |
+| Previous result shown (filter or search change) | The previous grid dims to 30 % over `motionFoldOpenMs`; a 72 px `bgPanelColor` card with a `glassStrokeColor` hairline stands at its centre and holds a 36 px `StaggeredGridMark` |
+| One photo loading (a card, a justified tile, an Editor filmstrip card) | A `StaggeredGridMark` at the centre of the photo area until the thumbnail is ready: 27 px on Library cards and tiles, `iconOpticalSize` on filmstrip cards |
+| Read failed | The previous result stays; the query row shows the error in `dangerColor` with Retry |
+
+`StaggeredGridMark.qml` is the compact 3 x 3 staggered grid. Each tile rests at 75 %
+size and 15 % wave level and grows to full size and full `textColor` as the wave
+passes, `loadingWaveCycleMs` per pass. Its spacing is the mark width / 9 and its
+tile radius the mark width / 18, both rounded, so one mark serves every size.
+
+A dense grid shows a mark on every loading card, so a mark is one `ShaderEffect`
+quad: `qml/shaders/staggered_grid_mark.frag` draws the nine tiles. Every mark reads
+one shared clock, `appTheme.loadingWavePhase`, which advances every
+`loadingWaveFrameMs` while at least one mark shows. All marks pulse together, and
+the window repaints at the clock rate instead of the display rate.
+
+The loaders draw no Material `BusyIndicator` and no spinner. Under `reduceMotion`
+the wave stops and every tile draws at its rest level.
+
+| Parameter | Value | Meaning |
+| --- | --- | --- |
+| `libraryLoadingRevealDelayMs` | 150 ms | Time from the start of a replacing read to the first loader frame |
+| Placeholder wave strength | 10 % | Opacity of `textColor` over a placeholder card at the crest of the wave |
+| Compact mark wave strength | 85 % | Opacity of `textColor` over a compact tile at the crest of the wave |
+| `loadingWaveCycleMs` | 1200 ms | One pass of the compact mark wave |
+| `loadingWaveFrameMs` | 33 ms | Interval of the shared mark clock (about 30 updates per second) |
+| Stale result opacity | 30 % | Opacity of the previous grid while the replacing read runs |
 
 ### Library color labels
 
@@ -1317,7 +1361,8 @@ Visible strings are product language only. Ban developer placeholders such as
 
 Quiet desktop language. No bounce, overshoot, perpetual animation, or input
 blocking. Session identity is never recreated by a fold. The one approved
-perpetual animation is the `SkeletonBlock` content placeholder (table below).
+perpetual animations are the `SkeletonBlock` content placeholder and the
+`StaggeredGridLoader` Library loading grid (table below).
 
 | Token | Value | Use |
 | --- | --- | --- |
@@ -1336,6 +1381,7 @@ perpetual animation is the `SkeletonBlock` content placeholder (table below).
 | Workspace + adjustment thumbs | Slide on `x` (OutBack, land scale pulse) | Documented capsule exception to “no overshoot” for mechanical feel |
 | Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
 | Content placeholder (`SkeletonBlock`) | A `hoverColor` band moves on `x` from left to right inside the clipped `bgBaseColor` block, `skeletonCycleMs` per sweep, `Easing.InOutSine`, repeated while the content loads | Approved exception to "no perpetual animation", for content placeholders only. The band stops when the block is invisible. Under `reduceMotion` the band does not run and the block is static |
+| Library loading grid (`StaggeredGridLoader`) | A `textColor` wave runs along the tile diagonals, top left to bottom right. Placeholder grid: one GUI-thread `NumberAnimation` drives every tile, opacity wave, 1600 ms per pass. Compact mark (`StaggeredGridMark`): one shader quad per mark on the shared `loadingWavePhase` clock (`loadingWaveFrameMs` ticks), opacity and scale wave, `loadingWaveCycleMs` per pass | Approved exception to "no perpetual animation", for Library loading and photo loading marks only (Spacing "Library loading"). The wave stops when the loader is invisible. Under `reduceMotion` every tile is static at its rest level |
 | Project loading overlay | Snap on immediately; after load, hold `motionFadeMs` then fade out `motionFoldCloseMs` | No fade-in — that flashed the empty library after Welcome closed |
 | Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
 | Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`. macOS keeps the system traffic lights over the leading side of the full-width toolbar and hides the title-bar surface with `Qt.ExpandedClientAreaHint` + `Qt.NoTitleBarBackgroundHint`; toolbar content reserves that leading region. Other platforms use Qt frameless behavior plus drawn caption buttons. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
@@ -1492,6 +1538,8 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | `AppMenuSeparator.qml` | Shared 1 px menu group divider |
 | `AlertBadge.qml` | Warning and error message: wrapped white caption text on an `alertBadgeFillColor` badge; hidden while empty |
 | `SkeletonBlock.qml` | Content placeholder: `bgBaseColor` block with the moving `hoverColor` band (Motion); `animated: false` draws a static tile |
+| `StaggeredGridLoader.qml` | Library loading: a grid of rounded tiles with a diagonal wave (Motion, "Library loading"); `rows: 0` fills the height as a placeholder grid, a fixed 3 x 3 grid with `scaleDepth` is the compact mark |
+| `StaggeredGridMark.qml` | The compact 3 x 3 staggered grid as one shader quad on the shared `appTheme.loadingWavePhase` clock: the loading mark of a photo (Library card, justified tile, Editor filmstrip card) and of the Library over a kept result |
 
 ---
 

@@ -211,7 +211,7 @@ auto AlbumWarnings(const std::vector<std::string>& warnings) -> std::vector<std:
           "StarRatingFilter.qml", "ThumbnailGridView.qml", "ThumbnailStarRating.qml",
           "ThumbnailEditMark.qml", "JustifiedThumbnailTile.qml", "ThumbnailPinBinding.qml",
           "ThumbnailLayoutAnimation.qml", "ThumbnailColorLabelDots.qml", "ThumbnailDeleteMark.qml",
-          "ColorLabelFilterChips.qml"}) {
+          "ColorLabelFilterChips.qml", "StaggeredGridMark.qml"}) {
       if (warning.find(file) != std::string::npos) {
         out.push_back(warning);
         break;
@@ -804,6 +804,130 @@ TEST_F(AlbumSectionQmlTests, LargeSectionTraversalKeepsCellsAndLoadedRowsBounded
   EXPECT_LE(max_pages, 3u);
   EXPECT_LE(max_rows, 360);
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// The thumbnail loading mark draws from one shared wave clock. A shown mark holds the clock, which
+// then ticks every loadingWaveFrameMs (not at the display rate); a hidden mark, a mark under
+// reduceMotion, and a destroyed mark hold nothing, and the clock stops with no holder.
+TEST_F(AlbumSectionQmlTests, StaggeredGridMarkHoldsTheSharedWaveClockOnlyWhileItShows) {
+  auto&      theme                = AppTheme::Instance();
+  const bool reduce_motion_before = theme.reduceMotion();
+  theme.setReduceMotion(false);
+  const int             holders_before = theme.loadingWaveHolders();
+
+  ApplicationModuleHost backend;
+  LoadedComponent       view(backend, "StaggeredGridMark.qml", 27);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* mark = view.loaded();
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before + 1);
+  EXPECT_EQ(mark->property("animated").toReal(), 1.0);
+
+  QSignalSpy    ticks(&theme, &AppTheme::LoadingWavePhaseChanged);
+  QElapsedTimer elapsed;
+  elapsed.start();
+  ProcessEvents(400);
+  const auto frames_at_clock_rate =
+      static_cast<double>(elapsed.elapsed()) / theme.loadingWaveFrameMs();
+  EXPECT_GE(ticks.count(), static_cast<int>(frames_at_clock_rate * 0.5));
+  EXPECT_LE(ticks.count(), static_cast<int>(frames_at_clock_rate * 1.2) + 2);
+  EXPECT_DOUBLE_EQ(mark->property("phase").toReal(), theme.loadingWavePhase());
+
+  mark->setProperty("visible", false);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before);
+  mark->setProperty("visible", true);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before + 1);
+
+  theme.setReduceMotion(true);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before);
+  EXPECT_EQ(mark->property("animated").toReal(), 0.0);
+  EXPECT_EQ(mark->property("phase").toReal(), 0.0);
+  theme.setReduceMotion(false);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before + 1);
+
+  // Destroying the mark lets go of the clock, and the clock stops.
+  view.window()->setProperty("loaderActive", false);
+  ASSERT_TRUE(WaitUntil([&]() { return theme.loadingWaveHolders() == holders_before; }));
+  if (holders_before == 0) {
+    ticks.clear();
+    ProcessEvents(200);
+    EXPECT_EQ(ticks.count(), 0);
+  }
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(view.warnings());
+  theme.setReduceMotion(reduce_motion_before);
+}
+
+// A zoom to a smaller thumbnail tier keeps the larger pin of a card that already shows a larger
+// thumbnail, so the card requests no render; a card without a thumbnail pins the new tier.
+TEST_F(AlbumSectionQmlTests, FlatGridZoomOutKeepsTheLargerThumbnailOfACardThatShowsOne) {
+  ApplicationModuleHost backend;
+  const auto            packed = PackedProjectWithOneEditedPhoto(temp_dir_);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto& keys = packed->images_;
+  ASSERT_GE(keys.size(), 2u);
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  // 4 columns: the 1024 tier.
+  view.loaded()->setProperty("zoomLevel", 2);
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  ASSERT_NE(window, nullptr);
+  const auto pin_of = [&](sl_element_id_t id) -> QObject* {
+    auto* card = GridCard(window, id);
+    return card ? card->findChild<QObject*>(QStringLiteral("thumbnailPinBinding")) : nullptr;
+  };
+  ASSERT_TRUE(WaitUntil([&]() {
+    for (const auto& key : keys) {
+      auto* pin = pin_of(key.file_id_);
+      if (pin == nullptr || pin->property("pinnedMaxEdge").toInt() != 1024) return false;
+    }
+    return view.loaded()->property("desiredMaxEdge").toInt() == 1024;
+  })) << Joined(view.warnings());
+  // The thumbnail requests of the fixture finish (with a thumbnail or an error) before the test
+  // sets the shown state of two cards.
+  ASSERT_TRUE(WaitUntil([&]() {
+    for (const auto& key : keys) {
+      auto* card = GridCard(window, key.file_id_);
+      if (card == nullptr || card->property("thumbnailLoadingState").toBool()) return false;
+    }
+    return true;
+  }));
+  ProcessEvents(300);
+
+  auto*         library    = backend.library();
+  const QString shown_url  = QStringLiteral("image://alcedo-thumb/%1/1024/7").arg(keys[0].file_id_);
+  library->thumbs().UpdateThumbnailState(keys[0].file_id_, shown_url, false, false);
+  library->thumbs().UpdateThumbnailState(keys[1].file_id_, QString(), false, false);
+  ASSERT_TRUE(WaitUntil([&]() {
+    auto* card = GridCard(window, keys[0].file_id_);
+    return card != nullptr && card->property("liveThumbUrl").toString() == shown_url;
+  }));
+
+  // 8 columns: the 256 tier.
+  view.loaded()->setProperty("zoomLevel", 5);
+  ASSERT_TRUE(WaitUntil([&]() {
+    return view.loaded()->property("columns").toInt() == 8 &&
+           view.loaded()->property("desiredMaxEdge").toInt() == 256 &&
+           !view.loaded()->property("thumbnailBindingSuspended").toBool();
+  })) << Joined(view.warnings());
+  ProcessEvents(500);
+
+  auto* shown_pin = pin_of(keys[0].file_id_);
+  ASSERT_NE(shown_pin, nullptr);
+  EXPECT_EQ(shown_pin->property("pinnedMaxEdge").toInt(), 1024);
+  EXPECT_EQ(GridCard(window, keys[0].file_id_)->property("liveThumbUrl").toString(), shown_url);
+  auto* empty_pin = pin_of(keys[1].file_id_);
+  ASSERT_NE(empty_pin, nullptr);
+  EXPECT_EQ(empty_pin->property("pinnedMaxEdge").toInt(), 256);
+  // The set URL has no pixels in the image store, so its Image warns; nothing else may.
+  std::vector<std::string> warnings;
+  for (const auto& warning : AlbumWarnings(view.warnings())) {
+    if (warning.find(shown_url.toStdString()) == std::string::npos) {
+      warnings.push_back(warning);
+    }
+  }
+  EXPECT_TRUE(warnings.empty()) << Joined(warnings);
 }
 
 // Issue #589, Library at 4 columns: the edit mark shows only on the edited photo; the stars

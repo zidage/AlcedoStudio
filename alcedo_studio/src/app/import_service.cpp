@@ -232,17 +232,19 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
     return job;
   }
 
-  submission_thread_.Submit(
-      [this, paths, dest, job, import_log, progress_ptr, allowed = options.allowed_categories_]() {
-        CreatePlaceholdersAndSubmit(paths, dest, job, import_log, progress_ptr, allowed);
-      });
+  submission_thread_.Submit([this, paths, dest, job, import_log, progress_ptr,
+                             allowed   = options.allowed_categories_,
+                             any_paths = options.any_category_paths_]() {
+    CreatePlaceholdersAndSubmit(paths, dest, job, import_log, progress_ptr, allowed, any_paths);
+  });
   return job;
 }
 
 void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     const std::vector<image_path_t>& paths, const image_path_t& dest,
     const std::shared_ptr<ImportJob>& job, const std::shared_ptr<ImportLog>& import_log,
-    const std::shared_ptr<ImportProgress>& progress_ptr, ImportCategoryMask allowed_categories) {
+    const std::shared_ptr<ImportProgress>& progress_ptr, ImportCategoryMask allowed_categories,
+    const ImportPathSet& any_category_paths) {
   // TODO: Use sleeve service to interact with FS
   // The current implementation is a temporary solution
   auto       root_writer     = std::make_shared<ImportRootBatchWriter>();
@@ -332,12 +334,15 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
 
     const auto element_id       = sleeve_file->element_id_;
     const auto pipeline_service = pipeline_service_;
+    const auto file_categories  = any_category_paths.contains(image_path.native())
+                                      ? kAllImportCategories
+                                      : allowed_categories;
 
     // Extract metadata and encode the history root on the pool; roots commit in batches.
     // The placeholder loop queues files much faster than the pool reads them, so a cancel
     // usually finds most tasks still queued: each one checks the job before reading its file.
     thread_pool_.Submit([image_handler_ptr, progress_ptr, job, import_log, element_id,
-                         pipeline_service, root_writer, allowed_categories, raw_extension]() {
+                         pipeline_service, root_writer, file_categories, raw_extension]() {
       auto image_ptr = image_handler_ptr ? image_handler_ptr->Get() : nullptr;
       std::vector<ImportRootBatchWriter::PendingRoot> full_batch;
       bool                                            encoded     = false;
@@ -354,7 +359,7 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
       } else if (image_ptr) {
         try {
           MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr,
-                                                 allowed_categories);
+                                                 file_categories);
           full_batch =
               root_writer->Add(image_ptr->image_id_, raw_extension,
                                EncodeImportedImageRoot(*pipeline_service, element_id, image_ptr));

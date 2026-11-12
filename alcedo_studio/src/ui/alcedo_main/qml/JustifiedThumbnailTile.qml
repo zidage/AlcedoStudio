@@ -170,10 +170,10 @@ Item {
             radius: tile.tileRadius
             color: appTheme.bgBaseColor
         }
-        ThumbnailLoadingSpinner {
+        StaggeredGridMark {
             anchors.centerIn: parent
-            width: 28
-            height: 28
+            width: 27
+            height: 27
             visible: tile.thumbnailLoadingState
         }
         Image {

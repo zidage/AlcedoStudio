@@ -123,6 +123,9 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   Q_PROPERTY(QString groupField READ GroupFieldName NOTIFY PresentationChanged)
   Q_PROPERTY(bool grouped READ Grouped NOTIFY PresentationChanged)
   Q_PROPERTY(bool queryUpdating READ QueryUpdating NOTIFY QueryStateChanged)
+  /// A refresh that replaces the shown result (scope, filter, search, presentation) is
+  /// scheduled or running. The Library shows the loading grid only for these refreshes.
+  Q_PROPERTY(bool queryReplacing READ QueryReplacing NOTIFY QueryStateChanged)
   Q_PROPERTY(QString queryError READ QueryError NOTIFY QueryStateChanged)
   Q_PROPERTY(uint pendingRevealFileId READ PendingRevealFileId NOTIFY PendingRevealChanged)
   /// The library image selection.
@@ -175,6 +178,11 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   QString GroupFieldName() const { return InspectorFieldName(accepted_options_.group_field_); }
   bool    Grouped() const { return accepted_options_.group_field_ != AlbumGroupField::kNone; }
   bool    QueryUpdating() const { return refresh_in_flight_; }
+  bool    QueryReplacing() const {
+    return refresh_in_flight_ &&
+           (unpublished_replace_ ||
+            (refresh_scheduled_ && scheduled_refresh_kind_ == RefreshKind::kReplace));
+  }
   QString QueryError() const { return query_error_; }
   uint             PendingRevealFileId() const { return pending_reveal_file_id_; }
 

@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Effects
 import Alcedo.Main 1.0
+import "ThumbnailTier.js" as ThumbnailTier
 
 // Grouped Library photo area. One vertical ListView over LibraryModule.sectionModel: each
 // logical row is a full-width group header or one line of at most `columnCount` photo cells.
@@ -891,7 +892,11 @@ Item {
             }
             const want = rowInUse && fileId > 0 && imageId > 0
             if (want && pinnedFileId === fileId && pinnedImageId === imageId
-                    && pinnedMaxEdge === root.desiredMaxEdge) {
+                    && (pinnedMaxEdge === root.desiredMaxEdge
+                        || ThumbnailTier.keepsLargerTier(pinnedMaxEdge, root.desiredMaxEdge,
+                                                         liveThumbUrl, ""))) {
+                // The same tier, or a smaller tier while the cell already shows a larger
+                // thumbnail: the cell keeps its pin and requests no render.
                 return
             }
             releasePin()

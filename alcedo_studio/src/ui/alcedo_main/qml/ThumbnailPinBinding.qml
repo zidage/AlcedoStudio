@@ -1,15 +1,20 @@
 import QtQuick
+import "ThumbnailTier.js" as ThumbnailTier
 
 // Thumbnail lifetime of one photo delegate of ThumbnailGridView (a classic card or a
 // justified-rows tile). While the delegate exists it pins the thumbnail of its photo at the tier
 // of the view (view.desiredMaxEdge) through LibraryModule.SetThumbnailVisible, and it keeps the
 // thumbnail state that the delegate shows (the live* properties).
 //
+// A zoom to a smaller tier keeps the larger pin of a photo that already shows a thumbnail larger
+// than the new tier (ThumbnailTier.keepsLargerTier): the photo requests no render.
+//
 // During a zoom the view suspends the binding (view.thumbnailBindingSuspended): a new photo of a
 // delegate shows its state but pins nothing, and a release is deferred to the view, which pins
 // the visible delegates again at the new tier when the zoom settles (view.syncVisibleThumbnailBindings).
 QtObject {
     id: pin
+    objectName: "thumbnailPinBinding"
 
     // The ThumbnailGridView that owns the delegate.
     property Item view: null
@@ -66,6 +71,10 @@ QtObject {
             return
         }
         if (pinnedElementId === elementId && pinnedImageId === imageId) {
+            if (ThumbnailTier.keepsLargerTier(pinnedMaxEdge, maxEdge, liveThumbUrl,
+                                              liveThumbErrorText)) {
+                return
+            }
             // The same photo at a new tier: pin the new tier before the old one is released.
             const oldMaxEdge = pinnedMaxEdge
             pinnedMaxEdge = maxEdge
