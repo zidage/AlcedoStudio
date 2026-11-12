@@ -95,6 +95,7 @@ def_library(Image
     ${ALCEDO_SRC_ROOT}/image/metadata/raster_metadata_reader.cpp
     ${ALCEDO_SRC_ROOT}/image/dng_color_profile_import.cpp
     ${ALCEDO_SRC_ROOT}/image/dng_color_profile_cache.cpp
+    ${ALCEDO_SRC_ROOT}/image/dcp_file_reader.cpp
     ${ALCEDO_SRC_ROOT}/image/raster_color_description.cpp
     ${ALCEDO_SRC_ROOT}/image/raster_container_reader.cpp
     ${ALCEDO_SRC_ROOT}/image/icc_profile_reader.cpp
