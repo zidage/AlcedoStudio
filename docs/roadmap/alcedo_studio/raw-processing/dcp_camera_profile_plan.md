@@ -6,11 +6,14 @@ Status: **C1 complete** (2026-11-12, reader and profile value). **C2 implemented
 library index, camera match, folder setting, Settings page); the user check of the Settings page
 is open. **C3 complete** (2026-11-12, Develop reference and effective profile in the render).
 **C4 complete** (2026-11-12, Develop field, history, and binding on each load path). **C5
-implemented** (2026-11-12, editor section and list model); the user check of the section is open.
-**C6 complete** (2026-11-12, DCP profile on a DNG source with the source calibration). C7 planned.
+complete** (2026-11-12, editor section and list model; the C7 review checked the section).
+**C6 complete** (2026-11-12, DCP profile on a DNG source with the source calibration). **C7
+complete** (2026-11-12, CUDA, OpenCL, and Metal against the scalar reference, user review
+approved, documents).
 **P-5 revised** (2026-11-12): the [DCP Profile Tone Curve Study](dcp_profile_tone_curve_study.md)
 brings `ProfileToneCurve` into the product in its phases T1 #862, T2 #863, and T3 #864, before C7.
-T1 and T3 are complete (2026-11-12); T2 is complete on CUDA and OpenCL, and its Metal run joins C7.
+T1 and T2 are complete (2026-11-12; the Metal run of T2 passed with C7). T3 is implemented; its
+user check with ACES 2.0 is open.
 
 Parent: [Roadmap](../../roadmap.md).
 
@@ -383,9 +386,9 @@ Stored reference, identity absent from the library
 | C2 | Library index, camera match, folder setting, Settings page | `image/`, `app/`, `ui/alcedo_main/` | C1 | 1300 to 1700 | Implemented; user page check open |
 | C3 | Profile reference in the Develop payload and the effective profile in the render | `edit/graph/`, `edit/runtime/` | C1 | 1100 to 1500 | Complete |
 | C4 | Develop field, history, and binding on each load path | `app/` | C2, C3 | 1200 to 1600 | Complete |
-| C5 | Editor section and list model | `ui/alcedo_main/`, `app/` | C4 | 900 to 1300 | Implemented; user section check open |
+| C5 | Editor section and list model | `ui/alcedo_main/`, `app/` | C4 | 900 to 1300 | Complete (section checked in the C7 review) |
 | C6 | DCP profile on a DNG source | `image/`, `app/`, `edit/graph/` | C4 | 600 to 900 | Complete |
-| C7 | Backend verification on CUDA, OpenCL, and Metal, user review, documents | tests, `docs/` | C5, C6, study T3 | 500 to 800 | Planned |
+| C7 | Backend verification on CUDA, OpenCL, and Metal, user review, documents | tests, `docs/` | C5, C6, study T3 | 500 to 800 | Complete |
 
 C2 and C3 have no dependency on each other. Each phase estimate is below 2000 lines.
 
@@ -1695,13 +1698,89 @@ run the same filter.
 
 **Exit criteria.**
 
-- [ ] The three tests pass, or the record states the unavailable backend.
-- [ ] The user review record exists.
-- [ ] `docs/dng_color_profiles.md` describes the shipped behavior.
+- [x] The three tests pass, or the record states the unavailable backend.
+- [x] The user review record exists.
+- [x] `docs/dng_color_profiles.md` describes the shipped behavior.
 
 **Expected diff.** 500 to 800 lines.
 
-**Completion record.** Empty.
+**Completion record.**
+
+```text
+Phase / date / status: C7 / 2026-11-12 / complete.
+Source revision and branch: feature/dcp-profile-backend-verification, stacked on the T3 branch
+  feature/dcp-profile-tone-editor (PR #868) at ce724fccb.
+Actual changed modules: tests/edit/runtime (dng_profile_test_support.hpp and the CUDA, OpenCL,
+  and Metal Develop suites), docs/dng_color_profiles.md, docs/roadmap/README.md, this plan, and
+  the status of the tone curve study.
+Implemented behavior:
+  - VerifyDcpCameraProfile<Device>(backend) renders a RAW file at full resolution with the import
+    profile, selects a synthetic DCP file through ApplyCameraProfileFileUpdate, and renders again
+    on the same device. The second render keeps sensor_develop_execute and adds one
+    camera_color_execute. Camera pass samples (a 193 x 211 pixel grid) equal scalar
+    DngApplyColorProfile on the packed DCP tables, after the reference gamut compression and
+    ACEScc encoding, within 3e-4. Clearing the selection renders the import pixels again (L-inf
+    below 1e-6) from the cached sensor result.
+  - The synthetic file comes from the C1 writer: two illuminants (17, 21), forward matrices, two
+    6 x 4 x 1 hue and saturation maps, a 9 x 5 x 3 look table with sRGB value encoding,
+    BaselineExposureOffset 0.25, and a four-point ProfileToneCurve, so the display render also
+    passes the profile tone stage.
+  - ExpectCameraPassMatchesScalarProfile is the sample loop of the Canon DNG check, now shared by
+    both checks; it packs through PackDngProfileGpuData(payload, transform), which equals the
+    import profile overload without a reference.
+Deviations from this section:
+  - The RAW file is the CI fixture ci_rawfiles/...DSC00830.ARW (Sony, Bayer) and not a file of
+    sample_images/raw/. The Mac and CI have no sample_images/raw folder; with the CI fixture the
+    Metal test runs in the macOS CI job (GpuDagMetalDevelopTest is a ci_metal target) and on the
+    Mac without a private fixture.
+  - The test name is DcpProfileMatchesScalarReference in the fixtures CudaDevelopFixture,
+    OpenClDevelopFixture, and MetalDevelopFixture (binaries GpuDagCudaDevelopTest,
+    GpuDagOpenClDevelopTest, GpuDagMetalDevelopTest).
+Explicitly unimplemented items: none.
+Primary success call chain:
+  VerifyDcpCameraProfile -> RawInputLoader::LoadEncoded -> ApplyImportedCameraProfile
+  -> Device::Execute (import profile) -> ReadDcpCameraProfile (synthetic file)
+  -> DevelopParamsModel::ApplyCameraProfileFileUpdate -> GraphCompiler::Compile -> Device::Execute
+     (sensor result reused; camera pass: ResolveDevelopColorTransform -> EffectiveCameraProfile
+     -> PackDngProfileGpuData -> DngApplyColorProfile on the GPU)
+  -> ExpectCameraPassMatchesScalarProfile (scalar DngApplyColorProfile on the same tables)
+Primary failure and restore call chain:
+  ApplyCameraProfileFileUpdate({}) -> camera_profile_file absent -> Device::Execute renders the
+  import profile again from the cached sensor result.
+Build and test commands with exit codes:
+  Windows: cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagCudaDevelopTest
+    GpuDagOpenClDevelopTest --parallel 6                                              exit 0
+  ctest --test-dir build/debug -j 1 -R "DevelopTest.*(DcpProfile|CanonDngProfile)"
+    --output-on-failure                                                               exit 0
+  Mac (yurunmac.local, macos-debug, ALCEDO_BUILD_TESTS=ON, 20 GiB free before the build):
+    cmake --build build/macos-debug --target GpuDagMetalDevelopTest GpuDagMetalDrtTest -j 8
+                                                                                      exit 0
+    ctest -j 1 -R "GpuDagMetalDevelopTest.*(DcpProfile|CanonDngProfile)|
+      GpuDagMetalDrtTest.*ProfileTone" --output-on-failure                            exit 0
+    ctest -j 1 -R "^GpuDagMetal(Develop|Drt)Test\." (caller suites)                   exit 8
+Discovered / passed / failed / skipped counts:
+  Windows: 4 discovered, 4 passed (CUDA and OpenCL: DcpProfileMatchesScalarReference and
+    CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache), 0 failed, 0 skipped.
+  Mac: 5 discovered, 4 passed (Metal DcpProfileMatchesScalarReference and the three
+    MetalProfileToneFixture tests of T2), 0 failed, 1 skipped (the Canon DNG check: private
+    fixture missing on the Mac).
+  Mac caller suites: 93 discovered, 3 disabled, 84 passed, 3 failed, 3 skipped (private
+    fixtures). The 3 failures are outside this plan; see "Remaining defects".
+  This is the first compile and run of the Metal changes of C3 and T2.
+Manual verification: user review, 2026-11-12, verdict approved. Release build of ce724fccb
+  (build/release, alcedo_main.exe), DCP folder D:\Adobe\Adobe Lightroom Classic\Resources\
+  CameraProfiles\Camera. Files of sample_images/raw/camera: canon/r5/020A0059.CR3 (Canon EOS R5
+  Camera Standard), nikon/z8/DSC_2230.NEF (NIKON Z 8 Camera Standard), sony/a7iv/DSC00102.ARW
+  (Sony ILCE-7M4 Camera ST), each against Built-in with Tone Curve on and the default DRT
+  (OpenDRT). The review used the Camera Profile section on three camera makes, so it also closes
+  the C5 section check. The T3 check with ACES 2.0 stays with T3 #864.
+Performance or resource evidence, if required: not required. The DCP test takes 3.4 s (CUDA),
+  1.7 s (OpenCL), and 0.8 s (Metal) in Debug.
+Evidence path: build/tmp/dcp_camera_profile/c7/ on Windows and build/tmp/dcp_c7/ on the Mac
+  (build and ctest logs, CUDA previews), removed after the pull request.
+Remaining defects or unavailable platforms: none for this plan. Pre-existing Metal failures
+  outside this plan, reproduced on origin/main: see the issues listed in the pull request.
+```
 
 ---
 
