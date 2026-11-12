@@ -8,6 +8,8 @@ is open. **C3 complete** (2026-11-12, Develop reference and effective profile in
 **C4 complete** (2026-11-12, Develop field, history, and binding on each load path). **C5
 implemented** (2026-11-12, editor section and list model); the user check of the section is open.
 **C6 complete** (2026-11-12, DCP profile on a DNG source with the source calibration). C7 planned.
+**P-5 revised** (2026-11-12): the [DCP Profile Tone Curve Study](dcp_profile_tone_curve_study.md)
+brings `ProfileToneCurve` into the product in its phases T1 to T3, before C7.
 
 Parent: [Roadmap](../../roadmap.md).
 
@@ -61,7 +63,7 @@ Alcedo Studio does not distribute profile files of other vendors. The user suppl
 | P-2 | The default for each image stays the current profile: the built-in camera matrices for a RAW file, and the embedded profile for a DNG file. A matched DCP profile applies only after the user selects it. | A camera has several profiles (Standard, Vivid, Portrait). No rule selects one of them for the user. |
 | P-3 | A match is exact after name normalization. An approximate match is not permitted. | A profile of another camera gives wrong color with no visible error. |
 | P-4 | A stored reference that the library cannot resolve fails the render with a named error. The editor shows the stored name and lets the user select another profile. | `AGENTS.md` permits no silent substitute. The embedded DNG path has the same rule for a missing source file. |
-| P-5 | `ProfileToneCurve` is read past and not applied. | The embedded DNG path does not apply it. The ACES output transform owns tone reproduction. A display-referred curve before that transform maps tone two times. |
+| P-5 | `ProfileToneCurve` applies through the profile tone stage of the [DCP Profile Tone Curve Study](dcp_profile_tone_curve_study.md) (revised 2026-11-12; phases C1 to C6 read the curve past). | The stage sits at the DRT entry after every grade, uses the exposure anchor Alcedo +1.5 EV = ACR 0 EV, and returns the profile's display light to scene light through the neutral inverse of the DRT. So the DRT maps tone once. |
 | P-6 | The profile reference is not part of adjustment transfer, copy and paste, or `alcedo-cli` in this plan. | A reference is specific to one camera model. The transfer catalogs exclude `camera_profile` today. |
 | P-7 | A profile with `ColorMatrix3`, `RGBTables`, or a `ReductionMatrix` fails to load with an error that names the tag. | The current render path has two illuminants and three camera channels. |
 
@@ -219,8 +221,9 @@ For a DNG file, the camera model of the image already follows `UniqueCameraModel
 
 ### 3.2 Explicit exclusions
 
-- `ProfileToneCurve`, `ProfileToneMethod`, and `DefaultBlackRender` rendering (P-5). The ACES
-  output transform keeps tone reproduction.
+- In phases C1 to C7: `ProfileToneCurve` rendering. The study phases T1 to T3 add it (P-5).
+- The ACR3 default curve for a profile that lacks `ProfileToneCurve`, automatic black
+  (`DefaultBlackRender` 0), and the curve of an embedded DNG profile.
 - Triple-illuminant profiles, `RGBTables`, and four-channel cameras (P-7).
 - DCP writing, editing, and conversion.
 - Adjustment transfer, copy and paste, and `alcedo-cli` parameters for the reference (P-6).
@@ -256,7 +259,7 @@ For a DNG file, the camera model of the image already follows `UniqueCameraModel
 | Settings folders | `app/lut_library_service.cpp:27,125-151`, `qml/LutSettingsPanel.qml`, `qml/FolderPathField.qml` | A `QObject` service owns a root path in `QSettings`, and a QML page opens a `FolderDialog`. | Add a service and a page with the same structure. |
 | RAW panel | `ui/alcedo_main/qml/EditorRawDecodePanel.qml:397-545` | Sections: Input Color (raster), white balance, Lens Calibration, RAW Decode. | Add the Camera Profile section. |
 | Camera identity in QML | `include/ui/alcedo_main/album_backend/editor_session_controller.hpp:124-125` | Only the lens identity is exposed. | The panel reads the matched list from a C++ model, so no camera string goes to QML. |
-| Tone curve | none | No code reads `ProfileToneCurve`. `docs/dng_color_profiles.md:81` states this. | None (P-5). |
+| Tone curve | none | No code reads `ProfileToneCurve`. `docs/dng_color_profiles.md:81` states this. | Study phases T1 to T3 (P-5). |
 | Tests | `tests/edit/runtime/dng_color_profile_test.cpp`, `tests/image/dng_color_profile_cache_test.cpp`, `tests/app/pipeline_dng_profile_binding_test.cpp`, `tests/edit/runtime/dng_profile_test_support.hpp` | Cover the embedded path on the scalar reference and the three backends. | New suites in section 9. The current suites must pass unchanged. |
 
 ---
@@ -371,7 +374,7 @@ Stored reference, identity absent from the library
 | C4 | Develop field, history, and binding on each load path | `app/` | C2, C3 | 1200 to 1600 | Complete |
 | C5 | Editor section and list model | `ui/alcedo_main/`, `app/` | C4 | 900 to 1300 | Implemented; user section check open |
 | C6 | DCP profile on a DNG source | `image/`, `app/`, `edit/graph/` | C4 | 600 to 900 | Complete |
-| C7 | Backend verification on CUDA, OpenCL, and Metal, user review, documents | tests, `docs/` | C5, C6 | 500 to 800 | Planned |
+| C7 | Backend verification on CUDA, OpenCL, and Metal, user review, documents | tests, `docs/` | C5, C6, study T3 | 500 to 800 | Planned |
 
 C2 and C3 have no dependency on each other. Each phase estimate is below 2000 lines.
 
@@ -1751,7 +1754,7 @@ run the same filter.
 | A camera name does not match its profiles | User report or C2 table test | Add the make or model alias with a test row. Keep the exact rule. |
 | The JSON of a document without a reference changes | `DocumentWithoutReferenceSerializesAsBefore` fails | Stop. Old projects must open. |
 | An Undo path applies a batch without the bind step | `UndoRestoresImportProfileAndRedoRestoresDcpProfile` fails | Move the bind step to the owner that applies the batch. |
-| The look of a profile differs from the vendor application | User review in C7 | Record the difference. P-5 is the known cause for contrast. Open an issue for each other cause. |
+| The look of a profile differs from the vendor application | User review in C7 | Record the difference. Check the profile tone stage first (P-5, study section 6). Open an issue for each other cause. |
 | A DCP file has a tag layout outside section 1.4 | Rejected count above zero for a user folder | Read the log line. Extend the reader with a test, or keep the explicit error for P-7 tags. |
 
 Stop implementation and update this plan when a required owner API does not exist, when the
