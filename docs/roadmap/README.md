@@ -38,6 +38,7 @@ use their own top-level category.
 - [Film Simulation Explained (Chinese; explanatory document)](alcedo_studio/edit/film_simulation/film_simulation_explained.md):
   the spectral film model, its main flow, the GPU implementation, and a comparison with spektrafilm
 - [Film Grain Format and Stock Granularity Plan](alcedo_studio/edit/film_grain_format_and_stock_plan.md)
+- [DCP Camera Profile Plan](alcedo_studio/raw-processing/dcp_camera_profile_plan.md)
 
 ## Alcedo Studio — UI
 
