@@ -44,6 +44,8 @@ enum class EditorAdjustmentField {
   InputProfile,
   /// The film format of the DRT node (`film_format`: 16mm, 35mm, or 70mm).
   FilmFormat,
+  /// DCP camera profile reference of the Develop node (`camera_profile_file`).
+  CameraProfileFile,
 };
 
 /// Every accepted field key with the adjustment it controls, including the aliases that panels

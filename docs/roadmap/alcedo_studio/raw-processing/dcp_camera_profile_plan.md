@@ -4,8 +4,9 @@ Date: 2026-11-12
 
 Status: **C1 complete** (2026-11-12, reader and profile value). **C2 implemented** (2026-11-12,
 library index, camera match, folder setting, Settings page); the user check of the Settings page
-is open. **C3 complete** (2026-11-12, Develop reference and effective profile in the render). C4
-to C7 planned.
+is open. **C3 complete** (2026-11-12, Develop reference and effective profile in the render).
+**C4 complete** (2026-11-12, Develop field, history, and binding on each load path). C5 to C7
+planned.
 
 Parent: [Roadmap](../../roadmap.md).
 
@@ -366,7 +367,7 @@ Stored reference, identity absent from the library
 | C1 | DCP file reader and profile value | `image/` | None | 900 to 1200 | Complete |
 | C2 | Library index, camera match, folder setting, Settings page | `image/`, `app/`, `ui/alcedo_main/` | C1 | 1300 to 1700 | Implemented; user page check open |
 | C3 | Profile reference in the Develop payload and the effective profile in the render | `edit/graph/`, `edit/runtime/` | C1 | 1100 to 1500 | Complete |
-| C4 | Develop field, history, and binding on each load path | `app/` | C2, C3 | 1200 to 1600 | Planned |
+| C4 | Develop field, history, and binding on each load path | `app/` | C2, C3 | 1200 to 1600 | Complete |
 | C5 | Editor section and list model | `ui/alcedo_main/`, `app/` | C4 | 900 to 1300 | Planned |
 | C6 | DCP profile on a DNG source | `image/`, `app/`, `edit/graph/` | C4 | 600 to 900 | Planned |
 | C7 | Backend verification on CUDA, OpenCL, and Metal, user review, documents | tests, `docs/` | C5, C6 | 500 to 800 | Planned |
@@ -1068,14 +1069,166 @@ ctest --test-dir build/debug -R "PipelineDcpProfileBindingTest|PipelineDngProfil
 
 **Exit criteria.**
 
-- [ ] `PipelineDcpProfileBindingTest` passes.
-- [ ] `PipelineDngProfileBindingTest` and the history applier suites pass unchanged.
-- [ ] The project file of a session with one selection has no DCP table data. The record states
+- [x] `PipelineDcpProfileBindingTest` passes.
+- [x] `PipelineDngProfileBindingTest` and the history applier suites pass unchanged.
+- [x] The project file of a session with one selection has no DCP table data. The record states
       the search command.
 
 **Expected diff.** 1200 to 1600 lines.
 
-**Completion record.** Empty.
+**Completion record.**
+
+```text
+Phase / date / status: C4 / 2026-11-12 / complete
+Source revision and branch: ccec2929a (C3, branch feature/dcp-profile-develop-reference), work
+  branch feature/dcp-profile-field-history-binding stacked on the C3 pull request
+Actual changed modules: app/ (new DcpCameraProfileBinding library, field write and parse,
+  history applier, field lists, panel projection, root binding), edit/graph/ (the update struct
+  of C3 and its Model check), ui/alcedo_main/album_backend/ (history row presentation and the
+  QML map of the projection value), tests/app/
+Implemented behavior:
+  - include/app/dcp_camera_profile_binding.hpp, app/dcp_camera_profile_binding.cpp (library
+    DcpCameraProfileBinding, deps EditGraph and Image): FindSelectableDcpCameraProfile (user
+    selection; std::invalid_argument that names the profile, the camera model, and the DCP folder
+    when the library has no such identity), ResolveStoredDcpCameraProfileFile (stored reference:
+    bound with the library profile, one warning when the fingerprint changed; unbound with a
+    warning that names the folder when the identity is absent; unbound with an error log when the
+    file cannot be read), BindDcpCameraProfile (document binding).
+  - app/pipeline_root_state.cpp: BindRootCameraProfile calls BindDcpCameraProfile after
+    BindImportedCameraProfile. This covers BuildDocumentFromRoot and BuildDocumentFromCheckpoint,
+    and through them the editor lease, the committed snapshot for thumbnails and exports, the
+    checkout, and the three preview documents.
+  - app/editor_parameter_write_parse.cpp: ParseCameraProfileFileUpdate, in two forms. A write
+    (submitPatch, ApplyEditorParameterPatch) is a selection {"camera_model", "profile_name"}, the
+    same object under "camera_profile_file", or null / {} to clear; it resolves the identity
+    through FindSelectableDcpCameraProfile, so an unknown identity is rejected before any change.
+    A value (history apply, editor restore) is a stored Develop JSON, complete or reduced to the
+    owned key; an identity that the library does not hold gives an unbound reference.
+  - app/editor_parameter_write.cpp, include/app/editor_parameter_write.hpp: the variant holds
+    DevelopCameraProfileFileUpdate; ApplyEditorParameterWrite calls
+    DevelopParamsModel::ApplyCameraProfileFileUpdate.
+  - app/pipeline_history_applier.cpp: DevelopFieldOwnedKeys("camera_profile_file") =
+    {"camera_profile_file"}; the expected-side check of SetParameter compares the reference
+    without its fingerprint (ComparedParameterJson).
+  - app/editor_adjustment_pipeline.cpp, include/app/editor_adjustment_pipeline.hpp:
+    EditorAdjustmentField::CameraProfileFile and its key. app/editor_adjustment_context.cpp
+    (IsDevelopField, selected-node target) and app/editor_pipeline_command_service.cpp
+    (current-panel target) treat it as a Develop field.
+  - app/editor_panel_projection.cpp, include/app/editor_panel_projection.hpp:
+    ReadCameraProfileFile gives EditorPanelCameraProfileFileValue {raster, selected, resolved,
+    camera_model, profile_name}; editor_panel_presentation.cpp maps it to the QML key
+    "camera_profile_file".
+  - editor_history_commit_presentation.cpp: history row "Camera Profile", the swatch-book icon,
+    and the summary "<before> -> <after>" with the profile names; the default entry reads
+    "Built-in", or "Embedded" when the stored camera_profile has a DNG profile fingerprint.
+Detail decisions made in this phase:
+  - DevelopCameraProfileFileUpdate (C3) gets a second member, `unresolved`: a stored reference
+    that the library cannot resolve. History replay needs it, because a replay that fails on an
+    unknown identity stops the whole document build: the editor would not open, and the user could
+    not select the default entry (failure chain of this section). The Model rejects an update
+    with both members and an unresolved reference with a bound profile.
+  - Step 1: the key is NOT in the wrapper list of FieldOwnedParameterJson. That list unwraps a
+    named object; the complete Develop JSON holds the "camera_profile_file" object, so the
+    unwrap would make the owned JSON of raw_decode, color_temp, and lens_calib empty. The owned
+    key itself carries the wrapper form.
+  - The parsers of raw_decode, color_temp, and lens_calib accept the key "camera_profile_file",
+    because the editor history restores those fields from the complete Develop JSON (issue #856
+    records the repeated key list).
+  - The fingerprint is binding state: a load takes the fingerprint of the changed library file
+    (section 2.3), and the stored history keeps the earlier one. The expected-side check compares
+    the identity only, so Undo works after a library file change.
+  - Step 6: the transfer catalogs are inclusion lists (raw_decode, color_temp, lens_calib in
+    document_transfer.cpp, document_transfer_planner.cpp, adjustment_transfer_package_builder.cpp),
+    so they need no change. TransferAndPasteDoNotCarryTheReference proves it.
+  - No editor parameter catalog entry: alcedo-cli has no parameter for the reference (P-6).
+    EditorParameterCatalogTest.EveryCatalogFieldCoversEveryFieldKey states this exclusion.
+  - A stored reference whose DCP file cannot be read stays unbound and the read error is logged:
+    the render fails with UnboundCameraProfileFile, and the editor still opens, so the user can
+    select another profile. A selection of such a file fails with the read error.
+  - The tests use DcpProfileLibrary::Shared(), the library that production lookups read, with a
+    scratch DCP folder scanned in SetUp and cleared in TearDown. An injected library would need a
+    test-only path through the history apply and the parser.
+  - submitPatch parses on the GUI thread, so the first selection of a profile reads its DCP file
+    there; the library cache keeps it. C5 owns the editor call site.
+  - Step 7: CommittedSelectionStoresReferenceOnlyInProjectTables casts every row of every table
+    of the project database to text, so the checkpoint encoder, the history payloads, and the
+    element pipeline JSON are all checked.
+Explicitly unimplemented items: none in C4. The editor section and list model are C5; the DNG
+  source calibration is C6; the GPU comparison is C7.
+Primary success call chain:
+  submitPatch("camera_profile_file", {camera_model, profile_name}, settled = true)
+    -> ParseEditorParameterWrite -> ParseCameraProfileFileUpdate (write)
+       -> FindSelectableDcpCameraProfile -> DcpProfileLibrary::Shared().Find
+    -> EditorHistoryMutation::CaptureAdjustmentBeforePreview: ReadEditorParameterJson (before)
+       -> ApplyEditorParameterWrite -> DevelopParamsModel::ApplyCameraProfileFileUpdate
+          (bound reference, as-shot values solved from the DCP matrices, WhiteBalance dirty)
+    -> CommitAdjustment: ReadEditorParameterJson (after) -> MakeSetParameterBatch(before, after)
+    -> history append -> PersistEditorHistory (checkpoint holds the reference keys only)
+  Reopen (checkpoint): AcquireEditorLease -> BuildDocumentFromCheckpoint -> BindRootCameraProfile
+    -> BindImportedCameraProfile -> BindDcpCameraProfile -> ResolveStoredDcpCameraProfileFile
+    -> ApplyCameraProfileFileUpdate(profile) -> bound reference -> render
+  Replay, checkout, committed snapshot: BuildDocumentFromRoot -> ApplyPipelineEditBatch
+    -> ApplySetParameter -> ApplyEditorParameterValue -> ParseCameraProfileFileUpdate (value)
+    -> ResolveStoredDcpCameraProfileFile -> bound reference; BindRootCameraProfile then finds it
+    bound
+Primary failure and restore call chain:
+  Selection of an identity that the library does not hold
+    -> FindSelectableDcpCameraProfile throws "camera profile "<name>" for "<model>" is not in the
+       DCP folder "<path>"" -> ParseEditorParameterWrite returns nullopt -> no write, no batch;
+       the document JSON and the history head are unchanged
+  Reopen with the folder not set (or the identity removed)
+    -> checkpoint: BindDcpCameraProfile logs the warning, the reference stays unbound
+    -> replay: ParseCameraProfileFileUpdate (value) gives the unresolved update -> unbound
+    -> ResolveDevelopColorTransform -> UnboundCameraProfileFile; the message names the profile
+       and the camera model -> no render with another profile
+    -> the default entry commits a clear edit (patch null) -> the import profile renders
+    -> Undo of the clear restores the stored reference, still unbound
+  Library file changed for the same identity
+    -> ResolveStoredDcpCameraProfileFile: one warning with both fingerprints; the library file
+       wins -> Undo still applies, because the expected-side check ignores the fingerprint
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AlbumBackendLib
+    PipelineDcpProfileBindingTest PipelineDngProfileBindingTest PipelineHistoryApplierTest
+    DcpCameraProfileRenderTest EditorParameterCatalogTest EditorPanelProjectionTest
+    EditorAdjustmentContextTest DocumentTransferTest AdjustmentTransferCatalogTest
+    --parallel 4                                                                      exit 0
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionHistoryPortTest
+    --parallel 4                                                                      exit 0
+  ctest --test-dir build/debug -R "PipelineDcpProfileBindingTest|PipelineDngProfileBindingTest|
+    PipelineHistoryApplierTest|DcpCameraProfileRenderTest|EditorParameterCatalogTest|
+    EditorPanelProjectionTest|EditorAdjustmentContextTest" -j 4 --output-on-failure  exit 0
+    (after clang-format)
+  ctest --test-dir build/debug -R "DocumentTransferTest|AdjustmentTransferCatalogTest" -j 4
+                                                     exit 8: one known failure, see below
+  ctest --test-dir build/debug -R "EditorSessionHistoryPortTest" -j 4
+                                                     exit 8: one known failure, see below
+  Search command of the storage criterion: AllTableRowTexts in
+    pipeline_dcp_profile_binding_test.cpp runs
+    SELECT table_name FROM duckdb_tables() WHERE NOT internal, then for each table
+    SELECT CAST(row_value AS VARCHAR) FROM "<table>" AS row_value, and searches each row for the
+    look table values (37.42, 1.391, 0.871), the forward matrix values (0.7978, 0.1352, 0.7119),
+    and the keys look_table and hue_sat_map. A RAW file has no ForwardMatrix from import, so a
+    forward matrix value can only come from the DCP file.
+Discovered / passed / failed / skipped counts:
+  116 discovered, 116 passed, 0 failed, 0 skipped: PipelineDcpProfileBindingTest 10,
+  PipelineDngProfileBindingTest 5, PipelineHistoryApplierTest 14, DcpCameraProfileRenderTest 13,
+  EditorParameterCatalogTest 43, EditorPanelProjectionTest 12, EditorAdjustmentContextTest 19.
+  DocumentTransferTest 36 of 37 and AdjustmentTransferCatalogTest 12 of 12; the failure is
+  TransferPackageCarriesOnlyOwnedDevelopKeysAndNoCaches (Color Wheel "version" key, open issues
+  #484 and #554). EditorSessionHistoryPortTest 118 of 119; the failure is
+  CheckoutAndPasteHashesAreUnchanged with the same hash values as on clean main (open issue #555).
+  Neither test touches the DCP reference.
+Manual verification: none needed; the editor section is C5.
+Performance or resource evidence, if required: not required.
+Evidence path: build/tmp/dcp_c4/ (build and ctest logs), removed after the pull request.
+Remaining defects or unavailable platforms: the macOS build was not run; this phase has no
+  platform code. Issue #856: editor_parameter_write_parse.cpp has 1061 lines (1007 before this
+  phase) and repeats the Develop key list in three parsers.
+LOC note: dcp_camera_profile_binding.cpp 87, dcp_camera_profile_binding.hpp 65,
+  pipeline_dcp_profile_binding_test.cpp 624, editor_parameter_write_parse.cpp 1061 (issue #856),
+  pipeline_history_applier.cpp 679, editor_panel_projection.cpp 656,
+  editor_history_commit_presentation.cpp 953, develop_node_model.cpp 580.
+```
 
 ### C5. Editor section and list model
 

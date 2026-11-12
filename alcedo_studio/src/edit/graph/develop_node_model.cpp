@@ -312,7 +312,14 @@ void DevelopParamsModel::UseAllSettingsFrom(const DevelopParamsModel& current) {
 }
 
 void DevelopParamsModel::ApplyCameraProfileFileUpdate(DevelopCameraProfileFileUpdate update) {
-  std::optional<DevelopCameraProfileFile> next;
+  if (update.profile && update.unresolved.has_value()) {
+    throw std::invalid_argument(
+        "Develop: a camera profile update cannot hold a profile and an unresolved reference");
+  }
+  if (update.unresolved.has_value() && update.unresolved->IsBound()) {
+    throw std::invalid_argument("Develop: an unresolved camera profile reference has no profile");
+  }
+  std::optional<DevelopCameraProfileFile> next = std::move(update.unresolved);
   if (update.profile) {
     next = MakeDevelopCameraProfileFile(std::move(update.profile));
   }

@@ -1579,8 +1579,14 @@ TEST(EditorParameterCatalogTest, LutPanelProjectionConvertsToModelJsonThatParses
 }
 
 TEST(EditorParameterCatalogTest, EveryCatalogFieldCoversEveryFieldKey) {
+  // The DCP profile reference is an editor field without a catalog entry, so alcedo-cli has no
+  // parameter for it (dcp_camera_profile_plan.md, decision P-6).
+  EXPECT_EQ(EditorParameterCatalog::Find("camera_profile_file"), nullptr);
   std::set<EditorAdjustmentField> adjustments;
   for (const auto& [key, adjustment] : EditorAdjustmentFieldKeys()) {
+    if (adjustment == EditorAdjustmentField::CameraProfileFile) {
+      continue;
+    }
     const auto* entry = EditorParameterCatalog::Find(key);
     ASSERT_NE(entry, nullptr) << key;
     EXPECT_EQ(entry->adjustment, adjustment) << key;

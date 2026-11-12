@@ -169,6 +169,14 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           input.insert(QStringLiteral("origin"), String(value.origin));
           input.insert(QStringLiteral("referral"), String(value.referral));
           map.insert(QStringLiteral("input"), input);
+        } else if constexpr (std::is_same_v<T, alcedo::EditorPanelCameraProfileFileValue>) {
+          QVariantMap reference;
+          reference.insert(QStringLiteral("raster"), value.raster);
+          reference.insert(QStringLiteral("selected"), value.selected);
+          reference.insert(QStringLiteral("resolved"), value.resolved);
+          reference.insert(QStringLiteral("camera_model"), String(value.camera_model));
+          reference.insert(QStringLiteral("profile_name"), String(value.profile_name));
+          map.insert(QStringLiteral("camera_profile_file"), reference);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelFilmFormatValue>) {
           QVariantMap format;
           format.insert(QStringLiteral("film_format"), String(value.film_format));

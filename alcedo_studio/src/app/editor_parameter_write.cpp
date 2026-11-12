@@ -226,6 +226,9 @@ auto ApplyEditorParameterWrite(PipelineDocument& document, const EditorParameter
         } else if (target.field_key == "input_profile") {
           develop->Params().ApplyInputProfileUpdate(
               RequireWrite<DevelopInputProfileUpdate>(write, target.field_key));
+        } else if (target.field_key == "camera_profile_file") {
+          develop->Params().ApplyCameraProfileFileUpdate(
+              RequireWrite<DevelopCameraProfileFileUpdate>(write, target.field_key));
         } else {
           return SetError(error, "Unsupported Develop parameter field: " + target.field_key);
         }

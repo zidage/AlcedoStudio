@@ -232,11 +232,18 @@ struct DevelopInputProfileUpdate {
 /**
  * @brief DCP profile selection (`camera_profile_file` field).
  *
- * @ref profile null clears the reference, so the import profile applies again. A non-null profile
- * comes from the DCP library and gives a bound reference with its own identity and fingerprint.
+ * - @ref profile set: a profile of the DCP library. It gives a bound reference with its own
+ *   identity and fingerprint.
+ * - @ref unresolved set: a stored reference that the DCP library cannot resolve (history replay,
+ *   project load). It gives an unbound reference with the stored values, so the render fails with
+ *   `UnboundCameraProfileFile` and no other profile applies.
+ * - Both empty: clears the reference, so the import profile applies again.
+ *
+ * Both set is an invalid update.
  */
 struct DevelopCameraProfileFileUpdate {
-  DcpCameraProfilePtr profile;
+  DcpCameraProfilePtr                     profile;
+  std::optional<DevelopCameraProfileFile> unresolved;
 };
 
 /**
@@ -339,8 +346,9 @@ class DevelopParamsModel final
    * EffectiveCameraProfile); `custom_cct` and `custom_tint` keep their numbers. Marks WhiteBalance
    * dirty when the reference, its bound profile, or a solved value changes. When the as-shot solve
    * fails (no usable import neutral), the as-shot values keep their numbers, as at import.
-   * @throws std::logic_error for a raster document, which has no camera profile; the payload is
-   *         unchanged.
+   * @throws std::logic_error for a raster document, which has no camera profile;
+   *         std::invalid_argument when the update sets both members, or when its unresolved
+   *         reference has a bound profile. The payload is unchanged in both cases.
    */
   void               ApplyCameraProfileFileUpdate(DevelopCameraProfileFileUpdate update);
 

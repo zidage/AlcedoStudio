@@ -594,12 +594,22 @@ def_library(VersionNameRules
         "${ALCEDO_INCLUDE_ROOT}/app/version_name_rules.hpp"
 )
 
+# Resolution of the Develop camera_profile_file reference through the DCP library
+# (dcp_camera_profile_plan.md, C4): the selection write, history replay, and document binding.
+def_library(DcpCameraProfileBinding
+    SOURCES
+        "${ALCEDO_APP_ROOT}/dcp_camera_profile_binding.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/dcp_camera_profile_binding.hpp"
+    PUBLIC_DEPS EditGraph Image
+)
+
 def_library(EditorParameterWrite
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_parameter_write.cpp"
         "${ALCEDO_APP_ROOT}/editor_parameter_write_parse.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_write.hpp"
     PUBLIC_DEPS EditGraph JSON
+    PRIVATE_DEPS DcpCameraProfileBinding
 )
 
 def_library(EditorPipelineCommandService
@@ -642,7 +652,8 @@ def_library(PipelineHistoryApplier
                 EditMaskCore
 )
 
-target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorAdjustmentPipeline)
+target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorAdjustmentPipeline
+    DcpCameraProfileBinding)
 
 def_library(EditorMaskCreationController
     SOURCES
