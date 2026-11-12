@@ -23,6 +23,8 @@ RowLayout {
     property int exportQueueCount: 0
     // Colour helpers of LibraryWorkspace; the appTheme values apply when it is not set.
     property var theme: null
+    // Height of the buttons; LibraryWorkspace gives the row this height.
+    readonly property int buttonHeight: 44
 
     readonly property bool exportPageActive: inspectorPanel ? inspectorPanel.exportPageActive
                                                             : false
@@ -74,7 +76,7 @@ RowLayout {
         id: addSelectedBtn
         objectName: "libraryInspectorAddToExportQueueButton"
         Layout.fillWidth: true
-        Layout.preferredHeight: 52
+        Layout.preferredHeight: root.buttonHeight
         visible: !root.exportPageActive
         text: qsTr("Add to Export Queue (%1)").arg(root.selectedCount)
         enabled: root.addEnabled
@@ -103,7 +105,7 @@ RowLayout {
         id: exportQueueBtn
         objectName: "libraryInspectorExportButton"
         Layout.fillWidth: true
-        Layout.preferredHeight: 52
+        Layout.preferredHeight: root.buttonHeight
         visible: root.exportPageActive
         text: appModules.importExport.exportInFlight
               ? qsTr("Exporting...")

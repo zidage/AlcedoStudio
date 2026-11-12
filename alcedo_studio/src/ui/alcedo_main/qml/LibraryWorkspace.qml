@@ -547,22 +547,27 @@ RowLayout {
                                : 0
         Behavior on Layout.preferredWidth { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
-        ColumnLayout {
+        // One panel: the Inspector pages, then the marks card and the button row at the bottom.
+        // The marks card and the buttons have the inset of the Album section cards (the 10 px
+        // page margin plus spaceMd), so every card of the panel has one width.
+        Rectangle {
             anchors.fill: parent
-            spacing: 10
+            radius: root.panelRadius
+            color: root.colBgPanel
+            border.width: 0
+            clip: true
 
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: root.panelRadius
-                color: root.colBgPanel
-                border.width: 0
-                clip: true
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
 
                 InspectorPanel {
                     id: inspectorPanel
-                    anchors.fill: parent
-                    anchors.margins: 10
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.topMargin: 10
+                    Layout.leftMargin: 10
+                    Layout.rightMargin: 10
                     focusedImage: host.focusedImageInspection
                     interactionPolicy: appModules.interactionPolicy
                     selectionState: host.selectionState
@@ -581,29 +586,39 @@ RowLayout {
                     }
                     onColorLabelSettingsRequested: host.openColorLabelSettings()
                 }
-            }
 
-            // Rating, color labels, and Delete mark of the selection (#772).
-            LibraryMarksControl {
-                Layout.fillWidth: true
-                visible: !inspectorPanel.exportPageActive
-                selectionState: host.selectionState
-                selectedCount: host.selectedCount
-                backendInteractive: host.backendInteractive
-                theme: root
-                onMessageRequested: function(message) { host.showSnackbar(message) }
-                onRatingApplied: host.refreshFocusedImageInspection()
-            }
+                ColumnLayout {
+                    objectName: "libraryInspectorFooter"
+                    Layout.fillWidth: true
+                    Layout.topMargin: appTheme.spaceSm
+                    Layout.leftMargin: 10 + appTheme.spaceMd
+                    Layout.rightMargin: 10 + appTheme.spaceMd
+                    Layout.bottomMargin: 10 + appTheme.spaceMd
+                    spacing: appTheme.spaceSm
 
-            LibraryInspectorActions {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 52
-                inspectorPanel: inspectorPanel
-                selectionState: host.selectionState
-                selectedCount: host.selectedCount
-                backendInteractive: host.backendInteractive
-                exportQueueCount: host.exportQueueCount
-                theme: root
+                    // Rating, color labels, and Delete mark of the selection (#772).
+                    LibraryMarksControl {
+                        Layout.fillWidth: true
+                        visible: !inspectorPanel.exportPageActive
+                        selectionState: host.selectionState
+                        selectedCount: host.selectedCount
+                        backendInteractive: host.backendInteractive
+                        theme: root
+                        onMessageRequested: function(message) { host.showSnackbar(message) }
+                        onRatingApplied: host.refreshFocusedImageInspection()
+                    }
+
+                    LibraryInspectorActions {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: buttonHeight
+                        inspectorPanel: inspectorPanel
+                        selectionState: host.selectionState
+                        selectedCount: host.selectedCount
+                        backendInteractive: host.backendInteractive
+                        exportQueueCount: host.exportQueueCount
+                        theme: root
+                    }
+                }
             }
         }
 
