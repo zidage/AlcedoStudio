@@ -10,6 +10,9 @@ Direct prerequisite: the embedded DNG profile path that
 [Embedded DNG color profiles](../../../dng_color_profiles.md) describes. This plan extends that
 path. It does not replace it.
 
+Tracking issue: [#851](https://github.com/zidage/AlcedoStudio/issues/851). Phase issues: C1 #844,
+C2 #845, C3 #846, C4 #847, C5 #848, C6 #849, C7 #850.
+
 Source audit revision: `c54ac05fa` on `main`.
 
 Unless a path starts with `alcedo_studio/` or `docs/`, it is relative to `alcedo_studio/src/`.
