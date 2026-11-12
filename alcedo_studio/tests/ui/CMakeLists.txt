@@ -1244,6 +1244,28 @@ target_link_libraries(EditorAdjustmentModelTest
 alcedo_ui_gtest_discover_tests(EditorAdjustmentModelTest TEST_PREFIX "EditorAdjustmentModelTest.")
 alcedo_register_test_target(EditorAdjustmentModelTest ui)
 
+# Rows and selections of the Camera Profile combo of the RAW panel (DCP plan C5). Synthetic DCP
+# files in a scratch folder; no GPU and no QML.
+add_executable(EditorCameraProfileListModelTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_camera_profile_list_model_test.cpp
+)
+target_include_directories(EditorCameraProfileListModelTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+    ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT})
+target_link_libraries(EditorCameraProfileListModelTest
+  PRIVATE
+    AlcedoInProcessTestMain
+    AlbumBackendLib
+    CameraProfileLibraryService
+    DcpCameraProfileBinding
+    GTest::gtest
+    Qt6::Core
+    Qt6::Qml
+    Qt6::Test
+)
+alcedo_ui_gtest_discover_tests(EditorCameraProfileListModelTest
+    TEST_PREFIX "EditorCameraProfileListModelTest.")
+alcedo_register_test_target(EditorCameraProfileListModelTest ui)
+
 # Slider-to-history-to-coordinator ownership boundaries. Uses a latch-blocked
 # renderer and the live Mini-Git history port; no GPU.
 add_executable(EditorSerialInputBoundaryTest
@@ -2049,11 +2071,13 @@ add_executable(EditorRawDecodePanelQmlTest
 )
 target_include_directories(EditorRawDecodePanelQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
-    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}
 )
 target_link_libraries(EditorRawDecodePanelQmlTest
     PRIVATE
         AlbumBackendLib
+        CameraProfileLibraryService
+        DcpCameraProfileBinding
         GTest::gtest
         Qt6::Core
         Qt6::Test

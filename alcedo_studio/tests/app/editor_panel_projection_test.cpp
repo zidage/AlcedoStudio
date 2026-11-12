@@ -14,6 +14,7 @@
 #include <utility>
 #include <variant>
 
+#include "../edit/graph/imported_camera_profile_fixtures.hpp"
 #include "../edit/graph/test_camera_profile.hpp"
 #include "app/editor_parameter_write.hpp"
 #include "app/editor_pipeline_command_service.hpp"
@@ -529,6 +530,40 @@ TEST(EditorPanelProjectionTest, InputProfileProjectsRasterDescriptionAndRawDocum
   const auto* adapter  = adapters.Find("input_profile");
   ASSERT_NE(adapter, nullptr);
   EXPECT_EQ(adapter->panel_id, "raw");
+}
+
+// DCP plan C5: the Camera Profile combo names its default entry "Embedded" when the import
+// profile is the embedded profile of a DNG file, and "Built-in" otherwise.
+TEST(EditorPanelProjectionTest, CameraProfileFileProjectsWhetherTheDefaultIsAnEmbeddedProfile) {
+  auto project = [](const PipelineDocument& document) {
+    EditorPanelProjection projection;
+    std::string           error;
+    EXPECT_TRUE(ProjectCurrentPanelFields(document, 5, &projection, &error)) << error;
+    const auto* field = FindField(projection, "camera_profile_file");
+    EXPECT_NE(field, nullptr);
+    const auto* value =
+        field ? std::get_if<EditorPanelCameraProfileFileValue>(&field->value) : nullptr;
+    EXPECT_NE(value, nullptr);
+    return value ? *value : EditorPanelCameraProfileFileValue{};
+  };
+
+  auto raw = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(raw);
+  const auto built_in = project(raw);
+  EXPECT_FALSE(built_in.raster);
+  EXPECT_FALSE(built_in.embedded_default);
+  EXPECT_FALSE(built_in.selected);
+
+  auto dng = CreateDefaultPipelineDocument();
+  for (const auto& fixture : gpu_dag_test::MakeImportedCameraProfileFixtures()) {
+    if (fixture.name_ == "dng") {
+      gpu_dag_test::ApplyImportedCameraProfile(dng, fixture.context_);
+    }
+  }
+  const auto embedded = project(dng);
+  EXPECT_FALSE(embedded.raster);
+  EXPECT_TRUE(embedded.embedded_default);
+  EXPECT_FALSE(embedded.selected);
 }
 
 // L4: the `lut` field write carries the stored encodings, so replaying an LMT Model JSON (undo,

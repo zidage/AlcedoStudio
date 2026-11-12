@@ -123,6 +123,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// the image EXIF carries no lens maker/model. Same lifetime as exifLineText.
   Q_PROPERTY(QString exifLensMake READ exif_lens_make NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifLensModel READ exif_lens_model NOTIFY ImageExifChanged)
+  /// Camera identity of the image RAW color context, for the DCP match of the Camera Profile
+  /// section. Empty for an image without one (a raster image). Same lifetime as exifLineText.
+  Q_PROPERTY(QString cameraMake READ camera_make NOTIFY ImageExifChanged)
+  Q_PROPERTY(QString cameraModel READ camera_model NOTIFY ImageExifChanged)
   // Left tool rail page: empty string = collapsed; "history", "versions", "nodes",
   // "maskgroups", or "luts" (LUT browser) = expanded. Survives workspace round-trips within the
   // process (not persisted across application restart).
@@ -207,6 +211,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString    exif_focal_text() const { return exif_focal_text_; }
   [[nodiscard]] QString    exif_lens_make() const { return exif_lens_make_; }
   [[nodiscard]] QString    exif_lens_model() const { return exif_lens_model_; }
+  [[nodiscard]] QString    camera_make() const { return camera_make_; }
+  [[nodiscard]] QString    camera_model() const { return camera_model_; }
   [[nodiscard]] QString    editor_tool_panel_page() const { return editor_tool_panel_page_; }
   [[nodiscard]] qulonglong session_generation() const;
   [[nodiscard]] qulonglong history_revision() const;
@@ -509,7 +515,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     SyncIdentityFromBackend();
   void                     RefreshImageExifDisplay();
   void                     ApplyExifRowText(const alcedo::EditorExifRowText& text);
-  void                     ApplyExifLensIdentity(const alcedo::EditorImageExifDisplay& display);
+  void                     ApplyImageIdentity(const alcedo::EditorImageExifDisplay& display);
   /// Enqueue @p patch (std::nullopt means the write was rejected before enqueueing, for
   /// @p rejection) and keep the viewport's interactive present loop in step with @p settled.
   auto EnqueueAdjustmentPatch(std::optional<alcedo::EditorAdjustmentPatch> patch, bool settled,
@@ -619,6 +625,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                 exif_focal_text_    = QString::fromUtf8("\xE2\x80\x94");
   QString                 exif_lens_make_;
   QString                 exif_lens_model_;
+  QString                 camera_make_;
+  QString                 camera_model_;
   QPointer<QObject>       presentation_viewport_;
   // Set once by BindHeadlessPresentationSink before the first render; read by render workers.
   alcedo::IFrameSink*     headless_presentation_sink_ = nullptr;

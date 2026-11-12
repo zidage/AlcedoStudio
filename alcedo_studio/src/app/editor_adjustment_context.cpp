@@ -109,10 +109,16 @@ auto ReadEditorImageExifDisplay(const ExifDisplayMetaData& metadata) -> EditorIm
 }
 
 auto ReadEditorImageExifDisplay(const Image& image) -> EditorImageExifDisplay {
-  if (!image.has_exif_display_.load()) {
-    return {};
+  EditorImageExifDisplay display;
+  if (image.has_exif_display_.load()) {
+    display = ReadEditorImageExifDisplay(image.exif_display_);
   }
-  return ReadEditorImageExifDisplay(image.exif_display_);
+  if (image.HasRawColorContext()) {
+    const auto& context  = image.GetRawColorContext();
+    display.camera_make  = context.camera_make_;
+    display.camera_model = context.camera_model_;
+  }
+  return display;
 }
 
 namespace {
