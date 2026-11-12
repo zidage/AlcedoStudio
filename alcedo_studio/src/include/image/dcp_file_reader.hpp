@@ -38,7 +38,8 @@ auto ReadDcpProfileIdentity(const std::filesystem::path& path) -> DcpProfileIden
  * @brief Read a complete DCP file into an immutable profile.
  *
  * Accepts byte orders `II` and `MM` with magic `0x4352` (DCP) or `42` (TIFF), and reads the first
- * IFD only. `ProfileToneCurve` and the other rendering hints are read past. A profile with a third
+ * IFD only. `ProfileToneCurve` becomes DcpCameraProfile::profile_tone_curve; it leaves the
+ * profile fingerprint unchanged. The other rendering hints are read past. A profile with a third
  * illuminant, `RGBTables`, or a `ReductionMatrix` fails, because the render path has two
  * illuminants and three camera channels.
  *

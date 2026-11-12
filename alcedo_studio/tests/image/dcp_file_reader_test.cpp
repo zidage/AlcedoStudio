@@ -20,6 +20,7 @@
 
 #include "dcp_test_file_writer.hpp"
 #include "image/dcp_camera_profile.hpp"
+#include "image/dng_tone_curve.hpp"
 
 namespace alcedo {
 namespace {
@@ -251,12 +252,76 @@ TEST_F(DcpFileReaderTest, IdentityReadDoesNotReadTablePayloads) {
   ExpectReadFails(path, "tag 50982 data is outside the file");
 }
 
-TEST_F(DcpFileReaderTest, ProfileToneCurveIsReadPastAndDoesNotChangeTheProfile) {
+TEST_F(DcpFileReaderTest, ProfileToneCurveIsReadAndKeepsTheProfileFingerprint) {
   auto with_curve = StandardProfile();
-  with_curve.Floats(tag::kProfileToneCurve, {0.0f, 0.0f, 0.5f, 0.6f, 1.0f, 1.0f});
+  with_curve.Floats(tag::kProfileToneCurve, {0.0f, 0.0f, 0.25f, 0.4f, 0.5f, 0.6f, 1.0f, 1.0f});
+  auto other_curve = StandardProfile();
+  other_curve.Floats(tag::kProfileToneCurve, {0.0f, 0.0f, 0.5f, 0.7f, 1.0f, 1.0f});
   const auto plain = ReadDcpCameraProfile(Write(StandardProfile(), "plain.dcp"));
   const auto curve = ReadDcpCameraProfile(Write(with_curve, "curve.dcp"));
+  const auto other = ReadDcpCameraProfile(Write(other_curve, "other.dcp"));
+
+  EXPECT_EQ(plain->profile_tone_curve, nullptr);
+  ASSERT_NE(curve->profile_tone_curve, nullptr);
+  EXPECT_EQ(
+      curve->profile_tone_curve->points,
+      (std::vector<DngToneCurvePoint>{{0.0f, 0.0f}, {0.25f, 0.4f}, {0.5f, 0.6f}, {1.0f, 1.0f}}));
+  EXPECT_FLOAT_EQ(curve->profile_tone_curve->table[2048], 0.6f);
+  // The curve stays outside the profile fingerprint, so a stored reference keeps its value.
   EXPECT_EQ(curve->fingerprint, plain->fingerprint);
+  EXPECT_EQ(other->fingerprint, plain->fingerprint);
+  EXPECT_NE(curve->profile_tone_curve->fingerprint, other->profile_tone_curve->fingerprint);
+}
+
+TEST_F(DcpFileReaderTest, ProfileToneCurveReadsTheSameFromBigEndianFile) {
+  auto writer = StandardProfile();
+  writer.Floats(tag::kProfileToneCurve, {0.0f, 0.0f, 0.18f, 0.43f, 1.0f, 1.0f});
+  const auto little = ReadDcpCameraProfile(Write(writer, "little.dcp"));
+  const auto big =
+      ReadDcpCameraProfile(Write(writer, "big.dcp", DcpTestFileWriter::ByteOrder::kBigEndian));
+  ASSERT_NE(big->profile_tone_curve, nullptr);
+  EXPECT_EQ(big->profile_tone_curve->points, little->profile_tone_curve->points);
+  EXPECT_EQ(big->profile_tone_curve->fingerprint, little->profile_tone_curve->fingerprint);
+}
+
+TEST_F(DcpFileReaderTest, ProfileToneCurveWithAnOddValueCountFails) {
+  auto writer = StandardProfile();
+  writer.Floats(tag::kProfileToneCurve, {0.0f, 0.0f, 0.5f, 0.6f, 1.0f});
+  ExpectReadFails(Write(writer, "odd.dcp"), "tag 50940 (ProfileToneCurve) has 5 values");
+}
+
+TEST_F(DcpFileReaderTest, ProfileToneCurveWithOnePointFails) {
+  auto writer = StandardProfile();
+  writer.Floats(tag::kProfileToneCurve, {0.0f, 0.0f});
+  ExpectReadFails(Write(writer, "one_point.dcp"), "tag 50940 (ProfileToneCurve): ");
+}
+
+TEST_F(DcpFileReaderTest, ProfileToneCurveWithXThatDoesNotRiseFails) {
+  auto writer = StandardProfile();
+  writer.Floats(tag::kProfileToneCurve, {0.0f, 0.0f, 0.5f, 0.6f, 0.5f, 0.7f, 1.0f, 1.0f});
+  ExpectReadFails(Write(writer, "falling_x.dcp"),
+                  "tag 50940 (ProfileToneCurve): ProfileToneCurve point 2: x does not rise");
+}
+
+TEST_F(DcpFileReaderTest, ProfileToneCurveWithValueOutsideTheUnitRangeFails) {
+  auto above = StandardProfile();
+  above.Floats(tag::kProfileToneCurve, {0.0f, 0.0f, 0.5f, 1.2f, 1.0f, 1.0f});
+  ExpectReadFails(Write(above, "above.dcp"), "point 1: y is outside [0, 1]");
+  auto below = StandardProfile();
+  below.Floats(tag::kProfileToneCurve, {-0.1f, 0.0f, 1.0f, 1.0f});
+  ExpectReadFails(Write(below, "below.dcp"), "point 0: x is outside [0, 1]");
+}
+
+TEST_F(DcpFileReaderTest, ProfileToneCurveWithNonFiniteValueFails) {
+  auto writer = StandardProfile();
+  writer.Floats(tag::kProfileToneCurve, {0.0f, 0.0f, 0.5f, std::nanf(""), 1.0f, 1.0f});
+  ExpectReadFails(Write(writer, "nan.dcp"), "point 1: a value is not finite");
+}
+
+TEST_F(DcpFileReaderTest, ProfileToneCurveWithWrongTypeFails) {
+  auto writer = StandardProfile();
+  writer.Longs(tag::kProfileToneCurve, {0, 0, 1, 1});
+  ExpectReadFails(Write(writer, "long_curve.dcp"), "tag 50940 has TIFF type 4, expected FLOAT");
 }
 
 TEST_F(DcpFileReaderTest, MissingProfileNameFails) {
@@ -375,7 +440,8 @@ TEST_F(DcpFileReaderTest, EqualContentGivesEqualFingerprint) {
 TEST(DcpFileReaderFolderTest, EveryFileOfTheUserFolderLoadsWithoutRejection) {
   const char* folder = std::getenv("ALCEDO_DCP_FOLDER");
   if (folder == nullptr || *folder == '\0') GTEST_SKIP() << "ALCEDO_DCP_FOLDER is not set";
-  std::size_t                         files = 0;
+  std::size_t                         files       = 0;
+  std::size_t                         tone_curves = 0;
   std::vector<std::string>            rejected;
   std::set<std::string>               cameras;
   std::chrono::steady_clock::duration identity_time{};
@@ -390,12 +456,14 @@ TEST(DcpFileReaderFolderTest, EveryFileOfTheUserFolderLoadsWithoutRejection) {
       EXPECT_EQ(profile->unique_camera_model, identity.unique_camera_model) << entry.path();
       EXPECT_EQ(profile->profile_name, identity.profile_name) << entry.path();
       cameras.insert(identity.unique_camera_model);
+      if (profile->profile_tone_curve) ++tone_curves;
     } catch (const std::runtime_error& error) {
       rejected.emplace_back(error.what());
     }
   }
   std::cout << "DCP files: " << files << ", cameras: " << cameras.size()
-            << ", rejected: " << rejected.size() << ", identity read time: "
+            << ", tone curves: " << tone_curves << ", rejected: " << rejected.size()
+            << ", identity read time: "
             << std::chrono::duration_cast<std::chrono::milliseconds>(identity_time).count()
             << " ms\n";
   for (const auto& message : rejected) std::cout << "  rejected: " << message << '\n';

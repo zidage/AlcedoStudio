@@ -98,6 +98,16 @@ gtest_discover_tests(Aces2ForwardTest TEST_PREFIX "Aces2ForwardTest."
   PROPERTIES LABELS "edit;runtime;color")
 alcedo_register_test_target(Aces2ForwardTest edit)
 
+# Profile tone stage host reference: ACES 2.0 and OpenDRT neutral responses, inverse tables,
+# neutral error, and the CIEDE2000 measurement record (DCP profile tone curve study, phase T1).
+add_executable(ProfileToneReferenceTest
+  ${ALCEDO_TEST_ROOT}/edit/runtime/profile_tone_reference_test.cpp)
+target_include_directories(ProfileToneReferenceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(ProfileToneReferenceTest PRIVATE GTest::gtest_main EditRuntime Image)
+gtest_discover_tests(ProfileToneReferenceTest TEST_PREFIX "ProfileToneReferenceTest."
+  PROPERTIES LABELS "edit;runtime;color")
+alcedo_register_test_target(ProfileToneReferenceTest edit ci_core)
+
 # LMT composite table bake: identity LUTs, an OpenColorIO 2.5.1 conversion LUT, the R2 raster
 # conversion, DOMAIN_MIN/MAX, bake accuracy and time (LUT color encodings, phase L3). Only test
 # targets link OpenColorIO.

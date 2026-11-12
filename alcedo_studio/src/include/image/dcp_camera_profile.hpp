@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "image/dng_color_profile.hpp"
+#include "image/dng_tone_curve.hpp"
 
 namespace alcedo {
 
@@ -23,6 +24,11 @@ namespace alcedo {
  * user selects the profile. @ref tables holds the hue and saturation maps, the look table, and
  * `BaselineExposureOffset`, with identity calibration, so the embedded DNG profile path evaluates
  * it unchanged.
+ *
+ * @ref profile_tone_curve holds `ProfileToneCurve`, or null when the file lacks the tag. It stays
+ * outside @ref DcpCameraProfileToJson, so the curve leaves @ref fingerprint unchanged and every
+ * stored reference keeps its fingerprint (dcp_profile_tone_curve_study.md, section 6.3). The curve
+ * carries its own fingerprint.
  *
  * The value is immutable after @ref MakeDcpCameraProfile. It is session data: project data stores
  * only the identity and the fingerprint, never the matrices or the tables.
@@ -39,6 +45,7 @@ struct DcpCameraProfile {
   double                color_matrix_2_cct     = 0.0;   ///< Kelvin of CalibrationIlluminant2.
   std::string           profile_calibration_signature;  ///< Tag 50932; empty when absent.
   DngColorProfilePtr    tables;           ///< Maps, look table, and exposure offset. Never null.
+  DngToneCurvePtr       profile_tone_curve;  ///< Tag 50940; null when absent. Not fingerprinted.
   std::uint64_t         fingerprint = 0;  ///< FNV-1a of the content; set by MakeDcpCameraProfile.
 };
 using DcpCameraProfilePtr = std::shared_ptr<const DcpCameraProfile>;

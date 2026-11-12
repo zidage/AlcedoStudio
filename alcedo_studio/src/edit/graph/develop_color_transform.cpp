@@ -372,6 +372,11 @@ auto BuildBradfordCAT(const cv::Vec2d& src_xy, const cv::Vec2d& dst_xy) -> cv::M
   return kBradfordInv * diag * kBradford;
 }
 
+/// XYZ D50 to AP1: Bradford D50 to the AP1 white, then XYZ to AP1. The same for every camera.
+auto XyzD50ToAp1() -> cv::Matx33d {
+  return kXyzD60ToAp1 * BuildBradfordCAT(cv::Vec2d(kD50X, kD50Y), cv::Vec2d(kD60X, kD60Y));
+}
+
 void StoreMatrix(const cv::Matx33d& src, std::array<float, 9>& dst) {
   for (int r = 0; r < 3; ++r) {
     for (int c = 0; c < 3; ++c) {
@@ -856,9 +861,7 @@ auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransfo
   }
   if (!IsFiniteMatrix(camera_to_xyz_d50)) return Fail(ColorTransformError::NonFiniteMatrix);
 
-  const cv::Matx33d cat_d50_to_d60 =
-      BuildBradfordCAT(cv::Vec2d(kD50X, kD50Y), cv::Vec2d(kD60X, kD60Y));
-  const cv::Matx33d xyz_d50_to_ap1 = kXyzD60ToAp1 * cat_d50_to_d60;
+  const cv::Matx33d xyz_d50_to_ap1 = XyzD50ToAp1();
   const cv::Matx33d camera_to_ap1  = xyz_d50_to_ap1 * camera_to_xyz_d50;
   if (!IsFiniteMatrix(camera_to_ap1) || !IsFiniteMatrix(xyz_d50_to_ap1)) {
     return Fail(ColorTransformError::NonFiniteMatrix);
@@ -954,6 +957,15 @@ auto BuildAp1Cat02WhiteBalanceMatrix(double cct, double tint) -> std::array<floa
   std::array<float, 9> result{};
   StoreMatrix(adaptation, result);
   return result;
+}
+
+auto XyzD50ToAp1Matrix() -> const std::array<float, 9>& {
+  static const std::array<float, 9> matrix = [] {
+    std::array<float, 9> result{};
+    StoreMatrix(XyzD50ToAp1(), result);
+    return result;
+  }();
+  return matrix;
 }
 
 }  // namespace alcedo
