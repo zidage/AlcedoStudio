@@ -1,4 +1,5 @@
 import QtQuick
+import "ColorLabelNames.js" as ColorLabelNames
 
 // Color label dots of a Library photo (#771, DESIGN.md "Library color labels"): one dot per
 // code the photo has, in code order (0 Red ... 6 Gray), after the file name of the caption.
@@ -42,14 +43,9 @@ Row {
 
     // Names of the shown codes (the user name from Settings or the color name).
     function shownNames() {
-        const names = appModules.libraryView ? appModules.libraryView.colorLabelNames : []
-        const out = []
-        for (let code = 0; code < codeCount; ++code) {
-            if (hasCode(code) && names && code < names.length) {
-                out.push(String(names[code]))
-            }
-        }
-        return out
+        return ColorLabelNames.shownNames(labels, appModules.libraryView
+                                                  ? appModules.libraryView.colorLabelNames : [],
+                                          codeCount)
     }
 
     visible: shownCount > 0

@@ -173,14 +173,18 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
                               .resolution_ = key.resolution};
     }
 
+    // A row with a known missing source checks the file again before it asks for a render. The
+    // path read goes through the image pool, which reads the database on a pool miss, so a row
+    // without that mark does not resolve it: a scroll pins a whole row of cards on this thread.
     const auto* item = library_.FindAlbumItem(elementId);
-    const bool known_missing = item != nullptr && item->thumb_missing_source;
-    const auto source_path = ResolveThumbnailSourcePath(elementId, imageId);
-    if (known_missing && !source_path.empty() && !PathExists(source_path)) {
-      UpdateThumbnailState(elementId, QString(), false, true,
-                           QObject::tr("Source file was moved or deleted: %1")
-                               .arg(album_util::PathToQString(source_path)));
-      return;
+    if (item != nullptr && item->thumb_missing_source) {
+      const auto source_path = ResolveThumbnailSourcePath(elementId, imageId);
+      if (!source_path.empty() && !PathExists(source_path)) {
+        UpdateThumbnailState(elementId, QString(), false, true,
+                             QObject::tr("Source file was moved or deleted: %1")
+                                 .arg(album_util::PathToQString(source_path)));
+        return;
+      }
     }
     RequestThumbnail(elementId, imageId, maxEdge);
     return;
