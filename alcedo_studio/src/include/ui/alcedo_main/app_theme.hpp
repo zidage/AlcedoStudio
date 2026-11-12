@@ -406,11 +406,11 @@ class AppTheme final : public QObject {
   auto        welcomeInfoMinWidth() const -> int;
   auto        welcomeEmptyContentWidth() const -> int;
   auto        skeletonCycleMs() const -> int;
-  auto        loadingWavePhase() const -> qreal;
-  auto        loadingWaveCycleMs() const -> int;
-  auto        loadingWaveFrameMs() const -> int;
+  auto             loadingWavePhase() const -> qreal;
+  auto             loadingWaveCycleMs() const -> int;
+  auto             loadingWaveFrameMs() const -> int;
   /// Number of objects that hold the loading wave clock; the clock runs while it is above 0.
-  auto        loadingWaveHolders() const -> int;
+  auto             loadingWaveHolders() const -> int;
   /// @p holder holds the loading wave clock while @p holds is true. A destroyed holder lets go
   /// by itself, so a mark that is torn down without its QML handlers releases the clock too.
   Q_INVOKABLE void setLoadingWaveHolder(QObject* holder, bool holds);
@@ -539,14 +539,14 @@ class AppTheme final : public QObject {
   explicit AppTheme(QObject* parent = nullptr);
 
   static auto  ResolveRole(QWidget* widget) -> FontRole;
-  void         AdvanceLoadingWave();
+  void                                     AdvanceLoadingWave();
 
-  void         UpdateLoadingWaveTimer();
+  void                                     UpdateLoadingWaveTimer();
 
-  QTimer*                                   loading_wave_timer_ = nullptr;
-  QElapsedTimer                             loading_wave_clock_{};
+  QTimer*                                  loading_wave_timer_ = nullptr;
+  QElapsedTimer                            loading_wave_clock_{};
   QHash<QObject*, QMetaObject::Connection> loading_wave_holders_{};
-  qreal                                     loading_wave_phase_ = 0.0;
+  qreal                                    loading_wave_phase_   = 0.0;
 
   int          current_theme_index_  = 0;
   // Lazy-loaded from QSettings("ui/reduceMotion") on first read so the

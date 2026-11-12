@@ -813,7 +813,7 @@ TEST_F(AlbumSectionQmlTests, StaggeredGridMarkHoldsTheSharedWaveClockOnlyWhileIt
   auto&      theme                = AppTheme::Instance();
   const bool reduce_motion_before = theme.reduceMotion();
   theme.setReduceMotion(false);
-  const int holders_before = theme.loadingWaveHolders();
+  const int             holders_before = theme.loadingWaveHolders();
 
   ApplicationModuleHost backend;
   LoadedComponent       view(backend, "StaggeredGridMark.qml", 27);

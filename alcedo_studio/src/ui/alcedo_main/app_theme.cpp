@@ -1274,11 +1274,11 @@ void AppTheme::setLoadingWaveHolder(QObject* holder, bool holds) {
   }
   const auto it = loading_wave_holders_.find(holder);
   if (holds && it == loading_wave_holders_.end()) {
-    loading_wave_holders_.insert(holder, connect(holder, &QObject::destroyed, this,
-                                                 [this, holder]() {
-                                                   loading_wave_holders_.remove(holder);
-                                                   UpdateLoadingWaveTimer();
-                                                 }));
+    loading_wave_holders_.insert(holder,
+                                 connect(holder, &QObject::destroyed, this, [this, holder]() {
+                                   loading_wave_holders_.remove(holder);
+                                   UpdateLoadingWaveTimer();
+                                 }));
   } else if (!holds && it != loading_wave_holders_.end()) {
     disconnect(it.value());
     loading_wave_holders_.erase(it);
@@ -1310,11 +1310,12 @@ void AppTheme::UpdateLoadingWaveTimer() {
 }
 
 void AppTheme::AdvanceLoadingWave() {
-  const auto cycle    = static_cast<qint64>(loadingWaveCycleMs());
-  loading_wave_phase_ = static_cast<qreal>(loading_wave_clock_.elapsed() % cycle) /
-                        static_cast<qreal>(cycle);
+  const auto cycle = static_cast<qint64>(loadingWaveCycleMs());
+  loading_wave_phase_ =
+      static_cast<qreal>(loading_wave_clock_.elapsed() % cycle) / static_cast<qreal>(cycle);
   emit LoadingWavePhaseChanged();
 }
+
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
 auto AppTheme::lineHeightBody() const -> int { return 16; }
 auto AppTheme::lineHeightTitle() const -> int { return 18; }
