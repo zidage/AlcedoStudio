@@ -11,6 +11,7 @@
 #include <system_error>
 #include <utility>
 
+#include "image/dcp_source_tables.hpp"
 #include "metadata/camera_name_match.hpp"
 #include "utils/logging/log.hpp"
 
@@ -293,6 +294,40 @@ auto DcpProfileLibrary::Find(const std::string& camera_model, const std::string&
     cache_.pop_back();
   }
   return profile;
+}
+
+auto DcpProfileLibrary::SourceTables(const DcpCameraProfilePtr& dcp,
+                                     const DngColorProfilePtr&  source) -> DngColorProfilePtr {
+  if (!dcp || !source) {
+    throw std::invalid_argument("DcpProfileLibrary: source tables need a DCP and a DNG profile");
+  }
+  const auto&           calibration = source->source_calibration;
+  const SourceTablesKey key{dcp->fingerprint, source->fingerprint, calibration.signature,
+                            calibration.camera_calibration_1, calibration.camera_calibration_2};
+  {
+    std::lock_guard<std::mutex> lock(source_tables_mutex_);
+    if (const auto it = source_tables_.find(key); it != source_tables_.end()) {
+      if (auto existing = it->second.lock()) return existing;
+    }
+    ++source_tables_merges_;
+  }
+  // Merge without the lock; the fingerprint of the merged tables reads all table entries.
+  auto                        merged = MergeDcpTablesWithSourceCalibration(*dcp, *source);
+
+  std::lock_guard<std::mutex> lock(source_tables_mutex_);
+  if (const auto it = source_tables_.find(key); it != source_tables_.end()) {
+    // Another thread merged the same inputs meanwhile; share its result.
+    if (auto existing = it->second.lock()) return existing;
+  }
+  // Drop entries that no holder keeps alive, so the map stays as small as the live set.
+  std::erase_if(source_tables_, [](const auto& entry) { return entry.second.expired(); });
+  source_tables_[key] = merged;
+  return merged;
+}
+
+auto DcpProfileLibrary::SourceTablesMergeCount() const -> std::uint64_t {
+  std::lock_guard<std::mutex> lock(source_tables_mutex_);
+  return source_tables_merges_;
 }
 
 auto DcpProfileLibrary::Root() const -> fs::path {

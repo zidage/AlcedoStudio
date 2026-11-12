@@ -112,7 +112,8 @@ void BindRootCameraProfile(PipelineDocument&                            document
     BindImportedCameraProfile(document, *raw_color_context);
   }
   // After the import binding: the DCP binding solves the as-shot values again from the DCP
-  // matrices. A document replayed from the root is already bound by its history apply; a
+  // matrices, and merges the DCP tables with the DNG profile that the import binding bound
+  // (phase C6). A document replayed from the root is already bound by its history apply; a
   // checkpoint document holds the stored reference only.
   BindDcpCameraProfile(document);
 }

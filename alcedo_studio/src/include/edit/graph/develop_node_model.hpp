@@ -83,14 +83,40 @@ struct DevelopCameraProfileFile {
   std::string         profile_name;     ///< ProfileName of the DCP file.
   std::uint64_t       fingerprint = 0;  ///< DcpCameraProfile::fingerprint of the file content.
   DcpCameraProfilePtr profile;          ///< Bound profile; null for an unbound reference.
+  /// For a DNG source: the tables of @ref profile merged with the source values (AnalogBalance,
+  /// BaselineExposure, CameraCalibration; plan phase C6). Runtime data like @ref profile; null
+  /// for a source without an embedded DNG profile, which uses the tables of @ref profile.
+  DngColorProfilePtr  source_tables;
+  /// Fingerprint of the DNG profile of the source that @ref source_tables was merged with.
+  std::uint64_t       source_fingerprint = 0;
 
   [[nodiscard]] auto  IsBound() const -> bool { return profile != nullptr; }
+  /// True when the runtime values of the two references are the same objects.
+  [[nodiscard]] auto  SameBinding(const DevelopCameraProfileFile& other) const -> bool {
+    return profile == other.profile && source_tables == other.source_tables &&
+           source_fingerprint == other.source_fingerprint;
+  }
 };
 
 inline auto operator==(const DevelopCameraProfileFile& a, const DevelopCameraProfileFile& b)
     -> bool {
   return a.camera_model == b.camera_model && a.profile_name == b.profile_name &&
          a.fingerprint == b.fingerprint;
+}
+
+/**
+ * @brief True when the source tables of @p reference belong to the DNG profile @p source of the
+ *        image (plan phase C6).
+ *
+ * A referenced @p source needs source tables merged with a profile of its fingerprint; an empty
+ * @p source needs none, so the tables of the DCP profile apply. An unbound @p source is compared
+ * by its fingerprint: the merged tables already hold the source values.
+ */
+[[nodiscard]] inline auto DcpSourceTablesMatchSource(const DevelopCameraProfileFile& reference,
+                                                     const DngColorProfileRef& source) -> bool {
+  if (!source.IsReferenced()) return reference.source_tables == nullptr;
+  return reference.source_tables != nullptr &&
+         reference.source_fingerprint == *source.Fingerprint();
 }
 
 /**
@@ -239,11 +265,15 @@ struct DevelopInputProfileUpdate {
  *   `UnboundCameraProfileFile` and no other profile applies.
  * - Both empty: clears the reference, so the import profile applies again.
  *
- * Both set is an invalid update.
+ * Both set is an invalid update. With @ref profile, a document with an embedded DNG profile also
+ * needs @ref source_tables: the tables of @ref profile merged with that DNG profile, whose
+ * fingerprint is @ref source_fingerprint (DcpProfileLibrary::SourceTables, plan phase C6).
  */
 struct DevelopCameraProfileFileUpdate {
   DcpCameraProfilePtr                     profile;
   std::optional<DevelopCameraProfileFile> unresolved;
+  DngColorProfilePtr                      source_tables;
+  std::uint64_t                           source_fingerprint = 0;
 };
 
 /**
@@ -347,8 +377,11 @@ class DevelopParamsModel final
    * dirty when the reference, its bound profile, or a solved value changes. When the as-shot solve
    * fails (no usable import neutral), the as-shot values keep their numbers, as at import.
    * @throws std::logic_error for a raster document, which has no camera profile;
-   *         std::invalid_argument when the update sets both members, or when its unresolved
-   *         reference has a bound profile. The payload is unchanged in both cases.
+   *         std::invalid_argument when the update sets both members, when its unresolved
+   *         reference has a bound profile, when it has source tables without a profile, or when
+   *         its source tables do not belong to the DNG profile of the document (absent for a
+   *         document with one, present for a document without one, or another fingerprint).
+   *         The payload is unchanged in all cases.
    */
   void               ApplyCameraProfileFileUpdate(DevelopCameraProfileFileUpdate update);
 

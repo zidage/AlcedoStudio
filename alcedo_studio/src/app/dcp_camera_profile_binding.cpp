@@ -68,20 +68,40 @@ auto ResolveStoredDcpCameraProfileFile(const DevelopCameraProfileFile& stored)
   return MakeDevelopCameraProfileFile(std::move(profile));
 }
 
+void AddDcpSourceTables(DevelopCameraProfileFileUpdate& update, const DngColorProfileRef& source) {
+  if (!update.profile || !source.IsReferenced()) {
+    return;
+  }
+  const auto* profile  = source.RequireBound();
+  auto        tables   = DcpProfileLibrary::Shared().SourceTables(update.profile, source.Profile());
+  update.source_tables = std::move(tables);
+  update.source_fingerprint = profile->fingerprint;
+}
+
 void BindDcpCameraProfile(PipelineDocument& document) {
   auto* develop = document.Develop();
   if (develop == nullptr) {
     return;
   }
   const auto stored = develop->Params().CameraProfileFile();
-  if (!stored.has_value() || stored->IsBound()) {
+  if (!stored.has_value()) {
     return;
   }
-  auto resolved = ResolveStoredDcpCameraProfileFile(*stored);
-  // An unresolved identity keeps the stored reference unbound.
-  if (resolved.IsBound()) {
-    develop->Params().ApplyCameraProfileFileUpdate({std::move(resolved.profile), std::nullopt});
+  DcpCameraProfilePtr profile = stored->profile;
+  if (!profile) {
+    auto resolved = ResolveStoredDcpCameraProfileFile(*stored);
+    // An unresolved identity keeps the stored reference unbound.
+    if (!resolved.IsBound()) {
+      return;
+    }
+    profile = std::move(resolved.profile);
   }
+  // A replayed document was bound by its history apply against the DNG profile of the root; the
+  // import binding before this call can have bound another one.
+  DevelopCameraProfileFileUpdate update;
+  update.profile = std::move(profile);
+  AddDcpSourceTables(update, develop->Params().DngProfile());
+  develop->Params().ApplyCameraProfileFileUpdate(std::move(update));
 }
 
 }  // namespace alcedo

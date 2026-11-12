@@ -3,6 +3,7 @@
 // Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 #include "image/dng_color_profile_import.hpp"
 
+#include <cmath>
 #include <limits>
 #include <span>
 #include <type_traits>
@@ -39,6 +40,47 @@ auto ReadArray(const Exiv2::ExifData& exif, std::uint16_t tag, std::array<T, N>&
 auto ReadString(const Exiv2::ExifData& exif, std::uint16_t tag) -> std::string {
   const auto* datum = Find(exif, tag);
   return datum ? datum->toString() : std::string{};
+}
+/// Text of an ASCII or BYTE tag (DNG permits both for the signatures), up to the first NUL.
+auto ReadText(const Exiv2::ExifData& exif, std::uint16_t tag) -> std::string {
+  const auto* datum = Find(exif, tag);
+  if (!datum) return {};
+  std::string text;
+  if (datum->typeId() == Exiv2::unsignedByte || datum->typeId() == Exiv2::undefined) {
+    for (std::size_t i = 0; i < datum->count(); ++i) {
+      const auto byte = datum->toInt64(i);
+      if (byte == 0) break;
+      text.push_back(static_cast<char>(byte));
+    }
+  } else {
+    text = datum->toString();
+  }
+  if (const auto end = text.find('\0'); end != std::string::npos) text.resize(end);
+  return text;
+}
+/// A 3x3 matrix tag with nine finite entries; any other value counts as absent.
+auto ReadMatrixIfValid(const Exiv2::ExifData& exif, std::uint16_t tag, std::array<double, 9>& out)
+    -> bool {
+  const auto* datum = Find(exif, tag);
+  if (!datum || datum->count() != out.size()) return false;
+  std::array<double, 9> matrix{};
+  for (std::size_t i = 0; i < matrix.size(); ++i) {
+    matrix[i] = datum->toFloat(i);
+    if (!std::isfinite(matrix[i])) return false;
+  }
+  out = matrix;
+  return true;
+}
+/// CameraCalibration tags as the file stores them. Malformed matrices count as absent, as in the
+/// Adobe DNG SDK, so a source whose signature never matches still imports.
+auto ReadSourceCalibration(const Exiv2::ExifData& exif) -> DngSourceCalibration {
+  DngSourceCalibration calibration;
+  calibration.signature = ReadText(exif, 50931);
+  const bool first      = ReadMatrixIfValid(exif, 50723, calibration.camera_calibration_1);
+  const bool second     = ReadMatrixIfValid(exif, 50724, calibration.camera_calibration_2);
+  if (first && !second) calibration.camera_calibration_2 = calibration.camera_calibration_1;
+  if (second && !first) calibration.camera_calibration_1 = calibration.camera_calibration_2;
+  return calibration;
 }
 auto ReadScalar(const Exiv2::ExifData& exif, std::uint16_t tag, double absent) -> double {
   const auto* datum = Find(exif, tag);
@@ -127,6 +169,7 @@ auto ReadDngColorProfile(const Exiv2::ExifData& exif) -> DngColorProfilePtr {
   profile.look_table               = ReadMap(exif, 50981, 50982, 51108);
   profile.baseline_exposure        = ReadScalar(exif, 50730, 0);
   profile.baseline_exposure_offset = ReadScalar(exif, 51109, 0);
+  profile.source_calibration       = ReadSourceCalibration(exif);
   return MakeDngColorProfile(std::move(profile));
 }
 }  // namespace alcedo

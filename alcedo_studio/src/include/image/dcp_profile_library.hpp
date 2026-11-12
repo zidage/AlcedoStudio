@@ -3,15 +3,19 @@
 // Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <list>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -120,6 +124,23 @@ class DcpProfileLibrary {
   auto Find(const std::string& camera_model, const std::string& profile_name)
       -> DcpCameraProfilePtr;
 
+  /**
+   * @brief The tables of @p dcp for the DNG source with profile @p source (plan phase C6).
+   *
+   * The result is MergeDcpTablesWithSourceCalibration of the two. Equal inputs return one shared
+   * profile while any holder keeps it alive, so all documents of one image hold one merged
+   * object. Inputs are equal when the fingerprints of @p dcp and @p source and the source
+   * calibration of @p source are equal. The map holds no strong reference; an expired entry is
+   * computed again.
+   *
+   * @throws std::invalid_argument when an argument is null; rethrows merge errors.
+   */
+  auto SourceTables(const DcpCameraProfilePtr& dcp, const DngColorProfilePtr& source)
+      -> DngColorProfilePtr;
+
+  /// Merges since construction (map misses and expired entries).
+  [[nodiscard]] auto SourceTablesMergeCount() const -> std::uint64_t;
+
   /// Folder of the published index.
   [[nodiscard]] auto Root() const -> std::filesystem::path;
   [[nodiscard]] auto ProfileCount() const -> std::size_t;
@@ -166,6 +187,13 @@ class DcpProfileLibrary {
   std::list<CacheEntry>                                             cache_;
   std::unordered_map<std::wstring, std::list<CacheEntry>::iterator> cache_by_path_;
   std::uint64_t                                                     profile_reads_ = 0;
+
+  /// DCP fingerprint, source fingerprint, and source calibration of one merge.
+  using SourceTablesKey = std::tuple<std::uint64_t, std::uint64_t, std::string,
+                                     std::array<double, 9>, std::array<double, 9>>;
+  mutable std::mutex                                              source_tables_mutex_;
+  std::map<SourceTablesKey, std::weak_ptr<const DngColorProfile>> source_tables_;
+  std::uint64_t                                                   source_tables_merges_ = 0;
 };
 
 }  // namespace alcedo

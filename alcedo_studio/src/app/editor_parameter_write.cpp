@@ -10,6 +10,7 @@
 #include <string_view>
 #include <variant>
 
+#include "app/dcp_camera_profile_binding.hpp"
 #include "app/editor_adjustment_types.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
@@ -227,8 +228,10 @@ auto ApplyEditorParameterWrite(PipelineDocument& document, const EditorParameter
           develop->Params().ApplyInputProfileUpdate(
               RequireWrite<DevelopInputProfileUpdate>(write, target.field_key));
         } else if (target.field_key == "camera_profile_file") {
-          develop->Params().ApplyCameraProfileFileUpdate(
-              RequireWrite<DevelopCameraProfileFileUpdate>(write, target.field_key));
+          auto update = RequireWrite<DevelopCameraProfileFileUpdate>(write, target.field_key);
+          // A DNG source keeps its own calibration with the DCP tables (plan phase C6).
+          AddDcpSourceTables(update, develop->Params().DngProfile());
+          develop->Params().ApplyCameraProfileFileUpdate(std::move(update));
         } else {
           return SetError(error, "Unsupported Develop parameter field: " + target.field_key);
         }

@@ -130,6 +130,12 @@ auto MixCameraColorParams(ContentHash& hash, const DevelopPayload& params) -> vo
   if (params.camera_profile_file.has_value()) {
     hash.MixText("camera_profile_file");
     hash.MixU64(params.camera_profile_file->fingerprint);
+    // The merged tables of a DNG source also hold its calibration, which the DNG fingerprint
+    // does not cover.
+    if (const auto& tables = params.camera_profile_file->source_tables; tables) {
+      hash.MixText("source_tables");
+      hash.MixU64(tables->fingerprint);
+    }
   }
 }
 

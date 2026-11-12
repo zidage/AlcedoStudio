@@ -319,17 +319,29 @@ void DevelopParamsModel::ApplyCameraProfileFileUpdate(DevelopCameraProfileFileUp
   if (update.unresolved.has_value() && update.unresolved->IsBound()) {
     throw std::invalid_argument("Develop: an unresolved camera profile reference has no profile");
   }
+  if (update.source_tables && !update.profile) {
+    throw std::invalid_argument("Develop: DCP source tables need a camera profile");
+  }
   std::optional<DevelopCameraProfileFile> next = std::move(update.unresolved);
   if (update.profile) {
-    next = MakeDevelopCameraProfileFile(std::move(update.profile));
+    next                     = MakeDevelopCameraProfileFile(std::move(update.profile));
+    next->source_tables      = std::move(update.source_tables);
+    next->source_fingerprint = next->source_tables ? update.source_fingerprint : 0;
   }
   MutateWithDirtyFields([&next](DevelopPayload& payload) {
     if (payload.input.has_value()) {
       throw std::logic_error("Develop: a raster image has no camera profile");
     }
+    if (next.has_value() && next->IsBound() &&
+        !DcpSourceTablesMatchSource(*next, payload.camera_profile.dng_profile)) {
+      throw std::invalid_argument(
+          "Develop: the DCP tables of " + next->profile_name +
+          " do not belong to the DNG profile of this image; merge them with "
+          "DcpProfileLibrary::SourceTables");
+    }
     const auto& current = payload.camera_profile_file;
     const bool  same_reference =
-        current == next && (!next.has_value() || current->profile == next->profile);
+        current == next && (!next.has_value() || current->SameBinding(*next));
     const float previous_cct    = payload.as_shot_cct;
     const float previous_tint   = payload.as_shot_tint;
     payload.camera_profile_file = std::move(next);
@@ -509,8 +521,7 @@ void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
         rebound                         = DirtyFieldMask{DevelopDirty::WhiteBalance};
       }
       auto& file = payload.camera_profile_file;
-      if (file.has_value() && file->IsBound() &&
-          dest.camera_profile_file->profile != file->profile) {
+      if (file.has_value() && file->IsBound() && !dest.camera_profile_file->SameBinding(*file)) {
         dest.camera_profile_file = std::move(file);
         rebound                  = DirtyFieldMask{DevelopDirty::WhiteBalance};
       }

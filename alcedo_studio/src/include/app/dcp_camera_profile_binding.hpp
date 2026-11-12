@@ -51,14 +51,31 @@ namespace alcedo {
     -> DevelopCameraProfileFile;
 
 /**
+ * @brief Add the source tables that @p update needs for an image with the DNG profile @p source.
+ *
+ * For an update with a profile and a referenced @p source, sets the update's source tables to
+ * DcpProfileLibrary::Shared().SourceTables(profile, source) and its source fingerprint to the
+ * fingerprint of @p source (plan phase C6). Otherwise @p update stays unchanged, and a RAW source
+ * without an embedded profile uses the DCP tables.
+ *
+ * @throws std::runtime_error when @p source is referenced but not bound (DngColorProfileRef::
+ *         RequireBound); rethrows merge errors. @p update is unchanged then.
+ */
+void AddDcpSourceTables(DevelopCameraProfileFileUpdate& update, const DngColorProfileRef& source);
+
+/**
  * @brief Bind the stored DCP reference of the Develop node of @p document.
  *
- * No-op when the document has no Develop node, no reference, or a bound reference. Otherwise the
- * reference takes the result of @ref ResolveStoredDcpCameraProfileFile through
- * DevelopParamsModel::ApplyCameraProfileFileUpdate, which solves the as-shot values again from
- * the DCP matrices. An identity that the library does not hold leaves the reference unbound.
+ * No-op when the document has no Develop node or no reference. An unbound reference takes the
+ * profile of @ref ResolveStoredDcpCameraProfileFile; a bound one keeps its profile. The source
+ * tables then follow the current DNG profile of the document (@ref AddDcpSourceTables), so this
+ * runs after the import binding, which can change that profile. The update goes through
+ * DevelopParamsModel::ApplyCameraProfileFileUpdate, which solves the as-shot values again from the
+ * DCP matrices and marks nothing dirty when the binding is the same. An identity that the library
+ * does not hold leaves the reference unbound.
  *
  * @pre @p document is not live yet (a document built from the root or a checkpoint).
+ * @throws std::runtime_error when the document references a DNG profile that is not bound.
  */
 void BindDcpCameraProfile(PipelineDocument& document);
 

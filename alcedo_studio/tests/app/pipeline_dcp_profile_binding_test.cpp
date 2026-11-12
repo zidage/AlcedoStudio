@@ -9,7 +9,8 @@
 // Each case writes synthetic DCP files into a scratch DCP folder and scans it into the
 // process-wide DcpProfileLibrary::Shared(), the library that production lookups read. The cases
 // import a copy of a CI RAW fixture (non-DNG, so no embedded profile takes part) and skip when it
-// is missing.
+// is missing. The PipelineDcpProfileDngSourceTest cases (phase C6) import a CI DNG fixture
+// instead, so the DCP tables meet an embedded profile.
 
 #include <duckdb.h>
 #include <gtest/gtest.h>
@@ -47,6 +48,7 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "image/dcp_profile_library.hpp"
 #include "image/dcp_test_file_writer.hpp"
+#include "image/dng_camera_matrix.hpp"
 #include "image/dng_color_profile.hpp"
 #include "json.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
@@ -65,6 +67,7 @@ constexpr std::uint16_t kColorMatrix1             = 50721;
 constexpr std::uint16_t kColorMatrix2             = 50722;
 constexpr std::uint16_t kCalibrationIlluminant1   = 50778;
 constexpr std::uint16_t kCalibrationIlluminant2   = 50779;
+constexpr std::uint16_t kProfileCalibrationSignature = 50932;
 constexpr std::uint16_t kProfileName              = 50936;
 constexpr std::uint16_t kForwardMatrix1           = 50964;
 constexpr std::uint16_t kForwardMatrix2           = 50965;
@@ -96,7 +99,7 @@ auto                                 RawFixturePath() -> std::filesystem::path {
 /// Dual-illuminant DCP with forward matrices and a 3x2x2 look table. @p matrix_scale changes the
 /// color matrices, so that two files with one identity have different content and fingerprints.
 void WriteDcp(const std::filesystem::path& path, const std::string& profile_name,
-              double matrix_scale = 1.0) {
+              double matrix_scale = 1.0, const std::string& calibration_signature = {}) {
   std::vector<double> color_matrix_1{0.6722, -0.0635, -0.0963, -0.4287, 1.246,
                                      0.2028, -0.0908, 0.2162,  0.5668};
   std::vector<double> color_matrix_2{0.6875, -0.097,  -0.0932, -0.4691, 1.2459,
@@ -121,6 +124,9 @@ void WriteDcp(const std::filesystem::path& path, const std::string& profile_name
       .Longs(tag::kProfileLookTableDims, {3, 2, 2})
       .Floats(tag::kProfileLookTableData, look)
       .Longs(tag::kProfileLookTableEncoding, {0});
+  if (!calibration_signature.empty()) {
+    writer.Ascii(tag::kProfileCalibrationSignature, calibration_signature);
+  }
   writer.Write(path);
 }
 
@@ -618,6 +624,207 @@ TEST_F(PipelineDcpProfileBindingTest, RootIdOfProjectMadeBeforeThisPlanStillVali
   EXPECT_FALSE(Payload(*lease.document_).camera_profile_file.has_value());
   EXPECT_EQ(lease.document_->ToJson(), expected.at("committed_document"));
   pipelines.ReleaseEditorLease(element_id);
+}
+
+// Phase C6: a DNG source keeps its AnalogBalance, BaselineExposure, and CameraCalibration with the
+// tables of the DCP profile. The cases import a copy of a CI DNG fixture instead of the RAW file.
+auto DngFixturePath() -> std::filesystem::path {
+  return std::filesystem::path(std::string(TEST_IMG_PATH)) / "ci_rawfiles" /
+         "tag @ryanbreitkreutz - free raws from @signatureeditsco - DSC06683.dng";
+}
+
+/// A DNG from another camera: its embedded profile has another fingerprint.
+auto OtherCameraDngPath() -> std::filesystem::path {
+  return std::filesystem::path(std::string(TEST_IMG_PATH)) / "raw/linear_dng/mfzoty.dng";
+}
+
+class PipelineDcpProfileDngSourceTest : public PipelineDcpProfileBindingTest {
+ protected:
+  void SetUp() override {
+    PipelineDcpProfileBindingTest::SetUp();
+    if (IsSkipped() || HasFatalFailure()) return;
+    if (!std::filesystem::exists(DngFixturePath())) {
+      GTEST_SKIP() << "CI DNG fixture missing: " << DngFixturePath().string();
+    }
+    dng_source_ = temp_dir_ / "DSC06683.dng";
+    std::filesystem::copy_file(DngFixturePath(), dng_source_);
+    auto pipelines = std::make_shared<PipelineMgmtService>(project_->GetStorage());
+    element_id_    = raw_import_test::ImportRawFile(*project_, pipelines, dng_source_).first;
+    ASSERT_NE(element_id_, 0u);
+
+    PipelineMgmtService service(project_->GetStorage());
+    auto                lease = service.AcquireEditorLease(element_id_);
+    source_profile_           = Payload(*lease.document_).camera_profile.dng_profile.Profile();
+    service.ReleaseEditorLease(element_id_);
+    ASSERT_NE(source_profile_, nullptr) << "the DNG fixture must embed a profile";
+  }
+
+  /// CameraCalibration1 that the DCP tables must hold for the DCP profile @p dcp.
+  [[nodiscard]] auto ExpectedCalibration1(const DcpCameraProfile& dcp) const
+      -> std::array<double, 9> {
+    const auto& calibration = source_profile_->source_calibration;
+    return CameraCalibrationSignaturesMatch(calibration.signature,
+                                            dcp.profile_calibration_signature)
+               ? calibration.camera_calibration_1
+               : kDngIdentityMatrix;
+  }
+
+  /// The document renders the library profile with the values of the DNG source.
+  void ExpectSourceTables(const PipelineDocument& document) const {
+    ExpectBoundToLibraryProfile(document);
+    const auto payload = Payload(document);
+    EXPECT_EQ(payload.camera_profile.dng_profile.Profile(), source_profile_) << "import values";
+    const auto& tables = payload.camera_profile_file->source_tables;
+    ASSERT_NE(tables, nullptr);
+    EXPECT_EQ(payload.camera_profile_file->source_fingerprint, source_profile_->fingerprint);
+    EXPECT_EQ(EffectiveCameraProfile(payload).dng_profile.Profile(), tables);
+    EXPECT_EQ(tables->analog_balance, source_profile_->analog_balance);
+    EXPECT_EQ(tables->baseline_exposure, source_profile_->baseline_exposure);
+    const auto& dcp = *library_profile_->tables;
+    EXPECT_EQ(tables->look_table, dcp.look_table);
+    EXPECT_EQ(tables->hue_sat_map_1, dcp.hue_sat_map_1);
+    EXPECT_EQ(tables->hue_sat_map_2, dcp.hue_sat_map_2);
+    EXPECT_EQ(tables->baseline_exposure_offset, dcp.baseline_exposure_offset);
+    EXPECT_EQ(tables->camera_calibration_1, ExpectedCalibration1(*library_profile_));
+  }
+
+  std::filesystem::path dng_source_;
+  DngColorProfilePtr    source_profile_;
+};
+
+TEST_F(PipelineDcpProfileDngSourceTest,
+       DngSourceKeepsAnalogBalanceAndBaselineExposureWithDcpProfile) {
+  // The fixture has its own values, so equal values prove that they come from the source.
+  EXPECT_NE(source_profile_->look_table, library_profile_->tables->look_table);
+  RecordProperty("source_signature", source_profile_->source_calibration.signature);
+  RecordProperty("source_baseline_exposure", std::to_string(source_profile_->baseline_exposure));
+  {
+    PipelineMgmtService pipelines(project_->GetStorage());
+    auto                lease  = pipelines.AcquireEditorLease(element_id_);
+    const auto          before = lease.graph_.GetImageEditState();
+    (void)CommitSelection(lease);
+    ExpectSourceTables(*lease.document_);
+    std::string error;
+    ASSERT_TRUE(pipelines.PersistEditorHistory(lease.graph_, before, *lease.document_, &error))
+        << error;
+    pipelines.ReleaseEditorLease(element_id_);
+  }
+  // Checkpoint, replay, and the committed snapshot of export bind the same values.
+  PipelineMgmtService reopened(project_->GetStorage());
+  auto                lease = reopened.AcquireEditorLease(element_id_);
+  ExpectSourceTables(*lease.document_);
+  std::string error;
+  const auto  replayed = BuildDocumentFromRoot(
+      lease.graph_, *lease.root_, lease.graph_.GetActiveVersionRef().head_commit_hash, &error);
+  ASSERT_NE(replayed, nullptr) << error;
+  ExpectSourceTables(*replayed);
+  const auto snapshot = reopened.AcquireCommittedSnapshot(element_id_);
+  ASSERT_NE(snapshot, nullptr);
+  ExpectSourceTables(snapshot->Document());
+  reopened.ReleaseEditorLease(element_id_);
+}
+
+TEST_F(PipelineDcpProfileDngSourceTest, CameraCalibrationAppliesOnlyWhenSignaturesMatch) {
+  const auto& signature = source_profile_->source_calibration.signature;
+  WriteDcp(dcp_dir_ / "Alcedo Test Camera Camera Signed.dcp", "Camera Signed", 1.0, signature);
+  WriteDcp(dcp_dir_ / "Alcedo Test Camera Camera Other.dcp", "Camera Other", 1.0,
+           signature + ".other");
+  ASSERT_EQ(DcpProfileLibrary::Shared().Scan(dcp_dir_).profile_count, 4u);
+
+  PipelineMgmtService pipelines(project_->GetStorage());
+  auto                lease = pipelines.AcquireEditorLease(element_id_);
+  std::string         error;
+  const auto          select = [&](const char* name) {
+    const auto batch =
+        CommitPatch(lease, {{"camera_model", kCameraModel}, {"profile_name", name}}, &error);
+    EXPECT_TRUE(batch.has_value()) << error;
+    return Payload(*lease.document_).camera_profile_file->source_tables;
+  };
+  const auto signed_tables = select("Camera Signed");
+  ASSERT_NE(signed_tables, nullptr);
+  EXPECT_EQ(signed_tables->camera_calibration_1,
+            source_profile_->source_calibration.camera_calibration_1);
+  EXPECT_EQ(signed_tables->camera_calibration_2,
+            source_profile_->source_calibration.camera_calibration_2);
+  const auto other_tables = select("Camera Other");
+  ASSERT_NE(other_tables, nullptr);
+  EXPECT_EQ(other_tables->camera_calibration_1, kDngIdentityMatrix);
+  EXPECT_EQ(other_tables->camera_calibration_2, kDngIdentityMatrix);
+  EXPECT_EQ(other_tables->analog_balance, source_profile_->analog_balance);
+  pipelines.ReleaseEditorLease(element_id_);
+}
+
+TEST_F(PipelineDcpProfileDngSourceTest, MergedProfileIsSharedByTwoDocumentsOfOneImage) {
+  CommitSelectionAndRelease();
+
+  PipelineMgmtService pipelines(project_->GetStorage());
+  const auto          snapshot = pipelines.AcquireCommittedSnapshot(element_id_);
+  ASSERT_NE(snapshot, nullptr);
+  auto lease = pipelines.AcquireEditorLease(element_id_);
+  ASSERT_NE(lease.document_, nullptr);
+  std::string error;
+  const auto  replayed = BuildDocumentFromRoot(
+      lease.graph_, *lease.root_, lease.graph_.GetActiveVersionRef().head_commit_hash, &error);
+  ASSERT_NE(replayed, nullptr) << error;
+
+  const auto& committed = Payload(snapshot->Document()).camera_profile_file->source_tables;
+  ASSERT_NE(committed, nullptr);
+  EXPECT_EQ(Payload(*lease.document_).camera_profile_file->source_tables, committed);
+  EXPECT_EQ(Payload(*replayed).camera_profile_file->source_tables, committed);
+  pipelines.ReleaseEditorLease(element_id_);
+}
+
+TEST_F(PipelineDcpProfileDngSourceTest, ClearingReferenceOnDngSourceRestoresEmbeddedProfile) {
+  PipelineMgmtService pipelines(project_->GetStorage());
+  auto                lease     = pipelines.AcquireEditorLease(element_id_);
+  auto&               document  = *lease.document_;
+  const auto          before    = Payload(document);
+  const auto          transform = ResolveDevelopColorTransform(before);
+  ASSERT_TRUE(transform.ok);
+  const auto json = document.Develop()->Params().ToJson();
+
+  (void)CommitSelection(lease);
+  ExpectSourceTables(document);
+  EXPECT_NE(ResolveDevelopColorTransform(Payload(document)).transform.camera_to_ap1,
+            transform.transform.camera_to_ap1);
+  std::string error;
+  ASSERT_TRUE(CommitPatch(lease, nlohmann::json(nullptr), &error).has_value()) << error;
+
+  const auto after = Payload(document);
+  EXPECT_FALSE(after.camera_profile_file.has_value());
+  EXPECT_EQ(after, before);
+  EXPECT_EQ(EffectiveCameraProfile(after).dng_profile.Profile(), source_profile_);
+  const auto restored = ResolveDevelopColorTransform(after);
+  ASSERT_TRUE(restored.ok);
+  EXPECT_EQ(restored.transform.camera_to_xyz, transform.transform.camera_to_xyz);
+  EXPECT_EQ(restored.transform.camera_to_ap1, transform.transform.camera_to_ap1);
+  EXPECT_EQ(document.Develop()->Params().ToJson(), json);
+  pipelines.ReleaseEditorLease(element_id_);
+}
+
+TEST_F(PipelineDcpProfileDngSourceTest, SourceFileWithAnotherProfileIsMergedAgainOnLoad) {
+  if (!std::filesystem::exists(OtherCameraDngPath())) {
+    GTEST_SKIP() << "Second DNG fixture missing: " << OtherCameraDngPath().string();
+  }
+  CommitSelectionAndRelease();
+  std::filesystem::copy_file(OtherCameraDngPath(), dng_source_,
+                             std::filesystem::copy_options::overwrite_existing);
+
+  // The replay binds the DCP against the stored root profile; the import binding then binds the
+  // profile of the new file, and BindDcpCameraProfile merges again.
+  PipelineMgmtService pipelines(project_->GetStorage());
+  auto                lease = pipelines.AcquireEditorLease(element_id_);
+  ASSERT_NE(lease.document_, nullptr);
+  const auto payload  = Payload(*lease.document_);
+  const auto replaced = payload.camera_profile.dng_profile.Profile();
+  ASSERT_NE(replaced, nullptr);
+  ASSERT_NE(replaced->fingerprint, source_profile_->fingerprint);
+  ASSERT_TRUE(payload.camera_profile_file.has_value());
+  ASSERT_NE(payload.camera_profile_file->source_tables, nullptr);
+  EXPECT_EQ(payload.camera_profile_file->source_fingerprint, replaced->fingerprint);
+  EXPECT_EQ(payload.camera_profile_file->source_tables->analog_balance, replaced->analog_balance);
+  EXPECT_TRUE(ResolveDevelopColorTransform(payload).ok);
+  pipelines.ReleaseEditorLease(element_id_);
 }
 
 }  // namespace

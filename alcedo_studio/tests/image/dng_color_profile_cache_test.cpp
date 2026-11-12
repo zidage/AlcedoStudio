@@ -100,6 +100,29 @@ TEST_F(DngColorProfileCacheTest, FilesWithEqualProfileContentShareOneProfile) {
   EXPECT_EQ(cache.LoaderCallCount(), 3u);
 }
 
+TEST_F(DngColorProfileCacheTest, EqualFingerprintWithOtherSourceCalibrationKeepsItsOwnProfile) {
+  // The content is the CameraCalibrationSignature of the source; the profile is the same. The
+  // signature is outside the fingerprint (DCP plan, phase C6), so only equal values share.
+  DngColorProfileCache cache([](const std::filesystem::path& path) {
+    std::ifstream     in(path, std::ios::binary);
+    const std::string content((std::istreambuf_iterator<char>(in)), {});
+    DngColorProfile   profile;
+    profile.name                                       = "Adobe Standard";
+    profile.source_calibration.signature               = content;
+    profile.source_calibration.camera_calibration_1[0] = 1.05;
+    return MakeDngColorProfile(std::move(profile));
+  });
+  const auto           first  = cache.Load(WriteSource("a.dng", "com.example"));
+  const auto           second = cache.Load(WriteSource("b.dng", "com.example"));
+  const auto           other  = cache.Load(WriteSource("c.dng", "com.other"));
+  EXPECT_EQ(first, second);
+  EXPECT_NE(first, other);
+  EXPECT_EQ(first->fingerprint, other->fingerprint);
+  EXPECT_EQ(other->source_calibration.signature, "com.other");
+  // The newest profile of a fingerprint is the one later loads share.
+  EXPECT_EQ(cache.Load(WriteSource("d.dng", "com.other")), other);
+}
+
 TEST_F(DngColorProfileCacheTest, ChangedSourceFileIsReadAgainAndGivesTheNewProfile) {
   DngColorProfileCache cache(&ReadNamedProfile);
   const auto           source = WriteSource("edited.dng", "Adobe Standard");

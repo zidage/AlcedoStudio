@@ -50,7 +50,31 @@ struct DngHueSatMap {
 
 inline constexpr std::array<double, 9> kDngIdentityMatrix{1, 0, 0, 0, 1, 0, 0, 0, 1};
 
-/** Import-resolved DNG calibration and profile tables. Shared immutably by image and graph. */
+/**
+ * @brief Camera calibration tags of a DNG source file, before the signature rule.
+ *
+ * `CameraCalibration1/2` apply to a profile only when @ref signature equals the
+ * `ProfileCalibrationSignature` of that profile. The embedded profile resolves this at import
+ * (DngColorProfile::camera_calibration_1/2). A DCP profile of another file resolves it against
+ * these values (dcp_camera_profile_plan.md, phase C6).
+ */
+struct DngSourceCalibration {
+  std::string           signature;  ///< CameraCalibrationSignature (50931); empty when absent.
+  /// CameraCalibration1/2 (50723, 50724). One tag alone serves both illuminants; identity when
+  /// both are absent.
+  std::array<double, 9> camera_calibration_1                                  = kDngIdentityMatrix;
+  std::array<double, 9> camera_calibration_2                                  = kDngIdentityMatrix;
+  auto                  operator==(const DngSourceCalibration&) const -> bool = default;
+};
+
+/**
+ * @brief Import-resolved DNG calibration and profile tables. Shared immutably by image and graph.
+ *
+ * @ref source_calibration is runtime data of the source file. It is outside
+ * DngColorProfileToJson and the fingerprint, so each stored fingerprint stays valid; two profiles
+ * with one fingerprint can hold different source calibration (DngColorProfileCache shares only
+ * profiles with equal values).
+ */
 struct DngColorProfile {
   std::string           name;
   std::array<double, 3> analog_balance{1, 1, 1};
@@ -62,6 +86,7 @@ struct DngColorProfile {
   double                baseline_exposure        = 0.0;
   double                baseline_exposure_offset = 0.0;
   std::uint64_t         fingerprint = 0;  // FNV-1a of the content; computed by MakeDngColorProfile.
+  DngSourceCalibration  source_calibration;  ///< Source tags; not part of the fingerprint.
 };
 using DngColorProfilePtr = std::shared_ptr<const DngColorProfile>;
 
@@ -97,7 +122,9 @@ inline auto MakeDngColorProfile(DngColorProfile profile) -> DngColorProfilePtr {
     if (!std::isfinite(value) || value <= 0)
       throw std::runtime_error("DNG profile: invalid AnalogBalance");
   }
-  for (const auto& matrix : {profile.camera_calibration_1, profile.camera_calibration_2}) {
+  for (const auto& matrix : {profile.camera_calibration_1, profile.camera_calibration_2,
+                             profile.source_calibration.camera_calibration_1,
+                             profile.source_calibration.camera_calibration_2}) {
     for (double value : matrix) {
       if (!std::isfinite(value))
         throw std::runtime_error("DNG profile: non-finite CameraCalibration");

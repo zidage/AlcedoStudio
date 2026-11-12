@@ -607,6 +607,18 @@ auto UnboundCameraProfileFileMessage(const DevelopCameraProfileFile& reference) 
          "\" is not in the DCP folder";
 }
 
+auto UnmergedCameraProfileFileMessage(const DevelopCameraProfileFile& reference) -> std::string {
+  return "camera profile \"" + reference.profile_name + "\" for \"" + reference.camera_model +
+         "\" is not bound to the DNG profile of the source file";
+}
+
+/// The reference is bound, and its source tables belong to the DNG profile of the image.
+auto CameraProfileFileRenderable(const DevelopPayload& payload) -> bool {
+  const auto& reference = *payload.camera_profile_file;
+  return reference.IsBound() &&
+         DcpSourceTablesMatchSource(reference, payload.camera_profile.dng_profile);
+}
+
 }  // namespace
 
 auto EffectiveCameraProfile(const DevelopPayload& payload) -> DevelopCameraProfile {
@@ -618,8 +630,13 @@ auto EffectiveCameraProfile(const DevelopPayload& payload) -> DevelopCameraProfi
   if (!reference.IsBound()) {
     throw std::runtime_error(UnboundCameraProfileFileMessage(reference));
   }
-  const auto& dcp                         = *reference.profile;
-  effective.dng_profile                   = DngColorProfileRef(dcp.tables);
+  if (!CameraProfileFileRenderable(payload)) {
+    throw std::runtime_error(UnmergedCameraProfileFileMessage(reference));
+  }
+  const auto& dcp = *reference.profile;
+  // A DNG source keeps its own AnalogBalance, BaselineExposure, and CameraCalibration (phase C6).
+  effective.dng_profile =
+      DngColorProfileRef(reference.source_tables ? reference.source_tables : dcp.tables);
   effective.color_matrices_valid          = true;
   effective.color_matrix_1                = dcp.color_matrix_1;
   effective.color_matrix_2                = dcp.color_matrix_2;
@@ -730,7 +747,9 @@ auto RawWhiteBalanceWhite(const DevelopPayload& develop)
 }
 
 auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransformResult {
-  if (develop.camera_profile_file.has_value() && !develop.camera_profile_file->IsBound()) {
+  // An import binding that changed the DNG profile leaves tables merged with the old profile
+  // until BindDcpCameraProfile merges again; until then the reference counts as unbound.
+  if (develop.camera_profile_file.has_value() && !CameraProfileFileRenderable(develop)) {
     return Fail(ColorTransformError::UnboundCameraProfileFile);
   }
   const DevelopCameraProfile camera_profile = EffectiveCameraProfile(develop);
@@ -881,7 +900,9 @@ auto ColorTransformFailureMessage(const DevelopPayload& develop, ColorTransformE
     -> std::string {
   if (error == ColorTransformError::UnboundCameraProfileFile &&
       develop.camera_profile_file.has_value()) {
-    return UnboundCameraProfileFileMessage(*develop.camera_profile_file);
+    const auto& reference = *develop.camera_profile_file;
+    return reference.IsBound() ? UnmergedCameraProfileFileMessage(reference)
+                               : UnboundCameraProfileFileMessage(reference);
   }
   return std::string(ColorTransformErrorMessage(error));
 }
