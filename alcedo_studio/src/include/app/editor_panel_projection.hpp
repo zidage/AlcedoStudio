@@ -125,12 +125,17 @@ struct EditorPanelInputProfileValue {
 /// import profile applies. `resolved` is false for a stored reference that the DCP library could
 /// not bind, whose render fails (plan decision P-4). `raster` is true for a raster document, which
 /// has no camera profile. `embedded_default` is true when the import profile is the embedded
-/// profile of a DNG file (the default entry reads "Embedded", else "Built-in").
+/// profile of a DNG file (the default entry reads "Embedded", else "Built-in"). `has_tone_curve`
+/// is true when the bound profile has a `ProfileToneCurve`, and `profile_tone` is the stored
+/// switch of the profile tone stage (dcp_profile_tone_curve_study.md, section 6.4); both are
+/// false without a reference.
 struct EditorPanelCameraProfileFileValue {
   bool        raster           = false;
   bool        embedded_default = false;
   bool        selected         = false;
-  bool        resolved = false;
+  bool        resolved         = false;
+  bool        has_tone_curve   = false;
+  bool        profile_tone     = false;
   std::string camera_model;
   std::string profile_name;
 };

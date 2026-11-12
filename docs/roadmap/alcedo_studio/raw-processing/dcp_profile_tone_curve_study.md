@@ -4,8 +4,8 @@ Date: 2026-11-12
 
 Status: **Study complete; design approved** (2026-11-12, with the entry reset of section 6.5 from
 the user). Phase T1 #862 is complete (2026-11-12, section 8). Phase T2 #863 is complete on CUDA
-and OpenCL (2026-11-12, section 8); its Metal run is open. Phase T3 #864 is planned. Tracking issue
-#851.
+and OpenCL (2026-11-12, section 8); its Metal run is open. Phase T3 #864 is implemented
+(2026-11-12, section 8); its user check on two camera makes is open. Tracking issue #851.
 
 Parent: [DCP Camera Profile Plan](dcp_camera_profile_plan.md). This study replaces decision P-5 of
 that plan ("`ProfileToneCurve` is read past and not applied") with the profile tone stage of
@@ -479,6 +479,100 @@ Primary call chains:
   Grade value.
 - `docs/dng_color_profiles.md` and the parent plan describe the stage.
 - User check on two camera makes with ACES 2.0 and OpenDRT.
+
+#### T3 completion (2026-11-12)
+
+Status: **implemented; the user check on two camera makes is open.** Branch
+`feature/dcp-profile-tone-editor`, stacked on the T2 PR #866.
+
+Implementation:
+
+- `ProfileToneEntryResetTargets(document, develop_before)` in
+  `app/editor_pipeline_command_service.cpp` returns `EditorEntryResetWrite` values (field target
+  and patch JSON): contrast `kProfileToneEntryContrast` (0) while Color Grade 1 holds
+  `kDefaultPipelineContrast`, saturation `kProfileToneEntrySaturation` (1.0) while it holds
+  `kDefaultPipelineSaturation`. The rule applies when the live document runs the stage after the
+  edit and the stored reference of `develop_before` did not run it. Color Grade 1 is
+  `PipelineDocument::PrimaryGrade`.
+- `EntryResetWrites(document, field_key, before, after)` dispatches the field: `odt` to
+  `FilmPrintEntrySaturationTarget`, `camera_profile_file` to `ProfileToneEntryResetTargets`.
+  `EditorHistoryMutation::CommitAdjustment` applies each write in the batch of the edit, and skips
+  a field whose input sequence is open, as the Film Print rule did.
+- `EditorPanelCameraProfileFileValue` gains `has_tone_curve` (bound profile with a curve) and
+  `profile_tone`; the panel presentation maps them to the same keys.
+- `EditorCameraProfileListModel` gains `toneCurveAvailable`, `profileTone`, `filmPrintMethod` (from
+  the `odt` entry of the snapshot), and `submitProfileTone(on)`, which submits one settled write
+  `{"camera_model", "profile_name", "profile_tone"}` through `ParseEditorParameterWrite`.
+- `EditorCameraProfileSection.qml`: row **Tone Curve** with a `Switch` under the combo; visible
+  for `toneCurveAvailable`, disabled while `filmPrintMethod`; it follows the echo of its write.
+  zh_CN: 色调曲线.
+- `docs/dng_color_profiles.md` gains the section "DCP camera profiles and the profile tone stage"
+  and a parameter table; the parent plan gains the switch and the entry reset in section 2.2.
+
+Details chosen during T3:
+
+- The signature takes the live document for the after side, where the reference is bound by the
+  write, and the Develop Model JSON of the history before-side. The before reference is resolved
+  through `DcpProfileLibrary::Shared()` to read whether its profile had a curve (cached after the
+  first read). An identity that the library does not hold had no stage, so the edit counts as an
+  entry. The `develop_after` parameter of section 6.5 is left out: the live document holds it.
+- A selection of another profile keeps the switch value of the stored reference (the write adds
+  `"profile_tone": false` when the switch is off). A selection from the default entry writes the
+  default, true.
+- The switch is a plain `Switch` driven by `submitProfileTone`, in place of
+  `EditorAdjustmentToggleModel`: its `paramsBuilder` falls back to `{}` for empty params, and `{}`
+  clears the reference.
+- The Default document renders with OpenDRT; the ACES 2.0 case selects the method first.
+- A change between two profiles that both run the stage is no entry; a change from a profile
+  without a curve to one with a curve is an entry.
+
+Primary call chains:
+
+```text
+DCP selection or Tone Curve on (QML)
+  -> EditorCameraProfileListModel::submitSelection / submitProfileTone
+  -> ParseEditorParameterWrite (FindSelectableDcpCameraProfile) -> submitNow(settled)
+  -> EditorHistoryMutation::CaptureAdjustmentBeforePreview (Develop before JSON)
+  -> ApplyEditorParameterWrite -> DevelopParamsModel::ApplyCameraProfileFileUpdate
+  -> EditorHistoryMutation::CommitAdjustment
+  -> EntryResetWrites -> ProfileToneEntryResetTargets
+     (live stage: method, bound reference, curve; before stage: ResolveStoredDcpCameraProfileFile)
+  -> ApplyEditorParameterPatch per Grade write -> one PipelineEditBatch -> PublishAppliedTypedBatch
+  -> panel projection echo -> loadFromSnapshot (switch state)
+```
+
+```text
+Failure: malformed before reference, a rejected Grade write, or a rejected batch
+  -> restore_before (RestoreDocumentFields of the edit and each applied reset)
+  -> CommitAdjustment returns false with the error; the history keeps its head
+Failure: no stored reference, equal value, parse error, or a session that rejects edits
+  -> submitProfileTone logs "[Camera Profile] Tone Curve ... is not applied" and returns false
+  -> the Switch returns to profileTone
+```
+
+Tests (Debug build):
+
+| Criterion | Test | Result |
+| --- | --- | --- |
+| A DCP selection resets both values in one Undo step (OpenDRT, then ACES 2.0) | `EditorProfileToneEntryHistoryTest.DcpSelectionResetsContrastAndSaturationInOneUndoStep`, `DcpSelectionOnAces20ResetsContrastAndSaturation` | PASS |
+| A user value stays; exposure stays | `ProfileToneEntryKeepsValuesThatTheUserSelected`, `ProfileToneEntryKeepsExposure` | PASS |
+| A document without Color Grade 1 keeps its values | `DocumentWithoutColorGradeOneKeepsItsValues` | PASS |
+| Film Print as the DRT method writes no Grade value | `FilmPrintMethodWritesNoGradeValueOnDcpSelection` | PASS |
+| Turning the switch off writes no Grade value; turning it on is an entry | `ToneCurveSwitchOffWritesNoGradeValue`, `ToneCurveSwitchOnIsAnEntry` | PASS |
+| Entry only when the stage starts; a leave writes no Grade value | `ChangeBetweenProfilesThatRunTheStageIsNoEntry`, `ProfileWithoutCurveWritesNoGradeValueAndLaterCurveDoes`, `LeaveToDefaultEntryWritesNoGradeValue` | PASS |
+| Projection of the curve and the switch | `EditorPanelProjectionTest.CameraProfileFileProjectsTheToneCurveAndItsSwitch` | PASS |
+| List model state and the settled write | `EditorCameraProfileListModelTest.ToneCurveSwitch*` (3), `SelectionKeepsTheToneCurveSwitchOfTheStoredReference` | PASS |
+| Switch in the section: visible, commit, Film Print disables, flat profile hides | `EditorRawDecodePanelQmlTest.CameraProfileToneCurveSwitchCommitsAndFollowsTheDrtMethod` | PASS |
+
+Suites: `EditorSessionHistoryPortTest` 129/130 (`CheckoutAndPasteHashesAreUnchanged` fails before
+this change, #555), `EditorPipelineCommandServiceTest` 24/24, `EditorPanelProjectionTest` 14/14,
+`EditorCameraProfileListModelTest` 15/15, `EditorRawDecodePanelQmlTest` 10/10,
+`PipelineDcpProfileBindingTest` 16/16. `lrelease` on `alcedo_main_zh_CN.ts`: exit 0.
+
+LOC: `editor_history_mutation.cpp` holds 1002 lines before T3 and 1009 after; the dispatch of the
+reset rules moved to `EntryResetWrites` to keep the mutation a router. The split is #867.
+
+Open: the user check on two camera makes with ACES 2.0 and OpenDRT. The Metal run of T2 joins C7.
 
 ## 9. Changes to the parent plan
 

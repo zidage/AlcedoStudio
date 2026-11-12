@@ -10,6 +10,7 @@ implemented** (2026-11-12, editor section and list model); the user check of the
 **C6 complete** (2026-11-12, DCP profile on a DNG source with the source calibration). C7 planned.
 **P-5 revised** (2026-11-12): the [DCP Profile Tone Curve Study](dcp_profile_tone_curve_study.md)
 brings `ProfileToneCurve` into the product in its phases T1 #862, T2 #863, and T3 #864, before C7.
+T1 and T3 are complete (2026-11-12); T2 is complete on CUDA and OpenCL, and its Metal run joins C7.
 
 Parent: [Roadmap](../../roadmap.md).
 
@@ -127,6 +128,7 @@ balance section. The section is visible for a RAW document and hidden for a rast
 Camera Profile
 +----------------------------------------------+
 | [ Camera Standard                         v ] |
+| Tone Curve                            [ on ] |
 +----------------------------------------------+
 ```
 
@@ -144,6 +146,14 @@ Camera Profile
   the warning color of `appTheme`. The list still holds the default entry and the matched
   profiles. The viewport shows the render error through the current render error surface.
 - The combo is disabled while the library scan runs.
+- The switch **Tone Curve** under the combo turns the profile tone stage of the
+  [study](dcp_profile_tone_curve_study.md) (section 6) on or off. It is visible when the selected
+  profile is bound and has a `ProfileToneCurve`, and disabled while the DRT method is Film Print.
+  A change is one settled edit of `camera_profile_file`. A selection of another profile keeps the
+  switch value; a selection from the default entry turns the stage on.
+- A profile tone entry (a selection or the switch turned on, after which the stage runs) writes
+  contrast 0 and saturation 1.0 of Color Grade 1 in the same Undo step, each while it still holds
+  the RAW import default (study section 6.5).
 
 ### 2.3 Data rules
 
@@ -221,7 +231,8 @@ For a DNG file, the camera model of the image already follows `UniqueCameraModel
 
 ### 3.2 Explicit exclusions
 
-- In phases C1 to C7: `ProfileToneCurve` rendering. The study phases T1 to T3 add it (P-5).
+- In phases C1 to C6: `ProfileToneCurve` rendering. The study phases T1 to T3 add it (P-5),
+  and C7 verifies it with the rest of the DCP path.
 - The ACR3 default curve for a profile that lacks `ProfileToneCurve`, automatic black
   (`DefaultBlackRender` 0), and the curve of an embedded DNG profile.
 - Triple-illuminant profiles, `RGBTables`, and four-channel cameras (P-7).
@@ -259,7 +270,7 @@ For a DNG file, the camera model of the image already follows `UniqueCameraModel
 | Settings folders | `app/lut_library_service.cpp:27,125-151`, `qml/LutSettingsPanel.qml`, `qml/FolderPathField.qml` | A `QObject` service owns a root path in `QSettings`, and a QML page opens a `FolderDialog`. | Add a service and a page with the same structure. |
 | RAW panel | `ui/alcedo_main/qml/EditorRawDecodePanel.qml:397-545` | Sections: Input Color (raster), white balance, Lens Calibration, RAW Decode. | Add the Camera Profile section. |
 | Camera identity in QML | `include/ui/alcedo_main/album_backend/editor_session_controller.hpp:124-125` | Only the lens identity is exposed. | The panel reads the matched list from a C++ model, so no camera string goes to QML. |
-| Tone curve | none | No code reads `ProfileToneCurve`. `docs/dng_color_profiles.md:81` states this. | Study phases T1 to T3 (P-5). |
+| Tone curve | none at C6 | No code read `ProfileToneCurve` at C6. | Study phases T1 to T3 (P-5), complete: reader, stage at the DRT entry, Tone Curve switch, entry reset. `docs/dng_color_profiles.md` describes the stage. |
 | Tests | `tests/edit/runtime/dng_color_profile_test.cpp`, `tests/image/dng_color_profile_cache_test.cpp`, `tests/app/pipeline_dng_profile_binding_test.cpp`, `tests/edit/runtime/dng_profile_test_support.hpp` | Cover the embedded path on the scalar reference and the three backends. | New suites in section 9. The current suites must pass unchanged. |
 
 ---

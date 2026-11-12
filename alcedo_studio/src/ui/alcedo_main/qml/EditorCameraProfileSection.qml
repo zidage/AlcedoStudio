@@ -9,6 +9,8 @@ import Alcedo.Main 1.0
 // profiles of the folder that match the camera. A selection commits one settled edit of the
 // Develop field camera_profile_file. A stored reference that does not resolve shows its name in
 // dangerColor. Without a DCP folder, Choose Folder opens the folder dialog of the Settings page.
+// Under the combo, the Tone Curve switch turns the profile tone stage of a profile with a
+// ProfileToneCurve on or off; each change is one settled edit of camera_profile_file.
 Item {
     id: root
     objectName: "editorCameraProfileSection"
@@ -90,6 +92,46 @@ Item {
                 Layout.fillWidth: true
                 model: profileModel
                 warning: profileModel.currentUnresolved
+            }
+
+            // Profile tone stage of the selected DCP profile (dcp_profile_tone_curve_study.md,
+            // section 6.4). Film Print runs no stage, so the switch is disabled there and keeps
+            // its stored value. The switch follows the echo of its write.
+            RowLayout {
+                objectName: "rawCameraProfileToneCurveRow"
+                Layout.fillWidth: true
+                visible: profileModel.toneCurveAvailable
+                spacing: appTheme.spaceSm
+
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("Tone Curve")
+                    color: root.colText
+                    font.pixelSize: appTheme.fontSizeBody
+                    Accessible.name: text
+                }
+
+                Switch {
+                    id: toneCurveSwitch
+                    objectName: "rawCameraProfileToneCurveSwitch"
+                    enabled: root.controlsEnabled && !root.scanning
+                             && !profileModel.filmPrintMethod
+                    checked: profileModel.profileTone
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.CheckBox
+                    Accessible.name: qsTr("Tone Curve")
+                    onToggled: {
+                        if (!profileModel.submitProfileTone(toneCurveSwitch.checked))
+                            toneCurveSwitch.checked = profileModel.profileTone
+                    }
+                    Connections {
+                        target: profileModel
+                        function onStoredReferenceChanged() {
+                            if (!toneCurveSwitch.pressed)
+                                toneCurveSwitch.checked = profileModel.profileTone
+                        }
+                    }
+                }
             }
 
             DialogActionButton {

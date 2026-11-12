@@ -175,6 +175,8 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           reference.insert(QStringLiteral("embedded_default"), value.embedded_default);
           reference.insert(QStringLiteral("selected"), value.selected);
           reference.insert(QStringLiteral("resolved"), value.resolved);
+          reference.insert(QStringLiteral("has_tone_curve"), value.has_tone_curve);
+          reference.insert(QStringLiteral("profile_tone"), value.profile_tone);
           reference.insert(QStringLiteral("camera_model"), String(value.camera_model));
           reference.insert(QStringLiteral("profile_name"), String(value.profile_name));
           map.insert(QStringLiteral("camera_profile_file"), reference);

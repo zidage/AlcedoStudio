@@ -195,6 +195,7 @@ set(ALCEDO_EDITOR_HISTORY_PORT_SOURCES
 add_executable(EditorSessionHistoryPortTest
     ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_document_history_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_profile_tone_entry_history_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_version_checkout_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_node_topology_history_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_document_paste_test.cpp

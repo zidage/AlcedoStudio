@@ -88,6 +88,19 @@ void EditorCameraProfileListModel::setCameraModel(const QString& model) {
 }
 
 void EditorCameraProfileListModel::loadFromSnapshot(const QVariantMap& snapshot) {
+  // The panel presentation nests the odt value under "odt" too.
+  if (const auto odt = snapshot.value(QStringLiteral("odt")); odt.isValid()) {
+    auto value = odt.toMap();
+    if (value.contains(QStringLiteral("odt"))) {
+      value = value.value(QStringLiteral("odt")).toMap();
+    }
+    const bool film_print =
+        value.value(QStringLiteral("method")).toString() == QStringLiteral("film_print");
+    if (film_print != film_print_method_) {
+      film_print_method_ = film_print;
+      emit filmPrintMethodChanged();
+    }
+  }
   const auto field = snapshot.value(QString::fromLatin1(kFieldKey));
   if (!field.isValid()) {
     return;
@@ -103,13 +116,17 @@ void EditorCameraProfileListModel::loadFromSnapshot(const QVariantMap& snapshot)
   stored.selected         = value.value(QStringLiteral("selected")).toBool();
   stored.resolved         = value.value(QStringLiteral("resolved")).toBool();
   if (stored.selected) {
-    stored.camera_model = value.value(QStringLiteral("camera_model")).toString().toStdString();
-    stored.profile_name = value.value(QStringLiteral("profile_name")).toString().toStdString();
+    stored.has_tone_curve = value.value(QStringLiteral("has_tone_curve")).toBool();
+    stored.profile_tone   = value.value(QStringLiteral("profile_tone")).toBool();
+    stored.camera_model   = value.value(QStringLiteral("camera_model")).toString().toStdString();
+    stored.profile_name   = value.value(QStringLiteral("profile_name")).toString().toStdString();
   }
   const bool changed =
       stored.raster != stored_.raster || stored.embedded_default != stored_.embedded_default ||
       stored.selected != stored_.selected || stored.resolved != stored_.resolved ||
-      stored.camera_model != stored_.camera_model || stored.profile_name != stored_.profile_name;
+      stored.has_tone_curve != stored_.has_tone_curve ||
+      stored.profile_tone != stored_.profile_tone || stored.camera_model != stored_.camera_model ||
+      stored.profile_name != stored_.profile_name;
   stored_ = std::move(stored);
   ComposeEntries();
   if (changed) {
@@ -192,10 +209,42 @@ auto EditorCameraProfileListModel::RowWriteJson(int row) const -> std::string {
   if (entry.isEmpty() || entry.value(QStringLiteral("isDefault")).toBool()) {
     return "null";
   }
-  return nlohmann::json{
+  nlohmann::json write{
       {"camera_model", entry.value(QStringLiteral("cameraModel")).toString().toStdString()},
-      {"profile_name", entry.value(QStringLiteral("profileName")).toString().toStdString()}}
-      .dump();
+      {"profile_name", entry.value(QStringLiteral("profileName")).toString().toStdString()}};
+  // A switch that the user turned off stays off for another profile.
+  if (stored_.selected && !stored_.profile_tone) {
+    write["profile_tone"] = false;
+  }
+  return write.dump();
+}
+
+bool EditorCameraProfileListModel::submitProfileTone(bool on) {
+  std::string error;
+  bool        accepted = false;
+  if (!stored_.selected) {
+    error = "no camera profile is selected";
+  } else if (on == stored_.profile_tone) {
+    error = "the switch already has this value";
+  } else {
+    auto write = ParseEditorParameterWrite(kFieldKey,
+                                           {{"camera_model", stored_.camera_model},
+                                            {"profile_name", stored_.profile_name},
+                                            {"profile_tone", on}},
+                                           &error);
+    if (write.has_value()) {
+      accepted = submitNow(std::move(*write), true);
+      if (!accepted) {
+        error = "the editor session does not accept edits";
+      }
+    }
+  }
+  if (!accepted) {
+    qCWarning(alcedo::diag::editorLog).noquote()
+        << "[Camera Profile] Tone Curve" << (on ? "on" : "off")
+        << "is not applied:" << QString::fromStdString(error);
+  }
+  return accepted;
 }
 
 }  // namespace alcedo::ui

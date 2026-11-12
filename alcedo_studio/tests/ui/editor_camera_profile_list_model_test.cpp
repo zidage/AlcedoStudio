@@ -42,6 +42,8 @@ struct StoredValue {
   bool        embedded_default = false;
   bool        selected         = false;
   bool        resolved         = false;
+  bool        has_tone_curve   = false;
+  bool        profile_tone     = false;
   std::string camera_model;
   std::string profile_name;
 };
@@ -53,12 +55,25 @@ auto Snapshot(const StoredValue& value) -> QVariantMap {
   reference.insert("embedded_default", value.embedded_default);
   reference.insert("selected", value.selected);
   reference.insert("resolved", value.resolved);
+  reference.insert("has_tone_curve", value.has_tone_curve);
+  reference.insert("profile_tone", value.profile_tone);
   reference.insert("camera_model", QString::fromStdString(value.camera_model));
   reference.insert("profile_name", QString::fromStdString(value.profile_name));
   QVariantMap field;
   field.insert("camera_profile_file", reference);
   QVariantMap snapshot;
   snapshot.insert("camera_profile_file", field);
+  return snapshot;
+}
+
+/// Adjustment snapshot with only the `odt` entry, in the panel presentation form.
+auto OdtSnapshot(const QString& method) -> QVariantMap {
+  QVariantMap odt;
+  odt.insert("method", method);
+  QVariantMap field;
+  field.insert("odt", odt);
+  QVariantMap snapshot;
+  snapshot.insert("odt", field);
   return snapshot;
 }
 
@@ -312,6 +327,123 @@ TEST_F(EditorCameraProfileListModelTest, SelectionIsNotSubmittedWhenTheSessionRe
 
   EXPECT_TRUE(submitter.calls.empty());
   EXPECT_EQ(model->currentIndex(), 0);
+}
+
+// T3 (dcp_profile_tone_curve_study.md, section 6.4): the Tone Curve switch reads the stored
+// reference, and the DRT method of the odt entry.
+TEST_F(EditorCameraProfileListModelTest, ToneCurveSwitchStateFollowsTheStoredReference) {
+  DcpProfileLibrary library;
+  auto              model = CanonModel(ScannedService(&library));
+  EXPECT_FALSE(model->toneCurveAvailable());
+  EXPECT_FALSE(model->profileTone());
+  EXPECT_FALSE(model->filmPrintMethod());
+
+  QSignalSpy changed(model.get(), &EditorCameraProfileListModel::storedReferenceChanged);
+  model->loadFromSnapshot(Snapshot({.selected       = true,
+                                    .resolved       = true,
+                                    .has_tone_curve = true,
+                                    .profile_tone   = true,
+                                    .camera_model   = "Canon EOS R6",
+                                    .profile_name   = "Adobe Color"}));
+  EXPECT_TRUE(model->toneCurveAvailable());
+  EXPECT_TRUE(model->profileTone());
+  model->loadFromSnapshot(Snapshot({.selected       = true,
+                                    .resolved       = true,
+                                    .has_tone_curve = true,
+                                    .profile_tone   = false,
+                                    .camera_model   = "Canon EOS R6",
+                                    .profile_name   = "Adobe Color"}));
+  EXPECT_FALSE(model->profileTone());
+  EXPECT_EQ(changed.count(), 2);
+
+  // A profile without a curve, or an unresolved reference, has no switch.
+  model->loadFromSnapshot(Snapshot({.selected       = true,
+                                    .resolved       = true,
+                                    .has_tone_curve = false,
+                                    .camera_model   = "Canon EOS R6",
+                                    .profile_name   = "Adobe Color"}));
+  EXPECT_FALSE(model->toneCurveAvailable());
+  model->loadFromSnapshot(Snapshot({.selected       = true,
+                                    .resolved       = false,
+                                    .has_tone_curve = true,
+                                    .camera_model   = "Canon EOS R6",
+                                    .profile_name   = "Adobe Color"}));
+  EXPECT_FALSE(model->toneCurveAvailable());
+
+  QSignalSpy method(model.get(), &EditorCameraProfileListModel::filmPrintMethodChanged);
+  model->loadFromSnapshot(OdtSnapshot("film_print"));
+  EXPECT_TRUE(model->filmPrintMethod());
+  // The odt entry alone leaves the stored reference.
+  EXPECT_EQ(model->currentIndex(), 1);
+  model->loadFromSnapshot(OdtSnapshot("open_drt"));
+  EXPECT_FALSE(model->filmPrintMethod());
+  EXPECT_EQ(method.count(), 2);
+}
+
+TEST_F(EditorCameraProfileListModelTest, ToneCurveSwitchSubmitsOneSettledWriteOfTheReference) {
+  auto model = CanonModel(ScannedService(nullptr));
+  model->loadFromSnapshot(Snapshot({.selected       = true,
+                                    .resolved       = true,
+                                    .has_tone_curve = true,
+                                    .profile_tone   = true,
+                                    .camera_model   = "Canon EOS R6",
+                                    .profile_name   = "Adobe Color"}));
+  RecordingSubmitter submitter;
+  model->setSubmitter(&submitter);
+
+  EXPECT_FALSE(model->submitProfileTone(true));
+  EXPECT_TRUE(submitter.calls.empty());
+  ASSERT_TRUE(model->submitProfileTone(false));
+
+  ASSERT_EQ(submitter.calls.size(), 1u);
+  EXPECT_EQ(submitter.calls[0].fieldKey, "camera_profile_file");
+  EXPECT_TRUE(submitter.calls[0].settled);
+  const auto* update = std::get_if<DevelopCameraProfileFileUpdate>(&submitter.calls[0].write);
+  ASSERT_NE(update, nullptr);
+  ASSERT_NE(update->profile, nullptr);
+  EXPECT_EQ(update->profile->profile_name, "Adobe Color");
+  EXPECT_FALSE(update->profile_tone);
+  // The model keeps no switch value of its own: the echo sets it.
+  EXPECT_TRUE(model->profileTone());
+}
+
+TEST_F(EditorCameraProfileListModelTest, ToneCurveSwitchWithoutReferenceSubmitsNothing) {
+  auto               model = CanonModel(ScannedService(nullptr));
+  RecordingSubmitter submitter;
+  model->setSubmitter(&submitter);
+
+  EXPECT_FALSE(model->submitProfileTone(true));
+  EXPECT_FALSE(model->submitProfileTone(false));
+  EXPECT_TRUE(submitter.calls.empty());
+}
+
+TEST_F(EditorCameraProfileListModelTest, SelectionKeepsTheToneCurveSwitchOfTheStoredReference) {
+  auto model = CanonModel(ScannedService(nullptr));
+  model->loadFromSnapshot(Snapshot({.selected       = true,
+                                    .resolved       = true,
+                                    .has_tone_curve = true,
+                                    .profile_tone   = false,
+                                    .camera_model   = "Canon EOS R6",
+                                    .profile_name   = "Adobe Color"}));
+  RecordingSubmitter submitter;
+  model->setSubmitter(&submitter);
+
+  model->selectIndex(3);
+
+  ASSERT_EQ(submitter.calls.size(), 1u);
+  const auto* update = std::get_if<DevelopCameraProfileFileUpdate>(&submitter.calls[0].write);
+  ASSERT_NE(update, nullptr);
+  ASSERT_NE(update->profile, nullptr);
+  EXPECT_EQ(update->profile->profile_name, "Camera Standard");
+  EXPECT_FALSE(update->profile_tone);
+
+  // From the default entry, the selection turns the stage on.
+  model->loadFromSnapshot(Snapshot({}));
+  model->selectIndex(3);
+  ASSERT_EQ(submitter.calls.size(), 2u);
+  update = std::get_if<DevelopCameraProfileFileUpdate>(&submitter.calls[1].write);
+  ASSERT_NE(update, nullptr);
+  EXPECT_TRUE(update->profile_tone);
 }
 
 }  // namespace
