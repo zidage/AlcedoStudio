@@ -211,7 +211,7 @@ auto AlbumWarnings(const std::vector<std::string>& warnings) -> std::vector<std:
           "StarRatingFilter.qml", "ThumbnailGridView.qml", "ThumbnailStarRating.qml",
           "ThumbnailEditMark.qml", "JustifiedThumbnailTile.qml", "ThumbnailPinBinding.qml",
           "ThumbnailLayoutAnimation.qml", "ThumbnailColorLabelDots.qml", "ThumbnailDeleteMark.qml",
-          "ColorLabelFilterChips.qml"}) {
+          "ColorLabelFilterChips.qml", "StaggeredGridMark.qml"}) {
       if (warning.find(file) != std::string::npos) {
         out.push_back(warning);
         break;
@@ -804,6 +804,56 @@ TEST_F(AlbumSectionQmlTests, LargeSectionTraversalKeepsCellsAndLoadedRowsBounded
   EXPECT_LE(max_pages, 3u);
   EXPECT_LE(max_rows, 360);
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// The thumbnail loading mark draws from one shared wave clock. A shown mark holds the clock, which
+// then ticks every loadingWaveFrameMs (not at the display rate); a hidden mark, a mark under
+// reduceMotion, and a destroyed mark hold nothing, and the clock stops with no holder.
+TEST_F(AlbumSectionQmlTests, StaggeredGridMarkHoldsTheSharedWaveClockOnlyWhileItShows) {
+  auto&      theme                = AppTheme::Instance();
+  const bool reduce_motion_before = theme.reduceMotion();
+  theme.setReduceMotion(false);
+  const int holders_before = theme.loadingWaveHolders();
+
+  ApplicationModuleHost backend;
+  LoadedComponent       view(backend, "StaggeredGridMark.qml", 27);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* mark = view.loaded();
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before + 1);
+  EXPECT_EQ(mark->property("animated").toReal(), 1.0);
+
+  QSignalSpy    ticks(&theme, &AppTheme::LoadingWavePhaseChanged);
+  QElapsedTimer elapsed;
+  elapsed.start();
+  ProcessEvents(400);
+  const auto frames_at_clock_rate =
+      static_cast<double>(elapsed.elapsed()) / theme.loadingWaveFrameMs();
+  EXPECT_GE(ticks.count(), static_cast<int>(frames_at_clock_rate * 0.5));
+  EXPECT_LE(ticks.count(), static_cast<int>(frames_at_clock_rate * 1.2) + 2);
+  EXPECT_DOUBLE_EQ(mark->property("phase").toReal(), theme.loadingWavePhase());
+
+  mark->setProperty("visible", false);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before);
+  mark->setProperty("visible", true);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before + 1);
+
+  theme.setReduceMotion(true);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before);
+  EXPECT_EQ(mark->property("animated").toReal(), 0.0);
+  EXPECT_EQ(mark->property("phase").toReal(), 0.0);
+  theme.setReduceMotion(false);
+  EXPECT_EQ(theme.loadingWaveHolders(), holders_before + 1);
+
+  // Destroying the mark lets go of the clock, and the clock stops.
+  view.window()->setProperty("loaderActive", false);
+  ASSERT_TRUE(WaitUntil([&]() { return theme.loadingWaveHolders() == holders_before; }));
+  if (holders_before == 0) {
+    ticks.clear();
+    ProcessEvents(200);
+    EXPECT_EQ(ticks.count(), 0);
+  }
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(view.warnings());
+  theme.setReduceMotion(reduce_motion_before);
 }
 
 // A zoom to a smaller thumbnail tier keeps the larger pin of a card that already shows a larger

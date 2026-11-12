@@ -5,12 +5,15 @@
 #pragma once
 
 #include <QColor>
+#include <QElapsedTimer>
 #include <QFont>
+#include <QHash>
 #include <QObject>
 #include <QString>
 #include <QVariantList>
 
 class QApplication;
+class QTimer;
 class QWidget;
 
 namespace alcedo::ui {
@@ -117,6 +120,13 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int welcomeInfoMinWidth READ welcomeInfoMinWidth CONSTANT)
   Q_PROPERTY(int welcomeEmptyContentWidth READ welcomeEmptyContentWidth CONSTANT)
   Q_PROPERTY(int skeletonCycleMs READ skeletonCycleMs CONSTANT)
+  // Shared clock of the StaggeredGridMark wave (DESIGN.md "Library loading"): 0 to 1 over
+  // loadingWaveCycleMs, advanced every loadingWaveFrameMs while at least one mark holds it
+  // (setLoadingWaveHolder). Every mark reads the same phase, so a dense grid repaints once per
+  // tick, not once per display frame.
+  Q_PROPERTY(qreal loadingWavePhase READ loadingWavePhase NOTIFY LoadingWavePhaseChanged)
+  Q_PROPERTY(int loadingWaveCycleMs READ loadingWaveCycleMs CONSTANT)
+  Q_PROPERTY(int loadingWaveFrameMs READ loadingWaveFrameMs CONSTANT)
   // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
   Q_PROPERTY(int lineHeightCaption READ lineHeightCaption CONSTANT)
   Q_PROPERTY(int lineHeightBody READ lineHeightBody CONSTANT)
@@ -396,6 +406,14 @@ class AppTheme final : public QObject {
   auto        welcomeInfoMinWidth() const -> int;
   auto        welcomeEmptyContentWidth() const -> int;
   auto        skeletonCycleMs() const -> int;
+  auto        loadingWavePhase() const -> qreal;
+  auto        loadingWaveCycleMs() const -> int;
+  auto        loadingWaveFrameMs() const -> int;
+  /// Number of objects that hold the loading wave clock; the clock runs while it is above 0.
+  auto        loadingWaveHolders() const -> int;
+  /// @p holder holds the loading wave clock while @p holds is true. A destroyed holder lets go
+  /// by itself, so a mark that is torn down without its QML handlers releases the clock too.
+  Q_INVOKABLE void setLoadingWaveHolder(QObject* holder, bool holds);
   auto        lineHeightCaption() const -> int;
   auto        lineHeightBody() const -> int;
   auto        lineHeightTitle() const -> int;
@@ -515,11 +533,20 @@ class AppTheme final : public QObject {
   void UiFontFamilyChanged();
   void ThemeChanged();
   void ReduceMotionChanged();
+  void LoadingWavePhaseChanged();
 
  private:
   explicit AppTheme(QObject* parent = nullptr);
 
   static auto  ResolveRole(QWidget* widget) -> FontRole;
+  void         AdvanceLoadingWave();
+
+  void         UpdateLoadingWaveTimer();
+
+  QTimer*                                   loading_wave_timer_ = nullptr;
+  QElapsedTimer                             loading_wave_clock_{};
+  QHash<QObject*, QMetaObject::Connection> loading_wave_holders_{};
+  qreal                                     loading_wave_phase_ = 0.0;
 
   int          current_theme_index_  = 0;
   // Lazy-loaded from QSettings("ui/reduceMotion") on first read so the

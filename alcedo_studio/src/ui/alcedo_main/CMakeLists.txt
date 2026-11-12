@@ -879,6 +879,9 @@ set(ALCEDO_MAIN_QML_FILES
 )
 set(ALCEDO_MAIN_QML_RESOURCES
     "${ALCEDO_UI_SHELL_ROOT}/qml/util/qmldir"
+    # Compiled from qml/shaders/staggered_grid_mark.frag (see that file); committed so QML loaded
+    # from the source tree finds it too.
+    "${ALCEDO_UI_SHELL_ROOT}/qml/shaders/staggered_grid_mark.frag.qsb"
 )
 foreach(ALCEDO_MAIN_QML_FILE IN LISTS ALCEDO_MAIN_QML_FILES ALCEDO_MAIN_QML_RESOURCES)
     file(RELATIVE_PATH ALCEDO_MAIN_QML_ALIAS "${ALCEDO_UI_SHELL_ROOT}" "${ALCEDO_MAIN_QML_FILE}")

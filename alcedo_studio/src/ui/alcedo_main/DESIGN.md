@@ -578,18 +578,25 @@ loader. The C++ side reports the first kind through `LibraryModule.queryReplacin
 
 `StaggeredGridMark.qml` is the compact 3 x 3 staggered grid. Each tile rests at 75 %
 size and 15 % wave level and grows to full size and full `textColor` as the wave
-passes, 1200 ms per pass. Its spacing is the mark width / 9 and its tile radius the
-mark width / 18, both rounded, so one mark serves every size.
+passes, `loadingWaveCycleMs` per pass. Its spacing is the mark width / 9 and its
+tile radius the mark width / 18, both rounded, so one mark serves every size.
 
-Every loader is drawn from rectangles; the Library and its thumbnails use no
-Material `BusyIndicator` and no spinner. Under `reduceMotion` the wave stops and
-every tile draws at its rest level.
+A dense grid shows a mark on every loading card, so a mark is one `ShaderEffect`
+quad: `qml/shaders/staggered_grid_mark.frag` draws the nine tiles. Every mark reads
+one shared clock, `appTheme.loadingWavePhase`, which advances every
+`loadingWaveFrameMs` while at least one mark shows. All marks pulse together, and
+the window repaints at the clock rate instead of the display rate.
+
+The loaders draw no Material `BusyIndicator` and no spinner. Under `reduceMotion`
+the wave stops and every tile draws at its rest level.
 
 | Parameter | Value | Meaning |
 | --- | --- | --- |
 | `libraryLoadingRevealDelayMs` | 150 ms | Time from the start of a replacing read to the first loader frame |
 | Placeholder wave strength | 10 % | Opacity of `textColor` over a placeholder card at the crest of the wave |
 | Compact mark wave strength | 85 % | Opacity of `textColor` over a compact tile at the crest of the wave |
+| `loadingWaveCycleMs` | 1200 ms | One pass of the compact mark wave |
+| `loadingWaveFrameMs` | 33 ms | Interval of the shared mark clock (about 30 updates per second) |
 | Stale result opacity | 30 % | Opacity of the previous grid while the replacing read runs |
 
 ### Library color labels
@@ -1374,7 +1381,7 @@ perpetual animations are the `SkeletonBlock` content placeholder and the
 | Workspace + adjustment thumbs | Slide on `x` (OutBack, land scale pulse) | Documented capsule exception to “no overshoot” for mechanical feel |
 | Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
 | Content placeholder (`SkeletonBlock`) | A `hoverColor` band moves on `x` from left to right inside the clipped `bgBaseColor` block, `skeletonCycleMs` per sweep, `Easing.InOutSine`, repeated while the content loads | Approved exception to "no perpetual animation", for content placeholders only. The band stops when the block is invisible. Under `reduceMotion` the band does not run and the block is static |
-| Library loading grid (`StaggeredGridLoader`) | A `textColor` wave runs along the tile diagonals, top left to bottom right; one GUI-thread `NumberAnimation` drives every tile. Placeholder grid: opacity wave, 1600 ms per pass. Compact mark: opacity and scale wave, 1200 ms per pass | Approved exception to "no perpetual animation", for Library loading and photo loading marks only (Spacing "Library loading"). The wave stops when the loader is invisible. Under `reduceMotion` every tile is static at its rest level |
+| Library loading grid (`StaggeredGridLoader`) | A `textColor` wave runs along the tile diagonals, top left to bottom right. Placeholder grid: one GUI-thread `NumberAnimation` drives every tile, opacity wave, 1600 ms per pass. Compact mark (`StaggeredGridMark`): one shader quad per mark on the shared `loadingWavePhase` clock (`loadingWaveFrameMs` ticks), opacity and scale wave, `loadingWaveCycleMs` per pass | Approved exception to "no perpetual animation", for Library loading and photo loading marks only (Spacing "Library loading"). The wave stops when the loader is invisible. Under `reduceMotion` every tile is static at its rest level |
 | Project loading overlay | Snap on immediately; after load, hold `motionFadeMs` then fade out `motionFoldCloseMs` | No fade-in — that flashed the empty library after Welcome closed |
 | Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
 | Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`. macOS keeps the system traffic lights over the leading side of the full-width toolbar and hides the title-bar surface with `Qt.ExpandedClientAreaHint` + `Qt.NoTitleBarBackgroundHint`; toolbar content reserves that leading region. Other platforms use Qt frameless behavior plus drawn caption buttons. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
@@ -1532,7 +1539,7 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | `AlertBadge.qml` | Warning and error message: wrapped white caption text on an `alertBadgeFillColor` badge; hidden while empty |
 | `SkeletonBlock.qml` | Content placeholder: `bgBaseColor` block with the moving `hoverColor` band (Motion); `animated: false` draws a static tile |
 | `StaggeredGridLoader.qml` | Library loading: a grid of rounded tiles with a diagonal wave (Motion, "Library loading"); `rows: 0` fills the height as a placeholder grid, a fixed 3 x 3 grid with `scaleDepth` is the compact mark |
-| `StaggeredGridMark.qml` | The compact 3 x 3 `StaggeredGridLoader`: the loading mark of a photo (Library card, justified tile, Editor filmstrip card) and of the Library over a kept result |
+| `StaggeredGridMark.qml` | The compact 3 x 3 staggered grid as one shader quad on the shared `appTheme.loadingWavePhase` clock: the loading mark of a photo (Library card, justified tile, Editor filmstrip card) and of the Library over a kept result |
 
 ---
 
