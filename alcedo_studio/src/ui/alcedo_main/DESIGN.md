@@ -544,6 +544,8 @@ always use the classic cells.
 - **Marks and selection:** the edit mark chip, the missing-source mark, and the
   Delete mark sit on the photo as on the cards. Selection is the 2 px
   `textColor` outline around the photo.
+- **New result:** a result that replaces the shown one (a filter, the search, a
+  collection) shows from its first photo, as in the classic grid (#841).
 
 ### Library delegate cost (#836)
 

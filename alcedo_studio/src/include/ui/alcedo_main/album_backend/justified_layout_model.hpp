@@ -38,7 +38,8 @@ namespace alcedo::ui {
  * every index after it, so every slot with a photo gets every role. After a layout or source
  * change that leaves fewer than half of the slots in use, the model removes the slots from
  * `count` on; a photo of a removed slot moves to an empty kept slot. A source reset resets this
- * model.
+ * model and moves the viewport to the top (viewportReset), so the new result shows from its
+ * first photo, as a GridView shows a reset model.
  *
  * The layout reads the `aspectRatio` role of each source photo. A change of that role lays out
  * the rows from the row of the photo. Appended pages lay out the last row and the rows after it.
@@ -155,6 +156,8 @@ class JustifiedLayoutModel : public QAbstractListModel {
   void viewportChanged();
   void tilesChanged();
   void windowChanged();
+  /// A source reset moved viewportY to 0; the view moves its content position there.
+  void viewportReset();
 
  private:
   /// What changed before a window update.

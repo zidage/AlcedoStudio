@@ -1270,6 +1270,8 @@ Item {
         viewportHeight: justifiedView.height
         // The tile count stays while a scroll moves the window, so the window asks for pages.
         onWindowChanged: root.maybeLoadMoreThumbnails()
+        // Another result shows from the top, as the classic GridView shows a reset model.
+        onViewportReset: justifiedView.contentY = 0
     }
 
     // A plain item with the scroll properties of a Flickable, not a Flickable: the view takes no

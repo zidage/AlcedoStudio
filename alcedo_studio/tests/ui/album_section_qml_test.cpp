@@ -1942,6 +1942,91 @@ TEST_F(AlbumSectionQmlTests, JustifiedRowsSliderZoomStepsKeepTheCentrePhotoAtThe
   ExpectSliderZoomKeepsTheCentrePhoto(backend, "justified", temp_dir_);
 }
 
+namespace {
+
+/// A lens filter applied deep in a long result: the filtered photos show from the top, and each
+/// photo in the viewport is a photo of the lens with its thumbnail pinned. The viewport position
+/// before the filter lies below the end of the filtered result.
+void ExpectALensFilterResultShowsFromTheTop(ApplicationModuleHost& backend, const char* layout,
+                                            const std::filesystem::path& dir) {
+  UseTestSettings(dir);
+  ASSERT_TRUE(backend.library_view()->setGridLayout(QString::fromLatin1(layout)));
+  auto specs = MixedSizePhotoSpecs(300);
+  for (size_t i = 0; i < specs.size(); ++i) {
+    specs[i].lens_ = i % 3 == 0 ? "Lens A" : "Lens B";
+  }
+  const auto packed = CreatePopulatedPackedProject(dir, {}, 0, specs);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  auto*                     library = backend.library();
+  std::set<sl_element_id_t> lens_a;
+  for (size_t i = 0; i < packed->images_.size(); i += 3) {
+    lens_a.insert(packed->images_[i].file_id_);
+  }
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* shown_view = qobject_cast<QQuickItem*>(view.Find(std::string(layout) == "justified"
+                                                             ? "thumbnailGridView_justified"
+                                                             : "thumbnailGridView_grid"));
+  ASSERT_NE(shown_view, nullptr);
+  ASSERT_TRUE(WaitUntil([&]() { return ShownPhotoItems(shown_view).size() > 6; }));
+  ProcessEvents(300);
+  const auto max_y = shown_view->property("contentHeight").toReal() - shown_view->height();
+  ASSERT_GT(max_y, 2.0 * shown_view->height());
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(view.loaded(), "restoreContentY", Q_ARG(QVariant, 0.9 * max_y)));
+  ProcessEvents(300);
+  ASSERT_GT(shown_view->property("contentY").toReal(), 0.8 * max_y);
+
+  // The photos of the viewport, by element id.
+  const auto photos_in_view = [&]() {
+    std::map<uint, QQuickItem*> out;
+    const auto                  content_y = shown_view->property("contentY").toReal();
+    for (const auto& [id, item] : ShownPhotoItems(shown_view)) {
+      const auto y = item->y() - content_y;
+      if (id != 0 && y + item->height() > 0 && y < shown_view->height()) {
+        out[id] = item;
+      }
+    }
+    return out;
+  };
+
+  backend.stats()->ToggleStatsFilter(QStringLiteral("lens"), QStringLiteral("Lens A"));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  ASSERT_EQ(library->model().count(), static_cast<int>(lens_a.size()));
+  ASSERT_TRUE(WaitUntil([&]() { return photos_in_view().size() > 6; }))
+      << layout << " contentY " << shown_view->property("contentY").toReal() << " shown "
+      << ShownPhotoItems(shown_view).size();
+  ProcessEvents(300);
+
+  EXPECT_NEAR(shown_view->property("contentY").toReal() - shown_view->property("originY").toReal(),
+              0.0, 0.5);
+  const auto in_view = photos_in_view();
+  EXPECT_TRUE(in_view.contains(static_cast<uint>(packed->images_[0].file_id_)));
+  for (const auto& [id, item] : in_view) {
+    EXPECT_TRUE(lens_a.contains(id)) << "photo " << id << " is not a Lens A photo";
+    auto* pin = item->findChild<QObject*>(QStringLiteral("thumbnailPinBinding"));
+    ASSERT_NE(pin, nullptr);
+    EXPECT_EQ(pin->property("pinnedElementId").toUInt(), id);
+    EXPECT_TRUE(library->thumbs().IsThumbnailPinned(id)) << "photo " << id;
+  }
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+}  // namespace
+
+TEST_F(AlbumSectionQmlTests, ClassicGridShowsALensFilterResultFromTheTopAfterADeepScroll) {
+  ApplicationModuleHost backend;
+  ExpectALensFilterResultShowsFromTheTop(backend, "classic", temp_dir_);
+}
+
+TEST_F(AlbumSectionQmlTests, JustifiedRowsShowALensFilterResultFromTheTopAfterADeepScroll) {
+  ApplicationModuleHost backend;
+  ExpectALensFilterResultShowsFromTheTop(backend, "justified", temp_dir_);
+}
+
 // Issue #766: a Library Overview section folds with the shared fold motion. The header stays;
 // the content keeps its size and a clip reveals it with the fold progress, which also drives the
 // content opacity and the glyph turn. The date content stays loaded while it folds.

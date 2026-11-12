@@ -375,11 +375,20 @@ void JustifiedLayoutModel::UpdateWindow(WindowChange change) {
 void JustifiedLayoutModel::OnSourceReset() {
   auto* model = thumbnailModel();
   layout_.Reset(model ? AspectRatios(0, model->count() - 1) : std::vector<double>{});
+  // A reset installs another result (a filter, a search, a collection), which shows from its
+  // first photo. The old viewport can lie below the end of a shorter result, where the window
+  // has no photo.
+  const bool viewport_moved = viewport_y_ != 0.0;
+  viewport_y_               = 0.0;
   PlaceWindowInOrder();
   endResetModel();
   ++tiles_revision_;
   emit tilesChanged();
   emit windowChanged();
+  if (viewport_moved) {
+    emit viewportChanged();
+    emit viewportReset();
+  }
 }
 
 void JustifiedLayoutModel::OnSourceRowsInserted(const QModelIndex& parent, int first, int last) {
