@@ -449,6 +449,10 @@ TEST_F(MetalDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidates
   gpu_dag_test::VerifyCanonDngProfile<MetalRenderDevice>("metal");
 }
 
+TEST_F(MetalDevelopFixture, DcpProfileMatchesScalarReference) {
+  gpu_dag_test::VerifyDcpCameraProfile<MetalRenderDevice>("metal");
+}
+
 TEST_F(MetalDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquivalentFullRenders) {
   gpu_dag_test::VerifyRgbWhiteBalanceAndLevels<MetalRenderDevice>();
 }
