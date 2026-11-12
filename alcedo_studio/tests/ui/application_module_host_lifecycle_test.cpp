@@ -104,6 +104,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     EXPECT_NE(host.updates(), nullptr);
     EXPECT_NE(host.lut_library(), nullptr);
     EXPECT_NE(host.lut_packages(), nullptr);
+    EXPECT_NE(host.camera_profiles(), nullptr);
     // Constructing the application modules makes no LUT feed request (plan L3).
     EXPECT_FALSE(host.lut_packages()->checking());
     EXPECT_FALSE(host.lut_packages()->checked());
@@ -141,6 +142,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
         {"updates", "alcedo::UpdateService*"},
         {"lutLibrary", "alcedo::LutLibraryService*"},
         {"lutPackages", "alcedo::LutPackageService*"},
+        {"cameraProfiles", "alcedo::CameraProfileLibraryService*"},
         {"aiModelPackages", "alcedo::AiModelPackageService*"},
         {"lutBrowser", "alcedo::ui::LutLibraryModel*"},
         {"lutTarget", "alcedo::ui::LutLibraryController*"},

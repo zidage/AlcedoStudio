@@ -2,7 +2,9 @@
 
 Date: 2026-11-12
 
-Status: **C1 complete** (2026-11-12, reader and profile value). C2 to C7 planned.
+Status: **C1 complete** (2026-11-12, reader and profile value). **C2 implemented** (2026-11-12,
+library index, camera match, folder setting, Settings page); the user check of the Settings page
+is open. C3 to C7 planned.
 
 Parent: [Roadmap](../../roadmap.md).
 
@@ -361,7 +363,7 @@ Stored reference, identity absent from the library
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | C1 | DCP file reader and profile value | `image/` | None | 900 to 1200 | Complete |
-| C2 | Library index, camera match, folder setting, Settings page | `image/`, `app/`, `ui/alcedo_main/` | C1 | 1300 to 1700 | Planned |
+| C2 | Library index, camera match, folder setting, Settings page | `image/`, `app/`, `ui/alcedo_main/` | C1 | 1300 to 1700 | Implemented; user page check open |
 | C3 | Profile reference in the Develop payload and the effective profile in the render | `edit/graph/`, `edit/runtime/` | C1 | 1100 to 1500 | Planned |
 | C4 | Develop field, history, and binding on each load path | `app/` | C2, C3 | 1200 to 1600 | Planned |
 | C5 | Editor section and list model | `ui/alcedo_main/`, `app/` | C4 | 900 to 1300 | Planned |
@@ -626,16 +628,130 @@ ctest --test-dir build/debug -R "DcpProfileLibraryTest|CameraProfileLibraryServi
 
 **Exit criteria.**
 
-- [ ] Both suites pass.
-- [ ] The Settings page shows 2445 profiles and 359 cameras for the user folder. The user
-      confirms the page.
-- [ ] The recorded scan time of the user folder is below 2 seconds in a Release build. A higher
+- [x] Both suites pass.
+- [ ] The Settings page shows 2445 profiles and 357 cameras for the user folder. The user
+      confirms the page. (The service and the library report 2445 and 357 for the user folder;
+      the page check by the user is open. 357, not 359: see the completion record.)
+- [x] The recorded scan time of the user folder is below 2 seconds in a Release build. A higher
       value is a stop condition (section 12).
-- [ ] After the scan, the project database file has the same size and tables as before.
+- [x] After the scan, the project database file has the same size and tables as before. (By
+      inspection: the scan path links no storage library and writes only the QSettings key.)
 
 **Expected diff.** 1300 to 1700 lines.
 
-**Completion record.** Empty.
+**Completion record.**
+
+```text
+Phase / date / status: C2 / 2026-11-12 / implemented; the user check of the Settings page is open
+Source revision and branch: a80c4459a (C1, branch feature/dcp-file-reader), work branch
+  feature/dcp-profile-library stacked on the C1 pull request
+Actual changed modules: image/ (DcpProfileLibrary, camera match), app/
+  (CameraProfileLibraryService), ui/alcedo_main/ (module host property cameraProfiles,
+  CameraProfileSettingsPanel.qml, SettingDialog category), tests/image/, tests/app/, tests/ui/
+  (category indices)
+Implemented behavior:
+  - include/image/dcp_profile_library.hpp, image/dcp_profile_library.cpp: DcpCameraMatchKeys,
+    DcpUniqueCameraModelKey, DcpCameraModelMatches, DcpLibraryScanResult, DcpProfileLibrary
+    (Shared, Scan, Match, Find, Root, ProfileCount, CameraCount, ProfileReadCount).
+  - include/app/camera_profile_library_service.hpp, app/camera_profile_library_service.cpp:
+    CameraProfileLibraryService (QObject) with the properties rootPath, profileCount,
+    cameraCount, rejectedCount, errorText, scanning, and the invokables setRootFolder(url) and
+    rescan(). One worker thread (ThreadPool of 1) runs the scans in request order.
+  - ApplicationModuleHost constructs the service after the LUT services, calls Start(), shuts it
+    down with the other library workers, and exposes it as appModules.cameraProfiles.
+  - Settings category 9 "Camera Profiles" (camera.svg) between LUTs and AI Models. AI Models is
+    now 10 and About is 11. The UI tests that name the indices changed with them.
+Detail decisions made in this phase:
+  - Camera count: the number of distinct compact camera keys. The user folder has 359
+    UniqueCameraModel spellings and 357 cameras: "NIKON D810" and "Nikon D810", and "NIKON Z 7"
+    and "Nikon Z 7", are one camera each under the normalization of section 2.3. Their profile
+    names differ, so no profile is dropped (2445 profiles).
+  - Identity key: the compact camera key and the exact profile name. Find compares the camera
+    model by its compact key and the profile name exactly.
+  - Make alias table: rows for olympus (Olympus, OM Digital Solutions), om (OM Digital
+    Solutions, Olympus), ricoh (Ricoh, Pentax), pentax (Pentax, Ricoh), phase (Phase One),
+    konica (Konica Minolta), eastman (Kodak). A make can give two profile makes, because one
+    manufacturer sells bodies under two names (Ricoh GR and Pentax K; Olympus E-M and OM-1).
+    Each other make uses its first word. This covers NIKON CORPORATION, LEICA CAMERA AG, SONY,
+    FUJIFILM, SIGMA, and the 359 camera folders. The model alone is also a key, because an Exif
+    model can hold the make ("NIKON Z 6_2", "Canon EOS R6", "PENTAX K-1").
+  - Locking: the scan holds the index lock (std::shared_mutex) exclusively for its full
+    duration. Match and Find take a shared lock, so they wait for a running scan (section 2.5)
+    and see one complete index. Find releases the lock before the file read.
+  - Find checks the file size and the last write time on each call (as DngColorProfileCache).
+    It fails when the file now holds another identity than the index records, with a message
+    that names the new identity. The failure leaves no cache entry.
+  - A folder error (open or walk) clears the index and the rejected count. errorText takes
+    std::error_code::message() through QString::fromLocal8Bit, because the Windows text is in
+    the ANSI code page. An empty URL clears the setting and the counts with no error.
+  - The busy indicator of section 2.1 is the spinning Rescan button, as on the LUT page. Browse
+    is the button of FolderPathField. The Rejected tile shows when its count is above 0.
+  - Log lines use the category alcedo.decode: one INFO line for each scan (counts and time), one
+    WARN line for each rejected file (path and reason) and each duplicate identity (both paths).
+  - Tests added to the plan list: MatchListsTheProfilesOfOneCameraByName,
+    FindEvictsTheLeastRecentlyUsedProfile, FindFailsWhenTheFileNowHoldsAnotherIdentity,
+    EmptyFolderPathClearsIndexWithoutError,
+    DcpProfileLibraryFolderTest.UserFolderScanCountsProfilesAndCamerasWithoutRejection
+    (ALCEDO_DCP_FOLDER), and the service tests MissingFolderShowsErrorAndKeepsStoredPath and
+    EmptyFolderClearsSettingAndCounts. The match tests are in the suite DcpCameraMatchTest of
+    the target DcpProfileLibraryTest.
+  - tests/image/dcp_test_file_writer.hpp got MinimalDcpProfile (identity, ColorMatrix1,
+    illuminant D65). The library tests and the service tests use it.
+Explicitly unimplemented items: none in C2. The editor list model and the render binding are
+  C4 and C5.
+Primary success call chain:
+  CameraProfileSettingsPanel FolderDialog.onAccepted -> page.useFolder(selectedFolder)
+    -> CameraProfileLibraryService::setRootFolder(url) -> QSettings write and sync
+       ("cameraProfiles/dcpLibraryRoot") -> RootChanged -> StartScan (scanning = true)
+    -> worker thread: DcpProfileLibrary::Scan(path): exclusive index lock
+       -> recursive_directory_iterator (skip_permission_denied), *.dcp without case
+       -> sorted paths -> ReadDcpProfileIdentity for each file -> entries, by_identity_,
+          by_camera_
+    -> QMetaObject::invokeMethod (queued) -> PublishScanResult -> ScanResultChanged,
+       ScanningChanged, ScanFinished -> CountTile Profiles and Cameras update
+  DcpProfileLibrary::Match(make, model) -> DcpCameraMatchKeys -> by_camera_ -> sorted identities
+  DcpProfileLibrary::Find(model, name) -> shared lock: by_identity_ -> file stamp
+    -> LRU hit, or the loader (ReadDcpCameraProfile) with no lock -> identity check -> LRU insert
+Primary failure and restore call chain:
+  Scan(path) -> directory iterator error (missing folder, removed drive)
+    -> index cleared, result.error = OS text -> PublishScanResult -> errorText -> AlertBadge
+       below the folder row; counts 0; the QSettings path stays; Rescan reads it again later.
+  Scan -> ReadDcpProfileIdentity throws -> rejected_count + 1, WARN log line, the scan continues.
+  Find -> file changed to another identity -> std::runtime_error that names the new identity, no
+    cache entry. Find -> file removed -> std::runtime_error with the path and the OS text.
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH=...             exit 0
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target DcpProfileLibraryTest
+    CameraProfileLibraryServiceTest DcpFileReaderTest --parallel 4                    exit 0
+  ctest --test-dir build/debug -R "DcpProfileLibraryTest|CameraProfileLibraryServiceTest|
+    DcpFileReaderTest" --output-on-failure                                            exit 0
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main
+    ApplicationModuleHostLifecycleTest SettingsAboutQmlTest AiModelsSettingsQmlTest
+    ShortcutSettingsQmlTest LutSettingsQmlTest MainQmlWorkflowTest --parallel 4       exit 0
+  ctest --test-dir build/debug -R "ApplicationModuleHostLifecycleTest|SettingsAboutQmlTest|
+    AiModelsSettingsQmlTest|ShortcutSettingsQmlTest|LutSettingsQmlTest" -j 1           exit 8
+    (1 failure, issue #585, see below)
+  Release measurement: win_release configured with -DALCEDO_BUILD_TESTS=ON only to build
+    DcpProfileLibraryTest, then configured again with -DALCEDO_BUILD_TESTS=OFF.
+Discovered / passed / failed / skipped counts:
+  New suites: 41 discovered, 39 passed, 0 failed, 2 skipped (the two folder tests without
+  ALCEDO_DCP_FOLDER): DcpProfileLibraryTest 13 (1 skipped), CameraProfileLibraryServiceTest 4,
+  DcpFileReaderTest 24 (1 skipped).
+  Settings UI and host suites: 33 discovered, 32 passed, 1 failed:
+  ShortcutSettingsQmlTest.RegistryRowsAppearInStableGroups expects no Comparison shortcut group
+  (open issue #585, present before this change).
+  MainQmlWorkflowTest.ProductionWindowLoadsAndRoutesCoreWorkspaceActions fails at line 136,
+  before the changed About index (open issue #722).
+Manual verification: Debug run of DcpProfileLibraryFolderTest with ALCEDO_DCP_FOLDER set to the
+  Lightroom Classic CameraProfiles\Camera folder: "2445 profiles, 357 cameras, 0 rejected,
+  1177 ms". The user has not checked the Settings page yet.
+Performance or resource evidence, if required: Release build, three runs of the same scan:
+  232 ms, 221 ms, 209 ms (2445 files, 357 cameras, 0 rejected). Target: below 2000 ms.
+Evidence path: build/tmp/dcp_camera_profile/c2/ (configure, build, and ctest logs), removed
+  after the pull request.
+Remaining defects or unavailable platforms: macOS build of the new files not run; the code uses
+  the C++20 standard library and Qt Core only. The Settings page layout needs the user check.
+```
 
 ### C3. Profile reference in the Develop payload and the effective profile in the render
 
@@ -1065,7 +1181,7 @@ run the same filter.
 | --- | --- | --- |
 | Read a valid DCP file of each byte order | Equal profile content and fingerprint | C1 |
 | Read an invalid file | Error with path and tag, no profile object | C1 |
-| Scan the user folder | 2445 profiles, 359 cameras, 0 rejected, below 2 seconds | C2 |
+| Scan the user folder | 2445 profiles, 357 cameras (359 `UniqueCameraModel` spellings), 0 rejected, below 2 seconds | C2 |
 | Match a camera | Exact normalized names only | C2 |
 | Select a profile | Camera pass renders again. The sensor result is reused. | C3, C4 |
 | Clear the selection | The render equals the render before the selection | C3 |

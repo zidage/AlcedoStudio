@@ -147,6 +147,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
         std::make_unique<alcedo::LutPackageService>(std::move(lut_package_options), *lut_library_);
   }
   RecordConstruction("LutPackageService", lut_packages_.get());
+  // Reads the DCP folder setting and starts the first scan on its worker (DCP plan C2).
+  camera_profiles_ = std::make_unique<alcedo::CameraProfileLibraryService>();
+  RecordConstruction("CameraProfileLibraryService", camera_profiles_.get());
+  camera_profiles_->Start();
   project_ = std::make_unique<ProjectModule>(this);
   RecordConstruction("ProjectModule", project_.get());
   // Every project's editor, thumbnail, and export executors resolve LUT references through
@@ -666,6 +670,9 @@ void ApplicationModuleHost::ShutdownModules() {
     if (lut_library_) {
       lut_library_->Shutdown();
     }
+    if (camera_profiles_) {
+      camera_profiles_->Shutdown();
+    }
     if (search_) {
       search_->CancelSearchRequests();
       search_->CancelSearchPreviewThumbnails();
@@ -776,6 +783,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(project_, "ProjectModule");
   ReportSurvivingProjectServices(project_services);
   RemovePendingWorkspace();
+  destroy(camera_profiles_, "CameraProfileLibraryService");
   destroy(lut_packages_, "LutPackageService");
   destroy(lut_library_, "LutLibraryService");
   destroy(updates_, "UpdateService");

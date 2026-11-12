@@ -14,6 +14,7 @@ class QQmlEngine;
 
 #include "app/ai_model_package_service.hpp"
 #include "app/ai_provider_profile.hpp"
+#include "app/camera_profile_library_service.hpp"
 #include "app/download_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/lut_library_service.hpp"
@@ -75,6 +76,9 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(alcedo::UpdateService* updates READ updates CONSTANT)
   Q_PROPERTY(alcedo::LutLibraryService* lutLibrary READ lut_library CONSTANT)
   Q_PROPERTY(alcedo::LutPackageService* lutPackages READ lut_packages CONSTANT)
+  /// DCP library folder, profile and camera counts, and scans (Settings > Camera Profiles).
+  Q_PROPERTY(
+      alcedo::CameraProfileLibraryService* cameraProfiles READ camera_profiles CONSTANT)
   /// Signed AI model package feed and the AI Mask model set install (AI Models plan, AM1).
   Q_PROPERTY(alcedo::AiModelPackageService* aiModelPackages READ ai_model_packages CONSTANT)
   /// LUT browser rows over lutLibrary; one instance shared by every LUT surface (plan 6.4).
@@ -158,6 +162,9 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto updates() -> alcedo::UpdateService* { return updates_.get(); }
   [[nodiscard]] auto lut_library() -> alcedo::LutLibraryService* { return lut_library_.get(); }
   [[nodiscard]] auto lut_packages() -> alcedo::LutPackageService* { return lut_packages_.get(); }
+  [[nodiscard]] auto camera_profiles() -> alcedo::CameraProfileLibraryService* {
+    return camera_profiles_.get();
+  }
   [[nodiscard]] auto ai_model_packages() -> alcedo::AiModelPackageService* {
     return ai_model_packages_.get();
   }
@@ -239,6 +246,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<alcedo::UpdateService>               updates_;
   std::unique_ptr<alcedo::LutLibraryService>           lut_library_;
   std::unique_ptr<alcedo::LutPackageService>           lut_packages_;
+  std::unique_ptr<alcedo::CameraProfileLibraryService> camera_profiles_;
   std::unique_ptr<ProjectModule>                       project_;
   std::unique_ptr<LibraryModule>                       library_;
   std::unique_ptr<FolderController>                    folders_;

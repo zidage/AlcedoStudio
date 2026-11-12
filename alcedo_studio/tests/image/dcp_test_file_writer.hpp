@@ -207,4 +207,27 @@ class DcpTestFileWriter {
   std::uint16_t                          magic_ = 0x4352;
 };
 
+/**
+ * @brief Smallest DCP file that the reader accepts: the identity, `ColorMatrix1`, and
+ * `CalibrationIlluminant1` = 21 (D65). @p matrix_scale changes the matrix, so that two files
+ * with one identity have different content.
+ */
+inline auto MinimalDcpProfile(const std::string& unique_camera_model,
+                              const std::string& profile_name, double matrix_scale = 1.0)
+    -> DcpTestFileWriter {
+  constexpr std::uint16_t kUniqueCameraModel      = 50708;
+  constexpr std::uint16_t kColorMatrix1           = 50721;
+  constexpr std::uint16_t kCalibrationIlluminant1 = 50778;
+  constexpr std::uint16_t kProfileName            = 50936;
+  std::vector<double>     matrix{0.6722, -0.0635, -0.0963, -0.4287, 1.246,
+                             0.2028, -0.0908, 0.2162,  0.5668};
+  for (double& value : matrix) value *= matrix_scale;
+  DcpTestFileWriter writer;
+  writer.Ascii(kUniqueCameraModel, unique_camera_model)
+      .Ascii(kProfileName, profile_name)
+      .SRationals(kColorMatrix1, matrix)
+      .Shorts(kCalibrationIlluminant1, {21});
+  return writer;
+}
+
 }  // namespace alcedo::test
