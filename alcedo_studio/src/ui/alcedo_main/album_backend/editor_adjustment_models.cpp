@@ -31,7 +31,6 @@
 #include "ui/alcedo_main/album_backend/editor_lut_encoding_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_parameter_catalog_adapter.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_item.hpp"
-#include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
@@ -558,7 +557,6 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorAdjustmentEnumModel>("Alcedo.Main", 1, 0, "EditorAdjustmentEnumModel");
   qmlRegisterType<EditorAdjustmentToggleModel>("Alcedo.Main", 1, 0, "EditorAdjustmentToggleModel");
   qmlRegisterType<EditorToneCurveModel>("Alcedo.Main", 1, 0, "EditorToneCurveModel");
-  qmlRegisterType<EditorToneCurveItem>("Alcedo.Main", 1, 0, "EditorToneCurveItem");
   qmlRegisterType<EditorColorTempModel>("Alcedo.Main", 1, 0, "EditorColorTempModel");
   qmlRegisterType<EditorGradeWhiteBalanceModel>("Alcedo.Main", 1, 0,
                                                 "EditorGradeWhiteBalanceModel");

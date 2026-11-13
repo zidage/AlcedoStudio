@@ -95,23 +95,25 @@ auto PlotPolylineLayer::PointerPress(const PlotViewTransform& view, const PlotPo
   if (!hit) {
     return false;
   }
-  pressed_ = true;
+  pressed_      = true;
+  press_offset_ = view.ToItem(*hit) - event.item;
   emit pressed(*hit, static_cast<int>(event.modifiers));
   return true;
 }
 
-void PlotPolylineLayer::PointerMove(const PlotViewTransform&, const PlotPointerEvent& event) {
+void PlotPolylineLayer::PointerMove(const PlotViewTransform& view, const PlotPointerEvent& event) {
   if (pressed_) {
-    emit moved(event.data, static_cast<int>(event.modifiers));
+    emit moved(view.ToData(event.item + press_offset_), static_cast<int>(event.modifiers));
   }
 }
 
-void PlotPolylineLayer::PointerRelease(const PlotViewTransform&, const PlotPointerEvent& event) {
+void PlotPolylineLayer::PointerRelease(const PlotViewTransform& view,
+                                       const PlotPointerEvent&  event) {
   if (!pressed_) {
     return;
   }
   pressed_ = false;
-  emit released(event.data, static_cast<int>(event.modifiers));
+  emit released(view.ToData(event.item + press_offset_), static_cast<int>(event.modifiers));
 }
 
 auto PlotPolylineLayer::Hover(const PlotViewTransform& view, const PlotPointerEvent& event)

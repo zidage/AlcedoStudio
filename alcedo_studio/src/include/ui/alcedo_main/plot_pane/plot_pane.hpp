@@ -32,8 +32,10 @@ namespace alcedo::ui {
  *
  * Input: pointer and key events go to the top visible, interactive layer that accepts them, in
  * data coordinates. The layer that accepts a press keeps the pointer grab until the release. A
- * press that no layer accepts pans a zoomed view. Ctrl + wheel zooms at the pointer; a plain
- * wheel event stays unaccepted, so a parent Flickable scrolls.
+ * press that no layer accepts emits @ref backgroundPressed and pans a zoomed view. Ctrl + wheel
+ * zooms at the pointer; a plain wheel event stays unaccepted, so a parent Flickable scrolls.
+ * @ref pointerInside and @ref pointerPosition follow the pointer over the plot rectangle (hover,
+ * and the moves of a press).
  *
  * Each pane owns its view transform and its layer list, so panes in one window are independent.
  * A layer belongs to one pane.
@@ -58,6 +60,10 @@ class PlotPane : public QQuickItem {
   Q_PROPERTY(QColor surfaceColor READ surface_color WRITE set_surface_color NOTIFY colorsChanged)
   Q_PROPERTY(qreal wheelZoomStep READ wheel_zoom_step WRITE set_wheel_zoom_step NOTIFY
                  wheelZoomStepChanged)
+  /// True while the pointer is over the plot rectangle.
+  Q_PROPERTY(bool pointerInside READ pointer_inside NOTIFY pointerChanged)
+  /// Data position of the pointer; valid while @ref pointerInside is true.
+  Q_PROPERTY(QPointF pointerPosition READ pointer_position NOTIFY pointerChanged)
 
  public:
   explicit PlotPane(QQuickItem* parent = nullptr);
@@ -105,6 +111,10 @@ class PlotPane : public QQuickItem {
   [[nodiscard]] auto  wheel_zoom_step() const -> qreal { return wheel_zoom_step_; }
   void                set_wheel_zoom_step(qreal step);
 
+  // Pointer.
+  [[nodiscard]] auto  pointer_inside() const -> bool { return pointer_inside_; }
+  [[nodiscard]] auto  pointer_position() const -> QPointF;
+
   /// Builds the layers that changed since their last build. `updatePolish` calls it; tests call
   /// it without a window.
   void                BuildDirtyLayers();
@@ -122,6 +132,9 @@ class PlotPane : public QQuickItem {
   void insetsChanged();
   void colorsChanged();
   void wheelZoomStepChanged();
+  void pointerChanged();
+  /// A press of the left button that no layer accepted, at @p position (data coordinates).
+  void backgroundPressed(QPointF position, int modifiers);
 
  protected:
   void updatePolish() override;
@@ -165,6 +178,9 @@ class PlotPane : public QQuickItem {
   void               SetHoverLayer(PlotLayer* layer);
   void               UpdateCursor();
   void               EndPointerGrab();
+  /// Sets the pointer to @p item (item coordinates), or to outside the plot when @p inside is
+  /// false.
+  void               SetPointer(const QPointF& item, bool inside);
 
   static void        AppendLayer(QQmlListProperty<PlotLayer>* list, PlotLayer* layer);
   static auto        LayerCount(QQmlListProperty<PlotLayer>* list) -> qsizetype;
@@ -190,6 +206,9 @@ class PlotPane : public QQuickItem {
   // Default: AppTheme plotSurfaceColor (dark theme).
   QColor                                  surface_color_    = QColor(0x16, 0x16, 0x16);
   qreal                                   wheel_zoom_step_  = 1.25;
+  // Item position of the pointer; the data position follows the view.
+  QPointF                                 pointer_item_{};
+  bool                                    pointer_inside_ = false;
 };
 
 }  // namespace alcedo::ui

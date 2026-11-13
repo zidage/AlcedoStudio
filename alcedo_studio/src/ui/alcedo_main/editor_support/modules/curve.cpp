@@ -105,6 +105,25 @@ auto SolveCurveSpline(const std::vector<QPointF>& points) -> tone_curve::ToneCur
   return tone_curve::SolveToneCurveSpline(curve_points);
 }
 
+auto SampleCurveLine(const tone_curve::ToneCurveSpline& spline) -> QList<QPointF> {
+  QList<QPointF> line;
+  line.reserve(kCurveLineSteps + 1 + static_cast<qsizetype>(spline.count));
+  std::uint32_t knot = 0;
+  for (int step = 0; step <= kCurveLineSteps; ++step) {
+    const double x = static_cast<double>(step) / kCurveLineSteps;
+    // The control points between the previous step and this one, so the line passes through them.
+    while (knot < spline.count && static_cast<double>(spline.x[knot]) < x) {
+      const double knot_x = spline.x[knot];
+      if (line.isEmpty() || knot_x > line.back().x()) {
+        line.push_back(QPointF(knot_x, spline.y[knot]));
+      }
+      ++knot;
+    }
+    line.push_back(QPointF(x, tone_curve::EvaluateToneCurveSpline(spline, static_cast<float>(x))));
+  }
+  return line;
+}
+
 auto CurveControlPointsToParams(const std::vector<QPointF>& points) -> nlohmann::json {
   const auto     normalized = NormalizeCurveControlPoints(points);
   nlohmann::json pts        = nlohmann::json::array();

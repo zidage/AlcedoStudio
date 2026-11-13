@@ -1155,6 +1155,30 @@ auto AppTheme::plotHandleOutlineWidth() const -> qreal { return 1.0; }
 
 auto AppTheme::plotHitRadius() const -> qreal { return 8.0; }
 
+// Curves of the color channels: stronger than the histogram tints, so a line reads over its own
+// channel of the histogram.
+auto AppTheme::plotChannelRedColor() const -> QColor {
+  return Blend(QColor(0xE8, 0x66, 0x66), textColor(), 0.12);
+}
+
+auto AppTheme::plotChannelGreenColor() const -> QColor {
+  return Blend(QColor(0x74, 0xC2, 0x66), textColor(), 0.12);
+}
+
+auto AppTheme::plotChannelBlueColor() const -> QColor {
+  return Blend(QColor(0x66, 0xA0, 0xE8), textColor(), 0.12);
+}
+
+auto AppTheme::plotPointerLineColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.45);
+}
+
+auto AppTheme::plotInactiveLineOpacity() const -> qreal { return 0.4; }
+
+auto AppTheme::plotCurveHitRadius() const -> qreal { return 6.0; }
+
+auto AppTheme::plotChannelMarkSize() const -> qreal { return 4.0; }
+
 auto AppTheme::dateGraphLevel0Color() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.22);
 }

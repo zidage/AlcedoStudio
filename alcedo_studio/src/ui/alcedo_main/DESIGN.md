@@ -890,6 +890,45 @@ sizes as properties; bind them to the tokens below.
   zoomed view. Cursors: pointing hand over a handle or a line, closed hand
   while dragging, open hand over an empty area of a zoomed view.
 
+### Tone Curve section
+
+The Tone Curve section of the Tone panel (`EditorToneCurveSection.qml`) is a
+`CollapsibleSection` with the header actions Histogram (toggle,
+`histogram.svg`), Fit (toggle, `fit-range.svg`), and Reset (`reset.svg`), all
+`IconActionButton` compact; a selected toggle uses the selected fill. There is
+no caption sentence.
+
+- **Row 1.** Channel selector `RGB`, `R`, `G`, `B` (`SegmentedCardSwitcher`).
+  A segment of a curve that is not the identity shows a `plotChannelMarkSize`
+  dot before its title, in the ink color of the segment. The user asked for
+  this dot in #890; it is the only status dot of the editor panels.
+- **Plot.** A square `PlotPane` with `plotSurfaceColor`. Grid every 2 EV from
+  18% grey with the strong line at 18% grey; signed EV labels under the plot
+  only (`fontSizeCaption`, `plotLabelColor`). The histogram of the curve input
+  is behind the curves. The dashed identity line uses
+  `plotReferenceLineColor`, 4 px dashes with 4 px gaps. The curve of the
+  selected channel is 1.25 px in `plotLineColor` (RGB) or its channel color;
+  the curves of the other channels that are not the identity show in their
+  colors at `plotInactiveLineOpacity`. Handles are the plot pane handles.
+- **Pointer.** Over the plot, a 1 px vertical line in `plotPointerLineColor`
+  follows the pointer, and `In` and `Out` with their EV values show at the top
+  left of the plot in `fontSizeCaption` (`plotLabelColor` names,
+  `textColor` values).
+- **Row 2.** `In` and `Out` fields of the selected point: a plain `TextInput`
+  in a hairline box (`bgBaseColor`, `controlRadiusSmall`, 1 px `dividerColor`,
+  `textMutedColor` border on focus), 4 decimals, each followed by its EV value
+  in `textMutedColor`.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `plotChannelRedColor` | `#E86666` to `textColor` at 12 percent | Red curve |
+| `plotChannelGreenColor` | `#74C266` to `textColor` at 12 percent | Green curve |
+| `plotChannelBlueColor` | `#66A0E8` to `textColor` at 12 percent | Blue curve |
+| `plotPointerLineColor` | `bgBaseColor` to `textMutedColor` at 45 percent | Vertical line at the pointer |
+| `plotInactiveLineOpacity` | 0.4 | Opacity of the curves of the other channels |
+| `plotCurveHitRadius` | 6 px | Pointer distance that adds a point on the curve line |
+| `plotChannelMarkSize` | 4 px | Dot of a changed channel in the channel selector |
+
 ---
 
 ## Nodes panel and graph nodes

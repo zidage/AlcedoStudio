@@ -20,8 +20,9 @@ namespace alcedo::ui {
 /**
  * @brief QML-facing owner of the histogram at the input of the Curve adjustment (issue #888).
  *
- * The Tone Curve section sets @ref active (section open and its Histogram toggle on) and
- * @ref gradeNodeId (the Color Grade that the section edits). While both are set, @ref request
+ * The Tone Curve section sets @ref active (section open and its Histogram toggle on).
+ * EditorSessionController sets @ref gradeNodeId to the Color Grade whose curve the panel
+ * projection shows (the Grade that the section edits). While both are set, @ref request
  * gives the request that the editor session shows (EditorSessionController calls
  * IEditorSessionBackend::ShowCurveInputHistogram on @ref RequestChanged), so the editor renders of
  * the whole frame count the curve input of that Grade. Otherwise there is no request and no

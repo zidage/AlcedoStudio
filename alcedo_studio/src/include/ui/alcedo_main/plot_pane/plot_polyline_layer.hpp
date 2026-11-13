@@ -18,8 +18,9 @@ namespace alcedo::ui {
  * @brief Thin antialiased line through data points, solid or dashed, clipped to the plot.
  *
  * When interactive, a press within @ref hitRadius item pixels of the line starts an interaction:
- * @ref pressed gives the nearest point of the line, @ref moved and @ref released give the pointer
- * position, all in data coordinates.
+ * @ref pressed gives the nearest point of the line, @ref moved and @ref released give the position
+ * of that line point as it follows the pointer (the press offset kept, so it moves 1:1 without a
+ * jump), all in data coordinates.
  */
 class PlotPolylineLayer : public PlotLayer {
   Q_OBJECT
@@ -78,6 +79,8 @@ class PlotPolylineLayer : public PlotLayer {
   qreal          gap_length_  = 0.0;
   qreal          hit_radius_  = 8.0;
   bool           pressed_     = false;
+  // Item offset from the pointer to the pressed point of the line.
+  QPointF        press_offset_{};
 };
 
 }  // namespace alcedo::ui
