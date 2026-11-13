@@ -3,11 +3,11 @@
 Date: 2026-11-12
 
 Status: **Study complete; design approved** (2026-11-12, with the entry reset of section 6.5 from
-the user). Phase T1 #862 is complete (2026-11-12, section 8). Phase T2 #863 is complete on CUDA
-and OpenCL (2026-11-12, section 8); its Metal run is open. Phase T3 #864 is implemented
-(2026-11-12, section 8); its user check on two camera makes is open. The highlight shoulder of
-section 6.6 replaces the clip at raw white (2026-11-12, after the user saw clipped highlights at a
-high exposure). Tracking issue #851.
+the user). Phase T1 #862 is complete (2026-11-12, section 8). Phase T2 #863 is complete on CUDA,
+OpenCL, and Metal (2026-11-12, section 8; Metal with C7). Phase T3 #864 is implemented
+(2026-11-12, section 8); its user check with ACES 2.0 is open (the C7 review covered OpenDRT on
+three camera makes). The highlight shoulder of section 6.6 replaces the clip at raw white
+(2026-11-12, after the user saw clipped highlights at a high exposure). Tracking issue #851.
 
 Parent: [DCP Camera Profile Plan](dcp_camera_profile_plan.md). This study replaces decision P-5 of
 that plan ("`ProfileToneCurve` is read past and not applied") with the profile tone stage of
@@ -453,7 +453,7 @@ color transform and camera profile tests of `GpuDagModelGraphTest` pass.
 
 #### T2 completion (2026-11-12)
 
-Status: **complete on CUDA and OpenCL; Metal written, compile and run pending** (see the Metal
+Status: **complete** on CUDA, OpenCL, and Metal (Metal run with C7; see the Metal
 item below). Branch `feature/dcp-profile-tone-render`, stacked on the T1 PR #865.
 
 Implementation:
@@ -524,6 +524,11 @@ reference).
 Metal: `drt.metal`, `metal_drt_pass.mm`, and `MetalProfileToneFixture` are written but not compiled
 on this date; the Mac build host did not resolve on the network. The Metal run of the three fixture
 tests stays open for C7.
+
+Metal run (2026-11-12, with C7, branch `feature/dcp-profile-backend-verification`): the macOS
+Debug build of `GpuDagMetalDrtTest` and `GpuDagMetalDevelopTest` compiles `drt.metal` and
+`metal_drt_pass.mm` (exit 0). `MetalProfileToneFixture`: 3 discovered, 3 passed (neutral ramp,
+color patches, documents without the stage).
 
 Primary call chains:
 
@@ -639,7 +644,7 @@ this change, #555), `EditorPipelineCommandServiceTest` 24/24, `EditorPanelProjec
 LOC: `editor_history_mutation.cpp` holds 1002 lines before T3 and 1009 after; the dispatch of the
 reset rules moved to `EntryResetWrites` to keep the mutation a router. The split is #867.
 
-Open: the user check on two camera makes with ACES 2.0 and OpenDRT. The Metal run of T2 joins C7.
+Open: the user check on two camera makes with ACES 2.0 and OpenDRT. The Metal run of T2 passed with C7.
 
 #### Highlight shoulder (2026-11-12)
 

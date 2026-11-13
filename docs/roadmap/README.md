@@ -17,6 +17,9 @@ use their own top-level category.
 - [CUDA DemosaicNet Performance Follow-up](alcedo_studio/raw-processing/demosaicnet/cuda_demosaicnet_performance_next.md)
 - [OpenCL NN Forward DemosaicNet Migration and Performance Recovery](alcedo_studio/raw-processing/demosaicnet/opencl_nn_forward_demosaicnet_plan.md)
 - [Metal MPSGraph DemosaicNet Plan](alcedo_studio/raw-processing/demosaicnet/metal_nn_forward_demosaicnet_plan.md)
+- [DCP Camera Profile Plan](alcedo_studio/raw-processing/dcp_camera_profile_plan.md): external DCP
+  profiles from a user folder; shipped behavior in [Embedded DNG color profiles](../dng_color_profiles.md)
+- [DCP Profile Tone Curve Study](alcedo_studio/raw-processing/dcp_profile_tone_curve_study.md)
 
 ## Alcedo Studio — Storage
 
@@ -38,7 +41,6 @@ use their own top-level category.
 - [Film Simulation Explained (Chinese; explanatory document)](alcedo_studio/edit/film_simulation/film_simulation_explained.md):
   the spectral film model, its main flow, the GPU implementation, and a comparison with spektrafilm
 - [Film Grain Format and Stock Granularity Plan](alcedo_studio/edit/film_grain_format_and_stock_plan.md)
-- [DCP Camera Profile Plan](alcedo_studio/raw-processing/dcp_camera_profile_plan.md)
 
 ## Alcedo Studio — UI
 

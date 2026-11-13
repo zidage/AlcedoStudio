@@ -49,6 +49,13 @@ profile reference:
 | --- | --- |
 | `Image.metadata` → `RawRuntimeColorContext.DngProfileFingerprint` | 16 hexadecimal digits, or null |
 | Develop JSON `camera_profile.dng_profile_fingerprint` (`PipelineParam`, `ImageEditState` checkpoint, `PipelineRoot` document) | 16 hexadecimal digits, or null |
+| Develop JSON `camera_profile_file` (same locations), present only for a selected DCP profile | `{"camera_model", "profile_name", "fingerprint"}`, and `"profile_tone": false` when the Tone Curve switch is off |
+| `QSettings` key `cameraProfiles/dcpLibraryRoot` | DCP folder path |
+
+A DCP reference holds identity strings and the fingerprint of the file content. The project
+database, the project package, and exported files hold no matrix and no table of a DCP file. A
+document without a DCP selection has no `camera_profile_file` key, so its JSON and root id stay
+as before the DCP support.
 
 The fingerprint is the FNV-1a hash of the complete profile content. It is the profile
 input to the root id hash and to the camera-pass cache identity. Changing only the
@@ -74,13 +81,56 @@ The profile tables are runtime data:
 - When the source file has another profile than the stored fingerprint, the source file
   wins, and one warning is logged. The cache identity changes with the fingerprint.
 
-## DCP camera profiles and the profile tone stage
+## External DCP camera profiles
 
-A DCP file from the user's DCP folder can replace the import profile of a RAW or DNG image
+A DCP file (DNG Camera Profile file) from a folder that the user supplies can replace the import
+profile of a RAW or DNG image
 ([DCP Camera Profile Plan](roadmap/alcedo_studio/raw-processing/dcp_camera_profile_plan.md)).
-Its matrices, HueSatMap, and LookTable take the camera pass above. The project stores the
-reference `camera_profile_file` {camera model, profile name, fingerprint}; the tables stay in
-memory.
+Alcedo Studio ships no DCP files. An example folder is `Resources/CameraProfiles/Camera` of a
+Lightroom Classic installation.
+
+### Library folder and camera match
+
+**Settings > Camera Profiles** holds one DCP folder (setting key `cameraProfiles/dcpLibraryRoot`).
+`CameraProfileLibraryService` scans the folder on one worker task and publishes the complete index
+of `DcpProfileLibrary` in one step. The scan reads only the identity of each file:
+`UniqueCameraModel` and `ProfileName`. A file that fails to read counts as rejected, and the log
+holds its path and reason. A full profile read (matrices and tables) happens when a document binds
+the profile; the library keeps the last 32 loaded profiles.
+
+A profile belongs to the camera of the image when the compact key of its `UniqueCameraModel`
+(lower-case letters and digits) equals the compact key of the image model, or of the make word
+and the model. The make word comes from an alias table (`NIKON CORPORATION` gives `Nikon`). The
+match is exact: a profile of a similar model never matches.
+
+### Selection and render
+
+The editor section **Camera Profile**, above White Balance, lists the default entry and the
+matched profiles in name order. The default entry is **Built-in** for a RAW file and **Embedded**
+for a DNG file with an embedded profile; it renders the import profile. A selection is one settled
+edit of the Develop field `camera_profile_file`, so Undo, Redo, and version checkout restore it.
+
+With a selected profile, the camera pass takes `ColorMatrix1/2`, `ForwardMatrix1/2`, the two
+illuminant CCT values, the HueSatMap, the LookTable, their encodings, and `BaselineExposureOffset`
+from the DCP file. It takes `AsShotNeutral` (or `cam_mul`) from the image. For a DNG source it also
+takes `AnalogBalance` and `BaselineExposure`, and `CameraCalibration1/2` when the
+`CameraCalibrationSignature` of the source equals the `ProfileCalibrationSignature` of the DCP
+file (identity calibration otherwise). A selection solves the as-shot white balance again from
+the DCP matrices; custom temperature and tint keep their numbers. The selection changes only the
+camera pass: the render reuses the sensor result.
+
+The render path is the table evaluation of the embedded profile: one implementation for CUDA,
+OpenCL, and Metal.
+
+### Binding and errors
+
+`BindDcpCameraProfile` resolves a stored reference through the library in every document build
+(editor, thumbnail, export, comparison, and analysis renders). A reference that the library cannot
+resolve stays unbound, and its render fails with `ColorTransformError::UnboundCameraProfileFile`
+and the message `camera profile "<name>" for "<camera>" is not in the DCP folder`. The project
+still opens, the combo shows the stored name in the warning color, and the user can select another
+entry. When the library file of the identity has another fingerprint, the library file renders and
+the reference takes its fingerprint.
 
 The `ProfileToneCurve` of a DCP profile (tag 50940) applies through the profile tone stage
 ([DCP Profile Tone Curve Study](roadmap/alcedo_studio/raw-processing/dcp_profile_tone_curve_study.md),
@@ -119,7 +169,10 @@ This support covers the single/dual-illuminant color path described above, from 
 profile or a DCP file. Alcedo renders through its own output transform; a DCP tone curve enters
 through the profile tone stage. Outside this scope: triple-illuminant profiles, the
 `ProfileToneCurve` of an embedded DNG profile, the ACR3 default curve, and Adobe process-version
-rendering. DNG decoding and opcode support remain separate from this color-profile change.
+rendering. A DCP file with `ColorMatrix3`, `RGBTables`, or a `ReductionMatrix` fails to load with
+an error that names the tag. The DCP reference is outside adjustment transfer, copy and paste, and
+`alcedo-cli` parameters, because a reference belongs to one camera model. DNG decoding and opcode
+support remain separate from this color-profile change.
 
 `DngColorProfileTest` checks interpolation, encoding, calibration, invalid data,
 fingerprint persistence, unbound references, and profile binding on clone and JSON load.
@@ -133,6 +186,18 @@ reconstruction. Private camera fixtures
 are optional and produce an explicit skip when absent. Set `ALCEDO_DNG_RENDER_OUTPUT`
 to an existing directory under `build/tmp/` to save diagnostic previews; the render
 itself still runs at full resolution.
+
+The same three suites hold `DcpProfileMatchesScalarReference`. It renders a CI Sony ARW file
+at full resolution with the import profile, selects a synthetic DCP file (two illuminants,
+forward matrices, two HueSatMaps, a LookTable with sRGB value encoding, an exposure offset, and a
+tone curve), and renders again on the same device. The second render reuses the sensor result
+and runs the camera pass once; its samples equal scalar `DngApplyColorProfile` on the DCP tables
+within 3e-4 in ACEScc. Clearing the selection renders the import pixels again.
+`DcpFileReaderTest`, `DcpProfileLibraryTest`, `DcpCameraProfileRenderTest`,
+`PipelineDcpProfileBindingTest`, and `EditorCameraProfileListModelTest` check the reader, the
+library scan and match, the effective profile, the binding on each load path, and the editor
+list. Test DCP files come from `tests/image/dcp_test_file_writer.hpp`; no vendor profile bytes
+enter the repository.
 
 `DngToneCurveTest`, `ProfileToneReferenceTest`, and the `ProfileTone` fixtures of the CUDA,
 OpenCL, and Metal DRT suites check the curve, the stage, and its GPU renders.
