@@ -118,7 +118,7 @@ void ApplyColorGradeWrite(IOperatorModel& model, std::string_view field,
     if (typed == nullptr) {
       throw std::invalid_argument("Adjustment Model type does not match field curve");
     }
-    typed->Apply(RequireWrite<EditorCurveWrite>(write, field));
+    typed->ApplyUpdate(RequireWrite<EditorCurveWrite>(write, field));
     return;
   }
   if (field == "grade_white_balance") {
