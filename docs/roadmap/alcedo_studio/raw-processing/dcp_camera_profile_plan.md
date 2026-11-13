@@ -5,8 +5,9 @@ Date: 2026-11-12
 Status: **C1 complete** (2026-11-12, reader and profile value). **C2 implemented** (2026-11-12,
 library index, camera match, folder setting, Settings page); the user check of the Settings page
 is open. **C3 complete** (2026-11-12, Develop reference and effective profile in the render).
-**C4 complete** (2026-11-12, Develop field, history, and binding on each load path). C5 to C7
-planned.
+**C4 complete** (2026-11-12, Develop field, history, and binding on each load path). **C5
+implemented** (2026-11-12, editor section and list model); the user check of the section is open.
+C6 and C7 planned.
 
 Parent: [Roadmap](../../roadmap.md).
 
@@ -1307,13 +1308,152 @@ ctest --test-dir build/debug -R "EditorCameraProfileListModelTest" --output-on-f
 
 **Exit criteria.**
 
-- [ ] The model test passes.
+- [x] The model test passes.
 - [ ] The user confirms the section on one RAW file of each of two camera makes.
-- [ ] No QML warning for the new files in a run with `QT_FORCE_STDERR_LOGGING=1`.
+- [x] No QML warning for the new files in a run with `QT_FORCE_STDERR_LOGGING=1`.
 
 **Expected diff.** 900 to 1300 lines.
 
-**Completion record.** Empty.
+**Completion record.**
+
+```text
+Phase / date / status: C5 / 2026-11-12 / implemented; the user check of the section on RAW files of
+  two camera makes is open
+Source revision and branch: 4597df0f6 (C4, branch feature/dcp-profile-field-history-binding),
+  work branch feature/dcp-profile-editor-section stacked on the C4 pull request
+Actual changed modules: ui/alcedo_main/album_backend/ (new EditorCameraProfileListModel, the enum
+  model submit hook, session camera identity, presentation key), ui/alcedo_main/qml/ (new
+  EditorCameraProfileSection.qml, EditorRawDecodePanel.qml, AdjustmentCombo.qml warning state),
+  app/ (camera identity of the EXIF display read, embedded_default of the projection),
+  ui/alcedo_main/i18n/ (strings added by hand), tests/ui/, tests/app/
+Implemented behavior:
+  - include/ui/alcedo_main/album_backend/editor_camera_profile_list_model.hpp and its .cpp:
+    EditorCameraProfileListModel. Rows: the default entry ("Built-in", or "Embedded"), then
+    DcpProfileLibrary::Match(cameraMake, cameraModel) in name order, then one isMissing row for a
+    stored reference that the match does not hold. A raster document has no rows. The matched
+    profiles are read on a camera change and on CameraProfileLibraryService::ScanFinished, never
+    on a selection. loadFromSnapshot sets the current row from the projection; the model keeps no
+    selection. currentUnresolved is true for a stored reference that is not bound.
+  - A selection submits {"camera_model", "profile_name"} (the default entry: null) through
+    ParseEditorParameterWrite, so the C4 write form resolves the identity in
+    DcpProfileLibrary::Shared(). A failed parse or a rejected submit logs one alcedo.editor
+    warning with the reason and returns the combo to the row of the stored reference.
+  - ui/alcedo_main/qml/EditorCameraProfileSection.qml: CollapsibleSection "Camera Profile" with
+    AdjustmentCombo (warning: currentUnresolved, text in appTheme.dangerColor) and the neutral
+    button "Choose Folder" (DialogActionButton kind normal) while no DCP folder is set; it opens
+    a FolderDialog and calls CameraProfileLibraryService::setRootFolder, as the Settings page
+    does. The combo is disabled while a scan runs. Registered in ALCEDO_MAIN_QML_FILES.
+  - EditorRawDecodePanel.qml hosts the section above EditorWhiteBalanceSection with
+    visible: !root.rasterInput; loadFromSnapshot passes the snapshot to the section.
+  - EditorSessionController: properties cameraMake and cameraModel (NOTIFY ImageExifChanged),
+    set by ApplyImageIdentity (renamed from ApplyExifLensIdentity) from the EXIF display read.
+  - app/editor_adjustment_context.cpp: ReadEditorImageExifDisplay(const Image&) copies
+    camera_make_ and camera_model_ of the image RAW color context.
+  - app/editor_panel_projection.cpp: EditorPanelCameraProfileFileValue::embedded_default =
+    DevelopParamsModel::DngProfile().IsReferenced(); the presentation adds the QML key
+    "embedded_default".
+  - EditorAdjustmentEnumModel: selectIndex and reset call the protected virtual
+    submitSelection(); the default keeps the two earlier branches (paramsBuilder or
+    selectionWrite).
+  - i18n: contexts EditorCameraProfileSection and alcedo::ui::EditorCameraProfileListModel in
+    alcedo_main_en.ts and alcedo_main_zh_CN.ts, written by hand (no lupdate run).
+Detail decisions made in this phase:
+  - The model derives from EditorAdjustmentEnumModel, not QAbstractListModel. AdjustmentCombo and
+    the settled submit (canEdit check, Release seal) take an enum model, and its entries are a
+    QVariantList of maps; a list model would need a second object for the combo or a copy of the
+    rows. The planned roles are the keys of each entry.
+  - Camera identity source: the RAW color context of the Image (Image::GetRawColorContext), read
+    through the existing EXIF display read of the session on each image change. The image root
+    records the same context: the import encodes the root from Image::GetRawColorContext
+    (import_service.cpp). The session holds no root state, so this needs no new path through
+    the history port.
+  - The default label comes from the Develop payload (embedded_default of the projection), the
+    same rule that the history row uses (C4): the payload names the profile that the default
+    entry renders.
+  - The match is not read while a scan runs, because DcpProfileLibrary::Match waits for the scan
+    and the GUI thread must not wait. ScanFinished reads it again.
+  - A missing row is a stored identity that the matched rows do not hold. A stored identity that
+    the rows hold but that is not bound (its file could not be read at load) selects its row and
+    shows the warning color.
+  - The C4 failure call chain named "the current command error path"; submitPatch drops a parse
+    error without a session error, so the model logs the reason and returns the combo to the
+    stored row itself.
+Explicitly unimplemented items: none in C5. DNG source calibration is C6; the GPU comparison
+  and the user review are C7.
+Primary success call chain:
+  Editor opens a RAW file of a Canon EOS R6
+    -> EditorSessionController::RefreshImageExifDisplay -> ReadEditorImageExifDisplay(Image)
+       -> ApplyImageIdentity: cameraMake "Canon", cameraModel "Canon EOS R6"
+    -> EditorCameraProfileListModel::setCameraModel -> ReadMatchedProfiles
+       -> DcpProfileLibrary::Match -> ComposeEntries: [Built-in, Adobe Color, Camera Standard]
+    -> EditorRawDecodePanel.loadFromSnapshot -> section.loadFromSnapshot
+       -> model.loadFromSnapshot(camera_profile_file projection) -> current row 0
+  User selects "Camera Standard"
+    -> AdjustmentCombo onActivated -> EditorAdjustmentEnumModel::selectIndex
+    -> EditorCameraProfileListModel::submitSelection
+       -> ParseEditorParameterWrite("camera_profile_file", {camera_model, profile_name})
+       -> FindSelectableDcpCameraProfile -> DevelopCameraProfileFileUpdate{profile}
+    -> submitNow -> EditorSessionController::submitWrite(settled) -> C4 success chain
+    -> snapshot publish -> loadFromSnapshot -> current row = the stored reference
+  Undo, Redo, checkout, image change: the next snapshot -> loadFromSnapshot -> current row (and
+    the missing row) follow the stored reference; an image change also reads the match again
+Primary failure call chain:
+  Selection of a profile whose file was removed after the scan
+    -> ParseEditorParameterWrite fails (DcpProfileLibrary::Find read error)
+    -> no write, no history entry -> alcedo.editor warning "[Camera Profile] selection <name> is
+       not applied: <reason>" -> setCurrentIndex(StoredRow()) -> the combo shows the stored row
+  Stored reference that the folder does not hold (reopen without the file)
+    -> projection: selected, resolved false -> model adds the isMissing row with the stored name
+       -> currentUnresolved -> AdjustmentCombo text in dangerColor; the render fails with
+       UnboundCameraProfileFile (C3, C4)
+    -> the default entry clears the reference (C4 clear edit)
+  No DCP folder
+    -> CameraProfileLibraryService::rootPath empty -> rows: the default entry only; Choose Folder
+       visible -> FolderDialog -> setRootFolder -> scan -> ScanFinished -> rows read again
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target
+    EditorCameraProfileListModelTest EditorAdjustmentModelTest EditorPanelProjectionTest
+    EditorRawDecodePanelQmlTest --parallel 6                                          exit 0
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main --parallel 6
+                                                                                  exit 0
+  ctest --test-dir build/debug -R "EditorCameraProfileListModelTest|EditorAdjustmentModelTest|
+    EditorPanelProjectionTest|EditorRawDecodePanelQmlTest" --output-on-failure      exit 0
+    (QT_QPA_PLATFORM=offscreen; repeated after clang-format, exit 0)
+  QT_FORCE_STDERR_LOGGING=1 EditorRawDecodePanelQmlTest.exe
+    --gtest_filter=*CameraProfileSection*:*RasterImage*:*ControlsEnabled*          exit 0
+    No message names EditorCameraProfileSection.qml, AdjustmentCombo.qml, or
+    EditorRawDecodePanel.qml. The six lines of the run name EditorMasksContextPanel.qml,
+    EditorScopePanel.qml, EditorAdjustmentHeader.qml, and EditorAdjustmentStack.qml; the test
+    session fake lacks those properties, and the lines appear in the earlier tests too.
+  ctest --test-dir build/debug -R "EditorAdjustmentControlQmlTest|LutLibraryModelTest"
+    (caller suites of AdjustmentCombo and EditorAdjustmentEnumModel)                exit 0
+Discovered / passed / failed / skipped counts:
+  52 discovered, 52 passed, 0 failed, 0 skipped: EditorCameraProfileListModelTest 11,
+  EditorAdjustmentModelTest 19, EditorPanelProjectionTest 13, EditorRawDecodePanelQmlTest 9.
+  EditorCameraProfileListModelTest: RowsAreDefaultThenMatchedProfilesInNameOrder,
+  ExifMakeSpellingMatchesTheProfileCameraName, DngSourceWithEmbeddedProfileNamesDefaultRowEmbedded,
+  StoredMatchedReferenceSelectsItsRow, UnresolvedStoredReferenceAddsMissingRow,
+  RowsRefreshAfterLibraryRescan, RasterDocumentHasNoRows,
+  SelectionSubmitsOneSettledWriteOfTheProfile, DefaultEntryClearsTheStoredReference,
+  RejectedSelectionReturnsToStoredRow, SelectionIsNotSubmittedWhenTheSessionRejectsEdits.
+  EditorRawDecodePanelQmlTest.CameraProfileSectionListsMatchedProfilesAndSubmitsSelection: the
+  section sits above White Balance, Choose Folder without a folder, rows after the folder scan, one
+  settled write of the selection, the missing row in the warning color, hidden for a raster image.
+  EditorPanelProjectionTest.CameraProfileFileProjectsWhetherTheDefaultIsAnEmbeddedProfile.
+  Caller suites: 40 discovered, 40 passed: EditorAdjustmentControlQmlTest 8,
+  LutLibraryModelTest 32.
+Manual verification: open. The user checks selection, Undo, Redo, version checkout, image change,
+  the missing reference state, and Choose Folder on RAW files of two camera makes.
+Performance or resource evidence, if required: not required.
+Evidence path: build/tmp/dcp_c5/ (build, ctest, and stderr logs), removed after the pull request.
+Remaining defects or unavailable platforms: the macOS build was not run; this phase has no
+  platform code. Issue #858: the Settings page strings of C2 are missing from the .ts files.
+LOC note: editor_camera_profile_list_model.hpp 117, editor_camera_profile_list_model.cpp 201,
+  EditorCameraProfileSection.qml 106, editor_camera_profile_list_model_test.cpp 318,
+  EditorRawDecodePanel.qml 723, editor_adjustment_models.cpp 580, editor_panel_projection.cpp 657,
+  editor_raw_decode_panel_qml_test.cpp 672. editor_session_controller.cpp has 2269 lines (4 lines
+  of this phase); the camera identity extends the existing EXIF identity method.
+```
 
 ### C6. DCP profile on a DNG source
 

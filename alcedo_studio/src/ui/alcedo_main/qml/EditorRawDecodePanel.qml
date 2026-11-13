@@ -322,6 +322,7 @@ Item {
         root.setEnumValue(rawMethodModel, rawEntry.method, rawMethodModel.defaultIndex)
         rawHighlightsModel.value = rawEntry.highlights_reconstruct !== undefined
                 ? Boolean(rawEntry.highlights_reconstruct) : rawHighlightsModel.defaultValue
+        cameraProfileSection.loadFromSnapshot(snapshot)
         if (typeof whiteBalanceSection.loadFromSnapshot === "function")
             whiteBalanceSection.loadFromSnapshot(snapshot)
         if (!root.lensBrandEntries.length)
@@ -442,6 +443,15 @@ Item {
                         model: inputProfileModel
                     }
                 }
+            }
+
+            EditorCameraProfileSection {
+                id: cameraProfileSection
+                visible: !root.rasterInput
+                Layout.fillWidth: true
+                theme: root.theme
+                editorSession: root.editorSession
+                controlsEnabled: root.controlsEnabled
             }
 
             EditorWhiteBalanceSection {

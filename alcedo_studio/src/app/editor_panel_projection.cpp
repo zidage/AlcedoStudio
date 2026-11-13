@@ -455,7 +455,8 @@ auto ReadCameraProfileFile(const PipelineDocument& document, const EditorParamet
     return false;
   }
   EditorPanelCameraProfileFileValue value;
-  value.raster = params->RasterInput().has_value();
+  value.raster           = params->RasterInput().has_value();
+  value.embedded_default = params->DngProfile().IsReferenced();
   if (const auto reference = params->CameraProfileFile(); reference.has_value()) {
     value.selected     = true;
     value.resolved     = reference->IsBound();

@@ -491,21 +491,23 @@ void EditorSessionController::RefreshImageExifDisplay() {
       display = {};
     }
   }
-  ApplyExifLensIdentity(display);
+  ApplyImageIdentity(display);
   ApplyExifRowText(alcedo::FormatEditorImageExifDisplay(display));
 }
 
-void EditorSessionController::ApplyExifLensIdentity(
-    const alcedo::EditorImageExifDisplay& display) {
-  const auto lens_make =
-      QString::fromUtf8(display.lens_make.data(), static_cast<int>(display.lens_make.size()));
-  const auto lens_model =
-      QString::fromUtf8(display.lens_model.data(), static_cast<int>(display.lens_model.size()));
-  if (exif_lens_make_ == lens_make && exif_lens_model_ == lens_model) {
+void EditorSessionController::ApplyImageIdentity(const alcedo::EditorImageExifDisplay& display) {
+  const auto lens_make    = QString::fromStdString(display.lens_make);
+  const auto lens_model   = QString::fromStdString(display.lens_model);
+  const auto camera_make  = QString::fromStdString(display.camera_make);
+  const auto camera_model = QString::fromStdString(display.camera_model);
+  if (exif_lens_make_ == lens_make && exif_lens_model_ == lens_model &&
+      camera_make_ == camera_make && camera_model_ == camera_model) {
     return;
   }
   exif_lens_make_  = lens_make;
   exif_lens_model_ = lens_model;
+  camera_make_     = camera_make;
+  camera_model_    = camera_model;
   emit ImageExifChanged();
 }
 

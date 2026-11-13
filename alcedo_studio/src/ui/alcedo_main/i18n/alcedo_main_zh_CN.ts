@@ -4743,6 +4743,24 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
 </context>
 <context>
+    <name>EditorCameraProfileSection</name>
+    <message>
+        <location filename="../qml/EditorCameraProfileSection.qml" line="+59"/>
+        <source>Choose the DCP folder</source>
+        <translation>选择 DCP 文件夹</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Camera Profile</source>
+        <translation>相机配置文件</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>Choose Folder</source>
+        <translation>选择文件夹</translation>
+    </message>
+</context>
+<context>
     <name>EditorRawDecodePanel</name>
     <message>
         <location filename="../qml/EditorRawDecodePanel.qml" line="+35"/>
@@ -8511,6 +8529,19 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="-12"/>
         <source>Alcedo Studio will close and install the update.</source>
         <translation>Alcedo Studio 将关闭并安装更新。</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::EditorCameraProfileListModel</name>
+    <message>
+        <location filename="../album_backend/editor_camera_profile_list_model.cpp" line="+155"/>
+        <source>Embedded</source>
+        <translation>内嵌</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Built-in</source>
+        <translation>内置</translation>
     </message>
 </context>
 <context>

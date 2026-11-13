@@ -172,6 +172,7 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelCameraProfileFileValue>) {
           QVariantMap reference;
           reference.insert(QStringLiteral("raster"), value.raster);
+          reference.insert(QStringLiteral("embedded_default"), value.embedded_default);
           reference.insert(QStringLiteral("selected"), value.selected);
           reference.insert(QStringLiteral("resolved"), value.resolved);
           reference.insert(QStringLiteral("camera_model"), String(value.camera_model));
