@@ -3422,17 +3422,15 @@ Original source files on disk will be kept.</source>
     <name>EditorCameraProfileSection</name>
     <message>
         <location filename="../qml/EditorCameraProfileSection.qml" line="+59"/>
-        <source>Choose the DCP folder</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+8"/>
         <source>Camera Profile</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+34"/>
-        <source>Choose Folder</source>
+        <source>Set a DCP folder in Settings &gt; LUTs and Color Management.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The DCP folder has no profile of this camera.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

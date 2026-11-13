@@ -51,10 +51,10 @@ Dialog {
     // Category indices used by callers outside this dialog.
     readonly property int colorLabelsCategory: 0
     readonly property int updatesCategory: 6
+    // LUTs and Color Management: the LUT library and the DCP camera profile folder.
     readonly property int lutCategory: 8
-    readonly property int cameraProfilesCategory: 9
-    readonly property int aiModelsCategory: 10
-    readonly property int aboutCategory: 11
+    readonly property int aiModelsCategory: 9
+    readonly property int aboutCategory: 10
     // The AI Models page checks the signed AI model feed once per Settings opening, when it is
     // first shown (AI Models plan, P6).
     property bool aiModelFeedCheckedThisOpening: false
@@ -207,10 +207,7 @@ Dialog {
             return qsTr("Keyboard")
         }
         if (currentCategory === lutCategory) {
-            return qsTr("LUTs")
-        }
-        if (currentCategory === cameraProfilesCategory) {
-            return qsTr("Camera Profiles")
+            return qsTr("LUTs and Color Management")
         }
         if (currentCategory === aiModelsCategory) {
             return qsTr("AI Models")
@@ -452,7 +449,7 @@ Dialog {
                                 // delegate-model never completes under an
                                 // offscreen test window, so nav items would never
                                 // materialize for QML tests (and this list is
-                                // fixed at twelve entries, so eager creation is
+                                // fixed at eleven entries, so eager creation is
                                 // equivalent in production).
                                 Instantiator {
                                     model: [
@@ -464,8 +461,7 @@ Dialog {
                                         { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
                                         { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
                                         { label: qsTr("Keyboard"), icon: "qrc:/panel_icons/keyboard.svg" },
-                                        { label: qsTr("LUTs"), icon: "qrc:/panel_icons/lut-cube.svg" },
-                                        { label: qsTr("Camera Profiles"), icon: "qrc:/panel_icons/camera.svg" },
+                                        { label: qsTr("LUTs and Color Management"), icon: "qrc:/panel_icons/lut-cube.svg" },
                                         { label: qsTr("AI Models"), icon: "qrc:/panel_icons/sparkles.svg" },
                                         { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
                                     ]
@@ -1024,25 +1020,11 @@ Dialog {
                                 width: lutScroll.availableWidth
                                 library: appModules.lutLibrary
                                 packageService: appModules.lutPackages
+                                cameraProfiles: appModules.cameraProfiles
                                 textColor: dialog.textColor
                                 mutedTextColor: dialog.mutedTextColor
                                 dividerColor: dialog.dividerColor
                                 dangerColor: dialog.dangerColor
-                            }
-                        }
-
-                        ScrollView {
-                            id: cameraProfilesScroll
-                            objectName: "cameraProfilesSettingsScroll"
-                            contentWidth: availableWidth
-                            clip: true
-
-                            CameraProfileSettingsPanel {
-                                width: cameraProfilesScroll.availableWidth
-                                library: appModules.cameraProfiles
-                                languageCode: languageManager.effectiveLanguageCode
-                                textColor: dialog.textColor
-                                mutedTextColor: dialog.mutedTextColor
                             }
                         }
 

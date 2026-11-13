@@ -607,30 +607,45 @@ TEST(EditorRawDecodePanelQmlTest, CameraProfileSectionListsMatchedProfilesAndSub
   auto* section   = harness.findObject<QQuickItem>(QStringLiteral("editorCameraProfileSection"));
   auto* model     = harness.findObject<QObject>(QStringLiteral("rawCameraProfileModel"));
   auto* combo_row = harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileComboRow"));
-  auto* choose_folder =
-      harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileChooseFolderButton"));
+  auto* note      = harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileNote"));
   auto* white_balance = harness.findObject<QQuickItem>(QStringLiteral("editorWhiteBalanceSection"));
   ASSERT_NE(section, nullptr);
   ASSERT_NE(model, nullptr);
   ASSERT_NE(combo_row, nullptr);
-  ASSERT_NE(choose_folder, nullptr);
+  ASSERT_NE(note, nullptr);
   ASSERT_NE(white_balance, nullptr);
   EXPECT_TRUE(section->isVisible());
   EXPECT_LT(section->mapToScene({0, 0}).y(), white_balance->mapToScene({0, 0}).y());
+  // The folder is set in Settings only; the section has no folder button.
+  EXPECT_EQ(harness.findObject<QQuickItem>(QStringLiteral("rawCameraProfileChooseFolderButton")),
+            nullptr);
 
-  // No DCP folder: the default entry only, and Choose Folder.
+  // No DCP folder: the default entry only, and a note that names the Settings page.
   section->setProperty("library", QVariant::fromValue(static_cast<QObject*>(&library)));
   ProcessEvents(50);
-  EXPECT_TRUE(choose_folder->isVisible());
+  EXPECT_TRUE(note->isVisible());
+  EXPECT_EQ(note->property("text").toString(),
+            QStringLiteral("Set a DCP folder in Settings > LUTs and Color Management."));
+  EXPECT_LT(combo_row->mapToScene({0, 0}).y(), note->mapToScene({0, 0}).y());
   EXPECT_EQ(model->property("entries").toList().size(), 1);
 
+  // A folder without a profile of this camera (Canon EOS R6): the default entry and a note.
+  const auto other_folder = temp / "Other";
+  fs::create_directories(other_folder);
+  alcedo::test::MinimalDcpProfile("Sony ILCE-7M4", "Camera ST").Write(other_folder / "sony.dcp");
   QSignalSpy finished(&library, &CameraProfileLibraryService::ScanFinished);
-  ASSERT_TRUE(QMetaObject::invokeMethod(
-      section, "useFolder",
-      Q_ARG(QVariant, QVariant(QUrl::fromLocalFile(QString::fromStdWString(folder.wstring()))))));
+  library.setRootFolder(QUrl::fromLocalFile(QString::fromStdWString(other_folder.wstring())));
   ASSERT_TRUE(finished.wait(10000));
   ProcessEvents(50);
-  EXPECT_FALSE(choose_folder->isVisible());
+  EXPECT_EQ(model->property("entries").toList().size(), 1);
+  EXPECT_TRUE(note->isVisible());
+  EXPECT_EQ(note->property("text").toString(),
+            QStringLiteral("The DCP folder has no profile of this camera."));
+
+  library.setRootFolder(QUrl::fromLocalFile(QString::fromStdWString(folder.wstring())));
+  ASSERT_TRUE(finished.wait(10000));
+  ProcessEvents(50);
+  EXPECT_FALSE(note->isVisible());
   QStringList labels;
   for (const auto& entry : model->property("entries").toList()) {
     labels << entry.toMap().value(QStringLiteral("label")).toString();
@@ -731,9 +746,7 @@ TEST(EditorRawDecodePanelQmlTest, CameraProfileToneCurveSwitchCommitsAndFollowsT
   ASSERT_NE(tone_switch, nullptr);
   QSignalSpy finished(&library, &CameraProfileLibraryService::ScanFinished);
   section->setProperty("library", QVariant::fromValue(static_cast<QObject*>(&library)));
-  ASSERT_TRUE(QMetaObject::invokeMethod(
-      section, "useFolder",
-      Q_ARG(QVariant, QVariant(QUrl::fromLocalFile(QString::fromStdWString(folder.wstring()))))));
+  library.setRootFolder(QUrl::fromLocalFile(QString::fromStdWString(folder.wstring())));
   ASSERT_TRUE(finished.wait(10000));
   ProcessEvents(50);
 

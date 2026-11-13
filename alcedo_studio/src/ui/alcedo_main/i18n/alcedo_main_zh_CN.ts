@@ -2197,6 +2197,30 @@ Alcedo 将改用 %1。</translation>
     </message>
 </context>
 <context>
+    <name>CameraProfileFolderTile</name>
+    <message>
+        <location filename="../qml/CameraProfileFolderTile.qml" line="+34"/>
+        <source>Choose the DCP folder</source>
+        <translation>选择 DCP 文件夹</translation>
+    </message>
+    <message>
+        <source>Camera profiles</source>
+        <translation>相机配置文件</translation>
+    </message>
+    <message>
+        <source>The folder of the DCP camera profiles that the editor lists for each camera.</source>
+        <translation>存放 DCP 相机配置文件的文件夹。编辑器按相机列出其中的配置文件。</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>浏览…</translation>
+    </message>
+    <message>
+        <source>Rescan</source>
+        <translation>重新扫描</translation>
+    </message>
+</context>
+<context>
     <name>CacheSettingsPanel</name>
     <message>
         <location filename="../qml/CacheSettingsPanel.qml" line="+75"/>
@@ -4746,18 +4770,16 @@ Refresh the library afterwards; they are listed under the User category. Import 
     <name>EditorCameraProfileSection</name>
     <message>
         <location filename="../qml/EditorCameraProfileSection.qml" line="+59"/>
-        <source>Choose the DCP folder</source>
-        <translation>选择 DCP 文件夹</translation>
-    </message>
-    <message>
-        <location line="+8"/>
         <source>Camera Profile</source>
         <translation>相机配置文件</translation>
     </message>
     <message>
-        <location line="+34"/>
-        <source>Choose Folder</source>
-        <translation>选择文件夹</translation>
+        <source>Set a DCP folder in Settings &gt; LUTs and Color Management.</source>
+        <translation>在“设置 &gt; LUT 和色彩管理”中设置 DCP 文件夹。</translation>
+    </message>
+    <message>
+        <source>The DCP folder has no profile of this camera.</source>
+        <translation>DCP 文件夹中没有这台相机的配置文件。</translation>
     </message>
     <message>
         <source>Tone Curve</source>
@@ -7567,8 +7589,8 @@ Create a new layer above it and draw the Mask there?</source>
     </message>
     <message>
         <location filename="../qml/SettingDialog.qml" line="+1"/>
-        <source>LUTs</source>
-        <translation>LUT</translation>
+        <source>LUTs and Color Management</source>
+        <translation>LUT 和色彩管理</translation>
     </message>
     <message>
         <location filename="../qml/SettingDialog.qml" line="+164"/>

@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
@@ -8,7 +7,8 @@ import Alcedo.Main 1.0
 // default entry (Built-in, or Embedded for a DNG file with an embedded profile) and the DCP
 // profiles of the folder that match the camera. A selection commits one settled edit of the
 // Develop field camera_profile_file. A stored reference that does not resolve shows its name in
-// dangerColor. Without a DCP folder, Choose Folder opens the folder dialog of the Settings page.
+// dangerColor. A note under the combo names the reason when it holds only the default entry: no
+// DCP folder (set in Settings > LUTs and Color Management), or no profile of this camera.
 // Under the combo, the Tone Curve switch turns the profile tone stage of a profile with a
 // ProfileToneCurve on or off; each change is one settled edit of camera_profile_file.
 Item {
@@ -38,12 +38,6 @@ Item {
             profileModel.loadFromSnapshot(snapshot)
     }
 
-    // Called with the dialog's folder URL; exposed for tests that cannot drive the native dialog.
-    function useFolder(folder) {
-        if (root.library)
-            root.library.setRootFolder(folder)
-    }
-
     EditorCameraProfileListModel {
         id: profileModel
         objectName: "rawCameraProfileModel"
@@ -54,12 +48,6 @@ Item {
                      ? String(root.editorSession.cameraModel) : ""
         enabled: root.controlsEnabled && !root.scanning
         submitter: root.editorSession
-    }
-
-    FolderDialog {
-        id: folderDialog
-        title: qsTr("Choose the DCP folder")
-        onAccepted: root.useFolder(selectedFolder)
     }
 
     CollapsibleSection {
@@ -134,14 +122,20 @@ Item {
                 }
             }
 
-            DialogActionButton {
-                objectName: "rawCameraProfileChooseFolderButton"
-                visible: !root.hasFolder
-                enabled: root.controlsEnabled && !!root.library
-                buttonWidth: 132
-                buttonHeight: 30
-                text: qsTr("Choose Folder")
-                onClicked: folderDialog.open()
+            // Why the combo holds only the default entry: no DCP folder is set, or the folder has
+            // no profile of this camera. The folder is set in Settings.
+            Label {
+                objectName: "rawCameraProfileNote"
+                Layout.fillWidth: true
+                visible: text.length > 0
+                text: !root.library || root.scanning ? ""
+                      : !root.hasFolder
+                        ? qsTr("Set a DCP folder in Settings > LUTs and Color Management.")
+                        : profileModel.entries.length <= 1
+                          ? qsTr("The DCP folder has no profile of this camera.") : ""
+                color: root.colMuted
+                font.pixelSize: appTheme.fontSizeCaption
+                wrapMode: Text.Wrap
             }
         }
     }

@@ -756,7 +756,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdateNotice.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdatesSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LutSettingsPanel.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/CameraProfileSettingsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/CameraProfileFolderTile.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelsSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiModelDownloadStatementDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/PackageCard.qml"

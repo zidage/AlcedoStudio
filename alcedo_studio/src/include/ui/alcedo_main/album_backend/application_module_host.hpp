@@ -76,7 +76,7 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(alcedo::UpdateService* updates READ updates CONSTANT)
   Q_PROPERTY(alcedo::LutLibraryService* lutLibrary READ lut_library CONSTANT)
   Q_PROPERTY(alcedo::LutPackageService* lutPackages READ lut_packages CONSTANT)
-  /// DCP library folder, profile and camera counts, and scans (Settings > Camera Profiles).
+  /// DCP library folder and its scans (Settings > LUTs and Color Management).
   Q_PROPERTY(
       alcedo::CameraProfileLibraryService* cameraProfiles READ camera_profiles CONSTANT)
   /// Signed AI model package feed and the AI Mask model set install (AI Models plan, AM1).
