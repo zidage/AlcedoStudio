@@ -38,6 +38,7 @@
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -573,7 +574,10 @@ TEST(AdjustmentTransferCatalogTest, CurveItemSummaryNamesTheChannelCurves) {
   auto  document = CreateDefaultPipelineDocument();
   auto& curve =
       dynamic_cast<CurveModel&>(*document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
-  EXPECT_EQ(curve_value(document), "2 points");
+  // A RAW import document carries the Film-like RGB curve and identity channel curves (#891).
+  const auto* film_like = FindToneCurvePreset(kFilmLikeToneCurvePresetId);
+  ASSERT_NE(film_like, nullptr);
+  EXPECT_EQ(curve_value(document), std::to_string(film_like->points.size()) + " points");
 
   CurveUpdate update;
   update.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.3f, 0.2f}, {0.7f, 0.8f}, {1.0f, 1.0f}};

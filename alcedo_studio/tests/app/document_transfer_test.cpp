@@ -736,10 +736,11 @@ TEST(DocumentTransferTest, PartialPasteOfExtraGradeStartsFromCleanValues) {
   ASSERT_NE(first, nullptr);
   ASSERT_NE(second, nullptr);
   EXPECT_EQ(working.DefaultGradeId(), NodeId{"grade.t1"});
-  // The default Grade keeps the Default look contrast of the target.
-  EXPECT_FLOAT_EQ(
-      first->FindAdjustmentByType(type_ids::Contrast())->ToJson().at("contrast").get<float>(),
-      kDefaultPipelineContrast);
+  // The default Grade keeps the Default look curve of the target (Film-like).
+  EXPECT_EQ(first->FindAdjustmentByType(type_ids::Curve())->ToJson().dump(),
+            target.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve())->ToJson().dump());
+  EXPECT_NE(first->FindAdjustmentByType(type_ids::Curve())->ToJson().dump(),
+            second->FindAdjustmentByType(type_ids::Curve())->ToJson().dump());
   // The extra Grade has clean values except its selected exposure.
   const auto clean = ColorGradeNodeModel::MakeClean(NodeId{"grade.clean"});
   EXPECT_EQ(second->FindAdjustmentByType(type_ids::Contrast())->ToJson().dump(),

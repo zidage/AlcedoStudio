@@ -2,7 +2,7 @@
 
 Date: 2026-11-13
 
-Status: TC1 to TC5 complete. TC6 planned.
+Status: TC1 to TC6 complete.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -621,9 +621,85 @@ drag. A field text that is not a number keeps the point and shows the point valu
   `PlotPaneInputTest.PolylineDragKeepsThePressOffset`.
 - `EditorCurveHistogramControllerTest` and `EditorSessionRenderSchedulerPortTest` (callers).
 
-### TC6
+### TC6: Tone Curve presets
 
-See #891.
+**Objective.** A preset menu in the Tone Curve section sets the points of the selected curve:
+Linear, Soft, Medium, and Strong Contrast, Film-like, Filmic, Kodak 2383, Velvia 50, and
+Ektachrome E100. `alcedo-cli` lists the presets and applies one by id. Film-like is the RGB curve
+of the RAW import look (user decision of 2026-11-13: "The default look will be Film-like").
+
+**Study.** [tone_curve_preset_study.md](tone_curve_preset_study.md) and
+`scripts/fit_tone_curve_presets.py` give the source, the points, and the fit error of each preset.
+The fit target is the source tone divided by the neutral response of ACES 2.0 on the curve axis,
+with 18% grey fixed at (0.41359, 0.41359) by an exposure shift of the source (study section 4.1).
+Each preset has at most 15 points, and each fit error is at most 0.51 display codes.
+
+**Data** (`edit` layer, Qt-free):
+
+- `tone_curve_presets.hpp`: `ToneCurvePreset` (id, English display name, menu group, points),
+  `ToneCurvePresets()` in menu order, `FindToneCurvePreset(id)`, `MatchToneCurvePreset(points)`
+  (exact float equality), `kFilmLikeToneCurvePresetId`.
+- `tone_curve_preset_points.inc`: the fitted points, written by the script.
+- The document stores only points. No Model key, no format change.
+
+**Apply.**
+
+- Panel: `EditorToneCurveModel::applyPreset(id)` replaces the points of the selected curve and
+  writes one settled entry with only that curve (none when the points are already the preset).
+  `presetId` is the id of the preset whose points equal the selected curve (empty for Custom);
+  it notifies with `pointsChanged`, so it follows edits, loads, and the channel.
+- Parameter write: in a write of `curve`, the value of `points`, `red`, `green`, or `blue` can be a
+  preset id instead of a list (`{"curve": {"points": "film_like"}}`); `ParseCurveWrite` writes the
+  points of the preset. A stored value (history replay) holds points only.
+- `alcedo-cli`: `curve.presets` lists id, name, group, points, and `editor_value`
+  (`{"points": "<id>"}`) for `editor.set` on `curve`.
+
+**Menu** (`EditorToneCurveSection.qml`): Row 1 holds the channel selector and the preset button
+(equal widths). The button shows the translated name of `presetId`, or "Custom". The menu is the
+shared `AppContextMenu` with the presets in four groups split by separators; a check marks the
+preset of the selected curve. QML translates the names by id (`presetLabel`).
+
+**RAW import look.** `CreateDefaultPipelineDocument` sets the RGB curve of Color Grade 1 to the
+Film-like points (`kDefaultPipelineToneCurvePresetId`), with exposure +1.5 EV and saturation 1.3;
+contrast stays 0 (the curve carries the contrast; study section 6). `kDefaultPipelineContrast` is
+gone; `kImportLookContrastBeforeFilmLike = 15` names the contrast of documents imported before.
+Entry resets: a profile tone entry and a Film Print entry each write the identity RGB curve while
+the RGB curve still has the Film-like points (`FilmPrintEntryCurveTarget`,
+`ProfileToneEntryResetTargets`); contrast 15 of an older document still resets on a profile tone
+entry.
+
+**Call chain (menu).**
+
+```text
+AppMenuItem.triggered -> EditorToneCurveModel::applyPreset(id)
+  -> FindToneCurvePreset(id) -> ReplaceChannelPoints(channel, preset points) -> pointsChanged
+  -> CommitSettled -> submitNow(EditorCurveWrite{<channel>: points}, settled=true)
+```
+
+**Call chain (CLI).** `editor.set {"field":"curve","value":{"points":"film_like"}}` ->
+`PrepareWrite` -> `ParseEditorParameterWrite` -> `ParseCurveWrite` -> `ParseCurvePresetPoints`
+-> `EnqueueFieldWrite(settled)`.
+
+**Tests.**
+
+- `ToneCurvePresetTest`: `MenuListsTheNinePresetsWithUniqueIds`,
+  `EachPresetHasTwoToSixteenPointsWithRisingXInTheUnitSquare`, `EachPresetKeepsGreyAndIsMonotone`
+  (|curve(g) - g| <= 1e-4), `MatchFindsThePresetOfExactlyItsPoints`,
+  `StudyToneScaleIsTheProductAces2NeutralResponse`,
+  `RenderedNeutralAxisAgreesWithTheStudySourceToneWithinTheFitError` (product spline and product
+  ACES 2.0 neutral response at 257 axis samples, fit error + 0.05 codes).
+- `ToneCurvePresetFilmSourceTest.NeutralToneOfEachFilmIsTheToneOfTheStudy` (film resources).
+- `EditorParameterCatalogTest`: `EachToneCurvePresetPassesTheCurveWrite`,
+  `CurveWriteAppliesAPresetById`.
+- `EditorToneCurveModelTest`: `PresetListIsTheMenuOrderOfTheEditLayer`,
+  `ApplyPresetWritesThePointsOfTheSelectedCurveInOneSettledEntry`,
+  `MenuNameFollowsThePointsPresetAfterApplyCustomAfterAnEdit`.
+- `AutomationEditorCommandsTest.CurvePresetsListsThePresetsWithTheirPointsAndEditorValue`.
+- Import look: `GpuDagModelGraphTest`
+  `DefaultPipelineDocumentBakesOnePointFiveEvSaturationOnePointThreeAndTheFilmLikeCurve`,
+  `EditorSessionHistoryPortTest` (profile tone entry cases with the curve, and
+  `DocumentImportedBeforeFilmLikeResetsContrastFifteen`; the pinned hash cases open a root with
+  the earlier look), `DocumentTransferTest`, `ImportPipelineDocumentTest`.
 
 ## 6. Completion record
 
@@ -819,3 +895,54 @@ Verification (Windows, debug build, RTX 3080 Laptop, D3D11 scene graph):
 The section was not driven in the running application (no input is sent to a real window). The
 painting tests were not run on macOS (Metal): the Mac was not reachable. The full test suite was
 not run.
+
+### TC6 (2026-11-13)
+
+Status: complete. Branch `feature/tone-curve-presets`, stacked on TC5. The design, call chains, and
+test list are in the TC6 section of section 5; the study is
+[tone_curve_preset_study.md](tone_curve_preset_study.md). The `alcedo-cli` documents:
+zidage/alcedo-skills#25 (stacked on #23).
+
+Decisions made during the work:
+
+- Default look (user, 2026-11-13): Film-like is the RGB curve of the RAW import look. The curve
+  carries the contrast, so the import look has contrast 0 (contrast +15 on top would add a second
+  S). Documents imported before keep their bytes and root ids.
+- The profile tone entry and the Film Print entry reset a Film-like RGB curve to the identity, as
+  they reset the other parts of the import look; contrast 15 of an older document still resets on
+  a profile tone entry.
+- 18% grey stays fixed by an exposure shift of the source (the grey exposure of the study), so a
+  preset keeps the mid-grey brightness and the source white reaches the display peak.
+- Fitted points are at least 0.02 (1/3 stop) apart, so no two handles overlap in the panel.
+- The film sources come from the point stages of the product film render
+  (`FilmPrintPointReference`, scene light `reference`), read through
+  `ToneCurvePresetFilmSourceTest`, which also checks that the resources still give that tone.
+- The CLI applies a preset by id in the `curve` write (`{"points": "film_like"}`) instead of a
+  separate apply command, so the apply is one `editor.set` commit; `curve.presets` lists them.
+- The menu names are translated in QML by id; the edit layer keeps the English names.
+- The pinned commit hashes of `EditorSessionHistoryPortTest` and the stored files of
+  `PipelineDocumentCheckpointTest` were recorded with the earlier look: these tests now open a root
+  with that look (`ApplyImportLookBeforeFilmLike`), and no stored value was recorded again.
+
+Verification (Windows, debug build, RTX 3080 Laptop):
+
+| Binary and filter | Result |
+| --- | --- |
+| `ToneCurvePresetTest` (all) | 6 passed; rendered neutral axis within the fit error of each preset (largest 0.51 codes, Velvia 50); study tone scale within 0.0001 codes of the product ACES 2.0 response |
+| `ToneCurvePresetFilmSourceTest` (all, film resources schema 11) | 1 passed |
+| `EditorParameterCatalogTest` (all) | 51 passed |
+| `EditorToneCurveModelTest` (all) | 18 passed |
+| `EditorAdjustmentSnapshotQmlTest` (all, includes `ToneCurvePresetMenuNamesThePresetOfTheCurveAndAppliesOne`) | 6 passed |
+| `AutomationEditorCommandsTest` (all) | 9 passed |
+| `GpuDagModelGraphTest` (all) | 195 passed |
+| `ProfileToneReferenceTest` (all) | 11 passed |
+| `ImportPipelineDocumentTest` (all) | 2 passed |
+| `EditorSessionHistoryPortTest` (all, includes the profile tone entry cases) | 130 passed, 1 failed: `CheckoutAndPasteHashesAreUnchanged`, the same hash with the earlier look restored in the product ([#555](https://github.com/zidage/AlcedoStudio/issues/555)) |
+| `DocumentTransferTest` (all) | 36 passed, 1 failed: `TransferPackageCarriesOnlyOwnedDevelopKeysAndNoCaches` ([#484](https://github.com/zidage/AlcedoStudio/issues/484), [#554](https://github.com/zidage/AlcedoStudio/issues/554)) |
+| `PipelineDocumentCheckpointTest` (all) | 20 passed, 3 failed: the `Existing{Raw,Lmt,FilmGrain}Root*` checks ([#553](https://github.com/zidage/AlcedoStudio/issues/553)) |
+| `AutomationReferenceDocsTest` | wrote the new schemas; the skills branch takes them. `generate_cli_reference.py --check` reports only the `labels.*` pages that the skills repository lacks ([alcedo-skills#24](https://github.com/zidage/alcedo-skills/issues/24)) |
+| `alcedo_main` | builds (qmlcachegen of the section included) |
+
+The preset menu was not driven in the running application (no input is sent to a real window).
+The Metal render was not run: the presets are points of the TC1 spline, whose Metal test runs on
+the macOS CI. The full test suite was not run.

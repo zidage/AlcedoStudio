@@ -5025,6 +5025,53 @@ Refresh the library afterwards; they are listed under the User category. Import 
     </message>
 </context>
 <context>
+    <name>EditorToneCurveSection</name>
+    <message>
+        <source>Tone Curve</source>
+        <translation>色调曲线</translation>
+    </message>
+    <message>
+        <source>Histogram</source>
+        <translation>直方图</translation>
+    </message>
+    <message>
+        <source>Fit to photo range</source>
+        <translation>适配照片范围</translation>
+    </message>
+    <message>
+        <source>In</source>
+        <translation>输入</translation>
+    </message>
+    <message>
+        <source>Out</source>
+        <translation>输出</translation>
+    </message>
+    <message>
+        <source>Custom</source>
+        <translation>自定义</translation>
+    </message>
+    <message>
+        <source>Linear</source>
+        <translation>线性</translation>
+    </message>
+    <message>
+        <source>Soft Contrast</source>
+        <translation>柔和对比度</translation>
+    </message>
+    <message>
+        <source>Medium Contrast</source>
+        <translation>中等对比度</translation>
+    </message>
+    <message>
+        <source>Strong Contrast</source>
+        <translation>强对比度</translation>
+    </message>
+    <message>
+        <source>Film-like</source>
+        <translation>胶片感</translation>
+    </message>
+</context>
+<context>
     <name>EditorTonePanel</name>
     <message>
         <location filename="../qml/EditorTonePanel.qml" line="+130"/>

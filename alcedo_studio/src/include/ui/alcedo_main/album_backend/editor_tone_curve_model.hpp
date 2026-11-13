@@ -57,6 +57,10 @@ class EditorToneCurveModel : public EditorAdjustmentModelBase {
   Q_PROPERTY(QList<QPointF> blueLine READ blueLine NOTIFY curvesChanged)
   /// Four booleans in channel order: true for a curve that is not the identity.
   Q_PROPERTY(QVariantList channelModified READ channelModified NOTIFY curvesChanged)
+  /// The Tone Curve presets in menu order: maps with `id`, `name` (English), and `group`.
+  Q_PROPERTY(QVariantList presets READ presets CONSTANT)
+  /// Id of the preset whose points equal the selected curve; empty for other points (Custom).
+  Q_PROPERTY(QString presetId READ presetId NOTIFY pointsChanged)
   /// 18% grey and one stop on the curve axis.
   Q_PROPERTY(double axisGrey READ axisGrey CONSTANT)
   Q_PROPERTY(double axisStop READ axisStop CONSTANT)
@@ -90,6 +94,8 @@ class EditorToneCurveModel : public EditorAdjustmentModelBase {
   [[nodiscard]] auto        greenLine() const -> QList<QPointF> { return lines_[2]; }
   [[nodiscard]] auto        blueLine() const -> QList<QPointF> { return lines_[3]; }
   [[nodiscard]] auto        channelModified() const -> QVariantList;
+  [[nodiscard]] static auto presets() -> QVariantList;
+  [[nodiscard]] auto        presetId() const -> QString;
   [[nodiscard]] static auto axisGrey() -> double;
   [[nodiscard]] static auto axisStop() -> double;
 
@@ -139,6 +145,9 @@ class EditorToneCurveModel : public EditorAdjustmentModelBase {
   Q_INVOKABLE void   clearSelection() { setSelectedIndex(-1); }
   /// Sets the selected curve to the identity. One settled write when it changed.
   Q_INVOKABLE void reset();
+  /// Replaces the points of the selected curve with the points of preset @p id. One settled write
+  /// when they changed. Returns false for an unknown id and during a drag.
+  Q_INVOKABLE bool          applyPreset(const QString& id);
   /// Writes the settled entry of a pending key move sequence now.
   Q_INVOKABLE void   settlePendingKeyMoves();
   [[nodiscard]] Q_INVOKABLE bool    hasPendingKeyMoves() const { return keyMovesPending_; }

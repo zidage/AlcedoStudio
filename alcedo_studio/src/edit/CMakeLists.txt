@@ -82,6 +82,7 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/models/parameter_revision.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/sharpen_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/tone_curve_spline.cpp
+    ${ALCEDO_SRC_ROOT}/edit/operators/models/tone_curve_presets.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/adjustment_ownership.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/color_grade_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_color_transform.cpp

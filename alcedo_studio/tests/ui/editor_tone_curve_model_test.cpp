@@ -25,6 +25,7 @@
 #include <variant>
 #include <vector>
 
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "support/recording_adjustment_submitter.hpp"
 #include "ui/alcedo_main/editor_support/modules/curve.hpp"
 #include "ui/alcedo_main/plot_pane/plot_handle_layer.hpp"
@@ -415,6 +416,78 @@ TEST(EditorToneCurveModelTest, EndpointHorizontalMoveKeepsOrdering) {
   for (size_t i = 1; i < model->controlPoints().size(); ++i) {
     EXPECT_GT(model->controlPoints()[i].x(), model->controlPoints()[i - 1].x());
   }
+}
+
+// Tone Curve presets (#891) -----------------------------------------------------------------
+
+TEST(EditorToneCurveModelTest, PresetListIsTheMenuOrderOfTheEditLayer) {
+  const auto presets = EditorToneCurveModel::presets();
+  const auto data    = alcedo::ToneCurvePresets();
+  ASSERT_EQ(static_cast<size_t>(presets.size()), data.size());
+  for (qsizetype i = 0; i < presets.size(); ++i) {
+    const auto entry = presets.at(i).toMap();
+    EXPECT_EQ(entry.value(QStringLiteral("id")).toString().toStdString(), data[i].id);
+    EXPECT_EQ(entry.value(QStringLiteral("name")).toString().toStdString(), data[i].display_name);
+  }
+}
+
+TEST(EditorToneCurveModelTest, ApplyPresetWritesThePointsOfTheSelectedCurveInOneSettledEntry) {
+  RecordingSubmitter sub;
+  auto               model = MakeCurveModel(sub);
+  QSignalSpy         settled(model.get(), &EditorToneCurveModel::settledCommitted);
+  model->setChannel(kGreen);
+
+  ASSERT_TRUE(model->applyPreset(QStringLiteral("kodak_2383")));
+  EXPECT_EQ(sub.interactiveCount(), 0);
+  EXPECT_EQ(sub.settledCount(), 1);
+  EXPECT_EQ(settled.count(), 1);
+  const auto* write = CurveWrite(sub.lastSettledWrite());
+  ASSERT_NE(write, nullptr);
+  EXPECT_FALSE(write->points.has_value()) << "only the selected curve";
+  ASSERT_TRUE(write->green.has_value());
+  EXPECT_EQ(*write->green, alcedo::FindToneCurvePreset("kodak_2383")->PointList());
+  EXPECT_TRUE(curve::CurveControlPointsEqual(model->channelControlPoints(kRgb),
+                                             curve::DefaultCurveControlPoints()));
+
+  // The same preset again changes nothing and writes nothing.
+  ASSERT_TRUE(model->applyPreset(QStringLiteral("kodak_2383")));
+  EXPECT_EQ(sub.settledCount(), 1);
+  EXPECT_FALSE(model->applyPreset(QStringLiteral("no_such_preset")));
+  EXPECT_EQ(sub.settledCount(), 1);
+}
+
+TEST(EditorToneCurveModelTest, MenuNameFollowsThePointsPresetAfterApplyCustomAfterAnEdit) {
+  RecordingSubmitter sub;
+  auto               model = MakeCurveModel(sub);
+  QSignalSpy         changed(model.get(), &EditorToneCurveModel::pointsChanged);
+  EXPECT_EQ(model->presetId(), QStringLiteral("linear"));
+
+  ASSERT_TRUE(model->applyPreset(QStringLiteral("film_like")));
+  EXPECT_EQ(model->presetId(), QStringLiteral("film_like"));
+  EXPECT_GE(changed.count(), 1);
+
+  // A point edit: the points are no preset any more.
+  model->setSelectedIndex(1);
+  ASSERT_TRUE(model->handleKey(Qt::Key_Up, Qt::NoModifier));
+  EXPECT_EQ(model->presetId(), QString{});
+  model->settlePendingKeyMoves();
+  EXPECT_EQ(model->presetId(), QString{});
+
+  // Each channel shows the preset of its own curve.
+  model->setChannel(kRed);
+  EXPECT_EQ(model->presetId(), QStringLiteral("linear"));
+  ASSERT_TRUE(model->applyPreset(QStringLiteral("fuji_velvia_50")));
+  EXPECT_EQ(model->presetId(), QStringLiteral("fuji_velvia_50"));
+  model->setChannel(kRgb);
+  EXPECT_EQ(model->presetId(), QString{});
+
+  // A document load of the preset points (float JSON values) shows the preset.
+  QVariantList points;
+  for (const auto& point : alcedo::FindToneCurvePreset("filmic")->points) {
+    points.push_back(PointMap(static_cast<double>(point.x), static_cast<double>(point.y)));
+  }
+  model->loadFromSnapshotEntry(QVariantMap{{QStringLiteral("points"), points}});
+  EXPECT_EQ(model->presetId(), QStringLiteral("filmic"));
 }
 
 }  // namespace alcedo::ui::test

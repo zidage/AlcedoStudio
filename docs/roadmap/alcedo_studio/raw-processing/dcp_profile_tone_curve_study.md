@@ -223,7 +223,7 @@ and version checkout restore it.
 ### 6.5 Entry reset of the RAW import look
 
 The profile curve and LookTable carry the camera's contrast and color. The RAW import look of the
-Default document (contrast `kDefaultPipelineContrast`, saturation `kDefaultPipelineSaturation`)
+Default document (contrast `kImportLookContrastBeforeFilmLike`, saturation `kDefaultPipelineSaturation`)
 adds a second contrast and color on top. The stage takes the rule of the Film Print entry
 (`FilmPrintEntrySaturationTarget`, user decision 2026-11-12):
 
@@ -233,11 +233,15 @@ adds a second contrast and color on top. The stage takes the rule of the Film Pr
   from the default entry and the Tone Curve switch turned on are both entries.
 - On an entry, when **Color Grade 1** (`grade.primary`, `PipelineDocument::PrimaryGrade`) exists,
   the same history batch writes its contrast to `kProfileToneEntryContrast` while it still equals
-  `kDefaultPipelineContrast`, and its saturation to `kProfileToneEntrySaturation` while it still
+  `kImportLookContrastBeforeFilmLike`, and its saturation to `kProfileToneEntrySaturation` while it still
   equals `kDefaultPipelineSaturation`. A value that the user selected stays. A document that lacks
   `grade.primary` keeps every Grade value.
 - An input sequence that is open on contrast or saturation keeps its value, as for Film Print.
 - One Undo restores the profile reference and both values; Redo writes them again.
+- Since #891 the RAW import look has the Film-like RGB curve with contrast 0
+  ([tone_curve_preset_study.md](../edit/tone_curve_preset_study.md), section 6). The entry also
+  writes the identity RGB curve while the RGB curve still has the Film-like points; contrast 15
+  (`kImportLookContrastBeforeFilmLike`) of a document imported before still resets to 0.
 - Exposure stays. The anchor `E_a` makes the stored +1.5 EV the profile's own exposure
   (section 3.3), so a user exposure keeps its meaning with the stage on or off.
 - A leave (stage on to stage off) writes no Grade value, as Film Print does.
@@ -562,7 +566,7 @@ Implementation:
 - `ProfileToneEntryResetTargets(document, develop_before)` in
   `app/editor_pipeline_command_service.cpp` returns `EditorEntryResetWrite` values (field target
   and patch JSON): contrast `kProfileToneEntryContrast` (0) while Color Grade 1 holds
-  `kDefaultPipelineContrast`, saturation `kProfileToneEntrySaturation` (1.0) while it holds
+  `kImportLookContrastBeforeFilmLike`, saturation `kProfileToneEntrySaturation` (1.0) while it holds
   `kDefaultPipelineSaturation`. The rule applies when the live document runs the stage after the
   edit and the stored reference of `develop_before` did not run it. Color Grade 1 is
   `PipelineDocument::PrimaryGrade`.
@@ -722,7 +726,7 @@ DrtPostExecutor::Execute -> ResolveProfileToneStage -> PackProfileToneGpuData
 | `profile_tone` | Key of `camera_profile_file`; written only as `false` | boolean | default true | Section 6.3 |
 | `kProfileToneEntryContrast` | Contrast of Color Grade 1 after a profile tone entry | slider value | 0 (catalog identity) | User decision, section 6.5 |
 | `kProfileToneEntrySaturation` | Saturation of Color Grade 1 after a profile tone entry | multiplier | 1.0, as `kFilmPrintEntrySaturation` | User decision, section 6.5 |
-| `kDefaultPipelineContrast` | Contrast of the RAW import look | slider value | 15 | `pipeline_document.hpp` |
+| `kImportLookContrastBeforeFilmLike` | Contrast of the RAW import look | slider value | 15 | `pipeline_document.hpp` |
 | `kDefaultPipelineSaturation` | Saturation of the RAW import look | multiplier | 1.3 | `pipeline_document.hpp` |
 | `DngToneCurve` | Immutable curve value with its own fingerprint | value type | per profile | Section 6.3 |
 | `kMaxDngToneCurvePoints` | Largest point count of a curve that the reader accepts | points | 4096 | T1 choice; user folder maximum 256 |

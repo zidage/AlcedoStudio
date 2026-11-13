@@ -18,6 +18,7 @@
 #include "automation/automation_protocol.hpp"
 #include "automation_in_process_session.hpp"
 #include "edit/history/edit_commit_attribution.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "support/document_transfer_test_support.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 
@@ -329,17 +330,19 @@ TEST_F(AutomationAdjustmentCommandsTest, PasteOfExposureOnlyKeepsImportLookOfOth
       QStringLiteral("color_grade"));
   EXPECT_EQ(ItemOfType(target_after, QStringLiteral("alcedo.adjustment.exposure")).value("value"),
             source_exposure.value("value"));
-  // Contrast +15 and saturation +30 of the import look stay on the target.
-  for (const QString type : {QStringLiteral("alcedo.adjustment.contrast"),
-                             QStringLiteral("alcedo.adjustment.saturation")}) {
+  // The Film-like curve, contrast, and saturation +30 of the import look stay on the target.
+  for (const QString type :
+       {QStringLiteral("alcedo.adjustment.curve"), QStringLiteral("alcedo.adjustment.contrast"),
+        QStringLiteral("alcedo.adjustment.saturation")}) {
     EXPECT_EQ(ItemOfType(target_after, type).value("value"),
               ItemOfType(target_before, type).value("value"))
         << type.toStdString();
   }
-  EXPECT_EQ(ItemOfType(target_after, QStringLiteral("alcedo.adjustment.contrast"))
-                .value("value")
-                .toString(),
-            QStringLiteral("15.00"));
+  const auto* film_like = FindToneCurvePreset(kFilmLikeToneCurvePresetId);
+  ASSERT_NE(film_like, nullptr);
+  EXPECT_EQ(
+      ItemOfType(target_after, QStringLiteral("alcedo.adjustment.curve")).value("value").toString(),
+      QStringLiteral("%1 points").arg(film_like->points.size()));
 }
 
 }  // namespace
