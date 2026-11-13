@@ -3528,6 +3528,56 @@ auto EditorSessionService::HideMaskRangeCoverage() -> EditorSessionResult {
   return result;
 }
 
+auto EditorSessionService::ShowCurveInputHistogram(const NodeId& grade_id,
+                                                   std::shared_ptr<ICurveInputHistogramSink> sink)
+    -> EditorSessionResult {
+  if (grade_id.Empty() || sink == nullptr) {
+    return Reject("The curve input histogram requires a Color Grade and a receiver");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind    = EditorSessionCommandKind::ShowCurveInputHistogram;
+    command.node_id = grade_id;
+    return SubmitCommand(std::move(command),
+                         [this, sink = std::move(sink)](const EditorSessionCommand& queued) {
+                           return ShowCurveInputHistogram(queued.node_id, sink);
+                         });
+  }
+  const CurveInputHistogramRequest request{grade_id, std::move(sink)};
+  const bool                       changed = render_.curve_input_histogram_request() != request;
+  render_.SetCurveInputHistogramRequest(request);
+  if (changed && lifecycle_.state() == EditorSessionState::Interactive && lifecycle_.has_image()) {
+    // One Quality render of the whole frame counts the new request; later frames carry it too.
+    EditorRenderCommand command;
+    command.operation_id = current_operation_id_;
+    command.reason       = EditorRenderReason::CurveInputHistogramRequested;
+    (void)render_.RouteViewChange(command, lifecycle_.identity(),
+                                  lifecycle_.active_image_load_request(), lifecycle_.state());
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Curve input histogram shown";
+  return result;
+}
+
+auto EditorSessionService::HideCurveInputHistogram() -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::HideCurveInputHistogram;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return HideCurveInputHistogram(); });
+  }
+  render_.SetCurveInputHistogramRequest(std::nullopt);
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Curve input histogram hidden";
+  return result;
+}
+
 auto EditorSessionService::RetryMaskCoveragePreview(EditorMaskCoverageCompletion on_complete)
     -> EditorSessionResult {
   if (!on_complete) {

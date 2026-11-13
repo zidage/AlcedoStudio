@@ -136,6 +136,12 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
       request.mask_coverage_probe = desc.mask_coverage_probe_;
       request.mask_coverage_sink  = desc.mask_coverage_sink_;
     }
+    // The curve input histogram describes the whole image: a viewport region frame and a Detail
+    // patch do not carry it.
+    if (role == ExecutorRole::Interactive && presentation_mode != FramePresentationMode::RoiFrame &&
+        frame_metadata.frame_role != FrameRole::DetailPatch) {
+      request.curve_input_histogram = desc.curve_input_histogram_;
+    }
     request.decode_res          = decode;
     request.require_host_output = host_output;
     request.role                = role;
@@ -176,6 +182,8 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
       quality.mask_coverage_probe = desc.mask_coverage_probe_;
       quality.mask_coverage_sink  = desc.mask_coverage_sink_;
     }
+    // A Quality Base frame renders the whole edit frame, so it carries the curve input histogram.
+    quality.curve_input_histogram = desc.curve_input_histogram_;
     return quality;
   }
   if (requested_render_type == RenderType::DETAIL_ROI_PREVIEW) {

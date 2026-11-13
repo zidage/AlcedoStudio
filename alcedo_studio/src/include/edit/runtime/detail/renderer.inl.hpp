@@ -12,6 +12,7 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/frame_presenter.hpp"
@@ -119,6 +120,11 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
           "Renderer: a Mask coverage probe needs an interactive render with a frame sink and a "
           "coverage sink");
     }
+  }
+  if (request.curve_input_histogram.has_value() &&
+      (!interactive || request.curve_input_histogram->sink == nullptr)) {
+    throw std::invalid_argument(
+        "Renderer: a curve input histogram needs an interactive render and a histogram sink");
   }
   if (interactive) {
     const auto key = RenderBindingKey::Of(snapshot);
@@ -245,13 +251,18 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
   if (request.mask_coverage_probe.has_value()) {
     probe.emplace(MaskCoverageProbeRecord<Backend>{*request.mask_coverage_probe});
   }
+  std::optional<CurveInputHistogramRecord> histogram;
+  if (request.curve_input_histogram.has_value()) {
+    histogram.emplace(CurveInputHistogramRecord{request.curve_input_histogram->grade_id});
+  }
   GraphValueId output_id;
   try {
     diag::PreviewCpuInterval encode(diag::PreviewCpuStage::Encode);
     output_id = render_device->Execute(plan, prepared, document, false,
                                        interactive ? TransientAllocationPolicy::SessionPacked
                                                    : TransientAllocationPolicy::ExactRelease,
-                                       persistence, probe.has_value() ? &*probe : nullptr);
+                                       persistence, probe.has_value() ? &*probe : nullptr,
+                                       histogram.has_value() ? &*histogram : nullptr);
   } catch (...) {
     // PlanExecutor has already cancelled the render and reported the error.
     release_batch_resources_after_failure();
@@ -305,6 +316,25 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
         *request.mask_coverage_sink);
   };
 
+  // The curve input histogram follows its photo frame: same identity. A plan without the
+  // requested Grade gives a histogram with no counts, so the receiver shows no older counts.
+  const auto publish_histogram = [&]() {
+    if (!histogram.has_value()) {
+      return;
+    }
+    const auto&         metadata = request.submission.metadata;
+    CurveInputHistogram result;
+    result.grade_id                = histogram->grade_id;
+    result.image_identity          = metadata.image_identity;
+    result.session_epoch           = metadata.session_epoch;
+    result.presentation_request_id = metadata.presentation_request_id;
+    if (histogram->recorded) {
+      result.counts       = ReadCurveInputHistogramCounts(*render_device, histogram->grade_id);
+      result.sample_count = histogram->sample_count;
+    }
+    request.curve_input_histogram->sink->PublishCurveInputHistogram(std::move(result));
+  };
+
   try {
     if (request.sink != nullptr) {
       // Attach the exact resolved geometry so viewer-side Mask mapping uses the
@@ -321,6 +351,7 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
       auto host = FramePresenter<Backend>::Download(*render_device, output_id);
       finish_successful_session();
       const auto coverage = publish_probe();
+      publish_histogram();
       return {.pixels        = std::move(host),
               .geometry      = plan.geometry,
               .display       = display_config,
@@ -328,6 +359,7 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     }
     finish_successful_session();
     const auto coverage = publish_probe();
+    publish_histogram();
     return {.pixels        = std::make_shared<ImageBuffer>(),
             .geometry      = plan.geometry,
             .display       = display_config,

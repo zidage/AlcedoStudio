@@ -37,6 +37,9 @@ inline constexpr const char* kPrimaryGradeNeighborBlurSceneKernelName =
     "primary_grade_neighbor_blur_h_scene_rgba32f";
 inline constexpr const char* kPrimaryGradeNeighborApplySceneKernelName =
     "primary_grade_neighbor_apply_v_scene_rgba32f";
+/// Histogram of the curve input of a Color Grade (issue #888).
+inline constexpr const char* kPrimaryGradeCurveInputHistogramKernelName =
+    "primary_grade_curve_input_histogram";
 inline constexpr const char* kPrimaryGradeMixKernelName       = "primary_grade_mix_rgba32f";
 inline constexpr const char* kPrimaryGradeMixMaskedKernelName = "primary_grade_mix_masked_rgba32f";
 inline constexpr const char* kLocalToneExtractKernelName      = "local_tone_extract";

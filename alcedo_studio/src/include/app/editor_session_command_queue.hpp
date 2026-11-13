@@ -111,6 +111,10 @@ enum class EditorSessionCommandKind : std::uint8_t {
   ShowMaskRangeCoverage,
   /// Hide the range probe coverage.
   HideMaskRangeCoverage,
+  /// Count the curve input of one Color Grade in the editor renders (issue #888).
+  ShowCurveInputHistogram,
+  /// Stop the curve input histogram.
+  HideCurveInputHistogram,
 };
 
 /// Worker messages that are delivered back to the session owner.

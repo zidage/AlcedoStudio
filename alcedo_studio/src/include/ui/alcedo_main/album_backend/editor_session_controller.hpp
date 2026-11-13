@@ -31,6 +31,7 @@
 #include "edit/mask/mask_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
+#include "ui/alcedo_main/album_backend/editor_curve_histogram_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_operation_publisher.hpp"
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
@@ -135,6 +136,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY
                  PresentationBindingChanged)
   Q_PROPERTY(EditorScopeController* scopeController READ scope_controller CONSTANT)
+  // Histogram of the Curve input of a Color Grade (issue #888); the Tone Curve section binds it.
+  Q_PROPERTY(
+      EditorCurveHistogramController* curveHistogram READ curve_histogram_controller CONSTANT)
   Q_PROPERTY(EditorMaskCreationAdapter* maskCreation READ mask_creation CONSTANT)
   // Phase 5D: the render coordinator has in-flight or pending work for this
   // session. QML binds a busy indicator to it. Reflects backend render_busy()
@@ -440,6 +444,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] auto scope_controller() const -> EditorScopeController* {
     return scope_controller_.get();
   }
+  [[nodiscard]] auto curve_histogram_controller() const -> EditorCurveHistogramController* {
+    return curve_histogram_controller_.get();
+  }
   [[nodiscard]] auto mask_creation() const -> EditorMaskCreationAdapter* {
     return mask_creation_.get();
   }
@@ -559,6 +566,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void OnBackendSessionResult(const alcedo::EditorSessionResult& result);
   void SetActiveAdjustmentPanel(const QString& panel, bool request_view);
   void SyncMaskAdjustmentPanel();
+  /// Show the request of the curve histogram owner on the backend, or hide it (issue #888).
+  void ApplyCurveHistogramRequest();
   /// Show the Compare page while the backend comparison is open, and restore the panel that was
   /// active before it when the comparison closes.
   void SyncComparisonAdjustmentPanel();
@@ -639,6 +648,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Presents the coverage preview again when the viewport dropped it with its QRhi resources.
   QMetaObject::Connection mask_coverage_lost_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
+  std::unique_ptr<EditorCurveHistogramController> curve_histogram_controller_;
   std::unique_ptr<EditorMaskCreationAdapter>     mask_creation_;
   std::shared_ptr<alcedo::MaskThumbnailService>  mask_thumbnail_service_;
 };

@@ -21,6 +21,8 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "color/color_encoding_math.h"
+#include "curve_input_histogram_test_support.hpp"
 #include "edit/geometry/texture_sampling_plan.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/film_format.hpp"
@@ -37,6 +39,7 @@
 #include "edit/operators/models/sharpen_model.hpp"
 #include "edit/operators/models/tone_curve_spline.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_mapping.hpp"
@@ -666,6 +669,29 @@ class OpenClGradeFixture : public ::testing::Test {
     return result;
   }
 
+  /// Render through Color Grade with @p record; keep the grade input in last_develop_pixels_.
+  void RenderWithHistogramRecord(CurveInputHistogramRecord& record) {
+    device_->BeginRender();
+    ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
+    ExecuteOpenClGeometryResample(*device_, plan_);
+    ExecuteOpenClCameraColor(*device_, plan_, document_);
+    (void)ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_, &record);
+    device_->EndRender();
+    device_->WaitIdle();
+    last_develop_pixels_ = Download(*device_, plan_.develop_output);
+    device_->PublishResults();
+  }
+
+  /// Counts of the curve input histogram of the primary Grade from one render.
+  auto RenderCurveInputHistogram() -> std::vector<std::uint32_t> {
+    CurveInputHistogramRecord record{document_.PrimaryGrade()->Id()};
+    RenderWithHistogramRecord(record);
+    const auto& extent = plan_.geometry.render_extent;
+    EXPECT_TRUE(record.recorded);
+    EXPECT_EQ(record.sample_count, CurveInputHistogramSampleCount(extent.width, extent.height));
+    return ReadCurveInputHistogramCounts(*device_, record.grade_id);
+  }
+
   auto RenderThroughDrtPost(bool reset_counters_after_develop = false) -> OpenClDrtResult {
     device_->BeginRender();
     ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
@@ -813,6 +839,68 @@ TEST_F(OpenClGradeFixture, OpenClChannelCurvesMatchSplineReferenceForRedAloneAnd
                                               tone_curve_test::SolveCurveSplines(curve)),
             tone_curve_test::kGpuCurveTolerance)
       << "RGB curve with a blue curve";
+}
+
+TEST_F(OpenClGradeFixture, OpenClCurveInputHistogramCountsTheGradeInputOnTheCurveAxis) {
+  // A curve that is not the identity: the histogram counts the curve input, not its output.
+  auto&       curve = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate s_curve;
+  s_curve.points = tone_curve_test::LiftedMidtonePoints(5, 0.1f, 0.9f);
+  curve.Apply(s_curve);
+
+  const auto  counts = RenderCurveInputHistogram();
+  const auto& extent = plan_.geometry.render_extent;
+  ASSERT_FALSE(last_develop_pixels_.empty());
+  EXPECT_EQ(counts, curve_histogram_test::ReferenceCounts(last_develop_pixels_, extent.width,
+                                                          extent.height));
+  EXPECT_EQ(device_->PassStats().curve_input_histogram_execute, 1U);
+}
+
+TEST_F(OpenClGradeFixture, OpenClCurveInputHistogramSamplesEveryStepPixelsOfALargeInput) {
+  constexpr std::uint32_t width  = 2100;
+  constexpr std::uint32_t height = 5;
+  prepared_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(width, height),
+                                            gpu_dag_test::FullSensor(width, height));
+  plan_     = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
+  ASSERT_EQ(plan_.geometry.render_extent.width, width);
+  ASSERT_EQ(plan_.geometry.render_extent.height, height);
+  ASSERT_EQ(CurveInputHistogramSampleStep(width, height), 3U);
+
+  const auto counts = RenderCurveInputHistogram();
+  EXPECT_EQ(counts, curve_histogram_test::ReferenceCounts(last_develop_pixels_, width, height));
+}
+
+TEST_F(OpenClGradeFixture, OpenClCurveInputHistogramIgnoresCurveEditsAndFollowsExposure) {
+  const auto  identity_curve = RenderCurveInputHistogram();
+  const auto  input          = last_develop_pixels_;
+  const auto& extent         = plan_.geometry.render_extent;
+
+  auto&       curve          = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate edit;
+  edit.points = tone_curve_test::LiftedMidtonePoints(6, 0.05f, 0.95f, -0.25f);
+  edit.blue   = tone_curve_test::LiftedMidtonePoints(4, 0.2f, 0.8f);
+  curve.Apply(edit);
+  EXPECT_EQ(RenderCurveInputHistogram(), identity_curve) << "a curve edit changed the histogram";
+
+  ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
+  const auto exposed = RenderCurveInputHistogram();
+  EXPECT_NE(exposed, identity_curve);
+  curve_histogram_test::ExpectCountsOfShiftedPixels(exposed, input, extent.width, extent.height,
+                                                    1.0f / CE_ACESCC_B, "Exposure +1");
+}
+
+TEST_F(OpenClGradeFixture, OpenClRenderWithoutAHistogramRequestRecordsNoHistogram) {
+  (void)RenderGrade();
+  EXPECT_EQ(device_->PassStats().curve_input_histogram_execute, 0U);
+  EXPECT_EQ(device_->Workspace().Values().Find(
+                CurveInputHistogramCountsId(document_.PrimaryGrade()->Id())),
+            nullptr);
+
+  // A request for a Grade that the plan does not have records nothing.
+  CurveInputHistogramRecord missing{NodeId{"grade.missing"}};
+  RenderWithHistogramRecord(missing);
+  EXPECT_FALSE(missing.recorded);
+  EXPECT_EQ(device_->PassStats().curve_input_histogram_execute, 0U);
 }
 
 TEST_F(OpenClGradeFixture, OpenClHlsHueAdjustmentChangesGradePixels) {

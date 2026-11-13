@@ -340,6 +340,48 @@ __global__ void PrimaryGradeKernel(const float4* input, float4* output, std::uin
   output[index] = MixGradePixel(mix_source[index], adjusted, grade_mix, mask, index);
 }
 
+// Bin of one ACEScc value on the curve axis: CurveInputHistogramBin (curve_input_histogram.hpp).
+__device__ auto CurveInputHistogramBinOf(float value) -> std::uint32_t {
+  return static_cast<std::uint32_t>(fminf(fmaxf(value * 256.0f, 0.0f), 255.0f));
+}
+
+// Histogram of the curve input (issue #888). Each thread takes samples of the grid
+// (x, y) = (column * step, row * step), applies the adjustments before the Curve, and adds the
+// three bins to the block counts in shared memory; each block then adds its counts to @p counts.
+__global__ void CurveInputHistogramKernel(const float4* input, std::uint32_t width,
+                                          std::uint32_t step, std::uint32_t sampled_width,
+                                          std::uint32_t                sample_count,
+                                          const unsigned char*         parameter_base,
+                                          const CudaAdjustmentCommand* commands,
+                                          std::uint32_t command_count, unsigned int* counts) {
+  __shared__ unsigned int block_counts[kCurveInputHistogramValueCount];
+  for (std::uint32_t i = threadIdx.x; i < kCurveInputHistogramValueCount; i += blockDim.x) {
+    block_counts[i] = 0U;
+  }
+  __syncthreads();
+  for (std::uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x; sample < sample_count;
+       sample += gridDim.x * blockDim.x) {
+    const std::uint32_t x      = (sample % sampled_width) * step;
+    const std::uint32_t y      = (sample / sampled_width) * step;
+    const float4        source = input[y * width + x];
+    float3              c      = make_float3(source.x, source.y, source.z);
+    for (std::uint32_t i = 0; i < command_count; ++i) {
+      const auto* params = reinterpret_cast<const CudaAdjustmentParams*>(
+          parameter_base + commands[i].parameter_offset);
+      c = ApplyAdjustment(c, *params, nullptr, 0U);
+    }
+    atomicAdd(&block_counts[CurveInputHistogramBinOf(c.x)], 1U);
+    atomicAdd(&block_counts[kCurveInputHistogramBins + CurveInputHistogramBinOf(c.y)], 1U);
+    atomicAdd(&block_counts[2U * kCurveInputHistogramBins + CurveInputHistogramBinOf(c.z)], 1U);
+  }
+  __syncthreads();
+  for (std::uint32_t i = threadIdx.x; i < kCurveInputHistogramValueCount; i += blockDim.x) {
+    if (block_counts[i] != 0U) {
+      atomicAdd(&counts[i], block_counts[i]);
+    }
+  }
+}
+
 auto MaskPointer(CudaRenderDevice& device, const GraphValueId* mask_id, std::uint32_t width,
                  std::uint32_t height) -> const std::uint8_t* {
   if (mask_id == nullptr) {
@@ -446,6 +488,33 @@ struct CudaGradeOps {
                     mask_id, width, height);
   }
 
+  static void DispatchCurveInputHistogram(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                          const CudaBackend::Buffer& commands,
+                                          std::uint32_t command_count, CudaBackend::Buffer& counts,
+                                          std::uint32_t width, std::uint32_t height,
+                                          std::uint32_t step) {
+    const auto sampled_width = CurveInputHistogramSampledLength(width, step);
+    const auto sample_count  = static_cast<std::uint32_t>(
+        static_cast<std::uint64_t>(sampled_width) * CurveInputHistogramSampledLength(height, step));
+    if (sample_count == 0U) {
+      return;
+    }
+    constexpr std::uint32_t kBlock     = 256;
+    constexpr std::uint32_t kMaxBlocks = 128;
+    const auto  blocks = std::min<std::uint32_t>((sample_count + kBlock - 1) / kBlock, kMaxBlocks);
+    const auto* parameter_base = static_cast<const unsigned char*>(
+        device.Workspace().Parameters().DeviceBuffer().DevicePointer());
+    CurveInputHistogramKernel<<<blocks, kBlock, 0, device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(CudaSceneTexture(device, src).DevicePointer()), width, step,
+        sampled_width, sample_count, parameter_base,
+        static_cast<const CudaAdjustmentCommand*>(commands.DevicePointer()), command_count,
+        static_cast<unsigned int*>(counts.DevicePointer()));
+    if (::cudaGetLastError() != cudaSuccess) {
+      throw std::runtime_error(
+          "ExecuteCudaPrimaryGrade: curve input histogram kernel launch failed");
+    }
+  }
+
   static auto AcquireHorizontalScratch(CudaRenderDevice& device, std::uint32_t width,
                                        std::uint32_t height) -> HorizontalScratch {
     return AcquireCudaScratch(device.Workspace(), width, height);
@@ -498,9 +567,10 @@ struct CudaGradeOps {
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
                              const PreparedRawInput& prepared, const PipelineDocument& document,
                              const CompiledGradeNode& compiled_grade_node,
-                             const FrameSceneBinding& scene) -> CudaPrimaryGradeResult {
+                             const FrameSceneBinding& scene, CurveInputHistogramRecord* histogram)
+    -> CudaPrimaryGradeResult {
   const auto executed = GradeExecutor<CudaGradeOps>::Execute(device, plan, prepared, document,
-                                                             compiled_grade_node, scene);
+                                                             compiled_grade_node, scene, histogram);
   CudaPrimaryGradeResult result;
   result.output                                 = executed.output;
   result.output_binding                         = executed.output_binding;
@@ -515,8 +585,8 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
 }
 
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
-                             const PreparedRawInput& prepared, const PipelineDocument& document)
-    -> CudaPrimaryGradeResult {
+                             const PreparedRawInput& prepared, const PipelineDocument& document,
+                             CurveInputHistogramRecord* histogram) -> CudaPrimaryGradeResult {
   if (plan.grade_nodes.empty()) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: plan has no Color Grade");
   }
@@ -526,7 +596,10 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   FrameSceneBinding scene = FrameSceneBinding::CachedImage(plan.develop_output);
   CudaPrimaryGradeResult last{};
   for (const auto& compiled_grade : plan.grade_nodes) {
-    last  = ExecuteCudaPrimaryGrade(device, plan, prepared, document, compiled_grade, scene);
+    auto* grade_histogram =
+        histogram != nullptr && histogram->grade_id == compiled_grade.node_id ? histogram : nullptr;
+    last  = ExecuteCudaPrimaryGrade(device, plan, prepared, document, compiled_grade, scene,
+                                    grade_histogram);
     scene = last.output_binding;
   }
   return last;

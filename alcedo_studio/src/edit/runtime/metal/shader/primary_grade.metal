@@ -299,6 +299,67 @@ kernel void primary_grade_pointwise(texture2d<float, access::read> src [[texture
   dst.write(adjusted, gid);
 }
 
+struct CurveInputHistogramDispatch {
+  uint  width;
+  uint  step;
+  uint  sampled_width;
+  uint  sample_count;
+  uint  command_count;
+  float local_reference;
+  uint  pad[2];
+};
+
+// Bin of one ACEScc value on the curve axis: CurveInputHistogramBin (curve_input_histogram.hpp).
+static inline uint CurveInputHistogramBin(float value) {
+  return uint(fmin(fmax(value * 256.0f, 0.0f), 255.0f));
+}
+
+// Histogram of the curve input (issue #888). Each thread takes samples of the grid
+// (x, y) = (column * step, row * step), applies the adjustments before the Curve, and adds the
+// three bins to the threadgroup counts; each threadgroup then adds its counts to @p counts (red
+// bins 0..255, green 256..511, blue 512..767).
+kernel void primary_grade_curve_input_histogram(
+    texture2d<float, access::read> src [[texture(0)]],
+    device const uchar* parameter_base [[buffer(0)]],
+    device const uint* commands [[buffer(1)]],
+    constant CurveInputHistogramDispatch& dispatch [[buffer(2)]],
+    device const float4* lmt_lut [[buffer(3)]],
+    device atomic_uint* counts [[buffer(4)]],
+    uint thread_index [[thread_index_in_threadgroup]],
+    uint threads_per_group [[threads_per_threadgroup]],
+    uint global_index [[thread_position_in_grid]],
+    uint grid_size [[threads_per_grid]]) {
+  threadgroup atomic_uint group_counts[768];
+  for (uint i = thread_index; i < 768u; i += threads_per_group) {
+    atomic_store_explicit(&group_counts[i], 0u, memory_order_relaxed);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint sample = global_index; sample < dispatch.sample_count; sample += grid_size) {
+    const uint2  gid    = uint2((sample % dispatch.sampled_width) * dispatch.step,
+                                (sample / dispatch.sampled_width) * dispatch.step);
+    const float4 source = src.read(gid);
+    float3       c      = source.xyz;
+    const uint   pixel_index = gid.y * dispatch.width + gid.x;
+    for (uint i = 0; i < dispatch.command_count; ++i) {
+      c = ApplyAdjustment(c, LoadParams(parameter_base, commands[i]), pixel_index,
+                          dispatch.local_reference, lmt_lut, 0u);
+    }
+    atomic_fetch_add_explicit(&group_counts[CurveInputHistogramBin(c.x)], 1u,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&group_counts[256u + CurveInputHistogramBin(c.y)], 1u,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&group_counts[512u + CurveInputHistogramBin(c.z)], 1u,
+                              memory_order_relaxed);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint i = thread_index; i < 768u; i += threads_per_group) {
+    const uint count = atomic_load_explicit(&group_counts[i], memory_order_relaxed);
+    if (count != 0u) {
+      atomic_fetch_add_explicit(&counts[i], count, memory_order_relaxed);
+    }
+  }
+}
+
 kernel void primary_grade_mix(texture2d<float, access::read> source [[texture(0)]],
                               texture2d<float, access::read> adjusted [[texture(1)]],
                               texture2d<float, access::write> dst [[texture(2)]],

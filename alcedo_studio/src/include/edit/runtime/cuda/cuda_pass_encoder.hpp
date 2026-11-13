@@ -80,9 +80,9 @@ template <>
 struct PassEncoder<CudaBackend, GpuPassKind::PrimaryColorGrade> {
   static auto Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
                      const PreparedRawInput& input, const PipelineDocument& document,
-                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene)
-      -> FrameSceneBinding {
-    return ExecuteCudaPrimaryGrade(device, plan, input, document, compiled_grade, scene)
+                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene,
+                     CurveInputHistogramRecord* histogram = nullptr) -> FrameSceneBinding {
+    return ExecuteCudaPrimaryGrade(device, plan, input, document, compiled_grade, scene, histogram)
         .output_binding;
   }
 };
