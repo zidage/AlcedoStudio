@@ -142,9 +142,16 @@ class Renderer {
    * channel when the render does not evaluate the Mask); `mask_coverage` of the result says
    * which. The probe changes no photo pixel and no result key.
    *
+   * With `request.curve_input_histogram`, the grade pass of the requested Color Grade also counts
+   * its curve input, and after the photo frame the render reads the counts and gives them to the
+   * sink of the request with the identity of the frame (issue #888). When the plan has no such
+   * Grade, the sink receives a histogram with no counts. The histogram changes no photo pixel and
+   * no result key.
+   *
    * @pre No other render runs on this renderer.
-   * @throws std::invalid_argument when `request.role` differs from @ref Role, or for a probe
-   *         without an interactive role, a frame sink, and a coverage sink.
+   * @throws std::invalid_argument when `request.role` differs from @ref Role, for a probe
+   *         without an interactive role, a frame sink, and a coverage sink, or for a curve input
+   *         histogram without an interactive role and a histogram sink.
    * @throws std::runtime_error for invalid input, GPU execution, presentation, coverage
    *         publication, or download failure. Nothing is returned for a failed render. A failed
    *         coverage publication happens after the photo frame and its results are published.

@@ -2,7 +2,7 @@
 
 Date: 2026-11-13
 
-Status: TC1 and TC2 complete. TC3 to TC6 planned.
+Status: TC1, TC2, and TC3 complete. TC4 to TC6 planned.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -309,10 +309,114 @@ the Model does not change. A stored channel curve that the spline does not accep
   and for the RGB curve with a blue curve. The CPU references of the OpenCL and Metal grade tests
   read the four records through `tone_curve_test::ApplyPackedCurveSlot`.
 
-### TC3 to TC6
+### TC3: histogram of the Curve input
 
-See the issues. TC5 removes `kPointerGain` and moves `EditorToneCurveItem` to the archive of
-deprecated code when the section no longer uses it.
+**Objective.** The editor renders give the histogram of the red, green, and blue values at the
+input of the Curve adjustment of one Color Grade, on the axis of the curve, to a QML-facing owner.
+The scope analyzer cannot give it: it reads the final display frame, after the curve and the
+display transform.
+
+**Data rules.**
+
+- 256 bins for each channel on the curve axis [0, 1]. `CurveInputHistogramBin(v)` is
+  `floor(v * 256)` limited to [0, 255]: a value below 0 counts in bin 0, a value at or above 1 in
+  bin 255, a value that is not a number in bin 0. The three kernels use the same float operations.
+- The counted values are the grade input after the compiled adjustments before the Curve in
+  `ColorGradeCompileOrder` (White Balance, Exposure, Contrast, Whites, Blacks, as far as the Grade
+  has them). All of them are pointwise. The Curve and the adjustments after it are not applied.
+- Sample grid: the pixels `(i * step, j * step)` of the grade input, with
+  `step = ceil(long edge / 1024)` (`CurveInputHistogramSampleStep`). A Quality Base frame of 4096
+  pixels is sampled every 4 pixels.
+- Only a render of the whole edit frame counts the histogram: the Interactive full frame, the
+  Quality Base frame, and a Detail render of the whole frame. A viewport region frame and a Detail
+  patch do not (the histogram of a region is not the histogram of the image). While the user works
+  zoomed in, the histogram follows the settled Quality Base frames.
+
+**Files.**
+
+- New: `edit/runtime/curve_input_histogram.hpp` (request, record, result, sink, bin and sample
+  rules, `ReadCurveInputHistogramCounts`), `ui/alcedo_main/album_backend/
+  editor_curve_histogram_controller.{hpp,cpp}`.
+- Changed: `GradeExecutor` (record step), the three grade passes and kernels
+  (`CurveInputHistogramKernel` in `cuda_primary_grade_pass.cu`,
+  `primary_grade_curve_input_histogram` in `primary_grade.cl` and `primary_grade.metal`),
+  `PlanExecutor`, the render devices, `PassEncoder<PrimaryColorGrade>` of the three backends,
+  `Renderer::RenderImage`, `PipelineApplyRequest`, `RenderDesc` and `PipelineTask::
+  MakeApplyRequest`, `EditorRenderIntent`, `EditorSessionRenderController`, `EditorSessionService`
+  (`ShowCurveInputHistogram`, `HideCurveInputHistogram`), `MakeEditorRenderDesc`,
+  `EditorSessionController` (`curveHistogram` property), `GpuNodePassStats`
+  (`curve_input_histogram_execute`).
+
+**Place in the render.** The film negative scan reduces its prescan inside the film print pass and
+reads it on the host before the pass continues, because the result changes the pass. The curve
+input histogram changes no pixel, so the grade pass records it on the device next to the grade
+work (`GradeExecutor::RecordCurveInputHistogram`), and the renderer reads the 768 counts after the
+photo frame was presented, as it publishes the Mask coverage probe. The grade pass applies the
+adjustments before the Curve inside one fused kernel, so the histogram kernel evaluates those
+adjustments again on the sample grid (`ApplyAdjustment` of the same shader) and adds the bins in
+group-local counts, then into the device counts with atomics. The pass writes no extra image.
+
+**Success call chain (consumer to sink).**
+
+```text
+QML Tone Curve section sets EditorCurveHistogramController.active and gradeNodeId
+  -> RequestChanged -> EditorSessionController::ApplyCurveHistogramRequest
+  -> IEditorSessionBackend::ShowCurveInputHistogram(grade_id, sink)        (owner command)
+  -> EditorSessionRenderController::SetCurveInputHistogramRequest; one Quality render
+     (EditorRenderReason::CurveInputHistogramRequested); later intents carry the request
+  -> MakeEditorRenderDesc -> RenderDesc::curve_input_histogram_
+  -> PipelineTask::MakeApplyRequest (whole frame only) -> PipelineApplyRequest
+  -> Renderer::RenderImage -> PlanExecutor::Execute(..., CurveInputHistogramRecord*)
+  -> PassEncoder<PrimaryColorGrade> -> Execute{Cuda,OpenCl,Metal}PrimaryGrade
+  -> GradeExecutor::RecordCurveInputHistogram -> Ops::DispatchCurveInputHistogram (kernel)
+  -> Renderer: present photo frame -> ReadCurveInputHistogramCounts
+  -> ICurveInputHistogramSink::PublishCurveInputHistogram (render thread)
+  -> queued to EditorCurveHistogramController::Accept (identity, epoch, Grade check)
+  -> BuildScopeHistogramRenderData -> HistogramChanged
+```
+
+**Failure and edge chains.**
+
+- The plan has no Grade with the requested id (removed Grade, another image): the record stays
+  not recorded -> the sink receives a histogram with no counts -> the owner clears its histogram.
+- A result of another image identity, session epoch, or Grade, or a result that arrives while the
+  owner is not active -> `Accept` drops it.
+- The owner is destroyed while a render runs -> its destructor detaches the sink; Qt drops a call
+  that was queued before.
+- A batch request or a request without a sink -> `Renderer::RenderImage` throws
+  `std::invalid_argument`.
+- A device download error after the frame -> the render reports the error; the photo frame and its
+  results are already published.
+
+**Tests.**
+
+- `GpuDagCudaPrimaryGradeTest`, `GpuDagOpenClGradeTest`, `GpuDagMetalGradeTest`:
+  `*CurveInputHistogramCountsTheGradeInputOnTheCurveAxis` (exact counts against the CPU reference
+  of the downloaded grade input, with a curve that is not the identity),
+  `*CurveInputHistogramSamplesEveryStepPixelsOfALargeInput` (2100 x 5 input, step 3, exact counts),
+  `*CurveInputHistogramIgnoresCurveEditsAndFollowsExposure` (equal after a curve edit; after
+  Exposure +1 each bin is within the range of the shifted CPU reference),
+  `*RenderWithoutAHistogramRequestRecordsNoHistogram` (no kernel, no counts buffer; a request for
+  a Grade that the plan does not have records nothing). CPU reference:
+  `tests/edit/runtime/curve_input_histogram_test_support.hpp`.
+- `ExecutorSnapshotRenderTest.InteractiveRenderGivesTheCurveInputHistogramToItsSink` (real RAW:
+  frame identity in the result, one sample count per channel, equal after a curve edit, changed
+  after an Exposure edit, no counts for a missing Grade, nothing without a request).
+- `PipelineFrameSinkTest.CurveInputHistogramRidesOnlyOnRendersOfTheWholeFrame`.
+- `EditorMaskCoveragePreviewTest.EditorCurveInputHistogramTest.*` (session facade: no request
+  before Show; Show routes one Quality render and every frame carries the request until Hide;
+  the same request routes no second render; refusal without a Grade or a sink; Show before an
+  image applies to its frames).
+- `EditorCurveHistogramControllerTest` (request only while active with a Grade; result of the
+  current image published as `ScopeHistogramRenderData`; results of another image, epoch, or Grade
+  dropped; image change and a result without counts clear the histogram; a result from another
+  thread is accepted on the owner thread; the sink outlives the owner).
+
+### TC4 to TC6
+
+See the issues. TC5 binds `EditorSessionController.curveHistogram` (`active`, `gradeNodeId`) to
+the Tone Curve section and draws `histogram()`. TC5 removes `kPointerGain` and moves
+`EditorToneCurveItem` to the archive of deprecated code when the section no longer uses it.
 
 ## 6. Completion record
 
@@ -383,3 +487,46 @@ Verification (Windows, debug build, RTX 3080 Laptop, CUDA and OpenCL):
 `GpuDagMetalGradeTest.MetalChannelCurvesMatchSplineReferenceForRedAloneAndRgbWithBlue` and the
 Metal shader compile were not run locally: the Mac was not reachable. The full test suite was not
 run.
+
+### TC3 (2026-11-13)
+
+Status: complete. Branch `feature/tone-curve-input-histogram`, stacked on TC2. The design, call
+chains, and test list are in the TC3 section of section 5.
+
+Decisions made during the work:
+
+- The request is presentation state of a render request (`CurveInputHistogramRequest` on
+  `EditorRenderIntent`, `RenderDesc`, and `PipelineApplyRequest`), as the Mask coverage probe is.
+  It is in no result key, so a curve edit or a histogram toggle invalidates nothing.
+- Only a render of the whole edit frame carries it (`PipelineTask::MakeApplyRequest`). A viewport
+  region frame and a Detail patch do not.
+- The grade pass records the histogram with a separate kernel that applies the adjustments before
+  the Curve again on a sample grid (step `ceil(long edge / 1024)`). The fused grade kernel writes
+  no intermediate image, and the prescan pattern of the film negative scan (read before the pass
+  continues) is not needed, because the histogram changes no pixel. The renderer reads the counts
+  after the photo frame.
+- A zero-mix Grade still records the histogram of its curve input.
+- A render of a document without the requested Grade gives the sink a histogram with no counts, so
+  the owner shows no older histogram. The request stays across an image change.
+- The session API is `ShowCurveInputHistogram` and `HideCurveInputHistogram` (owner commands); a
+  changed request routes one Quality render (`EditorRenderReason::CurveInputHistogramRequested`).
+- The QML-facing owner is `EditorCurveHistogramController`, the `curveHistogram` property of
+  `EditorSessionController`. TC5 binds `active` and `gradeNodeId` and draws `histogram()`.
+
+Verification (Windows, debug build, RTX 3080 Laptop, CUDA and OpenCL):
+
+| Binary and filter | Result |
+| --- | --- |
+| `GpuDagCudaPrimaryGradeTest --gtest_filter=CudaPrimaryGradeFixture.*` (includes the three `CudaCurveInputHistogram*` tests and `CudaRenderWithoutAHistogramRequestRecordsNoHistogram`) | 36 passed, 1 failed: `CudaNeighborGradeDetailPixelsAreUnchanged`, stored detail pixels ([#690](https://github.com/zidage/AlcedoStudio/issues/690)) |
+| `GpuDagOpenClGradeTest --gtest_filter=OpenClGradeFixture.*` (includes the four OpenCL tests) | 37 passed |
+| `ExecutorSnapshotRenderTest --gtest_filter=*CurveInputHistogram*:ExecutorSnapshotRenderTest.InteractiveRendersOfOneLineageReuseSourceAndPlan:ExecutorRoleTest.*` | 4 passed |
+| `PipelineFrameSinkTest` (all) | 24 passed |
+| `EditorMaskCoveragePreviewTest` (all, includes `EditorCurveInputHistogramTest.*`) | 25 passed |
+| `EditorCurveHistogramControllerTest` (all) | 6 passed |
+| `EditorSessionRenderSchedulerPortTest` (all) | 46 passed |
+| `alcedo_main` | builds |
+
+The three `GpuDagMetalGradeTest.MetalCurveInputHistogram*` tests,
+`MetalRenderWithoutAHistogramRequestRecordsNoHistogram`, and the Metal shader compile were not
+run locally: the Mac was not reachable. The macOS CI builds the Metal targets. The full test suite
+was not run.

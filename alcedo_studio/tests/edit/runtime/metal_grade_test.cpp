@@ -21,6 +21,8 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "color/color_encoding_math.h"
+#include "curve_input_histogram_test_support.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/film_format.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -35,6 +37,7 @@
 #include "edit/operators/models/sharpen_model.hpp"
 #include "edit/operators/models/tone_curve_spline.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_mapping.hpp"
@@ -321,6 +324,29 @@ class MetalGradeFixture : public ::testing::Test {
     return result;
   }
 
+  /// Render through Color Grade with @p record; return the grade input.
+  auto RenderWithHistogramRecord(CurveInputHistogramRecord& record) -> std::vector<Rgba> {
+    device_.BeginRender();
+    ExecuteMetalDevelop(device_, plan_, prepared_, document_);
+    ExecuteMetalGeometryResample(device_, plan_);
+    ExecuteMetalCameraColor(device_, plan_, document_);
+    (void)ExecuteMetalPrimaryGrade(device_, plan_, prepared_, document_, &record);
+    device_.EndRender();
+    device_.WaitIdle();
+    return Download(device_, plan_.develop_output);
+  }
+
+  /// Counts of the curve input histogram of the primary Grade from one render; @p input receives
+  /// the grade input of that render.
+  auto RenderCurveInputHistogram(std::vector<Rgba>& input) -> std::vector<std::uint32_t> {
+    CurveInputHistogramRecord record{document_.PrimaryGrade()->Id()};
+    input              = RenderWithHistogramRecord(record);
+    const auto& extent = plan_.geometry.render_extent;
+    EXPECT_TRUE(record.recorded);
+    EXPECT_EQ(record.sample_count, CurveInputHistogramSampleCount(extent.width, extent.height));
+    return ReadCurveInputHistogramCounts(device_, record.grade_id);
+  }
+
   auto RenderThroughDrtPost() -> MetalDrtResult {
     device_.BeginRender();
     ExecuteMetalDevelop(device_, plan_, prepared_, document_);
@@ -463,6 +489,71 @@ TEST_F(MetalGradeFixture, MetalChannelCurvesMatchSplineReferenceForRedAloneAndRg
                                               tone_curve_test::SolveCurveSplines(curve)),
             tone_curve_test::kGpuCurveTolerance)
       << "RGB curve with a blue curve";
+}
+
+TEST_F(MetalGradeFixture, MetalCurveInputHistogramCountsTheGradeInputOnTheCurveAxis) {
+  // A curve that is not the identity: the histogram counts the curve input, not its output.
+  auto&       curve = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate s_curve;
+  s_curve.points = tone_curve_test::LiftedMidtonePoints(5, 0.1f, 0.9f);
+  curve.ApplyUpdate(s_curve);
+
+  std::vector<Rgba> input;
+  const auto        counts = RenderCurveInputHistogram(input);
+  const auto&       extent = plan_.geometry.render_extent;
+  ASSERT_FALSE(input.empty());
+  EXPECT_EQ(counts, curve_histogram_test::ReferenceCounts(input, extent.width, extent.height));
+  EXPECT_EQ(device_.PassStats().curve_input_histogram_execute, 1U);
+}
+
+TEST_F(MetalGradeFixture, MetalCurveInputHistogramSamplesEveryStepPixelsOfALargeInput) {
+  constexpr std::uint32_t width  = 2100;
+  constexpr std::uint32_t height = 5;
+  prepared_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(width, height),
+                                            gpu_dag_test::FullSensor(width, height));
+  plan_     = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
+  ASSERT_EQ(plan_.geometry.render_extent.width, width);
+  ASSERT_EQ(plan_.geometry.render_extent.height, height);
+  ASSERT_EQ(CurveInputHistogramSampleStep(width, height), 3U);
+
+  std::vector<Rgba> input;
+  const auto        counts = RenderCurveInputHistogram(input);
+  EXPECT_EQ(counts, curve_histogram_test::ReferenceCounts(input, width, height));
+}
+
+TEST_F(MetalGradeFixture, MetalCurveInputHistogramIgnoresCurveEditsAndFollowsExposure) {
+  std::vector<Rgba> input;
+  const auto        identity_curve = RenderCurveInputHistogram(input);
+  const auto&       extent         = plan_.geometry.render_extent;
+
+  auto&             curve          = ModelByType<CurveModel>(type_ids::Curve());
+  CurveUpdate       edit;
+  edit.points = tone_curve_test::LiftedMidtonePoints(6, 0.05f, 0.95f, -0.25f);
+  edit.blue   = tone_curve_test::LiftedMidtonePoints(4, 0.2f, 0.8f);
+  curve.ApplyUpdate(edit);
+  std::vector<Rgba> unused;
+  EXPECT_EQ(RenderCurveInputHistogram(unused), identity_curve)
+      << "a curve edit changed the histogram";
+
+  ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
+  const auto exposed = RenderCurveInputHistogram(unused);
+  EXPECT_NE(exposed, identity_curve);
+  curve_histogram_test::ExpectCountsOfShiftedPixels(exposed, input, extent.width, extent.height,
+                                                    1.0f / CE_ACESCC_B, "Exposure +1");
+}
+
+TEST_F(MetalGradeFixture, MetalRenderWithoutAHistogramRequestRecordsNoHistogram) {
+  (void)RenderGrade();
+  EXPECT_EQ(device_.PassStats().curve_input_histogram_execute, 0U);
+  EXPECT_EQ(device_.Workspace().Values().Find(
+                CurveInputHistogramCountsId(document_.PrimaryGrade()->Id())),
+            nullptr);
+
+  // A request for a Grade that the plan does not have records nothing.
+  CurveInputHistogramRecord missing{NodeId{"grade.missing"}};
+  (void)RenderWithHistogramRecord(missing);
+  EXPECT_FALSE(missing.recorded);
+  EXPECT_EQ(device_.PassStats().curve_input_histogram_execute, 0U);
 }
 
 TEST_F(MetalGradeFixture, MetalHlsHueAdjustmentChangesGradePixels) {

@@ -58,6 +58,9 @@ EditorSessionController::EditorSessionController(alcedo::IEditorSessionBackend* 
   connect(&actions_, &EditorActionAvailabilityModel::AvailabilityChanged, this,
           &EditorSessionController::ActionAvailabilityChanged);
   scope_controller_ = std::make_unique<EditorScopeController>(this);
+  curve_histogram_controller_ = std::make_unique<EditorCurveHistogramController>(this);
+  connect(curve_histogram_controller_.get(), &EditorCurveHistogramController::RequestChanged, this,
+          &EditorSessionController::ApplyCurveHistogramRequest);
   mask_creation_    = std::make_unique<EditorMaskCreationAdapter>(this);
   connect(mask_creation_.get(), &EditorMaskCreationAdapter::maskCreationChanged, this,
           &EditorSessionController::SyncMaskAdjustmentPanel);
@@ -74,6 +77,7 @@ EditorSessionController::EditorSessionController(alcedo::IEditorSessionBackend* 
                                         std::move(region));
   });
   scope_controller_->SetImageIdentity(image_id(), SessionEpoch());
+  curve_histogram_controller_->SetImageIdentity(image_id(), SessionEpoch());
   LoadFilmstripUiPrefs();
   LoadDesktopUiPrefs();
   if (session_backend_) {
@@ -196,6 +200,22 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
   }
   if (scope_controller_) {
     scope_controller_->SetImageIdentity(image_id(), SessionEpoch());
+    curve_histogram_controller_->SetImageIdentity(image_id(), SessionEpoch());
+  }
+  // A new backend has no request yet: show the request of an active consumer on it.
+  if (curve_histogram_controller_->request().has_value()) {
+    ApplyCurveHistogramRequest();
+  }
+}
+
+void EditorSessionController::ApplyCurveHistogramRequest() {
+  if (!session_backend_ || !curve_histogram_controller_) {
+    return;
+  }
+  if (const auto request = curve_histogram_controller_->request()) {
+    (void)session_backend_->ShowCurveInputHistogram(request->grade_id, request->sink);
+  } else {
+    (void)session_backend_->HideCurveInputHistogram();
   }
 }
 
@@ -580,6 +600,7 @@ void EditorSessionController::SyncViewportIdentity() {
   }
   if (scope_controller_) {
     scope_controller_->SetImageIdentity(target_image_id, target_generation);
+    curve_histogram_controller_->SetImageIdentity(target_image_id, target_generation);
   }
   if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
     const bool presentation_active =
@@ -626,6 +647,8 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
             session_backend_->active_image_load_request().value + (same_image ? 0 : 1));
         if (scope_controller_) {
           scope_controller_->SetImageIdentity(presentation_image_id, presentation_generation);
+          curve_histogram_controller_->SetImageIdentity(presentation_image_id,
+                                                        presentation_generation);
         }
         if (auto* item =
                 qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
@@ -637,6 +660,7 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
     if (elementId == 0 || imageId == 0) {
       if (scope_controller_) {
         scope_controller_->SetImageIdentity(0, 0);
+        curve_histogram_controller_->SetImageIdentity(0, 0);
       }
       // Empty editor is an explicit persisted close, not a fake image open.
       if (auto* item =
@@ -1097,6 +1121,7 @@ void EditorSessionController::OnBackendSessionResult(const alcedo::EditorSession
 void EditorSessionController::Close() {
   if (scope_controller_) {
     scope_controller_->SetImageIdentity(0, 0);
+    curve_histogram_controller_->SetImageIdentity(0, 0);
   }
   if (scope_controller_) {
     scope_controller_->Shutdown();
@@ -1122,6 +1147,7 @@ void EditorSessionController::Close() {
 void EditorSessionController::Shutdown() {
   if (scope_controller_) {
     scope_controller_->SetImageIdentity(0, 0);
+    curve_histogram_controller_->SetImageIdentity(0, 0);
   }
   if (scope_controller_) {
     scope_controller_->Shutdown();
@@ -1149,6 +1175,7 @@ void EditorSessionController::Finalize(bool persistChanges) {
   if (!session_backend_) {
     if (scope_controller_) {
       scope_controller_->SetImageIdentity(0, 0);
+      curve_histogram_controller_->SetImageIdentity(0, 0);
       scope_controller_->Shutdown();
     }
     Close();
@@ -1188,6 +1215,7 @@ void EditorSessionController::Finalize(bool persistChanges) {
   if (result.kind != alcedo::EditorSessionResultKind::SaveStarted && !close_waiting) {
     if (scope_controller_) {
       scope_controller_->SetImageIdentity(0, 0);
+      curve_histogram_controller_->SetImageIdentity(0, 0);
       scope_controller_->Shutdown();
     }
     if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
@@ -1597,6 +1625,12 @@ auto ReasonName(alcedo::EditorRenderReason reason) -> const char* {
       return "PastedPipelineDocument";
     case R::ResourceChanged:
       return "ResourceChanged";
+    case R::ComparisonClosed:
+      return "ComparisonClosed";
+    case R::MaskCoverageProbeChanged:
+      return "MaskCoverageProbeChanged";
+    case R::CurveInputHistogramRequested:
+      return "CurveInputHistogramRequested";
   }
   return "Unknown";
 }

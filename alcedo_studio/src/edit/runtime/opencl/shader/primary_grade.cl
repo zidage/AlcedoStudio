@@ -305,6 +305,49 @@ static inline void SceneWriteRgba(write_only image2d_t image, __global float4* b
   write_imagef(image, gid, value);
 }
 
+// Bin of one ACEScc value on the curve axis: CurveInputHistogramBin (curve_input_histogram.hpp).
+static inline uint CurveInputHistogramBin(float value) {
+  return (uint)fmin(fmax(value * 256.0f, 0.0f), 255.0f);
+}
+
+// Histogram of the curve input (issue #888). Each work item takes samples of the grid
+// (x, y) = (column * step, row * step), applies the adjustments before the Curve, and adds the
+// three bins to the work-group counts in local memory; each work group then adds its counts to
+// @p counts (red bins 0..255, green 256..511, blue 512..767).
+__kernel void primary_grade_curve_input_histogram(
+    __read_only image2d_t src_image, __global const float4* src_buffer, int src_is_buffer,
+    uint width, uint step, uint sampled_width, uint sample_count,
+    __global const uchar* parameter_base, __global const uint* commands, uint command_count,
+    __global const float4* lut, __global uint* counts) {
+  __local uint group_counts[768];
+  for (uint i = (uint)get_local_id(0); i < 768u; i += (uint)get_local_size(0)) {
+    group_counts[i] = 0u;
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (uint sample = (uint)get_global_id(0); sample < sample_count;
+       sample += (uint)get_global_size(0)) {
+    const int2   gid    = (int2)((int)((sample % sampled_width) * step),
+                                 (int)((sample / sampled_width) * step));
+    const float4 source = SceneReadRgba(src_image, src_buffer, src_is_buffer, gid, width);
+    float3       c      = source.xyz;
+    for (uint i = 0u; i < command_count; ++i) {
+      __global const GradeAdjustmentParams* params =
+          (__global const GradeAdjustmentParams*)(parameter_base + commands[i]);
+      c = ApplyAdjustment(c, params, lut, 0u);
+    }
+    atomic_inc(&group_counts[CurveInputHistogramBin(c.x)]);
+    atomic_inc(&group_counts[256u + CurveInputHistogramBin(c.y)]);
+    atomic_inc(&group_counts[512u + CurveInputHistogramBin(c.z)]);
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  for (uint i = (uint)get_local_id(0); i < 768u; i += (uint)get_local_size(0)) {
+    const uint count = group_counts[i];
+    if (count != 0u) {
+      atomic_add(&counts[i], count);
+    }
+  }
+}
+
 __kernel void primary_grade_pointwise_scene_rgba32f(
     __read_only image2d_t src_image, __global const float4* src_buffer, int src_is_buffer,
     __write_only image2d_t dst_image, __global float4* dst_buffer, int dst_is_buffer,

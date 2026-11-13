@@ -44,6 +44,19 @@ struct PrimaryGradeDispatchParams {
   std::uint32_t pad[3]          = {};
 };
 
+/// Layout of CurveInputHistogramDispatch in primary_grade.metal.
+struct CurveInputHistogramDispatch {
+  std::uint32_t width           = 0;
+  std::uint32_t step            = 1;
+  std::uint32_t sampled_width   = 0;
+  std::uint32_t sample_count    = 0;
+  std::uint32_t command_count   = 0;
+  float         local_reference = 0.0f;
+  std::uint32_t pad[2]          = {};
+};
+
+static_assert(sizeof(CurveInputHistogramDispatch) == 32);
+
 auto AcquireRgba(MetalRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
                  std::uint32_t height) -> ResourceLease<MetalBackend>& {
   return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
@@ -277,6 +290,50 @@ struct MetalGradeOps {
                                  highlights_slider, geometry, mix, mask_id);
   }
 
+  static void DispatchCurveInputHistogram(MetalRenderDevice& device, const FrameSceneBinding& src,
+                                          const MetalBackend::Buffer& commands,
+                                          std::uint32_t command_count, MetalBackend::Buffer& counts,
+                                          std::uint32_t width, std::uint32_t height,
+                                          std::uint32_t step) {
+    CurveInputHistogramDispatch dispatch;
+    dispatch.width         = width;
+    dispatch.step          = step;
+    dispatch.sampled_width = CurveInputHistogramSampledLength(width, step);
+    dispatch.sample_count =
+        static_cast<std::uint32_t>(static_cast<std::uint64_t>(dispatch.sampled_width) *
+                                   CurveInputHistogramSampledLength(height, step));
+    dispatch.command_count   = command_count;
+    dispatch.local_reference = local_tone_mapping::kAcesccMiddleGray;
+    if (dispatch.sample_count == 0U) {
+      return;
+    }
+    auto pipeline =
+        Pipeline("primary_grade_curve_input_histogram", "Metal PrimaryGrade Curve Input Histogram");
+    auto& backend = device.Workspace().Device();
+    auto* encoder = static_cast<MTL::ComputeCommandEncoder*>(
+        backend.EnsureComputeCommandEncoder(device.CommandContext()));
+    if (encoder == nullptr) {
+      throw std::runtime_error(
+          "ExecuteMetalPrimaryGrade: curve input histogram encoder is missing");
+    }
+    // The adjustments before the Curve never read the LUT; the kernel still needs a valid buffer.
+    const auto lut = backend.DummyLut();
+    encoder->setComputePipelineState(pipeline.get());
+    encoder->setTexture(static_cast<MTL::Texture*>(MetalSceneTexture(device, src).Native()), 0);
+    encoder->setBuffer(
+        static_cast<MTL::Buffer*>(device.Workspace().Parameters().DeviceBuffer().Native()), 0, 0);
+    encoder->setBuffer(static_cast<MTL::Buffer*>(commands.Native()), 0, 1);
+    encoder->setBytes(&dispatch, sizeof(dispatch), 2);
+    encoder->setBuffer(static_cast<MTL::Buffer*>(lut.native), 0, 3);
+    encoder->setBuffer(static_cast<MTL::Buffer*>(counts.Native()), 0, 4);
+    constexpr NS::UInteger kGroup     = 256;
+    constexpr NS::UInteger kMaxGroups = 128;
+    const NS::UInteger     groups =
+        std::min<NS::UInteger>((dispatch.sample_count + kGroup - 1) / kGroup, kMaxGroups);
+    encoder->dispatchThreadgroups(MTL::Size{groups, 1, 1}, MTL::Size{kGroup, 1, 1});
+    backend.NoteComputeDispatch(device.CommandContext());
+  }
+
   static void CheckAfterEncode(MetalRenderDevice&) {}
 };
 
@@ -300,9 +357,10 @@ void AppendMetalPrimaryGradeWarmup(std::vector<MetalPipelineWarmup>& pipelines) 
 auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
                               const PreparedRawInput& prepared, const PipelineDocument& document,
                               const CompiledGradeNode& compiled_grade_node,
-                              const FrameSceneBinding& scene) -> MetalPrimaryGradeResult {
-  const auto executed = GradeExecutor<MetalGradeOps>::Execute(device, plan, prepared, document,
-                                                             compiled_grade_node, scene);
+                              const FrameSceneBinding& scene, CurveInputHistogramRecord* histogram)
+    -> MetalPrimaryGradeResult {
+  const auto executed = GradeExecutor<MetalGradeOps>::Execute(
+      device, plan, prepared, document, compiled_grade_node, scene, histogram);
   MetalPrimaryGradeResult result;
   result.output                                 = executed.output;
   result.output_binding                         = executed.output_binding;
@@ -318,8 +376,8 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
 }
 
 auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
-                              const PreparedRawInput& prepared, const PipelineDocument& document)
-    -> MetalPrimaryGradeResult {
+                              const PreparedRawInput& prepared, const PipelineDocument& document,
+                              CurveInputHistogramRecord* histogram) -> MetalPrimaryGradeResult {
   if (plan.grade_nodes.empty()) {
     throw std::runtime_error("ExecuteMetalPrimaryGrade: plan has no Color Grade");
   }
@@ -329,7 +387,10 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   FrameSceneBinding scene = FrameSceneBinding::CachedImage(plan.develop_output);
   MetalPrimaryGradeResult last{};
   for (const auto& compiled_grade : plan.grade_nodes) {
-    last  = ExecuteMetalPrimaryGrade(device, plan, prepared, document, compiled_grade, scene);
+    auto* grade_histogram =
+        histogram != nullptr && histogram->grade_id == compiled_grade.node_id ? histogram : nullptr;
+    last  = ExecuteMetalPrimaryGrade(device, plan, prepared, document, compiled_grade, scene,
+                                     grade_histogram);
     scene = last.output_binding;
   }
   return last;

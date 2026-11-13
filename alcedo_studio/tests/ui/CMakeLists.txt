@@ -321,6 +321,7 @@ alcedo_register_test_target(EditorComparisonServiceTest ui)
 add_executable(EditorMaskCoveragePreviewTest
     ${ALCEDO_TEST_ROOT}/app/editor_mask_coverage_preview_test.cpp
     ${ALCEDO_TEST_ROOT}/app/editor_mask_range_coverage_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/editor_curve_input_histogram_test.cpp
     ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
 target_include_directories(EditorMaskCoveragePreviewTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
@@ -1713,6 +1714,28 @@ alcedo_ui_gtest_discover_tests(EditorScopeControllerTest
     TEST_PREFIX "EditorScopeControllerTest."
     PROPERTIES LABELS "workspace_qml;editor_scope")
 alcedo_register_test_target(EditorScopeControllerTest ui)
+
+# Tone Curve TC3 (issue #888): request, identity filter, and thread hand-off of the owner of the
+# curve input histogram.
+add_executable(EditorCurveHistogramControllerTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_curve_histogram_controller_test.cpp
+)
+target_include_directories(EditorCurveHistogramControllerTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorCurveHistogramControllerTest
+    PRIVATE
+        AlcedoInProcessTestMain
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+)
+alcedo_ui_gtest_discover_tests(EditorCurveHistogramControllerTest
+    TEST_PREFIX "EditorCurveHistogramControllerTest."
+    PROPERTIES LABELS "workspace_qml;editor_tone_curve")
+alcedo_register_test_target(EditorCurveHistogramControllerTest ui)
 
 # Histogram plot painting: additive channel overlap, clip markers, and the break across a cut peak.
 add_executable(EditorScopeItemPaintTest
