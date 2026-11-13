@@ -229,7 +229,8 @@ auto CompleteCurrentPanelParameterTarget(const PipelineDocument& document, std::
     return target;
   }
   if (target.field_key == "raw_decode" || target.field_key == "lens_calib" ||
-      target.field_key == "color_temp" || target.field_key == "input_profile") {
+      target.field_key == "color_temp" || target.field_key == "input_profile" ||
+      target.field_key == "camera_profile_file") {
     const auto* develop = document.Develop();
     if (develop == nullptr) {
       SetError(error, "Develop node is missing");

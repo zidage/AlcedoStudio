@@ -347,6 +347,23 @@ gtest_discover_tests(PipelineDngProfileBindingTest TEST_PREFIX "PipelineDngProfi
 alcedo_copy_duckdb_fts_extension(PipelineDngProfileBindingTest)
 alcedo_register_test_target(PipelineDngProfileBindingTest app ci_core)
 
+# DCP camera profile reference (dcp_camera_profile_plan.md, C4): the project stores the reference,
+# and the field write, the history, and every load path bind it from the DCP library.
+add_executable(PipelineDcpProfileBindingTest
+  ${ALCEDO_TEST_ROOT}/app/pipeline_dcp_profile_binding_test.cpp)
+target_include_directories(PipelineDcpProfileBindingTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+  ${ALCEDO_TEST_DIR})
+target_link_libraries(PipelineDcpProfileBindingTest
+  ImportService ProjectService PipelineMgmtService AdjustmentTransferService
+  EditorPipelineCommandService PipelineHistoryApplier OpenImageIO::OpenImageIO
+  GTest::gtest_main)
+target_compile_definitions(PipelineDcpProfileBindingTest PRIVATE
+  ALCEDO_COMPAT_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/compat")
+gtest_discover_tests(PipelineDcpProfileBindingTest TEST_PREFIX "PipelineDcpProfileBindingTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_fts_extension(PipelineDcpProfileBindingTest)
+alcedo_register_test_target(PipelineDcpProfileBindingTest app ci_core)
+
 if(ALCEDO_CUDA_ENABLED)
   qt_add_executable(ImportPipelineDocumentTest
     ${ALCEDO_TEST_ROOT}/app/import_pipeline_document_test.cpp)

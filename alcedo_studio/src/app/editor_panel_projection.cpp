@@ -448,6 +448,23 @@ auto ReadInputProfile(const PipelineDocument& document, const EditorParameterTar
   return FinishField(target, std::move(value), out);
 }
 
+auto ReadCameraProfileFile(const PipelineDocument& document, const EditorParameterTarget& target,
+                           EditorPanelFieldPresentation* out, std::string* error) -> bool {
+  const auto* params = DevelopParams(document, target, error);
+  if (params == nullptr) {
+    return false;
+  }
+  EditorPanelCameraProfileFileValue value;
+  value.raster = params->RasterInput().has_value();
+  if (const auto reference = params->CameraProfileFile(); reference.has_value()) {
+    value.selected     = true;
+    value.resolved     = reference->IsBound();
+    value.camera_model = reference->camera_model;
+    value.profile_name = reference->profile_name;
+  }
+  return FinishField(target, std::move(value), out);
+}
+
 auto ReadGeometry(const PipelineDocument& document, const EditorParameterTarget& target,
                   EditorPanelFieldPresentation* out, std::string* error) -> bool {
   if (target.owner_kind != EditorParameterOwnerKind::Document) {
@@ -534,6 +551,7 @@ auto EditorPanelAdapterTable::Production() -> EditorPanelAdapterTable {
     table.Add({"color_temp", "look", &ReadColorTemp});
     table.Add({"lens_calib", "raw", &ReadLens});
     table.Add({"input_profile", "raw", &ReadInputProfile});
+    table.Add({"camera_profile_file", "raw", &ReadCameraProfileFile});
     table.Add({"crop_rotate", "geometry", &ReadGeometry});
     return table;
   }();

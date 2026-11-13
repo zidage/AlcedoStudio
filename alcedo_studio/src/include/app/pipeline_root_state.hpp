@@ -67,7 +67,9 @@ void BindSourceDngProfiles(Storage& storage, sl_element_id_t id, LoadedRootState
 
 /**
  * @brief Bind the image camera profile onto a document that nothing renders yet. RAW roots bind
- *        the stored RAW color context; roots without one use the working-space profile.
+ *        the stored RAW color context; roots without one use the working-space profile. Then
+ *        BindDcpCameraProfile binds a stored DCP reference from the DCP library; an identity
+ *        that the library does not hold stays unbound, and the render of the document fails.
  */
 void BindRootCameraProfile(PipelineDocument&                            document,
                            const std::optional<RawRuntimeColorContext>& raw_color_context);

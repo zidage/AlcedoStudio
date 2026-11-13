@@ -90,7 +90,7 @@ using EditorParameterWrite =
                  EditorLutWrite, HlsUpdate, ColorWheelUpdate, Cat02WhiteBalanceUpdate,
                  SharpenUpdate, DevelopRawDecodeUpdate, DevelopColorTemperatureUpdate,
                  DevelopLensCalibrationUpdate, DevelopInputProfileUpdate, DrtParameterUpdate,
-                 ImageGeometryUpdate, DrtFilmFormatUpdate>;
+                 ImageGeometryUpdate, DrtFilmFormatUpdate, DevelopCameraProfileFileUpdate>;
 
 /**
  * @brief Parse a field JSON object into the matching Model operation.

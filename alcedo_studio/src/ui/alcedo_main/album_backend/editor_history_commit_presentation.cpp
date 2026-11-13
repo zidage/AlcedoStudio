@@ -225,6 +225,8 @@ auto DisplayName(std::optional<EditorAdjustmentField> field) -> QString {
       return QStringLiteral("Input Profile");
     case EditorAdjustmentField::FilmFormat:
       return QStringLiteral("Film Format");
+    case EditorAdjustmentField::CameraProfileFile:
+      return QStringLiteral("Camera Profile");
   }
   return QStringLiteral("Edit");
 }
@@ -277,6 +279,7 @@ auto IconResource(std::optional<EditorAdjustmentField> field) -> QString {
     case EditorAdjustmentField::ColorTemperature:
       return QStringLiteral(":/history_icons/thermometer.svg");
     case EditorAdjustmentField::InputProfile:
+    case EditorAdjustmentField::CameraProfileFile:
       return QStringLiteral(":/history_icons/swatch-book.svg");
     case EditorAdjustmentField::FilmFormat:
       return QStringLiteral(":/history_icons/scan-line.svg");
@@ -454,6 +457,24 @@ auto SummarizeFilmFormat(const nlohmann::json& after, const nlohmann::json& befo
   if (old_value.isEmpty()) {
     return {QString(), value, value};
   }
+  return {old_value, value, QStringLiteral("%1 → %2").arg(old_value, value)};
+}
+
+/// Profile name of a stored Develop JSON. Without a DCP reference the import profile applies:
+/// the embedded profile of a DNG file, or the built-in camera matrices.
+auto CameraProfileName(const nlohmann::json& develop) -> QString {
+  if (const auto name = JsonStringAtPath(develop, {"camera_profile_file", "profile_name"})) {
+    return *name;
+  }
+  const auto* embedded = JsonAtPath(develop, {"camera_profile", "dng_profile_fingerprint"});
+  return embedded != nullptr && embedded->is_string() ? QStringLiteral("Embedded")
+                                                      : QStringLiteral("Built-in");
+}
+
+auto SummarizeCameraProfileFile(const nlohmann::json& after, const nlohmann::json& before)
+    -> CommitSummary {
+  const QString value     = CameraProfileName(after);
+  const QString old_value = CameraProfileName(before);
   return {old_value, value, QStringLiteral("%1 → %2").arg(old_value, value)};
 }
 
@@ -763,6 +784,8 @@ auto BuildSummary(std::optional<EditorAdjustmentField> field, const nlohmann::js
       return SummarizeInputProfile(after, before);
     case EditorAdjustmentField::FilmFormat:
       return SummarizeFilmFormat(after, before);
+    case EditorAdjustmentField::CameraProfileFile:
+      return SummarizeCameraProfileFile(after, before);
     case EditorAdjustmentField::Hls:
       return SummarizeHls(after, before);
     case EditorAdjustmentField::ColorWheel:

@@ -121,6 +121,18 @@ struct EditorPanelInputProfileValue {
   std::string referral;
 };
 
+/// DCP profile reference of the Develop node (`camera_profile_file`). `selected` is false when the
+/// import profile applies. `resolved` is false for a stored reference that the DCP library could
+/// not bind, whose render fails (plan decision P-4). `raster` is true for a raster document, which
+/// has no camera profile.
+struct EditorPanelCameraProfileFileValue {
+  bool        raster   = false;
+  bool        selected = false;
+  bool        resolved = false;
+  std::string camera_model;
+  std::string profile_name;
+};
+
 /// The film format of the DRT node, as its document identifier (`16mm`, `35mm`, or `70mm`).
 struct EditorPanelFilmFormatValue {
   std::string film_format = "35mm";
@@ -138,7 +150,8 @@ using EditorPanelFieldValue =
                  EditorPanelCurveValue, EditorPanelHlsValue, EditorPanelColorWheelValue,
                  EditorPanelColorTempValue, EditorPanelRawDecodeValue, EditorPanelOdtValue,
                  EditorPanelLensValue, EditorPanelGeometryValue, EditorPanelGradeWhiteBalanceValue,
-                 EditorPanelInputProfileValue, EditorPanelFilmFormatValue>;
+                 EditorPanelInputProfileValue, EditorPanelFilmFormatValue,
+                 EditorPanelCameraProfileFileValue>;
 
 /**
  * @brief One panel field copied from a Graph Node Model.

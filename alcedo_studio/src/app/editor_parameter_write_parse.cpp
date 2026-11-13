@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "app/dcp_camera_profile_binding.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/film_format.hpp"
@@ -401,6 +402,7 @@ auto ParseRawDecodeUpdate(const nlohmann::json& params) -> DevelopRawDecodeUpdat
                      "as_shot_cct",
                      "as_shot_tint",
                      "camera_profile",
+                     "camera_profile_file",
                      "lens_enabled",
                      "apply_vignetting",
                      "apply_distortion",
@@ -442,6 +444,7 @@ auto ParseColorTemperatureUpdate(const nlohmann::json& params) -> DevelopColorTe
                      "use_camera_wb",
                      "user_wb",
                      "camera_profile",
+                     "camera_profile_file",
                      "lens_enabled",
                      "apply_vignetting",
                      "apply_distortion",
@@ -531,7 +534,8 @@ auto ParseLensCalibrationUpdate(const nlohmann::json& params) -> DevelopLensCali
                      "custom_tint",
                      "as_shot_cct",
                      "as_shot_tint",
-                     "camera_profile"},
+                     "camera_profile",
+                     "camera_profile_file"},
                     "lens_calib");
   DevelopLensCalibrationUpdate update;
   update.lens_enabled         = ReadOptionalBool(object, {"lens_enabled", "enabled"}, "lens_calib");
@@ -879,6 +883,53 @@ auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
 /// The form of a parse: a write sets only its keys; a complete value sets every field.
 enum class ParseForm { Write, Value };
 
+/// `camera_profile_file` (dcp_camera_profile_plan.md, phase C4).
+///
+/// A write is a selection: {"camera_model", "profile_name"}, or the same object under
+/// "camera_profile_file". `{}`, null, and {"camera_profile_file": null} clear the reference. The
+/// identity is resolved through the DCP library; an identity that the library does not hold is
+/// rejected, so the document stays unchanged.
+///
+/// A value is a stored Develop JSON, complete or reduced to the owned key: the reference with its
+/// fingerprint under "camera_profile_file", and no key for no reference. The other keys belong to
+/// other Develop fields. An identity that the library does not hold gives an unbound reference,
+/// so a project opens without its DCP folder and its render fails with the named error.
+auto ParseCameraProfileFileUpdate(const nlohmann::json& params, ParseForm form)
+    -> DevelopCameraProfileFileUpdate {
+  constexpr std::string_view kField = "camera_profile_file";
+  RequireObject(params, kField);
+  const nlohmann::json* reference = &params;
+  if (params.contains(kField)) {
+    reference = &params.at(std::string{kField});
+    if (form == ParseForm::Write && params.size() != 1) {
+      RejectUnknownKeys(params, {kField}, kField);
+    }
+  } else if (form == ParseForm::Value && !params.contains("camera_model")) {
+    return {};
+  }
+  if (reference->is_null() || (reference->is_object() && reference->empty())) {
+    return {};
+  }
+  if (form == ParseForm::Value) {
+    const auto stored   = DevelopCameraProfileFileFromJson(*reference);
+    auto       resolved = ResolveStoredDcpCameraProfileFile(stored);
+    if (resolved.IsBound()) {
+      return {std::move(resolved.profile), std::nullopt};
+    }
+    return {nullptr, std::move(resolved)};
+  }
+  RequireObject(*reference, kField);
+  RejectUnknownKeys(*reference, {"camera_model", "profile_name"}, kField);
+  const auto camera_model = ReadOptionalString(*reference, {"camera_model"}, kField);
+  const auto profile_name = ReadOptionalString(*reference, {"profile_name"}, kField);
+  if (!camera_model.has_value() || camera_model->empty() || !profile_name.has_value() ||
+      profile_name->empty()) {
+    throw std::invalid_argument(
+        "camera_profile_file: a selection needs the strings camera_model and profile_name");
+  }
+  return {FindSelectableDcpCameraProfile(*camera_model, *profile_name), std::nullopt};
+}
+
 auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, ParseForm form)
     -> EditorParameterWrite {
   if (field == "exposure") {
@@ -949,6 +1000,9 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, Par
   }
   if (field == "input_profile") {
     return ParseInputProfileUpdate(params);
+  }
+  if (field == "camera_profile_file") {
+    return ParseCameraProfileFileUpdate(params, form);
   }
   if (field == "odt") {
     auto update = ParseDrtUpdate(params);
