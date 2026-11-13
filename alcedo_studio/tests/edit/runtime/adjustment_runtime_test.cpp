@@ -340,7 +340,7 @@ TEST(GpuDagAdjustmentRuntime, CurvePackingCarriesAllSixteenPointsAndRejectsSeven
   curve.SetPoints({{0.0f, 0.0f}, {1.0f, 1.0f}});
   CurveUpdate update;
   update.blue = points;
-  curve.Apply(update);
+  curve.ApplyUpdate(update);
   EXPECT_THROW((void)MakeCurveGradeRuntimeParams(curve), std::invalid_argument);
 }
 
@@ -349,7 +349,7 @@ TEST(GpuDagAdjustmentRuntime, CurvePackingHasOneRecordForEachCurveAndCountZeroFo
   CurveUpdate update;
   update.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}};
   update.blue   = std::vector<CurvePoint>{{0.0f, 0.1f}, {0.3f, 0.25f}, {0.7f, 0.8f}, {1.0f, 0.9f}};
-  curve.Apply(update);
+  curve.ApplyUpdate(update);
 
   const auto records = MakeCurveGradeRuntimeParams(curve);
   static_assert(sizeof(records) == 4 * sizeof(GradeAdjustmentParams));
@@ -390,7 +390,7 @@ TEST(GpuDagAdjustmentRuntime, CurveSlotBindsFourRecordsAndRepacksOnAChannelEdit)
 
   CurveUpdate update;
   update.red = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.5f, 0.4f}, {1.0f, 1.0f}};
-  curve.Apply(update);
+  curve.ApplyUpdate(update);
   EXPECT_TRUE(BindOrRefreshGradeRuntimeSlot(arena, key, curve, AdjustmentBehavior::Curve));
   EXPECT_EQ(arena.Binding(key).size, 4 * kGradeRuntimeParamBytes);
 

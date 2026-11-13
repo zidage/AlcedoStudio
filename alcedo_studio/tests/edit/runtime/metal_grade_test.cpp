@@ -469,7 +469,7 @@ TEST_F(MetalGradeFixture, MetalChannelCurvesMatchSplineReferenceForRedAloneAndRg
   // A red curve alone: the green and blue channels stay as they are.
   CurveUpdate red_alone;
   red_alone.red = tone_curve_test::LiftedMidtonePoints(5, range.low, range.high);
-  curve.Apply(red_alone);
+  curve.ApplyUpdate(red_alone);
   (void)RenderGrade();
   ASSERT_EQ(last_grade_pixels_.size(), develop.size());
   EXPECT_LT(tone_curve_test::MaxCurveSetError(develop, last_grade_pixels_,
@@ -482,7 +482,7 @@ TEST_F(MetalGradeFixture, MetalChannelCurvesMatchSplineReferenceForRedAloneAndRg
   rgb_with_blue.red    = IdentityCurvePoints();
   rgb_with_blue.points = tone_curve_test::LiftedMidtonePoints(4, range.low, range.high);
   rgb_with_blue.blue   = tone_curve_test::LiftedMidtonePoints(6, range.low, range.high, -0.15f);
-  curve.Apply(rgb_with_blue);
+  curve.ApplyUpdate(rgb_with_blue);
   (void)RenderGrade();
   ASSERT_EQ(last_grade_pixels_.size(), develop.size());
   EXPECT_LT(tone_curve_test::MaxCurveSetError(develop, last_grade_pixels_,
@@ -496,7 +496,7 @@ TEST_F(MetalGradeFixture, MetalCurveInputHistogramCountsTheGradeInputOnTheCurveA
   auto&       curve = ModelByType<CurveModel>(type_ids::Curve());
   CurveUpdate s_curve;
   s_curve.points = tone_curve_test::LiftedMidtonePoints(5, 0.1f, 0.9f);
-  curve.Apply(s_curve);
+  curve.ApplyUpdate(s_curve);
 
   std::vector<Rgba> input;
   const auto        counts = RenderCurveInputHistogram(input);
@@ -530,7 +530,7 @@ TEST_F(MetalGradeFixture, MetalCurveInputHistogramIgnoresCurveEditsAndFollowsExp
   CurveUpdate       edit;
   edit.points = tone_curve_test::LiftedMidtonePoints(6, 0.05f, 0.95f, -0.25f);
   edit.blue   = tone_curve_test::LiftedMidtonePoints(4, 0.2f, 0.8f);
-  curve.Apply(edit);
+  curve.ApplyUpdate(edit);
   std::vector<Rgba> unused;
   EXPECT_EQ(RenderCurveInputHistogram(unused), identity_curve)
       << "a curve edit changed the histogram";

@@ -117,7 +117,7 @@ class CurveModel final : public OperatorModelBase<CurveModel, CurvePayload, Curv
    *
    * A curve with fewer than two points becomes the identity. The other curves do not change.
    */
-  void                              Apply(CurveUpdate update);
+  void                              ApplyUpdate(CurveUpdate update);
   /// The points of @p channel.
   [[nodiscard]] auto ChannelPoints(CurveChannel channel) const -> std::vector<CurvePoint>;
 
