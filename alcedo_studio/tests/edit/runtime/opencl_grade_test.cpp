@@ -819,7 +819,7 @@ TEST_F(OpenClGradeFixture, OpenClChannelCurvesMatchSplineReferenceForRedAloneAnd
   // A red curve alone: the green and blue channels stay as they are.
   CurveUpdate red_alone;
   red_alone.red = tone_curve_test::LiftedMidtonePoints(5, range.low, range.high);
-  curve.Apply(red_alone);
+  curve.ApplyUpdate(red_alone);
   (void)RenderGrade();
   ASSERT_EQ(last_output_pixels_.size(), input.size());
   EXPECT_LT(tone_curve_test::MaxCurveSetError(input, last_output_pixels_,
@@ -832,7 +832,7 @@ TEST_F(OpenClGradeFixture, OpenClChannelCurvesMatchSplineReferenceForRedAloneAnd
   rgb_with_blue.red    = IdentityCurvePoints();
   rgb_with_blue.points = tone_curve_test::LiftedMidtonePoints(4, range.low, range.high);
   rgb_with_blue.blue   = tone_curve_test::LiftedMidtonePoints(6, range.low, range.high, -0.15f);
-  curve.Apply(rgb_with_blue);
+  curve.ApplyUpdate(rgb_with_blue);
   (void)RenderGrade();
   ASSERT_EQ(last_output_pixels_.size(), input.size());
   EXPECT_LT(tone_curve_test::MaxCurveSetError(input, last_output_pixels_,

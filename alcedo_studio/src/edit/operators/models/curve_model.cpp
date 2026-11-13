@@ -113,14 +113,14 @@ auto CurveModel::IsDefault() const -> bool {
 void CurveModel::SetPoints(std::vector<CurvePoint> points) {
   CurveUpdate update;
   update.points = std::move(points);
-  Apply(std::move(update));
+  ApplyUpdate(std::move(update));
 }
 
 auto CurveModel::Points() const -> std::vector<CurvePoint> {
   return ChannelPoints(CurveChannel::Rgb);
 }
 
-void CurveModel::Apply(CurveUpdate update) {
+void CurveModel::ApplyUpdate(CurveUpdate update) {
   for (const auto channel : kCurveChannels) {
     auto& points = update.Channel(channel);
     if (points.has_value() && points->size() < 2) {
@@ -168,7 +168,7 @@ void CurveModel::LoadJson(const nlohmann::json& json) {
   for (const auto channel : kCurveChannels) {
     update.Channel(channel) = PointsFromJson(json, CurveChannelKey(channel));
   }
-  Apply(std::move(update));
+  ApplyUpdate(std::move(update));
 }
 
 }  // namespace alcedo

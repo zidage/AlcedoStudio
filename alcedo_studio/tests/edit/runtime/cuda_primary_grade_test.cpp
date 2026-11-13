@@ -620,7 +620,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaChannelCurvesMatchSplineReferenceForRedAlone
   // A red curve alone: the green and blue channels stay as they are.
   CurveUpdate red_alone;
   red_alone.red = tone_curve_test::LiftedMidtonePoints(5, range.low, range.high);
-  curve.Apply(red_alone);
+  curve.ApplyUpdate(red_alone);
   const auto red_output = Download(Render().output);
   ASSERT_EQ(red_output.size(), input.size());
   EXPECT_LT(tone_curve_test::MaxCurveSetError(input, red_output,
@@ -633,7 +633,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaChannelCurvesMatchSplineReferenceForRedAlone
   rgb_with_blue.red    = IdentityCurvePoints();
   rgb_with_blue.points = tone_curve_test::LiftedMidtonePoints(4, range.low, range.high);
   rgb_with_blue.blue   = tone_curve_test::LiftedMidtonePoints(6, range.low, range.high, -0.15f);
-  curve.Apply(rgb_with_blue);
+  curve.ApplyUpdate(rgb_with_blue);
   const auto blue_output = Download(Render().output);
   ASSERT_EQ(blue_output.size(), input.size());
   EXPECT_LT(tone_curve_test::MaxCurveSetError(input, blue_output,

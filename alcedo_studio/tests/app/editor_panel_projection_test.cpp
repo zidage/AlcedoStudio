@@ -145,7 +145,7 @@ void SetOwnedScalars(PipelineDocument& document) {
   curve.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.4f, 0.55f}, {1.0f, 1.0f}};
   curve.green  = std::vector<CurvePoint>{{0.0f, 0.05f}, {1.0f, 0.95f}};
   dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()))
-      ->Apply(curve);
+      ->ApplyUpdate(curve);
   dynamic_cast<LmtModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()))
       ->SetCubePath("D:/luts/look.cube");
   dynamic_cast<Cat02WhiteBalanceModel*>(

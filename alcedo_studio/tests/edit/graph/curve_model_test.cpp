@@ -32,7 +32,7 @@ TEST(CurveModelTest, PayloadWithBlueCurveDecodesAndEncodesToTheSameBytes) {
   CurveUpdate update;
   update.points = kRgbCurve;
   update.blue   = kBlueCurve;
-  source.Apply(update);
+  source.ApplyUpdate(update);
   const auto bytes = source.ToJson().dump();
   EXPECT_FALSE(source.ToJson().contains("red"));
   ASSERT_TRUE(source.ToJson().contains("blue"));
@@ -52,7 +52,7 @@ TEST(CurveModelTest, LoadJsonWithoutAChannelKeyResetsThatChannelToIdentity) {
   CurveModel  model;
   CurveUpdate update;
   update.red = kBlueCurve;
-  model.Apply(update);
+  model.ApplyUpdate(update);
   ASSERT_FALSE(model.IsDefault());
 
   model.LoadJson(nlohmann::json::parse(R"({"points":[{"x":0.0,"y":0.0},{"x":1.0,"y":1.0}]})"));
@@ -67,7 +67,7 @@ TEST(CurveModelTest, IsDefaultOnlyWhenTheFourCurvesAreTheIdentity) {
     CurveModel  edited;
     CurveUpdate update;
     update.Channel(channel) = kBlueCurve;
-    edited.Apply(update);
+    edited.ApplyUpdate(update);
     EXPECT_FALSE(edited.IsDefault()) << CurveChannelKey(channel);
   }
 }
@@ -76,25 +76,25 @@ TEST(CurveModelTest, ApplyChangesOnlyTheGivenCurvesInOneRevision) {
   CurveModel  model;
   CurveUpdate first;
   first.points = kRgbCurve;
-  model.Apply(first);
+  model.ApplyUpdate(first);
   const auto  before = model.Revision();
 
   CurveUpdate blue_only;
   blue_only.blue = kBlueCurve;
-  model.Apply(blue_only);
+  model.ApplyUpdate(blue_only);
   EXPECT_NE(model.Revision(), before);
   EXPECT_EQ(model.Points(), kRgbCurve);
   EXPECT_EQ(model.ChannelPoints(CurveChannel::Blue), kBlueCurve);
 
   // A curve with the same points is no change: the revision stays.
   const auto after_blue = model.Revision();
-  model.Apply(blue_only);
+  model.ApplyUpdate(blue_only);
   EXPECT_EQ(model.Revision(), after_blue);
 
   // Fewer than two points set the identity, as SetPoints does for the RGB curve.
   CurveUpdate reset_blue;
   reset_blue.blue = std::vector<CurvePoint>{};
-  model.Apply(reset_blue);
+  model.ApplyUpdate(reset_blue);
   EXPECT_EQ(model.ChannelPoints(CurveChannel::Blue), IdentityCurvePoints());
 }
 
