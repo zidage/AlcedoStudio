@@ -496,7 +496,7 @@ TEST_F(MetalGradeFixture, MetalCurveInputHistogramCountsTheGradeInputOnTheCurveA
   auto&       curve = ModelByType<CurveModel>(type_ids::Curve());
   CurveUpdate s_curve;
   s_curve.points = tone_curve_test::LiftedMidtonePoints(5, 0.1f, 0.9f);
-  curve.Apply(s_curve);
+  curve.ApplyUpdate(s_curve);
 
   std::vector<Rgba> input;
   const auto        counts = RenderCurveInputHistogram(input);
@@ -530,7 +530,7 @@ TEST_F(MetalGradeFixture, MetalCurveInputHistogramIgnoresCurveEditsAndFollowsExp
   CurveUpdate       edit;
   edit.points = tone_curve_test::LiftedMidtonePoints(6, 0.05f, 0.95f, -0.25f);
   edit.blue   = tone_curve_test::LiftedMidtonePoints(4, 0.2f, 0.8f);
-  curve.Apply(edit);
+  curve.ApplyUpdate(edit);
   std::vector<Rgba> unused;
   EXPECT_EQ(RenderCurveInputHistogram(unused), identity_curve)
       << "a curve edit changed the histogram";

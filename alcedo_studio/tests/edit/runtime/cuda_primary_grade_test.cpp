@@ -647,7 +647,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaCurveInputHistogramCountsTheGradeInputOnTheC
   auto&       curve = ModelByType<CurveModel>(type_ids::Curve());
   CurveUpdate s_curve;
   s_curve.points = tone_curve_test::LiftedMidtonePoints(5, 0.1f, 0.9f);
-  curve.Apply(s_curve);
+  curve.ApplyUpdate(s_curve);
 
   const auto  counts = RenderCurveInputHistogram();
   const auto& extent = plan_.geometry.render_extent;
@@ -680,7 +680,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaCurveInputHistogramIgnoresCurveEditsAndFollo
   CurveUpdate edit;
   edit.points = tone_curve_test::LiftedMidtonePoints(6, 0.05f, 0.95f, -0.25f);
   edit.blue   = tone_curve_test::LiftedMidtonePoints(4, 0.2f, 0.8f);
-  curve.Apply(edit);
+  curve.ApplyUpdate(edit);
   EXPECT_EQ(RenderCurveInputHistogram(), identity_curve) << "a curve edit changed the histogram";
 
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
