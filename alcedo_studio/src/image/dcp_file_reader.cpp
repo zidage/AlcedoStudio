@@ -20,6 +20,7 @@
 
 #include "image/dng_camera_matrix.hpp"
 #include "image/dng_color_profile_import.hpp"
+#include "image/dng_tone_curve.hpp"
 
 namespace alcedo {
 namespace {
@@ -38,6 +39,7 @@ constexpr std::uint16_t kProfileName                 = 50936;
 constexpr std::uint16_t kProfileHueSatMapDims        = 50937;
 constexpr std::uint16_t kProfileHueSatMapData1       = 50938;
 constexpr std::uint16_t kProfileHueSatMapData2       = 50939;
+constexpr std::uint16_t kProfileToneCurve            = 50940;
 constexpr std::uint16_t kForwardMatrix1              = 50964;
 constexpr std::uint16_t kForwardMatrix2              = 50965;
 constexpr std::uint16_t kProfileLookTableDims        = 50981;
@@ -373,6 +375,27 @@ auto ReadMap(DcpIfdReader& reader, std::uint16_t dims_tag, std::uint16_t data_ta
   }
 }
 
+/// `ProfileToneCurve` as (x, y) FLOAT pairs. An absent tag gives null.
+auto ReadToneCurve(DcpIfdReader& reader) -> DngToneCurvePtr {
+  const auto* entry = reader.Find(tag::kProfileToneCurve);
+  if (entry == nullptr) return nullptr;
+  const std::string name = DcpIfdReader::TagText(tag::kProfileToneCurve) + " (ProfileToneCurve)";
+  if (entry->count % 2 != 0) {
+    reader.Fail(name + " has " + std::to_string(entry->count) + " values, expected (x, y) pairs");
+  }
+  if (entry->count > 2 * kMaxDngToneCurvePoints) {
+    reader.Fail(name + " has more than " + std::to_string(kMaxDngToneCurvePoints) + " points");
+  }
+  const auto                     values = reader.ReadFloats(*entry);
+  std::vector<DngToneCurvePoint> points(values.size() / 2);
+  for (std::size_t i = 0; i < points.size(); ++i) points[i] = {values[2 * i], values[2 * i + 1]};
+  try {
+    return MakeDngToneCurve(std::move(points));
+  } catch (const std::runtime_error& error) {
+    reader.Fail(name + ": " + error.what());
+  }
+}
+
 }  // namespace
 
 auto ReadDcpProfileIdentity(const std::filesystem::path& path) -> DcpProfileIdentity {
@@ -435,6 +458,7 @@ auto ReadDcpCameraProfile(const std::filesystem::path& path) -> DcpCameraProfile
     reader.RequireCount(*offset, 1);
     tables.baseline_exposure_offset = reader.ReadSRationals(*offset).front();
   }
+  profile.profile_tone_curve = ReadToneCurve(reader);
 
   try {
     profile.tables = MakeDngColorProfile(std::move(tables));

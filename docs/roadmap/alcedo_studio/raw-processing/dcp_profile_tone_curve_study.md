@@ -3,8 +3,8 @@
 Date: 2026-11-12
 
 Status: **Study complete; design approved** (2026-11-12, with the entry reset of section 6.5 from
-the user). Phases T1 to T3 (section 8) are planned: T1 #862, T2 #863, T3 #864. Tracking issue
-#851.
+the user). Phase T1 #862 is complete (2026-11-12, section 8). Phases T2 #863 and T3 #864 are
+planned. Tracking issue #851.
 
 Parent: [DCP Camera Profile Plan](dcp_camera_profile_plan.md). This study replaces decision P-5 of
 that plan ("`ProfileToneCurve` is read past and not applied") with the profile tone stage of
@@ -282,6 +282,98 @@ rest of the DCP path.
 - Tests use synthetic DCP files. `ProfileToneCurveIsReadPastAndDoesNotChangeTheProfile` becomes
   a test that the curve keeps the profile fingerprint.
 
+#### T1 completion (2026-11-12)
+
+Status: **complete**. Branch `feature/dcp-profile-tone-reference`, stacked on the study PR #861.
+
+Implementation:
+
+- `image/dng_tone_curve.hpp`: `DngToneCurve` (points, knot slopes, 4097-entry float table,
+  fingerprint), `MakeDngToneCurve`, and `ApplyDngBaselineRgbTone`. The slopes follow
+  `dng_spline_solver::Solve` in its order of operations. The table samples the spline at
+  `j / 4096`, as `dng_render` builds its tone table (`dng_1d_table::Initialize` with its default,
+  direct sampling). The fingerprint is FNV-1a of the point count and the float bit patterns.
+- `DcpCameraProfile::profile_tone_curve` holds the curve, or null when the file lacks tag 50940.
+  `DcpCameraProfileToJson` leaves it out, so the profile fingerprint stays as in C1 to C6.
+- The reader rejects an odd value count, a type other than FLOAT, and more than 4096 points
+  (`kMaxDngToneCurvePoints`) in addition to the conditions above. Each message starts with
+  `tag 50940 (ProfileToneCurve)` and names the point index.
+- `edit/runtime/profile_tone_reference.hpp`: `ProfileToneNeutralResponse` (`N_m`, `N_m^-1`, scene
+  values at the peak and at black) and `ApplyProfileToneStageReference` (section 6.1).
+  `ProfileToneNeutralResponse::Resolve` builds each method once per process.
+- `N_ACES` is the Rec.709 luminance of `A2rAp0ToDisplay` on the AP0 neutral, Rec.709 primaries,
+  100 nits. `N_OpenDRT` is the achromatic path of `OpenDRTTransform_fwd` with the parameters that
+  `DrtOutputResolver` resolves from a default `DrtPayload` with method OpenDRT. On a neutral, the
+  opponent distance is 0, so the tone scale on the norm remains. `Resolve` checks that the defaults
+  keep local and high contrast off, creative white D65, and a Rec.709 display.
+- `N_m^-1` is a table of 4097 scene values at display light `(i / 4096)^2.4`, solved by bisection
+  of `N_m` (64 steps) between the scene value at black and the scene value at the peak.
+- `M` is `ProPhotoToAp1(XyzD50ToAp1Matrix())`, the matrix pair of the camera pass.
+  `XyzD50ToAp1Matrix` (develop_color_transform) and `ProPhotoToAp1` (dng_profile_gpu_data) now
+  hold the arithmetic that `ResolveDevelopColorTransform` and `PackDngProfileGpuData` used, so the
+  camera pass keeps its bytes.
+
+Details chosen during T1:
+
+- OpenDRT renders scene 0.18 at 0.124 (12.4 nits) at its defaults. The default encoding,
+  Rec.709 gamma 2.2, uses the average surround, which divides the contrast 1.66 by 1.1. The
+  response follows the kernel, so the stage reproduces the profile curve through that rendering.
+- The scene value at the peak is 128.00 for ACES 2.0 and 117.62 for OpenDRT. The scene value at
+  black is 0 for ACES 2.0 and -0.005 (the OpenDRT offset `tn_off`) for OpenDRT, so profile black
+  renders as display black on both.
+- The OpenDRT kernel converts AP1 to P3-D65 through XYZ, so the AP1 white (near D60) enters the
+  kernel as a slightly warm P3 color with a small opponent distance. The achromatic port uses
+  distance 0. The neutral ramp of T2 on the GPU measures the difference against the host
+  `N_m(stage)`.
+- The host measurement starts the ACES 2.0 forward at the stage output. The product DRT entry also
+  holds the ACES reference gamut compression (`AcesReferenceGamutCompress`); T2 places the stage
+  relative to it.
+
+Measurement record (`ProfileToneReferenceTest`, Debug build, synthetic camera-like curve of 128
+points with value 0.444 at scene 0.18):
+
+| Item | Case | Result |
+| --- | --- | --- |
+| (a) | Neutral error of `N_m(stage(v))` against `C(v)`, 12 stops below raw white to raw white | ACES 2.0 3.1e-5, OpenDRT 2.4e-5 relative (target 1e-3) |
+| (b) | CIEDE2000 against the SDK-style rendering, per-channel inverse, ACES 2.0 | mean 2.17, p95 6.69, max 16.08 |
+| (b) | CIEDE2000 against the SDK-style rendering, full ACES 2.0 inverse (A4) | mean 0.00, p95 0.00, max 0.00 |
+| (c) | Default document after the entry reset (exposure +1.5 EV, contrast 0, saturation 1.0) | equal to the per-channel row: contrast 0 and saturation 1.0 are identity |
+| (c) | Default document before the entry reset (contrast 15, saturation 1.3) | mean 4.85, p95 15.25, max 26.01 |
+
+The patch set holds 175 patches in linear ProPhoto at the ACR scale: a neutral and 12 hues at
+purity 0.3 and 0.6 (`L * (1 + purity * cos(hue - 120 * c))` for channel c), at 7 levels from 7
+stops to 0.75 stops below raw white. The SDK-style rendering clips the exposure ramp, applies the
+baseline RGB tone, converts ProPhoto to sRGB (Bradford D50 to D65), and clips to [0, 1]. The Alcedo
+rendering applies the anchor, the stage, AP1 to AP0, and the ACES 2.0 forward at 100 nits, and
+clips to [0, 1]. CIEDE2000 compares the two in CIELAB D65.
+
+Reading of the record:
+
+- The neutral patches agree within CIEDE2000 0.1. The per-channel error grows with level: the mean
+  by level is 0.48, 0.79, 1.37, 1.58, 2.03, 2.80, and 6.16 from the darkest level to the brightest.
+  The largest error is at ProPhoto (0.595, 0.286, 0.904), a bright saturated violet. There the
+  ACES 2.0 chroma compression and gamut mapping act; the SDK keeps the hue of the RGB tone and
+  clips to sRGB.
+- A4 reproduces the SDK display values, as section 7 expects; it stays a later mode at most.
+- The entry reset halves the mean error of the Default document (4.85 to 2.17) and lowers the p95
+  from 15.25 to 6.69, which supports the reset of section 6.5.
+
+Primary call chains:
+
+- Read: `ReadDcpCameraProfile` -> `ReadToneCurve` -> `MakeDngToneCurve` -> `SolveSlopes`, table
+  sampling -> `DcpCameraProfile::profile_tone_curve`.
+- Stage reference: `ApplyProfileToneStageReference` -> `ProfileToneStageMatrices` (AP1 to
+  ProPhoto, anchor, clamp) -> `ApplyDngBaselineRgbTone` -> `ProfileToneNeutralResponse::Inverse`
+  per channel -> ProPhoto to AP1.
+- Responses: `ProfileToneNeutralResponse::Resolve` -> `ResolveAces2ReferenceRuntime` (ACES 2.0) or
+  `DrtOutputResolver::Resolve` (OpenDRT) -> `BuildInverseTable` -> `Forward`.
+
+Tests: `DngToneCurveTest` (9, against a port of the SDK classes), `DcpFileReaderTest` (8 curve
+tests; `ProfileToneCurveIsReadAndKeepsTheProfileFingerprint` replaces the C1 test),
+`ProfileToneReferenceTest` (9). `DcpFileReaderFolderTest` on the user folder: 2445 files, 2445
+curves, 0 rejected. Caller suites `DngColorProfileTest`, `DcpCameraProfileRenderTest`, and the
+color transform and camera profile tests of `GpuDagModelGraphTest` pass.
+
 ### T2. Render
 
 - `camera_profile_file.profile_tone` parse and write (`false` only), history comparison, binding.
@@ -331,4 +423,10 @@ rest of the DCP path.
 | `kDefaultPipelineContrast` | Contrast of the RAW import look | slider value | 15 | `pipeline_document.hpp` |
 | `kDefaultPipelineSaturation` | Saturation of the RAW import look | multiplier | 1.3 | `pipeline_document.hpp` |
 | `DngToneCurve` | Immutable curve value with its own fingerprint | value type | per profile | Section 6.3 |
+| `kMaxDngToneCurvePoints` | Largest point count of a curve that the reader accepts | points | 4096 | T1 choice; user folder maximum 256 |
+| `kProfileToneInverseTableEntries` | Entries of the `N_m^-1` table | entries | 4097 | Section 6.3 |
+| `tn_off` | OpenDRT scene offset; `-tn_off` is the OpenDRT scene value at black | relative scene light | 0.005 | OpenDRT Standard look |
+| Surround divisor | OpenDRT divides the contrast by it for the average surround of Rec.709 gamma 2.2 | factor | 1.1 | `open_drt_runtime.cpp` |
+| OpenDRT scene 0.18 at 100 nits | Mid grey rendering of the OpenDRT defaults | display light | 0.124 | T1 measurement |
+| OpenDRT scene value at the SDR peak | Scene value at which `N_OpenDRT` reaches display light 1 | relative scene light | 117.62 | T1 measurement |
 | Raw white | Sensor saturation after black subtraction | relative scene light | 1.0 before the default exposure | Alcedo RAW scale |

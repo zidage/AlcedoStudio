@@ -507,7 +507,8 @@ Detail decisions made in this phase:
     covers the complete table content.
   - Extra tests beyond the plan list: AcceptsTiffMagicFortyTwo,
     ProfileWithoutForwardMatricesMarksThemInvalid,
-    ProfileToneCurveIsReadPastAndDoesNotChangeTheProfile (P-5), MissingColorMatrix1Fails,
+    ProfileToneCurveIsReadPastAndDoesNotChangeTheProfile (P-5; study phase T1 renamed it to
+    ProfileToneCurveIsReadAndKeepsTheProfileFingerprint), MissingColorMatrix1Fails,
     ReductionMatrixFails, FourChannelColorMatrixFails, IlluminantWithoutTemperatureFails,
     TagWithAnotherTypeFails, LookTableWithWrongEntryCountFails, FileAboveSizeLimitFailsBeforeRead,
     MissingFileFailsWithThePath.

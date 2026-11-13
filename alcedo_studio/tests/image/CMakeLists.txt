@@ -42,6 +42,14 @@ gtest_discover_tests(DcpFileReaderTest TEST_PREFIX "DcpFileReaderTest."
   PROPERTIES LABELS "ci_core_flow;image")
 alcedo_register_test_target(DcpFileReaderTest image ci_core)
 
+# ProfileToneCurve spline, table, and baseline RGB tone against a port of the DNG SDK.
+add_executable(DngToneCurveTest ${ALCEDO_TEST_ROOT}/image/dng_tone_curve_test.cpp)
+target_include_directories(DngToneCurveTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DngToneCurveTest PRIVATE GTest::gtest_main Image)
+gtest_discover_tests(DngToneCurveTest TEST_PREFIX "DngToneCurveTest."
+  PROPERTIES LABELS "ci_core_flow;image")
+alcedo_register_test_target(DngToneCurveTest image ci_core)
+
 # DCP library index, camera match, and loaded-profile cache over synthetic DCP files.
 add_executable(DcpProfileLibraryTest ${ALCEDO_TEST_ROOT}/image/dcp_profile_library_test.cpp)
 target_include_directories(DcpProfileLibraryTest PUBLIC ${ALCEDO_INCLUDE_DIR})

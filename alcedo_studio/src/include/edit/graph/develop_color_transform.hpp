@@ -225,4 +225,12 @@ struct WhiteBalanceTemperatureTint {
 [[nodiscard]] auto BuildAp1Cat02WhiteBalanceMatrix(double cct, double tint)
     -> std::array<float, 9>;
 
+/**
+ * @brief XYZ D50 to linear AP1 (Bradford D50 to the AP1 white), row-major, column vectors.
+ *
+ * The value equals DevelopColorTransform::xyz_d50_to_ap1 of every resolved transform: the matrix
+ * does not depend on the camera. Computed once; thread-safe.
+ */
+[[nodiscard]] auto XyzD50ToAp1Matrix() -> const std::array<float, 9>&;
+
 }  // namespace alcedo

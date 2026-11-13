@@ -98,6 +98,7 @@ def_library(Image
     ${ALCEDO_SRC_ROOT}/image/dcp_file_reader.cpp
     ${ALCEDO_SRC_ROOT}/image/dcp_profile_library.cpp
     ${ALCEDO_SRC_ROOT}/image/dcp_source_tables.cpp
+    ${ALCEDO_SRC_ROOT}/image/dng_tone_curve.cpp
     ${ALCEDO_SRC_ROOT}/image/raster_color_description.cpp
     ${ALCEDO_SRC_ROOT}/image/raster_container_reader.cpp
     ${ALCEDO_SRC_ROOT}/image/icc_profile_reader.cpp
