@@ -40,7 +40,7 @@ class EditorCurveHistogramController::Mailbox final : public alcedo::ICurveInput
 };
 
 EditorCurveHistogramController::EditorCurveHistogramController(QObject* parent)
-    : QObject(parent), mailbox_(std::make_shared<Mailbox>(this)) {}
+    : PlotHistogramSource(parent), mailbox_(std::make_shared<Mailbox>(this)) {}
 
 EditorCurveHistogramController::~EditorCurveHistogramController() { mailbox_->Detach(); }
 

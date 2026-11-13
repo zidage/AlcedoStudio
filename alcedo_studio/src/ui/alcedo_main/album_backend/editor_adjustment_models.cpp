@@ -36,6 +36,7 @@
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_preview_controller.hpp"
+#include "ui/alcedo_main/plot_pane/plot_pane.hpp"
 
 namespace alcedo::ui {
 
@@ -575,6 +576,7 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorCameraProfileListModel>("Alcedo.Main", 1, 0,
                                                 "EditorCameraProfileListModel");
   EditorScopeItem::RegisterQmlType();
+  PlotPane::RegisterQmlTypes();
 }
 
 }  // namespace alcedo::ui

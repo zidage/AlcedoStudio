@@ -412,11 +412,88 @@ QML Tone Curve section sets EditorCurveHistogramController.active and gradeNodeI
   dropped; image change and a result without counts clear the histogram; a result from another
   thread is accepted on the owner thread; the sink outlives the owner).
 
-### TC4 to TC6
+### TC4: reusable plot pane
+
+**Objective.** One plot item that the Tone Curve section (TC5) draws on: a view transform with
+zoom and pan, an inset for labels, ordered layers, and pointer and key routing to the layers in
+data coordinates. No other panel uses it in this work.
+
+**Parts** (library `EditorPlotPane`, `ui/alcedo_main/plot_pane/`, headers in
+`include/ui/alcedo_main/plot_pane/`):
+
+- `PlotViewTransform` (value type, Qt Core geometry only): limits, view, maximum zoom (32),
+  `ToItem`, `ToData`, `ZoomAt` (the anchor keeps its item position), `Pan` (the data follows the
+  pointer), `SetView`, `ResetView`. The view always stays inside the limits; its span is between
+  the limits span divided by the maximum zoom and the limits span. One zoom factor applies to both
+  axes. Invalid limits throw `std::invalid_argument`.
+- `PlotLayer` (QObject): `visible`, `interactive`, `contentChanged`, `Build(view, geometry)`, and
+  the input calls `PointerPress`, `PointerMove`, `PointerRelease`, `PointerDoubleClick`, `Hover`,
+  `HoverLeave`, `Cursor`, `Key`. A layer builds premultiplied triangles and labels in item
+  coordinates (`PlotLayerGeometry`) with the antialiased triangle primitives of the viewport
+  overlays (`overlay_triangles`, through `plot_primitives`).
+- Layers: `PlotGridLayer` (ticks `{value, label, strong}` on each axis, lines and labels),
+  `PlotHistogramLayer` (filled areas and edge from `ScopeHistogramRenderData`, all channels
+  additive or one channel in its own tint, the break across a cut peak), `PlotPolylineLayer`
+  (solid or dashed line, hit test of the nearest point on the line), `PlotHandleLayer` (rings, the
+  selected handle filled, a hovered or pressed handle 1 px larger; hit test with a radius in item
+  pixels).
+- `PlotPane` (QQuickItem): `limits`, `maximumZoom`, `view`, `zoomed`, `zoom`, `plotRect`, the four
+  insets, `backgroundColor`, `surfaceColor`, `wheelZoomStep`, the default property `layers`, and
+  `setView`, `resetView`, `zoomAt`, `mapToData`, `mapFromData`.
+- `PlotHistogramSource` (QObject with `histogram()` and `HistogramChanged`): the owner of the
+  histogram. `EditorCurveHistogramController` is one, so TC5 sets it as the `source` of the
+  histogram layer. The layer reads the owner's data when it builds and keeps no copy.
+
+**Drawing.** A layer that emits `contentChanged` is marked dirty; a view, size, or inset change
+marks every layer dirty. `updatePolish` (GUI thread) builds only the dirty layers and their text
+layouts; `updatePaintNode` uploads only those. Each layer has a container node, so the layer order
+stays fixed: it holds one geometry node (`QSGVertexColorMaterial`, premultiplied colors) while the
+layer has triangles, and one text node (`QQuickWindow::createTextNode`) for its labels. The
+histogram channels add up with premultiplied vertices of alpha 0 (source plus target), as the
+`CompositionMode_Plus` of the scope histogram.
+
+**Input routing.** Press: the top visible, interactive layer whose `PointerPress` accepts gets the
+pointer grab (`setKeepMouseGrab`) and the moves and the release; the pane calls `PointerRelease`
+with the last position when it loses the grab. A press that no layer accepts pans a zoomed view.
+Hover goes to the top layer that takes it; the others get `HoverLeave`. Keys go to the top layer
+that accepts them. Ctrl + wheel zooms at the pointer by `wheelZoomStep` per notch; a plain wheel
+event is ignored, so the parent Flickable scrolls. The handle layer keeps the press offset, so a
+point moves 1:1 with no jump; the owner moves it by setting `points` from `moved`.
+
+**Call chain (handle drag).**
+
+```text
+QQuickWindow -> PlotPane::mousePressEvent (item -> data through PlotViewTransform)
+  -> top layer PlotHandleLayer::PointerPress (HitTest, radius in item px) -> pressed(index, data)
+  -> PlotPane::mouseMoveEvent -> PlotHandleLayer::PointerMove -> moved(index, data)
+  -> owner sets PlotHandleLayer.points -> contentChanged -> PlotPane::MarkLayerDirty
+  -> PlotPane::updatePolish -> BuildDirtyLayers -> PlotHandleLayer::Build
+  -> PlotPane::updatePaintNode (uploads that layer only)
+  -> PlotPane::mouseReleaseEvent -> PlotHandleLayer::PointerRelease -> released(index, data)
+```
+
+**Tokens.** `AppTheme` `plotSurfaceColor`, `plotGridColor`, `plotGridStrongColor`,
+`plotLabelColor`, `plotLineColor`, `plotReferenceLineColor`, `plotHandleColor`,
+`plotHandleOutlineColor`, `plotGridLineWidth`, `plotLineWidth`, `plotHandleRadius`,
+`plotHandleRingWidth`, `plotHandleOutlineWidth`, `plotHitRadius`; DESIGN.md "Plot pane". The C++
+defaults of the pane and the layers are the dark theme values of these tokens.
+
+**Tests** (`EditorPlotPaneTest`): `PlotViewTransformTest.*` (identity of data to item and back,
+zoom at a point, limits of pan and zoom), `PlotPolylineLayerTest.PolylineItemPointsFollowTheZoomedView`,
+`PlotHandleLayerTest.PointerSevenPixelsFromAHandleHitsItAtRadiusEightAtEachZoom`,
+`PlotHandleLayerTest.HandleOutsideThePlotRectangleIsNotHitOrDrawn`,
+`PlotGridLayerTest.TicksInsideTheViewDrawLinesAndLabels`, `PlotPaneInputTest.*` (press, drag,
+and release reach the top layer in data coordinates; plain wheel unaccepted and Ctrl + wheel zoom
+at the pointer; drag in an empty area pans a zoomed view; keys only with a selected handle; double
+click), `PlotPanePaintTest.*` (each layer in the rendered image; only the changed layer builds
+again; two panes in one window keep their own views).
+
+### TC5 and TC6
 
 See the issues. TC5 binds `EditorSessionController.curveHistogram` (`active`, `gradeNodeId`) to
-the Tone Curve section and draws `histogram()`. TC5 removes `kPointerGain` and moves
-`EditorToneCurveItem` to the archive of deprecated code when the section no longer uses it.
+the Tone Curve section and sets it as the `source` of a `PlotHistogramLayer`. TC5 removes
+`kPointerGain` and moves `EditorToneCurveItem` to the archive of deprecated code when the section
+no longer uses it.
 
 ## 6. Completion record
 
@@ -529,4 +606,41 @@ Verification (Windows, debug build, RTX 3080 Laptop, CUDA and OpenCL):
 The three `GpuDagMetalGradeTest.MetalCurveInputHistogram*` tests,
 `MetalRenderWithoutAHistogramRequestRecordsNoHistogram`, and the Metal shader compile were not
 run locally: the Mac was not reachable. The macOS CI builds the Metal targets. The full test suite
+was not run.
+
+### TC4 (2026-11-13)
+
+Status: complete. Branch `feature/tone-curve-plot-pane`, stacked on TC3. The design, call chain,
+and test list are in the TC4 section of section 5.
+
+Decisions made during the work:
+
+- The layers build in `updatePolish` on the GUI thread and `updatePaintNode` only uploads, so a
+  layer reads its owner's data (points, the histogram of `PlotHistogramSource`) on the thread of
+  the owner and keeps no copy.
+- The layers draw with the antialiased triangle primitives of the viewport overlays, so the pane
+  needs no custom material. A width is the visible width with the antialiased edge included.
+- A geometry node exists only while its layer has triangles: the batch renderer did not draw a
+  geometry node that it first received without vertices, even after the vertices arrived.
+- The histogram layer reads a `PlotHistogramSource`; `EditorCurveHistogramController` now derives
+  from it (its `HistogramChanged` signal is the one of the interface). The scope item and the
+  histogram layer share the additive channel colors (`plot_primitives::AdditiveChannelChroma`);
+  the scope item draws as before.
+- A press that no layer accepts pans a zoomed view (the drag in an empty area of the panel
+  design); Ctrl + wheel zooms by 1.25 per notch.
+- `EditorPlotPaneTest` has its own `main` on the native platform plugin: the offscreen plugin
+  gives the software scene graph, which draws no geometry nodes. The painting tests select the
+  RHI API of the platform and grab a window that is never shown (rendered offscreen); no window
+  appears.
+
+Verification (Windows, debug build, RTX 3080 Laptop, D3D11 scene graph):
+
+| Binary and filter | Result |
+| --- | --- |
+| `EditorPlotPaneTest` (all) | 14 passed |
+| `EditorScopeItemPaintTest` (all) | 3 passed |
+| `EditorCurveHistogramControllerTest` (all) | 6 passed |
+| `alcedo_main` | builds |
+
+The painting tests were not run on macOS (Metal): the Mac was not reachable. The full test suite
 was not run.

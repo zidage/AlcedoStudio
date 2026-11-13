@@ -124,6 +124,35 @@ def_library(AiModelDownloadTaskPublisher
     PUBLIC_DEPS AiModelPackageService BackgroundTaskController Qt6::Core
 )
 
+# Reusable plot pane: view transform, ordered layers, and pointer and key routing
+# (docs/roadmap/alcedo_studio/edit/tone_curve_editor_plan.md, TC4). The layers draw with the
+# antialiased triangle primitives of EditorViewerLogic.
+def_library(EditorPlotPane
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_view_transform.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_primitives.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_layer.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_grid_layer.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_histogram_layer.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_polyline_layer.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_handle_layer.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/plot_pane/plot_pane.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_view_transform.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_primitives.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_layer.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_grid_layer.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_histogram_layer.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_polyline_layer.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_handle_layer.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/plot_pane/plot_pane.hpp"
+    PUBLIC_DEPS
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        EditorViewerLogic
+)
+
 add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/application_module_host.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_module.cpp"
@@ -342,6 +371,8 @@ target_link_libraries(AlbumBackendLib
         AgentControlOwner
         DisplayProfileReadout
         EditorRhiViewport
+        # The Tone Curve plot and the curve histogram owner (a PlotHistogramSource).
+        EditorPlotPane
         # The editor scope controller and item analyze the presented frame through EditScope.
         EditScope
         Qt6::Quick
