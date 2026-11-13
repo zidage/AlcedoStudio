@@ -24,6 +24,7 @@
 #include <QStyleHints>
 #include <QTest>
 #include <QUrl>
+#include <QWheelEvent>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -331,6 +332,14 @@ auto DrawnRect(QQuickItem* item, QQuickItem* view) -> QRectF {
 
 auto SceneCenter(QQuickItem* item) -> QPoint {
   return item->mapToScene(QPointF(item->width() / 2.0, item->height() / 2.0)).toPoint();
+}
+
+/// One mouse wheel event with Ctrl held at the scene point @p pos. A positive @p angle is a turn
+/// forward, away from the user; one notch is 120.
+void SendCtrlWheel(QQuickWindow* window, const QPointF& pos, int angle) {
+  QWheelEvent event(pos, window->mapToGlobal(pos), QPoint(), QPoint(0, angle), Qt::NoButton,
+                    Qt::ControlModifier, Qt::NoScrollPhase, false);
+  QCoreApplication::sendEvent(window, &event);
 }
 
 auto RatingOf(ApplicationModuleHost& backend, sl_element_id_t element_id) -> int {
@@ -1709,6 +1718,85 @@ TEST_F(AlbumSectionQmlTests, FlatGridZoomStepMovesEachCardFromItsOldRectangleToI
     EXPECT_NEAR(drawn.y(), expected_y, 0.5) << index;
   }
   EXPECT_NEAR(focus_y(), focus.y(), 1.0);
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+// Ctrl + wheel forward shows fewer, larger photos (a lower zoom level) and wheel backward more,
+// as wheel forward zooms in the editor viewport (#883). Touchpad steps below one notch add up.
+TEST_F(AlbumSectionQmlTests, FlatGridCtrlWheelForwardShowsFewerLargerPhotos) {
+  ApplicationModuleHost backend;
+  const auto            packed = CreatePopulatedPackedProject(temp_dir_, {}, 60);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  const auto&     keys = packed->images_;
+
+  LoadedComponent view(backend, "ThumbnailGridView.qml", 1000);
+  ASSERT_TRUE(WaitUntil([&]() { return view.loaded() != nullptr; })) << Joined(view.warnings());
+  auto* window = qobject_cast<QQuickWindow*>(view.window());
+  ASSERT_TRUE(WaitUntil([&]() { return GridCard(window, keys[0].file_id_) != nullptr; }));
+  ProcessEvents(300);
+  ASSERT_EQ(view.loaded()->property("zoomLevel").toInt(), 4);
+  const auto zoom_level = [&]() { return view.loaded()->property("zoomLevel").toInt(); };
+  const auto wheel      = [&](int angle) {
+    auto* card = GridCard(window, keys[0].file_id_);
+    ASSERT_NE(card, nullptr);
+    SendCtrlWheel(window, SceneCenter(card), angle);
+    ProcessEvents(400);
+  };
+
+  wheel(120);
+  EXPECT_EQ(zoom_level(), 3) << "wheel forward";
+  EXPECT_EQ(view.loaded()->property("columns").toInt(), 5);
+  wheel(-120);
+  wheel(-120);
+  EXPECT_EQ(zoom_level(), 5) << "two notches backward";
+  wheel(60);
+  EXPECT_EQ(zoom_level(), 5) << "half a notch";
+  wheel(60);
+  EXPECT_EQ(zoom_level(), 4) << "the second half";
+  EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
+}
+
+TEST_F(AlbumSectionQmlTests, SectionCtrlWheelForwardRequestsFewerLargerPhotos) {
+  ApplicationModuleHost         backend;
+  std::vector<LibraryPhotoSpec> specs(40);
+  for (size_t index = 0; index < specs.size(); ++index) {
+    specs[index].model_ = index < 30 ? "Canon R5" : "Sony A7";
+  }
+  const auto packed = CreatePopulatedPackedProject(temp_dir_, {}, 0, specs);
+  ASSERT_TRUE(packed.has_value());
+  ASSERT_TRUE(LoadPackedProject(backend, packed->packed_path_));
+  auto* library = backend.library();
+  library->SetInspectorGrouping(QStringLiteral("camera"), true);
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+
+  LoadedComponent view(backend, "AlbumSectionView.qml", 1000);
+  auto*           window = qobject_cast<QQuickWindow*>(view.window());
+  QQuickItem*     cell   = nullptr;
+  ASSERT_TRUE(WaitUntil([&]() {
+    std::vector<QQuickItem*> cells;
+    CollectNamedItems(window != nullptr ? window->contentItem() : nullptr,
+                      QStringLiteral("albumSectionPhotoCell"), cells);
+    for (auto* candidate : cells) {
+      if (candidate->isVisible() && candidate->width() > 0) {
+        cell = candidate;
+        return true;
+      }
+    }
+    return false;
+  })) << Joined(view.warnings());
+  ProcessEvents(300);
+  ASSERT_EQ(view.loaded()->property("zoomLevel").toInt(), 4);
+  // The section view reports the level; its owner applies it. zoomLevel stays 4 here.
+  QSignalSpy requests(view.loaded(), SIGNAL(zoomChanged(int)));
+
+  SendCtrlWheel(window, SceneCenter(cell), 120);
+  ASSERT_EQ(requests.count(), 1);
+  EXPECT_EQ(requests.takeFirst().at(0).toInt(), 3) << "wheel forward";
+  SendCtrlWheel(window, SceneCenter(cell), -120);
+  ASSERT_EQ(requests.count(), 1);
+  EXPECT_EQ(requests.takeFirst().at(0).toInt(), 5) << "wheel backward";
   EXPECT_TRUE(AlbumWarnings(view.warnings()).empty()) << Joined(AlbumWarnings(view.warnings()));
 }
 
