@@ -14,7 +14,9 @@
 #include <mutex>
 
 #include "edit/geometry/resolved_render_geometry.hpp"
+#include "ui/edit_viewer/display_color_transform.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "ui/edit_viewer/window_display_destination.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
 #include "ui/editor_rhi/viewport_composite_pass.hpp"
 #include "ui/editor_rhi/viewport_mask_coverage_sink.hpp"
@@ -86,9 +88,20 @@ class EditorViewportItem : public QQuickRhiItem {
   [[nodiscard]] auto statusText() const -> QString;
   [[nodiscard]] auto displayConfig() const -> ViewerDisplayConfig;
   [[nodiscard]] auto extendedDynamicRangeRequested() const -> bool;
+  /// True while the display shows the encoding converted to the monitor: the CAMetalLayer has the
+  /// encoding as its color space (macOS), or the viewport has a display table (Windows).
   [[nodiscard]] auto windowColorSpaceApplied() const -> bool {
     return window_color_space_applied_.load(std::memory_order_acquire);
   }
+  /**
+   * @brief The display table from the encoding to the destination of the window, or null when
+   *        the viewport draws the encoding pixels.
+   *
+   * Null for an HDR encoding, for a destination without bytes (Unusable, NoWindow), and on
+   * platforms other than Windows. The renderer reads it in synchronize().
+   * @thread Any thread.
+   */
+  [[nodiscard]] auto displayTransform() const -> std::shared_ptr<const DisplayTransformLut>;
 
   void               setImageIdentity(qulonglong identity);
   void               setSessionEpoch(qulonglong epoch);
@@ -291,6 +304,9 @@ class EditorViewportItem : public QQuickRhiItem {
   void                                requestPresentUpdateOnGuiThread();
   void                                applyDisplayConfig();
   void                                resetWindowDisplayConfig();
+  /// Build the display table for @p config and the current destination of the window when one of
+  /// them differs from those of the current table. GUI thread. Returns true when a table exists.
+  auto updateDisplayTransform(const ViewerDisplayConfig& config) -> bool;
 
   std::shared_ptr<DirectPresentQueue> present_queue_;
   // Shared so the render-thread presentation-opportunity arm can hold the sink
@@ -313,6 +329,12 @@ class EditorViewportItem : public QQuickRhiItem {
   mutable std::mutex                  mutex_;
   ViewerViewState                     view_state_{};
   ViewerDisplayConfig                 display_config_{};
+  /// The display table, and the encoding and destination that it was built for (under mutex_).
+  std::shared_ptr<const DisplayTransformLut> display_transform_;
+  ViewerDisplayConfig                        display_transform_config_{};
+  std::shared_ptr<const DisplayDestination>  display_transform_destination_;
+  /// GUI thread: the destination of the last build-failure warning, so that it is logged once.
+  std::shared_ptr<const DisplayDestination>  warned_display_destination_;
   QString                             backend_name_ = QStringLiteral("uninitialized");
   QString                    status_text_ = QStringLiteral("waiting for a compatible frame");
   std::atomic<qulonglong>    image_identity_{0};
@@ -330,6 +352,7 @@ class EditorViewportItem : public QQuickRhiItem {
   QQuickWindow*              attached_window_ = nullptr;
   QMetaObject::Connection    window_visibility_connection_;
   QMetaObject::Connection    window_screen_connection_;
+  QMetaObject::Connection    display_destination_connection_;
   QMetaObject::Connection    scene_graph_invalidated_connection_;
   QMetaObject::Connection    scene_graph_initialized_connection_;
   QMetaObject::Connection    before_rendering_connection_;

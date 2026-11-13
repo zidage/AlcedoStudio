@@ -50,6 +50,46 @@ def_library(EditorViewerLogic
         EditGeometry
 )
 
+# Conversion of display-encoded photo pixels to a monitor ICC profile
+# (docs/roadmap/alcedo_studio/ui/windows_display_icc_color_management_plan.md, W1).
+def_library(DisplayColorTransform
+    SOURCES
+        "${ALCEDO_UI_ROOT}/edit_viewer/display_color_transform.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/display_color_transform.hpp"
+    PUBLIC_DEPS
+        Qt6::Gui
+        opencv_core
+        ColorEncodingCatalog
+    PRIVATE_DEPS
+        lcms2::lcms2
+)
+
+# The monitor profile of a window and the destination of its photo surfaces (W2). The monitor
+# query exists on Windows only; elsewhere the destination is NoWindow.
+set(WINDOW_DISPLAY_DESTINATION_SRCS
+    "${ALCEDO_UI_ROOT}/edit_viewer/window_display_destination.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/window_display_destination.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/monitor_color_profile.hpp"
+)
+if(WIN32)
+    list(APPEND WINDOW_DISPLAY_DESTINATION_SRCS
+        "${ALCEDO_UI_ROOT}/edit_viewer/monitor_color_profile_win.cpp"
+    )
+endif()
+def_library(WindowDisplayDestination
+    SOURCES ${WINDOW_DISPLAY_DESTINATION_SRCS}
+    PUBLIC_DEPS
+        Qt6::Core
+        Qt6::Gui
+        DisplayColorTransform
+    PRIVATE_DEPS
+        AppDiagnostics
+)
+if(WIN32)
+    # MonitorFromWindow / QueryDisplayConfig (user32), CreateDCW / GetICMProfileW (gdi32).
+    target_link_libraries(WindowDisplayDestination PRIVATE user32 gdi32)
+endif()
+
 def_library(BackgroundTaskController
     SOURCES
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/background_task_controller.cpp"

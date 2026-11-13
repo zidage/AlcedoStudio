@@ -16,6 +16,8 @@ layout(std140, binding = 0) uniform ViewerUniforms {
   vec4 detailCoverageU;
   // xyz: photo UV -> detail coverage UV, v row.
   vec4 detailCoverageV;
+  // x: 1 when the display table converts the output; y: nodes per axis; z: input exponent.
+  vec4 displayLut;
 } ubo;
 
 layout(binding = 1) uniform sampler2D baseTexture;
@@ -24,6 +26,8 @@ layout(binding = 2) uniform sampler2D detailTexture;
 layout(binding = 3) uniform sampler2D coverageTexture;
 // Coverage of the detail ROI render (Mask ranges D10), in red.
 layout(binding = 4) uniform sampler2D detailCoverageTexture;
+// Display table: photo encoding code values to monitor code values (Windows display ICC plan).
+layout(binding = 5) uniform sampler3D displayLutTexture;
 
 layout(location = 0) in vec2 vUv;
 layout(location = 0) out vec4 fragColor;
@@ -72,6 +76,16 @@ void main() {
     if (a > 0.0) {
       color.rgb = color.rgb * (1.0 - a) + ubo.coverageTint.rgb * a;
     }
+  }
+  // The display conversion is the last step: the coverage tint has the photo encoding and is
+  // converted with the photo. Without a table every value stays, including values outside [0, 1].
+  if (ubo.displayLut.x > 0.5) {
+    float edge = ubo.displayLut.y;
+    vec3 coordinate = clamp(color.rgb, 0.0, 1.0);
+    if (ubo.displayLut.z != 1.0) {
+      coordinate = pow(coordinate, vec3(ubo.displayLut.z));
+    }
+    color.rgb = texture(displayLutTexture, (coordinate * (edge - 1.0) + 0.5) / edge).rgb;
   }
   fragColor = color;
 }

@@ -14,6 +14,7 @@ layout(std140, binding = 0) uniform ViewerUniforms {
   vec4 coverageTint;
   vec4 detailCoverageU;
   vec4 detailCoverageV;
+  vec4 displayLut;
 } ubo;
 
 layout(location = 0) out vec2 vUv;

@@ -57,6 +57,7 @@ use their own top-level category.
   (includes **Final locked identity model**: history owns HEAD; pipeline = params table; chain hash unit = one commit)
 - [UI Fuzz Automation Platform Plan](alcedo_studio/ui/ui_fuzz_automation_platform_plan.md)
 - [Global Search Redesign Plan](alcedo_studio/ui/global_search_redesign_plan.md)
+- [Windows Display ICC Color Management Plan](alcedo_studio/ui/windows_display_icc_color_management_plan.md)
 
 ## Alcedo Studio — Automation
 
