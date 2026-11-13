@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -76,6 +77,29 @@ inline constexpr std::uint32_t kGradeRuntimeParamDirtyBit = 1;
 inline constexpr std::uint32_t kGradeRuntimeParamBytes =
     static_cast<std::uint32_t>(sizeof(GradeAdjustmentParams));
 
+/// Number of consecutive GradeAdjustmentParams records in a Curve slot: the RGB, red, green, and
+/// blue curves, in the order of CurveChannel.
+inline constexpr std::uint32_t kCurveGradeRecordCount = 4;
+
+/**
+ * @brief The GPU layout of a Curve grade slot: one record for each curve.
+ *
+ * The grade kernels read the record at the slot offset and the three records after it. Each
+ * record has count control points with x in values[0..15], y in values[16..31], and the slope in
+ * values[32..47]. count 0 (an identity red, green, or blue curve) leaves the channel unchanged.
+ */
+using CurveGradeRuntimeParams = std::array<GradeAdjustmentParams, kCurveGradeRecordCount>;
+
+static_assert(sizeof(CurveGradeRuntimeParams) == kCurveGradeRecordCount * kGradeRuntimeParamBytes,
+              "The Curve records are consecutive with no padding");
+
+/// Byte size of the Grade slot of @p behavior: four records for Curve, one record otherwise.
+[[nodiscard]] constexpr auto GradeRuntimeParamBytes(AdjustmentBehavior behavior) -> std::uint32_t {
+  return behavior == AdjustmentBehavior::Curve
+             ? static_cast<std::uint32_t>(sizeof(CurveGradeRuntimeParams))
+             : kGradeRuntimeParamBytes;
+}
+
 /**
  * @brief Resolve a built-in Model type to its Grade runtime behavior.
  * @return nullopt when the type has no GPU grade implementation (legacy Tint, etc.).
@@ -97,10 +121,23 @@ inline constexpr std::uint32_t kGradeRuntimeParamBytes =
  *
  * Reads only the fields the GPU layout needs under the Model lock. Does not copy a
  * full DTO. Throws when the Model type does not match @p behavior or the layout is
- * unsupported.
+ * unsupported. Curve has four records: use @ref MakeCurveGradeRuntimeParams.
  */
 [[nodiscard]] auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior behavior)
     -> GradeAdjustmentParams;
+
+/**
+ * @brief Pack the four curves of a CurveModel into the records of its Grade slot.
+ *
+ * Solves the spline of each curve under the Model lock (tone_curve::SolveToneCurveSpline). The
+ * RGB curve always has its points. A red, green, or blue curve that is the identity has count 0.
+ *
+ * @throws std::runtime_error when @p model is not a CurveModel.
+ * @throws std::invalid_argument with the text of tone_curve::FindToneCurvePointsError when a
+ *         curve has points that the spline does not accept.
+ */
+[[nodiscard]] auto MakeCurveGradeRuntimeParams(const IOperatorModel& model)
+    -> CurveGradeRuntimeParams;
 
 /**
  * @brief Build the original separable-neighborhood parameters for one compiled adjustment.

@@ -22,7 +22,8 @@ enum class EditorParameterValueKind {
   /// An object of named properties in panel units. A write may give some of the properties.
   Object,
   /// The Model JSON that ParseEditorParameterWrite accepts: the UI shape is the Model shape. A
-  /// write gives the complete value. The entry describes the shape in `model_shape`.
+  /// lut write gives the complete value; a curve write gives one or more of its four curves. The
+  /// entry describes the shape in `model_shape`.
   Model,
 };
 

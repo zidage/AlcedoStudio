@@ -141,8 +141,11 @@ void SetOwnedScalars(PipelineDocument& document) {
   dynamic_cast<SaturationModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()))
       ->SetValue(1.8f);
+  CurveUpdate curve;
+  curve.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.4f, 0.55f}, {1.0f, 1.0f}};
+  curve.green  = std::vector<CurvePoint>{{0.0f, 0.05f}, {1.0f, 0.95f}};
   dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()))
-      ->SetPoints({{0.0f, 0.0f}, {0.4f, 0.55f}, {1.0f, 1.0f}});
+      ->ApplyUpdate(curve);
   dynamic_cast<LmtModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()))
       ->SetCubePath("D:/luts/look.cube");
   dynamic_cast<Cat02WhiteBalanceModel*>(
@@ -288,6 +291,10 @@ TEST(EditorPanelProjectionTest, ProjectsToneLookLutRawOdtAndGeometryFromExplicit
   ASSERT_EQ(curve_value->points.size(), 3u);
   EXPECT_FLOAT_EQ(curve_value->points[1].x, 0.4f);
   EXPECT_FLOAT_EQ(curve_value->points[1].y, 0.55f);
+  // The projection has the four curves: the green curve and the identity red and blue curves.
+  EXPECT_EQ(curve_value->green, (std::vector<CurvePoint>{{0.0f, 0.05f}, {1.0f, 0.95f}}));
+  EXPECT_EQ(curve_value->red, IdentityCurvePoints());
+  EXPECT_EQ(curve_value->blue, IdentityCurvePoints());
 
   const auto* grain = NestedOf(projection, "film_grain");
   ASSERT_NE(grain, nullptr);

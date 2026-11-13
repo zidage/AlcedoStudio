@@ -177,9 +177,8 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pi
     c.g *= gain;
     c.b *= gain;
   } else if (behavior == AdjustmentBehavior::Curve) {
-    c.r = tone_curve_test::ApplyPackedCurve(c.r, p);
-    c.g = tone_curve_test::ApplyPackedCurve(c.g, p);
-    c.b = tone_curve_test::ApplyPackedCurve(c.b, p);
+    // p is the first of the four records of the Curve slot, as in the kernel.
+    tone_curve_test::ApplyPackedCurveSlot(c, &p);
   } else if (behavior == AdjustmentBehavior::Hls) {
     c = ApplyHls(c, p);
   } else if (behavior == AdjustmentBehavior::Saturation ||
@@ -432,6 +431,38 @@ TEST_F(MetalGradeFixture, MetalCurveMatchesSplineReferenceForThreeAndSixteenPoin
               tone_curve_test::kGpuCurveTolerance)
         << count << " points";
   }
+}
+
+TEST_F(MetalGradeFixture, MetalChannelCurvesMatchSplineReferenceForRedAloneAndRgbWithBlue) {
+  (void)RenderGrade();
+  const auto develop = Download(device_, plan_.develop_output);
+  ASSERT_FALSE(develop.empty());
+  const auto range = tone_curve_test::RgbValueRange(develop);
+  auto&      curve = ModelByType<CurveModel>(type_ids::Curve());
+
+  // A red curve alone: the green and blue channels stay as they are.
+  CurveUpdate red_alone;
+  red_alone.red = tone_curve_test::LiftedMidtonePoints(5, range.low, range.high);
+  curve.ApplyUpdate(red_alone);
+  (void)RenderGrade();
+  ASSERT_EQ(last_grade_pixels_.size(), develop.size());
+  EXPECT_LT(tone_curve_test::MaxCurveSetError(develop, last_grade_pixels_,
+                                              tone_curve_test::SolveCurveSplines(curve)),
+            tone_curve_test::kGpuCurveTolerance)
+      << "red curve alone";
+
+  // The RGB curve together with a blue curve: blue gets the RGB curve, then the blue curve.
+  CurveUpdate rgb_with_blue;
+  rgb_with_blue.red    = IdentityCurvePoints();
+  rgb_with_blue.points = tone_curve_test::LiftedMidtonePoints(4, range.low, range.high);
+  rgb_with_blue.blue   = tone_curve_test::LiftedMidtonePoints(6, range.low, range.high, -0.15f);
+  curve.ApplyUpdate(rgb_with_blue);
+  (void)RenderGrade();
+  ASSERT_EQ(last_grade_pixels_.size(), develop.size());
+  EXPECT_LT(tone_curve_test::MaxCurveSetError(develop, last_grade_pixels_,
+                                              tone_curve_test::SolveCurveSplines(curve)),
+            tone_curve_test::kGpuCurveTolerance)
+      << "RGB curve with a blue curve";
 }
 
 TEST_F(MetalGradeFixture, MetalHlsHueAdjustmentChangesGradePixels) {
@@ -785,7 +816,9 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) 
   ASSERT_EQ(input.size(), output.size());
   ASSERT_FALSE(input.empty());
 
+  // The records as the grade pass packs them, and the first record of each slot.
   std::vector<GradeAdjustmentParams> params;
+  std::vector<std::size_t>           slot_starts;
   auto*                              grade = document_.PrimaryGrade();
   ASSERT_NE(plan_.FirstGrade(), nullptr);
   for (const auto& compiled : plan_.FirstGrade()->adjustments) {
@@ -799,14 +832,14 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) 
         MakeGradeRuntimeParams(*model, *behavior).values[0] == 0.0f) {
       continue;
     }
-    params.push_back(MakeGradeRuntimeParams(*model, *behavior));
+    slot_starts.push_back(tone_curve_test::AppendGradeSlotRecords(params, *model, *behavior));
   }
 
   float max_err = 0.0f;
   for (std::size_t i = 0; i < input.size(); ++i) {
     Rgba cpu = input[i];
-    for (const auto& p : params) {
-      cpu = CpuApplyAdjustment(cpu, p, static_cast<std::uint32_t>(i));
+    for (const auto start : slot_starts) {
+      cpu = CpuApplyAdjustment(cpu, params[start], static_cast<std::uint32_t>(i));
     }
     max_err = std::max(max_err, std::fabs(cpu.r - output[i].r));
     max_err = std::max(max_err, std::fabs(cpu.g - output[i].g));

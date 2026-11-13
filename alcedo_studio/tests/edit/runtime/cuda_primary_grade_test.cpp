@@ -584,6 +584,38 @@ TEST_F(CudaPrimaryGradeFixture, CudaCurveMatchesSplineReferenceForThreeAndSixtee
   }
 }
 
+TEST_F(CudaPrimaryGradeFixture, CudaChannelCurvesMatchSplineReferenceForRedAloneAndRgbWithBlue) {
+  (void)Render();
+  const auto input = Download(plan_.develop_output);
+  ASSERT_FALSE(input.empty());
+  const auto range = tone_curve_test::RgbValueRange(input);
+  auto&      curve = ModelByType<CurveModel>(type_ids::Curve());
+
+  // A red curve alone: the green and blue channels stay as they are.
+  CurveUpdate red_alone;
+  red_alone.red = tone_curve_test::LiftedMidtonePoints(5, range.low, range.high);
+  curve.ApplyUpdate(red_alone);
+  const auto red_output = Download(Render().output);
+  ASSERT_EQ(red_output.size(), input.size());
+  EXPECT_LT(tone_curve_test::MaxCurveSetError(input, red_output,
+                                              tone_curve_test::SolveCurveSplines(curve)),
+            tone_curve_test::kGpuCurveTolerance)
+      << "red curve alone";
+
+  // The RGB curve together with a blue curve: blue gets the RGB curve, then the blue curve.
+  CurveUpdate rgb_with_blue;
+  rgb_with_blue.red    = IdentityCurvePoints();
+  rgb_with_blue.points = tone_curve_test::LiftedMidtonePoints(4, range.low, range.high);
+  rgb_with_blue.blue   = tone_curve_test::LiftedMidtonePoints(6, range.low, range.high, -0.15f);
+  curve.ApplyUpdate(rgb_with_blue);
+  const auto blue_output = Download(Render().output);
+  ASSERT_EQ(blue_output.size(), input.size());
+  EXPECT_LT(tone_curve_test::MaxCurveSetError(input, blue_output,
+                                              tone_curve_test::SolveCurveSplines(curve)),
+            tone_curve_test::kGpuCurveTolerance)
+      << "RGB curve with a blue curve";
+}
+
 TEST_F(CudaPrimaryGradeFixture, CudaHlsHueAdjustmentChangesGradePixels) {
   const auto identity = Download(Render().output);
   auto&      hls      = ModelByType<HlsModel>(type_ids::Hls());

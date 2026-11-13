@@ -37,6 +37,7 @@
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "grade_owned_mask_support.hpp"
@@ -263,6 +264,51 @@ TEST(PipelineDocumentCheckpointFormat,
   DevelopParamsModel develop;
   develop.LoadJson(develop_json);
   EXPECT_EQ(develop.ToJson().dump(), develop_json.dump());
+}
+
+TEST(PipelineDocumentCheckpointFormat,
+     ExistingCurveRootDocumentsSerializeByteIdenticalAfterChannelCurves) {
+  // curve_root_before_channel_curves.json is raw_root_before_raster_input.json (the default
+  // document with a bound camera profile, element 42) with a four-point RGB curve, in the Curve
+  // JSON of the code before the red, green, and blue curves: {"points": [...]} only. The same
+  // document must encode to the same bytes (so it keeps its root id), read identity channel
+  // curves, and never gain the channel keys (tone_curve_editor_plan.md, TC2).
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  LoadVersionOneNeutralColorWheels(document);
+  auto* curve =
+      dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  const std::vector<CurvePoint> rgb{{0.0f, 0.0f}, {0.25f, 0.18f}, {0.6f, 0.7f}, {1.0f, 1.0f}};
+  curve->SetPoints(rgb);
+  const auto raw_json   = nlohmann::json{{"CameraModel", "RootStateCamera"}};
+  const auto root_bytes = LoadExpectedBytes("curve_root_before_channel_curves.json");
+  // The stored root has the HLS defaults of its time; the default document has others (#553).
+  // Load the stored HLS params so that this test compares the curve only.
+  const auto stored_grade =
+      nlohmann::json::parse(root_bytes).at("pipeline_document").at("nodes").at(1);
+  ASSERT_EQ(stored_grade.at("id"), "grade.primary");
+  for (const auto& adjustment : stored_grade.at("adjustments")) {
+    if (adjustment.at("id") == "grade.primary.hls") {
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Hls())->LoadJson(
+          adjustment.at("params"));
+    }
+  }
+  EXPECT_EQ(EncodePipelineRootState(42, document, raw_json).dump(), root_bytes);
+
+  const auto root = DecodePipelineRootState(nlohmann::json::parse(root_bytes));
+  EXPECT_EQ(EncodePipelineRootState(root.element_id, root.document, root.raw_color_context).dump(),
+            root_bytes);
+  EXPECT_EQ(ComputeRootId(42, root.document, root.raw_color_context),
+            ComputeRootId(42, document, raw_json));
+  const auto* restored = dynamic_cast<const CurveModel*>(
+      root.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(restored->Points(), rgb);
+  for (const auto channel : {CurveChannel::Red, CurveChannel::Green, CurveChannel::Blue}) {
+    EXPECT_EQ(restored->ChannelPoints(channel), IdentityCurvePoints()) << CurveChannelKey(channel);
+    EXPECT_FALSE(restored->ToJson().contains(std::string{CurveChannelKey(channel)}));
+  }
 }
 
 TEST(PipelineDocumentCheckpointFormat,

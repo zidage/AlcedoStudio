@@ -234,7 +234,12 @@ auto ReadCurve(const PipelineDocument& document, const EditorParameterTarget& ta
   if (typed == nullptr) {
     return SetError(error, "Adjustment Model type does not match field curve");
   }
-  return FinishField(target, EditorPanelCurveValue{typed->Points()}, out);
+  return FinishField(target,
+                     typed->Read([](const CurvePayload& payload) {
+                       return EditorPanelCurveValue{payload.points, payload.red, payload.green,
+                                                    payload.blue};
+                     }),
+                     out);
 }
 
 auto ReadLut(const PipelineDocument& document, const EditorParameterTarget& target,

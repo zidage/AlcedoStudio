@@ -246,12 +246,15 @@ void EditorToneCurveModel::submitSettled() { submitNow(currentCurveWrite(), true
 
 auto EditorToneCurveModel::currentCurveWrite() const -> alcedo::EditorCurveWrite {
   const auto              normalized = curve::NormalizeCurveControlPoints(points_);
-  alcedo::EditorCurveWrite write;
-  write.points.reserve(normalized.size());
+  // The panel edits the RGB curve; the write leaves the red, green, and blue curves as they are.
+  std::vector<alcedo::CurvePoint> points;
+  points.reserve(normalized.size());
   for (const auto& point : normalized) {
-    write.points.push_back(
+    points.push_back(
         alcedo::CurvePoint{static_cast<float>(point.x()), static_cast<float>(point.y())});
   }
+  alcedo::EditorCurveWrite write;
+  write.points = std::move(points);
   return write;
 }
 

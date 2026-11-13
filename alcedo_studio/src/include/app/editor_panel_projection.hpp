@@ -51,8 +51,12 @@ struct EditorPanelLutValue {
   std::string  output_encoding{kDefaultLutEncodingId};
 };
 
+/// The four curves of a Curve Model: `points` is the RGB curve.
 struct EditorPanelCurveValue {
   std::vector<CurvePoint> points;
+  std::vector<CurvePoint> red;
+  std::vector<CurvePoint> green;
+  std::vector<CurvePoint> blue;
 };
 
 struct EditorPanelHlsValue {

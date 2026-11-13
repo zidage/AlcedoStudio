@@ -86,12 +86,16 @@ class GradeExecutor {
     result.output          = compiled_grade.scene_output;
     result.output_binding  = scene;
     auto& arena            = workspace.Parameters();
-    std::size_t slot_count = 0;
+    std::size_t slot_bytes = 0;
     for (const auto& compiled_node : plan.grade_nodes) {
-      slot_count += compiled_node.adjustments.size();
+      for (const auto& compiled : compiled_node.adjustments) {
+        const auto behavior = TryResolveAdjustmentBehavior(compiled.type);
+        slot_bytes +=
+            (behavior.has_value() ? GradeRuntimeParamBytes(*behavior) : kGradeRuntimeParamBytes) +
+            ParameterArena<typename Ops::Backend>::kSlotAlignment;
+      }
     }
-    arena.Reserve(slot_count *
-                  (kGradeRuntimeParamBytes + ParameterArena<typename Ops::Backend>::kSlotAlignment));
+    arena.Reserve(slot_bytes);
 
     auto schedule =
         BindAndScheduleGrade(arena, *grade, compiled_grade, plan.geometry, Ops::kErrorPrefix);

@@ -231,7 +231,7 @@ TEST(GpuDagAdjustmentRuntime, PackedGradeParamsMatchOwnerFieldsWithoutFullDtoCop
 
   CurveModel curve;
   curve.SetPoints({{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}});
-  const auto packed_curve = MakeGradeRuntimeParams(curve, AdjustmentBehavior::Curve);
+  const auto packed_curve = MakeCurveGradeRuntimeParams(curve)[0];
   const auto curve_spline = tone_curve::SolveToneCurveSpline(curve.Points());
   // x in values[0..15], y in values[16..31], slope in values[32..47].
   EXPECT_EQ(packed_curve.count, 3U);
@@ -318,7 +318,7 @@ TEST(GpuDagAdjustmentRuntime, CurvePackingCarriesAllSixteenPointsAndRejectsSeven
   }
   CurveModel curve;
   curve.SetPoints(points);
-  const auto packed = MakeGradeRuntimeParams(curve, AdjustmentBehavior::Curve);
+  const auto packed = MakeCurveGradeRuntimeParams(curve)[0];
   EXPECT_EQ(packed.count, 16U);
   for (std::size_t i = 0; i < points.size(); ++i) {
     EXPECT_EQ(packed.values[i], points[i].x) << i;
@@ -330,11 +330,76 @@ TEST(GpuDagAdjustmentRuntime, CurvePackingCarriesAllSixteenPointsAndRejectsSeven
   points.push_back({1.5f, 1.5f});
   curve.SetPoints(points);
   try {
-    (void)MakeGradeRuntimeParams(curve, AdjustmentBehavior::Curve);
+    (void)MakeCurveGradeRuntimeParams(curve);
     ADD_FAILURE() << "17 points were packed";
   } catch (const std::invalid_argument& error) {
     EXPECT_STREQ(error.what(), "Tone curve has 17 control points; a curve has 2 to 16 points");
   }
+
+  // A channel curve has the same limit.
+  curve.SetPoints({{0.0f, 0.0f}, {1.0f, 1.0f}});
+  CurveUpdate update;
+  update.blue = points;
+  curve.ApplyUpdate(update);
+  EXPECT_THROW((void)MakeCurveGradeRuntimeParams(curve), std::invalid_argument);
+}
+
+TEST(GpuDagAdjustmentRuntime, CurvePackingHasOneRecordForEachCurveAndCountZeroForIdentityChannels) {
+  CurveModel  curve;
+  CurveUpdate update;
+  update.points = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}};
+  update.blue   = std::vector<CurvePoint>{{0.0f, 0.1f}, {0.3f, 0.25f}, {0.7f, 0.8f}, {1.0f, 0.9f}};
+  curve.ApplyUpdate(update);
+
+  const auto records = MakeCurveGradeRuntimeParams(curve);
+  static_assert(sizeof(records) == 4 * sizeof(GradeAdjustmentParams));
+  EXPECT_EQ(GradeRuntimeParamBytes(AdjustmentBehavior::Curve), 4 * kGradeRuntimeParamBytes);
+  EXPECT_EQ(GradeRuntimeParamBytes(AdjustmentBehavior::Exposure), kGradeRuntimeParamBytes);
+  for (const auto& record : records) {
+    EXPECT_EQ(record.behavior, static_cast<std::uint32_t>(AdjustmentBehavior::Curve));
+  }
+  // The RGB curve, then red, green, and blue (CurveChannel order). The identity red and green
+  // curves have count 0, which the kernels read as "leave the channel unchanged".
+  EXPECT_EQ(records[0].count, 3U);
+  EXPECT_EQ(records[1].count, 0U);
+  EXPECT_EQ(records[2].count, 0U);
+  EXPECT_EQ(records[3].count, 4U);
+  const auto blue = tone_curve::SolveToneCurveSpline(*update.blue);
+  for (std::size_t i = 0; i < 4; ++i) {
+    EXPECT_EQ(records[3].values[i], blue.x[i]) << i;
+    EXPECT_EQ(records[3].values[16 + i], blue.y[i]) << i;
+    EXPECT_EQ(records[3].values[32 + i], blue.slope[i]) << i;
+  }
+  // An identity RGB curve keeps its two points, as before the channel curves.
+  CurveModel identity;
+  EXPECT_EQ(MakeCurveGradeRuntimeParams(identity)[0].count, 2U);
+
+  // The single-record packer names the four-record layout instead of packing one curve.
+  EXPECT_THROW((void)MakeGradeRuntimeParams(curve, AdjustmentBehavior::Curve), std::runtime_error);
+}
+
+TEST(GpuDagAdjustmentRuntime, CurveSlotBindsFourRecordsAndRepacksOnAChannelEdit) {
+  HostParameterBackend                 backend;
+  ParameterArena<HostParameterBackend> arena(backend);
+  const ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"grade.primary.curve"}};
+  CurveModel             curve;
+
+  EXPECT_TRUE(BindOrRefreshGradeRuntimeSlot(arena, key, curve, AdjustmentBehavior::Curve));
+  EXPECT_EQ(arena.Binding(key).size, 4 * kGradeRuntimeParamBytes);
+  EXPECT_FALSE(BindOrRefreshGradeRuntimeSlot(arena, key, curve, AdjustmentBehavior::Curve));
+
+  CurveUpdate update;
+  update.red = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.5f, 0.4f}, {1.0f, 1.0f}};
+  curve.ApplyUpdate(update);
+  EXPECT_TRUE(BindOrRefreshGradeRuntimeSlot(arena, key, curve, AdjustmentBehavior::Curve));
+  EXPECT_EQ(arena.Binding(key).size, 4 * kGradeRuntimeParamBytes);
+
+  GradeAdjustmentParams red{};
+  std::memcpy(&red, arena.HostSpan().data() + arena.Binding(key).offset + kGradeRuntimeParamBytes,
+              sizeof(red));
+  EXPECT_EQ(SlotParams(arena, key).count, 2U);
+  EXPECT_EQ(red.count, 3U);
+  EXPECT_FLOAT_EQ(red.values[17], 0.4f);
 }
 
 TEST(GpuDagAdjustmentRuntime, NeighborhoodParamsReadOwnerFieldsWithoutFullDtoCopy) {

@@ -80,8 +80,9 @@ TEST(EditorToneCurveModelTest, PointerDragSubmitsInteractiveThenOneSettled) {
   ASSERT_NE(sub.lastSettledWrite(), nullptr);
   const auto* write = std::get_if<alcedo::EditorCurveWrite>(sub.lastSettledWrite());
   ASSERT_NE(write, nullptr);
-  ASSERT_GE(write->points.size(), 2u);
-  EXPECT_NEAR(write->points.front().y, 0.40, 1e-3);
+  ASSERT_TRUE(write->points.has_value());
+  ASSERT_GE(write->points->size(), 2u);
+  EXPECT_NEAR(write->points->front().y, 0.40, 1e-3);
 }
 
 TEST(EditorToneCurveModelTest, InsertInteriorPointThenDragCommitsOnce) {
@@ -102,9 +103,10 @@ TEST(EditorToneCurveModelTest, InsertInteriorPointThenDragCommitsOnce) {
   ASSERT_NE(sub.lastSettledWrite(), nullptr);
   const auto* write = std::get_if<alcedo::EditorCurveWrite>(sub.lastSettledWrite());
   ASSERT_NE(write, nullptr);
-  ASSERT_EQ(write->points.size(), 3u);
-  EXPECT_NEAR(write->points[1].x, 0.5, 1e-2);
-  EXPECT_NEAR(write->points[1].y, 0.55, 1e-2);
+  ASSERT_TRUE(write->points.has_value());
+  ASSERT_EQ(write->points->size(), 3u);
+  EXPECT_NEAR((*write->points)[1].x, 0.5, 1e-2);
+  EXPECT_NEAR((*write->points)[1].y, 0.55, 1e-2);
 }
 
 TEST(EditorToneCurveModelTest, RemoveInteriorPointCommitsSettled) {

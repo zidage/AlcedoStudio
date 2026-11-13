@@ -261,9 +261,12 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, const f
     c.y += offset;
     c.z += offset;
   } else if (behavior == CudaAdjustmentBehavior::Curve) {
-    c.x = ApplyCurve(c.x, p);
-    c.y = ApplyCurve(c.y, p);
-    c.z = ApplyCurve(c.z, p);
+    // The Curve slot has four records (CurveGradeRuntimeParams): the RGB curve, then the red,
+    // green, and blue curves. count 0 leaves the channel unchanged.
+    const CudaAdjustmentParams* curves = &p;
+    c.x = ApplyCurve(ApplyCurve(c.x, curves[0]), curves[1]);
+    c.y = ApplyCurve(ApplyCurve(c.y, curves[0]), curves[2]);
+    c.z = ApplyCurve(ApplyCurve(c.z, curves[0]), curves[3]);
   } else if (behavior == CudaAdjustmentBehavior::Hls) {
     c = ApplyHls(c, p);
   } else if (behavior == CudaAdjustmentBehavior::Saturation ||

@@ -238,6 +238,7 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/lmt_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_wheel_tone_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/tone_curve_spline_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/curve_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp
