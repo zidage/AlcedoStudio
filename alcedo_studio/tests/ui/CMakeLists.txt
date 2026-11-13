@@ -2794,27 +2794,6 @@ target_link_libraries(EditorToneCurveModelTest
 alcedo_ui_gtest_discover_tests(EditorToneCurveModelTest TEST_PREFIX "EditorToneCurveModelTest.")
 alcedo_register_test_target(EditorToneCurveModelTest ui)
 
-# Phase 6B: pure tone-curve scene geometry (no QQuickWindow / GPU).
-add_executable(EditorToneCurveGeometryTest
-    ${ALCEDO_TEST_ROOT}/ui/editor_tone_curve_geometry_test.cpp
-)
-target_include_directories(EditorToneCurveGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorToneCurveGeometryTest
-  PRIVATE
-    AlcedoInProcessTestMain
-    AlbumBackendLib
-    GTest::gtest
-    JSON
-    Qt6::Core
-    Qt6::Gui
-    Qt6::Qml
-    Qt6::Quick
-    Qt6::Test
-    Qt6::Widgets
-)
-alcedo_ui_gtest_discover_tests(EditorToneCurveGeometryTest TEST_PREFIX "EditorToneCurveGeometryTest.")
-alcedo_register_test_target(EditorToneCurveGeometryTest ui)
-
 # Phase 6D: Look panel typed models (WB / HSL / CDL / LUT) — no QML/GPU.
 add_executable(EditorLookModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_look_model_test.cpp

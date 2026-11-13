@@ -23,6 +23,7 @@
 #include "app/editor_history_types.hpp"
 #include "app/editor_mask_coverage_preview.hpp"
 #include "app/editor_node_graph_projection.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_pending_input.hpp"
 #include "app/editor_session_types.hpp"
 #include "app/mask_thumbnail_service.hpp"
@@ -568,6 +569,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void SyncMaskAdjustmentPanel();
   /// Show the request of the curve histogram owner on the backend, or hide it (issue #888).
   void ApplyCurveHistogramRequest();
+  /// Grade of the curve input histogram: the node of the `curve` field of @p projection, or none.
+  void SyncCurveHistogramGrade(const alcedo::EditorPanelProjection& projection);
   /// Show the Compare page while the backend comparison is open, and restore the panel that was
   /// active before it when the comparison closes.
   void SyncComparisonAdjustmentPanel();

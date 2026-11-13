@@ -87,6 +87,7 @@ class TestHistogramSource final : public PlotHistogramSource {
 // Gives the tests the protected event handlers of the pane.
 class InputPlotPane final : public PlotPane {
  public:
+  using PlotPane::hoverLeaveEvent;
   using PlotPane::keyPressEvent;
   using PlotPane::mouseDoubleClickEvent;
   using PlotPane::mouseMoveEvent;
@@ -433,6 +434,100 @@ TEST(PlotPaneInputTest, KeysReachTheHandleLayerOnlyWithASelectedHandle) {
   EXPECT_EQ(double_clicked.at(0).at(0).toInt(), 0);
 }
 
+TEST(PlotPaneInputTest, PressThatNoLayerTakesReportsTheBackgroundPress) {
+  InputPlotPane pane;
+  ConfigurePane(pane);
+  PlotHandleLayer handles;
+  handles.set_interactive(true);
+  handles.set_points({{0.5, 0.5}});
+  pane.AddLayer(&handles);
+  QSignalSpy background(&pane, &PlotPane::backgroundPressed);
+
+  auto on_handle = Mouse(QEvent::MouseButtonPress, pane.mapFromData({0.5, 0.5}), Qt::LeftButton);
+  pane.mousePressEvent(&on_handle);
+  auto on_handle_release =
+      Mouse(QEvent::MouseButtonRelease, pane.mapFromData({0.5, 0.5}), Qt::NoButton);
+  pane.mouseReleaseEvent(&on_handle_release);
+  EXPECT_EQ(background.count(), 0) << "the handle layer took the press";
+
+  auto empty = Mouse(QEvent::MouseButtonPress, pane.mapFromData({0.2, 0.7}), Qt::LeftButton,
+                     Qt::ShiftModifier);
+  pane.mousePressEvent(&empty);
+  ASSERT_EQ(background.count(), 1);
+  ExpectNear(background.at(0).at(0).toPointF(), {0.2, 0.7});
+  EXPECT_EQ(background.at(0).at(1).toInt(), static_cast<int>(Qt::ShiftModifier));
+}
+
+TEST(PlotPaneInputTest, PointerPositionFollowsTheMovesAndLeavesWithTheHover) {
+  InputPlotPane pane;
+  ConfigurePane(pane);
+  QSignalSpy pointer_changed(&pane, &PlotPane::pointerChanged);
+  EXPECT_FALSE(pane.pointer_inside());
+
+  auto press = Mouse(QEvent::MouseButtonPress, pane.mapFromData({0.3, 0.3}), Qt::LeftButton);
+  pane.mousePressEvent(&press);
+  auto move = Mouse(QEvent::MouseMove, pane.mapFromData({0.4, 0.6}), Qt::LeftButton);
+  pane.mouseMoveEvent(&move);
+  EXPECT_TRUE(pane.pointer_inside());
+  ExpectNear(pane.pointer_position(), {0.4, 0.6});
+  EXPECT_GE(pointer_changed.count(), 1);
+
+  // The same item position shows another data position after a zoom.
+  pane.zoomAt({0.5, 0.5}, 2.0);
+  ExpectNear(pane.pointer_position(), {0.45, 0.55});
+
+  // A move into the label inset is outside the plot rectangle.
+  auto inset = Mouse(QEvent::MouseMove, QPointF(5.0, 100.0), Qt::LeftButton);
+  pane.mouseMoveEvent(&inset);
+  EXPECT_FALSE(pane.pointer_inside());
+  auto release = Mouse(QEvent::MouseButtonRelease, QPointF(5.0, 100.0), Qt::NoButton);
+  pane.mouseReleaseEvent(&release);
+
+  auto back = Mouse(QEvent::MouseMove, pane.mapFromData({0.5, 0.5}), Qt::NoButton);
+  pane.mouseMoveEvent(&back);
+  ASSERT_TRUE(pane.pointer_inside());
+  QHoverEvent leave(QEvent::HoverLeave, QPointF(-1.0, -1.0), QPointF(-1.0, -1.0),
+                    QPointF(-1.0, -1.0));
+  pane.hoverLeaveEvent(&leave);
+  EXPECT_FALSE(pane.pointer_inside());
+}
+
+TEST(PlotPaneInputTest, PolylineDragKeepsThePressOffset) {
+  InputPlotPane pane;
+  ConfigurePane(pane);
+  PlotPolylineLayer line;
+  line.set_interactive(true);
+  line.set_hit_radius(6.0);
+  line.set_points({{0.0, 0.5}, {1.0, 0.5}});
+  pane.AddLayer(&line);
+  QSignalSpy    pressed(&line, &PlotPolylineLayer::pressed);
+  QSignalSpy    moved(&line, &PlotPolylineLayer::moved);
+  QSignalSpy    released(&line, &PlotPolylineLayer::released);
+
+  // A press 4 px above the line grabs the nearest line point.
+  const QPointF on_line = pane.mapFromData({0.4, 0.5});
+  auto press = Mouse(QEvent::MouseButtonPress, on_line - QPointF(0.0, 4.0), Qt::LeftButton);
+  pane.mousePressEvent(&press);
+  ASSERT_EQ(pressed.count(), 1);
+  ExpectNear(pressed.at(0).at(0).toPointF(), {0.4, 0.5});
+
+  // The grabbed line point follows the pointer 1:1, 4 px below it.
+  const QPointF pointer(120.0, 60.0);
+  auto          move = Mouse(QEvent::MouseMove, pointer, Qt::LeftButton);
+  pane.mouseMoveEvent(&move);
+  ASSERT_EQ(moved.count(), 1);
+  ExpectNear(moved.at(0).at(0).toPointF(), pane.mapToData(pointer + QPointF(0.0, 4.0)));
+  auto release = Mouse(QEvent::MouseButtonRelease, pointer, Qt::NoButton);
+  pane.mouseReleaseEvent(&release);
+  ASSERT_EQ(released.count(), 1);
+  ExpectNear(released.at(0).at(0).toPointF(), pane.mapToData(pointer + QPointF(0.0, 4.0)));
+
+  // Farther than 6 px from the line, the layer does not take the press.
+  auto far = Mouse(QEvent::MouseButtonPress, on_line - QPointF(0.0, 7.0), Qt::LeftButton);
+  pane.mousePressEvent(&far);
+  EXPECT_EQ(pressed.count(), 1);
+}
+
 // ---- Painting ----------------------------------------------------------------------------------
 
 constexpr int kRedFirstBin = 20;
@@ -593,6 +688,40 @@ TEST_F(PlotPanePaintTest, PaneDrawsEachLayer) {
     }
   }
   EXPECT_GT(label_pixels, 4);
+}
+
+TEST_F(PlotPanePaintTest, CurveLineIsOnePointTwoFivePixelsWideAtItsPosition) {
+  // The Tone Curve section draws the curve with the plotLineWidth token: 1.25 px.
+  constexpr double kCurveLineWidth = 1.25;
+  line_.set_width(kCurveLineWidth);
+  line_.set_points({{0.0, 0.6}, {1.0, 0.6}});
+  const QImage image = Present();
+  ASSERT_FALSE(image.isNull());
+
+  // A column at x 0.35 crosses no grid line, no histogram bin, and no handle. The coverage of
+  // each device pixel is its brightness above the surface; the sum across the line is its width
+  // and the weighted mean of the rows is its center.
+  const qreal   dpr       = image.devicePixelRatio();
+  const QPointF center    = pane_->mapFromData({0.35, 0.6});
+  const int     column    = static_cast<int>(std::floor(center.x() * dpr));
+  const int     first_row = static_cast<int>(std::floor((center.y() - 6.0) * dpr));
+  const int     last_row  = static_cast<int>(std::ceil((center.y() + 6.0) * dpr));
+  const double  surface   = Brightness(kSurface);
+  const double  full      = Brightness(QColor(255, 255, 255)) - surface;
+  double        coverage  = 0.0;
+  double        moment    = 0.0;
+  for (int row = first_row; row <= last_row; ++row) {
+    const double pixel =
+        std::clamp((Brightness(image.pixelColor(column, row)) - surface) / full, 0.0, 1.0);
+    coverage += pixel;
+    moment += pixel * (row + 0.5);
+  }
+  ASSERT_GT(coverage, 0.0);
+  EXPECT_NEAR(coverage / dpr, kCurveLineWidth, 0.25) << "line width in item pixels";
+  EXPECT_NEAR(moment / coverage / dpr, center.y(), 0.25) << "line center in item pixels";
+  // Nothing of the line two pixels away from it.
+  EXPECT_EQ(Pixel(image, center + QPointF(0.0, 2.5)), kSurface);
+  EXPECT_EQ(Pixel(image, center - QPointF(0.0, 2.5)), kSurface);
 }
 
 TEST_F(PlotPanePaintTest, OnlyTheChangedLayerIsBuiltAgain) {

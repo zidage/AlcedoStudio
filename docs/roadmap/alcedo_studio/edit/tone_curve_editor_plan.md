@@ -2,7 +2,7 @@
 
 Date: 2026-11-13
 
-Status: TC1, TC2, and TC3 complete. TC4 to TC6 planned.
+Status: TC1 to TC5 complete. TC6 planned.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -488,12 +488,142 @@ at the pointer; drag in an empty area pans a zoomed view; keys only with a selec
 click), `PlotPanePaintTest.*` (each layer in the rendered image; only the changed layer builds
 again; two panes in one window keep their own views).
 
-### TC5 and TC6
+### TC5: Tone Curve section on the plot pane
 
-See the issues. TC5 binds `EditorSessionController.curveHistogram` (`active`, `gradeNodeId`) to
-the Tone Curve section and sets it as the `source` of a `PlotHistogramLayer`. TC5 removes
-`kPointerGain` and moves `EditorToneCurveItem` to the archive of deprecated code when the section
-no longer uses it.
+**Objective.** The Tone Curve section of the Tone panel edits the four curves of TC2 on the plot
+pane of TC4, over the curve input histogram of TC3, with the drawing, input, and controls of #890.
+
+**Layout** (`EditorToneCurveSection.qml`, inside the `CollapsibleSection` "Tone Curve"):
+
+- Header: title, then the header actions Histogram (toggle), Fit (toggle), and Reset. The
+  `CollapsibleSection` gets a `headerActions` component slot at the right end of the header; a
+  click on an action does not fold the section.
+- Row 1: channel selector `RGB`, `R`, `G`, `B` (`SegmentedCardSwitcher`). A segment of a curve
+  that is not the identity shows a 4 px dot before its title, in the ink of the segment. TC6 adds
+  the preset menu to this row.
+- Plot: a square `PlotPane` (limits [0, 1] x [0, 1]). Layers from the bottom: grid, histogram,
+  dashed identity line, the faint curves of the other channels, the pointer line, the curve of
+  the selected channel, the handles. EV labels under the plot (bottom inset).
+- Pointer readout: while the pointer is over the plot, a vertical line at the pointer and, at the
+  top left of the plot, `In` and `Out` with the EV of the pointer input and of the curve output.
+- Row 2: `In` and `Out` fields of the selected point (plain `TextInput` in a hairline box, value
+  on the curve axis with 4 decimals), each followed by its EV value. Without a selection the
+  fields are empty and read-only.
+- The caption sentence under the plot is removed.
+
+**Data rules of the panel.**
+
+- Grid: lines at `0.4135 + 2 k * 0.0571` inside [0, 1] (-6 EV to +10 EV from 18% grey, every
+  2 EV) on both axes; the line at 18% grey is strong. Labels only under the plot, as signed EV
+  (`−6` to `+10`). The exact axis values come from ACEScc: 18% grey is
+  `(log2(0.18) + 9.72) / 17.52`, one stop is `1 / 17.52` (`curve::kCurveAxisGrey`,
+  `curve::kCurveAxisStop`).
+- Fit: off shows the full range [0, 1]. On shows -7 EV to +5 EV from 18% grey on both axes
+  (`curve::kCurveFitMinimumEv`, `curve::kCurveFitMaximumEv`): the shadows of a photo down to the
+  sensor floor and the highlights to +5 EV, where the histogram of a usual photo ends. Ctrl +
+  wheel still zooms; Fit sets the view again on each change.
+- Curve lines: the spline of TC1 sampled at 512 equal steps of x on [0, 1] plus each control
+  point (`curve::SampleCurveLine`), drawn with `PlotPolylineLayer`.
+- Histogram: `EditorSessionController.curveHistogram` is the `source` of the histogram layer.
+  `RGB` shows the three channels; `R`, `G`, `B` show their channel. The section sets `active`
+  while the Histogram toggle is on, the section is open, and the Tone panel is visible.
+  `EditorSessionController` sets `gradeNodeId` itself: it is the node of the `curve` field of the
+  current panel projection (the Color Grade whose curve the panel shows and writes), so QML does
+  not resolve node ids.
+
+**Input** (owner: `EditorToneCurveModel`; the layers only report positions):
+
+- Handle press: `PlotHandleLayer.pressed` -> `beginDrag(index)`; `moved` -> `updateDrag(x, y,
+  modifiers)`; `released` -> `finishDrag()`. The handle layer keeps the press offset, so the
+  point follows the pointer 1:1. `kPointerGain` is gone with `EditorToneCurveItem`.
+- Shift + drag keeps one axis: the axis with the larger motion from the press position moves, the
+  other keeps the press value.
+- A press on the curve line within 6 px (`plotCurveHitRadius`) of the selected curve:
+  `PlotPolylineLayer.pressed` gives the nearest point of the line; `insertPointOnCurve(x)` adds a
+  point at `(x, curve(x))` and starts a drag. The polyline layer keeps the press offset like the
+  handle layer (changed in TC5), so the new point follows the pointer 1:1.
+- A press that no layer takes: `PlotPane.backgroundPressed` (new) -> `clearSelection()`. The pane
+  pans a zoomed view as before.
+- Keys (`PlotHandleLayer.keyPressed`): arrows move the selected point by 0.001, with Shift by
+  0.01; Delete and Backspace remove it.
+- Double click on an inner point removes it. A double click elsewhere does nothing.
+- Reset sets the selected curve to the identity.
+
+**History.** Each change below gives exactly one settled write of the `curve` field; a write has
+only the key of the edited curve (`EditorCurveWrite` with one list), so the other curves stay:
+
+| Change | Interactive writes | Settled write |
+| --- | --- | --- |
+| Drag of a handle or of a new point | one for each move that changes the point | at release, only when the point moved or was added |
+| Key move sequence | one for each key | 500 ms after the last key (`keySettleIntervalMs`), or at once when the selection, the channel, or a drag starts |
+| In or Out field edit | none | at Enter or focus out, when the value changed |
+| Removal, Reset | none | at once (none when nothing changes) |
+
+A press on a handle with no motion writes nothing, so a click that only selects a point and the
+first click of a double click add no history entry.
+
+**Load.** `loadFromSnapshotEntry` reads `points`, `red`, `green`, and `blue` of the projected
+`curve` map (an absent channel list is the identity) without a write, and only while no drag
+runs. The selected channel is panel state: a load does not change it. The editor workspace is
+retained after its first creation (`WorkspaceHost.editorRetained`), so the channel stays during a
+workspace re-entry. A load that changes the points of the selected curve clears the selection.
+
+**Files.**
+
+- Changed: `EditorToneCurveModel` (four curves, selected channel, selection, key and field
+  edits), `curve.hpp` (axis constants, `SampleCurveLine`), `PlotPane` (`pointerInside`,
+  `pointerPosition`, `backgroundPressed`), `PlotPolylineLayer` (press offset),
+  `EditorSessionController` (curve histogram Grade from the projection), `CollapsibleSection.qml`
+  (`headerActions`), `EditorTonePanel.qml`, `AppTheme` and `DESIGN.md` (tokens of the section),
+  `resource.qrc` (`fit-range.svg`).
+- New: `EditorToneCurveSection.qml`, `panel_icons/fit-range.svg` (Lucide `scan`).
+- Archived (unchanged, outside the build): `EditorToneCurveItem` and
+  `editor_tone_curve_geometry_test.cpp` to `alcedo_studio/deprecated/tone_curve_item/`.
+
+**Call chain (handle drag).**
+
+```text
+PlotPane::mousePressEvent -> PlotHandleLayer::PointerPress -> pressed(index)
+  -> QML -> EditorToneCurveModel::beginDrag(index)        (selects, records the press point)
+PlotPane::mouseMoveEvent -> PlotHandleLayer::PointerMove -> moved(index, data, modifiers)
+  -> EditorToneCurveModel::updateDrag(x, y, modifiers)    (axis lock, neighbor limits)
+  -> submitNow(EditorCurveWrite{<channel>: points}, settled=false) -> pointsChanged
+  -> QML sets PlotHandleLayer.points and PlotPolylineLayer.points
+PlotPane::mouseReleaseEvent -> released -> EditorToneCurveModel::finishDrag()
+  -> submitNow(..., settled=true) -> settledCommitted
+```
+
+**Call chain (histogram).** `EditorSessionController::NotifyChange` (panel projection current) ->
+`SyncCurveHistogramGrade` -> `EditorCurveHistogramController::set_grade_node_id` ->
+`RequestChanged` -> `ApplyCurveHistogramRequest` (TC3 chain) -> `HistogramChanged` ->
+`PlotHistogramLayer` builds again.
+
+**Failure behavior.** A write that the submitter refuses (no editable session) leaves the model
+points as the user moved them; the next projection load sets the document points again. An
+insertion at a curve of 16 points or within 0.001 of an end point does nothing and starts no
+drag. A field text that is not a number keeps the point and shows the point value again.
+
+**Tests.**
+
+- `EditorToneCurveModelTest`: `HandleDragToAPanePositionGivesExactlyThatDataPosition` (a
+  `PlotHandleLayer` press at a handle, a move to an item position: the point equals
+  `PlotViewTransform::ToData` of that position), `PointAddedOnTheCurveKeepsTheCurveValuesAt33Inputs`
+  (a point at x 0.6 of a five-point S curve: the curve moves by at most 0.003 on the axis, 0.05
+  stop, at the 33 inputs i / 32; the new slopes cause the change),
+  `ShiftDragMovesOnlyTheAxisWithTheLargerMotion`, `ArrowKeysMoveTheSelectedPointAndSettleOnceAfterTheSequence`,
+  `FieldEditsWriteOneSettledEntryEach`, `RemovalAndResetWriteOneSettledEntryForTheSelectedCurve`,
+  `ChannelChangeSettlesThePendingKeyMovesAndEditsTheNewCurve`,
+  `PressWithoutMotionWritesNothing`, `SnapshotLoadReadsTheFourCurvesWithoutAWrite`.
+- `EditorAdjustmentSnapshotQmlTest.ToneCurveSectionLoadsFourCurvesAndMarksTheChangedChannels`.
+- `EditorPlotPaneTest`: `PlotPanePaintTest.CurveLineIsOnePointTwoFivePixelsWideAtItsPosition`
+  (coverage of a column across a horizontal curve line), `PlotPaneInputTest.
+  PressThatNoLayerTakesReportsTheBackgroundPress`, `PlotPaneInputTest.PointerPositionFollowsTheMovesAndLeavesWithTheHover`,
+  `PlotPaneInputTest.PolylineDragKeepsThePressOffset`.
+- `EditorCurveHistogramControllerTest` and `EditorSessionRenderSchedulerPortTest` (callers).
+
+### TC6
+
+See #891.
 
 ## 6. Completion record
 
@@ -644,3 +774,48 @@ Verification (Windows, debug build, RTX 3080 Laptop, D3D11 scene graph):
 
 The painting tests were not run on macOS (Metal): the Mac was not reachable. The full test suite
 was not run.
+
+### TC5 (2026-11-13)
+
+Status: complete. Branch `feature/tone-curve-section`, stacked on TC4. The design, call chains,
+and test list are in the TC5 section of section 5.
+
+Decisions made during the work:
+
+- The session sets the histogram Grade (`EditorSessionController::SyncCurveHistogramGrade`, from
+  the node of the projected `curve` field); the section only sets `active`. QML resolves no node
+  ids, and the histogram follows the Grade that the panel shows after a node change or an undo.
+- Fit shows -7 EV to +5 EV from 18% grey; off is the full range. The view is a square, because
+  the pane has one zoom factor for both axes.
+- The polyline layer keeps its press offset (a change of TC4), so a point added on the curve
+  follows the pointer 1:1 like a handle.
+- A press with no motion writes nothing. A key move sequence settles 500 ms after the last key,
+  or at once when the selection, the channel, or a drag changes.
+- A load is skipped during a drag and during a key move sequence, so a projection cannot move the
+  point back while the user moves it.
+- The model keeps the loaded points as the document floats; a drag and the fields set doubles,
+  and the write converts them to float.
+- The point added on the curve is at the exact spline value. The new slopes move the curve by at
+  most 0.003 on the axis (0.05 stop) at the 33 test inputs of an S curve.
+- The selected channel stays in the panel model: the editor workspace is retained after its first
+  creation, so it stays during a workspace re-entry.
+- `EditorToneCurveItem` and `EditorToneCurveGeometryTest` moved to
+  `alcedo_studio/deprecated/tone_curve_item/` (with `kPointerGain`). The stale check #892 left
+  with the archived test.
+
+Verification (Windows, debug build, RTX 3080 Laptop, D3D11 scene graph):
+
+| Binary and filter | Result |
+| --- | --- |
+| `EditorToneCurveModelTest` (all) | 15 passed |
+| `EditorPlotPaneTest` (all, includes the four new tests) | 18 passed |
+| `EditorAdjustmentSnapshotQmlTest` (all, includes `ToneCurveSectionLoadsFourCurvesAndMarksTheChangedChannels`) | 5 passed; no QML warning from the Tone panel, the section, or `CollapsibleSection` |
+| `EditorCurveHistogramControllerTest` (all) | 6 passed |
+| `EditorSerialInputBoundaryTest` (all) | 7 passed |
+| `EditorSessionRenderSchedulerPortTest` (all) | 46 passed |
+| `EditorMaskCoveragePreviewTest` (all) | 25 passed |
+| `alcedo_main` | builds (qmlcachegen of the new QML included) |
+
+The section was not driven in the running application (no input is sent to a real window). The
+painting tests were not run on macOS (Metal): the Mac was not reachable. The full test suite was
+not run.

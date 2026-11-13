@@ -280,6 +280,24 @@ void PlotPane::OnViewChanged() {
   MarkAllLayersDirty();
   UpdateCursor();
   emit viewChanged();
+  if (pointer_inside_) {
+    // The same item position shows another data position.
+    emit pointerChanged();
+  }
+}
+
+auto PlotPane::pointer_position() const -> QPointF { return view_.ToData(pointer_item_); }
+
+void PlotPane::SetPointer(const QPointF& item, bool inside) {
+  inside = inside && view_.item_rect().contains(item);
+  if (inside == pointer_inside_ && (!inside || item == pointer_item_)) {
+    return;
+  }
+  pointer_inside_ = inside;
+  if (inside) {
+    pointer_item_ = item;
+  }
+  emit pointerChanged();
 }
 
 void PlotPane::UpdatePlotRect() {
@@ -574,6 +592,7 @@ void PlotPane::mousePressEvent(QMouseEvent* event) {
   }
   // The press stays with the pane, so a drag on the plot does not scroll a parent Flickable.
   event->accept();
+  emit backgroundPressed(pointer.data, static_cast<int>(event->modifiers()));
 }
 
 void PlotPane::mouseMoveEvent(QMouseEvent* event) {
@@ -587,6 +606,7 @@ void PlotPane::mouseMoveEvent(QMouseEvent* event) {
     }
   }
   last_pointer_item_ = position;
+  SetPointer(position, true);
   event->accept();
 }
 
@@ -648,12 +668,14 @@ void PlotPane::hoverMoveEvent(QHoverEvent* event) {
   }
   SetHoverLayer(taken);
   UpdateCursor();
+  SetPointer(event->position(), true);
   event->accept();
 }
 
 void PlotPane::hoverLeaveEvent(QHoverEvent* event) {
   SetHoverLayer(nullptr);
   UpdateCursor();
+  SetPointer({}, false);
   event->accept();
 }
 

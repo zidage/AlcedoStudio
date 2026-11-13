@@ -234,6 +234,14 @@ class AppTheme final : public QObject {
   Q_PROPERTY(qreal plotHandleRingWidth READ plotHandleRingWidth CONSTANT)
   Q_PROPERTY(qreal plotHandleOutlineWidth READ plotHandleOutlineWidth CONSTANT)
   Q_PROPERTY(qreal plotHitRadius READ plotHitRadius CONSTANT)
+  // Tone Curve section (DESIGN.md "Tone Curve section").
+  Q_PROPERTY(QColor plotChannelRedColor READ plotChannelRedColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotChannelGreenColor READ plotChannelGreenColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotChannelBlueColor READ plotChannelBlueColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor plotPointerLineColor READ plotPointerLineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(qreal plotInactiveLineOpacity READ plotInactiveLineOpacity CONSTANT)
+  Q_PROPERTY(qreal plotCurveHitRadius READ plotCurveHitRadius CONSTANT)
+  Q_PROPERTY(qreal plotChannelMarkSize READ plotChannelMarkSize CONSTANT)
   // Nodes graph canvas and node-card geometry. Colors follow the active theme;
   // sizes are logical px. See DESIGN.md "Nodes panel and graph nodes".
   Q_PROPERTY(QColor graphCanvasColor READ graphCanvasColor NOTIFY ThemeChanged)
@@ -506,6 +514,13 @@ class AppTheme final : public QObject {
   auto plotHandleRingWidth() const -> qreal;
   auto plotHandleOutlineWidth() const -> qreal;
   auto plotHitRadius() const -> qreal;
+  auto plotChannelRedColor() const -> QColor;
+  auto plotChannelGreenColor() const -> QColor;
+  auto plotChannelBlueColor() const -> QColor;
+  auto plotPointerLineColor() const -> QColor;
+  auto plotInactiveLineOpacity() const -> qreal;
+  auto plotCurveHitRadius() const -> qreal;
+  auto plotChannelMarkSize() const -> qreal;
   auto graphCanvasColor() const -> QColor;
   auto graphEdgeColor() const -> QColor;
   auto graphCandidateEdgeColor() const -> QColor;
