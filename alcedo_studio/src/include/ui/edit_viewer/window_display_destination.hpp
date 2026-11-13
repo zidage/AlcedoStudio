@@ -8,16 +8,19 @@
 #pragma once
 
 #include <QEvent>
+#include <QImage>
 #include <QObject>
 #include <QWindow>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/monitor_color_profile.hpp"
 
 namespace alcedo {
@@ -55,6 +58,48 @@ struct DisplayDestination {
   std::filesystem::path  profile_path;
   /// The reason, for Unusable.
   std::string            error;
+};
+
+/**
+ * @brief The pixels of @p source as a photo surface with @p destination shows them.
+ *
+ * Converts a copy of @p source with ConvertImageToDisplay when @p destination has profile bytes
+ * (MonitorProfile and the two sRGB kinds) and @p encoding is an SDR encoding. Returns @p source
+ * for a null destination, for NoWindow and Unusable, and for an ST 2084 or HLG encoding.
+ *
+ * @param source An image of `QImage::Format_RGBA8888` with the pixels of @p encoding.
+ * @throws std::invalid_argument and std::runtime_error as ConvertImageToDisplay.
+ * @thread Any thread.
+ */
+[[nodiscard]] auto ConvertImageForDestination(const QImage&              source,
+                                              const ViewerDisplayConfig& encoding,
+                                              const DisplayDestination*  destination) -> QImage;
+
+/**
+ * @brief The destination of an image store and the conversion of its images (plan section 6.4).
+ *
+ * An image store keeps source pixels and their encoding. Its image provider converts each
+ * requested image with @ref Convert, so a new destination needs no second render. A conversion
+ * that fails gives the source pixels and writes one warning for each destination.
+ *
+ * Thread: any thread. @ref SetDestination runs on the GUI thread, @ref Convert on the image
+ * provider threads.
+ */
+class DisplayImageConverter {
+ public:
+  /// Convert to @p destination from now on. Null converts nothing.
+  void               SetDestination(std::shared_ptr<const DisplayDestination> destination);
+  [[nodiscard]] auto Destination() const -> std::shared_ptr<const DisplayDestination>;
+
+  /// ConvertImageForDestination with the current destination; @p source when it throws.
+  [[nodiscard]] auto Convert(const QImage& source, const ViewerDisplayConfig& encoding) const
+      -> QImage;
+
+ private:
+  mutable std::mutex                                mutex_;
+  std::shared_ptr<const DisplayDestination>         destination_;
+  /// The destination whose failure is in the log already.
+  mutable std::shared_ptr<const DisplayDestination> reported_failure_;
 };
 
 /**

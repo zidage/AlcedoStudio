@@ -13,8 +13,12 @@
 
 #include <QCoreApplication>
 #include <QSettings>
+#include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QWindow>
+#include <filesystem>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <string>
@@ -22,6 +26,7 @@
 #include <vector>
 
 #include "app/editor_session_service.hpp"
+#include "display_destination_test_support.hpp"
 #include "editor_comparison_test_support.hpp"
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
@@ -233,6 +238,52 @@ TEST_F(EditorComparisonControllerTest, RepeatedOpenSelectCloseKeepsOneExecutorAn
   EXPECT_EQ(backend_.opened_kinds.size(), 3u);
   EXPECT_EQ(backend_.selections.size(), 3u);
   EXPECT_EQ(backend_.close_refresh, (std::vector<bool>{true, true, true}));
+}
+
+// Windows display ICC plan, W5: a new destination of the display window gives the shown pair new
+// URLs, and the provider converts the stored pixels; nothing renders again.
+TEST_F(EditorComparisonControllerTest, NewDisplayDestinationPublishesNewPairUrls) {
+  QWindow window;
+  window.resize(64, 48);
+  comparison_->SetDisplayWindow(&window);
+  comparison_->openBeforeAfter();
+  backend_.Publish(OpenState(201, EditorComparisonStatus::Ready, 77), MakePair(nullptr));
+  ASSERT_EQ(comparison_->status(), QStringLiteral("ready"))
+      << comparison_->error_text().toStdString();
+  const auto    before = comparison_->pair().toMap();
+
+  QTemporaryDir dir;
+  ASSERT_TRUE(dir.isValid());
+  const auto profile_path =
+      std::filesystem::path(dir.filePath(QStringLiteral("p3.icc")).toStdWString());
+  const auto p3_bytes = alcedo::test::P3DisplayProfileBytes();
+  alcedo::test::WriteProfileFile(profile_path, p3_bytes);
+  QSignalSpy pair_changes(comparison_.get(), &EditorComparisonController::PairChanged);
+  WindowDisplayDestination::ForWindow(&window)->ApplyMonitorReading(
+      alcedo::test::MonitorWithProfile(profile_path));
+
+  EXPECT_EQ(pair_changes.count(), 1);
+  const auto after = comparison_->pair().toMap();
+  EXPECT_EQ(after.value(QStringLiteral("operationId")),
+            before.value(QStringLiteral("operationId")));
+  EXPECT_NE(after.value(QStringLiteral("aSource")), before.value(QStringLiteral("aSource")));
+  EXPECT_NE(after.value(QStringLiteral("bSource")), before.value(QStringLiteral("bSource")));
+  EXPECT_EQ(after.value(QStringLiteral("aPlacement")), before.value(QStringLiteral("aPlacement")));
+  EXPECT_EQ(backend_.take_count, 1) << "a new destination renders nothing";
+
+  ComparisonImageProvider provider(store_);
+  const QString           prefix =
+      QStringLiteral("image://%1/").arg(QLatin1String(kComparisonImageProviderId));
+  const QImage shown = provider.requestImage(
+      after.value(QStringLiteral("aSource")).toString().mid(prefix.size()), nullptr, {});
+  EXPECT_EQ(shown, alcedo::test::ExpectedDisplayImage(store_->Get(77, ComparisonSide::A),
+                                                      ViewerDisplayConfig{}, p3_bytes));
+
+  // The same monitor state again publishes nothing.
+  WindowDisplayDestination::ForWindow(&window)->ApplyMonitorReading(
+      alcedo::test::MonitorWithProfile(profile_path));
+  EXPECT_EQ(pair_changes.count(), 1);
+  comparison_->SetDisplayWindow(nullptr);
 }
 
 TEST_F(EditorComparisonControllerTest, LeavingTheEditorClosesTheComparisonWithoutARefresh) {

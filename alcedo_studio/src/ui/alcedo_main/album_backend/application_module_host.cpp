@@ -843,6 +843,15 @@ void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
                            new ThumbnailImageProvider(std::move(store)));
 }
 
+void ApplicationModuleHost::AttachDisplayWindow(QWindow* window) {
+  if (editor_comparison_) {
+    editor_comparison_->SetDisplayWindow(window);
+  }
+  if (lut_preview_) {
+    lut_preview_->SetDisplayWindow(window);
+  }
+}
+
 void ApplicationModuleHost::RecordConstruction(const char* type_name, const void* object) {
   if (lifecycle_observer_) {
     lifecycle_observer_(LifecycleEvent{LifecycleEvent::Kind::Constructed, type_name, object});

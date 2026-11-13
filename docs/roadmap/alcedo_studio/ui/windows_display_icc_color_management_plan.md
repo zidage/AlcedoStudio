@@ -1,7 +1,7 @@
 # Windows Display ICC Color Management Plan
 
 - Date: 2026-11-12
-- Status: W1, W2, W3, and W4 implemented (2026-11-12). W5 and W6 planned.
+- Status: W1, W2, W3, W4, and W5 implemented (2026-11-12). W6 planned.
 - Tracking issue: [#873](https://github.com/zidage/AlcedoStudio/issues/873) (W1 to W3, PR [#874](https://github.com/zidage/AlcedoStudio/pull/874)); W4 [#875](https://github.com/zidage/AlcedoStudio/issues/875), W5 [#876](https://github.com/zidage/AlcedoStudio/issues/876), W6 [#877](https://github.com/zidage/AlcedoStudio/issues/877)
 - Source revision of the audit: `e7251164b` (`main`)
 - Related plans:
@@ -286,7 +286,7 @@ Proposed APIs:
 | W2 | Monitor profile query and window destination with tests | `ui/edit_viewer`, `tests/ui` | W1 | 550 to 750 | done |
 | W3 | Converted editor viewport | `ui/editor_rhi`, `tests/ui` | W1, W2 | 600 to 850 | done |
 | W4 | Settings tile | `ui/alcedo_main` | W2 | 350 to 500 | done |
-| W5 | Converted comparison view and LUT previews | `ui/alcedo_main/album_backend` | W1, W2 | 450 to 700 | planned |
+| W5 | Converted comparison view and LUT previews | `ui/alcedo_main/album_backend` | W1, W2 | 450 to 700 | done |
 | W6 | Converted thumbnails | `app/thumbnail_service`, `ui/alcedo_main/album_backend` | W1, W2 | 700 to 1100 | planned |
 
 W5 and W6 are separate because W6 changes an app-layer result type and three thumbnail producers.
@@ -810,13 +810,72 @@ The destination is then `Unusable` in W2 terms, so the settings tile shows the s
 
 **Exit criteria.**
 
-- [ ] The tests pass.
+- [x] The tests pass.
 - [ ] The comparison view and the viewport show the same colors for the same photo on the
       development machine (manual, user).
 
 **Expected diff.** 450 to 700 lines.
 
-**Completion record.** Empty.
+**Completion record.**
+
+```text
+Phase / date / status: W5 / 2026-11-12 / done (manual color check of the user open)
+Source revision and branch: f9e304e0f + feature/windows-display-icc-comparison-lut-previews (on
+  PR #879)
+Actual changed modules: ui/edit_viewer (ConvertImageForDestination, DisplayImageConverter in
+  WindowDisplayDestination), ui/alcedo_main/album_backend (ComparisonImageStore,
+  ComparisonImageProvider, EditorComparisonController, LutPreviewImageStore,
+  LutPreviewImageProvider, LutPreviewController, ApplicationModuleHost::AttachDisplayWindow),
+  alcedo_main and alcedo_studio_test_host main.cpp, tests/ui (display_destination_test_support,
+  EditorComparisonImageProviderTest, EditorComparisonControllerTest, LutPreviewControllerTest)
+Implemented behavior: both stores keep the source pixels and their output encoding;
+  requestImage converts them to the destination of the main window; a new destination gives the
+  shown comparison pair and the shown LUT previews new URLs and renders nothing.
+Explicitly unimplemented items: none
+Primary success call chain: render result -> PublishComparisonPair(a.display, b.display) /
+  LutPreviewController::OnRendered -> CachePut(image, result.image.display) -> Show ->
+  LutPreviewImageStore::Put(id, image, encoding); QML Image (asynchronous) ->
+  ComparisonImageProvider / LutPreviewImageProvider::requestImage -> store GetForDisplay ->
+  DisplayImageConverter::Convert -> ConvertImageForDestination -> ConvertImageToDisplay;
+  main.cpp -> ApplicationModuleHost::AttachDisplayWindow(main window) -> SetDisplayWindow of
+  both controllers -> WindowDisplayDestination::DestinationChanged -> ApplyDisplayDestination
+  -> store SetDestination -> new pair URLs (PairChanged) / new display ids (revisionChanged)
+Primary failure and restore call chain: ConvertImageToDisplay throws ->
+  DisplayImageConverter::Convert writes one `[DisplayProfile]` warning for that destination ->
+  the source pixels; the next destination converts again
+Build and test commands with exit codes: build build\debug --target
+  EditorComparisonImageProviderTest EditorComparisonControllerTest LutLibraryModelTest
+  EditorComparisonViewQmlTest WindowDisplayDestinationTest DisplayProfileTileQmlTest
+  alcedo_main alcedo_studio_test_host (0); each test binary with QT_FORCE_STDERR_LOGGING=1 (0);
+  EditorComparisonLargeRawPairTest (1, issue #880)
+Discovered / passed / failed / skipped counts: EditorComparisonImageProviderTest 9 / 9 / 0 / 0;
+  EditorComparisonControllerTest 6 / 6 / 0 / 0; LutLibraryModelTest 33 / 33 / 0 / 0 (with
+  LutPreviewControllerTest 8); EditorComparisonViewQmlTest 5 / 5 / 0 / 0;
+  WindowDisplayDestinationTest 6 / 6 / 0 / 0; DisplayProfileTileQmlTest 2 / 2 / 0 / 0;
+  EditorComparisonLargeRawPairTest 1 / 0 / 1 / 0: the cold pair render on the editor executor
+  does not complete within 600 s, before the comparison store (issue #880)
+Manual verification: open (the user compares the comparison view and the viewport)
+Performance or resource evidence: the conversion runs on the QML image loader thread for each
+  request (both Image items are asynchronous); not measured
+Evidence path: none
+Remaining defects or unavailable platforms: on macOS the destination stays NoWindow and the
+  stores give the source pixels, as before
+```
+
+Changes against the plan:
+
+- The destination of a store and the one warning for each failed destination are in
+  `DisplayImageConverter` (window destination library) with its own mutex, so that both stores
+  and the thumbnail store of W6 share them. The store mutex guards the entries and the URL
+  revision; the conversion runs outside both locks.
+- A comparison URL has a third part, the destination revision
+  (`<operation>/<a|b>/<revision>`), because the operation id of a ready pair does not change. The
+  parser accepts the two-part form too.
+- The automation render command is unchanged in source (`render_commands.cpp` calls
+  `ConvertRenderedImageForComparison` and writes its result), and the headless host attaches no
+  display window. Its tests were not run for this phase.
+- `ApplicationModuleHost::AttachDisplayWindow` connects the two controllers to the main window
+  after the QML root loads.
 
 ### W6. Converted thumbnails
 

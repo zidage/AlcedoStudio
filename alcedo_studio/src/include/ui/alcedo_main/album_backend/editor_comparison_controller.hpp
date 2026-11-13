@@ -9,6 +9,7 @@
 #include <QString>
 #include <QVariant>
 #include <QVariantList>
+#include <QWindow>
 #include <cstdint>
 #include <memory>
 
@@ -112,6 +113,14 @@ class EditorComparisonController final : public QObject {
   /// Read the backend comparison state again. Connected to the session's change notification.
   void               Refresh();
 
+  /**
+   * @brief Convert the comparison images to the display destination of @p window.
+   *
+   * Follows WindowDisplayDestination::DestinationChanged of @p window: a new destination goes to
+   * the store, and a shown pair gets new URLs through @ref PairChanged. Null converts nothing.
+   */
+  void                      SetDisplayWindow(QWindow* window);
+
   /// Encoding of a source for QML: "root", "current", or "version:<id>".
   [[nodiscard]] static auto SourceValue(const alcedo::EditorComparisonSource& source) -> QString;
   /// Parse SourceValue output. False for an unknown value.
@@ -136,8 +145,12 @@ class EditorComparisonController final : public QObject {
   /// Take, convert, and publish the Ready pair of @ref state_ once.
   void               PublishReadyPair();
   void               ClearPair();
+  /// Give the store the destination of the display window, and the shown pair its new URLs.
+  void               ApplyDisplayDestination();
 
   QPointer<EditorSessionController>     session_;
+  QPointer<WindowDisplayDestination>    display_source_;
+  QMetaObject::Connection               display_connection_;
   std::shared_ptr<ComparisonImageStore> store_;
   alcedo::EditorComparisonState         state_{};
   QVariantList                          source_options_;

@@ -20,7 +20,9 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
+#include "display_destination_test_support.hpp"
 #include "editor_comparison_test_support.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/comparison_presentation_image.hpp"
@@ -147,8 +149,8 @@ TEST(EditorComparisonImageProviderTest, PairProviderNeverPublishesOneNewSideWith
   const auto           first =
       PublishComparisonPair(store, 11, MakeFilledRenderedImage(full, cv::Scalar(1, 0, 0, 1)),
                             MakeFilledRenderedImage(cropped, cv::Scalar(0, 1, 0, 1)));
-  EXPECT_EQ(first.a_url, QStringLiteral("image://alcedo-comparison/11/a"));
-  EXPECT_EQ(first.b_url, QStringLiteral("image://alcedo-comparison/11/b"));
+  EXPECT_EQ(first.a_url, QStringLiteral("image://alcedo-comparison/11/a/0"));
+  EXPECT_EQ(first.b_url, QStringLiteral("image://alcedo-comparison/11/b/0"));
   EXPECT_EQ(store.ImageCount(), 2);
 
   // A new pair whose B side is invalid publishes nothing: the first pair stays whole.
@@ -220,7 +222,7 @@ TEST(EditorComparisonImageProviderTest, PairProviderNeverPublishesOneNewSideWith
   });
   for (std::uint64_t op = 15; op < 615; ++op) {
     auto [a, b] = TaggedPair(static_cast<int>(op % 200));
-    (void)store.PublishPair(op, a, b);
+    (void)store.PublishPair(op, a, ViewerDisplayConfig{}, b, ViewerDisplayConfig{});
     latest.store(op);
   }
   stop.store(true);
@@ -250,8 +252,11 @@ TEST(EditorComparisonImageProviderTest, ProviderServesOnlyTheStoredOperationAtIt
     EXPECT_TRUE(missing_size.isEmpty()) << id;
   }
 
-  EXPECT_THROW((void)store->PublishPair(0, a, a), std::invalid_argument);
-  EXPECT_THROW((void)store->PublishPair(22, a, QImage{}), std::invalid_argument);
+  EXPECT_THROW((void)store->PublishPair(0, a, ViewerDisplayConfig{}, a, ViewerDisplayConfig{}),
+               std::invalid_argument);
+  EXPECT_THROW(
+      (void)store->PublishPair(22, a, ViewerDisplayConfig{}, QImage{}, ViewerDisplayConfig{}),
+      std::invalid_argument);
   EXPECT_FALSE(store->Get(21, ComparisonSide::A).isNull());
 }
 
@@ -275,6 +280,106 @@ TEST(EditorComparisonImageProviderTest, ClearedStoreKeepsImagesAlreadyReadByTheP
   EXPECT_TRUE(read_a.isDetached());
   EXPECT_EQ(qRed(read_a.pixel(5, 5)), 255);
   EXPECT_EQ(qBlue(read_a.pixel(5, 5)), 0);
+}
+
+// Windows display ICC plan, W5: the store keeps the source pixels and their encoding; the provider
+// converts them to the destination of the main window.
+
+TEST(EditorComparisonImageProviderTest, RequestedImageIsConvertedToTheDestination) {
+  auto                      store    = std::make_shared<ComparisonImageStore>();
+  const auto                geometry = ResolveComparisonGeometry(kSource);
+  // Each side keeps the encoding of its own render.
+  const ViewerDisplayConfig a_encoding{};
+  const ViewerDisplayConfig b_encoding{ColorUtils::ColorSpace::P3_D65,
+                                       ColorUtils::EOTF::SRGB_PIECEWISE};
+  const auto                publication = PublishComparisonPair(
+      *store, 41,
+      MakeRenderedImage(FilledPixelsFor(geometry, cv::Scalar(0.25, 0.5, 0.75, 1)), geometry,
+                                       a_encoding),
+      MakeRenderedImage(FilledPixelsFor(geometry, cv::Scalar(0.6, 0.3, 0.1, 1)), geometry,
+                                       b_encoding));
+  const auto p3_bytes = alcedo::test::P3DisplayProfileBytes();
+  ASSERT_TRUE(store
+                  ->SetDestination(alcedo::test::MakeDestination(
+                      DisplayDestinationKind::MonitorProfile, p3_bytes))
+                  .has_value());
+
+  ComparisonImageProvider provider(store);
+  const QImage            source_a = store->Get(41, ComparisonSide::A);
+  const QImage            source_b = store->Get(41, ComparisonSide::B);
+  const QImage            shown_a  = provider.requestImage(QStringLiteral("41/a/1"), nullptr, {});
+  const QImage            shown_b  = provider.requestImage(QStringLiteral("41/b/1"), nullptr, {});
+  EXPECT_EQ(shown_a, alcedo::test::ExpectedDisplayImage(source_a, a_encoding, p3_bytes));
+  EXPECT_EQ(shown_b, alcedo::test::ExpectedDisplayImage(source_b, b_encoding, p3_bytes));
+  EXPECT_NE(shown_a, source_a) << "Rec.709 pixels change on a P3 monitor";
+  // The store keeps the source pixels.
+  EXPECT_EQ(store->Get(41, ComparisonSide::A), source_a);
+  EXPECT_EQ(publication.a_url, ComparisonImageStore::MakeUrl(41, ComparisonSide::A, 0));
+}
+
+TEST(EditorComparisonImageProviderTest, NewDestinationGivesNewUrlsAndPixels) {
+  auto store      = std::make_shared<ComparisonImageStore>();
+  auto [a, b]     = TaggedPair(90);
+  a               = alcedo::test::GradientImage(16, 8);
+  const auto urls = store->PublishPair(51, a, ViewerDisplayConfig{}, b, ViewerDisplayConfig{});
+  ComparisonImageProvider provider(store);
+  const auto              id_of = [](const QString& url) {
+    return url.mid(
+        QStringLiteral("image://%1/").arg(QLatin1String(kComparisonImageProviderId)).size());
+  };
+
+  const auto p3_bytes = alcedo::test::P3DisplayProfileBytes();
+  const auto p3 = alcedo::test::MakeDestination(DisplayDestinationKind::MonitorProfile, p3_bytes);
+  const auto p3_urls = store->SetDestination(p3);
+  ASSERT_TRUE(p3_urls.has_value());
+  EXPECT_NE(p3_urls->a, urls.a);
+  EXPECT_NE(p3_urls->b, urls.b);
+  EXPECT_FALSE(store->SetDestination(p3).has_value()) << "the same destination changes nothing";
+  EXPECT_EQ(provider.requestImage(id_of(p3_urls->a), nullptr, {}),
+            alcedo::test::ExpectedDisplayImage(a, ViewerDisplayConfig{}, p3_bytes));
+
+  const auto srgb_bytes = SrgbDisplayProfile();
+  const auto srgb_urls  = store->SetDestination(
+      alcedo::test::MakeDestination(DisplayDestinationKind::SrgbNoProfile, srgb_bytes));
+  ASSERT_TRUE(srgb_urls.has_value());
+  EXPECT_NE(srgb_urls->a, p3_urls->a);
+  const QImage shown = provider.requestImage(id_of(srgb_urls->a), nullptr, {});
+  EXPECT_EQ(shown, alcedo::test::ExpectedDisplayImage(a, ViewerDisplayConfig{}, srgb_bytes));
+  EXPECT_NE(shown, alcedo::test::ExpectedDisplayImage(a, ViewerDisplayConfig{}, p3_bytes));
+
+  // A pair published after the change has URLs of the current destination.
+  const auto next = store->PublishPair(52, a, ViewerDisplayConfig{}, b, ViewerDisplayConfig{});
+  EXPECT_EQ(next.a, ComparisonImageStore::MakeUrl(52, ComparisonSide::A, 2));
+  // Without a stored pair a new destination has no URLs to publish.
+  store->Clear();
+  EXPECT_FALSE(store->SetDestination(p3).has_value());
+}
+
+TEST(EditorComparisonImageProviderTest, NoDestinationKeepsSourcePixels) {
+  auto store  = std::make_shared<ComparisonImageStore>();
+  auto [a, b] = TaggedPair(30);
+  a           = alcedo::test::GradientImage(16, 8);
+  (void)store->PublishPair(61, a, ViewerDisplayConfig{}, b, ViewerDisplayConfig{});
+  ComparisonImageProvider provider(store);
+
+  EXPECT_EQ(provider.requestImage(QStringLiteral("61/a/0"), nullptr, {}), a) << "no destination";
+  (void)store->SetDestination(alcedo::test::MakeDestination(DisplayDestinationKind::NoWindow));
+  EXPECT_EQ(provider.requestImage(QStringLiteral("61/a/1"), nullptr, {}), a) << "NoWindow";
+  (void)store->SetDestination(alcedo::test::MakeDestination(DisplayDestinationKind::Unusable));
+  EXPECT_EQ(provider.requestImage(QStringLiteral("61/a/2"), nullptr, {}), a) << "Unusable";
+}
+
+TEST(EditorComparisonImageProviderTest, FailedConversionKeepsSourcePixels) {
+  auto store  = std::make_shared<ComparisonImageStore>();
+  auto [a, b] = TaggedPair(30);
+  (void)store->PublishPair(71, a, ViewerDisplayConfig{}, b, ViewerDisplayConfig{});
+  // Bytes that LittleCMS cannot parse: the conversion throws, the provider shows the source.
+  const std::vector<std::byte> garbage(64, std::byte{0x5a});
+  (void)store->SetDestination(
+      alcedo::test::MakeDestination(DisplayDestinationKind::MonitorProfile, garbage));
+  ComparisonImageProvider provider(store);
+  EXPECT_EQ(provider.requestImage(QStringLiteral("71/a/1"), nullptr, {}), a);
+  EXPECT_EQ(provider.requestImage(QStringLiteral("71/b/1"), nullptr, {}), b);
 }
 
 }  // namespace alcedo::ui::test

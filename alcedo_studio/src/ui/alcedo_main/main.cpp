@@ -395,6 +395,7 @@ int main(int argc, char* argv[]) {
         }
 #endif
         alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);
+        app_modules.AttachDisplayWindow(window);
         window->setProperty("nativeFrameReady", true);
         window->showMaximized();
       }
