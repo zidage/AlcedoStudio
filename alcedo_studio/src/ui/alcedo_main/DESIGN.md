@@ -853,6 +853,43 @@ inside the rounded corners, and a `plotPadding` of `spaceSm - spaceXs`. One
 - **Waveform.** The density image fills the same plot rectangle. The guide
   lines are the three horizontal level lines at 25, 50, and 75 percent.
 
+### Plot pane
+
+`PlotPane` is the reusable plot item of editor plots (the Tone Curve section is
+its first user). It holds a view of the data (zoom and pan inside the data
+limits), insets around the plot rectangle for labels, and an ordered list of
+layers: the first layer draws at the bottom. Each layer has its own colors and
+sizes as properties; bind them to the tokens below.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `plotSurfaceColor` | `bgBaseColor` | Plot rectangle fill (`PlotPane.surfaceColor`) and the break across a cut histogram peak |
+| `plotGridColor` | `bgBaseColor` to `textMutedColor` at 22 percent | Ordinary grid lines |
+| `plotGridStrongColor` | `bgBaseColor` to `textMutedColor` at 55 percent | Strong grid line (for example 18% grey on the curve axis) |
+| `plotLabelColor` | `textMutedColor` | Tick labels in the insets |
+| `plotLineColor` | `textColor` | Data line (the curve) |
+| `plotReferenceLineColor` | `bgBaseColor` to `textMutedColor` at 70 percent | Reference lines (the dashed identity line) |
+| `plotHandleColor` | `textColor` | Handle ring; fill of the selected handle |
+| `plotHandleOutlineColor` | `bgDeepColor` at alpha 200 | Dark disc behind a handle, so it reads over the histogram |
+| `plotGridLineWidth` | 1 px | Grid line width |
+| `plotLineWidth` | 1.25 px | Data line and histogram edge width |
+| `plotHandleRadius` | 3.5 px | Handle radius: 7 px rings |
+| `plotHandleRingWidth` | 1.25 px | Handle ring width |
+| `plotHandleOutlineWidth` | 1 px | Width of the dark outline around a handle |
+| `plotHitRadius` | 8 px | Pointer distance that hits a handle or a line |
+
+- **Layers.** `PlotGridLayer` (lines at ticks, labels under and left of the
+  plot), `PlotHistogramLayer` (the scope histogram look: additive channel
+  fills with a 1.25 px edge, `scopeHistogram*Color` tints, one channel in its
+  own tint when the layer shows one channel), `PlotPolylineLayer` (solid or
+  dashed line), and `PlotHandleLayer` (rings; the selected handle is a filled
+  disc; a hovered or pressed handle grows by 1 px). Widths are the visible
+  width with the antialiased edge included.
+- **Input.** A handle follows the pointer 1:1. Ctrl + wheel zooms at the
+  pointer; the plain wheel scrolls the panel. A drag in an empty area moves a
+  zoomed view. Cursors: pointing hand over a handle or a line, closed hand
+  while dragging, open hand over an empty area of a zoomed view.
+
 ---
 
 ## Nodes panel and graph nodes

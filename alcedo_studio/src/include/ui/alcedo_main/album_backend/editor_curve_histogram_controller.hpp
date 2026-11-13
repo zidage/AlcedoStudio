@@ -13,6 +13,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/scope/scope_analyzer.hpp"
+#include "ui/alcedo_main/plot_pane/plot_histogram_layer.hpp"
 
 namespace alcedo::ui {
 
@@ -32,9 +33,12 @@ namespace alcedo::ui {
  * ScopeHistogramRenderData through BuildScopeHistogramRenderData, the display heights of the scope
  * histogram. A render that did not evaluate the Grade clears the histogram.
  *
+ * It is the PlotHistogramSource of the PlotHistogramLayer of the Tone Curve section: the layer
+ * reads @ref histogram after HistogramChanged.
+ *
  * Thread: the owner thread (the Qt GUI thread), except @ref sink, which any thread can call.
  */
-class EditorCurveHistogramController final : public QObject {
+class EditorCurveHistogramController final : public PlotHistogramSource {
   Q_OBJECT
   Q_PROPERTY(bool active READ active WRITE set_active NOTIFY ActiveChanged)
   Q_PROPERTY(
@@ -62,7 +66,7 @@ class EditorCurveHistogramController final : public QObject {
   }
 
   /// Display heights of the current histogram; `valid` is false when there is none.
-  [[nodiscard]] auto histogram() const -> const alcedo::ScopeHistogramRenderData& {
+  [[nodiscard]] auto histogram() const -> const alcedo::ScopeHistogramRenderData& override {
     return histogram_;
   }
 
@@ -82,7 +86,7 @@ class EditorCurveHistogramController final : public QObject {
  signals:
   void ActiveChanged();
   void GradeNodeIdChanged();
-  void HistogramChanged();
+  // HistogramChanged is the signal of PlotHistogramSource.
   /// @ref request changed: the session must show the new request or hide the histogram.
   void RequestChanged();
 

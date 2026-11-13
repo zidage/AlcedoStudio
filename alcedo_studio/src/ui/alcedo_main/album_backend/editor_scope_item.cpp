@@ -13,9 +13,14 @@
 #include <cmath>
 
 #include "ui/alcedo_main/album_backend/editor_scope_controller.hpp"
+#include "ui/alcedo_main/plot_pane/plot_primitives.hpp"
 
 namespace alcedo::ui {
 namespace {
+
+using plot_primitives::AdditiveChannelChroma;
+using plot_primitives::ScaledChromaColor;
+using plot_primitives::TintChroma;
 
 // Fill and edge strengths of one histogram channel. The channels add up, so where all three
 // overlap the plot shows a neutral tone at the same strength.
@@ -31,36 +36,6 @@ constexpr qreal kPeakCutGapHeight      = 2.0;
 auto            PlotRect(qreal width, qreal height, qreal padding) -> QRectF {
   return QRectF(padding, padding, std::max<qreal>(1.0, width - 2.0 * padding),
                            std::max<qreal>(1.0, height - 2.0 * padding));
-}
-
-auto WaveformChroma(const QColor& tint) -> std::array<float, 3> {
-  const std::array<float, 3> rgb = {tint.redF(), tint.greenF(), tint.blueF()};
-  const auto [minimum, maximum]  = std::minmax_element(rgb.begin(), rgb.end());
-  const float range              = *maximum - *minimum;
-  if (range <= 0.001f) {
-    return {1.0f, 1.0f, 1.0f};
-  }
-  return {(rgb[0] - *minimum) / range, (rgb[1] - *minimum) / range, (rgb[2] - *minimum) / range};
-}
-
-// Chroma of the three channel tints, scaled per component so that the three add up to white.
-auto AdditiveChannelChroma(const std::array<QColor, 3>& tints)
-    -> std::array<std::array<float, 3>, 3> {
-  std::array<std::array<float, 3>, 3> chroma = {WaveformChroma(tints[0]), WaveformChroma(tints[1]),
-                                                WaveformChroma(tints[2])};
-  for (size_t component = 0; component < 3; ++component) {
-    const float sum = chroma[0][component] + chroma[1][component] + chroma[2][component];
-    for (auto& channel : chroma) {
-      channel[component] = sum > 0.001f ? channel[component] / sum : 1.0f / 3.0f;
-    }
-  }
-  return chroma;
-}
-
-auto ScaledColor(const std::array<float, 3>& chroma, float strength) -> QColor {
-  return QColor::fromRgbF(std::clamp(chroma[0] * strength, 0.0f, 1.0f),
-                          std::clamp(chroma[1] * strength, 0.0f, 1.0f),
-                          std::clamp(chroma[2] * strength, 0.0f, 1.0f));
 }
 
 }  // namespace
@@ -220,9 +195,9 @@ void EditorScopeItem::rebuild_waveform_image(const alcedo::ScopeWaveformRenderDa
     return;
   }
 
-  const auto red_chroma   = WaveformChroma(histogram_red_color_);
-  const auto green_chroma = WaveformChroma(histogram_green_color_);
-  const auto blue_chroma  = WaveformChroma(histogram_blue_color_);
+  const auto red_chroma   = TintChroma(histogram_red_color_);
+  const auto green_chroma = TintChroma(histogram_green_color_);
+  const auto blue_chroma  = TintChroma(histogram_blue_color_);
 
   QImage     image(waveform.width, waveform.height, QImage::Format_ARGB32_Premultiplied);
   image.fill(Qt::transparent);
@@ -344,9 +319,9 @@ void EditorScopeItem::paint_histogram(QPainter* painter, const QRectF& plot) con
     area.lineTo(plot.left(), plot.bottom());
     area.closeSubpath();
 
-    painter->fillPath(area, ScaledColor(chroma[channel], kHistogramFillStrength));
+    painter->fillPath(area, ScaledChromaColor(chroma[channel], kHistogramFillStrength));
     painter->strokePath(
-        edge, QPen(ScaledColor(chroma[channel], kHistogramEdgeStrength), kHistogramEdgeWidth,
+        edge, QPen(ScaledChromaColor(chroma[channel], kHistogramEdgeStrength), kHistogramEdgeWidth,
                    Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
   }
   painter->restore();

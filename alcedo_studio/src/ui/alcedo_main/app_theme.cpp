@@ -1118,6 +1118,43 @@ auto AppTheme::scopeHistogramBlueColor() const -> QColor {
 
 auto AppTheme::scopeMarkerColor() const -> QColor { return textColor(); }
 
+auto AppTheme::plotSurfaceColor() const -> QColor { return bgBaseColor(); }
+
+auto AppTheme::plotGridColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.22);
+}
+
+auto AppTheme::plotGridStrongColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.55);
+}
+
+auto AppTheme::plotLabelColor() const -> QColor { return textMutedColor(); }
+
+auto AppTheme::plotLineColor() const -> QColor { return textColor(); }
+
+auto AppTheme::plotReferenceLineColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.70);
+}
+
+auto AppTheme::plotHandleColor() const -> QColor { return textColor(); }
+
+auto AppTheme::plotHandleOutlineColor() const -> QColor {
+  // Dark halo around a handle, so a ring reads over the histogram and the line under it.
+  return WithAlpha(bgDeepColor(), 200);
+}
+
+auto AppTheme::plotGridLineWidth() const -> qreal { return 1.0; }
+
+auto AppTheme::plotLineWidth() const -> qreal { return 1.25; }
+
+auto AppTheme::plotHandleRadius() const -> qreal { return 3.5; }
+
+auto AppTheme::plotHandleRingWidth() const -> qreal { return 1.25; }
+
+auto AppTheme::plotHandleOutlineWidth() const -> qreal { return 1.0; }
+
+auto AppTheme::plotHitRadius() const -> qreal { return 8.0; }
+
 auto AppTheme::dateGraphLevel0Color() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.22);
 }

@@ -1737,6 +1737,33 @@ alcedo_ui_gtest_discover_tests(EditorCurveHistogramControllerTest
     PROPERTIES LABELS "workspace_qml;editor_tone_curve")
 alcedo_register_test_target(EditorCurveHistogramControllerTest ui)
 
+# Tone Curve TC4 (issue #889): view transform, layer geometry, hit test, input routing, and
+# painting of the reusable plot pane.
+# The test has its own main: the painting tests need the native platform plugin (the offscreen
+# plugin gives the software scene graph). They never show a window.
+add_executable(EditorPlotPaneTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_plot_pane_test.cpp
+)
+target_include_directories(EditorPlotPaneTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorPlotPaneTest
+    PRIVATE
+        EditorPlotPane
+        # BuildScopeHistogramRenderData gives the histogram layer its display heights.
+        EditScope
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Quick
+        Qt6::Test
+)
+alcedo_ui_gtest_discover_tests(EditorPlotPaneTest
+    TEST_PREFIX "EditorPlotPaneTest."
+    PROPERTIES LABELS "workspace_qml;editor_tone_curve")
+alcedo_register_test_target(EditorPlotPaneTest ui)
+
 # Histogram plot painting: additive channel overlap, clip markers, and the break across a cut peak.
 add_executable(EditorScopeItemPaintTest
     ${ALCEDO_TEST_ROOT}/ui/editor_scope_item_paint_test.cpp
