@@ -6,6 +6,7 @@
 
 #include <QGuiApplication>
 #include <QString>
+#include <algorithm>
 #include <cstring>
 #include <exception>
 #include <fstream>
@@ -117,10 +118,38 @@ auto ConvertImageForDestination(const QImage& source, const ViewerDisplayConfig&
 }
 
 void DisplayImageConverter::SetDestination(std::shared_ptr<const DisplayDestination> destination) {
-  // The previous destination is released after the lock.
+  // The previous destination and its conversions are released after the lock.
   std::shared_ptr<const DisplayDestination> released;
+  std::vector<PreparedTransform>            released_transforms;
   std::lock_guard                           lock(mutex_);
   released = std::exchange(destination_, std::move(destination));
+  released_transforms.swap(transforms_);
+}
+
+auto DisplayImageConverter::TransformFor(
+    const std::shared_ptr<const DisplayDestination>& destination,
+    const ViewerDisplayConfig& encoding) const -> std::shared_ptr<const DisplayImageTransform> {
+  {
+    std::lock_guard lock(mutex_);
+    if (destination_ == destination) {
+      for (const auto& prepared : transforms_) {
+        if (prepared.encoding == encoding) {
+          return prepared.transform;
+        }
+      }
+    }
+  }
+  // Two threads can build the same conversion at once; the second result is not kept.
+  auto transform =
+      std::make_shared<const DisplayImageTransform>(encoding, destination->profile_bytes);
+  std::lock_guard lock(mutex_);
+  if (destination_ == destination && std::none_of(transforms_.begin(), transforms_.end(),
+                                                  [&encoding](const PreparedTransform& prepared) {
+                                                    return prepared.encoding == encoding;
+                                                  })) {
+    transforms_.push_back(PreparedTransform{encoding, transform});
+  }
+  return transform;
 }
 
 auto DisplayImageConverter::Destination() const -> std::shared_ptr<const DisplayDestination> {
@@ -131,8 +160,15 @@ auto DisplayImageConverter::Destination() const -> std::shared_ptr<const Display
 auto DisplayImageConverter::Convert(const QImage& source, const ViewerDisplayConfig& encoding) const
     -> QImage {
   const auto destination = Destination();
+  // The cases of ConvertImageForDestination that keep the source pixels.
+  if (destination == nullptr || destination->profile_bytes.empty() ||
+      !HasDisplayTransform(encoding) || source.isNull()) {
+    return source;
+  }
   try {
-    return ConvertImageForDestination(source, encoding, destination.get());
+    QImage converted = source.copy();
+    TransformFor(destination, encoding)->Apply(converted);
+    return converted;
   } catch (const std::exception& error) {
     bool first = false;
     {

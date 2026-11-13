@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "ui/edit_viewer/display_color_transform.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/monitor_color_profile.hpp"
 
@@ -82,6 +83,10 @@ struct DisplayDestination {
  * requested image with @ref Convert, so a new destination needs no second render. A conversion
  * that fails gives the source pixels and writes one warning for each destination.
  *
+ * The converter keeps one DisplayImageTransform for each encoding of the current destination, so
+ * that a request does not build a LittleCMS conversion (Windows display ICC plan, W6
+ * measurements). @ref SetDestination drops them.
+ *
  * Thread: any thread. @ref SetDestination runs on the GUI thread, @ref Convert on the image
  * provider threads.
  */
@@ -96,8 +101,22 @@ class DisplayImageConverter {
       -> QImage;
 
  private:
+  /// One prepared conversion of the current destination.
+  struct PreparedTransform {
+    ViewerDisplayConfig                          encoding{};
+    std::shared_ptr<const DisplayImageTransform> transform;
+  };
+
+  /// The prepared conversion of @p encoding to @p destination; built outside the lock and kept
+  /// while @p destination is current.
+  [[nodiscard]] auto TransformFor(const std::shared_ptr<const DisplayDestination>& destination,
+                                  const ViewerDisplayConfig&                       encoding) const
+      -> std::shared_ptr<const DisplayImageTransform>;
+
   mutable std::mutex                                mutex_;
   std::shared_ptr<const DisplayDestination>         destination_;
+  /// Prepared conversions of destination_, one for each encoding; few encodings exist.
+  mutable std::vector<PreparedTransform>            transforms_;
   /// The destination whose failure is in the log already.
   mutable std::shared_ptr<const DisplayDestination> reported_failure_;
 };

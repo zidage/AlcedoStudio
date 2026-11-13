@@ -211,12 +211,24 @@ void ConvertImageToDisplay(QImage& image, const ViewerDisplayConfig& source,
   if (image.format() != QImage::Format_RGBA8888) {
     throw std::invalid_argument("display transform: the image format is not RGBA8888");
   }
-  const DisplayConversion conversion = CreateDisplayConversion(
-      source, display_profile, TYPE_RGBA_8, kDisplayFlags | cmsFLAGS_COPY_ALPHA);
+  DisplayImageTransform(source, display_profile).Apply(image);
+}
+
+DisplayImageTransform::DisplayImageTransform(const ViewerDisplayConfig& source,
+                                             std::span<const std::byte> display_profile) {
+  DisplayConversion conversion = CreateDisplayConversion(source, display_profile, TYPE_RGBA_8,
+                                                         kDisplayFlags | cmsFLAGS_COPY_ALPHA);
+  transform_ = std::shared_ptr<void>(conversion.transform.release(), TransformDeleter{});
+}
+
+void DisplayImageTransform::Apply(QImage& image) const {
+  if (image.format() != QImage::Format_RGBA8888) {
+    throw std::invalid_argument("display transform: the image format is not RGBA8888");
+  }
   const auto width = static_cast<cmsUInt32Number>(image.width());
   for (int y = 0; y < image.height(); ++y) {
     uchar* row = image.scanLine(y);
-    cmsDoTransform(conversion.transform.get(), row, row, width);
+    cmsDoTransform(transform_.get(), row, row, width);
   }
 }
 
