@@ -13,6 +13,7 @@
 #include <cmath>
 #include <utility>
 
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "ui/alcedo_main/editor_support/modules/curve.hpp"
 
 namespace alcedo::ui {
@@ -53,6 +54,20 @@ auto ChannelKey(int channel) -> QString {
 auto IsIdentity(const std::vector<QPointF>& points) -> bool {
   return curve::CurveControlPointsEqual(points, curve::DefaultCurveControlPoints(),
                                         kLoadEqualTolerance);
+}
+
+auto Text(std::string_view text) -> QString {
+  return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+/// The panel points of @p preset: the float points of the preset as doubles.
+auto PresetControlPoints(const alcedo::ToneCurvePreset& preset) -> std::vector<QPointF> {
+  std::vector<QPointF> points;
+  points.reserve(preset.points.size());
+  for (const auto& point : preset.points) {
+    points.emplace_back(point.x, point.y);
+  }
+  return points;
 }
 
 }  // namespace
@@ -120,6 +135,40 @@ auto EditorToneCurveModel::channelModified() const -> QVariantList {
     modified.push_back(!IsIdentity(points));
   }
   return modified;
+}
+
+auto EditorToneCurveModel::presets() -> QVariantList {
+  QVariantList list;
+  for (const auto& preset : alcedo::ToneCurvePresets()) {
+    list.push_back(QVariantMap{{QStringLiteral("id"), Text(preset.id)},
+                               {QStringLiteral("name"), Text(preset.display_name)},
+                               {QStringLiteral("group"), Text(preset.group)}});
+  }
+  return list;
+}
+
+auto EditorToneCurveModel::presetId() const -> QString {
+  // The write converts the panel points to float, so the float values decide the match.
+  std::vector<alcedo::CurvePoint> points;
+  points.reserve(Selected().size());
+  for (const auto& point : Selected()) {
+    points.push_back({static_cast<float>(point.x()), static_cast<float>(point.y())});
+  }
+  const auto* preset = alcedo::MatchToneCurvePreset(points);
+  return preset == nullptr ? QString{} : Text(preset->id);
+}
+
+auto EditorToneCurveModel::applyPreset(const QString& id) -> bool {
+  const auto* preset = alcedo::FindToneCurvePreset(id.toStdString());
+  if (preset == nullptr || dragActive_) {
+    return false;
+  }
+  settlePendingKeyMoves();
+  SetSelectedIndexInternal(-1);
+  if (ReplaceChannelPoints(channel_, PresetControlPoints(*preset))) {
+    CommitSettled();
+  }
+  return true;
 }
 
 auto EditorToneCurveModel::channelControlPoints(int channel) const -> const std::vector<QPointF>& {

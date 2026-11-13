@@ -76,8 +76,22 @@ void LoadVersionOneNeutralColorWheels(PipelineDocument& document) {
   EXPECT_TRUE(wheels->IsDefault());
 }
 
+/// Sets the RAW import look of the code before #891 on the default Color Grade of @p document:
+/// contrast 15 and the identity RGB curve (the Film-like curve replaced it). The stored files of
+/// this test were written with that look.
+void ApplyImportLookBeforeFilmLike(PipelineDocument& document) {
+  auto* grade = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  grade->FindAdjustmentByType(type_ids::Contrast())
+      ->LoadJson({{"contrast", kImportLookContrastBeforeFilmLike}});
+  auto* curve = dynamic_cast<CurveModel*>(grade->FindAdjustmentByType(type_ids::Curve()));
+  ASSERT_NE(curve, nullptr);
+  curve->SetPoints(IdentityCurvePoints());
+}
+
 auto MultiGradeDocument() -> PipelineDocument {
   auto document = CreateDefaultPipelineDocument();
+  ApplyImportLookBeforeFilmLike(document);
   EXPECT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.look"}).empty());
   grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
   return document;
@@ -114,6 +128,7 @@ auto MakeFilmGrainHistoryCase(std::string_view name) -> FilmGrainHistoryCase {
   FilmGrainHistoryCase result;
   result.raw_json = nlohmann::json{{"CameraModel", "RootStateCamera"}};
   auto document   = CreateDefaultPipelineDocument();
+  ApplyImportLookBeforeFilmLike(document);
   gpu_dag_test::EnsureTestCameraProfile(document);
   std::string error;
   if (name == "film_print") {
@@ -234,6 +249,7 @@ TEST(PipelineDocumentCheckpointFormat,
   // a bound camera profile, element 42. The same RAW document must encode to the same bytes, keep
   // its root id, and never gain the Develop "input" key. Its color wheels are version 1 JSON.
   auto document = CreateDefaultPipelineDocument();
+  ApplyImportLookBeforeFilmLike(document);
   gpu_dag_test::EnsureTestCameraProfile(document);
   LoadVersionOneNeutralColorWheels(document);
   const auto raw_json   = nlohmann::json{{"CameraModel", "RootStateCamera"}};
@@ -274,6 +290,7 @@ TEST(PipelineDocumentCheckpointFormat,
   // document must encode to the same bytes (so it keeps its root id), read identity channel
   // curves, and never gain the channel keys (tone_curve_editor_plan.md, TC2).
   auto document = CreateDefaultPipelineDocument();
+  ApplyImportLookBeforeFilmLike(document);
   gpu_dag_test::EnsureTestCameraProfile(document);
   LoadVersionOneNeutralColorWheels(document);
   auto* curve =
@@ -320,6 +337,7 @@ TEST(PipelineDocumentCheckpointFormat,
   // ACEScc, and never gain the encoding keys (lut_color_encoding_plan.md, section 6.1). Its color
   // wheels are version 1 JSON.
   auto document = CreateDefaultPipelineDocument();
+  ApplyImportLookBeforeFilmLike(document);
   gpu_dag_test::EnsureTestCameraProfile(document);
   LoadVersionOneNeutralColorWheels(document);
   auto* lmt =

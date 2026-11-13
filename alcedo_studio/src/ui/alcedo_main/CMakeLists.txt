@@ -502,6 +502,8 @@ def_library(AutomationHostLib
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_search_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/lut_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_lut_commands.hpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/curve_commands.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_curve_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/film_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_film_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/editor_commands.cpp"

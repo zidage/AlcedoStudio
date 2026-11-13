@@ -163,8 +163,10 @@ Negative Scan render without it.
 
 In the editor, the switch **Tone Curve** under the Camera Profile combo sets `profile_tone`. A
 profile tone entry, a settled edit after which the stage runs and before which it stayed out,
-writes contrast 0 and saturation 1.0 of Color Grade 1 in the same Undo step, each while it still
-holds the RAW import default (contrast 15, saturation 1.3). Exposure stays.
+writes the identity RGB curve and saturation 1.0 of Color Grade 1 in the same Undo step, each while it
+still holds the RAW import default (the Film-like curve, saturation 1.3). A document imported
+before the Film-like curve (#891) holds contrast 15 instead, and the entry writes contrast 0.
+Exposure stays.
 
 ## Scope and verification
 
@@ -226,5 +228,6 @@ and [table import](https://android.googlesource.com/platform/external/dng_sdk/+/
 | `profile_tone` | Develop key of `camera_profile_file`; written only as `false` | boolean | default true | Study section 6.3 |
 | Entry contrast | Contrast of Color Grade 1 after a profile tone entry | slider value | 0 | User decision, study section 6.5 |
 | Entry saturation | Saturation of Color Grade 1 after a profile tone entry | multiplier | 1.0 | User decision, study section 6.5 |
-| RAW import contrast | Contrast of the Default document | slider value | 15 | `kDefaultPipelineContrast` |
+| RAW import curve | RGB curve of the Default document | Tone Curve preset | `film_like` | `kDefaultPipelineToneCurvePresetId` (#891) |
+| Earlier RAW import contrast | Contrast of a document imported before #891 | slider value | 15 | `kImportLookContrastBeforeFilmLike` |
 | RAW import saturation | Saturation of the Default document | multiplier | 1.3 | `kDefaultPipelineSaturation` |

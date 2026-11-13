@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "edit/graph/color_grade_node_model.hpp"
@@ -183,17 +184,25 @@ class PipelineDocument {
 inline constexpr float kDefaultPipelineExposureEv = 1.5f;
 /// Product Default saturation multiplier (legacy UI +30 → 1 + 30/100).
 inline constexpr float kDefaultPipelineSaturation = 1.3f;
-/// Product Default contrast slider value (OkLab lightness S curve, slope 2^(15/100) at mid grey).
-inline constexpr float kDefaultPipelineContrast   = 15.0f;
+/// Product Default RGB curve: the Tone Curve preset `film_like` (tone_curve_presets.hpp), the
+/// shape of the Adobe default tone curve on top of the ACES 2.0 display transform (#891).
+inline constexpr std::string_view kDefaultPipelineToneCurvePresetId = "film_like";
+/**
+ * Contrast slider value of the RAW import look before the Film-like curve (OkLab lightness S
+ * curve, slope 2^(15/100) at mid grey). Documents imported before #891 keep it; the entry resets of
+ * the profile tone stage still read it. The look of a new document has contrast 0.
+ */
+inline constexpr float            kImportLookContrastBeforeFilmLike = 15.0f;
 
 /**
  * @brief Three-node product Default: Develop -> Primary Color Grade -> DRT.
  *
  * The primary Color Grade is @ref ColorGradeNodeModel::MakeDefault with
- * @ref kDefaultPipelineExposureEv, @ref kDefaultPipelineContrast, and
- * @ref kDefaultPipelineSaturation applied in this factory. The editor sliders reset to the
- * catalog identity values (0 EV, contrast 0), not to this look. Does not require legacy stage
- * remirror.
+ * @ref kDefaultPipelineExposureEv, @ref kDefaultPipelineSaturation, and the RGB curve of
+ * @ref kDefaultPipelineToneCurvePresetId applied in this factory; contrast stays 0, because the
+ * curve carries the contrast of the look. The editor sliders and the curve Reset go to the
+ * catalog identity values (0 EV, the identity curve), not to this look. Does not require legacy
+ * stage remirror.
  *
  * @return A document that satisfies graph Validate and ValidateImageBackbone.
  */

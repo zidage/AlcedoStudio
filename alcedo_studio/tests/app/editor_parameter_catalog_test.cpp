@@ -39,6 +39,7 @@
 #include "edit/operators/models/color_wheel_tone.hpp"
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "ui/alcedo_main/editor_support/modules/hls_math.hpp"
 
 namespace alcedo {
@@ -1583,6 +1584,41 @@ TEST(EditorParameterCatalogTest, CurveWriteRejectsUnknownKeysAndInvalidChannelPo
                    &error)
                    .has_value());
   EXPECT_EQ(error, "curve.size must match curve.points");
+}
+
+TEST(EditorParameterCatalogTest, EachToneCurvePresetPassesTheCurveWrite) {
+  // The points of each preset as a point list, the shape that the panel writes.
+  for (const auto& preset : ToneCurvePresets()) {
+    nlohmann::json points = nlohmann::json::array();
+    for (const auto& point : preset.points) {
+      points.push_back({{"x", point.x}, {"y", point.y}});
+    }
+    std::string error;
+    const auto  parsed =
+        ParseEditorParameterWrite("curve", {{"curve", {{"red", std::move(points)}}}}, &error);
+    ASSERT_TRUE(parsed.has_value()) << preset.id << ": " << error;
+    EXPECT_EQ(*std::get_if<EditorCurveWrite>(&*parsed)->red, preset.PointList()) << preset.id;
+  }
+}
+
+TEST(EditorParameterCatalogTest, CurveWriteAppliesAPresetById) {
+  std::string error;
+  const auto  parsed = ParseEditorParameterWrite(
+      "curve", {{"curve", {{"points", "film_like"}, {"blue", "kodak_2383"}}}}, &error);
+  ASSERT_TRUE(parsed.has_value()) << error;
+  const auto* write = std::get_if<EditorCurveWrite>(&*parsed);
+  ASSERT_NE(write, nullptr);
+  ASSERT_TRUE(write->points.has_value());
+  EXPECT_EQ(*write->points, FindToneCurvePreset("film_like")->PointList());
+  EXPECT_FALSE(write->red.has_value());
+  ASSERT_TRUE(write->blue.has_value());
+  EXPECT_EQ(*write->blue, FindToneCurvePreset("kodak_2383")->PointList());
+
+  EXPECT_FALSE(
+      ParseEditorParameterWrite("curve", {{"curve", {{"green", "velvia"}}}}, &error).has_value());
+  EXPECT_EQ(error, "curve.green names no Tone Curve preset: velvia; curve.presets lists them");
+  // A stored value holds points only.
+  EXPECT_FALSE(ParseEditorParameterValue("curve", {{"points", "film_like"}}, &error).has_value());
 }
 
 TEST(EditorParameterCatalogTest, CurveValueWithoutAChannelKeyReadsThatChannelAsIdentity) {

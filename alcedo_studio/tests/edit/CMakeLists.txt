@@ -271,6 +271,29 @@ gtest_discover_tests(FilmPrintTablesTest TEST_PREFIX "FilmPrintTablesTest."
   PROPERTIES LABELS "edit;runtime;film_print")
 alcedo_register_test_target(FilmPrintTablesTest edit)
 
+# Tone Curve presets (#891): point rules, 18% grey, and the neutral axis against the study.
+add_executable(ToneCurvePresetTest
+  ${ALCEDO_TEST_ROOT}/edit/runtime/tone_curve_preset_test.cpp)
+target_include_directories(ToneCurvePresetTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ToneCurvePresetTest PRIVATE GTest::gtest_main EditGraph EditRuntime Image)
+gtest_discover_tests(ToneCurvePresetTest TEST_PREFIX "ToneCurvePresetTest."
+  PROPERTIES LABELS "edit;runtime")
+alcedo_register_test_target(ToneCurvePresetTest edit ci_core)
+
+# Tone Curve presets (#891): the film sources of the study, from the film print point stages. The
+# check needs the film print resources, which are not in Git.
+add_executable(ToneCurvePresetFilmSourceTest
+  ${ALCEDO_TEST_ROOT}/edit/runtime/tone_curve_preset_film_source_test.cpp)
+target_include_directories(ToneCurvePresetFilmSourceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ToneCurvePresetFilmSourceTest PRIVATE GTest::gtest_main EditRuntimeFilm)
+if(ALCEDO_FILM_PRINT_RESOURCE_DIR)
+  target_compile_definitions(ToneCurvePresetFilmSourceTest PRIVATE
+    ALCEDO_FILM_PRINT_RESOURCE_DIR="${ALCEDO_FILM_PRINT_RESOURCE_DIR}")
+endif()
+gtest_discover_tests(ToneCurvePresetFilmSourceTest TEST_PREFIX "ToneCurvePresetFilmSourceTest."
+  PROPERTIES LABELS "edit;runtime;film_print")
+alcedo_register_test_target(ToneCurvePresetFilmSourceTest edit)
+
 # Executor ownership refactor P0: cost of the whole-document copy, static plan key, and Grade
 # parameter packing, recorded before P2 replaces the copy with a copy-on-write freeze.
 add_executable(PipelineDocumentCopyCostTest

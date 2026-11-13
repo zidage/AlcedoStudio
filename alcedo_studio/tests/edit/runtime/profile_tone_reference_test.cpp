@@ -427,7 +427,7 @@ TEST(ProfileToneReferenceTest, RecordsCiede2000OfTheAces2StageAgainstTheSdkRende
 
     // Default document before the entry reset: the RAW import look stays on.
     const Rgb graded =
-        ApplyImportLook(anchored, kDefaultPipelineContrast, kDefaultPipelineSaturation);
+        ApplyImportLook(anchored, kImportLookContrastBeforeFilmLike, kDefaultPipelineSaturation);
     before_reset.push_back(Ciede2000(
         reference,
         display_lab(aces_forward(ApplyProfileToneStageReference(*curve, *response, graded)))));

@@ -28,6 +28,8 @@ CollapsibleSection {
     readonly property var channelModified: model ? model.channelModified : [false, false, false, false]
     readonly property var channelColors: [appTheme.plotLineColor, appTheme.plotChannelRedColor,
                                           appTheme.plotChannelGreenColor, appTheme.plotChannelBlueColor]
+    // Id of the preset whose points the selected curve has; empty for other points.
+    readonly property string presetId: model ? model.presetId : "linear"
     readonly property real axisGrey: model ? model.axisGrey : 0.4135
     readonly property real axisStop: model ? model.axisStop : 0.0571
     readonly property int labelInset: appTheme.fontSizeCaption + appTheme.spaceSm
@@ -40,6 +42,33 @@ CollapsibleSection {
     }
 
     bodyContentHeight: curveBody.implicitHeight + appTheme.spaceSm
+
+    // Menu name of a preset id (EditorToneCurveModel.presets); Custom for an empty id.
+    function presetLabel(id) {
+        switch (id) {
+        case "": return qsTr("Custom")
+        case "linear": return qsTr("Linear")
+        case "soft_contrast": return qsTr("Soft Contrast")
+        case "medium_contrast": return qsTr("Medium Contrast")
+        case "strong_contrast": return qsTr("Strong Contrast")
+        case "film_like": return qsTr("Film-like")
+        case "filmic": return qsTr("Filmic")
+        case "kodak_2383": return qsTr("Kodak 2383")
+        case "fuji_velvia_50": return qsTr("Velvia 50")
+        case "kodak_ektachrome_e100": return qsTr("Ektachrome E100")
+        }
+        const presets = section.model ? section.model.presets : []
+        for (let i = 0; i < presets.length; ++i) {
+            if (presets[i].id === id)
+                return presets[i].name
+        }
+        return id
+    }
+
+    function applyPreset(id) {
+        if (section.model)
+            section.model.applyPreset(id)
+    }
 
     function evText(value) {
         const ev = (value - section.axisGrey) / section.axisStop
@@ -139,35 +168,157 @@ CollapsibleSection {
         anchors.margins: appTheme.spaceXs
         spacing: appTheme.spaceSm
 
-        SegmentedCardSwitcher {
-            id: channelSelector
-            objectName: "toneCurveChannelSelector"
+        RowLayout {
             Layout.fillWidth: true
-            enabled: section.controlsEnabled
-            entries: [
-                { label: qsTr("RGB"), value: "rgb", channel: 0 },
-                { label: qsTr("R"), value: "red", channel: 1 },
-                { label: qsTr("G"), value: "green", channel: 2 },
-                { label: qsTr("B"), value: "blue", channel: 3 }
-            ]
-            currentIndex: section.channel
-            // A dot before the title of a curve that is not the identity.
-            segmentDecoration: Component {
-                Rectangle {
-                    readonly property bool modified:
-                        entry ? section.channelModified[entry.channel] === true : false
-                    objectName: "toneCurveChannelMark_" + (entry ? entry.value : "")
-                    visible: modified
-                    // No room for the dot of an unchanged curve, so its title stays centered.
-                    width: modified ? appTheme.plotChannelMarkSize : 0
-                    height: appTheme.plotChannelMarkSize
-                    radius: width / 2
-                    color: selected ? appTheme.editorListSelectedInkColor : appTheme.textColor
+            spacing: appTheme.spaceSm
+
+            SegmentedCardSwitcher {
+                id: channelSelector
+                objectName: "toneCurveChannelSelector"
+                Layout.fillWidth: true
+                Layout.preferredWidth: 0
+                Layout.horizontalStretchFactor: 1
+                enabled: section.controlsEnabled
+                entries: [
+                    { label: qsTr("RGB"), value: "rgb", channel: 0 },
+                    { label: qsTr("R"), value: "red", channel: 1 },
+                    { label: qsTr("G"), value: "green", channel: 2 },
+                    { label: qsTr("B"), value: "blue", channel: 3 }
+                ]
+                currentIndex: section.channel
+                // A dot before the title of a curve that is not the identity.
+                segmentDecoration: Component {
+                    Rectangle {
+                        readonly property bool modified:
+                            entry ? section.channelModified[entry.channel] === true : false
+                        objectName: "toneCurveChannelMark_" + (entry ? entry.value : "")
+                        visible: modified
+                        // No room for the dot of an unchanged curve, so its title stays centered.
+                        width: modified ? appTheme.plotChannelMarkSize : 0
+                        height: appTheme.plotChannelMarkSize
+                        radius: width / 2
+                        color: selected ? appTheme.editorListSelectedInkColor : appTheme.textColor
+                    }
+                }
+                onSelected: function(index, value) {
+                    if (section.model)
+                        section.model.channel = index
                 }
             }
-            onSelected: function(index, value) {
-                if (section.model)
-                    section.model.channel = index
+
+            // Preset menu of the selected curve: the name of the preset whose points the curve has,
+            // or Custom.
+            Rectangle {
+                id: presetButton
+                objectName: "toneCurvePresetButton"
+                readonly property string text: section.presetLabel(section.presetId)
+                Layout.fillWidth: true
+                Layout.preferredWidth: 0
+                Layout.horizontalStretchFactor: 1
+                Layout.preferredHeight: channelSelector.implicitHeight
+                radius: appTheme.controlRadiusSmall
+                color: presetMouse.containsMouse && section.controlsEnabled ? appTheme.hoverColor
+                                                                            : appTheme.bgBaseColor
+                border.width: 1
+                border.color: presetMenu.visible ? appTheme.textMutedColor : appTheme.cardBorderColor
+                opacity: section.controlsEnabled ? 1.0 : 0.55
+
+                Text {
+                    objectName: "toneCurvePresetName"
+                    anchors.left: parent.left
+                    anchors.right: presetChevron.left
+                    anchors.leftMargin: appTheme.spaceSm
+                    anchors.rightMargin: appTheme.spaceXs
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: presetButton.text
+                    elide: Text.ElideRight
+                    color: appTheme.textColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeBody
+                }
+                Text {
+                    id: presetChevron
+                    anchors.right: parent.right
+                    anchors.rightMargin: appTheme.spaceSm
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "›"
+                    rotation: 90
+                    color: appTheme.textMutedColor
+                    font.pixelSize: appTheme.fontSizeTitle
+                }
+                MouseArea {
+                    id: presetMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: section.controlsEnabled && section.model !== null
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: presetMenu.open()
+                }
+
+                AppContextMenu {
+                    id: presetMenu
+                    objectName: "toneCurvePresetMenu"
+                    x: 0
+                    y: presetButton.height + 2
+
+                    PresetMenuItem {
+                        presetId: "linear"
+                        text: section.presetLabel(presetId)
+                        checked: section.presetId === presetId
+                        onTriggered: section.applyPreset(presetId)
+                    }
+                    AppMenuSeparator {}
+                    PresetMenuItem {
+                        presetId: "soft_contrast"
+                        text: section.presetLabel(presetId)
+                        checked: section.presetId === presetId
+                        onTriggered: section.applyPreset(presetId)
+                    }
+                    PresetMenuItem {
+                        presetId: "medium_contrast"
+                        text: section.presetLabel(presetId)
+                        checked: section.presetId === presetId
+                        onTriggered: section.applyPreset(presetId)
+                    }
+                    PresetMenuItem {
+                        presetId: "strong_contrast"
+                        text: section.presetLabel(presetId)
+                        checked: section.presetId === presetId
+                        onTriggered: section.applyPreset(presetId)
+                    }
+                    AppMenuSeparator {}
+                    PresetMenuItem {
+                        presetId: "film_like"
+                        text: section.presetLabel(presetId)
+                        checked: section.presetId === presetId
+                        onTriggered: section.applyPreset(presetId)
+                    }
+                    PresetMenuItem {
+                        presetId: "filmic"
+                        text: section.presetLabel(presetId)
+                        checked: section.presetId === presetId
+                        onTriggered: section.applyPreset(presetId)
+                    }
+                    AppMenuSeparator {}
+                    PresetMenuItem {
+                        presetId: "kodak_2383"
+                        text: section.presetLabel(presetId)
+                        checked: section.presetId === presetId
+                        onTriggered: section.applyPreset(presetId)
+                    }
+                    PresetMenuItem {
+                        presetId: "fuji_velvia_50"
+                        text: section.presetLabel(presetId)
+                        checked: section.presetId === presetId
+                        onTriggered: section.applyPreset(presetId)
+                    }
+                    PresetMenuItem {
+                        presetId: "kodak_ektachrome_e100"
+                        text: section.presetLabel(presetId)
+                        checked: section.presetId === presetId
+                        onTriggered: section.applyPreset(presetId)
+                    }
+                }
             }
         }
 
@@ -383,6 +534,14 @@ CollapsibleSection {
                 }
             }
         }
+    }
+
+    // One preset of the menu. The use site binds the name, the check of the preset of the selected
+    // curve, and the apply: an inline component has no access to the ids of this file.
+    component PresetMenuItem: AppMenuItem {
+        property string presetId: ""
+        objectName: "toneCurvePreset_" + presetId
+        checkable: false
     }
 
     // Field of one coordinate of the selected point: a plain TextInput in a hairline box and the

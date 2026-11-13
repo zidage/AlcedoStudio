@@ -4,8 +4,9 @@
 
 // Entry reset of the RAW import look on a profile tone entry (dcp_profile_tone_curve_study.md,
 // section 6.5, phase T3). A settled edit of `camera_profile_file` that turns on the profile tone
-// stage writes contrast 15 -> 0 and saturation 1.3 -> 1.0 of Color Grade 1 in the same history
-// batch, each only while it still holds the RAW import default.
+// stage writes the Film-like RGB curve -> identity and saturation 1.3 -> 1.0 of Color Grade 1 in
+// the same history batch, each only while it still holds the RAW import default. A document
+// imported before the Film-like curve (#891) has contrast 15 instead, and contrast 15 -> 0.
 //
 // Each case writes synthetic DCP files into a scratch folder and scans it into
 // DcpProfileLibrary::Shared(), the library that the selection write and the reset read.
@@ -28,6 +29,9 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/curve_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "image/dcp_profile_library.hpp"
 #include "image/dcp_test_file_writer.hpp"
 #include "json.hpp"
@@ -111,6 +115,16 @@ class EditorProfileToneEntryHistoryTest : public ::testing::Test {
   auto Reference() -> std::optional<DevelopCameraProfileFile> {
     return Working()->Document().Develop()->Params().CameraProfileFile();
   }
+  /// The RGB curve of Color Grade 1.
+  auto RgbCurve() -> std::vector<CurvePoint> {
+    const auto* curve = dynamic_cast<const CurveModel*>(
+        Working()->Document().PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
+    EXPECT_NE(curve, nullptr);
+    return curve == nullptr ? std::vector<CurvePoint>{} : curve->Points();
+  }
+  static auto FilmLikePoints() -> std::vector<CurvePoint> {
+    return FindToneCurvePreset(kDefaultPipelineToneCurvePresetId)->PointList();
+  }
 
   /// One settled edit of @p field with @p params, as the editor submits it.
   auto Commit(const EditorHistoryGuardHandle& handle, EditorAdjustmentPatch patch) -> bool {
@@ -130,6 +144,11 @@ class EditorProfileToneEntryHistoryTest : public ::testing::Test {
     return Commit(handle,
                   WithColorGradeTarget({field, nlohmann::json{{field, value}}.dump(), true}));
   }
+  /// One settled write of the RGB curve of Color Grade 1 by preset id.
+  auto CommitCurvePreset(const EditorHistoryGuardHandle& handle, const char* preset) -> bool {
+    return Commit(handle,
+                  WithColorGradeTarget({"curve", nlohmann::json{{"points", preset}}.dump(), true}));
+  }
   auto CommitMethod(const EditorHistoryGuardHandle& handle, const char* method) -> bool {
     return Commit(handle,
                   WithDrtPostTarget({"odt", nlohmann::json{{"method", method}}.dump(), true}));
@@ -143,33 +162,60 @@ class EditorProfileToneEntryHistoryTest : public ::testing::Test {
   EditorSessionHistoryPort                   history_;
 };
 
-TEST_F(EditorProfileToneEntryHistoryTest, DcpSelectionResetsContrastAndSaturationInOneUndoStep) {
+TEST_F(EditorProfileToneEntryHistoryTest, DcpSelectionResetsCurveAndSaturationInOneUndoStep) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   ASSERT_EQ(Working()->Document().Drt()->Params().Method(), DrtMethod::OpenDrt);
-  ASSERT_FLOAT_EQ(GradeValue("contrast"), kDefaultPipelineContrast);
+  ASSERT_EQ(RgbCurve(), FilmLikePoints());
+  ASSERT_FLOAT_EQ(GradeValue("contrast"), 0.0f);
   ASSERT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
 
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
   ASSERT_TRUE(Reference().has_value());
   EXPECT_EQ(Reference()->profile_name, kCurveProfile);
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kProfileToneEntryContrast);
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
+  EXPECT_FLOAT_EQ(GradeValue("contrast"), 0.0f);
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
 
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   EXPECT_FALSE(Reference().has_value());
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kDefaultPipelineContrast);
+  EXPECT_EQ(RgbCurve(), FilmLikePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
   EXPECT_FALSE(Head().has_value());
 
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
   ASSERT_TRUE(Reference().has_value());
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kProfileToneEntryContrast);
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
 }
 
-TEST_F(EditorProfileToneEntryHistoryTest, DcpSelectionOnAces20ResetsContrastAndSaturation) {
+TEST_F(EditorProfileToneEntryHistoryTest, DocumentImportedBeforeFilmLikeResetsContrastFifteen) {
+  // The RAW import look before #891: contrast 15 and the identity curve.
+  auto  root_document = CreateDefaultPipelineDocument();
+  auto* grade         = root_document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  grade->FindAdjustmentByType(type_ids::Contrast())
+      ->LoadJson({{"contrast", kImportLookContrastBeforeFilmLike}});
+  dynamic_cast<CurveModel*>(grade->FindAdjustmentByType(type_ids::Curve()))
+      ->SetPoints(IdentityCurvePoints());
+  lease_ = test::MakeInMemoryEditorLease(42, std::move(root_document));
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_FLOAT_EQ(GradeValue("contrast"), kImportLookContrastBeforeFilmLike);
+
+  ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
+  EXPECT_FLOAT_EQ(GradeValue("contrast"), kProfileToneEntryContrast);
+  EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
+
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  EXPECT_FLOAT_EQ(GradeValue("contrast"), kImportLookContrastBeforeFilmLike);
+  EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
+}
+
+TEST_F(EditorProfileToneEntryHistoryTest, DcpSelectionOnAces20ResetsCurveAndSaturation) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
@@ -177,7 +223,7 @@ TEST_F(EditorProfileToneEntryHistoryTest, DcpSelectionOnAces20ResetsContrastAndS
   ASSERT_EQ(Working()->Document().Drt()->Params().Method(), DrtMethod::Aces20);
 
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kProfileToneEntryContrast);
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
 }
 
@@ -187,7 +233,7 @@ TEST_F(EditorProfileToneEntryHistoryTest, ProfileToneEntryKeepsExposure) {
   ASSERT_TRUE(handle.valid) << error;
   ASSERT_TRUE(Commit(handle, WithColorGradeTarget({"exposure", R"({"exposure_ev":2.0})", true})));
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kProfileToneEntryContrast);
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
   nlohmann::json json;
   ASSERT_TRUE(ReadEditorParameterJson(Working()->Document(), ColorGradeFieldTarget("exposure"),
                                       &json, &error))
@@ -200,14 +246,18 @@ TEST_F(EditorProfileToneEntryHistoryTest, ProfileToneEntryKeepsValuesThatTheUser
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   ASSERT_TRUE(CommitGrade(handle, "contrast", 30.0f));
+  ASSERT_TRUE(CommitCurvePreset(handle, "medium_contrast"));
+  const auto medium = RgbCurve();
 
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
   EXPECT_FLOAT_EQ(GradeValue("contrast"), 30.0f);
+  EXPECT_EQ(RgbCurve(), medium);
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
 
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   EXPECT_FALSE(Reference().has_value());
   EXPECT_FLOAT_EQ(GradeValue("contrast"), 30.0f);
+  EXPECT_EQ(RgbCurve(), medium);
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
 }
 
@@ -233,17 +283,25 @@ TEST_F(EditorProfileToneEntryHistoryTest, DocumentWithoutColorGradeOneKeepsItsVa
   EXPECT_EQ(Working()->Document().ToJson().dump(), before);
 }
 
-TEST_F(EditorProfileToneEntryHistoryTest, FilmPrintMethodWritesNoGradeValueOnDcpSelection) {
+TEST_F(EditorProfileToneEntryHistoryTest, FilmPrintEntryResetsTheCurveAndDcpSelectionWritesNone) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   ASSERT_TRUE(CommitMethod(handle, "film_print"));
-  // The Film Print entry already reset the saturation; the user selects it again.
+  // The Film Print entry reset the saturation and the Film-like curve.
+  EXPECT_FLOAT_EQ(GradeValue("saturation"), kFilmPrintEntrySaturation);
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  EXPECT_EQ(RgbCurve(), FilmLikePoints());
+  EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  // The user selects the values of the import look again.
   ASSERT_TRUE(CommitGrade(handle, "saturation", kDefaultPipelineSaturation));
+  ASSERT_TRUE(CommitCurvePreset(handle, "film_like"));
 
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
   ASSERT_TRUE(Reference().has_value());
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kDefaultPipelineContrast);
+  EXPECT_EQ(RgbCurve(), FilmLikePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
 }
 
@@ -252,13 +310,13 @@ TEST_F(EditorProfileToneEntryHistoryTest, ToneCurveSwitchOffWritesNoGradeValue) 
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
-  ASSERT_TRUE(CommitGrade(handle, "contrast", kDefaultPipelineContrast));
+  ASSERT_TRUE(CommitCurvePreset(handle, "film_like"));
   ASSERT_TRUE(CommitGrade(handle, "saturation", kDefaultPipelineSaturation));
 
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile, false));
   ASSERT_TRUE(Reference().has_value());
   EXPECT_FALSE(Reference()->profile_tone);
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kDefaultPipelineContrast);
+  EXPECT_EQ(RgbCurve(), FilmLikePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
 }
 
@@ -268,17 +326,17 @@ TEST_F(EditorProfileToneEntryHistoryTest, ToneCurveSwitchOnIsAnEntry) {
   ASSERT_TRUE(handle.valid) << error;
   // A selection with the switch off runs no stage: no reset.
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile, false));
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kDefaultPipelineContrast);
+  EXPECT_EQ(RgbCurve(), FilmLikePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
 
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile, true));
   EXPECT_TRUE(Reference()->profile_tone);
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kProfileToneEntryContrast);
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
 
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   EXPECT_FALSE(Reference()->profile_tone);
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kDefaultPipelineContrast);
+  EXPECT_EQ(RgbCurve(), FilmLikePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
 }
 
@@ -287,12 +345,12 @@ TEST_F(EditorProfileToneEntryHistoryTest, ChangeBetweenProfilesThatRunTheStageIs
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
-  ASSERT_TRUE(CommitGrade(handle, "contrast", kDefaultPipelineContrast));
+  ASSERT_TRUE(CommitCurvePreset(handle, "film_like"));
   ASSERT_TRUE(CommitGrade(handle, "saturation", kDefaultPipelineSaturation));
 
   ASSERT_TRUE(CommitProfile(handle, kOtherCurveProfile));
   EXPECT_EQ(Reference()->profile_name, kOtherCurveProfile);
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kDefaultPipelineContrast);
+  EXPECT_EQ(RgbCurve(), FilmLikePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
 }
 
@@ -301,12 +359,12 @@ TEST_F(EditorProfileToneEntryHistoryTest, ProfileWithoutCurveWritesNoGradeValueA
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   ASSERT_TRUE(CommitProfile(handle, kFlatProfile));
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kDefaultPipelineContrast);
+  EXPECT_EQ(RgbCurve(), FilmLikePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kDefaultPipelineSaturation);
 
   // From a profile without a curve to one with a curve: the stage starts, an entry.
   ASSERT_TRUE(CommitProfile(handle, kCurveProfile));
-  EXPECT_FLOAT_EQ(GradeValue("contrast"), kProfileToneEntryContrast);
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
 }
 
@@ -320,6 +378,7 @@ TEST_F(EditorProfileToneEntryHistoryTest, LeaveToDefaultEntryWritesNoGradeValue)
   ASSERT_TRUE(Commit(handle, PatchFromJson("camera_profile_file", "null", true)));
   EXPECT_FALSE(Reference().has_value());
   EXPECT_FLOAT_EQ(GradeValue("contrast"), 40.0f);
+  EXPECT_EQ(RgbCurve(), IdentityCurvePoints());
   EXPECT_FLOAT_EQ(GradeValue("saturation"), kProfileToneEntrySaturation);
 }
 

@@ -28,6 +28,8 @@
 #include <variant>
 
 #include "app/editor_panel_projection.hpp"
+#include "edit/operators/models/curve_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
@@ -331,6 +333,51 @@ TEST(EditorAdjustmentSnapshotQmlTest, ToneCurveSectionLoadsFourCurvesAndMarksThe
   // 513 steps of x; the interior point of the RGB curve is at a step (x 0.5).
   EXPECT_EQ(curve_line->property("points").value<QList<QPointF>>().size(), 513);
   EXPECT_EQ(harness.root()->findChild<QObject*>(QStringLiteral("editorToneCurveItem")), nullptr);
+}
+
+TEST(EditorAdjustmentSnapshotQmlTest, ToneCurvePresetMenuNamesThePresetOfTheCurveAndAppliesOne) {
+  // A document with the Film-like RGB curve (the RAW import look) and a custom red curve.
+  const auto* film_like = alcedo::FindToneCurvePreset("film_like");
+  ASSERT_NE(film_like, nullptr);
+  alcedo::EditorPanelCurveValue curve;
+  curve.points = film_like->PointList();
+  curve.red    = {{0.0f, 0.1f}, {0.5f, 0.45f}, {1.0f, 1.0f}};
+  curve.green  = alcedo::IdentityCurvePoints();
+  curve.blue   = alcedo::IdentityCurvePoints();
+  alcedo::EditorPanelProjection projection;
+  projection.session_generation = 1;
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = "curve";
+  field.value     = curve;
+  projection.fields.push_back(std::move(field));
+
+  SnapshotSession              session(alcedo::ui::PanelProjectionToVariantMap(projection), 1);
+  AdjustmentSnapshotQmlHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* model  = harness.root()->findChild<QObject*>(QStringLiteral("toneCurveModel"));
+  auto* button = harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePresetButton"));
+  ASSERT_NE(model, nullptr);
+  ASSERT_NE(button, nullptr);
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Film-like"));
+
+  model->setProperty("channel", 1);
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Custom"));
+
+  // The menu item applies its preset to the selected curve: one settled write.
+  auto* item = harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePreset_kodak_2383"));
+  ASSERT_NE(item, nullptr);
+  EXPECT_FALSE(item->property("checked").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(item, "triggered"));
+  EXPECT_EQ(session.submitCount(), 1);
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Kodak 2383"));
+  EXPECT_TRUE(item->property("checked").toBool());
+
+  model->setProperty("channel", 0);
+  EXPECT_EQ(button->property("text").toString(), QStringLiteral("Film-like"));
+  auto* film_item =
+      harness.root()->findChild<QObject*>(QStringLiteral("toneCurvePreset_film_like"));
+  ASSERT_NE(film_item, nullptr);
+  EXPECT_TRUE(film_item->property("checked").toBool());
 }
 
 }  // namespace

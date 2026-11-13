@@ -1622,8 +1622,10 @@ auto Table() -> const std::array<EditorParameterCatalogEntry, 25>& {
                  "\"green\": [...], \"blue\": [...]}: the RGB curve (points) and the red, green, "
                  "and blue curves, each 2 to 16 control points in the unit square with x "
                  "strictly increasing. A write needs one or more of the four keys and leaves "
-                 "the other curves as they are. The render applies the RGB curve to each "
-                 "channel, then the curve of the channel",
+                 "the other curves as they are; in a write, the value of a key can be the id of "
+                 "a Tone Curve preset (curve.presets), which writes the points of the preset. "
+                 "The render applies the RGB curve to each channel, then the curve of the "
+                 "channel",
                  &CurveUiDefault, &CurveModelToUi),
       ModelEntry("lut", "ocio_lmt", EditorAdjustmentField::Lut, "lut",
                  "{\"cube_path\": string} or a tagged {\"reference\": object}, and optional "

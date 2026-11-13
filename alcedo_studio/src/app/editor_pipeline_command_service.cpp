@@ -20,7 +20,9 @@
 #include "edit/graph/graph_validation.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "image/dcp_camera_profile.hpp"
 
 namespace alcedo {
@@ -208,6 +210,47 @@ auto FilmPrintEntrySaturationTarget(const PipelineDocument& document,
 
 namespace {
 
+/// True when the RGB curve of @p grade has the points of the Film-like preset of the RAW import
+/// look.
+auto HasImportLookCurve(const ColorGradeNodeModel& grade) -> bool {
+  const auto* curve =
+      dynamic_cast<const CurveModel*>(grade.FindAdjustmentByType(type_ids::Curve()));
+  const auto* preset = FindToneCurvePreset(kDefaultPipelineToneCurvePresetId);
+  if (curve == nullptr || preset == nullptr) return false;
+  const auto points = curve->Points();
+  return MatchToneCurvePreset(points) == preset;
+}
+
+/// The curve write of an entry reset: the RGB curve becomes the identity, the channel curves stay.
+auto IdentityRgbCurvePatch() -> nlohmann::json {
+  nlohmann::json points = nlohmann::json::array();
+  for (const auto& point : IdentityCurvePoints()) {
+    points.push_back({{"x", point.x}, {"y", point.y}});
+  }
+  return {{"curve", {{"points", std::move(points)}}}};
+}
+
+}  // namespace
+
+auto FilmPrintEntryCurveTarget(const PipelineDocument& document, const nlohmann::json& odt_before,
+                               const nlohmann::json& odt_after)
+    -> std::optional<EditorParameterTarget> {
+  const auto is_film_print = [](const nlohmann::json& odt) {
+    return odt.value("method", std::string{}) == "film_print";
+  };
+  if (is_film_print(odt_before) || !is_film_print(odt_after)) {
+    return std::nullopt;
+  }
+  const auto* grade = CurrentPanelColorGrade(document);
+  if (grade == nullptr || !HasImportLookCurve(*grade)) {
+    return std::nullopt;
+  }
+  std::string ignored;
+  return CompleteCurrentPanelParameterTarget(document, "curve", &ignored);
+}
+
+namespace {
+
 /// True when the DRT method of @p document runs the profile tone stage (study section 6.2).
 auto MethodRunsProfileTone(const PipelineDocument& document) -> bool {
   const auto* drt = document.Drt();
@@ -255,13 +298,20 @@ auto ProfileToneEntryResetTargets(const PipelineDocument& document,
   };
   const auto* contrast =
       dynamic_cast<const ContrastModel*>(grade->FindAdjustmentByType(type_ids::Contrast()));
-  if (contrast != nullptr && contrast->Value() == kDefaultPipelineContrast) {
+  if (contrast != nullptr && contrast->Value() == kImportLookContrastBeforeFilmLike) {
     add("contrast", kProfileToneEntryContrast);
   }
   const auto* saturation =
       dynamic_cast<const SaturationModel*>(grade->FindAdjustmentByType(type_ids::Saturation()));
   if (saturation != nullptr && saturation->Value() == kDefaultPipelineSaturation) {
     add("saturation", kProfileToneEntrySaturation);
+  }
+  if (HasImportLookCurve(*grade)) {
+    std::string ignored;
+    auto        target = CompleteCurrentPanelParameterTarget(document, "curve", &ignored);
+    if (target.has_value()) {
+      writes.push_back({std::move(*target), IdentityRgbCurvePatch()});
+    }
   }
   return writes;
 }
@@ -270,10 +320,13 @@ auto EntryResetWrites(const PipelineDocument& document, std::string_view field_k
                       const nlohmann::json& before, const nlohmann::json& after)
     -> std::vector<EditorEntryResetWrite> {
   if (field_key == "odt") {
-    auto target = FilmPrintEntrySaturationTarget(document, before, after);
-    if (!target.has_value()) return {};
     std::vector<EditorEntryResetWrite> writes;
-    writes.push_back({std::move(*target), {{"saturation", kFilmPrintEntrySaturation}}});
+    if (auto target = FilmPrintEntrySaturationTarget(document, before, after)) {
+      writes.push_back({std::move(*target), {{"saturation", kFilmPrintEntrySaturation}}});
+    }
+    if (auto target = FilmPrintEntryCurveTarget(document, before, after)) {
+      writes.push_back({std::move(*target), IdentityRgbCurvePatch()});
+    }
     return writes;
   }
   if (field_key == "camera_profile_file") {

@@ -78,6 +78,22 @@ inline constexpr float kFilmPrintEntrySaturation = 1.0f;
                                                   const nlohmann::json&   odt_after)
     -> std::optional<EditorParameterTarget>;
 
+/**
+ * @brief Default Grade curve that an `odt` edit resets when it turns on the film print.
+ *
+ * The Film-like curve of the RAW import look (@ref kDefaultPipelineToneCurvePresetId) is the
+ * Adobe tone on top of ACES 2.0; the negative and the print give the tone of the film print. The
+ * rule applies on the entry of @ref FilmPrintEntrySaturationTarget, and only while the RGB curve
+ * still has the points of the preset. The write sets the RGB curve to the identity; the channel
+ * curves stay.
+ *
+ * @return The `curve` target, or nullopt when the rule does not apply.
+ */
+[[nodiscard]] auto FilmPrintEntryCurveTarget(const PipelineDocument& document,
+                                             const nlohmann::json&   odt_before,
+                                             const nlohmann::json&   odt_after)
+    -> std::optional<EditorParameterTarget>;
+
 /// Contrast of Color Grade 1 after a profile tone entry: the catalog identity.
 inline constexpr float kProfileToneEntryContrast   = 0.0f;
 /// Saturation of Color Grade 1 after a profile tone entry, as @ref kFilmPrintEntrySaturation.
@@ -99,16 +115,19 @@ struct EditorEntryResetWrite {
  * `ProfileToneCurve`, `profile_tone` is true, and the DRT method is ACES 2.0 or OpenDRT.
  *
  * On an entry, when the document has Color Grade 1 (`grade.primary`), the result holds a write of
- * @ref kProfileToneEntryContrast while its contrast still equals @ref kDefaultPipelineContrast, and
- * a write of @ref kProfileToneEntrySaturation while its saturation still equals
- * @ref kDefaultPipelineSaturation. A value that the user selected stays; a document without
- * `grade.primary` gets no write. Exposure is never written (the anchor of section 3.3).
+ * @ref kProfileToneEntryContrast while its contrast still equals
+ * @ref kImportLookContrastBeforeFilmLike (a document imported before #891), a write of
+ * @ref kProfileToneEntrySaturation while its saturation still equals
+ * @ref kDefaultPipelineSaturation, and a write of the identity RGB curve while the RGB curve still
+ * has the points of the Film-like preset (@ref kDefaultPipelineToneCurvePresetId). A value that the
+ * user selected stays; a document without `grade.primary` gets no write. Exposure is never written
+ * (the anchor of section 3.3).
  *
  * @param document Live document after the edit; its Develop reference is bound by the write.
  * @param develop_before Develop Model JSON before the edit (the history before-side). Its stored
  *        reference is resolved through DcpProfileLibrary::Shared() to read whether its profile has
  *        a curve; an identity that the library does not hold had no stage.
- * @return The writes in the order contrast, saturation; empty when the rule does not apply.
+ * @return The writes in the order contrast, saturation, curve; empty when the rule does not apply.
  * @throws std::exception when @p develop_before holds a malformed reference.
  */
 [[nodiscard]] auto ProfileToneEntryResetTargets(const PipelineDocument& document,
@@ -117,8 +136,9 @@ struct EditorEntryResetWrite {
 
 /**
  * @brief Grade writes of the entry resets of the RAW import look that a settled edit of
- *        @p field_key makes: @ref FilmPrintEntrySaturationTarget for `odt`, and
- *        @ref ProfileToneEntryResetTargets for `camera_profile_file`.
+ *        @p field_key makes: @ref FilmPrintEntrySaturationTarget and
+ *        @ref FilmPrintEntryCurveTarget for `odt`, and @ref ProfileToneEntryResetTargets for
+ *        `camera_profile_file`.
  *
  * The caller applies them in the history batch of the edit, so one Undo restores them with it.
  * @param document Live document after the edit.

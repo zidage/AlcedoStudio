@@ -26,6 +26,7 @@
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/operators/models/tone_curve_presets.hpp"
 #include "edit/operators/models/tone_curve_spline.hpp"
 
 namespace alcedo {
@@ -228,10 +229,24 @@ auto ParseCurvePoints(const nlohmann::json& points_json, std::string_view key)
   return points;
 }
 
+/// The points of the Tone Curve preset @p id_json for `curve.<key>` (a write only).
+auto ParseCurvePresetPoints(const nlohmann::json& id_json, std::string_view key)
+    -> std::vector<CurvePoint> {
+  const auto  id     = id_json.get<std::string>();
+  const auto* preset = FindToneCurvePreset(id);
+  if (preset == nullptr) {
+    throw std::invalid_argument("curve." + std::string{key} + " names no Tone Curve preset: " + id +
+                                "; curve.presets lists them");
+  }
+  return preset->PointList();
+}
+
 /// `curve`: the RGB curve under `points` (with an optional `size`, the point count) and the
 /// channel curves under `red`, `green`, and `blue`. A write has one or more of the four curves and
-/// leaves the others as they are. A complete value (the Model JSON of history replay) has
-/// `points`; a channel key that it does not have is the identity, as the Model omits it.
+/// leaves the others as they are; the value of a curve is its list of points or, in a write, the
+/// id of a Tone Curve preset, which writes the points of the preset. A complete value (the Model
+/// JSON of history replay) has `points`; a channel key that it does not have is the identity, as
+/// the Model omits it.
 auto ParseCurveWrite(const nlohmann::json& params, ParseForm form) -> EditorCurveWrite {
   const auto& object = UnwrapObject(params, {"curve"}, "curve");
   RejectUnknownKeys(object, {"points", "size", "red", "green", "blue"}, "curve");
@@ -252,7 +267,9 @@ auto ParseCurveWrite(const nlohmann::json& params, ParseForm form) -> EditorCurv
   EditorCurveWrite write;
   for (const auto channel : kCurveChannels) {
     const std::string key{CurveChannelKey(channel)};
-    if (object.contains(key)) {
+    if (object.contains(key) && form == ParseForm::Write && object.at(key).is_string()) {
+      write.Channel(channel) = ParseCurvePresetPoints(object.at(key), key);
+    } else if (object.contains(key)) {
       write.Channel(channel) = ParseCurvePoints(object.at(key), key);
     } else if (form == ParseForm::Value) {
       write.Channel(channel) = IdentityCurvePoints();
