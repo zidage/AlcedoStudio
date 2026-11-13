@@ -109,10 +109,19 @@ auto AdjustmentDisplayValue(const IOperatorModel& model) -> std::string {
            FixedNumber(params.value("tint", 0.0), 0);
   }
   if (type == type_ids::Curve()) {
-    if (params.contains("points") && params["points"].is_array()) {
-      return std::to_string(params["points"].size()) + " points";
+    if (!params.contains("points") || !params["points"].is_array()) {
+      return "Default";
     }
-    return "Default";
+    // The RGB point count, then the point count of each channel curve that the Model has (the
+    // Model omits an identity channel curve): "4 points, R 3, B 5".
+    std::string text = std::to_string(params["points"].size()) + " points";
+    for (const auto& [key, label] :
+         {std::pair{"red", "R"}, std::pair{"green", "G"}, std::pair{"blue", "B"}}) {
+      if (params.contains(key) && params[key].is_array()) {
+        text += std::string{", "} + label + " " + std::to_string(params[key].size());
+      }
+    }
+    return text;
   }
   if (type == type_ids::Hls() || type == type_ids::ColorWheel()) {
     return model.IsDefault() ? "Default" : "Adjusted";

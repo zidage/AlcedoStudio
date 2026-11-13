@@ -186,32 +186,26 @@ auto ParseScalarWrite(const nlohmann::json& params, std::string_view field,
   return EditorScalarWrite{*value};
 }
 
-auto ParseCurveWrite(const nlohmann::json& params) -> EditorCurveWrite {
-  const auto& object = UnwrapObject(params, {"curve"}, "curve");
-  RejectUnknownKeys(object, {"points", "size"}, "curve");
-  if (!object.contains("points")) {
-    throw std::invalid_argument("curve.points is required");
-  }
-  const auto& points_json = object.at("points");
-  if (!points_json.is_array() || points_json.size() < 2) {
-    throw std::invalid_argument("curve.points must contain at least two points");
+/// The form of a parse: a write sets only its keys; a complete value sets every field.
+enum class ParseForm { Write, Value };
+
+/// The control points of one curve under `curve.<key>`. They lie in the unit square and their x
+/// values strictly increase, as the curve panel writes them. Out-of-range or unordered points are
+/// rejected, not clamped or sorted.
+auto ParseCurvePoints(const nlohmann::json& points_json, std::string_view key)
+    -> std::vector<CurvePoint> {
+  const std::string name = "curve." + std::string{key};
+  if (!points_json.is_array() || points_json.size() < tone_curve::kMinControlPoints) {
+    throw std::invalid_argument(name + " must contain at least two points");
   }
   if (points_json.size() > tone_curve::kMaxControlPoints) {
-    throw std::invalid_argument("curve.points must contain at most " +
+    throw std::invalid_argument(name + " must contain at most " +
                                 std::to_string(tone_curve::kMaxControlPoints) + " points");
   }
-  if (object.contains("size")) {
-    if (!object.at("size").is_number_integer() ||
-        object.at("size").get<std::size_t>() != points_json.size()) {
-      throw std::invalid_argument("curve.size must match curve.points");
-    }
-  }
-  // The control points lie in the unit square and their x values strictly increase, as the curve
-  // panel writes them. Out-of-range or unordered points are rejected, not clamped or sorted.
   std::vector<CurvePoint> points;
   points.reserve(points_json.size());
   for (std::size_t index = 0; index < points_json.size(); ++index) {
-    const auto  context = "curve.points[" + std::to_string(index) + "]";
+    const auto  context = name + "[" + std::to_string(index) + "]";
     const auto& point   = RequireObject(points_json.at(index), context);
     RejectUnknownKeys(point, {"x", "y"}, "curve point");
     if (!point.contains("x") || !point.contains("y")) {
@@ -226,12 +220,45 @@ auto ParseCurveWrite(const nlohmann::json& params) -> EditorCurveWrite {
       throw std::invalid_argument(context + ".y must be in [0, 1]");
     }
     if (!points.empty() && parsed.x <= points.back().x) {
-      throw std::invalid_argument(context + ".x must be greater than curve.points[" +
+      throw std::invalid_argument(context + ".x must be greater than " + name + "[" +
                                   std::to_string(index - 1) + "].x");
     }
     points.push_back(parsed);
   }
-  return EditorCurveWrite{std::move(points)};
+  return points;
+}
+
+/// `curve`: the RGB curve under `points` (with an optional `size`, the point count) and the
+/// channel curves under `red`, `green`, and `blue`. A write has one or more of the four curves and
+/// leaves the others as they are. A complete value (the Model JSON of history replay) has
+/// `points`; a channel key that it does not have is the identity, as the Model omits it.
+auto ParseCurveWrite(const nlohmann::json& params, ParseForm form) -> EditorCurveWrite {
+  const auto& object = UnwrapObject(params, {"curve"}, "curve");
+  RejectUnknownKeys(object, {"points", "size", "red", "green", "blue"}, "curve");
+  if (form == ParseForm::Value && !object.contains("points")) {
+    throw std::invalid_argument("curve.points is required");
+  }
+  if (form == ParseForm::Write && !object.contains("points") && !object.contains("red") &&
+      !object.contains("green") && !object.contains("blue")) {
+    throw std::invalid_argument("curve requires points, red, green, or blue");
+  }
+  if (object.contains("size")) {
+    if (!object.contains("points") || !object.at("size").is_number_integer() ||
+        !object.at("points").is_array() ||
+        object.at("size").get<std::size_t>() != object.at("points").size()) {
+      throw std::invalid_argument("curve.size must match curve.points");
+    }
+  }
+  EditorCurveWrite write;
+  for (const auto channel : kCurveChannels) {
+    const std::string key{CurveChannelKey(channel)};
+    if (object.contains(key)) {
+      write.Channel(channel) = ParseCurvePoints(object.at(key), key);
+    } else if (form == ParseForm::Value) {
+      write.Channel(channel) = IdentityCurvePoints();
+    }
+  }
+  return write;
 }
 
 /// Parse the complete LMT state: the Model JSON (`cube_path` or a tagged `reference`,
@@ -885,9 +912,6 @@ auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
   return update;
 }
 
-/// The form of a parse: a write sets only its keys; a complete value sets every field.
-enum class ParseForm { Write, Value };
-
 /// `camera_profile_file` (dcp_camera_profile_plan.md, phase C4).
 ///
 /// A write is a selection: {"camera_model", "profile_name"} with an optional boolean
@@ -985,7 +1009,7 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, Par
     return ParseFilmFormatUpdate(params);
   }
   if (field == "curve") {
-    return ParseCurveWrite(params);
+    return ParseCurveWrite(params, form);
   }
   if (field == "lut" || field == "ocio_lmt") {
     return ParseLutWrite(params);

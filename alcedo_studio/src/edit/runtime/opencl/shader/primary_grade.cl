@@ -187,9 +187,11 @@ static inline float3 ApplyAdjustment(float3 c, __global const GradeAdjustmentPar
     c.y += offset;
     c.z += offset;
   } else if (behavior == 7u) {
-    c.x = ApplyCurve(c.x, p);
-    c.y = ApplyCurve(c.y, p);
-    c.z = ApplyCurve(c.z, p);
+    // The Curve slot has four records (CurveGradeRuntimeParams): the RGB curve, then the red,
+    // green, and blue curves. count 0 leaves the channel unchanged.
+    c.x = ApplyCurve(ApplyCurve(c.x, p), p + 1);
+    c.y = ApplyCurve(ApplyCurve(c.y, p), p + 2);
+    c.z = ApplyCurve(ApplyCurve(c.z, p), p + 3);
   } else if (behavior == 8u) {
     c = ApplyHls(c, p);
   } else if (behavior == 9u || behavior == 10u) {

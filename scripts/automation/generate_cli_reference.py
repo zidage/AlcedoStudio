@@ -207,7 +207,9 @@ def fields_block(catalog: dict) -> str:
             for space, eotfs in sorted(entry["encoding_eotf_by_space"].items()):
                 lines.append(f"- `{space}`: " + ", ".join(f"`{eotf}`" for eotf in eotfs))
             lines.append("")
-    lines += ["### Model fields", "", "A write gives the complete value.", ""]
+    lines += ["### Model fields", "",
+              "A `lut` write gives the complete value. A `curve` write gives one or more of its "
+              "four curves and leaves the other curves as they are.", ""]
     for entry in fields:
         if entry["kind"] != "model":
             continue

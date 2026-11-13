@@ -2,7 +2,7 @@
 
 Date: 2026-11-13
 
-Status: TC1 complete. TC2 to TC6 planned.
+Status: TC1 and TC2 complete. TC3 to TC6 planned.
 
 Tracking issue: [#885](https://github.com/zidage/AlcedoStudio/issues/885). Items: TC1
 [#886](https://github.com/zidage/AlcedoStudio/issues/886), TC2
@@ -128,7 +128,8 @@ backends. The slot layout gives the exact spline for a search of at most 15 step
 
 TC2 extends the layout for the R, G, and B curves: the Curve slot becomes four consecutive
 `GradeAdjustmentParams` records (RGB, R, G, B), and `ApplyCurve` applies the first record to the
-three channels and each other record to its channel. TC2 records the final binding size rule.
+three channels and each other record to its channel. The binding size rule is in the TC2 section
+(`GradeRuntimeParamBytes`: 832 bytes for Curve, 208 bytes otherwise).
 
 ### 4.3 Failure behavior
 
@@ -210,10 +211,108 @@ stored Model with invalid points: `MakeGradeRuntimeParams` -> `SolveToneCurveSpl
 
 **Completion record.** See section 6.
 
-### TC2 to TC6
+### TC2: R, G, and B curves
 
-See the issues. TC2 uses the slot layout of 4.2. TC5 removes `kPointerGain` and moves
-`EditorToneCurveItem` to the archive of deprecated code when the section no longer uses it.
+**Objective.** The Curve adjustment holds four curves: RGB (the `points` from before TC2), red,
+green, and blue. The render applies the RGB curve to the three channels, then each channel curve
+to its channel.
+
+**Model.** `CurvePayload` has `points` (RGB), `red`, `green`, and `blue`; each is the identity
+`(0, 0) - (1, 1)` by default. `CurveChannel` (`Rgb`, `Red`, `Green`, `Blue`) names a curve, and
+`CurveChannelKey` gives its JSON key (`points`, `red`, `green`, `blue`). `CurveUpdate` has an
+optional list of points for each curve; `CurveModel::Apply(CurveUpdate)` sets the curves that the
+update has in one Model change (one revision, one dirty bit for each changed curve). A curve with
+fewer than two points becomes the identity, as `SetPoints` did before. `IsDefault` is true only
+when the four curves are the identity.
+
+**JSON.** `ToJson` writes `"points"` always and `"red"`, `"green"`, and `"blue"` only for a curve
+that is not exactly the identity. A channel curve is a list of `{"x", "y"}` objects, the same form
+as `points`. `LoadJson` reads the complete state: a channel key that the JSON does not have is the
+identity. A document from before TC2 encodes to the same bytes and keeps its root id.
+
+**Parameter write.** `EditorCurveWrite` is `CurveUpdate` (as `EditorLutWrite` is `LmtUpdate`).
+`ParseCurveWrite` accepts `points`, `size`, `red`, `green`, and `blue`; another key fails with
+`Unknown parameter: curve.<key>`. Each curve has the rules of section 2 (2 to 16 points, unit
+square, x strictly increases), with the key in the error text (`curve.red[1].x must be in
+[0, 1]`). `size` counts the RGB points and needs `points`. The two parse forms differ:
+
+- A write (`ParseEditorParameterWrite`: `alcedo-cli`, the panel) has one or more of the four keys
+  and leaves the other curves as they are. A write with no key fails with `curve requires points,
+  red, green, or blue`. The current `{"curve":{"size":N,"points":[...]}}` write keeps the channel
+  curves.
+- A complete value (`ParseEditorParameterValue`: history replay, `RestoreDocumentFields`) is the
+  Model JSON and needs `points`. A channel key that it does not have is the identity, because the
+  Model omits an identity channel curve. Without this rule, the undo of the first blue edit (stored
+  `before` value without `"blue"`) would keep the blue curve.
+
+The catalog reset value of `curve` has the four keys with the identity, so a reset through
+`editor.set` resets the four curves. `model_shape` describes the four keys and the write rule.
+
+**GPU layout and binding size.** The Curve slot is `CurveGradeRuntimeParams`: four consecutive
+`GradeAdjustmentParams` records (832 bytes) in `CurveChannel` order, each in the layout of 4.2.
+`GradeRuntimeParamBytes(behavior)` gives the slot size: 832 bytes for Curve, 208 bytes for every
+other behavior. `BindOrRefreshGradeRuntimeSlot` packs with `MakeCurveGradeRuntimeParams` for
+Curve and binds the slot at that size; the command offset is the offset of the first record.
+`MakeGradeRuntimeParams` fails for Curve with a named error, so no caller packs one curve of four.
+The RGB record always has its points (an identity RGB curve has count 2, as in TC1). A red, green,
+or blue curve that is the identity has count 0, and `ApplyCurve` returns the value unchanged for
+count 0, so an identity channel costs one comparison. The kernels apply
+`ApplyCurve(ApplyCurve(c, record[0]), record[1 + channel])` on CUDA, OpenCL, and Metal.
+
+**Panel projection and presentation.** `EditorPanelCurveValue` has the four lists, and the QML map
+of `curve` has `points`, `red`, `green`, and `blue`. The current panel edits `points` only, and its
+write leaves the channel curves as they are. TC5 adds the channel selector.
+
+**Adjustment transfer.** The transfer copies the Model JSON and loads it with `LoadJson`, so the
+four curves transfer. The row text is the RGB point count and the point count of each channel
+curve that is not the identity, for example `4 points, R 3, B 5`.
+
+**Success call chain (write).** `alcedo-cli editor.set curve` -> `EditorParameterCatalog::
+ToModelJson` -> `ParseEditorParameterWrite` -> `ParseCurveWrite(params, ParseForm::Write)` ->
+`ApplyEditorParameterWrite` -> `CurveModel::Apply`.
+
+**Success call chain (undo).** `ApplySetParameter` -> `ApplyEditorParameterValue` ->
+`ParseEditorParameterValue` -> `ParseCurveWrite(value, ParseForm::Value)` (absent channel keys are
+the identity) -> `CurveModel::Apply`.
+
+**Success call chain (render).** `BindAndScheduleGrade` -> `BindOrRefreshGradeRuntimeSlot` ->
+`MakeCurveGradeRuntimeParams` (four solved splines) -> `ParameterArena::WritePackedSlot` (832
+bytes) -> kernel `ApplyAdjustment` reads the records at the command offset.
+
+**Failure call chain.** A write with an invalid channel curve -> `ParseCurvePoints` throws
+`std::invalid_argument` with the key in the text -> `ParseEditorParameterWrite` returns nullopt;
+the Model does not change. A stored channel curve that the spline does not accept ->
+`MakeCurveGradeRuntimeParams` throws the text of `FindToneCurvePointsError` -> the render fails.
+
+**Tests.**
+
+- `GpuDagModelGraphTest.CurveModelTest.*`: identity channel curves encode without the new keys; a
+  payload with a blue curve decodes and encodes to the same bytes; `LoadJson` without a channel key
+  sets the identity; `IsDefault` only for four identity curves; `Apply` changes only the given
+  curves in one revision.
+- `PipelineDocumentCheckpointTest.PipelineDocumentCheckpointFormat.
+  ExistingCurveRootDocumentsSerializeByteIdenticalAfterChannelCurves`: a stored root with a
+  four-point RGB curve in the JSON from before TC2 decodes and encodes to the same bytes.
+- `EditorParameterCatalogTest`: `CurveWriteWithPointsOnlyLeavesTheChannelCurvesAsTheyAre`,
+  `CurveWriteWithOneChannelKeySetsOnlyThatCurve`,
+  `CurveWriteRejectsUnknownKeysAndInvalidChannelPointsWithNamedErrors`,
+  `CurveValueWithoutAChannelKeyReadsThatChannelAsIdentity`, `CurveResetValueResetsTheFourCurves`.
+- `PipelineHistoryApplierTest.UndoOfABlueCurveEditRestoresTheEarlierBlueCurveAndKeepsTheRgbCurve`.
+- `EditorPanelProjectionTest` (the projection has the four curves) and
+  `AdjustmentTransferCatalogTest.CurveItemSummaryNamesTheChannelCurves`.
+- `GpuDagRawInputTest.GpuDagAdjustmentRuntime.*`: four records with count 0 for identity channel
+  curves; the slot binds 832 bytes and repacks after a channel edit; the 17-point error also for a
+  channel curve.
+- `GpuDagOpenClGradeTest`, `GpuDagCudaPrimaryGradeTest`, `GpuDagMetalGradeTest`:
+  `*ChannelCurvesMatchSplineReferenceForRedAloneAndRgbWithBlue`. Every pixel agrees with
+  `EvaluateToneCurveSpline` (RGB curve, then the channel curve) within 1e-5 for a red curve alone
+  and for the RGB curve with a blue curve. The CPU references of the OpenCL and Metal grade tests
+  read the four records through `tone_curve_test::ApplyPackedCurveSlot`.
+
+### TC3 to TC6
+
+See the issues. TC5 removes `kPointerGain` and moves `EditorToneCurveItem` to the archive of
+deprecated code when the section no longer uses it.
 
 ## 6. Completion record
 
@@ -244,3 +343,43 @@ Verification (Windows, debug build, RTX 3080 Laptop, CUDA and OpenCL):
 `GpuDagMetalGradeTest.MetalCurveMatchesSplineReferenceForThreeAndSixteenPoints` and the Metal
 shader compile were not run locally: the Mac was not reachable. The macOS CI runs the
 `ci_metal` targets. The full test suite was not run.
+
+### TC2 (2026-11-13)
+
+Status: complete. Branch `feature/tone-curve-channel-curves`, stacked on TC1. The `alcedo-cli`
+documents: zidage/alcedo-skills#23.
+
+Decisions made during the work (details in the TC2 section of section 5):
+
+- `EditorCurveWrite` is `CurveUpdate`: an optional list of points for each curve.
+- A write leaves the curves that it does not have as they are; a complete value (history replay)
+  reads an absent channel key as the identity. This is the rule that makes the undo of a first
+  channel edit work, because the stored `before` value has no channel key.
+- The catalog reset value of `curve` has the four keys.
+- Slot size by behavior (`GradeRuntimeParamBytes`): 832 bytes for Curve. Identity channel curves
+  pack count 0. `MakeGradeRuntimeParams` refuses Curve with a named error.
+- The transfer row text names the channel curves (`4 points, R 3, B 5`).
+
+Verification (Windows, debug build, RTX 3080 Laptop, CUDA and OpenCL):
+
+| Binary and filter | Result |
+| --- | --- |
+| `GpuDagModelGraphTest` (all, includes `CurveModelTest.*`, `ToneCurveSplineTest.*`, and the header check) | 195 passed |
+| `GpuDagRawInputTest --gtest_filter=GpuDagAdjustmentRuntime.*` | 16 passed |
+| `EditorParameterCatalogTest` (all) | 49 passed |
+| `PipelineHistoryApplierTest` (all) | 15 passed |
+| `EditorPanelProjectionTest` (all) | 14 passed |
+| `AdjustmentTransferCatalogTest` (all) | 13 passed |
+| `EditorPendingInputTest` (all) | 13 passed |
+| `EditorPipelineCommandServiceTest` (all) | 24 passed |
+| `EditorToneCurveModelTest` (all) | 8 passed |
+| `EditorToneCurveGeometryTest` (all) | 5 passed, 1 failed: `PlotRectUsesLegacyPadding` ([#892](https://github.com/zidage/AlcedoStudio/issues/892)) |
+| `PipelineDocumentCopyCostTest` (all) | 5 passed |
+| `PipelineDocumentCheckpointTest` (all) | 20 passed, 3 failed: the `Existing{Raw,Lmt,FilmGrain}Root*` checks of a fresh document against stored HLS defaults ([#553](https://github.com/zidage/AlcedoStudio/issues/553)). The new `ExistingCurveRootDocumentsSerializeByteIdenticalAfterChannelCurves` passes. |
+| `GpuDagOpenClGradeTest --gtest_filter=OpenClGradeFixture.*` | 33 passed |
+| `GpuDagCudaPrimaryGradeTest --gtest_filter=CudaPrimaryGradeFixture.*` | 32 passed, 1 failed: `CudaNeighborGradeDetailPixelsAreUnchanged` ([#690](https://github.com/zidage/AlcedoStudio/issues/690)) |
+| `AutomationReferenceDocsTest` | wrote the new `editor.catalog` schemas; alcedo-skills#23 takes them, and `generate_cli_reference.py --check` passes there |
+
+`GpuDagMetalGradeTest.MetalChannelCurvesMatchSplineReferenceForRedAloneAndRgbWithBlue` and the
+Metal shader compile were not run locally: the Mac was not reachable. The full test suite was not
+run.

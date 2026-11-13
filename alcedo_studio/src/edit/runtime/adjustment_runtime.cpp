@@ -190,19 +190,8 @@ auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior beha
             return packed;
           });
     case AdjustmentBehavior::Curve:
-      return RequireModel<CurveModel>(model).Read([behavior](const CurvePayload& payload) {
-        // Layout read by ApplyCurve in the CUDA, OpenCL, and Metal grade kernels: x in
-        // values[0..15], y in values[16..31], slope in values[32..47].
-        const auto            spline = tone_curve::SolveToneCurveSpline(payload.points);
-        GradeAdjustmentParams packed;
-        packed.behavior = static_cast<std::uint32_t>(behavior);
-        packed.count    = spline.count;
-        std::copy(spline.x.begin(), spline.x.end(), packed.values);
-        std::copy(spline.y.begin(), spline.y.end(), packed.values + kCurvePointCapacity);
-        std::copy(spline.slope.begin(), spline.slope.end(),
-                  packed.values + 2 * kCurvePointCapacity);
-        return packed;
-      });
+      throw std::runtime_error(
+          "Primary grade: the Curve slot has four records; use MakeCurveGradeRuntimeParams");
     case AdjustmentBehavior::Hls:
       return RequireModel<HlsModel>(model).Read([behavior](const HlsPayload& payload) {
         GradeAdjustmentParams packed;
@@ -257,6 +246,30 @@ auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior beha
     default:
       throw std::runtime_error("Primary grade: adjustment behavior is not supported");
   }
+}
+
+auto MakeCurveGradeRuntimeParams(const IOperatorModel& model) -> CurveGradeRuntimeParams {
+  return RequireModel<CurveModel>(model).Read([](const CurvePayload& payload) {
+    // Layout read by ApplyCurve in the CUDA, OpenCL, and Metal grade kernels: one record for each
+    // curve in CurveChannel order, x in values[0..15], y in values[16..31], slope in
+    // values[32..47].
+    CurveGradeRuntimeParams records;
+    for (std::size_t index = 0; index < kCurveChannels.size(); ++index) {
+      const auto channel = kCurveChannels[index];
+      auto&      packed  = records[index];
+      packed.behavior    = static_cast<std::uint32_t>(AdjustmentBehavior::Curve);
+      const auto& points = CurveChannelPoints(payload, channel);
+      if (channel != CurveChannel::Rgb && IsIdentityCurve(points)) {
+        continue;  // count 0: the kernel leaves the channel unchanged.
+      }
+      const auto spline = tone_curve::SolveToneCurveSpline(points);
+      packed.count      = spline.count;
+      std::copy(spline.x.begin(), spline.x.end(), packed.values);
+      std::copy(spline.y.begin(), spline.y.end(), packed.values + kCurvePointCapacity);
+      std::copy(spline.slope.begin(), spline.slope.end(), packed.values + 2 * kCurvePointCapacity);
+    }
+    return records;
+  });
 }
 
 auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior behavior,
