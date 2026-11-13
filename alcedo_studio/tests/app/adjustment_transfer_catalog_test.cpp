@@ -580,7 +580,7 @@ TEST(AdjustmentTransferCatalogTest, CurveItemSummaryNamesTheChannelCurves) {
   update.red    = std::vector<CurvePoint>{{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}};
   update.blue   = std::vector<CurvePoint>{{0.0f, 0.1f}, {0.2f, 0.2f}, {0.6f, 0.5f}, {0.8f, 0.8f},
                                           {1.0f, 0.9f}};
-  curve.Apply(update);
+  curve.ApplyUpdate(update);
   EXPECT_EQ(curve_value(document), "4 points, R 3, B 5");
 }
 
