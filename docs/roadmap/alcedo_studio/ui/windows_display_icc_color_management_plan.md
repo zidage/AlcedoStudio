@@ -2,7 +2,7 @@
 
 - Date: 2026-11-12
 - Status: W1, W2, and W3 implemented (2026-11-12). W4, W5, and W6 planned.
-- Tracking issue: [#873](https://github.com/zidage/AlcedoStudio/issues/873)
+- Tracking issue: [#873](https://github.com/zidage/AlcedoStudio/issues/873) (W1 to W3, PR [#874](https://github.com/zidage/AlcedoStudio/pull/874)); W4 [#875](https://github.com/zidage/AlcedoStudio/issues/875), W5 [#876](https://github.com/zidage/AlcedoStudio/issues/876), W6 [#877](https://github.com/zidage/AlcedoStudio/issues/877)
 - Source revision of the audit: `e7251164b` (`main`)
 - Related plans:
   - [LUT Color Encoding Plan](../edit/lut_color_encoding_plan.md): this plan uses its gamut
